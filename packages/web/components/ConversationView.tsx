@@ -2,7 +2,7 @@ import Link from "next/link";
 import { LogoIcon } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import { useRouter } from "next/navigation";
-import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, Fragment, ComponentProps, type ReactElement } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, Fragment, ComponentProps, type ReactElement, type ReactNode } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -28,6 +28,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
 import { classifyApiErrorBanner, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, type ConvexAgentType, type AgentStatus, type ThreadStateFields } from "@codecast/shared/contracts";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
+import { parseLimitResetAt } from "../lib/limitReset";
 import {
   describeSmallToolGroup,
   describeToolGroup,
@@ -119,9 +120,12 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { AssignmentBadge } from "./AssignmentBadge";
 import { AssignedToYouBanner } from "./OwnersBadge";
 import { TmuxAttachPill } from "./TmuxAttachPill";
+import { SessionFilesButton } from "./SessionFilesButton";
 import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
 import { BrowserWatchSplit, toggleBrowserWatch, useBrowserWatchOpen } from "./browser/BrowserWatchSplit";
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
+import { SessionDecisionCard } from "./SessionDecisionCard";
+import { DecisionStepperContext, usePendingDecisionItem } from "../hooks/useDecisionQueue";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
 import { findEntityInStore } from "../lib/liveEntities";
 import { useWorkflowRun, useWorkflows } from "../hooks/useSyncWorkflows";
@@ -2268,145 +2272,150 @@ function CopyCommand({ command }: { command: string }) {
   );
 }
 
-function ApiErrorCard({ error, agentType, conversationId, compact = false }: { error: ParsedApiError; agentType?: string; conversationId?: string; compact?: boolean }) {
-  // Auth/setup banner → a distinct "re-authenticate" card. The remedy is in the
-  // user's hands and DIFFERS by client (opencode → `opencode auth login` in a
-  // terminal; pi / Claude / Codex → `/login` in the session), so the card names the
-  // exact command for this client and lets the user copy it.
+// Is the block this banner describes still in force? The conversation row's
+// pending_api_error is server-derived and clears the moment anything supersedes
+// the banner: a later turn, a message send, an account switch (accountSwitch
+// clears it on revive). Reading it live keeps a card honest after the fact —
+// an hours-old "Usage limit reached" must not still read as the current state
+// once the session moved on. A row missing from the store (not in this viewer's
+// inbox window) is treated as still live: the banner is the newest thing we
+// know about, so the neutral guess is "unresolved".
+function useApiErrorLive(conversationId?: string): boolean {
+  return useInboxStore((s) => {
+    if (!conversationId) return true;
+    const row = s.sessions[conversationId];
+    if (!row) return true;
+    return row.pending_api_error === true;
+  });
+}
+
+function ApiErrorCard({ error, agentType, conversationId, timestamp, compact = false }: { error: ParsedApiError; agentType?: string; conversationId?: string; timestamp?: number; compact?: boolean }) {
+  const live = useApiErrorLive(conversationId);
+  // Relative "when" ticks so the card stays true as time passes.
+  const now = useCoarseNow(30_000);
+  const resetAt = error.isLimit ? parseLimitResetAt(error.message, timestamp) : undefined;
+  const resetPassed = resetAt != null && now >= resetAt;
+  const isServerError = !error.isAuth && !error.isLimit && !error.isConnection && (error.statusCode ?? 0) >= 500;
+
+  // Tone: amber (or red for a provider 5xx) while the block is in force;
+  // muted once the session moved past it, so a stale banner reads as history.
+  const tone = !live
+    ? { border: "border-sol-border/40 bg-sol-bg-alt/30", fg: "text-sol-text-muted", badge: "border-sol-border/40 bg-sol-bg-alt/50 text-sol-text-muted", icon: "bg-sol-bg-alt text-sol-text-muted" }
+    : isServerError
+      ? { border: "border-sol-red/40 bg-sol-red/10", fg: "text-sol-red", badge: "border-sol-red/40 bg-sol-red/10 text-sol-red", icon: "bg-sol-red/20 text-sol-red" }
+      : { border: "border-amber-500/40 bg-amber-500/10", fg: "text-amber-500", badge: "border-amber-500/40 bg-amber-500/10 text-amber-500", icon: "bg-amber-500/20 text-amber-500" };
+
+  let heading: string;
+  let icon: ReactNode;
+  let hint: ReactNode;
+  const remedy = authRemedy(agentType);
   if (error.isAuth) {
-    const remedy = authRemedy(agentType);
-    return (
-      <div className={`rounded-lg border border-amber-500/40 bg-amber-500/10 ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}>
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500/20 text-amber-500">
-            <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <circle cx="7.5" cy="15.5" r="3.5" />
-              <path d="M10 13L20 3M17 6l2 2M14 9l2 2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </span>
-          <span className="text-xs font-semibold uppercase tracking-wide text-amber-500">
-            Authentication required
-          </span>
-          {error.statusCode && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded border font-mono border-amber-500/40 bg-amber-500/10 text-amber-500">
-              {error.statusCode}
-            </span>
-          )}
+    heading = "Authentication required";
+    icon = (
+      <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+        <circle cx="7.5" cy="15.5" r="3.5" />
+        <path d="M10 13L20 3M17 6l2 2M14 9l2 2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+    hint = (
+      <>
+        <div className="mt-2 flex items-center gap-1.5 flex-wrap text-xs text-sol-text-dim">
+          <span>Run</span>
+          <CopyCommand command={remedy.command} />
+          <span>{remedy.where} to {remedy.inPane ? "re-authenticate" : "set up an account"}, then retry.</span>
         </div>
-        <p className="mt-1 text-sm text-amber-500">{error.message}</p>
-        {!compact && (
+        {agentType === "opencode" && (
+          <ProviderKeyInlineEntry errorMessage={error.message} conversationId={conversationId} />
+        )}
+      </>
+    );
+  } else if (error.isLimit) {
+    heading = "Usage limit reached";
+    icon = (
+      <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+        <path d="M6 3h12M6 21h12M8 3v3.5c0 2 4 4 4 5.5s-4 3.5-4 5.5V21M16 3v3.5c0 2-4 4-4 5.5s4 3.5 4 5.5V21" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+    hint = (
+      <p className="mt-1.5 text-xs text-sol-text-dim">
+        {resetPassed
+          ? <>The limit window reset {formatRelativeTime(resetAt!)} — send a message to pick up where it left off.</>
+          : "The session is paused until the limit resets — send a message after that to pick up where it left off."}
+      </p>
+    );
+  } else if (error.isConnection) {
+    heading = "Connection dropped";
+    icon = (
+      <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+        <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+    hint = (
+      <p className="mt-1.5 text-xs text-sol-text-dim">
+        The turn was cut off mid-response — send{" "}
+        <code className="px-1 py-0.5 rounded bg-sol-bg-alt/60 text-sol-text-secondary font-mono">continue</code>{" "}
+        (or any message) and the session picks up where it left off.
+      </p>
+    );
+  } else {
+    heading = "API Error";
+    icon = <span className="text-[10px] font-semibold">!</span>;
+    hint = (
+      <p className="mt-1 text-xs text-sol-text-dim">
+        {error.isFatal ? (
           <>
-            <div className="mt-2 flex items-center gap-1.5 flex-wrap text-xs text-sol-text-dim">
-              <span>Run</span>
-              <CopyCommand command={remedy.command} />
-              <span>{remedy.where} to {remedy.inPane ? "re-authenticate" : "set up an account"}, then retry.</span>
-            </div>
-            {agentType === "opencode" && (
-              <ProviderKeyInlineEntry errorMessage={error.message} conversationId={conversationId} />
-            )}
-          </>
-        )}
-      </div>
-    );
-  }
-
-  // Usage/session-limit banner → a "usage limit" card. Nothing is broken; the
-  // session is just parked until the limit resets, so the card leads with the
-  // reset detail instead of an error tone.
-  if (error.isLimit) {
-    return (
-      <div className={`rounded-lg border border-amber-500/40 bg-amber-500/10 ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}>
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500/20 text-amber-500">
-            <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path d="M6 3h12M6 21h12M8 3v3.5c0 2 4 4 4 5.5s-4 3.5-4 5.5V21M16 3v3.5c0 2-4 4-4 5.5s4 3.5 4 5.5V21" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </span>
-          <span className="text-xs font-semibold uppercase tracking-wide text-amber-500">
-            Usage limit reached
-          </span>
-        </div>
-        <p className="mt-1 text-sm text-amber-500">{error.message}</p>
-        {!compact && (
-          <p className="mt-1.5 text-xs text-sol-text-dim">
-            The session is paused until the limit resets — send a message after that to pick up where it left off.
-          </p>
-        )}
-      </div>
-    );
-  }
-
-  // Connection-drop banner → a "connection dropped" card. The provider never
-  // replied (stream cut mid-response / connection error / timeout), so the
-  // turn died at the prompt — a plain "continue" resumes it.
-  if (error.isConnection) {
-    return (
-      <div className={`rounded-lg border border-amber-500/40 bg-amber-500/10 ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}>
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500/20 text-amber-500">
-            <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </span>
-          <span className="text-xs font-semibold uppercase tracking-wide text-amber-500">
-            Connection dropped
-          </span>
-        </div>
-        <p className="mt-1 text-sm text-amber-500">{error.message}</p>
-        {!compact && (
-          <p className="mt-1.5 text-xs text-sol-text-dim">
-            The turn was cut off mid-response — send{" "}
+            The agent won&apos;t retry this on its own — send{" "}
             <code className="px-1 py-0.5 rounded bg-sol-bg-alt/60 text-sol-text-secondary font-mono">continue</code>{" "}
-            (or any message) and the session picks up where it left off.
-          </p>
+            (or any message) to retry the turn.
+          </>
+        ) : (
+          "Provider-side failure. Retry the request; if it repeats, include the request ID."
         )}
-      </div>
+      </p>
     );
   }
-
-  const isServerError = (error.statusCode ?? 0) >= 500;
 
   return (
-    <div className={`rounded-lg border ${isServerError ? "border-sol-red/40 bg-sol-red/10" : "border-amber-500/30 bg-amber-500/10"} ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}>
+    <div className={`rounded-lg border ${tone.border} ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}>
       <div className="flex items-center gap-2 flex-wrap">
-        <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] font-semibold ${isServerError ? "bg-sol-red/20 text-sol-red" : "bg-amber-500/20 text-amber-500"}`}>
-          !
+        <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full ${tone.icon}`}>
+          {icon}
         </span>
-        <span className={`text-xs font-semibold uppercase tracking-wide ${isServerError ? "text-sol-red" : "text-amber-500"}`}>
-          API Error
+        <span className={`text-xs font-semibold uppercase tracking-wide ${tone.fg}`}>
+          {heading}
         </span>
-        {error.statusCode && (
-          <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono ${isServerError ? "border-sol-red/40 bg-sol-red/10 text-sol-red" : "border-amber-500/40 bg-amber-500/10 text-amber-500"}`}>
+        {error.statusCode && !error.isLimit && !error.isConnection && (
+          <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono ${tone.badge}`}>
             {error.statusCode}
           </span>
         )}
-        {error.errorType && (
+        {error.errorType && !error.isAuth && !error.isLimit && !error.isConnection && (
           <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border/40 bg-sol-bg-alt/50 text-sol-text-dim font-mono">
             {error.errorType}
           </span>
         )}
+        {!live && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-green/40 bg-sol-green/10 text-sol-green uppercase tracking-wide">
+            resolved
+          </span>
+        )}
+        {timestamp != null && (
+          <span className="ml-auto text-[10px] text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>
+            {formatRelativeTime(timestamp)}
+          </span>
+        )}
       </div>
-      <p className={`mt-1 text-sm ${isServerError ? "text-sol-red" : "text-amber-500"}`}>
-        {error.message}
-      </p>
-      {error.requestId && (
+      <p className={`mt-1 text-sm ${tone.fg}`}>{error.message}</p>
+      {error.requestId && !error.isAuth && !error.isLimit && !error.isConnection && (
         <p className="mt-1 text-[11px] text-sol-text-muted font-mono">
           request_id: <span className="text-sol-text-secondary">{error.requestId}</span>
         </p>
       )}
-      {!compact && (
-        <p className="mt-1 text-xs text-sol-text-dim">
-          {error.isFatal ? (
-            <>
-              The agent won&apos;t retry this on its own — send{" "}
-              <code className="px-1 py-0.5 rounded bg-sol-bg-alt/60 text-sol-text-secondary font-mono">continue</code>{" "}
-              (or any message) to retry the turn.
-            </>
-          ) : (
-            "Provider-side failure. Retry the request; if it repeats, include the request ID."
-          )}
+      {!live ? (
+        <p className="mt-1.5 text-xs text-sol-text-dim">
+          The session continued after this — nothing to do here.
         </p>
-      )}
+      ) : (!compact || resetPassed) && hint}
     </div>
   );
 }
@@ -8517,7 +8526,7 @@ function AssistantBlockImpl({
           <>
             <div className={parsedApiError ? "" : "text-sol-text prose prose-invert prose-sm max-w-none"}>
               {parsedApiError ? (
-                <ApiErrorCard error={parsedApiError} agentType={agentType} conversationId={conversationId} compact={condensed} />
+                <ApiErrorCard error={parsedApiError} agentType={agentType} conversationId={conversationId} timestamp={timestamp} compact={condensed} />
               ) : (
                 <div
                   ref={contentRef}
@@ -8600,7 +8609,7 @@ function AssistantBlockImpl({
               </div>
               <div className="prose prose-invert prose-sm max-w-none text-sol-text">
                 {parsedApiError ? (
-                  <ApiErrorCard error={parsedApiError} agentType={agentType} conversationId={conversationId} />
+                  <ApiErrorCard error={parsedApiError} agentType={agentType} conversationId={conversationId} timestamp={timestamp} />
                 ) : (
                   <ReactMarkdown
                     remarkPlugins={entityRemarkPlugins}
@@ -9955,6 +9964,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     });
   }, [resolvedImageUrls, conversationId]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Root of the composer, used to find the stacking context the image lightbox
+  // must portal into. In the regular conversation the lightbox goes to
+  // document.body (z-10001) and the composer raises itself above it (z-10002).
+  // Inside a dialog host (the new-session compose popup) the composer is capped
+  // by the dialog overlay's stacking context, so a body-level lightbox would
+  // cover the whole dialog and block typing — portal into the dialog instead,
+  // where the same z ordering keeps the input on top.
+  const composerRootRef = useRef<HTMLDivElement>(null);
   const escapeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
   const [lightboxImageIndex, setLightboxImageIndex] = useState<number | null>(null);
@@ -11204,7 +11221,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       }`;
 
   return (
-    <div data-sv-composer className={`shrink-0 pointer-events-none sticky bottom-0 ${lightboxImageIndex !== null ? "z-[10002]" : "z-10"}`}>
+    <div ref={composerRootRef} data-sv-composer className={`shrink-0 pointer-events-none sticky bottom-0 ${lightboxImageIndex !== null ? "z-[10002]" : "z-10"}`}>
       {lightboxImageIndex === null && <div className="h-16 bg-gradient-to-t from-sol-bg via-[color-mix(in_srgb,var(--sol-bg)_80%,transparent)] to-transparent -mt-16 relative" />}
       <div className={`pb-4 pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
         <div className="relative">
@@ -11809,7 +11826,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             )}
           </div>
         </div>,
-        document.body
+        composerRootRef.current?.closest<HTMLElement>('[role="dialog"]') ?? document.body
       )}
     </div>
   );
@@ -12529,6 +12546,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   );
   const pendingPermissions = pendingPermissionsRaw?.filter((p: any) => !PERMISSION_SKIP_TOOLS.has(p.tool_name));
   const hasAskUserQuestion = pendingPermissionsRaw?.some((p: any) => p.tool_name === "AskUserQuestion") ?? false;
+  // A `cast decide` ask renders as a card inside the pane: blocking owns the
+  // pane, advisory docks above the composer (SessionDecisionCard). The queue
+  // supplies a stepper — and, for a poll/permission card, the item itself.
+  const decisionStepper = useContext(DecisionStepperContext);
+  const pendingDecision = usePendingDecisionItem(conversation?._id && isConvexId(conversation._id) ? conversation._id : null);
+  const decisionItem = pendingDecision ?? decisionStepper?.item ?? null;
 
   // Fork UI state (panels). Forks themselves are first-class conversations
   // (we navigate to them); no overlay state to keep in sync.
@@ -15744,6 +15767,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
                 {sessionGallerySrcs.length > 0 && <SessionGalleryButton srcs={sessionGallerySrcs} />}
 
+                {/* The project's files, one click away regardless of what the
+                    transcript happens to mention. Opens beside on surfaces
+                    that can hold a second pane. */}
+                {filePathBase && !guest && <SessionFilesButton projectPath={filePathBase} />}
+
                 {/* Hairline between the identity/status pills and the plain
                     icon actions — the two families read as one soup without it. */}
                 <span aria-hidden className="w-px h-3.5 bg-sol-border/60 mx-0.5 flex-shrink-0" />
@@ -16505,6 +16533,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           messageCount={conversation.message_count}
           canClear={effectiveIsOwner}
         />
+      )}
+
+      {decisionItem && conversation && (
+        <SessionDecisionCard key={decisionItem.key} item={decisionItem} stepper={decisionStepper} />
       )}
 
       {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (

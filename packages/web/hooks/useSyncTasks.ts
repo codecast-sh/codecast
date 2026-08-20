@@ -234,7 +234,7 @@ export function useSyncMentionTasks() {
 /** Store one task detail row (taskMining.webGetTaskDetail shape: the task plus
  *  its comments). Shared by the detail feeder below and the Threads inbox,
  *  whose payload carries the same rows for every task thread on the page. */
-export function ingestTaskDetail(d: any): void {
+export function ingestTaskDetail(d: any, opts?: { partialComments?: boolean }): void {
   // Only persist genuine tasks. The detail route can be loaded with a foreign
   // id (/tasks/<conversationId>); storing whatever comes back plants a phantom
   // task in the never-pruned cache (see validRow in clientSyncRegistry).
@@ -242,7 +242,23 @@ export function ingestTaskDetail(d: any): void {
   // use short ids (/tasks/ct-123), and syncRecord(key=short_id) would store a
   // second copy of the row under that key — the never-pruned duplicate then
   // double-counts in subtaskProgressOf / taskFamilyIndex.
-  if (d && collectionRowValidator("tasks")!(d)) useInboxStore.getState().syncRecord("tasks", String(d._id), d);
+  if (!d || !collectionRowValidator("tasks")!(d)) return;
+  let row = d;
+  // A PARTIAL comment set (threads.listMine ships the newest 50) must never
+  // shrink a fuller local list: the task page renders the same array, and a
+  // truncating merge would drop its older history until the next detail push.
+  if (opts?.partialComments) {
+    const prev = (useInboxStore.getState().tasks as Record<string, any>)[String(d._id)];
+    const prevComments: any[] = prev?.comments ?? [];
+    if (prevComments.length > 0) {
+      const incoming = new Set((d.comments ?? []).map((c: any) => String(c._id)));
+      const keep = prevComments.filter((c: any) => !incoming.has(String(c._id)));
+      if (keep.length > 0) {
+        row = { ...d, comments: [...keep, ...(d.comments ?? [])].sort((a: any, b: any) => a.created_at - b.created_at) };
+      }
+    }
+  }
+  useInboxStore.getState().syncRecord("tasks", String(row._id), row);
 }
 
 export function useSyncTaskDetail(id?: string) {

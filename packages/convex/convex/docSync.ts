@@ -215,6 +215,7 @@ export const submitSnapshot = mutation({
                   entity_type: "doc",
                   entity_id: doc._id.toString(),
                   reason: "mentioned",
+                  via: "human",
                 });
                 await ctx.runMutation(internal.notificationRouter.emit, {
                   event_type: "mention",

@@ -15,6 +15,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { isSilentAgentRow } from "@codecast/shared/chat";
 import { commentThreadRootKey } from "@codecast/shared/comments";
+import { isHumanOrigin } from "@codecast/shared/tasks";
 
 export type ThreadKind = "chat" | "comment" | "task" | "page";
 export const threadKindValidator = v.union(
@@ -155,6 +156,20 @@ export async function touchThread(ctx: MutationCtx, opts: TouchThreadOptions): P
       readAt: isActor ? opts.activityAt : 0,
     });
   }
+}
+
+/** One person's follow of one thread, for a dismiss or a handoff: the row
+ *  leaves their inbox now; the next qualifying touch files a fresh one. */
+export async function dropThreadRead(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  kind: ThreadKind,
+  rootKey: string,
+): Promise<boolean> {
+  const row = await findRow(ctx, userId, kind, rootKey);
+  if (!row) return false;
+  await ctx.db.delete(row._id);
+  return true;
 }
 
 /** Every follow of one thread, for a hard purge of the entity. */
@@ -363,24 +378,84 @@ export const backfillThreadReads = internalMutation({
   },
 });
 
-/** Who a task's comment stream reaches: its unmuted subscribers who created,
- *  own, commented on or were named in it, plus its creator and assignee.
- *  Shared by the live touch in tasks.ts and the backfill above. */
-export async function taskThreadParticipants(
+/** The task fields membership is decided from. */
+export type TaskThreadMembershipTask = Pick<Doc<"tasks">, "_id" | "user_id" | "assignee" | "source" | "promoted">;
+
+/** A task a person is expected to read on its own: filed by a person (human
+ *  or meeting origin; an absent source was stamped human at create) or
+ *  promoted to the human board. Identity alone enrolls only on these. */
+export function isHumanTask(task: Pick<Doc<"tasks">, "source" | "promoted">): boolean {
+  return isHumanOrigin({ source: task.source ?? "human" }) || !!task.promoted;
+}
+
+/** Who a task's comment stream reaches. Membership is earned by a HUMAN act,
+ *  never by identity: agents work under their owner's token, so the owner's
+ *  name on a task (creator, or assignee through an agent's `cast task start`)
+ *  is not attention directed at the owner.
+ *
+ *  - the owner: when the task is a human task, or their creator subscription
+ *    was written by a human act (via human);
+ *  - commenters: via human, or a legacy row (no via) on a human task;
+ *  - mentioned: always (a mention is attention AT a person, whoever typed it);
+ *  - the assignee (the task field or an assignee subscription): when they are
+ *    not the owner, or the task is a human task, or their assignee row is via
+ *    human. An agent's self-claim for its owner on an agent task is none of
+ *    these.
+ *
+ *  Muted subscriptions grant nothing — and a muted row is also a DENY on the
+ *  identity legs (owner, assignee field), which never read subscriptions to
+ *  enroll: it is the durable "handed off / not following" marker a handoff or
+ *  an explicit unwatch writes, cleared only by re-engagement (ensureSubscribed).
+ *  Shared by the live touch in tasks.ts, the backfill above and the inbox
+ *  resolver's defense in threads.ts. */
+export type TaskThreadMembership = {
+  participants: Id<"users">[];
+  /** Users whose mute overrides every leg, including the resolver's own
+   *  wrote-in-the-thread backstop. */
+  muted: Set<string>;
+};
+
+export async function taskThreadMembership(
   ctx: ReadCtx,
-  task: Pick<Doc<"tasks">, "_id" | "user_id" | "assignee">,
-): Promise<Id<"users">[]> {
-  const subscriptions = await ctx.db
+  task: TaskThreadMembershipTask,
+  // The task's subscription rows, when the caller already holds them — the
+  // retroactive sweep passes rows with a simulated `via` so a dry run answers
+  // for the post-stamp world without writing anything.
+  preloadedSubscriptions?: Doc<"entity_subscriptions">[],
+): Promise<TaskThreadMembership> {
+  const rows = preloadedSubscriptions ?? await ctx.db
     .query("entity_subscriptions")
     .withIndex("by_entity", (q: any) => q.eq("entity_type", "task").eq("entity_id", String(task._id)))
     .collect();
-  const subscribed = subscriptions
-    .filter((s) => !s.muted && ["creator", "assignee", "commenter", "mentioned"].includes(s.reason))
-    .map((s) => s.user_id);
+  const muted = new Set(rows.filter((s) => s.muted).map((s) => String(s.user_id)));
+  const subscriptions = rows.filter((s) => !s.muted);
+  const humanTask = isHumanTask(task);
+  const owner = String(task.user_id);
+  const hasHumanRow = (userId: Id<"users">, reason: string) =>
+    subscriptions.some((s) => String(s.user_id) === String(userId) && s.reason === reason && s.via === "human");
+
+  const members: Array<Id<"users"> | null> = [];
+  if (humanTask || hasHumanRow(task.user_id, "creator")) members.push(task.user_id);
+  for (const s of subscriptions) {
+    if (s.reason === "mentioned") members.push(s.user_id);
+    else if (s.reason === "commenter" && (s.via === "human" || (!s.via && humanTask))) members.push(s.user_id);
+  }
   // An assignee is a user id or an agent label ("agent:codex"): only an id
   // that names a user row is a participant. normalizeId never throws.
-  const assigneeId = task.assignee ? ctx.db.normalizeId("users", task.assignee) : null;
-  return dedupe([...subscribed, task.user_id, assigneeId]);
+  const assigneeField = task.assignee ? ctx.db.normalizeId("users", task.assignee) : null;
+  const assignees = dedupe([assigneeField, ...subscriptions.filter((s) => s.reason === "assignee").map((s) => s.user_id)]);
+  for (const assignee of assignees) {
+    if (String(assignee) !== owner || humanTask || hasHumanRow(assignee, "assignee")) members.push(assignee);
+  }
+  return { participants: dedupe(members).filter((id) => !muted.has(String(id))), muted };
+}
+
+export async function taskThreadParticipants(
+  ctx: ReadCtx,
+  task: TaskThreadMembershipTask,
+  preloadedSubscriptions?: Doc<"entity_subscriptions">[],
+): Promise<Id<"users">[]> {
+  return (await taskThreadMembership(ctx, task, preloadedSubscriptions)).participants;
 }
 
 /** Who a published page's discussion reaches: its owner and every commenter

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
-import { Plus, X, Tag, Filter, FilterX, Trash2 } from "lucide-react";
+import { Plus, X, Tag, Filter, FilterX, EyeOff, Trash2 } from "lucide-react";
 import {
   useInboxStore,
   useTrackedStore,
@@ -14,6 +14,8 @@ import {
 } from "../store/inboxStore";
 import { getLabelColor } from "../lib/labelColors";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
+import { KeyCap } from "./KeyboardShortcutsHelp";
+import { isMac } from "../shortcuts";
 
 type ChipCtxPayload =
   | { kind: "label"; bucket: BucketItem }
@@ -60,21 +62,39 @@ export function LabelChipsRow({
   ]);
   const visibleBuckets = useMemo(() => sortLabels(s.buckets), [s.buckets]);
 
-  // Clicking a chip cycles it through three states: off → include ("only
-  // this") → exclude ("everything but this") → off. Clicking a DIFFERENT chip
-  // always starts that chip at include.
-  const cycleBucket = useCallback((bucketId: string) => {
+  // Click is a pure toggle: include the chip, click again to clear. Exclude
+  // ("everything but this") is a deliberate gesture — ⌥/Alt-click, or the
+  // right-click menu — never a state the plain click cycles through. Clicking
+  // a chip that is active in EITHER mode clears it, so a click's result never
+  // surprises: same chip = off, different chip = on.
+  const toggleBucket = useCallback((bucketId: string, alt?: boolean) => {
     const store = useInboxStore.getState();
-    if (store.activeBucketFilter !== bucketId) store.setActiveBucketFilter(bucketId);
-    else if (!store.chipFilterExclude) store.setActiveBucketFilter(bucketId, true);
-    else store.setActiveBucketFilter(null);
+    const active = store.activeBucketFilter === bucketId;
+    if (alt) {
+      if (active && store.chipFilterExclude) store.setActiveBucketFilter(null);
+      else store.setActiveBucketFilter(bucketId, true);
+    } else {
+      store.setActiveBucketFilter(active ? null : bucketId);
+    }
   }, []);
-  const cycleProject = useCallback((name: string, path: string | null) => {
+  const toggleProject = useCallback((name: string, path: string | null, alt?: boolean) => {
     const store = useInboxStore.getState();
-    if (store.activeProjectFilter !== name) store.setActiveProjectFilter(name, path);
-    else if (!store.chipFilterExclude) store.setActiveProjectFilter(name, path, true);
-    else store.setActiveProjectFilter(null, null);
+    const active = store.activeProjectFilter === name;
+    if (alt) {
+      if (active && store.chipFilterExclude) store.setActiveProjectFilter(null, null);
+      else store.setActiveProjectFilter(name, path, true);
+    } else {
+      if (active) store.setActiveProjectFilter(null, null);
+      else store.setActiveProjectFilter(name, path);
+    }
   }, []);
+  // The ⌥-click hint, rendered as real keycaps (never bare glyphs in text).
+  const altClickHint = (
+    <span className="flex items-center gap-[3px]">
+      <KeyCap size="xs">{isMac ? "⌥" : "Alt"}</KeyCap>
+      <KeyCap size="xs">click</KeyCap>
+    </span>
+  );
 
   // Labels created inline THIS session stay row-visible at count 0 — creating
   // a chip that instantly vanishes into +N is broken feedback. The exemption
@@ -383,7 +403,7 @@ export function LabelChipsRow({
           setDraggingLabelId(bucket._id);
         }}
         onDragEnd={clearDragState}
-        onClick={() => cycleBucket(bucket._id)}
+        onClick={(e) => toggleBucket(bucket._id, e.altKey)}
         onContextMenu={(e) => ctxMenu.open(e, { kind: "label", bucket })}
         onDragOver={(e) => {
           // Session-card drops target the chip itself; label reorders are
@@ -420,20 +440,20 @@ export function LabelChipsRow({
           excluded
             ? `Hiding "${bucket.name}" — click to clear`
             : active
-              ? `Filtering to "${bucket.name}" — click to exclude it instead`
-              : `Label: ${bucket.name} — click to filter, drag to reorder`
+              ? `Filtering to "${bucket.name}" — click to clear`
+              : `Label: ${bucket.name} — click to filter, right-click to hide, drag to reorder`
         }
       >
-        {/* Exclude keeps the filter's colors, quieter cues carry the meaning:
-            hollow dot + struck-through name. border-current inherits the
-            chip's label-colored text. */}
-        <span className={`w-1.5 h-1.5 rounded-[2px] ${excluded ? "border border-current" : bc.dot} ${active ? "" : "opacity-50"}`} />
+        {/* Exclude keeps the filter's colors; the dot flattens into a minus
+            bar ("without this"). bg-current inherits the chip's label-colored
+            text, and the fixed 1.5 width keeps the chip size constant. */}
+        <span className={`w-1.5 flex-shrink-0 ${excluded ? "h-[2px] rounded-full bg-current" : `h-1.5 rounded-[2px] ${bc.dot}`} ${active ? "" : "opacity-50"}`} />
         {/* Bold invisible twin reserves the active state's text width so the
-            chip is the SAME width in all three filter states — cycling never
+            chip is the SAME width in all three filter states — toggling never
             shifts the row under the pointer. */}
         <span className="inline-grid">
           <span aria-hidden className="invisible font-medium col-start-1 row-start-1">{bucket.name}</span>
-          <span className={`col-start-1 row-start-1 ${active ? "font-medium" : ""} ${excluded ? "line-through" : ""}`}>{bucket.name}</span>
+          <span className={`col-start-1 row-start-1 ${active ? "font-medium" : ""} ${excluded ? "opacity-75" : ""}`}>{bucket.name}</span>
         </span>
         {/* Fixed-width slot: the ✕ overlays the count on hover instead of
             replacing it, so the chip never changes size and the row never
@@ -514,7 +534,7 @@ export function LabelChipsRow({
             <button
               key={name}
               ref={chipRef(key)}
-              onClick={() => cycleProject(name, projectPathByName[name] || null)}
+              onClick={(e) => toggleProject(name, projectPathByName[name] || null, e.altKey)}
               onContextMenu={(e) => ctxMenu.open(e, { kind: "project", name })}
               style={rowHint ? { transform: `translateX(${REORDER_GAP}px)`, transition: "transform 150ms ease" } : { transition: "transform 150ms ease" }}
               className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 ${
@@ -528,16 +548,16 @@ export function LabelChipsRow({
                 excluded
                   ? `Hiding "${name}" — click to clear`
                   : active
-                    ? `Filtering to "${name}" — click to exclude it instead`
-                    : `Project: ${name} — click to filter`
+                    ? `Filtering to "${name}" — click to clear`
+                    : `Project: ${name} — click to filter, right-click to hide`
               }
             >
               {/* Same exclude cues + constant-width construction as the label
                   chips above. */}
-              <span className={`w-1.5 h-1.5 rounded-full ${excluded ? "border border-current" : pc.dot} ${active ? "" : "opacity-50"}`} />
+              <span className={`w-1.5 flex-shrink-0 ${excluded ? "h-[2px] rounded-full bg-current" : `h-1.5 rounded-full ${pc.dot}`} ${active ? "" : "opacity-50"}`} />
               <span className="inline-grid">
                 <span aria-hidden className="invisible font-medium col-start-1 row-start-1">{name}</span>
-                <span className={`col-start-1 row-start-1 ${active ? "font-medium" : ""} ${excluded ? "line-through" : ""}`}>{name}</span>
+                <span className={`col-start-1 row-start-1 ${active ? "font-medium" : ""} ${excluded ? "opacity-75" : ""}`}>{name}</span>
               </span>
               <span className="ml-0.5 opacity-50">{count}</span>
             </button>
@@ -564,12 +584,13 @@ export function LabelChipsRow({
           const bc = getLabelColor(activeBucket.name);
           return (
             <button
-              onClick={() => cycleBucket(activeBucket._id)}
-              title={excluded ? `Hiding "${activeBucket.name}" — click to clear` : `Filtering to "${activeBucket.name}" — click to exclude it instead`}
+              onClick={(e) => toggleBucket(activeBucket._id, e.altKey)}
+              onContextMenu={(e) => ctxMenu.open(e, { kind: "label", bucket: activeBucket })}
+              title={excluded ? `Hiding "${activeBucket.name}" — click to clear` : `Filtering to "${activeBucket.name}" — click to clear`}
               className={`group min-w-0 px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 font-medium ${bc.bg} ${bc.text}`}
             >
-              <span className={`w-1.5 h-1.5 rounded-[2px] flex-shrink-0 ${excluded ? "border border-current" : bc.dot}`} />
-              <span className={`truncate ${excluded ? "line-through" : ""}`}>{activeBucket.name}</span>
+              <span className={`w-1.5 flex-shrink-0 ${excluded ? "h-[2px] rounded-full bg-current" : `h-1.5 rounded-[2px] ${bc.dot}`}`} />
+              <span className={`truncate ${excluded ? "opacity-75" : ""}`}>{activeBucket.name}</span>
               <span className="ml-0.5 relative inline-flex flex-shrink-0 items-center justify-center min-w-[10px]">
                 <span className="opacity-50 group-hover:opacity-0 tabular-nums">{bucketCounts[activeBucket._id] || 0}</span>
                 <span className="absolute inset-0 hidden group-hover:flex items-center justify-center opacity-70">
@@ -584,12 +605,13 @@ export function LabelChipsRow({
         const pc = getLabelColor(activeProject[0]);
         return (
           <button
-            onClick={() => cycleProject(activeProject[0], projectPathByName[activeProject[0]] || null)}
-            title={excluded ? `Hiding "${activeProject[0]}" — click to clear` : `Filtering to "${activeProject[0]}" — click to exclude it instead`}
+            onClick={(e) => toggleProject(activeProject[0], projectPathByName[activeProject[0]] || null, e.altKey)}
+            onContextMenu={(e) => ctxMenu.open(e, { kind: "project", name: activeProject[0] })}
+            title={excluded ? `Hiding "${activeProject[0]}" — click to clear` : `Filtering to "${activeProject[0]}" — click to clear`}
             className={`min-w-0 px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 font-medium ${pc.bg} ${pc.text}`}
           >
-            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${excluded ? "border border-current" : pc.dot}`} />
-            <span className={`truncate ${excluded ? "line-through" : ""}`}>{activeProject[0]}</span>
+            <span className={`w-1.5 flex-shrink-0 ${excluded ? "h-[2px] rounded-full bg-current" : `h-1.5 rounded-full ${pc.dot}`}`} />
+            <span className={`truncate ${excluded ? "opacity-75" : ""}`}>{activeProject[0]}</span>
             <span className="ml-0.5 opacity-50 tabular-nums flex-shrink-0">{activeProject[1]}</span>
           </button>
         );
@@ -661,10 +683,11 @@ export function LabelChipsRow({
                     setDraggingLabelId(bucket._id);
                   }}
                   onDragEnd={clearDragState}
-                  onClick={() => {
-                    cycleBucket(bucket._id);
+                  onClick={(e) => {
+                    toggleBucket(bucket._id, e.altKey);
                     setPopoverOpen(false);
                   }}
+                  onContextMenu={(e) => ctxMenu.open(e, { kind: "label", bucket })}
                   onDragOver={(e) => {
                     // Session-card drops land on popover rows too — for
                     // zero-count labels (hidden from the row) this is the only
@@ -695,11 +718,11 @@ export function LabelChipsRow({
                       ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10 text-sol-text"
                       : active ? "bg-sol-cyan/10 text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt/60"
                   }`}
-                  title={excluded ? "Hidden — click to clear" : active ? "Filtering — click to exclude instead" : "Click to filter — drag to reorder"}
+                  title={excluded ? "Hidden — click to clear" : active ? "Filtering — click to clear" : "Click to filter — right-click to hide, drag to reorder"}
                 >
                   <span className="text-sol-text-dim/40 cursor-grab select-none leading-none">⠿</span>
-                  <span className={`w-2 h-2 rounded-[2px] flex-shrink-0 ${excluded ? `border border-current ${bc.text}` : bc.dot}`} />
-                  <span className={`flex-1 truncate ${active ? "font-medium" : ""} ${excluded ? "line-through" : ""}`}>{bucket.name}</span>
+                  <span className={`w-2 flex-shrink-0 ${excluded ? `h-[2px] rounded-full ${bc.dot}` : `h-2 rounded-[2px] ${bc.dot}`}`} />
+                  <span className={`flex-1 truncate ${active ? "font-medium" : ""} ${excluded ? "opacity-75" : ""}`}>{bucket.name}</span>
                   <span className="text-[10px] tabular-nums text-sol-text-dim/70">{bucketCounts[bucket._id] || 0}</span>
                   {/* Fixed slot — ✕ appears without shifting the count. */}
                   <span className="w-3 inline-flex items-center justify-center">
@@ -746,18 +769,19 @@ export function LabelChipsRow({
                 return (
                   <div
                     key={name}
-                    onClick={() => {
-                      cycleProject(name, projectPathByName[name] || null);
+                    onClick={(e) => {
+                      toggleProject(name, projectPathByName[name] || null, e.altKey);
                       setPopoverOpen(false);
                     }}
+                    onContextMenu={(e) => ctxMenu.open(e, { kind: "project", name })}
                     className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors ${
                       active ? "bg-sol-cyan/10 text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt/60"
                     }`}
-                    title={excluded ? "Hidden — click to clear" : active ? "Filtering — click to exclude instead" : "Click to filter"}
+                    title={excluded ? "Hidden — click to clear" : active ? "Filtering — click to clear" : "Click to filter — right-click to hide"}
                   >
                     <span className="w-3" />
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${excluded ? `border border-current ${pc.text}` : pc.dot}`} />
-                    <span className={`flex-1 truncate ${active ? "font-medium" : ""} ${excluded ? "line-through" : ""}`}>{name}</span>
+                    <span className={`w-2 flex-shrink-0 ${excluded ? `h-[2px] rounded-full ${pc.dot}` : `h-2 rounded-full ${pc.dot}`}`} />
+                    <span className={`flex-1 truncate ${active ? "font-medium" : ""} ${excluded ? "opacity-75" : ""}`}>{name}</span>
                     <span className="text-[10px] tabular-nums text-sol-text-dim/70">{count}</span>
                   </div>
                 );
@@ -769,28 +793,51 @@ export function LabelChipsRow({
       )}
 
       <ContextMenu state={ctxMenu}>
-        {(p) =>
-          p.kind === "label" ? (
-            <>
-              <CtxHeader title={p.bucket.name} />
-              {s.activeBucketFilter === p.bucket._id ? (
-                <CtxItem icon={FilterX} onSelect={() => useInboxStore.getState().setActiveBucketFilter(null)}>
-                  Clear filter
+        {(p) => {
+          // Include and exclude are peers in the menu; whichever is currently
+          // active swaps for its "clear" counterpart, so exactly one item ever
+          // reads as an undo.
+          if (p.kind === "label") {
+            const active = s.activeBucketFilter === p.bucket._id;
+            const excluded = active && s.chipFilterExclude;
+            return (
+              <>
+                <CtxHeader title={p.bucket.name} />
+                {active && !excluded ? (
+                  <CtxItem icon={FilterX} onSelect={() => useInboxStore.getState().setActiveBucketFilter(null)}>
+                    Clear filter
+                  </CtxItem>
+                ) : (
+                  <CtxItem icon={Filter} onSelect={() => useInboxStore.getState().setActiveBucketFilter(p.bucket._id)}>
+                    Filter by this label
+                  </CtxItem>
+                )}
+                {excluded ? (
+                  <CtxItem icon={FilterX} onSelect={() => useInboxStore.getState().setActiveBucketFilter(null)}>
+                    Stop hiding
+                  </CtxItem>
+                ) : (
+                  <CtxItem
+                    icon={EyeOff}
+                    trailing={altClickHint}
+                    onSelect={() => useInboxStore.getState().setActiveBucketFilter(p.bucket._id, true)}
+                  >
+                    Hide this label
+                  </CtxItem>
+                )}
+                <CtxSeparator />
+                <CtxItem danger icon={Trash2} onSelect={() => performDeleteLabel(p.bucket)}>
+                  Delete label
                 </CtxItem>
-              ) : (
-                <CtxItem icon={Filter} onSelect={() => useInboxStore.getState().setActiveBucketFilter(p.bucket._id)}>
-                  Filter by this label
-                </CtxItem>
-              )}
-              <CtxSeparator />
-              <CtxItem danger icon={Trash2} onSelect={() => performDeleteLabel(p.bucket)}>
-                Delete label
-              </CtxItem>
-            </>
-          ) : (
+              </>
+            );
+          }
+          const active = s.activeProjectFilter === p.name;
+          const excluded = active && s.chipFilterExclude;
+          return (
             <>
               <CtxHeader title={p.name} />
-              {s.activeProjectFilter === p.name ? (
+              {active && !excluded ? (
                 <CtxItem icon={FilterX} onSelect={() => useInboxStore.getState().setActiveProjectFilter(null, null)}>
                   Clear filter
                 </CtxItem>
@@ -802,9 +849,22 @@ export function LabelChipsRow({
                   Filter by project
                 </CtxItem>
               )}
+              {excluded ? (
+                <CtxItem icon={FilterX} onSelect={() => useInboxStore.getState().setActiveProjectFilter(null, null)}>
+                  Stop hiding
+                </CtxItem>
+              ) : (
+                <CtxItem
+                  icon={EyeOff}
+                  trailing={altClickHint}
+                  onSelect={() => useInboxStore.getState().setActiveProjectFilter(p.name, projectPathByName[p.name] || null, true)}
+                >
+                  Hide this project
+                </CtxItem>
+              )}
             </>
-          )
-        }
+          );
+        }}
       </ContextMenu>
     </div>
   );

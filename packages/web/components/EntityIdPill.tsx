@@ -35,7 +35,7 @@ import {
   entityReferenceLabel,
   type EntityType,
 } from "../lib/entityLinks";
-import { findEntityInStore } from "../lib/liveEntities";
+import { findEntityInStore, resolveAssigneeInfo } from "../lib/liveEntities";
 import { useInboxStore } from "../store/inboxStore";
 import { DocEmbed } from "./DocEmbed";
 import { FilePathLink } from "./FilePathLink";
@@ -86,6 +86,19 @@ const STATUS_LABEL: Record<string, string> = {
   abandoned: "Abandoned",
 };
 
+// Task pills tint with the task's status so the pill reads at a glance like
+// its status circle: open blue, in progress yellow, in review violet, done
+// green, draft/backlog/dropped muted.
+const TASK_STATUS_PILL: Record<string, string> = {
+  draft: "bg-gray-500/10 text-gray-400 border-gray-500/20 hover:bg-gray-500/20",
+  backlog: "bg-gray-500/10 text-gray-400 border-gray-500/20 hover:bg-gray-500/20",
+  open: "bg-sol-blue/10 text-sol-blue border-sol-blue/20 hover:bg-sol-blue/20",
+  in_progress: "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/20 hover:bg-sol-yellow/20",
+  in_review: "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20",
+  done: "bg-sol-green/10 text-sol-green border-sol-green/20 hover:bg-sol-green/20",
+  dropped: "bg-gray-500/10 text-gray-500 border-gray-500/20 hover:bg-gray-500/20",
+};
+
 const PRIORITY_CONFIG: Record<string, { icon: any; color: string; label: string }> = {
   urgent: { icon: AlertTriangle, color: "text-red-400", label: "Urgent" },
   high: { icon: ArrowUp, color: "text-orange-400", label: "High" },
@@ -118,11 +131,44 @@ function entityQueryArgs(type: EntityType, id: string): { short_id?: string; id?
   return { id };
 }
 
+// Creator (only when it isn't the viewer) and assignee (only when it differs
+// from the creator) for the task hover card. Names resolve through the same
+// roster helper the task page uses; read non-reactively — the card mounts
+// fresh on each hover, so a subscription would only add churn.
+function taskPeople(task: any) {
+  const s = useInboxStore.getState() as any;
+  const me = s.currentUser;
+  const members = s.teamMembers;
+  const myId = me?._id?.toString?.();
+  const creatorId = task.user_id?.toString?.();
+  const creator =
+    creatorId && creatorId !== myId
+      ? resolveAssigneeInfo(creatorId, task.creator, members, me)
+      : null;
+  const assigneeId = task.assignee?.toString?.();
+  const assignee =
+    assigneeId && assigneeId !== creatorId
+      ? resolveAssigneeInfo(assigneeId, task.assignee_info, members, me)
+      : null;
+  return { creator, assignee };
+}
+
+function PersonRow({ label, person }: { label: string; person: { name?: string; image?: string | null } }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-[10px] text-gray-500 w-14 flex-shrink-0">{label}</span>
+      <AuthorAvatar name={person.name} avatar={person.image} size={12} />
+      <span className="text-[10px] text-gray-400 truncate">{person.name}</span>
+    </div>
+  );
+}
+
 function TaskHoverContent({ task }: { task: any }) {
   const StatusIcon = STATUS_ICON[task.status || "open"] || Circle;
   const statusColor = STATUS_COLOR[task.status || "open"] || "text-gray-400";
   const statusLabel = STATUS_LABEL[task.status] || task.status;
   const priority = PRIORITY_CONFIG[task.priority];
+  const { creator, assignee } = taskPeople(task);
 
   return (
     <div className="space-y-2">
@@ -157,6 +203,13 @@ function TaskHoverContent({ task }: { task: any }) {
         <div className="flex items-center gap-1.5 pl-[22px]">
           <Target className="w-2.5 h-2.5 text-sol-cyan flex-shrink-0" />
           <span className="text-[10px] text-sol-cyan truncate">{task.plan.title}</span>
+        </div>
+      )}
+
+      {(creator || assignee) && (
+        <div className="space-y-1 pl-[22px]">
+          {creator && <PersonRow label="Creator" person={creator} />}
+          {assignee && <PersonRow label="Assignee" person={assignee} />}
         </div>
       )}
 
@@ -729,7 +782,8 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
           ? "bg-sol-green/10 text-sol-green border-sol-green/20 hover:bg-sol-green/20"
           : type === "project"
             ? "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20"
-            : "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/20 hover:bg-sol-yellow/20";
+            : TASK_STATUS_PILL[status || "open"]
+              ?? "bg-sol-blue/10 text-sol-blue border-sol-blue/20 hover:bg-sol-blue/20";
 
   // One label rule for every type, shared with mobile: the pill reads as the
   // object's NAME, and the id moves to the hover card. A trigger prefers its

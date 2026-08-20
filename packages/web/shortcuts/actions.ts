@@ -2,7 +2,7 @@
 
 import { useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { useInboxStore, isSessionWaitingForInput, selectCommentRailOpen, selectNavCollapsed } from "../store/inboxStore";
+import { useInboxStore, classifySession, selectCommentRailOpen, selectNavCollapsed } from "../store/inboxStore";
 import { isInboxSessionView } from "../lib/inboxRouting";
 import { focusComposer } from "../lib/composerControl";
 import { useShortcutAction } from "./ShortcutProvider";
@@ -67,9 +67,16 @@ export function useGlobalShortcutActions() {
   }, [isOnInboxPage]));
 
   useShortcutAction('session.jumpIdle', useCallback(() => {
+    // Ctrl+I: top of the your-move stack — Questions/Needs Input first, then
+    // Done, which sits directly below Needs Input and reads as its extension.
+    // Never a Dormant row: a machine wakes those, so it's nobody's move to
+    // jump to (the bare waiting predicate matches parked rows too).
     const store = useInboxStore.getState();
     const ordered = store.visualOrder();
-    const first = ordered.find(s => isSessionWaitingForInput(s));
+    const first = ordered.find(s => {
+      const c = classifySession(s);
+      return c.waiting && c.rest !== "dormant";
+    });
     if (!first) return;
     if (isOnInboxPage) store.setCurrentSession(first._id);
     else store.selectPanelSession(first._id);

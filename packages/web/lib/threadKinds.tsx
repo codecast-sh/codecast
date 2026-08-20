@@ -4,7 +4,9 @@ import { selectChannelReadMarker, type ChatRailChannel } from "../store/chatSlic
 import type { ThreadInboxRow } from "../store/threadTypes";
 import type { InboxSession } from "../store/inboxStore";
 import {
+  SWEEPABLE_CHIPS,
   THREAD_KIND_META,
+  type ChipKey,
   type ThreadCardKind,
   type ThreadCardModel,
   type ThreadKindMeta,
@@ -14,6 +16,8 @@ import { DmExpanded, DmGlyph, DmLabel, DmRoot } from "../components/threads/kind
 import { CommentExpanded, CommentLabel, CommentRoot } from "../components/threads/kinds/CommentKind";
 import { TaskExpanded, TaskLabel, TaskRoot } from "../components/threads/kinds/TaskKind";
 import { SessionExpanded, SessionLabel, SessionRoot } from "../components/threads/kinds/SessionKind";
+import { PageExpanded, PageLabel, PageRoot } from "../components/threads/kinds/PageKind";
+import { QuestionExpanded, QuestionLabel, QuestionRoot } from "../components/threads/kinds/QuestionKind";
 
 // The Threads page's kind registry: one spec per card kind, each saying how a
 // card reads, expands, and marks itself read. The page and the generic
@@ -33,8 +37,13 @@ export type ThreadKindSpec = ThreadKindMeta & {
   Label: ComponentType<{ card: ThreadCardModel }>;
   /** The collapsed body (and the part of the body that stays when expanded). */
   Root: ComponentType<{ card: ThreadCardModel; expanded: boolean }>;
-  /** In-place thread + composer. Mounts only for the one open card. */
-  Expanded: ComponentType<{ card: ThreadCardModel; present: boolean; frozenReadAt: number }>;
+  /** In-place thread + composer. Many cards are expanded at once (unread
+   *  opens by default), so the shell mounts this only near the viewport, and
+   *  the kind's read-mark effect gates on `seen` — present AND the card's
+   *  newest content actually in the viewport — never on the mount itself.
+   *  `focusComposer` is true only for a user's own expand: a default-open
+   *  body autofocusing would steal focus on every scroll. */
+  Expanded: ComponentType<{ card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }>;
   /** Mark one card read, the kind's own way. */
   markRead(card: ThreadCardModel): void;
 };
@@ -61,6 +70,10 @@ export const THREAD_KIND_SPECS: Record<ThreadCardKind, ThreadKindSpec> = {
   comment: { ...THREAD_KIND_META.comment, Label: CommentLabel, Root: CommentRoot, Expanded: CommentExpanded, markRead: markServerRead },
   task: { ...THREAD_KIND_META.task, Label: TaskLabel, Root: TaskRoot, Expanded: TaskExpanded, markRead: markServerRead },
   session: { ...THREAD_KIND_META.session, Label: SessionLabel, Root: SessionRoot, Expanded: SessionExpanded, markRead: markSessionSeen },
+  page: { ...THREAD_KIND_META.page, Label: PageLabel, Root: PageRoot, Expanded: PageExpanded, markRead: markServerRead },
+  // A question's status IS its read mark: answering or dismissing resolves the
+  // row, so there is nothing separate to mark.
+  question: { ...THREAD_KIND_META.question, Label: QuestionLabel, Root: QuestionRoot, Expanded: QuestionExpanded, markRead: () => {} },
 };
 
 /** Mark every unread card of a view read. Server kinds go through the one
@@ -69,16 +82,26 @@ export const THREAD_KIND_SPECS: Record<ThreadCardKind, ThreadKindSpec> = {
  *  from the cards on screen; sessions never. */
 export function markViewRead(
   cards: ThreadCardModel[],
-  chip: "all" | "chat" | "dm" | "comment" | "task",
+  chip: ChipKey,
   teamId: string | undefined,
 ): void {
   const st = useInboxStore.getState();
-  if (chip === "dm") {
+  // Chat and DMs mark their VISIBLE cards one by one: a chat thread can live
+  // in a DM room and file under the DMs chip, so the server's kind-scoped
+  // sweep would erase threads the reader never saw.
+  if (chip === "dm" || chip === "chat") {
     for (const c of cards) if (c.unread > 0 && (c.kind === "dm" || c.kind === "chat")) THREAD_KIND_SPECS[c.kind].markRead(c);
     return;
   }
-  st.markAllThreadsRead(teamId, chip === "all" ? undefined : chip);
+  // Questions have no separate read mark (their status is the mark), and the
+  // session cards never join a sweep.
+  if (chip === "question") return;
   if (chip === "all") {
+    // "all" is an explicit sentinel on the wire: a one-argument call is the
+    // legacy chat-only sweep, and absence must not widen it.
+    st.markAllThreadsRead(teamId, "all");
     for (const c of cards) if (c.unread > 0 && c.kind === "dm") THREAD_KIND_SPECS.dm.markRead(c);
+    return;
   }
+  if (SWEEPABLE_CHIPS.has(chip)) st.markAllThreadsRead(teamId, chip);
 }

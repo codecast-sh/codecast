@@ -1,0 +1,117 @@
+import { describe, expect, test } from "bun:test";
+import {
+  cardsForChip,
+  dmCards,
+  defaultOpenEntry,
+  openEntryExpired,
+  resolveOpenEntry,
+  sortCards,
+  toggledOpenEntry,
+  unreadByChip,
+} from "./threadCards";
+import type { ChatRailChannel } from "../store/chatSlice";
+
+// DM cards on /threads: presence and rank in the All view key to the
+// counterpart's last message (lastInboundAt). The viewer's own send never
+// creates, removes, or re-ranks a card there — and never re-opens a card the
+// user collapsed. The DMs chip stays a browsing surface over the full rail,
+// ordered by sortAt.
+
+const T0 = 1_700_000_000_000;
+
+function room(id: string, over: Partial<ChatRailChannel> = {}): ChatRailChannel {
+  return {
+    id,
+    name: id,
+    kind: "dm",
+    isPrivate: false,
+    unreadCount: 0,
+    mentionCount: 0,
+    muted: false,
+    sortAt: T0,
+    notifyLevel: "all",
+    joined: true,
+    ...over,
+  } as ChatRailChannel;
+}
+
+describe("presence", () => {
+  test("a room with no inbound ever is browse-only: on the DMs chip, not in All", () => {
+    const cards = dmCards([
+      room("quiet", { sortAt: T0 + 5000 }), // viewer-only sends
+      room("live", { sortAt: T0, lastInboundAt: T0 }),
+    ]);
+    expect(cardsForChip(cards, "all", false).map((c) => c.id)).toEqual(["dm:live"]);
+    expect(cardsForChip(cards, "dm", false).map((c) => c.id)).toEqual(["dm:quiet", "dm:live"]);
+  });
+
+  test("a fresh outbound to a quiet room creates no card in All", () => {
+    const before = dmCards([room("quiet", { sortAt: T0 })]);
+    expect(cardsForChip(before, "all", false)).toEqual([]);
+    // The viewer sends: sortAt moves, lastInboundAt stays absent.
+    const after = dmCards([room("quiet", { sortAt: T0 + 60_000 })]);
+    expect(cardsForChip(after, "all", false)).toEqual([]);
+  });
+});
+
+describe("rank and timestamp", () => {
+  const rail = (bSortAt: number, bInboundAt: number) => [
+    room("a", { sortAt: T0 + 1000, lastInboundAt: T0 + 1000 }),
+    room("b", { sortAt: bSortAt, lastInboundAt: bInboundAt }),
+  ];
+
+  test("own send does not change activityAt or the All rank; inbound does", () => {
+    const before = dmCards(rail(T0, T0));
+    // The viewer replies in b: sortAt jumps, inbound stands.
+    const afterOwnSend = dmCards(rail(T0 + 9000, T0));
+    const cardB = (cards: ReturnType<typeof dmCards>) => cards.find((c) => c.id === "dm:b")!;
+    expect(cardB(afterOwnSend).activityAt).toBe(cardB(before).activityAt);
+    expect(sortCards(afterOwnSend).map((c) => c.id)).toEqual(["dm:a", "dm:b"]);
+    // The counterpart replies: the card re-ranks.
+    const afterInbound = dmCards(rail(T0 + 9000, T0 + 9000));
+    expect(cardB(afterInbound).activityAt).toBe(T0 + 9000);
+    expect(sortCards(afterInbound).map((c) => c.id)).toEqual(["dm:b", "dm:a"]);
+  });
+
+  test("the shown time is the inbound time, not the own-send time", () => {
+    const [card] = dmCards([room("b", { sortAt: T0 + 9000, lastInboundAt: T0 })]);
+    expect(card.activityAt).toBe(T0);
+    expect(card.browseAt).toBe(T0 + 9000);
+  });
+
+  test("the DMs chip ranks by the rail stamp, own sends included", () => {
+    const cards = dmCards(rail(T0 + 9000, T0));
+    expect(sortCards(cards, "dm").map((c) => c.id)).toEqual(["dm:b", "dm:a"]);
+  });
+});
+
+describe("open map", () => {
+  test("a user collapse holds across the viewer's own send, expires on inbound", () => {
+    const at = (inboundAt: number) => dmCards([room("b", { sortAt: inboundAt, lastInboundAt: inboundAt, unreadCount: 1 })])[0];
+    const card = at(T0);
+    const collapsed = toggledOpenEntry(card, defaultOpenEntry(card));
+    expect(collapsed.expanded).toBe(false);
+    // The viewer replies: sortAt moves, activityAt does not — the collapse stands.
+    const afterOwnSend = dmCards([room("b", { sortAt: T0 + 5000, lastInboundAt: T0, unreadCount: 1 })])[0];
+    expect(openEntryExpired(afterOwnSend, collapsed)).toBe(false);
+    expect(resolveOpenEntry(afterOwnSend, collapsed, false)).toBe(collapsed);
+    // The counterpart speaks again: newer unread re-earns the default-open.
+    const afterInbound = at(T0 + 8000);
+    expect(openEntryExpired(afterInbound, collapsed)).toBe(true);
+    expect(resolveOpenEntry(afterInbound, collapsed, false).expanded).toBe(true);
+  });
+});
+
+describe("counts", () => {
+  test("a browse-only room never ticks the All badge; muting still zeroes unread", () => {
+    const counts = unreadByChip(
+      dmCards([
+        room("quiet", { unreadCount: 1 }), // no inbound: whatever the count says, not in All
+        room("live", { unreadCount: 2, lastInboundAt: T0 }),
+        room("hushed", { unreadCount: 3, muted: true, lastInboundAt: T0 }),
+      ]),
+    );
+    expect(counts.all).toBe(1);
+    expect(counts.dm).toBe(2);
+  });
+});
