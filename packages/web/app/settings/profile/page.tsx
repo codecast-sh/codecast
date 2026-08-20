@@ -90,6 +90,17 @@ export default function ProfilePage() {
           </div>
           <div className="flex items-center justify-between gap-4">
             <div>
+              <span className="text-sol-base1">Let teammates talk to me</span>
+              <p className="text-xs text-sol-base01 mt-0.5">
+                A teammate holding push-to-talk in your DM is heard out loud here, the moment
+                they say it. Turn this off and their voice message still arrives in the chat with
+                its transcript — it just waits to be read.
+              </p>
+            </div>
+            <WalkieToggle />
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <div>
               <span className="text-sol-base1">Simple view</span>
               <p className="text-xs text-sol-base01 mt-0.5">Calmer conversations and inbox cards — secondary badges, counts and meta rows drop away</p>
             </div>
@@ -313,6 +324,17 @@ function SoundsToggle() {
       checked={soundsEnabled}
       onCheckedChange={(v) => updateUI({ sounds_enabled: v })}
     />
+  );
+}
+
+/** The walkie door. It gates LIVE playback on this machine and nothing else: a
+ *  closed door mutes a speaker, it never silences them, which is why the copy
+ *  says what still happens rather than only what stops. */
+function WalkieToggle() {
+  const open = useInboxStore((s) => (s.currentUser as any)?.walkie_pref !== "off");
+  const setWalkiePref = useInboxStore((s) => s.setWalkiePref);
+  return (
+    <Switch checked={open} onCheckedChange={(v) => setWalkiePref(v ? "team" : "off")} />
   );
 }
 

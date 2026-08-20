@@ -1,9 +1,9 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { LayoutList } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useChatMembers, useChatRail } from "../../hooks/useChatSync";
-import { useThreadInbox, useThreadInboxCards, useThreadsInboxSync } from "../../hooks/useThreadsSync";
+import { useCommentThreadMap, useQuestionThreadCards, useThreadInbox, useThreadInboxCards, useThreadsInboxSync } from "../../hooks/useThreadsSync";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useTeamFeature } from "../../lib/teamFeatures";
 import { memberName } from "../../lib/chatViews";
@@ -12,14 +12,16 @@ import {
   cardsForChip,
   chipFromSearch,
   dmCards,
-  frozenReadAtOf,
   markViewRead,
+  resolveOpenEntry,
   serverCards,
   sortCards,
+  toggledOpenEntry,
   unreadByChip,
   visibleChips,
   type ThreadCardModel,
 } from "../../lib/threadKinds";
+import type { ThreadCardOpenEntry } from "../../store/threadTypes";
 import { SegmentedToggle } from "../SegmentedToggle";
 import { Switch } from "../ui/switch";
 import { NewMessageModal } from "../chat/NewMessageModal";
@@ -35,9 +37,12 @@ import "./threads.css";
 // The Threads page body: every conversation the viewer is in — chat threads,
 // DMs, session comment threads, task comment streams, and (toggle) inbox
 // sessions — one card list, newest activity first, filtered by a single
-// select chip. One card is open at a time; its unread boundary is frozen at
-// expansion so marking read cannot erase it mid-read; reads happen only while
-// the reader is present (tab active, window focused).
+// select chip. Unread cards render already expanded, read cards collapsed,
+// so one scrolling pass reads the inbox in place (lib/threadCards owns the
+// rules; ThreadCard windows the heavy bodies and witnesses the read law). A
+// card's unread boundary is frozen at expansion so marking read cannot erase
+// it mid-read; reads happen only while the reader is present (tab active,
+// window focused) AND the card's newest content has been in the viewport.
 //
 // The chips are the app's SegmentedToggle rather than GenericListView's tab
 // bar: the page is a single-select view over one list in chat-style chrome,
@@ -67,6 +72,8 @@ export function ThreadsView({ present }: { present: boolean }) {
   const chatCards = useMemo(() => new Map(chatCardList.map((c) => [c.entry.root_key, c])), [chatCardList]);
   const { members, byId, viewerId, handles } = useChatMembers();
   const sessionCardList = useSessionThreadCards(includeSessions && chip === "all");
+  const questionCardList = useQuestionThreadCards();
+  const commentThreads = useCommentThreadMap(rows);
   // Task short ids give the canonical /tasks/<short_id> link. One string
   // signature over just the task rows on the page, not the tasks collection.
   const taskShortSig = useInboxStore((s) => {
@@ -74,31 +81,60 @@ export function ThreadsView({ present }: { present: boolean }) {
     for (const r of rows) if (r.kind === "task") sig += `${(s.tasks[String(r.task_id ?? r.root_key)] as any)?.short_id ?? ""}|`;
     return sig;
   });
+  // Page slugs give the published page link; one string over just the page rows.
+  const pageSlugSig = useInboxStore((s) => {
+    let sig = "";
+    for (const r of rows) if (r.kind === "page") sig += `${(s.pageThreads[r.root_key] as any)?.slug ?? ""}|`;
+    return sig;
+  });
 
   const allCards = useMemo(() => {
     const railById = new Map(rail.map((c) => [c.id, c]));
-    const tasks = useInboxStore.getState().tasks as Record<string, { short_id?: string }>;
-    const server = serverCards(rows, (id) => railById.get(id)?.kind, (id) => tasks[id]?.short_id);
-    return [...server, ...dmCards(chatOn ? rail : []), ...sessionCardList];
-    // taskShortSig is the wake for the short id lookup.
+    const st = useInboxStore.getState();
+    const tasks = st.tasks as Record<string, { short_id?: string }>;
+    const pages = st.pageThreads as Record<string, { slug?: string }>;
+    const server = serverCards(rows, (id) => railById.get(id)?.kind, (id) => tasks[id]?.short_id, (id) => pages[id]?.slug);
+    return [...server, ...dmCards(chatOn ? rail : []), ...sessionCardList, ...questionCardList];
+    // taskShortSig / pageSlugSig are the wakes for the id lookups.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, rail, chatOn, sessionCardList, taskShortSig]);
+  }, [rows, rail, chatOn, sessionCardList, questionCardList, taskShortSig, pageSlugSig]);
   const counts = useMemo(() => unreadByChip(allCards), [allCards]);
   const cards = useMemo(
-    () => sortCards(cardsForChip(allCards, chip, includeSessions)),
+    () => sortCards(cardsForChip(allCards, chip, includeSessions), chip),
     [allCards, chip, includeSessions],
   );
 
-  // ── One open card ─────────────────────────────────────────────────────────
-  const [open, setOpen] = useState<{ id: string; frozenReadAt: number } | null>(null);
+  // ── Open cards ────────────────────────────────────────────────────────────
+  // Unread cards render already expanded, read cards collapsed; the reader's
+  // toggles override, and a collapse holds until NEWER unread lands
+  // (lib/threadCards.resolveOpenEntry). Entries live in the store (ephemeral
+  // UI) so choices survive leaving the page; `sighted` marks the cards this
+  // visit has rendered — a card's first sight re-derives its `auto` entry
+  // (a card read last visit collapses again), while a sighted card's entry
+  // is settled, so marking itself read never collapses it under the reader.
+  const openEntries = useInboxStore((s) => s.threadCardOpen);
+  const sightedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const sighted = sightedRef.current;
+    const patch: Record<string, ThreadCardOpenEntry> = {};
+    for (const card of cards) {
+      const entry = openEntries[card.id];
+      const resolved = resolveOpenEntry(card, entry, !sighted.has(card.id));
+      sighted.add(card.id);
+      if (resolved !== entry) patch[card.id] = resolved;
+    }
+    if (Object.keys(patch).length) useInboxStore.getState().patchThreadCardOpen(patch);
+  }, [cards, openEntries]);
   const toggle = useCallback((card: ThreadCardModel) => {
-    setOpen((prev) => (prev?.id === card.id ? null : { id: card.id, frozenReadAt: frozenReadAtOf(card) }));
+    const st = useInboxStore.getState();
+    const current = resolveOpenEntry(card, st.threadCardOpen[card.id], false);
+    st.patchThreadCardOpen({ [card.id]: toggledOpenEntry(card, current) });
   }, []);
 
   const nameOf = useCallback((userId: string) => memberName(byId.get(String(userId))), [byId]);
   const ctx = useMemo<ThreadsPageContextValue>(
-    () => ({ now, present, teamId, viewerId, members, handles, nameOf, chatCards, toggle }),
-    [now, present, teamId, viewerId, members, handles, nameOf, chatCards, toggle],
+    () => ({ now, present, teamId, viewerId, members, handles, nameOf, chatCards, commentThreads, toggle }),
+    [now, present, teamId, viewerId, members, handles, nameOf, chatCards, commentThreads, toggle],
   );
 
   // ── Header + chips ────────────────────────────────────────────────────────
@@ -167,14 +203,21 @@ export function ThreadsView({ present }: { present: boolean }) {
                   </p>
                 </div>
               )}
-              {cards.map((card) => (
-                <ThreadCard
-                  key={card.id}
-                  card={card}
-                  expanded={open?.id === card.id}
-                  frozenReadAt={open?.id === card.id ? open.frozenReadAt : 0}
-                />
-              ))}
+              {cards.map((card, i) => {
+                const entry = resolveOpenEntry(card, openEntries[card.id], !sightedRef.current.has(card.id));
+                return (
+                  <ThreadCard
+                    key={card.id}
+                    card={card}
+                    expanded={entry.expanded}
+                    expandedBy={entry.by}
+                    frozenReadAt={entry.frozenReadAt}
+                    // The first screenful mounts bodies on the first frame,
+                    // before the viewport observers have answered.
+                    defaultNear={i < 8}
+                  />
+                );
+              })}
               {/* The feed pages the mixed list, so only All can promise older
                   items; a kind chip's list is whatever has paged in. */}
               {feed.hasMore && chip === "all" && (

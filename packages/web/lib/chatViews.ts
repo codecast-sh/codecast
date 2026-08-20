@@ -294,6 +294,12 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
     deletedAt: row.deleted_at,
     mentionsMe: mentionsViewer(row, ctx.viewerId),
     attachments: row.attachments?.length ? row.attachments : undefined,
+    // A canceled burst carries `deleted_at` too, so it never reaches the voice
+    // bubble — the deleted branch above it answers first. toMessageViews drops
+    // it before that, unless somebody replied to it.
+    voice: row.voice
+      ? { status: row.voice.status, durationMs: row.voice.duration_ms, roomKey: row.voice.room_key }
+      : undefined,
     reactions: reactions && reactions.length > 0 ? reactions : undefined,
     agentStatus: row.agent_status,
     replyCount: replyCount || undefined,
@@ -309,7 +315,19 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
 }
 
 export function toMessageViews(rows: ChatMessageRow[], ctx: ViewContext): ChatMessageView[] {
-  return rows.map((row) => toMessageView(row, ctx));
+  return rows
+    .map((row) => toMessageView(row, ctx))
+    // A canceled burst is a key somebody brushed: nothing was said, so there is
+    // nothing to show. The server keeps the row as a tombstone rather than
+    // deleting it — a hard delete cannot travel through a delta overlay, and
+    // watchers holding the live row would pulse forever — but a tombstone is a
+    // message to the CLIENT, not a line in the conversation. Rendering it would
+    // put "This message was deleted" in the DM every time a hand brushed a key.
+    //
+    // Unless something already points at it. A reply needs its root to have
+    // somewhere to hang, and there the tombstone is doing the ordinary job any
+    // deleted message's does.
+    .filter((view) => view.voice?.status !== "canceled" || !!view.replyCount);
 }
 
 /** Fold one message's reaction rows into pills. Same distinct-user counting as

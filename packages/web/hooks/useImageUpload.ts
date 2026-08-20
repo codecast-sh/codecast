@@ -1,24 +1,19 @@
 import { useCallback } from "react";
-import { useMutation, useConvex } from "convex/react";
+import { useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { compressImage } from "../lib/compressImage";
+import { uploadBlobToStorage } from "../lib/uploadBlob";
 
 const api = _api as any;
 
 export function useImageUpload() {
   const convex = useConvex();
-  const generateUploadUrl = useMutation(api.images.generateUploadUrl);
 
   return useCallback(async (file: File): Promise<string | null> => {
     const uploaded = await compressImage(file);
-    const uploadUrl = await generateUploadUrl({});
-    const result = await fetch(uploadUrl, {
-      method: "POST",
-      headers: { "Content-Type": uploaded.type },
-      body: uploaded,
-    });
-    const { storageId } = await result.json();
+    const storageId = await uploadBlobToStorage(convex, uploaded, uploaded.type);
+    if (!storageId) return null;
     const url = await convex.query(api.images.getImageUrl, { storageId });
     return url || null;
-  }, [generateUploadUrl, convex]);
+  }, [convex]);
 }

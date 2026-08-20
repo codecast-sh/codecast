@@ -182,3 +182,40 @@ describe("computeVisualOrder trigger view", () => {
     expect(order).toEqual(["wk1"]);
   });
 });
+
+// QUESTIONS: a session that asked something (a pending `cast decide` row)
+// lifts out of its status section into the leading Questions group — the
+// original bug was Working/Pinned never being sampled, so an advisory decide
+// showed in the queue badge but nowhere in the rail. Nav must walk it first,
+// and a collapsed Questions section must skip it like any other section.
+describe("computeVisualOrder lifts questions", () => {
+  const decide = {
+    _id: "d1", conversation_id: "wk1", session_id: "session-wk1",
+    question: "q", options: [{ label: "a" }, { label: "b" }],
+    blocking: false, status: "pending" as const, created_at: Date.now(),
+  };
+
+  it("a working session with a pending decide walks first, out of Working", () => {
+    const order = computeVisualOrder({ ...baseState, sessionDecisions: { d1: decide } }).map((s) => s._id);
+    expect(order[0]).toBe("wk1");
+    expect(order.filter((id) => id === "wk1")).toHaveLength(1);
+  });
+
+  it("collapsing the Questions section hides the lifted card from nav", () => {
+    const order = computeVisualOrder({
+      ...baseState,
+      sessionDecisions: { d1: decide },
+      collapsedSections: { questions: true },
+    }).map((s) => s._id);
+    expect(order).not.toContain("wk1");
+  });
+
+  it("an answered decide leaves the session in Working", () => {
+    const order = computeVisualOrder({
+      ...baseState,
+      sessionDecisions: { d1: { ...decide, status: "answered" as const } },
+    }).map((s) => s._id);
+    expect(order).toContain("wk1");
+    expect(order[0]).not.toBe("wk1");
+  });
+});

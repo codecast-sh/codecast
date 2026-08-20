@@ -225,7 +225,7 @@ describe("bucket filter mutual exclusivity", () => {
     expect(useInboxStore.getState().activeBucketFilter).toBeNull();
   });
 
-  it("chipFilterExclude follows the include → exclude → off cycle and resets on filter changes", () => {
+  it("chipFilterExclude tracks the setter's exclude flag and resets on filter changes", () => {
     const store = useInboxStore.getState();
     store.setActiveBucketFilter("b1");
     expect(useInboxStore.getState().chipFilterExclude).toBe(false);

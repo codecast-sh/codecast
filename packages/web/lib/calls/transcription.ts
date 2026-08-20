@@ -15,6 +15,7 @@
 // store except through convex mutations.
 import { Room, RoomEvent, Track } from "livekit-client";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { openAsrPipe, type AsrPipe } from "./asrPipe";
 
 type ConvexHandle = {
   mutation: (fn: any, args: any) => Promise<any>;
@@ -24,7 +25,6 @@ type ConvexHandle = {
 // Silence long enough to count as a conversational gap. VAD closes an
 // utterance at 600ms; a gap is a real lull, not a breath.
 export const GAP_MS = 6_000;
-const SAMPLE_RATE = 24_000;
 const FLUSH_MIN_INTERVAL_MS = 10_000;
 
 export type ScribeStatus = {
@@ -57,15 +57,9 @@ export function getScribeStatus(): ScribeStatus {
 }
 
 type TrackPipe = {
-  ws: WebSocket | null;
-  ctx: AudioContext | null;
-  node: ScriptProcessorNode | null;
-  source: MediaStreamAudioSourceNode | null;
+  pipe: AsrPipe;
   speakerId: string;
   speakerName: string;
-  speaking: boolean;
-  utteranceStartMs: number;
-  closed: boolean;
 };
 
 let convex: ConvexHandle | null = null;
@@ -87,164 +81,69 @@ function nowMs(): number {
   return Date.now() - startedAt;
 }
 
-// PCM16 mono downsample from the AudioContext rate to 24k, base64-encoded
-// the way input_audio_buffer.append wants it.
-function floatTo16(input: Float32Array, inRate: number): ArrayBuffer {
-  const ratio = inRate / SAMPLE_RATE;
-  const outLen = Math.floor(input.length / ratio);
-  const out = new Int16Array(outLen);
-  for (let i = 0; i < outLen; i++) {
-    const v = input[Math.floor(i * ratio)];
-    out[i] = Math.max(-1, Math.min(1, v)) * 0x7fff;
-  }
-  return out.buffer;
-}
-function b64(buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf);
-  let s = "";
-  const CHUNK = 0x8000;
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    s += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-  }
-  return btoa(s);
-}
-
-async function openPipe(
+// One recognizer per track (lib/calls/asrPipe), wrapped in the scribe's own
+// bookkeeping: who the track belongs to, where its words go, and the reconnect
+// the huddle wants — a dropped socket mid-huddle is a token expiry, not the end
+// of the conversation.
+function openPipe(
   key: string,
   mediaTrack: MediaStreamTrack,
   speakerId: string,
   speakerName: string,
   roomKey: string,
-): Promise<void> {
+): void {
   if (!convex || pipes.has(key)) return;
-  const pipe: TrackPipe = {
-    ws: null,
-    ctx: null,
-    node: null,
-    source: null,
-    speakerId,
-    speakerName,
-    speaking: false,
-    utteranceStartMs: 0,
-    closed: false,
-  };
-  pipes.set(key, pipe);
-  emit({ trackCount: pipes.size });
-
-  const minted = await convex.action(api.transcripts.mintAsrToken, { room_key: roomKey });
-  if (pipe.closed) return;
-  if (minted?.error || !minted?.client_secret) {
-    emit({ error: minted?.error ?? "Could not start transcription" });
+  const forget = () => {
     pipes.delete(key);
     emit({ trackCount: pipes.size });
-    return;
-  }
-
-  // Browser websockets cannot set headers; the Realtime API accepts the
-  // ephemeral secret as a subprotocol.
-  // GA subprotocol auth: just "realtime" + the ephemeral key. (Verified
-  // against the live API; the old beta subprotocol is gone.)
-  const ws = new WebSocket("wss://api.openai.com/v1/realtime?intent=transcription", [
-    "realtime",
-    `openai-insecure-api-key.${minted.client_secret}`,
-  ]);
-  pipe.ws = ws;
-
-  ws.onopen = () => {
-    if (pipe.closed) return;
-    // The session arrives fully configured from the mint (model, pcm 24k,
-    // server VAD) — no session.update needed, and the beta-era
-    // transcription_session.update event no longer exists.
-    const stream = new MediaStream([mediaTrack]);
-    const actx = new AudioContext();
-    pipe.ctx = actx;
-    const source = actx.createMediaStreamSource(stream);
-    pipe.source = source;
-    // ScriptProcessor over AudioWorklet deliberately: one file, no worklet
-    // module fetch, and 4096-frame buffers (~85ms at 48k) are fine for ASR.
-    const node = actx.createScriptProcessor(4096, 1, 1);
-    pipe.node = node;
-    node.onaudioprocess = (e) => {
-      if (pipe.closed || ws.readyState !== WebSocket.OPEN) return;
-      const pcm = floatTo16(e.inputBuffer.getChannelData(0), actx.sampleRate);
-      ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: b64(pcm) }));
-    };
-    source.connect(node);
-    // A ScriptProcessor only runs when connected toward the destination;
-    // route through a zero-gain node so nothing is audible.
-    const mute = actx.createGain();
-    mute.gain.value = 0;
-    node.connect(mute);
-    mute.connect(actx.destination);
   };
-
-  ws.onmessage = (e) => {
-    if (pipe.closed) return;
-    let msg: any;
-    try {
-      msg = JSON.parse(String(e.data));
-    } catch {
-      return;
-    }
-    if (msg.type === "input_audio_buffer.speech_started") {
-      pipe.speaking = true;
-      pipe.utteranceStartMs = nowMs();
-    } else if (msg.type === "input_audio_buffer.speech_stopped") {
-      pipe.speaking = false;
-      lastSpeechEndMs = Date.now();
-    } else if (
-      msg.type === "conversation.item.input_audio_transcription.completed" &&
-      typeof msg.transcript === "string"
-    ) {
-      const text = msg.transcript.trim();
-      if (!text) return;
-      const t1 = nowMs();
-      const seg = {
-        speaker_id: pipe.speakerId,
-        speaker_name: pipe.speakerName,
-        text,
-        t0: pipe.utteranceStartMs || Math.max(0, t1 - 2000),
-        t1,
-      };
-      anySegmentsSinceFlush = true;
-      emit({ tail: [...status.tail, { speaker: pipe.speakerName, text }].slice(-6) });
-      convex
-        ?.mutation(api.transcripts.appendSegments, {
-          transcript_id: transcriptId,
-          segments: [seg],
-        })
-        .catch(() => {});
-    } else if (msg.type === "error") {
-      emit({ error: String(msg.error?.message ?? "ASR error").slice(0, 140) });
-    }
-  };
-
-  ws.onclose = () => {
-    if (!pipe.closed && status.active) {
-      // Token expiry or transient drop: reopen this pipe fresh.
-      pipes.delete(key);
-      emit({ trackCount: pipes.size });
-      if (room && transcriptId) {
-        setTimeout(() => {
-          if (status.active && !pipes.has(key) && mediaTrack.readyState === "live") {
-            void openPipe(key, mediaTrack, speakerId, speakerName, roomKey);
-          }
-        }, 1000);
-      }
-    }
-  };
+  const pipe = openAsrPipe({
+    convex,
+    roomKey,
+    track: mediaTrack,
+    clock: nowMs,
+    events: {
+      onSpeechStop: () => {
+        lastSpeechEndMs = Date.now();
+      },
+      onUtterance: ({ text, t0, t1 }) => {
+        const seg = { speaker_id: speakerId, speaker_name: speakerName, text, t0, t1 };
+        anySegmentsSinceFlush = true;
+        emit({ tail: [...status.tail, { speaker: speakerName, text }].slice(-6) });
+        convex
+          ?.mutation(api.transcripts.appendSegments, {
+            transcript_id: transcriptId,
+            segments: [seg],
+          })
+          .catch(() => {});
+      },
+      onError: (message) => emit({ error: message }),
+      onFailed: (message) => {
+        emit({ error: message });
+        forget();
+      },
+      onDropped: () => {
+        if (!status.active) return forget();
+        // Token expiry or transient drop: reopen this pipe fresh.
+        forget();
+        if (room && transcriptId) {
+          setTimeout(() => {
+            if (status.active && !pipes.has(key) && mediaTrack.readyState === "live") {
+              openPipe(key, mediaTrack, speakerId, speakerName, roomKey);
+            }
+          }, 1000);
+        }
+      },
+    },
+  });
+  pipes.set(key, { pipe, speakerId, speakerName });
+  emit({ trackCount: pipes.size });
 }
 
 function closePipe(key: string) {
-  const pipe = pipes.get(key);
-  if (!pipe) return;
-  pipe.closed = true;
-  try {
-    pipe.node?.disconnect();
-    pipe.source?.disconnect();
-    void pipe.ctx?.close();
-    pipe.ws?.close();
-  } catch {}
+  const entry = pipes.get(key);
+  if (!entry) return;
+  entry.pipe.close();
   pipes.delete(key);
   emit({ trackCount: pipes.size });
 }
@@ -255,7 +154,7 @@ function attachRoomTracks(roomKey: string) {
   const micPub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
   const me = room.localParticipant;
   if (micPub?.track?.mediaStreamTrack) {
-    void openPipe(
+    openPipe(
       `local:${micPub.trackSid}`,
       micPub.track.mediaStreamTrack,
       me.identity,
@@ -267,7 +166,7 @@ function attachRoomTracks(roomKey: string) {
   for (const p of room.remoteParticipants.values()) {
     const pub = p.getTrackPublication(Track.Source.Microphone);
     if (pub?.isSubscribed && pub.track?.mediaStreamTrack) {
-      void openPipe(
+      openPipe(
         `${p.identity}:${pub.trackSid}`,
         pub.track.mediaStreamTrack,
         p.identity,
@@ -313,7 +212,7 @@ export async function startScribe(opts: {
   // stop-start conversation from spamming a routed agent.
   gapTimer = interval(() => {
     if (!status.active || !transcriptId || !convex) return;
-    const anySpeaking = [...pipes.values()].some((p) => p.speaking);
+    const anySpeaking = [...pipes.values()].some((p) => p.pipe.speaking);
     const quietFor = Date.now() - Math.max(lastSpeechEndMs, lastFlushAt);
     if (
       !anySpeaking &&

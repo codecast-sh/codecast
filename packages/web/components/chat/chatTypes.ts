@@ -5,6 +5,8 @@
 // fixture, from an optimistic stub and from a synced server row — and so the
 // whole surface can be designed and screenshot-verified before the store exists.
 
+import type { ChatVoiceStatus } from "@codecast/shared/chat";
+
 export type ChatAuthor = {
   id: string;
   name: string;
@@ -64,6 +66,17 @@ export type ChatMessageView = {
   /** An agent turn in flight (or failed) inside this root's thread, so the
    *  affordance can say "thinking…" without the panel open. */
   threadAgentStatus?: "thinking" | "streaming" | "error";
+  /** Push-to-talk. Present only on a walkie burst, which renders as a voice
+   *  bubble instead of a markdown body: pulsing while the sender is still
+   *  holding the key, a play button once the recording has landed. `content` is
+   *  the transcript in both states — the words ARE the message, so reading is
+   *  always enough and the audio is the optional half. */
+  voice?: {
+    status: ChatVoiceStatus;
+    durationMs?: number;
+    /** The call room the burst was spoken into: what a live bubble joins. */
+    roomKey?: string;
+  };
   /** Optimistic, not yet echoed by the server. Renders like a sent row; the
    *  flag is kept for callers that reason about the outbox. */
   pending?: boolean;

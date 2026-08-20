@@ -390,6 +390,32 @@ export class TmuxControlClient {
   }
 
   /**
+   * Detach NOW, without the control channel: for daemon shutdown, where
+   * close()'s in-band restore rides a stdin write the process won't live to
+   * see drained, and verifyRestore — which runs on the child's exit event —
+   * never gets its turn (a pane was left at 165x6 this way, 2026-08-21). Our
+   * client is found by pid and detached from outside, then the window is
+   * repaired the same way verifyRestore would.
+   */
+  closeSync(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.failPending();
+    const pid = this.child?.pid;
+    if (pid && this.mode.kind === "attach") {
+      try {
+        const r = tmuxRun(["list-clients", "-t", this.mode.target, "-F", "#{client_name}|#{client_pid}"]);
+        for (const line of r.stdout.split("\n")) {
+          const [name, cpid] = line.split("|");
+          if (name && parseInt(cpid ?? "", 10) === pid) tmuxRun(["detach-client", "-t", name]);
+        }
+      } catch {}
+    }
+    this.verifyRestore();
+    this.destroyChild();
+  }
+
+  /**
    * The in-band restore can be lost — the daemon shutting down under us, a
    * child killed before its stdin drained. Once our client is gone, check
    * the window and repair it from outside if needed: resize-window flips the

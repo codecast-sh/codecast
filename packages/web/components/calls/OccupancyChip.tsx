@@ -5,6 +5,58 @@ import { joinCall, startHuddle } from "../../lib/calls/callManager";
 import { sessionRoomKey } from "@codecast/shared/contracts";
 import { AvatarImg } from "../../lib/avatarCache";
 
+// The faces in a room, in one idiom: every live-room surface (this chip, the
+// sidebar's Live now cluster, /calls' Happening now) shows the same overlapped
+// avatars with the same initial fallback, so a room looks like itself wherever
+// it appears.
+export function Facepile({
+  members,
+  max = 3,
+  size = 16,
+  className = "",
+}: {
+  members: { user_id: string; user_name?: string; user_image?: string }[];
+  max?: number;
+  /** Avatar diameter in px. */
+  size?: number;
+  className?: string;
+}) {
+  const extra = members.length - max;
+  return (
+    <span className={`flex shrink-0 -space-x-1.5 ${className}`}>
+      {members.slice(0, max).map((m) => (
+        <span
+          key={m.user_id}
+          className="inline-block overflow-hidden rounded-full border border-sol-bg"
+          style={{ height: size, width: size }}
+        >
+          <AvatarImg
+            src={m.user_image}
+            alt=""
+            className="h-full w-full object-cover"
+            fallback={
+              <span
+                className="flex h-full w-full items-center justify-center bg-sol-base02"
+                style={{ fontSize: Math.max(8, Math.round(size / 2)) }}
+              >
+                {(m.user_name || "?").charAt(0).toUpperCase()}
+              </span>
+            }
+          />
+        </span>
+      ))}
+      {extra > 0 && (
+        <span
+          className="inline-flex items-center justify-center rounded-full border border-sol-bg bg-sol-base02 text-sol-text-muted"
+          style={{ height: size, width: size, fontSize: Math.max(8, Math.round(size / 2)) }}
+        >
+          +{extra}
+        </span>
+      )}
+    </span>
+  );
+}
+
 // "Someone is in here" — the live-room affordance for channel rows and
 // session headers. Renders nothing while the room is empty (rooms are keys,
 // not entities; an empty room does not exist), a facepile + join otherwise.
@@ -46,25 +98,7 @@ export function OccupancyChip({
       }
     >
       <Headphones className="h-3 w-3" />
-      <span className="flex -space-x-1.5">
-        {roster.slice(0, 3).map((m) => (
-          <span
-            key={m.user_id}
-            className="inline-block h-4 w-4 overflow-hidden rounded-full border border-sol-bg"
-          >
-            <AvatarImg
-              src={m.user_image}
-              alt=""
-              className="h-full w-full object-cover"
-              fallback={
-                <span className="flex h-full w-full items-center justify-center bg-sol-base02 text-[8px]">
-                  {(m.user_name || "?").charAt(0).toUpperCase()}
-                </span>
-              }
-            />
-          </span>
-        ))}
-      </span>
+      <Facepile members={roster} size={16} />
       <span>{inThisRoom ? "in huddle" : "join"}</span>
     </button>
   );

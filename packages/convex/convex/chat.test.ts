@@ -3,14 +3,19 @@ import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
 import {
   addChannelMembers,
+  appendVoiceTranscript,
+  cancelVoiceBurst,
   createChannel,
   deleteMessage,
+  finalizeVoiceBurst,
+  startVoiceBurst,
   editMessage,
   expireAnchorReply,
   stopAnchorReply,
   archiveChannel,
   getThread,
   listChannels,
+  listLiveVoiceBursts,
   listMessages,
   listMyThreads,
   markAllThreadsRead,
@@ -1989,6 +1994,57 @@ describe("direct messages", () => {
     expect(row.unread_mentions).toBe(2);
   });
 
+  test("a DM rail row stamps the other person's newest line, never the viewer's", async () => {
+    const ctx = context(ALICE);
+    const dm = await call(openDm, ctx, { team_id: TEAM, member_ids: [BOB] });
+    const railRow = async (who: any) =>
+      (await call(listChannels, who, { team_id: TEAM })).rail
+        .find((r: any) => String(r.channel_id) === String(dm.channel_id));
+
+    // Only Alice has spoken: her own rail has no inbound; Bob's does.
+    const first = await call(sendMessage, ctx, { channel_id: dm.channel_id, content: "anyone?" });
+    expect((await railRow(ctx)).last_inbound).toBeNull();
+    expect((await railRow(as(ctx, BOB))).last_inbound).toEqual({
+      _id: first.message_id, created_at: expect.any(Number),
+    });
+
+    // Bob answers, then Alice sends a run of follow-ups: Alice's stamp stays on
+    // Bob's line, and sort_at moves past it on her own sends.
+    const reply = await call(sendMessage, as(ctx, BOB), { channel_id: dm.channel_id, content: "here" });
+    for (let i = 0; i < 6; i++) {
+      await call(sendMessage, ctx, { channel_id: dm.channel_id, content: `more ${i}` });
+    }
+    messagesIn(ctx).forEach((row: any, i: number) => { row.created_at = 2_000 + i; });
+    const row = await railRow(ctx);
+    expect(row.last_inbound._id).toBe(reply.message_id);
+    expect(row.last_inbound.created_at).toBe(2_001);
+    expect(row.sort_at).toBe(2_007);
+  });
+
+  test("a DM inbound stamp skips tombstones and silent agent rows", async () => {
+    const ctx = context(ALICE);
+    const dm = await call(openDm, ctx, { team_id: TEAM, member_ids: [BOB] });
+    const bob = as(ctx, BOB);
+    const kept = await call(sendMessage, bob, { channel_id: dm.channel_id, content: "kept" });
+    const gone = await call(sendMessage, bob, { channel_id: dm.channel_id, content: "retracted" });
+    await call(deleteMessage, bob, { message_id: gone.message_id });
+    messagesIn(ctx).forEach((row: any, i: number) => { row.created_at = 2_000 + i; });
+    // An anchor that listened and passed leaves a row nobody sees.
+    messagesIn(ctx).push({
+      _id: "silent-pass", team_id: TEAM, channel_id: dm.channel_id, user_id: BOT,
+      author_kind: "agent", agent_status: "passed", content: "",
+      created_at: 3_000, updated_at: 3_000,
+    });
+
+    const row = (await call(listChannels, ctx, { team_id: TEAM })).rail
+      .find((r: any) => String(r.channel_id) === String(dm.channel_id));
+    expect(row.last_inbound).toEqual({ _id: kept.message_id, created_at: 2_000 });
+    // A channel row carries no stamp at all.
+    const channelRow = (await call(listChannels, ctx, { team_id: TEAM })).rail
+      .find((r: any) => String(r.channel_id) === String(CHANNEL));
+    expect(channelRow.last_inbound).toBeNull();
+  });
+
   test("a muted DM is silent; the mentions default still lets DM lines through", async () => {
     const ctx = context(ALICE);
     const dm = await call(openDm, ctx, { team_id: TEAM, member_ids: [BOB] });
@@ -2395,5 +2451,282 @@ describe("the Threads inbox", () => {
       expect(swept.marked).toBe(1);
       expect((await call(unreadCount, ctx, { team_id: TEAM }))).toBe(0);
     });
+  });
+});
+
+// A push-to-talk burst is one message written in three steps. These tests hold
+// the two rules that make that safe: only the speaker writes it, and only the
+// release announces it — until then it exists without having happened.
+describe("voice bursts", () => {
+  const AUDIO = { storage_id: "storage-burst" as any, name: "burst.webm", mime: "audio/webm" };
+
+  async function dmWith(ctx: any, other: string) {
+    const dm = await call(openDm, ctx, { team_id: TEAM, member_ids: [other] });
+    ctx._emitted.length = 0;
+    return dm.channel_id;
+  }
+
+  function rowFor(ctx: any, id: any) {
+    return messagesIn(ctx).find((m: any) => String(m._id) === String(id));
+  }
+
+  async function railFor(ctx: any, userId: string, channelId: any) {
+    const rail = await call(listChannels, as(ctx, userId), { team_id: TEAM });
+    return rail.rail.find((r: any) => String(r.channel_id) === String(channelId));
+  }
+
+  test("start, stream, release: one message, and the push waits for the release", async () => {
+    const ctx = context(ALICE);
+    const channel = await dmWith(ctx, BOB);
+
+    const started = await call(startVoiceBurst, ctx, {
+      channel_id: channel, client_id: "burst-1", room_key: "dm:alice-bob",
+    });
+    expect(started.created).toBe(true);
+    expect(rowFor(ctx, started.message_id).voice).toEqual({
+      status: "live", room_key: "dm:alice-bob",
+    });
+    expect(rowFor(ctx, started.message_id).content).toBe("");
+
+    // The transcript is rewritten whole each time — a recognizer revises what it
+    // already heard — and none of it notifies anyone.
+    await call(appendVoiceTranscript, ctx, { message_id: started.message_id, content: "hey are you" });
+    await call(appendVoiceTranscript, ctx, { message_id: started.message_id, content: "hey are you around" });
+    expect(rowFor(ctx, started.message_id).content).toBe("hey are you around");
+    expect(ctx._emitted.length).toBe(0);
+
+    await call(finalizeVoiceBurst, ctx, {
+      message_id: started.message_id,
+      content: "hey are you around?",
+      duration_ms: 2400,
+      attachments: [AUDIO],
+    });
+    const landed = rowFor(ctx, started.message_id);
+    expect(landed.voice).toEqual({ status: "done", duration_ms: 2400, room_key: "dm:alice-bob" });
+    expect(landed.attachments).toEqual([AUDIO]);
+    // Three writes, still one message in the room.
+    expect(messagesIn(ctx).filter((m: any) => String(m.channel_id) === String(channel)).length).toBe(1);
+    // And exactly one notification, carrying the words that were spoken.
+    expect(ctx._emitted.map((e: any) => e.args.event_type)).toEqual(["chat_dm"]);
+    expect(ctx._emitted[0].args.direct_recipient_id).toBe(BOB);
+    expect(ctx._emitted[0].args.push_body).toBe("hey are you around?");
+
+    // The other side reads the lifecycle off the row it already gets.
+    const view = await call(listMessages, as(ctx, BOB), { channel_id: channel });
+    expect(view.messages.length).toBe(1);
+    expect(view.messages[0].voice.status).toBe("done");
+  });
+
+  // The receiver's whole trigger. A client watching this decides whether a
+  // voice comes out of somebody's speakers, so what it can and cannot see is
+  // the feature's blast radius.
+  test("the watcher sees a live burst in my DM, and nothing else", async () => {
+    const ctx = context(ALICE);
+    const channel = await dmWith(ctx, BOB);
+    const elsewhere = (await call(createChannel, ctx, { team_id: TEAM, name: "standup" })).channel_id;
+
+    const started = await call(startVoiceBurst, ctx, {
+      channel_id: channel, room_key: "dm:alice-bob",
+    });
+    const heard = await call(listLiveVoiceBursts, as(ctx, BOB), { channel_ids: [channel] });
+    expect(heard.length).toBe(1);
+    expect(String(heard[0].message_id)).toBe(String(started.message_id));
+    expect(heard[0].room_key).toBe("dm:alice-bob");
+    // No transcript on the wire: this is a standing subscription and the words
+    // are patched every couple of seconds while the burst runs.
+    expect(Object.keys(heard[0]).sort()).toEqual([
+      "channel_id", "created_at", "message_id", "room_key", "user_id",
+    ]);
+
+    // My own burst is not something to play back at me.
+    expect(await call(listLiveVoiceBursts, ctx, { channel_ids: [channel] })).toEqual([]);
+    // A channel I am not in, named by a caller who is guessing: nothing.
+    expect(await call(listLiveVoiceBursts, as(ctx, OUTSIDER), { channel_ids: [channel] })).toEqual([]);
+
+    // Walkie is a person-to-person gesture; a room channel is never scanned.
+    const inRoom = await call(startVoiceBurst, ctx, { channel_id: elsewhere, room_key: "channel:x" });
+    expect(String(inRoom.message_id)).toBeTruthy();
+    expect(await call(listLiveVoiceBursts, as(ctx, BOB), { channel_ids: [elsewhere] })).toEqual([]);
+
+    // And the ear closes on release: the message is now an ordinary one.
+    await call(finalizeVoiceBurst, ctx, {
+      message_id: started.message_id, content: "back in five", duration_ms: 1500,
+    });
+    expect(await call(listLiveVoiceBursts, as(ctx, BOB), { channel_ids: [channel] })).toEqual([]);
+  });
+
+  test("a burst the recognizer heard nothing in still lands, and its banner says what it is", async () => {
+    const ctx = context(ALICE);
+    const channel = await dmWith(ctx, BOB);
+    const started = await call(startVoiceBurst, ctx, { channel_id: channel });
+    await call(finalizeVoiceBurst, ctx, {
+      message_id: started.message_id, content: "", duration_ms: 1200, attachments: [AUDIO],
+    });
+    expect(ctx._emitted[0].args.push_body).toBe("Voice note");
+    // Neither words nor audio is not a message; that is what cancel is for.
+    const empty = await call(startVoiceBurst, ctx, { channel_id: channel });
+    await expect(call(finalizeVoiceBurst, ctx, {
+      message_id: empty.message_id, content: "  ", duration_ms: 10,
+    })).rejects.toThrow("needs audio or a transcript");
+  });
+
+  test("a transcript names its speaker: nobody else writes it, and nothing writes it after the release", async () => {
+    const ctx = context(ALICE);
+    const channel = await dmWith(ctx, BOB);
+    const started = await call(startVoiceBurst, ctx, { channel_id: channel });
+
+    await expect(call(appendVoiceTranscript, as(ctx, BOB), {
+      message_id: started.message_id, content: "words Alice never said",
+    })).rejects.toThrow("Only the speaker");
+    await expect(call(cancelVoiceBurst, as(ctx, BOB), { message_id: started.message_id }))
+      .rejects.toThrow("Only the speaker");
+    // A stranger to the room gets the room's own answer, not an existence oracle.
+    await expect(call(appendVoiceTranscript, as(ctx, OUTSIDER), {
+      message_id: started.message_id, content: "hello",
+    })).rejects.toThrow("Channel not found");
+
+    await call(finalizeVoiceBurst, ctx, {
+      message_id: started.message_id, content: "said and done", duration_ms: 900, attachments: [AUDIO],
+    });
+    // A landed message has already notified: reopening it would rewrite words
+    // people were shown.
+    await expect(call(appendVoiceTranscript, ctx, {
+      message_id: started.message_id, content: "said and done, actually not",
+    })).rejects.toThrow("no longer live");
+    await expect(call(finalizeVoiceBurst, ctx, {
+      message_id: started.message_id, content: "again", duration_ms: 100,
+    })).rejects.toThrow("no longer live");
+    expect(rowFor(ctx, started.message_id).content).toBe("said and done");
+  });
+
+  test("a retried start returns the burst already in flight", async () => {
+    const ctx = context(ALICE);
+    const channel = await dmWith(ctx, BOB);
+    const started = await call(startVoiceBurst, ctx, { channel_id: channel, client_id: "burst-1" });
+    const again = await call(startVoiceBurst, ctx, { channel_id: channel, client_id: "burst-1" });
+    expect(again.created).toBe(false);
+    expect(String(again.message_id)).toBe(String(started.message_id));
+    expect(messagesIn(ctx).length).toBe(1);
+
+    // A client id already spent on a typed line is a conflict, not a burst.
+    await call(sendMessage, ctx, { channel_id: channel, content: "typed", client_id: "typed-1" });
+    await expect(call(startVoiceBurst, ctx, { channel_id: channel, client_id: "typed-1" }))
+      .rejects.toThrow("already bound");
+  });
+
+  test("a brushed key leaves a tombstone, not absence — the row has to travel", async () => {
+    const ctx = context(ALICE);
+    const channel = await dmWith(ctx, BOB);
+    const brushed = await call(startVoiceBurst, ctx, { channel_id: channel, client_id: "brushed" });
+    // Bob had the DM open, so his client already holds the live row. Chat syncs
+    // as a delta overlay that only grows: a row that merely stopped being
+    // returned would pulse on his screen forever. The tombstone is what reaches
+    // him, so it must exist.
+    const canceled = await call(cancelVoiceBurst, ctx, { message_id: brushed.message_id });
+    expect(canceled.deleted).toBe(true);
+    const gone = rowFor(ctx, brushed.message_id);
+    expect(gone).toBeDefined();
+    expect(gone.voice.status).toBe("canceled");
+    expect(gone.deleted_at).toBeGreaterThan(0);
+    expect(gone.content).toBe("");
+    // It never notified, so there is nothing to retract.
+    expect(ctx._emitted.length).toBe(0);
+    // And it is a deleted row everywhere a deleted row is: no badge, no preview,
+    // and the watcher does not chase it into a room.
+    const rail = await railFor(ctx, BOB, channel);
+    expect(rail.unread).toBe(0);
+    expect(rail.last_message).toBe(null);
+    expect(await call(listLiveVoiceBursts, as(ctx, BOB), { channel_ids: [channel] })).toEqual([]);
+
+    // A referenced burst tombstones the same way, keeping the reaction's row
+    // pointed at something real.
+    const seen = await call(startVoiceBurst, ctx, { channel_id: channel, client_id: "seen" });
+    await call(toggleReaction, as(ctx, BOB), { message_id: seen.message_id, emoji: "👍" });
+    await call(cancelVoiceBurst, ctx, { message_id: seen.message_id });
+    expect(rowFor(ctx, seen.message_id).voice.status).toBe("canceled");
+  });
+
+  test("a live burst badges nothing; the released one badges once", async () => {
+    const ctx = context(ALICE);
+    const channel = await dmWith(ctx, BOB);
+    const started = await call(startVoiceBurst, ctx, { channel_id: channel, client_id: "burst-1" });
+    await call(appendVoiceTranscript, ctx, { message_id: started.message_id, content: "half a" });
+
+    const midSentence = await railFor(ctx, BOB, channel);
+    expect(midSentence.unread).toBe(0);
+    expect(midSentence.unread_mentions).toBe(0);
+    // Nor is it the room's last line while it is still being said.
+    expect(midSentence.last_message).toBe(null);
+
+    await call(finalizeVoiceBurst, ctx, {
+      message_id: started.message_id, content: "half a sentence", duration_ms: 1500, attachments: [AUDIO],
+    });
+    const released = await railFor(ctx, BOB, channel);
+    expect(released.unread).toBe(1);
+    // Every DM line is addressed to you, bursts included.
+    expect(released.unread_mentions).toBe(1);
+    expect(released.last_message.preview).toBe("half a sentence");
+  });
+
+  test("a long talker is not an orphan: the sweep reads silence, not age", async () => {
+    const ctx = context(ALICE);
+    const channel = await dmWith(ctx, BOB);
+    const talking = await call(startVoiceBurst, ctx, { channel_id: channel, client_id: "long-one" });
+    // The key has been down for ten minutes, and the transcript moved a moment
+    // ago. Judged by its start time this burst looks abandoned; it is not.
+    const row = rowFor(ctx, talking.message_id);
+    row.created_at = Date.now() - 10 * 60_000;
+    row.updated_at = Date.now() - 10 * 60_000;
+    await call(appendVoiceTranscript, ctx, {
+      message_id: talking.message_id, content: "still going and",
+    });
+
+    // Bob holds his own key to answer — hold-to-reply, which sweeps this
+    // channel on its way in. Alice is mid-sentence and must survive it.
+    await call(startVoiceBurst, as(ctx, BOB), { channel_id: channel, client_id: "reply" });
+    expect(rowFor(ctx, talking.message_id).voice.status).toBe("live");
+
+    // So her real release still lands, with the recording, instead of being
+    // refused as "no longer live" after a sweep ate the words.
+    await call(finalizeVoiceBurst, ctx, {
+      message_id: talking.message_id,
+      content: "still going and now done",
+      duration_ms: 600_000,
+      attachments: [AUDIO],
+    });
+    const landed = rowFor(ctx, talking.message_id);
+    expect(landed.voice.status).toBe("done");
+    expect(landed.content).toBe("still going and now done");
+    expect(landed.attachments).toEqual([AUDIO]);
+  });
+
+  test("a burst whose tab died is finished by the next one, or forgotten", async () => {
+    const ctx = context(ALICE);
+    const channel = await dmWith(ctx, BOB);
+    const spoke = await call(startVoiceBurst, ctx, { channel_id: channel, client_id: "orphan-words" });
+    await call(appendVoiceTranscript, ctx, { message_id: spoke.message_id, content: "did you see the" });
+    const silent = await call(startVoiceBurst, ctx, { channel_id: channel, client_id: "orphan-silence" });
+    // Both tabs die: nothing releases them, nothing more is said in them, and
+    // two minutes pass. Silence is what makes them orphans — see the test below.
+    for (const row of messagesIn(ctx)) {
+      row.created_at = Date.now() - 5 * 60_000;
+      row.updated_at = Date.now() - 5 * 60_000;
+    }
+    ctx._emitted.length = 0;
+
+    const fresh = await call(startVoiceBurst, ctx, { channel_id: channel, client_id: "fresh" });
+    // Words were said, so they land — without audio, which died with the tab —
+    // and reach the other side, who was never told about them live.
+    const orphan = rowFor(ctx, spoke.message_id);
+    expect(orphan.voice.status).toBe("done");
+    expect(orphan.content).toBe("did you see the");
+    expect(orphan.attachments).toBeUndefined();
+    expect(ctx._emitted.map((e: any) => e.args.event_type)).toEqual(["chat_dm"]);
+    // Nothing was said in the other one, so it is a tombstone — which is what
+    // reaches the clients that watched it start.
+    expect(rowFor(ctx, silent.message_id).deleted_at).toBeGreaterThan(0);
+    expect(rowFor(ctx, silent.message_id).voice.status).toBe("canceled");
+    // And the burst doing the sweeping is left alone.
+    expect(rowFor(ctx, fresh.message_id).voice.status).toBe("live");
   });
 });

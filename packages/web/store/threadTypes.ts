@@ -82,3 +82,19 @@ export type PageThreadRow = {
 export function threadRowId(kind: ThreadKind, rootKey: string): string {
   return `${kind}:${rootKey}`;
 }
+
+/** One Threads card's open/closed state, keyed by the card id (ephemeral UI in
+ *  the store so it survives leaving and re-entering the page). `at` is the
+ *  card's activityAt when the state was decided: a user's collapse of an
+ *  unread card holds only until newer unread lands (activityAt moves past
+ *  `at`), then the card re-earns its default-open. `frozenReadAt` is the
+ *  unread boundary frozen at expansion, so marking read cannot erase the
+ *  "new" divider mid-read. */
+export type ThreadCardOpenEntry = {
+  expanded: boolean;
+  /** Who decided: the default rule, or the user's click. A fresh visit
+   *  re-derives `auto` entries; `user` entries hold. */
+  by: "auto" | "user";
+  at: number;
+  frozenReadAt: number;
+};

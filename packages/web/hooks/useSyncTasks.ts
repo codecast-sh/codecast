@@ -5,7 +5,8 @@ import { useInboxStore } from "../store/inboxStore";
 import { collectionRowValidator } from "../store/clientSyncRegistry";
 import { useConvexSync } from "./useConvexSync";
 import { useWatchEffect } from "./useWatchEffect";
-import { runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
+import { countLogMissedRows, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
+import { track } from "../lib/analytics";
 import { useWorkspaceArgs, type WorkspaceArgs } from "./useWorkspaceArgs";
 
 const api = _api as any;
@@ -25,13 +26,13 @@ const CURSOR_REFRESH_MS = 30_000;
 // the server's `isDone`, so the crawl always reaches the true end regardless.
 const RECONCILE_PAGE_SIZE = 1000;
 const RECONCILE_PAGE_DELAY_MS = 5; // minimal pacing — cold backfill should be fast, not polite
-// Safety-net interval, NOT the freshness path. The live delta channel below keeps
-// the store current within ~30s; this crawl only re-verifies completeness. The
-// FIRST crawl per workspace is a full backfill (cold cache); every crawl after is
-// incremental (`since` the persisted watermark), so it pages a handful of changed
-// rows, not the whole table. Durable throttle (syncMeta.backfilledAt) means it
-// won't re-run on every launch — the old 5-min full sweep was the "syncing 4,529".
-const RECONCILE_THROTTLE_MS = 30 * 60 * 1000;
+// Demoted safety net (docs/architecture/sync-log-migration.md D9/D12): the sync
+// log is the catch-up correctness path now; this crawl remains the COLD BACKFILL
+// (first run per workspace, scope_added bootstrap, retention resync) and a 24h
+// re-verification whose observed healing rate is the removal signal. The healed
+// counter in reconcileCrawl logs rows the crawl changed that the log had missed —
+// two weeks of zeros in prod is the condition for deleting the periodic schedule.
+const RECONCILE_THROTTLE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Core task sync — pulls tasks for the workspace into the store.
@@ -186,6 +187,7 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
     // Before that, `since` stays undefined so the first pass loads everything.
     const meta = useInboxStore.getState().syncMeta[metaKey];
     const crawlSince = meta?.backfilledAt ? meta.cursor : undefined;
+    const healedRef = { count: 0 };
     runReconcileCrawl({
       namespace: "tasks",
       wsKey,
@@ -201,8 +203,31 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
         });
         return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
       },
-      onPage: (rows) => { syncTable("tasks", rows, { isDelta: true }); fetchOriginBadges(rows); },
-      onComplete: (all) => useInboxStore.getState().syncTable("tasks", all, { isDelta: true }),
+      onPage: (rows) => {
+        if (crawlSince !== undefined) healedRef.count += countLogMissedRows(useInboxStore.getState().tasks, rows);
+        // An authorized crawl returning a row proves it is visible again — lift
+        // any exclude (feed prune, team-revocation purge) before the delta
+        // merge, or the engine drops the row forever (excludes only retire on
+        // snapshot omission, which delta channels never produce). This is what
+        // makes a team REJOIN heal (review C7).
+        useInboxStore.getState().clearFeedExcludes("tasks", rows.map((r: any) => String(r._id)));
+        syncTable("tasks", rows, { isDelta: true });
+        fetchOriginBadges(rows);
+      },
+      onComplete: (all) => {
+        useInboxStore.getState().clearFeedExcludes("tasks", all.map((r: any) => String(r._id)));
+        useInboxStore.getState().syncTable("tasks", all, { isDelta: true });
+        // Removal-condition metric (sync-log-migration.md D11/D12): rows an
+        // incremental safety-net crawl healed = rows the sync log missed.
+        // Emitted on EVERY completed incremental crawl, zeros included — the
+        // removal condition is "two weeks of zeros", and absence of nonzero
+        // events is indistinguishable from the crawl not running.
+        if (crawlSince !== undefined) {
+          track("synclog_crawl_healed", { namespace: "tasks", count: healedRef.count });
+          console.info(`[synclog] tasks safety-net crawl healed ${healedRef.count} row(s)`);
+          healedRef.count = 0;
+        }
+      },
     });
   }, [convex, wsKey, reconcileNonce, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -234,7 +259,7 @@ export function useSyncMentionTasks() {
 /** Store one task detail row (taskMining.webGetTaskDetail shape: the task plus
  *  its comments). Shared by the detail feeder below and the Threads inbox,
  *  whose payload carries the same rows for every task thread on the page. */
-export function ingestTaskDetail(d: any): void {
+export function ingestTaskDetail(d: any, opts?: { partialComments?: boolean }): void {
   // Only persist genuine tasks. The detail route can be loaded with a foreign
   // id (/tasks/<conversationId>); storing whatever comes back plants a phantom
   // task in the never-pruned cache (see validRow in clientSyncRegistry).
@@ -242,7 +267,23 @@ export function ingestTaskDetail(d: any): void {
   // use short ids (/tasks/ct-123), and syncRecord(key=short_id) would store a
   // second copy of the row under that key — the never-pruned duplicate then
   // double-counts in subtaskProgressOf / taskFamilyIndex.
-  if (d && collectionRowValidator("tasks")!(d)) useInboxStore.getState().syncRecord("tasks", String(d._id), d);
+  if (!d || !collectionRowValidator("tasks")!(d)) return;
+  let row = d;
+  // A PARTIAL comment set (threads.listMine ships the newest 50) must never
+  // shrink a fuller local list: the task page renders the same array, and a
+  // truncating merge would drop its older history until the next detail push.
+  if (opts?.partialComments) {
+    const prev = (useInboxStore.getState().tasks as Record<string, any>)[String(d._id)];
+    const prevComments: any[] = prev?.comments ?? [];
+    if (prevComments.length > 0) {
+      const incoming = new Set((d.comments ?? []).map((c: any) => String(c._id)));
+      const keep = prevComments.filter((c: any) => !incoming.has(String(c._id)));
+      if (keep.length > 0) {
+        row = { ...d, comments: [...keep, ...(d.comments ?? [])].sort((a: any, b: any) => a.created_at - b.created_at) };
+      }
+    }
+  }
+  useInboxStore.getState().syncRecord("tasks", String(row._id), row);
 }
 
 export function useSyncTaskDetail(id?: string) {

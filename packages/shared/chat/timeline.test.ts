@@ -191,6 +191,17 @@ describe("tallyUnread", () => {
     expect(t).toEqual({ unread: 0, mentions: 0 });
   });
 
+  it("ignores a burst still being spoken: the badge waits for the release", () => {
+    const talking = tallyUnread(
+      [m(NOW - MIN, "u2", { voiceLive: true, mentionsViewer: true })], NOW - 5 * MIN, "me",
+    );
+    expect(talking).toEqual({ unread: 0, mentions: 0 });
+    const released = tallyUnread(
+      [m(NOW - MIN, "u2", { mentionsViewer: true })], NOW - 5 * MIN, "me",
+    );
+    expect(released).toEqual({ unread: 1, mentions: 1 });
+  });
+
   it("treats a never-read channel as entirely unread", () => {
     const t = tallyUnread([m(NOW - DAY, "u2"), m(NOW, "u2")], undefined, "me");
     expect(t.unread).toBe(2);

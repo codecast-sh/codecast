@@ -1,62 +1,25 @@
+// Codecast's binding of the @platform/engine undo stack: the stack mechanics
+// (bounded depth, 5-minute expiry, redo clearing) live in the engine; this
+// module installs sonner as the notifier so undo/redo keep announcing through
+// the app's toast layer, and preserves the import path.
 import { toast } from "sonner";
+import { setUndoNotifier } from "@platform/engine";
 
-export type UndoEntry = {
-  label: string;
-  undo: () => void;
-  redo: () => void;
-  ts: number;
-};
+setUndoNotifier({
+  notify: (message) => toast(message),
+  notifyWithUndo: (label, undo) =>
+    toast(label, {
+      action: { label: "Undo", onClick: () => undo() },
+      duration: 5000,
+    }),
+});
 
-const MAX_STACK = 30;
-const UNDO_EXPIRY_MS = 5 * 60_000;
-
-let undoStack: UndoEntry[] = [];
-let redoStack: UndoEntry[] = [];
-
-export function pushUndo(entry: Omit<UndoEntry, "ts">) {
-  undoStack.push({ ...entry, ts: Date.now() });
-  if (undoStack.length > MAX_STACK) undoStack.shift();
-  redoStack = [];
-}
-
-function pruneExpired(stack: UndoEntry[]): UndoEntry[] {
-  const cutoff = Date.now() - UNDO_EXPIRY_MS;
-  return stack.filter((e) => e.ts > cutoff);
-}
-
-export function performUndo(): boolean {
-  undoStack = pruneExpired(undoStack);
-  const entry = undoStack.pop();
-  if (!entry) return false;
-  entry.undo();
-  redoStack.push(entry);
-  toast(`Undid: ${entry.label}`);
-  return true;
-}
-
-export function performRedo(): boolean {
-  redoStack = pruneExpired(redoStack);
-  const entry = redoStack.pop();
-  if (!entry) return false;
-  entry.redo();
-  undoStack.push(entry);
-  toast(`Redid: ${entry.label}`);
-  return true;
-}
-
-export function showUndoToast(label: string) {
-  toast(label, {
-    action: { label: "Undo", onClick: () => performUndo() },
-    duration: 5000,
-  });
-}
-
-export function canUndo(): boolean {
-  undoStack = pruneExpired(undoStack);
-  return undoStack.length > 0;
-}
-
-export function canRedo(): boolean {
-  redoStack = pruneExpired(redoStack);
-  return redoStack.length > 0;
-}
+export {
+  pushUndo,
+  performUndo,
+  performRedo,
+  showUndoToast,
+  canUndo,
+  canRedo,
+  type UndoEntry,
+} from "@platform/engine";

@@ -10,6 +10,10 @@
 export const CALL_HEARTBEAT_MS = 15_000;
 export const CALL_MEMBER_STALE_MS = 45_000;
 export const CALL_INVITE_TTL_MS = 45_000;
+// A knock at a locked room: the same 45s as a ring, and for the same reason —
+// it is a live gesture, not a queued request. Whoever is inside sees it while
+// the knocker is still standing there, or not at all.
+export const CALL_KNOCK_TTL_MS = 45_000;
 
 // A people room holds at most as many members as a chat group thread,
 // because a group thread and the huddle of its members are the same room.
