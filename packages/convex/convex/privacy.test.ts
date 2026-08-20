@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { profileConversationVisible, buildShareUpdate, buildPathRestampUpdate, resolveCreationPrivacy } from "./privacy";
+import { profileConversationVisible, buildShareUpdate, buildPathRestampUpdate, resolveCreationPrivacy, isConversationTeamVisible, canOwnerOrTeamAccess } from "./privacy";
+import { makeFakeDb } from "./testDb";
 
 // Regression for the profile-feed privacy leak: a teammate's profile page
 // (team/[username]) selected their conversations by (team_id, user_id) and
@@ -281,5 +282,121 @@ describe("teamVisibleConvTeam — private sessions never hand their team to work
   test("null/undefined conversation → undefined", () => {
     expect(teamVisibleConvTeam(undefined)).toBeUndefined();
     expect(teamVisibleConvTeam(null)).toBeUndefined();
+  });
+});
+
+// The team-visibility rule exists twice: the async isConversationTeamVisible
+// (fetches the owner's membership visibility) and the sync body it delegates
+// to (used by createTeamFeedFilter and profileConversationVisible with the
+// visibility pre-loaded). The async form now delegates to the sync one; this
+// matrix pins the two surfaces to the same answer for every input combination
+// so they can never drift apart again.
+describe("isConversationTeamVisible — async and sync surfaces agree on the full matrix", () => {
+  const teamIds = [undefined, "t1"] as const;
+  const isPrivates = [true, false] as const;
+  const teamVisibilities = [undefined, "private", "summary", "team"] as const;
+  const ownerVisibilities = ["summary", "full", "detailed", "hidden", "activity"] as const;
+
+  for (const teamId of teamIds) {
+    for (const isPrivate of isPrivates) {
+      for (const teamVisibility of teamVisibilities) {
+        for (const ownerVisibility of ownerVisibilities) {
+          const label = `team_id=${teamId} is_private=${isPrivate} team_visibility=${teamVisibility} owner=${ownerVisibility}`;
+          test(label, async () => {
+            const conv = {
+              user_id: "u_owner",
+              team_id: teamId,
+              is_private: isPrivate,
+              team_visibility: teamVisibility,
+            } as any;
+            const ctx = {
+              db: makeFakeDb({
+                team_memberships: teamId
+                  ? [{ _id: "m1", user_id: "u_owner", team_id: teamId, visibility: ownerVisibility }]
+                  : [],
+              }),
+            } as any;
+            const asyncAnswer = await isConversationTeamVisible(ctx, conv);
+            // profileConversationVisible(false, true, vis, conv) IS the sync rule
+            // (a non-owner teammate falls straight through to it).
+            const syncAnswer = profileConversationVisible(false, true, ownerVisibility, conv);
+            expect(asyncAnswer).toBe(syncAnswer);
+          });
+        }
+      }
+    }
+  }
+
+  test("owner with NO membership row defaults to 'summary' on both surfaces", async () => {
+    const conv = { user_id: "u_owner", team_id: "t1", is_private: false } as any;
+    const ctx = { db: makeFakeDb({ team_memberships: [] }) } as any;
+    expect(await isConversationTeamVisible(ctx, conv)).toBe(true);
+    expect(profileConversationVisible(false, true, "summary", conv)).toBe(true);
+  });
+});
+
+// Regression for the owner-definition drift: eleven-plus conversations.ts
+// endpoints gated on `conversation.user_id === viewer` before falling back to
+// team access, while checkConversationAccess also accepts the denormalized
+// owner_user_id and a session_owners row. A secondary session owner (assigned,
+// not primary, not a teammate) could open a conversation but was denied
+// getMoreMessages/export/fork/tree. canOwnerOrTeamAccess is the shared gate
+// with the canonical owner definition and no share-token tier.
+describe("canOwnerOrTeamAccess — canonical owner definition plus team visibility", () => {
+  const CONV = "conversations_1";
+  const privateConvRow = {
+    _id: CONV,
+    user_id: "u_primary",
+    is_private: true,
+  } as any;
+
+  const ctxWith = (tables: Record<string, any[]>) =>
+    ({ db: makeFakeDb({ team_memberships: [], session_owners: [], ...tables }) }) as any;
+
+  test("THE BUG: a session_owners-only user (not primary, not teammate) passes", async () => {
+    const ctx = ctxWith({
+      session_owners: [{ _id: "so1", conversation_id: CONV, user_id: "u_second", added_at: 1 }],
+    });
+    expect(await canOwnerOrTeamAccess(ctx, "u_second" as any, privateConvRow)).toBe(true);
+  });
+
+  test("the primary owner passes", async () => {
+    expect(await canOwnerOrTeamAccess(ctxWith({}), "u_primary" as any, privateConvRow)).toBe(true);
+  });
+
+  test("the denormalized owner_user_id holder passes", async () => {
+    const conv = { ...privateConvRow, owner_user_id: "u_assigned" };
+    expect(await canOwnerOrTeamAccess(ctxWith({}), "u_assigned" as any, conv)).toBe(true);
+  });
+
+  test("a stranger is denied", async () => {
+    expect(await canOwnerOrTeamAccess(ctxWith({}), "u_stranger" as any, privateConvRow)).toBe(false);
+  });
+
+  test("a teammate reaches a SHARED conversation", async () => {
+    const shared = { _id: CONV, user_id: "u_primary", team_id: "t1", is_private: false } as any;
+    const ctx = ctxWith({
+      team_memberships: [
+        { _id: "m1", user_id: "u_mate", team_id: "t1" },
+        { _id: "m2", user_id: "u_primary", team_id: "t1" },
+      ],
+    });
+    expect(await canOwnerOrTeamAccess(ctx, "u_mate" as any, shared)).toBe(true);
+  });
+
+  test("a teammate is denied a PRIVATE conversation (team access follows real visibility)", async () => {
+    const routed = { _id: CONV, user_id: "u_primary", team_id: "t1", is_private: true } as any;
+    const ctx = ctxWith({
+      team_memberships: [
+        { _id: "m1", user_id: "u_mate", team_id: "t1" },
+        { _id: "m2", user_id: "u_primary", team_id: "t1" },
+      ],
+    });
+    expect(await canOwnerOrTeamAccess(ctx, "u_mate" as any, routed)).toBe(false);
+  });
+
+  test("no share-token tier: a minted token grants nothing here", async () => {
+    const tokened = { ...privateConvRow, share_token: "tok" };
+    expect(await canOwnerOrTeamAccess(ctxWith({}), "u_stranger" as any, tokened)).toBe(false);
   });
 });

@@ -32,6 +32,7 @@ import {
   listStates,
   readState,
   setState,
+  stateToWorkspace,
   validateContract,
   writeState,
   type PersistedWorkspaceState,
@@ -340,21 +341,6 @@ export function listWorkspaces(repoRoot: string): Workspace[] {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
-
-function stateToWorkspace(s: PersistedWorkspaceState): Workspace {
-  return {
-    name: s.name,
-    path: s.path,
-    branch: s.branch,
-    resourceIndex: s.resourceIndex,
-    manifest: s.manifest,
-    ports: s.ports,
-    env: s.env,
-    state: s.state,
-    contract: s.contract,
-    chrome: s.chrome,
-  };
-}
 
 function workspaceToState(ws: Workspace): PersistedWorkspaceState {
   return {

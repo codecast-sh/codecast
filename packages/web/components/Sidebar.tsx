@@ -323,7 +323,8 @@ const ChatNavRow = memo(function ChatNavRow({
 
   // Slack's pinned entry above the rooms: the Threads inbox — a view, not a
   // room. Its count is cyan (replies in your threads are addressed to you,
-  // but nobody typed your name), and it never carries channel actions.
+  // but nobody typed your name). It pins like a channel — same kind, the
+  // literal id the route uses — so the one pin mechanism covers it.
   const threadsItem = {
     id: "threads",
     name: "Threads",
@@ -335,6 +336,14 @@ const ChatNavRow = memo(function ChatNavRow({
           {threads > 99 ? "99+" : threads}
         </span>
       ) : null,
+    actions: [
+      {
+        key: "pin",
+        title: isChannelPinned("threads") ? "Unpin from top" : "Pin to top of sidebar",
+        icon: isChannelPinned("threads") ? <PinOff className="w-3 h-3" /> : <Pin className="w-3 h-3" />,
+        onClick: () => togglePin("channel", "threads", "Threads"),
+      },
+    ],
     onSelect: () => {
       router.push("/chat/threads");
       onMobileClose?.();
@@ -556,6 +565,7 @@ function PinnedRail({
 }) {
   const pathname = usePathname();
   const pins = useInboxStore((s) => readPins(s));
+  const { threads: threadsUnread } = useChatUnread();
   const projects = useInboxStore((s) => s.projects);
   const savedViews = useInboxStore((s) => (s as any).savedViews);
   const chatChannels = useInboxStore((s) => s.chatChannels);
@@ -590,6 +600,24 @@ function PinnedRail({
       };
     }
     if (pin.kind === "channel") {
+      // The Threads inbox pins under the channel kind (its id IS the route
+      // segment), but it is a view: its own icon, and the same cyan count the
+      // chat section's Threads row wears.
+      if (pin.id === "threads") {
+        return {
+          ...base,
+          name: "Threads",
+          icon: <MessagesSquare className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
+          trailing:
+            threadsUnread > 0 ? (
+              <span className="min-w-[16px] h-[15px] px-1 flex items-center justify-center text-[9.5px] font-bold bg-sol-cyan text-sol-bg rounded-full flex-shrink-0">
+                {threadsUnread > 99 ? "99+" : threadsUnread}
+              </span>
+            ) : null,
+          active: pathname === "/chat/threads",
+          onSelect: () => onNavigate("/chat/threads"),
+        };
+      }
       const c = (chatChannels as any)?.[pin.id];
       const isDm = c?.kind === "dm";
       const dmName = isDm

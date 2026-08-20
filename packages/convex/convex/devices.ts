@@ -863,7 +863,6 @@ export const listDevices = query({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return [];
     const now = Date.now();
-    const ONLINE_MS = 2 * 60 * 1000; // online if seen within 2 min
     const rows = await ctx.db
       .query("devices")
       .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
@@ -894,7 +893,7 @@ export const listDevices = query({
         oldest_pending_ms: d.oldest_pending_ms ?? undefined,
         pending_sync_messages: d.pending_sync_messages ?? undefined,
         pending_sync_conversations: d.pending_sync_conversations ?? undefined,
-        online: now - d.last_seen < ONLINE_MS,
+        online: now - d.last_seen < DEVICE_ONLINE_MS,
       }))
       .sort((a: any, b: any) => b.last_seen - a.last_seen);
   },

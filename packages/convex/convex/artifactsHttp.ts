@@ -4,6 +4,7 @@
 
 import { httpAction, action } from "./_generated/server";
 import { internal, api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { marked } from "marked";
@@ -574,64 +575,80 @@ export const rollback = httpAction(async (ctx, request) => {
 // Link/owner editing — save publishes a new version
 // ---------------------------------------------------------------------------
 
+/** Shared edit-version pipeline for the link editor and the web editor:
+ * render+hash per kind, size check, unchanged short-circuit (which deletes the
+ * just-stored markdown source blob), bundle asset carry-forward as blob copies
+ * (ownership invariant), appendVersion. Auth and edited_by resolution stay
+ * with the callers. */
+export async function applyEditVersion(
+  ctx: ActionCtx,
+  artifact: { _id: Id<"artifacts">; version: number; title: string; content_hash?: string; kind?: string },
+  content: string,
+  editedBy: string | undefined,
+): Promise<{ version: number; unchanged?: boolean } | { error: string }> {
+  const kind = artifact.kind ?? "html";
+
+  let docHtml: string;
+  let contentHash: string;
+  let sourceStorageId;
+  if (kind === "markdown") {
+    contentHash = await sha256Hex(content);
+    docHtml = await renderMarkdown(content, artifact.title);
+    sourceStorageId = await ctx.storage.store(new Blob([content], { type: "text/markdown; charset=utf-8" }));
+  } else {
+    docHtml = content;
+    contentHash = await sha256Hex(docHtml);
+  }
+  const size = new TextEncoder().encode(docHtml).byteLength;
+  if (size > MAX_ARTIFACT_BYTES) return { error: "Content exceeds the 8MB limit" };
+  if (artifact.content_hash === contentHash && kind !== "bundle") {
+    if (sourceStorageId) await ctx.storage.delete(sourceStorageId).catch(() => {});
+    return { version: artifact.version, unchanged: true };
+  }
+
+  const storageId = await ctx.storage.store(new Blob([docHtml], { type: "text/html; charset=utf-8" }));
+
+  // Bundles: the editor edits the entry page; assets carry forward as blob
+  // copies (ownership invariant).
+  const assets = [];
+  if (kind === "bundle") {
+    const current = await ctx.runQuery(internal.artifacts.assetsForVersion, {
+      artifact_id: artifact._id,
+      version: artifact.version,
+    });
+    for (const a of current) {
+      const blob = await ctx.storage.get(a.storage_id);
+      if (!blob) continue;
+      const buf = await blob.arrayBuffer();
+      const id = await ctx.storage.store(new Blob([buf], { type: a.content_type }));
+      assets.push({ path: a.path, storage_id: id, content_type: a.content_type, size: a.size });
+    }
+  }
+
+  const result: { version: number } = await ctx.runMutation(internal.artifacts.appendVersion, {
+    artifact_id: artifact._id,
+    storage_id: storageId,
+    size,
+    kind,
+    source_storage_id: sourceStorageId,
+    content_hash: contentHash,
+    edited_by: editedBy,
+    assets: assets as never,
+  });
+  return { version: result.version };
+}
+
 export const edit = httpAction(async (ctx, request) => {
   try {
     const { slug, key, content, editor_name } = await request.json();
     if (!slug || !key || typeof content !== "string") return json({ error: "Missing slug, key, or content" }, 400);
     const auth = await ctx.runQuery(internal.artifacts.editTarget, { slug, key });
     if (!auth) return json({ error: "This link doesn't grant editing" }, 403);
-    const artifact = auth.artifact;
-    const kind = artifact.kind ?? "html";
-
-    let docHtml: string;
-    let contentHash: string;
-    let sourceStorageId;
-    if (kind === "markdown") {
-      contentHash = await sha256Hex(content);
-      docHtml = await renderMarkdown(content, artifact.title);
-      sourceStorageId = await ctx.storage.store(new Blob([content], { type: "text/markdown; charset=utf-8" }));
-    } else {
-      docHtml = content;
-      contentHash = await sha256Hex(docHtml);
-    }
-    const size = new TextEncoder().encode(docHtml).byteLength;
-    if (size > MAX_ARTIFACT_BYTES) return json({ error: "Content exceeds the 8MB limit" }, 413);
-    if (artifact.content_hash === contentHash && kind !== "bundle") {
-      if (sourceStorageId) await ctx.storage.delete(sourceStorageId).catch(() => {});
-      return json({ version: artifact.version, unchanged: true });
-    }
-
-    const storageId = await ctx.storage.store(new Blob([docHtml], { type: "text/html; charset=utf-8" }));
-
-    // Bundles: the editor edits the entry page; assets carry forward as blob
-    // copies (ownership invariant).
-    const assets = [];
-    if (kind === "bundle") {
-      const current = await ctx.runQuery(internal.artifacts.assetsForVersion, {
-        artifact_id: artifact._id,
-        version: artifact.version,
-      });
-      for (const a of current) {
-        const blob = await ctx.storage.get(a.storage_id);
-        if (!blob) continue;
-        const buf = await blob.arrayBuffer();
-        const id = await ctx.storage.store(new Blob([buf], { type: a.content_type }));
-        assets.push({ path: a.path, storage_id: id, content_type: a.content_type, size: a.size });
-      }
-    }
 
     const editedBy = auth.is_owner ? undefined : (typeof editor_name === "string" && editor_name.trim() ? editor_name.trim().slice(0, 80) : "link editor");
-    const result = await ctx.runMutation(internal.artifacts.appendVersion, {
-      artifact_id: artifact._id,
-      storage_id: storageId,
-      size,
-      kind,
-      source_storage_id: sourceStorageId,
-      content_hash: contentHash,
-      edited_by: editedBy,
-      assets: assets as never,
-    });
-    return json({ version: result.version });
+    const outcome = await applyEditVersion(ctx, auth.artifact, content, editedBy);
+    if ("error" in outcome) return json({ error: outcome.error }, 413);
+    return json(outcome);
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : "Bad request" }, 400);
   }
@@ -650,54 +667,9 @@ export const editForWeb = action({
     if (!userId) return { error: "Not signed in" };
     const auth = await ctx.runQuery(internal.artifacts.teamEditAuth, { slug: args.slug, editor_user_id: userId });
     if (!auth) return { error: "You don't have edit access to this artifact" };
-    const artifact = auth.artifact;
-    const kind = artifact.kind ?? "html";
 
-    let docHtml: string;
-    let contentHash: string;
-    let sourceStorageId;
-    if (kind === "markdown") {
-      contentHash = await sha256Hex(args.content);
-      docHtml = await renderMarkdown(args.content, artifact.title);
-      sourceStorageId = await ctx.storage.store(new Blob([args.content], { type: "text/markdown; charset=utf-8" }));
-    } else {
-      docHtml = args.content;
-      contentHash = await sha256Hex(docHtml);
-    }
-    const size = new TextEncoder().encode(docHtml).byteLength;
-    if (size > MAX_ARTIFACT_BYTES) return { error: "Content exceeds the 8MB limit" };
-    if (artifact.content_hash === contentHash && kind !== "bundle") {
-      if (sourceStorageId) await ctx.storage.delete(sourceStorageId).catch(() => {});
-      return { version: artifact.version, unchanged: true };
-    }
-    const storageId = await ctx.storage.store(new Blob([docHtml], { type: "text/html; charset=utf-8" }));
-
-    const assets = [];
-    if (kind === "bundle") {
-      const current = await ctx.runQuery(internal.artifacts.assetsForVersion, {
-        artifact_id: artifact._id,
-        version: artifact.version,
-      });
-      for (const a of current) {
-        const blob = await ctx.storage.get(a.storage_id);
-        if (!blob) continue;
-        const buf = await blob.arrayBuffer();
-        const id = await ctx.storage.store(new Blob([buf], { type: a.content_type }));
-        assets.push({ path: a.path, storage_id: id, content_type: a.content_type, size: a.size });
-      }
-    }
-
-    const result: { version: number } = await ctx.runMutation(internal.artifacts.appendVersion, {
-      artifact_id: artifact._id,
-      storage_id: storageId,
-      size,
-      kind,
-      source_storage_id: sourceStorageId,
-      content_hash: contentHash,
-      edited_by: auth.is_owner ? undefined : (args.editor_name?.trim().slice(0, 80) || auth.editor_name),
-      assets: assets as never,
-    });
-    return { version: result.version };
+    const editedBy = auth.is_owner ? undefined : (args.editor_name?.trim().slice(0, 80) || auth.editor_name);
+    return await applyEditVersion(ctx, auth.artifact, args.content, editedBy);
   },
 });
 

@@ -21,7 +21,7 @@ function getContainerViewport(el: HTMLDivElement | null): { width: number; heigh
 
 export const WindowTaskbar = memo(function WindowTaskbar({ containerRef }: { containerRef: RefObject<HTMLDivElement | null> }) {
   const { windows, autoArrange, closeAll, openWindow } = useWindowManager();
-  const minimized = Object.values(windows).filter(w => w.minimized);
+  const minimized = Object.values(windows).filter(w => w.visualState === "minimized");
   const windowCount = Object.keys(windows).length;
 
   const handleArrange = useCallback((mode: ArrangeMode) => {

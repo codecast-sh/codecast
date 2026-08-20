@@ -80,7 +80,7 @@ import {
   performReconciliation,
   repairDiscrepancies,
 } from "./reconciliation.js";
-import { parseSessionFile, extractSlug } from "./parser.js";
+import { parseSessionFile, extractSlug, extractCwd } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { resolveLocalProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
 import { runDoctor } from "./doctor.js";
@@ -529,10 +529,12 @@ function readProjectPathFromSession(sessionFilePath: string): string | null {
     const buf = Buffer.alloc(4096);
     const bytesRead = fs.readSync(fd, buf, 0, 4096, 0);
     fs.closeSync(fd);
-    const firstLine = buf.toString("utf-8", 0, bytesRead).split("\n")[0];
+    const head = buf.toString("utf-8", 0, bytesRead);
+    const cwd = extractCwd(head, { quiet: true });
+    if (cwd) return cwd;
+    const firstLine = head.split("\n")[0];
     if (!firstLine) return null;
-    const parsed = JSON.parse(firstLine);
-    return parsed.cwd || parsed.project_path || null;
+    return JSON.parse(firstLine).project_path || null;
   } catch {
     return null;
   }
@@ -6807,12 +6809,8 @@ function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveP
           const stat = fs.statSync(fp);
           if (stat.mtimeMs <= bestMtime || Date.now() - stat.mtimeMs > 86_400_000) continue;
           const head = fs.readFileSync(fp, "utf-8").slice(0, 5000);
-          for (const hl of head.split("\n").slice(0, 5)) {
-            try {
-              const e = JSON.parse(hl);
-              if (e.cwd && (e.cwd === cwd || cwd!.startsWith(e.cwd + "/"))) { bestMtime = stat.mtimeMs; best = path.basename(fp, ".jsonl"); break; }
-            } catch {}
-          }
+          const headCwd = extractCwd(head, { quiet: true });
+          if (headCwd && (headCwd === cwd || cwd!.startsWith(headCwd + "/"))) { bestMtime = stat.mtimeMs; best = path.basename(fp, ".jsonl"); }
         } catch {}
       }
     }

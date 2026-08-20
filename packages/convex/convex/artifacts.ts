@@ -139,6 +139,30 @@ export function accessSummary(a: Doc<"artifacts">) {
   };
 }
 
+/** The 5-field version-row shape shared by historyBySlug and ownerPanel —
+ * the current artifact row projected as a version. Callers spread their own
+ * extras (storage ids + kind, or the current flag). */
+function currentVersionRow(a: Doc<"artifacts">) {
+  return {
+    version: a.version,
+    title: a.title,
+    size: a.size,
+    published_at: a.updated_at,
+    edited_by: a.last_edited_by ?? null,
+  };
+}
+
+/** Same 5-field shape for a superseded artifact_versions row. */
+function historyVersionRow(h: Doc<"artifact_versions">) {
+  return {
+    version: h.version,
+    title: h.title,
+    size: h.size,
+    published_at: h.published_at,
+    edited_by: h.edited_by ?? null,
+  };
+}
+
 function toCliRow(a: Doc<"artifacts">) {
   const url = artifactUrl(a.slug);
   return {
@@ -265,25 +289,17 @@ export const historyBySlug = internalQuery({
       views: stats?.view_count ?? 0,
       versions: [
         {
-          version: artifact.version,
-          title: artifact.title,
-          size: artifact.size,
-          published_at: artifact.updated_at,
+          ...currentVersionRow(artifact),
           storage_id: artifact.storage_id,
           source_storage_id: artifact.source_storage_id,
           kind: artifact.kind ?? "html",
-          edited_by: artifact.last_edited_by ?? null,
         },
         ...history
           .map((h) => ({
-            version: h.version,
-            title: h.title,
-            size: h.size,
-            published_at: h.published_at,
+            ...historyVersionRow(h),
             storage_id: h.storage_id,
             source_storage_id: h.source_storage_id,
             kind: h.kind ?? artifact.kind ?? "html",
-            edited_by: h.edited_by ?? null,
           }))
           .sort((a, b) => b.version - a.version),
       ],
@@ -383,23 +399,9 @@ export const ownerPanel = internalQuery({
       // Version history, newest first — same shape the in-page history panel
       // uses, so `cast publish versions` and the bar agree.
       versions: [
-        {
-          version: artifact.version,
-          title: artifact.title,
-          size: artifact.size,
-          published_at: artifact.updated_at,
-          edited_by: artifact.last_edited_by ?? null,
-          current: true,
-        },
+        { ...currentVersionRow(artifact), current: true },
         ...history
-          .map((h) => ({
-            version: h.version,
-            title: h.title,
-            size: h.size,
-            published_at: h.published_at,
-            edited_by: h.edited_by ?? null,
-            current: false,
-          }))
+          .map((h) => ({ ...historyVersionRow(h), current: false }))
           .sort((a, b) => b.version - a.version),
       ],
       access: accessSummary(artifact),

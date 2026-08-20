@@ -77,22 +77,22 @@ export const COMPARISONS: Comparison[] = [
     competitor: "Conductor",
     competitorUrl: "https://conductor.build",
     title: "Codecast vs Conductor",
-    dek: "Conductor runs a fleet of agents in parallel on one Mac. Codecast records and steers the sessions your whole team runs, on every machine.",
+    dek: "Conductor runs a fleet of agents in parallel from one Mac app. Codecast records and steers the sessions your whole team runs, on every machine.",
     codecastIs:
       "Codecast is a team dashboard and memory for coding agent sessions: a daemon syncs every session your team runs — any supported agent, any machine — into one searchable, steerable record.",
     competitorIs:
-      "Conductor is a macOS app for running multiple Claude Code and Codex agents in parallel on your Mac, each in an isolated git worktree, with a dashboard for monitoring, review, and merging.",
+      "Conductor is a macOS app for running multiple Claude Code, Codex, and Cursor agents in parallel — each in an isolated workspace, locally or in Conductor's cloud sandboxes — with a dashboard for monitoring, review, and merging.",
     rows: [
       {
         ...SHARED_ROWS.model,
         competitor:
           "Launches and manages agent runs itself, in worktrees it creates on your Mac",
       },
-      { ...SHARED_ROWS.agents, competitor: "Claude Code and Codex" },
+      { ...SHARED_ROWS.agents, competitor: "Claude Code, Codex, and Cursor agents" },
       {
         dimension: "Where it runs",
         codecast: "Daemon on every machine where agents run; clients on web, desktop, iOS",
-        competitor: "One macOS machine",
+        competitor: "A macOS app; runs execute locally or in Conductor's cloud sandboxes",
       },
       { ...SHARED_ROWS.team, competitor: "Single-user: your Mac, your runs" },
       {

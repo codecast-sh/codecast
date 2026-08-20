@@ -659,6 +659,90 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   if (graph.goal) console.log(`${c.dim}Goal: ${graph.goal}${c.reset}`);
   console.log();
 
+  let current: WorkflowNode = await runNodeLoop(startNode, graph, state, nodeOutcomes, cwd, options);
+
+  // ── Stage 6: Exit node reached — check goal gates ─────────────────────────
+  // Fabro: goal gates are only checked when reaching the exit node.
+  // Any goal_gate node whose outcome is not "success" triggers retry_target on that node.
+  if (current.type === "exit" && !state.failed) {
+    const failedGateId = checkGoalGates(graph, nodeOutcomes);
+    if (failedGateId) {
+      const failedGate = graph.nodes.get(failedGateId)!;
+      const retryNode = getRetryTarget(failedGateId, graph);
+      if (retryNode) {
+        console.log(`\n${c.yellow}  goal gate '${failedGate.label}' failed → retry_target '${retryNode.label}'${c.reset}\n`);
+        // Re-enter the loop from the retry target. The initial run_status
+        // "running" seed is NOT re-emitted here — it fires once per run.
+        current = await runNodeLoop(retryNode, graph, state, nodeOutcomes, cwd, options);
+
+        // Re-check goal gates after retry loop
+        if (current.type === "exit") {
+          const failedGate2 = checkGoalGates(graph, nodeOutcomes);
+          if (failedGate2) {
+            state.failed = true;
+            state.failReason = `goal_gate failed on ${failedGate2} after retry`;
+          }
+        }
+      } else {
+        state.failed = true;
+        state.failReason = `goal_gate failed on ${failedGateId} (no retry_target)`;
+      }
+    }
+  }
+
+  if (current.type === "exit" && !state.failed) {
+    console.log(`\n${c.bold}${c.green}━━━ Workflow complete ━━━${c.reset}`);
+    console.log(`${c.dim}Nodes: ${state.completed.join(" → ")}${c.reset}`);
+    if (options.runId) {
+      await reportProgress(options, {
+        current_node_id: current.id,
+        node_id: current.id,
+        node_status: "completed",
+        run_status: "completed",
+      });
+    }
+
+    // Log completion to bound plan
+    if (options.planId && options.apiToken && options.convexSiteUrl) {
+      try {
+        await fetch(`${options.convexSiteUrl}/cli/plans/log`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: options.apiToken,
+            short_id: options.planId,
+            entry: `Workflow "${graph.name}" completed: ${state.completed.join(" → ")}`,
+          }),
+        });
+      } catch {}
+    }
+  } else if (state.failed) {
+    console.log(`\n${c.bold}${c.red}━━━ Workflow failed: ${state.failReason} ━━━${c.reset}`);
+    if (options.runId) {
+      await reportProgress(options, {
+        current_node_id: current.id,
+        node_id: current.id,
+        node_status: "failed",
+        run_status: "failed",
+        fail_reason: state.failReason,
+      });
+    }
+    return "failed";
+  }
+  return "completed";
+}
+
+// Core node-execution loop, shared by the initial pass and goal-gate retries.
+// Runs from startNode until an exit node or a dead end, mutating state and
+// nodeOutcomes, and returns the terminal node.
+async function runNodeLoop(
+  startNode: WorkflowNode,
+  graph: WorkflowGraph,
+  state: WorkflowRunState,
+  nodeOutcomes: Record<string, NodeOutcome>,
+  cwd: string,
+  options: RunOptions,
+): Promise<WorkflowNode> {
   let current: WorkflowNode = startNode;
 
   while (current.type !== "exit") {
@@ -767,125 +851,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     current = next;
   }
 
-  // ── Stage 6: Exit node reached — check goal gates ─────────────────────────
-  // Fabro: goal gates are only checked when reaching the exit node.
-  // Any goal_gate node whose outcome is not "success" triggers retry_target on that node.
-  if (current.type === "exit" && !state.failed) {
-    const failedGateId = checkGoalGates(graph, nodeOutcomes);
-    if (failedGateId) {
-      const failedGate = graph.nodes.get(failedGateId)!;
-      const retryNode = getRetryTarget(failedGateId, graph);
-      if (retryNode) {
-        console.log(`\n${c.yellow}  goal gate '${failedGate.label}' failed → retry_target '${retryNode.label}'${c.reset}\n`);
-        // Re-enter the loop from the retry target
-        // (recursive call to keep state clean)
-        current = retryNode;
-        while (current.type !== "exit") {
-          const visits2 = (state.visitCounts[current.id] || 0) + 1;
-          state.visitCounts[current.id] = visits2;
-
-          if (current.max_visits !== undefined && visits2 > current.max_visits) {
-            console.log(`\n${c.red}${c.bold}  ✗ max_visits=${current.max_visits} exceeded on '${current.label}' — aborting${c.reset}`);
-            state.failed = true;
-            state.failReason = `max_visits=${current.max_visits} exceeded on ${current.id}`;
-            break;
-          }
-
-          const icon2 = nodeIcon(current);
-          console.log(`${c.bold}${icon2} ${current.label}${c.reset}${visits2 > 1 ? c.dim + ` (visit ${visits2})` + c.reset : ""}`);
-
-          let outcome2: NodeOutcome;
-          if (options.dryRun) {
-            outcome2 = "success";
-          } else if (current.type === "command") {
-            outcome2 = await executeCommand(current, state.context, cwd);
-          } else if (current.type === "human") {
-            outcome2 = await executeHumanGate(current, graph, state.context);
-          } else if (current.type === "agent" || current.type === "prompt") {
-            const backend2 = current.backend || "builtin";
-            if (backend2 !== "builtin") {
-              outcome2 = await executeCliAgent(current, graph, state.context, cwd, options);
-            } else {
-              outcome2 = await executeAgent(current, graph, state.context, cwd, options);
-            }
-          } else {
-            outcome2 = "success";
-          }
-
-          state.context["outcome"] = outcome2;
-          state.context[`${current.id}.outcome`] = outcome2;
-          nodeOutcomes[current.id] = outcome2;
-          state.completed.push(current.id);
-
-          const next2 = resolveHumanGateTarget(current, graph, state.context)
-            || resolveNextNode(graph, current, state.context);
-
-          if (!next2) {
-            if (outcome2 === "failure") {
-              const retryNode2 = getRetryTarget(current.id, graph);
-              if (retryNode2) { current = retryNode2; console.log(); continue; }
-            }
-            break;
-          }
-          console.log();
-          current = next2;
-        }
-
-        // Re-check goal gates after retry loop
-        if (current.type === "exit") {
-          const failedGate2 = checkGoalGates(graph, nodeOutcomes);
-          if (failedGate2) {
-            state.failed = true;
-            state.failReason = `goal_gate failed on ${failedGate2} after retry`;
-          }
-        }
-      } else {
-        state.failed = true;
-        state.failReason = `goal_gate failed on ${failedGateId} (no retry_target)`;
-      }
-    }
-  }
-
-  if (current.type === "exit" && !state.failed) {
-    console.log(`\n${c.bold}${c.green}━━━ Workflow complete ━━━${c.reset}`);
-    console.log(`${c.dim}Nodes: ${state.completed.join(" → ")}${c.reset}`);
-    if (options.runId) {
-      await reportProgress(options, {
-        current_node_id: current.id,
-        node_id: current.id,
-        node_status: "completed",
-        run_status: "completed",
-      });
-    }
-
-    // Log completion to bound plan
-    if (options.planId && options.apiToken && options.convexSiteUrl) {
-      try {
-        await fetch(`${options.convexSiteUrl}/cli/plans/log`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            api_token: options.apiToken,
-            short_id: options.planId,
-            entry: `Workflow "${graph.name}" completed: ${state.completed.join(" → ")}`,
-          }),
-        });
-      } catch {}
-    }
-  } else if (state.failed) {
-    console.log(`\n${c.bold}${c.red}━━━ Workflow failed: ${state.failReason} ━━━${c.reset}`);
-    if (options.runId) {
-      await reportProgress(options, {
-        current_node_id: current.id,
-        node_id: current.id,
-        node_status: "failed",
-        run_status: "failed",
-        fail_reason: state.failReason,
-      });
-    }
-    return "failed";
-  }
-  return "completed";
+  return current;
 }
 
 // Human gate edges use the selected key to find the right target

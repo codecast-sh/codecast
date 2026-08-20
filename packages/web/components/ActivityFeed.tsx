@@ -1,5 +1,6 @@
 import { useMemo, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { AvatarImg } from "../lib/avatarCache";
 import { useQuery, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -334,6 +335,12 @@ function RollupHeader({ convs, compact }: {
           ))}
         </div>
       )}
+      <Link
+        href="/team/charts"
+        className="ml-auto text-[11px] text-sol-cyan/60 hover:text-sol-cyan transition-colors whitespace-nowrap"
+      >
+        Charts
+      </Link>
     </div>
   );
 }

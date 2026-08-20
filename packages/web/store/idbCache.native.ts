@@ -23,6 +23,7 @@ import {
   isPersistedClientStoreKey,
 } from "./clientSyncRegistry";
 import { diffCollection } from "./idbCollectionDiff";
+import { partitionSessionRetention, expireExcludeTombstones } from "./cacheRetention";
 import { isConvexId } from "../lib/entityLinks";
 
 let Storage: any = null;
@@ -141,17 +142,21 @@ export async function loadCache(): Promise<Record<string, any> | null> {
       ...metaKeys.map((k) => META_PREFIX + k),
     ]);
     const byKey = new Map(pairs);
-    // The pending map gates hydrateRow (an unsynced local edit keeps its body).
-    let metaPending: Record<string, any> | undefined;
-    try {
-      const rawPending = byKey.get(META_PREFIX + "pending");
-      metaPending = rawPending == null ? undefined : JSON.parse(rawPending);
-    } catch { metaPending = undefined; }
+    // Meta lookup first — the pending map gates hydrateRow (an unsynced local
+    // edit keeps its body), and the sessions retention pass below needs
+    // liveInboxIdList and lastFocusedConversationId from the same snapshot.
+    const readMeta = (key: string): any => {
+      try {
+        const raw = byKey.get(META_PREFIX + key);
+        return raw == null ? undefined : JSON.parse(raw);
+      } catch { return undefined; }
+    };
+    const metaPending = readMeta("pending") as Record<string, any> | undefined;
 
     for (const key of collectionKeys) {
       const raw = byKey.get(COLLECTION_PREFIX + key);
       if (raw == null) continue;
-      const rows = JSON.parse(raw) as any[];
+      let rows = JSON.parse(raw) as any[];
       // Seed the persistence shadow with what's on disk so the first write after
       // hydrate diffs against reality (see idbCache.ts).
       const shadow = new Map<string, any>();
@@ -159,6 +164,19 @@ export async function loadCache(): Promise<Record<string, any> | null> {
       const hydrateRow = collectionRowHydrator(key);
       const hydrateCtx = { pending: (metaPending as Record<string, any> | undefined) ?? {} };
       let anyTrimmed = false;
+      if (key === "sessions" && rows.length > 0) {
+        const { keep, drop } = partitionSessionRetention(
+          rows,
+          readMeta("liveInboxIdList"),
+          readMeta("lastFocusedConversationId"),
+          Date.now(),
+        );
+        rows = keep;
+        // Whole-blob engine: the trim rewrite below (Object.values(map), which
+        // the dropped rows never enter) is how the prune reaches disk.
+        if (drop.length) anyTrimmed = true;
+        if (drop.length && rows.length === 0) Storage.setItem(COLLECTION_PREFIX + key, "[]").catch(() => {});
+      }
       if (rows.length > 0) {
         const map: Record<string, any> = {};
         for (const row of rows) {
@@ -187,6 +205,25 @@ export async function loadCache(): Promise<Record<string, any> | null> {
       if (raw == null) continue;
       result[key] = JSON.parse(raw);
       hasData = true;
+    }
+
+    // The conversations map is the sessions cache's twin persisted as ONE meta
+    // blob — apply the same retention policy (see idbCache.ts); the pruned blob
+    // reaches disk on its next natural put.
+    if (result.conversations && typeof result.conversations === "object") {
+      const { keep } = partitionSessionRetention(
+        Object.values(result.conversations),
+        readMeta("liveInboxIdList"),
+        readMeta("lastFocusedConversationId"),
+        Date.now(),
+      );
+      const pruned: Record<string, any> = {};
+      for (const row of keep) pruned[row._id] = row;
+      result.conversations = pruned;
+    }
+
+    if (result.pending && typeof result.pending === "object") {
+      result.pending = expireExcludeTombstones(result.pending, Date.now());
     }
 
     return hasData ? result : null;

@@ -8,6 +8,8 @@ import {
   accessSummary,
   submitComments,
   deliverPendingComments,
+  historyBySlug,
+  ownerPanel,
 } from "./artifacts";
 import { brandArtifactHtml } from "./artifactPages";
 import { normalizeAssetPath } from "./artifactsHttp";
@@ -274,6 +276,40 @@ describe("upsertFromPublish", () => {
     });
     expect(result.updated).toBe(false);
     expect(inserts.length).toBe(1);
+  });
+});
+
+describe("version rows (historyBySlug / ownerPanel)", () => {
+  // Multi-version artifact: current row is kind markdown; v1 predates the kind
+  // column (falls back to the artifact's kind), v2 carries its own kind.
+  const art = { ...existingRow, kind: "markdown", owner_key: "sekrit", source_storage_id: "src_cur" };
+  const h1 = {
+    _table: "artifact_versions", _id: "v1", artifact_id: "a1", version: 1, title: "T1",
+    size: 10, published_at: 1100, storage_id: "st_v1", source_storage_id: "src_v1", edited_by: "link editor",
+  };
+  const h2 = {
+    _table: "artifact_versions", _id: "v2", artifact_id: "a1", version: 2, title: "T2",
+    size: 20, published_at: 1200, storage_id: "st_v2", kind: "html",
+  };
+
+  test("historyBySlug pins the shared row shape + storage ids + kind fallback chain", async () => {
+    const { ctx } = makeCtx([{ ...art }, { ...h1 }, { ...h2 }]);
+    const out = await (historyBySlug as any)._handler(ctx, { slug: art.slug });
+    expect(out.versions).toEqual([
+      { version: 3, title: "Old title", size: 100, published_at: 2000, edited_by: null, storage_id: "st_old", source_storage_id: "src_cur", kind: "markdown" },
+      { version: 2, title: "T2", size: 20, published_at: 1200, edited_by: null, storage_id: "st_v2", source_storage_id: undefined, kind: "html" },
+      { version: 1, title: "T1", size: 10, published_at: 1100, edited_by: "link editor", storage_id: "st_v1", source_storage_id: "src_v1", kind: "markdown" },
+    ]);
+  });
+
+  test("ownerPanel pins the same rows with the current flag", async () => {
+    const { ctx } = makeCtx([{ ...art }, { ...h1 }, { ...h2 }]);
+    const out = await (ownerPanel as any)._handler(ctx, { slug: art.slug, owner_key: "sekrit" });
+    expect(out.versions).toEqual([
+      { version: 3, title: "Old title", size: 100, published_at: 2000, edited_by: null, current: true },
+      { version: 2, title: "T2", size: 20, published_at: 1200, edited_by: null, current: false },
+      { version: 1, title: "T1", size: 10, published_at: 1100, edited_by: "link editor", current: false },
+    ]);
   });
 });
 

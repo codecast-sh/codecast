@@ -100,17 +100,7 @@ export function ShortcutProvider({ children }: { children: ReactNode }) {
         if (def.when && !contextsRef.current.has(def.when)) continue;
         if (inInput && !inputGuardBypass(def, e.target as HTMLElement | null)) continue;
 
-        const actionHandlers = handlersRef.current.get(def.action);
-        if (!actionHandlers || actionHandlers.size === 0) continue;
-
-        let handled = false;
-        for (const handler of actionHandlers) {
-          const result = handler();
-          if (result === false) continue;
-          handled = true;
-          if (result === true) break;
-        }
-        if (handled) {
+        if (dispatchAction(def.action)) {
           e.preventDefault();
           e.stopImmediatePropagation();
           onShortcutUsed(def.action);

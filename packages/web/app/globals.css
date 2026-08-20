@@ -1384,16 +1384,27 @@ pre[class*="language-"] {
 .titlebar-head {
   -webkit-app-region: drag;
 }
+/* A titlebar row sits level with the traffic lights: they span y 12-24
+   (center 18), so the row grows to 36px and centers its content there.
+   Doubled class to outrank same-specificity height pins declared later
+   (cc-panel__head fixes height to 32px). */
+.titlebar-head.titlebar-head {
+  height: auto;
+  min-height: 36px;
+  align-items: center;
+}
 .titlebar-head.titlebar-head--edge {
   /* Set per element by attachTitlebarHead: the lights' width minus the row's own left. */
   padding-left: var(--titlebar-edge-inset, var(--titlebar-inset)) !important;
 }
-/* A lent row on a headerless page (lib/pageLayout PageShell): it has height
-   only while it measures as the titlebar, so it vanishes under a tab bar. */
-.titlebar-strip.titlebar-head--edge {
+/* A lent strip on a surface with no stable top row (PageShell pages, the chat
+   rail): it has height only while it measures as the titlebar, so it vanishes
+   under a tab bar or when another row covers the band. */
+.titlebar-strip.titlebar-head {
   height: 36px;
+  min-height: 36px;
 }
-.titlebar-strip.titlebar-head--edge + [data-main-scroll] {
+.titlebar-strip.titlebar-head + [data-main-scroll] {
   padding-top: 8px;
 }
 /* Too narrow to indent (an icon-only rail): the row sits below the lights. */

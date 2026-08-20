@@ -27,8 +27,10 @@ export const SessionWindow = memo(function SessionWindow({ win, isFocused }: Ses
     bringToFront(win.id);
   }, [bringToFront, win.id]);
 
+  const maximized = win.visualState === "maximized";
+
   const handleMaxToggle = useCallback(() => {
-    if (win.maximized) {
+    if (maximized) {
       restoreWindow(win.id);
     } else {
       // Use the parent container dimensions, not the viewport
@@ -38,9 +40,9 @@ export const SessionWindow = memo(function SessionWindow({ win, isFocused }: Ses
         : { width: window.innerWidth, height: window.innerHeight };
       maximizeWindow(win.id, vp);
     }
-  }, [win.id, win.maximized, maximizeWindow, restoreWindow]);
+  }, [win.id, maximized, maximizeWindow, restoreWindow]);
 
-  if (win.minimized) return null;
+  if (win.visualState === "minimized") return null;
 
   const statusColor = !session
     ? "var(--sol-text-dim)"
@@ -72,8 +74,8 @@ export const SessionWindow = memo(function SessionWindow({ win, isFocused }: Ses
           height: ref.offsetHeight,
         });
       }}
-      enableResizing={!win.maximized}
-      disableDragging={win.maximized}
+      enableResizing={!maximized}
+      disableDragging={maximized}
     >
       <div
         className={`session-window h-full flex flex-col rounded-lg overflow-hidden shadow-2xl border transition-shadow duration-150 ${
@@ -126,9 +128,9 @@ export const SessionWindow = memo(function SessionWindow({ win, isFocused }: Ses
             <button
               onClick={(e) => { e.stopPropagation(); handleMaxToggle(); }}
               className="p-1 rounded hover:bg-sol-text-dim/15 text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
-              title={win.maximized ? "Restore" : "Maximize"}
+              title={maximized ? "Restore" : "Maximize"}
             >
-              {win.maximized ? <Maximize2 className="w-3 h-3" /> : <Square className="w-3 h-3" />}
+              {maximized ? <Maximize2 className="w-3 h-3" /> : <Square className="w-3 h-3" />}
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); closeWindow(win.id); }}

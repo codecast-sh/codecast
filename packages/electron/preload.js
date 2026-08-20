@@ -6,41 +6,50 @@ if (zoomArg) {
   if (z && isFinite(z)) webFrame.setZoomFactor(z);
 }
 
-// Deep links must survive the cold-start window. This preload script runs
-// before any page JS, so registering the IPC listener here (not lazily inside
-// onDeepLink) guarantees it's live before main can ever send. Links that land
-// before the page's React handler subscribes are buffered and replayed on
-// subscribe — without this, a deep link sent during boot hits no listener and
-// is silently dropped, leaving the app on whatever it restored (its last
-// conversation). Registering once also avoids the old leak of stacking a new
-// ipcRenderer.on listener every time onDeepLink was called.
-let deepLinkHandler = null;
-let deepLinkBuffer = [];
-ipcRenderer.on("deep-link", (_e, url) => {
-  if (deepLinkHandler) deepLinkHandler(url);
-  else deepLinkBuffer.push(url);
-});
+// IPC events can fire during the cold-start window, before the page's React
+// handler subscribes. This preload script runs before any page JS, so
+// registering the IPC listener here (not lazily inside the on* subscribe
+// call) guarantees it's live before main can ever send; events that land
+// before subscribe are buffered and replayed on subscribe. Without this, an
+// event sent during boot hits no listener and is silently dropped (a deep
+// link would leave the app on whatever it restored; an adopted tab would be
+// lost). Registering once also avoids the old leak of stacking a new
+// ipcRenderer.on listener every time the subscribe function was called.
+// { latest: true } keeps and replays only the most recent event (an update
+// banner only cares about the current state).
+function bufferedChannel(channel, { latest = false } = {}) {
+  let handler = null;
+  let buffer = [];
+  let last = null;
+  ipcRenderer.on(channel, (_e, payload) => {
+    if (latest) last = payload;
+    if (handler) handler(payload);
+    else if (!latest) buffer.push(payload);
+  });
+  return (cb) => {
+    handler = cb;
+    if (latest) {
+      if (last) cb(last);
+    } else if (buffer.length) {
+      const pending = buffer;
+      buffer = [];
+      for (const p of pending) cb(p);
+    }
+  };
+}
 
-// Update status can fire during cold start, before the page's React handler has
-// subscribed. Keep the latest one and replay it on subscribe so the banner
-// never misses a download that already progressed or finished (same reasoning
-// as the deep-link buffer above, but we only care about the most recent state).
-let updateStatusHandler = null;
-let lastUpdateStatus = null;
-ipcRenderer.on("update-status", (_e, status) => {
-  lastUpdateStatus = status;
-  if (updateStatusHandler) updateStatusHandler(status);
-});
+// Deep links must survive cold start — a dropped one leaves the app on
+// whatever it restored (its last conversation).
+const onDeepLink = bufferedChannel("deep-link");
+
+// Update status: only the most recent state matters, so the banner never
+// misses a download that already progressed or finished.
+const onUpdateStatus = bufferedChannel("update-status", { latest: true });
 
 // Tabs handed back by detached tab windows. Buffered like deep links: an
 // adoption can land while the main renderer is still booting, and a dropped
 // one would silently lose the user's tab.
-let adoptTabHandler = null;
-let adoptTabBuffer = [];
-ipcRenderer.on("adopt-tab", (_e, navPath) => {
-  if (adoptTabHandler) adoptTabHandler(navPath);
-  else adoptTabBuffer.push(navPath);
-});
+const onAdoptTab = bufferedChannel("adopt-tab");
 
 // Window role (notification leader / app focus / any call) is pushed by main
 // whenever windows or focus change. Keep the latest so a subscriber that
@@ -56,18 +65,8 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   getVersion: () => ipcRenderer.invoke("get-app-version"),
   setBadgeCount: (count) => ipcRenderer.invoke("set-badge-count", count),
   getEnv: () => ipcRenderer.invoke("get-env"),
-  onDeepLink: (cb) => {
-    deepLinkHandler = cb;
-    if (deepLinkBuffer.length) {
-      const pending = deepLinkBuffer;
-      deepLinkBuffer = [];
-      for (const url of pending) cb(url);
-    }
-  },
-  onUpdateStatus: (cb) => {
-    updateStatusHandler = cb;
-    if (lastUpdateStatus) cb(lastUpdateStatus);
-  },
+  onDeepLink,
+  onUpdateStatus,
   restartForUpdate: () => ipcRenderer.invoke("restart-for-update"),
   checkForUpdate: (opts) => ipcRenderer.invoke("check-for-update", opts),
   // Resolves { shown } — false when main dropped it (duplicate from another
@@ -123,13 +122,6 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   isTabWindow: process.argv.includes("--tab-window"),
   detachTab: (navPath) => ipcRenderer.invoke("detach-tab", navPath),
   attachTab: (navPath) => ipcRenderer.invoke("attach-tab", navPath),
-  onAdoptTab: (cb) => {
-    adoptTabHandler = cb;
-    if (adoptTabBuffer.length) {
-      const pending = adoptTabBuffer;
-      adoptTabBuffer = [];
-      for (const p of pending) cb(p);
-    }
-  },
+  onAdoptTab,
   platform: process.platform,
 });

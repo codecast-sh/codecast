@@ -6,6 +6,7 @@ import {
   requireTeamMembership,
   workspaceKey,
   computeWorkspaceKey,
+  resolveWorkspaceKey,
   parseWorkspaceKey,
   type WorkspaceKey,
 } from "./lib/access";
@@ -322,15 +323,6 @@ async function resolveWorkspace(ctx: { db: any }, opts: DataContextOpts): Promis
   return { type: "personal", userId: opts.userId };
 }
 
-// The row's access key, resolved lazily for legacy rows (one conversation
-// read at most). After the backfill the stored branch is the only one taken.
-async function rowWorkspaceKey(ctx: { db: any }, doc: any): Promise<WorkspaceKey> {
-  if (typeof doc.workspace === "string" && doc.workspace) return doc.workspace;
-  const cid = linkedConversationId(doc);
-  const conv = cid ? await ctx.db.get(cid) : null;
-  return computeWorkspaceKey(doc, conv);
-}
-
 // Owner always; otherwise the row's ACCESS key must equal the context's key.
 // team_id is never consulted here — a team-routed private row (team_id: T,
 // workspace: user:<owner>) is invisible to every other member of T.
@@ -342,7 +334,7 @@ async function canAccess(
   key: WorkspaceKey,
 ): Promise<boolean> {
   if (String(doc.user_id) === String(userId)) return true;
-  return (await rowWorkspaceKey(ctx, doc)) === key;
+  return (await resolveWorkspaceKey(ctx, doc)) === key;
 }
 
 // Chokepoint query for a scoped table: rows whose ACCESS key equals the
@@ -374,7 +366,7 @@ function wrapWorkspaceQuery(
     for (const d of await b.collect()) {
       if (seen.has(String(d._id))) continue;
       if (typeof d.workspace === "string" && d.workspace) continue; // keyed elsewhere
-      if ((await rowWorkspaceKey(ctx, d)) === key) { seen.add(String(d._id)); out.push(d); }
+      if ((await resolveWorkspaceKey(ctx, d)) === key) { seen.add(String(d._id)); out.push(d); }
     }
     return out;
   };
@@ -394,7 +386,7 @@ function wrapWorkspaceQuery(
       const result = await a.paginate(opts);
       const page: any[] = [];
       for (const d of result.page) {
-        if ((await rowWorkspaceKey(ctx, d)) === key) page.push(d);
+        if ((await resolveWorkspaceKey(ctx, d)) === key) page.push(d);
       }
       return { ...result, page };
     },

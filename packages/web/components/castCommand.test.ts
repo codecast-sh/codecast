@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { stripCdPrefix, stripEnvPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs } from "./castCommand";
+import { stripCdPrefix, stripEnvPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs, extractStateArgs } from "./castCommand";
 
 describe("stripEnvPrefix", () => {
   test("strips a leading assignment", () => {
@@ -416,13 +416,8 @@ describe("extractCastBodyParts", () => {
     ]);
   });
 
-  test("cast state carries the pinned line", () => {
-    expect(extractCastBodyParts("state", "", '"Waiting on CI — nothing to decide"')).toEqual([
-      { text: "Waiting on CI — nothing to decide", label: undefined },
-    ]);
-  });
-
-  test("state readers carry nothing", () => {
+  test("cast state renders as its own row, never a body block", () => {
+    expect(extractCastBodyParts("state", "", '--status done "Shipped and verified"')).toEqual([]);
     expect(extractCastBodyParts("state", "clear", "")).toEqual([]);
     expect(extractCastBodyParts("state", "show", "jx7c6zk")).toEqual([]);
   });
@@ -434,6 +429,48 @@ describe("extractCastBodyParts", () => {
 
   test("a shell-expanded body yields nothing to quote", () => {
     expect(extractCastBodyParts("task", "comment", 'ct-1 "$(cat notes.md)"')).toEqual([]);
+  });
+});
+
+describe("extractStateArgs", () => {
+  test("status flag plus quoted body", () => {
+    expect(extractStateArgs('--status done "Shipped — all four fixes verified"')).toEqual({
+      status: "done",
+      headline: "Shipped — all four fixes verified",
+    });
+  });
+
+  test("heredoc body yields only the first line", () => {
+    const args = "--status dormant - <<'EOF'\nOps audit of Convex on Railway\nStatus: both pinned at the cap\nNext: read memory.stat\nEOF";
+    expect(extractStateArgs(args)).toEqual({
+      status: "dormant",
+      headline: "Ops audit of Convex on Railway",
+    });
+  });
+
+  test("body without a status flag", () => {
+    expect(extractStateArgs('"Waiting on CI — nothing to decide"')).toEqual({
+      status: null,
+      headline: "Waiting on CI — nothing to decide",
+    });
+  });
+
+  test("status flag after the body", () => {
+    expect(extractStateArgs('"Rewrite done, tests green" --status blocked')).toEqual({
+      status: "blocked",
+      headline: "Rewrite done, tests green",
+    });
+  });
+
+  test("a shell-expanded body is a recipe, not a headline", () => {
+    expect(extractStateArgs('--status done "$(cat state.txt)"')).toEqual({
+      status: "done",
+      headline: null,
+    });
+  });
+
+  test("bare read has neither", () => {
+    expect(extractStateArgs("")).toEqual({ status: null, headline: null });
   });
 });
 

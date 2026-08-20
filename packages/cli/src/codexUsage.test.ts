@@ -109,6 +109,18 @@ describe("snapshotFromRateLimits", () => {
     expect(snap.weekly).toBeUndefined();
     expect(snap.credits).toBeUndefined();
   });
+
+  it("never sets reset_credits (RPC-only field)", () => {
+    const rl = {
+      limit_id: "codex",
+      primary: { used_percent: 41, window_minutes: 10080, resets_at: 1786011679 },
+      credits: { has_credits: true, unlimited: false, balance: "1250" },
+      plan_type: "pro",
+    };
+    const snap = snapshotFromRateLimits(new Map([["codex", { at: NOW, rl }]]), NOW);
+    expect(snap.weekly).toBeDefined();
+    expect(snap.reset_credits).toBeUndefined();
+  });
 });
 
 // Real response captured from `codex app-server` → account/rateLimits/read.
@@ -164,6 +176,13 @@ describe("parseRateLimitsReadResult", () => {
   it("returns null on empty or malformed results", () => {
     expect(parseRateLimitsReadResult(null, NOW)).toBeNull();
     expect(parseRateLimitsReadResult({}, NOW)).toBeNull();
+  });
+
+  it("returns null when the result carries zero limit entries", () => {
+    expect(parseRateLimitsReadResult({ rateLimitsByLimitId: {} }, NOW)).toBeNull();
+    expect(
+      parseRateLimitsReadResult({ rateLimitsByLimitId: {}, rateLimitResetCredits: { availableCount: 1 } }, NOW),
+    ).toBeNull();
   });
 });
 

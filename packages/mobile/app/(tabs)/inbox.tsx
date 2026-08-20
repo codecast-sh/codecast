@@ -188,9 +188,9 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
   const effectiveBucketId = bucketPick === undefined ? (activeBucketFilter ?? null) : bucketPick;
   const [modelSheetVisible, setModelSheetVisible] = useState(false);
   const [showAllRecents, setShowAllRecents] = useState(false);
-  // Project directory and Context are pre-filled (last folder / machine's own
-  // `cast stable`) so they collapse to a one-line summary by default — the
-  // common launch is agent + go. Tapping the row expands the editor.
+  // Pre-filled controls fold away by default (the common launch is agent +
+  // go): projectOpen gates only the free-text path input (the recent pills
+  // stay visible), contextOpen gates the stable-mode segments.
   const [projectOpen, setProjectOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   // Machine picker. `deviceId` holds an EXPLICIT pick only: left null, routing
@@ -548,9 +548,17 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
             </>
           )}
 
+          {/* Only the free-text path editor folds away; the recent-project
+              pills below stay visible so the common pick is one tap. The
+              summary names the path only when no visible pill shows it (a
+              custom path, or a recent past the first six). */}
           <CollapsibleSection
             label="Project directory"
-            summary={projectPath.trim() ? displayPath(projectPath.trim()).split("/").pop() || displayPath(projectPath.trim()) : "Pick a folder"}
+            summary={
+              projectPath.trim() && !allRecents.slice(0, 6).some((p) => p.path === projectPath)
+                ? displayPath(projectPath.trim()).split("/").pop() || displayPath(projectPath.trim())
+                : ""
+            }
             open={projectOpen}
             onToggle={() => setProjectOpen((v) => !v)}
             disabled={submitting}
@@ -568,6 +576,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
             autoCapitalize="none"
             editable={!submitting}
           />
+          </CollapsibleSection>
           {allRecents.length > 0 && (
             <RNView style={modalStyles.recentRow}>
               {allRecents.slice(0, 6).map((p) => (
@@ -629,7 +638,6 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
               ))}
             </RNView>
           )}
-          </CollapsibleSection>
 
           {rail && (
             <>

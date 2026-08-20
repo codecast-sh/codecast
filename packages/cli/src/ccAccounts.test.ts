@@ -24,6 +24,7 @@ import {
   refreshUsageSnapshots,
   readUsageCache,
   CcAccountError,
+  createMtimeGatedCache,
 } from "./ccAccounts.js";
 
 const CRED = JSON.stringify({
@@ -184,6 +185,39 @@ describe("credentialHealth", () => {
 // Exercises the real save path against a sandboxed $HOME: file-backed secret
 // store (CC_ACCOUNTS_FORCE_FILE) and an empty PATH so the keychain lookup
 // fails over to $HOME/.claude/.credentials.json.
+describe("createMtimeGatedCache", () => {
+  it("memoizes (including a null result) until an mtime changes; invalidate forces recompute", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mtime-cache-test-"));
+    const file = path.join(dir, "a.json");
+    fs.writeFileSync(file, "{}");
+    fs.utimesSync(file, new Date(1000), new Date(1000));
+    let calls = 0;
+    let next: string | null = null;
+    const cache = createMtimeGatedCache<string | null>(
+      () => [file, path.join(dir, "missing.json")],
+      () => {
+        calls++;
+        return next;
+      },
+    );
+    // A failed/null compute is memoized against the same mtimes, not retried.
+    expect(cache.get()).toBeNull();
+    expect(cache.get()).toBeNull();
+    expect(calls).toBe(1);
+    // An mtime change recomputes.
+    next = "fresh";
+    fs.utimesSync(file, new Date(2000), new Date(2000));
+    expect(cache.get()).toBe("fresh");
+    expect(cache.get()).toBe("fresh");
+    expect(calls).toBe(2);
+    // Manual invalidation recomputes with unchanged mtimes.
+    cache.invalidate();
+    expect(cache.get()).toBe("fresh");
+    expect(calls).toBe(3);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("autoSaveActiveProfile + heartbeat payload (sandboxed $HOME)", () => {
   let home: string;
   const savedEnv: Record<string, string | undefined> = {};

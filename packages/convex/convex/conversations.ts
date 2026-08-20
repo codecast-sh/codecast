@@ -26,6 +26,7 @@ import { filterUserMessages, isImportNotice } from "./userMessagesFilter";
 import {
   isTeamMember,
   canTeamMemberAccess,
+  canOwnerOrTeamAccess,
   checkConversationAccess,
   isConversationTeamVisible,
   createTeamFeedFilter,
@@ -1231,7 +1232,7 @@ export const webGet = query({
 
     if (!conv) return null;
     const isOwner = conv.user_id.toString() === userId.toString();
-    if (!isOwner && !(await canTeamMemberAccess(ctx, userId, conv))) return null;
+    if (!(await canOwnerOrTeamAccess(ctx, userId, conv))) return null;
 
     // Author identity, only for teammates' sessions (own sessions skip the read).
     // The reference pill/hover use this to show the author's avatar when the
@@ -1556,9 +1557,7 @@ export const getProjectInfo = query({
     if (!userId) return null;
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv) return null;
-    if (conv.user_id.toString() !== userId.toString()) {
-      if (!(await canTeamMemberAccess(ctx, userId, conv))) return null;
-    }
+    if (!(await canOwnerOrTeamAccess(ctx, userId, conv))) return null;
     return {
       project_path: conv.project_path ?? null,
       git_root: conv.git_root ?? null,
@@ -1700,11 +1699,8 @@ export const getNewMessages = query({
     if (!conversation) {
       return null;
     }
-    const isOwner = conversation.user_id.toString() === authUserId.toString();
-    if (!isOwner) {
-      if (!(await canTeamMemberAccess(ctx, authUserId, conversation))) {
-        return null;
-      }
+    if (!(await canOwnerOrTeamAccess(ctx, authUserId, conversation))) {
+      return null;
     }
 
     const PAGE_LIMIT = 2000;
@@ -2077,11 +2073,8 @@ export const getConversationMessages = query({
     if (!conversation) {
       return null;
     }
-    const isOwner = conversation.user_id.toString() === authUserId.toString();
-    if (!isOwner) {
-      if (!(await canTeamMemberAccess(ctx, authUserId, conversation))) {
-        return null;
-      }
+    if (!(await canOwnerOrTeamAccess(ctx, authUserId, conversation))) {
+      return null;
     }
 
     let messages;
@@ -2133,11 +2126,8 @@ export const getMoreMessages = query({
     if (!conversation) {
       return null;
     }
-    const isOwner = conversation.user_id.toString() === authUserId.toString();
-    if (!isOwner) {
-      if (!(await canTeamMemberAccess(ctx, authUserId, conversation))) {
-        return null;
-      }
+    if (!(await canOwnerOrTeamAccess(ctx, authUserId, conversation))) {
+      return null;
     }
 
     const limit = args.limit ?? 100;
@@ -2177,11 +2167,8 @@ export const getOlderMessages = query({
     if (!conversation) {
       return null;
     }
-    const isOwner = conversation.user_id.toString() === authUserId.toString();
-    if (!isOwner) {
-      if (!(await canTeamMemberAccess(ctx, authUserId, conversation))) {
-        return null;
-      }
+    if (!(await canOwnerOrTeamAccess(ctx, authUserId, conversation))) {
+      return null;
     }
 
     const limit = args.limit ?? 100;
@@ -4380,8 +4367,7 @@ export const conversationMessagesForCLI = query({
     const conv = await resolveConversationRef(ctx, args.conversation_id, authUserId);
     if (!conv) return { error: "Conversation not found" };
 
-    const isOwn = conv.user_id.toString() === authUserId.toString();
-    if (!isOwn && !(await canTeamMemberAccess(ctx, authUserId, conv))) {
+    if (!(await canOwnerOrTeamAccess(ctx, authUserId, conv))) {
       return { error: "Access denied" };
     }
 
@@ -4439,11 +4425,8 @@ export const readConversationMessages = query({
 
     // Check access - user can see their own conversations, or non-private
     // conversations from team members
-    const isOwn = conv.user_id.toString() === authUserId.toString();
-    if (!isOwn) {
-      if (!(await canTeamMemberAccess(ctx, authUserId, conv))) {
-        return { error: "Access denied" };
-      }
+    if (!(await canOwnerOrTeamAccess(ctx, authUserId, conv))) {
+      return { error: "Access denied" };
     }
 
     const firstMessages = await ctx.db
@@ -4596,11 +4579,8 @@ export const exportConversationMessages = query({
       return { error: "Conversation not found" };
     }
 
-    const isOwn = conv.user_id.toString() === authUserId.toString();
-    if (!isOwn) {
-      if (!(await canTeamMemberAccess(ctx, authUserId, conv))) {
-        return { error: "Access denied" };
-      }
+    if (!(await canOwnerOrTeamAccess(ctx, authUserId, conv))) {
+      return { error: "Access denied" };
     }
 
     const allMessages = await ctx.db
@@ -4661,11 +4641,8 @@ export const exportConversationMessagesPage = query({
       return { error: "Conversation not found" };
     }
 
-    const isOwn = conv.user_id.toString() === authUserId.toString();
-    if (!isOwn) {
-      if (!(await canTeamMemberAccess(ctx, authUserId, conv))) {
-        return { error: "Access denied" };
-      }
+    if (!(await canOwnerOrTeamAccess(ctx, authUserId, conv))) {
+      return { error: "Access denied" };
     }
 
     const pageSize = Math.max(1, Math.min(args.limit ?? 500, 1000));
@@ -4726,15 +4703,9 @@ export const updateTitle = mutation({
       throw new Error("Authentication failed: invalid token or session");
     }
 
-    const isOwner = conversation.user_id.toString() === authUserId.toString();
-    let hasTeamAccess = false;
-    if (!isOwner && conversation.team_id) {
-      // Team WRITE access follows real visibility, not the routing team — a
-      // member of a private session's routing team must not rename it.
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
-    }
-
-    if (!isOwner && !hasTeamAccess) {
+    // Team WRITE access follows real visibility, not the routing team — a
+    // member of a private session's routing team must not rename it.
+    if (!(await canOwnerOrTeamAccess(ctx, authUserId, conversation))) {
       throw new Error("Unauthorized: can only update your own conversations");
     }
 
@@ -4874,15 +4845,9 @@ export const setSkipTitleGeneration = mutation({
       throw new Error("Authentication failed: invalid token or session");
     }
 
-    const isOwner = conversation.user_id.toString() === authUserId.toString();
-    let hasTeamAccess = false;
-    if (!isOwner && conversation.team_id) {
-      // Team WRITE access follows real visibility, not the routing team — a
-      // member of a private session's routing team must not rename it.
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
-    }
-
-    if (!isOwner && !hasTeamAccess) {
+    // Team WRITE access follows real visibility, not the routing team — a
+    // member of a private session's routing team must not rename it.
+    if (!(await canOwnerOrTeamAccess(ctx, authUserId, conversation))) {
       throw new Error("Unauthorized: can only update your own conversations");
     }
 
@@ -5319,11 +5284,8 @@ export const forkFromMessage = mutation({
       throw new Error("Conversation not found");
     }
 
-    const isOwner = original.user_id.toString() === userId.toString();
-    if (!isOwner) {
-      if (!(await canTeamMemberAccess(ctx, userId, original))) {
-        throw new Error("Access denied");
-      }
+    if (!(await canOwnerOrTeamAccess(ctx, userId, original))) {
+      throw new Error("Access denied");
     }
 
     // Idempotency on the client-supplied session_id. The fork command rides the
@@ -5608,11 +5570,8 @@ export const getConversationTree = query({
       return { error: "Conversation not found" };
     }
 
-    const isOwner = conv.user_id.toString() === userId.toString();
-    if (!isOwner) {
-      if (!(await canTeamMemberAccess(ctx, userId, conv))) {
-        return { error: "Access denied" };
-      }
+    if (!(await canOwnerOrTeamAccess(ctx, userId, conv))) {
+      return { error: "Access denied" };
     }
 
     // Walk up to find root
@@ -5760,11 +5719,8 @@ export const getForkBranchMessages = query({
       return { error: "Conversation not found" };
     }
 
-    const isOwner = conv.user_id.toString() === userId.toString();
-    if (!isOwner) {
-      if (!(await canTeamMemberAccess(ctx, userId, conv))) {
-        return { error: "Access denied" };
-      }
+    if (!(await canOwnerOrTeamAccess(ctx, userId, conv))) {
+      return { error: "Access denied" };
     }
 
     const allMessages = await ctx.db

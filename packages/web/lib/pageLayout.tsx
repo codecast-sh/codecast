@@ -29,6 +29,10 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/schedules(\/|$)/,
   /^\/plans(\/|$)/,
   /^\/docs(\/|$)/,
+  /^\/capabilities$/,
+  /^\/crosstalk$/,
+  // /vault = pre-rename alias for /files; both stay full-width.
+  /^\/files(\/|$)/,
   /^\/vault(\/|$)/,
   /^\/projects(\/|$)/,
   /^\/windows(\/|$)/,

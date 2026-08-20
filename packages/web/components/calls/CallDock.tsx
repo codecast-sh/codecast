@@ -10,6 +10,7 @@ import {
   type ParticipantTile,
 } from "../../lib/calls/callManager";
 import { Avatar, CallStage, StageVideo } from "./CallStage";
+import { AvatarImg } from "../../lib/avatarCache";
 import { AddPeopleButton } from "./AddPeople";
 import { HangUpButton, MicButton } from "./CallControls";
 import { firstName } from "./speakers";
@@ -272,13 +273,16 @@ function DockPill({
                   : ""
               }`}
             >
-              {m.user_image ? (
-                <img src={m.user_image} alt="" className="h-full w-full object-cover" />
-              ) : (
-                <span className="flex h-full w-full items-center justify-center bg-sol-bg-highlight text-[10px] text-sol-text-muted">
-                  {(m.user_name || "?").charAt(0).toUpperCase()}
-                </span>
-              )}
+              <AvatarImg
+                src={m.user_image}
+                alt=""
+                className="h-full w-full object-cover"
+                fallback={
+                  <span className="flex h-full w-full items-center justify-center bg-sol-bg-highlight text-[10px] text-sol-text-muted">
+                    {(m.user_name || "?").charAt(0).toUpperCase()}
+                  </span>
+                }
+              />
             </span>
           ))}
           {roster.length === 0 && (

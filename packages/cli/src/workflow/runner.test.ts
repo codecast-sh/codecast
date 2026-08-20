@@ -396,6 +396,58 @@ describe("workflow/runner (command nodes)", () => {
   });
 });
 
+// ── Runner (goal-gate retry) tests ───────────────────────────────────────────
+
+describe("workflow/runner (goal-gate retry)", () => {
+  let tmpDir: string;
+  let cap: ReturnType<typeof captureConsole>;
+  let origFetch: typeof fetch;
+  let fetched: string[];
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    cap = captureConsole();
+    origFetch = globalThis.fetch;
+    fetched = [];
+    globalThis.fetch = (async (url: any) => {
+      const u = String(url);
+      fetched.push(u);
+      const body = u.includes("/cli/workflow-runs/poll-gate")
+        ? { status: "paused", gate_response: "ok" }
+        : {};
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    cap.restore();
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test("retry path routes human nodes through the remote gate when runId is set", async () => {
+    // check fails on first visit (goal gate), retry_target sends the run
+    // through a human node. With runId set the human node must use the
+    // remote gate (fetch) — never the stdin prompt, which would hang headless.
+    const g = parseWorkflowSource(`digraph g {
+      start  [shape=Mdiamond]
+      check  [shape=parallelogram, script="test -f marker && exit 0; touch marker; exit 1", goal_gate=true, retry_target="review"]
+      review [shape=hexagon, label="Review"]
+      exit   [shape=Msquare]
+      start  -> check -> exit
+      review -> check
+    }`);
+    const outcome = await runWorkflow(g, {
+      cwd: tmpDir,
+      runId: "run-1",
+      apiToken: "tok",
+      convexSiteUrl: "https://convex.test",
+    });
+    expect(outcome).toBe("completed");
+    expect(fetched.some(u => u.includes("/cli/workflow-runs/gate"))).toBe(true);
+  }, 20000);
+});
+
 // ── plan-to-polish workflow file ──────────────────────────────────────────────
 
 describe("plan-to-polish workflow (file parse + dry-run)", () => {

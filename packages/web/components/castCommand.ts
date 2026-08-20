@@ -318,6 +318,48 @@ export function extractChatSendArgs(subcommand: string, args: string): ChatSendA
   };
 }
 
+// `cast state --status done "…"` / `cast state --status blocked - <<'EOF'…` pin
+// the thread state the UI already renders expanded above the composer, so the
+// row needs only two things: the declared status and the state's first line.
+// Rendering the whole body here would show the same text twice.
+export interface StateArgs {
+  status: string | null;
+  /** First non-empty line of the pinned text, or null when the body was
+   * shell-expanded (a recipe, not the delivered state). */
+  headline: string | null;
+}
+
+export function extractStateArgs(args: string): StateArgs {
+  const status = extractFlagValue(args, ["--status"]);
+
+  // The body: a heredoc/stdin `-` anywhere in the args, else the first
+  // positional word that isn't a flag or a flag's value.
+  const dash = args.match(/(?:^|\s)-(?=\s|$)/);
+  let body: SendBody;
+  if (dash && dash.index !== undefined) {
+    body = extractSendBody(args.slice(dash.index + dash[0].indexOf("-")));
+  } else {
+    const tokens = tokenizeShellArgs(args);
+    let positional: ShellToken | undefined;
+    for (let i = 0; i < tokens.length; i += 1) {
+      const t = tokens[i];
+      if (!t.quoted && FLAG_RE.test(t.value)) {
+        const next = tokens[i + 1];
+        if (next && !(!next.quoted && FLAG_RE.test(next.value))) i += 1;
+        continue;
+      }
+      positional = t;
+      break;
+    }
+    body = positional
+      ? { body: positional.value, kind: positional.dynamic ? "dynamic" : "literal" }
+      : { body: "", kind: "dynamic" };
+  }
+  if (body.kind === "dynamic") return { status, headline: null };
+  const headline = body.body.split("\n").find((l) => l.trim())?.trim();
+  return { status, headline: headline || null };
+}
+
 // "t"/"p"/"d" are the short spellings, "sched"/"schedule" the pre-rename name of
 // `cast trigger` — old transcripts replay them forever, so every reader resolves
 // a category through here and sees one name per object kind.
@@ -381,7 +423,6 @@ export function extractCastBodyParts(
 
   if (subcommand === "comment") push(extractCommentBody(args));
   else if (cat === "trigger" && subcommand === "add") push(positional(), "prompt");
-  else if (cat === "state" && !["clear", "show"].includes(subcommand)) push(positional());
 
   if (CAST_BODY_SUBCOMMANDS.has(subcommand)) {
     for (const { flags, label } of CAST_BODY_FLAGS) push(extractFlagValue(args, flags), label);

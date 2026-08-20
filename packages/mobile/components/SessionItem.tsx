@@ -234,13 +234,13 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
             name="thumb-tack"
             size={9}
             // The declared status owns the pin color (blocked = orange, done =
-            // violet since green means "running", working = cyan — no yellow in
-            // the mobile theme); rows written before the status existed keep
-            // the freshness rule.
+            // teal, working = green like the web card and the liveness pulse —
+            // no yellow in the mobile theme); rows written before the status
+            // existed keep the freshness rule.
             color={
               stateView.status === 'blocked' ? Theme.orange
-                : stateView.status === 'done' ? Theme.violet
-                : stateView.status === 'working' ? Theme.cyan
+                : stateView.status === 'done' ? Theme.cyan
+                : stateView.status === 'working' ? Theme.green
                 : stateView.freshness === 'fresh' ? Theme.cyan : Theme.orange
             }
             style={styles.statePin}

@@ -157,6 +157,7 @@ describe("applyOwnedJson on disk", () => {
     const dir = tmp();
     const target = path.join(dir, "settings.json");
     const r = applyOwnedJson(target, [want(PLUGIN, true)]);
+    expect(r.status).toBe("applied");
     expect(r.wrote).toBe(true);
     expect(JSON.parse(fs.readFileSync(target, "utf-8"))).toEqual({
       enabledPlugins: { "frontend-design@claude-plugins-official": true },
@@ -283,7 +284,8 @@ describe("ledger envelope (schema_version + MAC)", () => {
     );
     const result = applyOwnedJson(target, [{ keyPath: ["b"], value: 2 }]);
     expect(result.wrote).toBe(false);
-    expect(result.conflicts.some((c: any) => c.reason === "ledger_needs_upgrade")).toBe(true);
+    expect(result.status).toBe("needs_upgrade");
+    expect(result.conflicts).toEqual([]);
     // The document AND the newer ledger are byte-untouched — unknown entries
     // are preserved by not touching the file at all.
     expect(fs.readFileSync(target, "utf-8")).toBe(before);

@@ -456,6 +456,16 @@ export class SyncService {
     return this.apiToken;
   }
 
+  // Maps auth failures to AuthExpiredError; every other error passes through.
+  private async guarded<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (error) {
+      if (isAuthError(error)) throw new AuthExpiredError();
+      throw error;
+    }
+  }
+
   /**
    * Narrow transport used by ConvexExecutionControlPlane. It always supplies
    * the daemon bearer explicitly; there is no browser/session auth fallback and
@@ -465,30 +475,24 @@ export class SyncService {
     name: ExecutionControlMutationName,
     args: Record<string, unknown>,
   ): Promise<unknown> {
-    try {
-      return await this.mutate(`executionBindings:${name}`, {
+    return this.guarded(() =>
+      this.mutate(`executionBindings:${name}`, {
         ...args,
         api_token: this.executionApiToken(),
-      });
-    } catch (error) {
-      if (isAuthError(error)) throw new AuthExpiredError();
-      throw error;
-    }
+      })
+    );
   }
 
   async executionControlQuery(
     name: ExecutionControlQueryName,
     args: Record<string, unknown>,
   ): Promise<unknown> {
-    try {
-      return await this.client.query(`executionBindings:${name}` as any, {
+    return this.guarded(() =>
+      this.client.query(`executionBindings:${name}` as any, {
         ...args,
         api_token: this.executionApiToken(),
-      });
-    } catch (error) {
-      if (isAuthError(error)) throw new AuthExpiredError();
-      throw error;
-    }
+      })
+    );
   }
 
   subscribeExecutionControlQuery(
@@ -552,19 +556,19 @@ export class SyncService {
     if (messageUuids.length === 0) return new Set();
     await this.throttle();
     try {
-      const existing = await this.client.query(
-        "messages:existingMessageUuids" as any,
-        {
-          conversation_id: conversationId,
-          message_uuids: messageUuids,
-          api_token: this.apiToken,
-        }
-      );
-      return new Set(Array.isArray(existing) ? existing : []);
+      return await this.guarded(async () => {
+        const existing = await this.client.query(
+          "messages:existingMessageUuids" as any,
+          {
+            conversation_id: conversationId,
+            message_uuids: messageUuids,
+            api_token: this.apiToken,
+          }
+        );
+        return new Set(Array.isArray(existing) ? existing : []);
+      });
     } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
+      if (error instanceof AuthExpiredError) throw error;
       return null;
     }
   }
@@ -821,7 +825,7 @@ export class SyncService {
       ? hashPath(params.projectPath)
       : undefined;
     const gitInfo = params.gitInfo;
-    try {
+    return this.guarded(async () => {
       const result = await this.mutate(
         "conversations:createConversation" as any,
         {
@@ -861,17 +865,12 @@ export class SyncService {
         }
       );
       return result as string;
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   async linkSessions(parentConversationId: string, childConversationId: string, subagentDescription?: string): Promise<void> {
     await this.throttle();
-    try {
+    return this.guarded(async () => {
       await this.mutate(
         "conversations:linkSessions" as any,
         {
@@ -881,17 +880,12 @@ export class SyncService {
           api_token: this.apiToken,
         }
       );
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   async killFinishedConversation(conversationId: string): Promise<void> {
     await this.throttle();
-    try {
+    return this.guarded(async () => {
       await this.mutate(
         "conversations:cliSetSessionVisibility" as any,
         {
@@ -900,12 +894,7 @@ export class SyncService {
           api_token: this.apiToken,
         }
       );
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   // Visible-child link: teammate/spawned session → the session that spawned it.
@@ -918,7 +907,7 @@ export class SyncService {
     agentName?: string,
   ): Promise<void> {
     await this.throttle();
-    try {
+    return this.guarded(async () => {
       await this.mutate(
         "conversations:linkSpawnedBy" as any,
         {
@@ -929,17 +918,12 @@ export class SyncService {
           api_token: this.apiToken,
         }
       );
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   async linkPlanHandoff(parentConversationId: string, childConversationId: string): Promise<void> {
     await this.throttle();
-    try {
+    return this.guarded(async () => {
       await this.mutate(
         "conversations:linkPlanHandoff" as any,
         {
@@ -948,12 +932,7 @@ export class SyncService {
           api_token: this.apiToken,
         }
       );
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   async syncPlanFromPlanMode(params: {
@@ -962,7 +941,7 @@ export class SyncService {
     projectPath?: string;
   }): Promise<string | null> {
     await this.throttle();
-    try {
+    return this.guarded(async () => {
       const result = await this.mutate(
         "docs:create" as any,
         {
@@ -975,12 +954,7 @@ export class SyncService {
         }
       );
       return result?.plan_short_id || null;
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   async syncTaskFromPlanMode(params: {
@@ -990,7 +964,7 @@ export class SyncService {
     planShortId?: string;
   }): Promise<string | null> {
     await this.throttle();
-    try {
+    return this.guarded(async () => {
       const result = await this.mutate(
         "tasks:create" as any,
         {
@@ -1006,17 +980,12 @@ export class SyncService {
         }
       );
       return result?.short_id || null;
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   async updateTaskStatus(shortId: string, status: string, sessionId?: string): Promise<void> {
     await this.throttle();
-    try {
+    return this.guarded(async () => {
       await this.mutate(
         "tasks:update" as any,
         {
@@ -1026,29 +995,24 @@ export class SyncService {
           conversation_id: sessionId,
         }
       );
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   async getPlanSnippet(planShortId: string): Promise<string | null> {
     await this.throttle();
     try {
-      const result = await this.client.query(
-        "plans:snippet" as any,
-        {
-          api_token: this.apiToken,
-          plan_short_id: planShortId,
-        }
-      );
-      return result?.snippet || null;
+      return await this.guarded(async () => {
+        const result = await this.client.query(
+          "plans:snippet" as any,
+          {
+            api_token: this.apiToken,
+            plan_short_id: planShortId,
+          }
+        );
+        return result?.snippet || null;
+      });
     } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
+      if (error instanceof AuthExpiredError) throw error;
       return null;
     }
   }
@@ -1115,7 +1079,7 @@ export class SyncService {
       }
     }
 
-    try {
+    return this.guarded(async () => {
       const messageId = await this.mutate(
         "messages:addMessage" as any,
         {
@@ -1134,12 +1098,7 @@ export class SyncService {
         }
       );
       return messageId as string;
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   async addMessages(params: {
@@ -1264,7 +1223,7 @@ export class SyncService {
 
       for (const batch of batches) {
         await this.throttle();
-        try {
+        await this.guarded(async () => {
           const result = await withTimeout(
             this.mutate(
               "messages:addMessages" as any,
@@ -1280,12 +1239,7 @@ export class SyncService {
           const typed = result as { inserted: number; ids: string[] };
           totalInserted += typed.inserted;
           allIds.push(...typed.ids);
-        } catch (error) {
-          if (isAuthError(error)) {
-            throw new AuthExpiredError();
-          }
-          throw error;
-        }
+        });
       }
 
       return { inserted: totalInserted, ids: allIds };
@@ -1304,17 +1258,14 @@ export class SyncService {
       for (let i = 0; i < messageUuids.length; i += ADD_MESSAGES_BATCH_SIZE) {
         const chunk = messageUuids.slice(i, i + ADD_MESSAGES_BATCH_SIZE);
         await this.throttle();
-        try {
+        await this.guarded(async () => {
           const result = await this.mutate("messages:deleteMessagesByUuid" as any, {
             conversation_id: conversationId,
             message_uuids: chunk,
             api_token: this.apiToken,
           });
           deleted += (result as { deleted: number }).deleted;
-        } catch (error) {
-          if (isAuthError(error)) throw new AuthExpiredError();
-          throw error;
-        }
+        });
       }
       return deleted;
     });
@@ -1346,19 +1297,14 @@ export class SyncService {
       throw new Error("userId required for sync cursor operations");
     }
     const filePathHash = hashPath(params.filePath);
-    try {
+    return this.guarded(async () => {
       await this.mutate("syncCursors:updateSyncCursor" as any, {
         user_id: this.userId,
         file_path_hash: filePathHash,
         last_position: params.byteOffset,
         api_token: this.apiToken,
       });
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   async getSyncCursor(filePath: string): Promise<number> {
@@ -1366,7 +1312,7 @@ export class SyncService {
       throw new Error("userId required for sync cursor operations");
     }
     const filePathHash = hashPath(filePath);
-    try {
+    return this.guarded(async () => {
       const position = await this.client.query(
         "syncCursors:getSyncCursor" as any,
         {
@@ -1376,27 +1322,17 @@ export class SyncService {
         }
       );
       return position ?? 0;
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   async updateTitle(conversationId: string, title: string): Promise<void> {
-    try {
+    return this.guarded(async () => {
       await this.mutate("conversations:updateTitle" as any, {
         conversation_id: conversationId,
         title,
         api_token: this.apiToken,
       });
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   async setAvailableSkills(conversationId: string | undefined, skills: string, projectPath?: string): Promise<void> {
@@ -1633,34 +1569,38 @@ export class SyncService {
   async findLocalCheckouts(gitRemoteUrl: string): Promise<string[]> {
     if (!gitRemoteUrl) return [];
     try {
-      const result = await this.client.query("conversations:findUserLocalCheckouts" as any, {
-        git_remote_url: gitRemoteUrl,
-        api_token: this.apiToken,
+      return await this.guarded(async () => {
+        const result = await this.client.query("conversations:findUserLocalCheckouts" as any, {
+          git_remote_url: gitRemoteUrl,
+          api_token: this.apiToken,
+        });
+        if (!Array.isArray(result)) return [];
+        return result.map((r: any) => r?.git_root).filter((g: any): g is string => typeof g === "string" && g.length > 0);
       });
-      if (!Array.isArray(result)) return [];
-      return result.map((r: any) => r?.git_root).filter((g: any): g is string => typeof g === "string" && g.length > 0);
     } catch (error) {
-      if (isAuthError(error)) throw new AuthExpiredError();
+      if (error instanceof AuthExpiredError) throw error;
       return [];
     }
   }
 
   async getProjectInfo(conversationId: string): Promise<{ project_path: string | null; git_root: string | null; git_remote_url: string | null; effort: string | null; execution_protocol_state: string | null } | null> {
     try {
-      const result = await this.client.query("conversations:getProjectInfo" as any, {
-        conversation_id: conversationId,
-        api_token: this.apiToken,
+      return await this.guarded(async () => {
+        const result = await this.client.query("conversations:getProjectInfo" as any, {
+          conversation_id: conversationId,
+          api_token: this.apiToken,
+        });
+        if (!result) return null;
+        return {
+          project_path: result.project_path ?? null,
+          git_root: result.git_root ?? null,
+          git_remote_url: result.git_remote_url ?? null,
+          effort: result.effort ?? null,
+          execution_protocol_state: result.execution_protocol_state ?? null,
+        };
       });
-      if (!result) return null;
-      return {
-        project_path: result.project_path ?? null,
-        git_root: result.git_root ?? null,
-        git_remote_url: result.git_remote_url ?? null,
-        effort: result.effort ?? null,
-        execution_protocol_state: result.execution_protocol_state ?? null,
-      };
     } catch (error) {
-      if (isAuthError(error)) throw new AuthExpiredError();
+      if (error instanceof AuthExpiredError) throw error;
       return null;
     }
   }
@@ -1674,39 +1614,39 @@ export class SyncService {
     }>,
   ): Promise<void> {
     try {
-      await this.mutate("pendingMessages:ackInjectedMessages" as any, {
-        conversation_id: conversationId,
-        api_token: this.apiToken,
-        device_id: deviceId(),
-        ...(pastedMessageIds ? { message_ids: pastedMessageIds } : {}),
-        ...(deliveryAcks?.length
-          ? {
-              delivery_acks: deliveryAcks.map((ack) => ({
-                pending_message_id: ack.pendingMessageId,
-                transcript_message_id: ack.transcriptMessageId,
-              })),
-            }
-          : {}),
-      });
+      await this.guarded(() =>
+        this.mutate("pendingMessages:ackInjectedMessages" as any, {
+          conversation_id: conversationId,
+          api_token: this.apiToken,
+          device_id: deviceId(),
+          ...(pastedMessageIds ? { message_ids: pastedMessageIds } : {}),
+          ...(deliveryAcks?.length
+            ? {
+                delivery_acks: deliveryAcks.map((ack) => ({
+                  pending_message_id: ack.pendingMessageId,
+                  transcript_message_id: ack.transcriptMessageId,
+                })),
+              }
+            : {}),
+        })
+      );
     } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
+      if (error instanceof AuthExpiredError) throw error;
       // Non-critical — don't let ack failures break the sync loop
     }
   }
 
   async resetInjectedMessages(conversationId: string): Promise<void> {
     try {
-      await this.mutate("pendingMessages:resetInjectedMessages" as any, {
-        conversation_id: conversationId,
-        api_token: this.apiToken,
-        device_id: deviceId(),
-      });
+      await this.guarded(() =>
+        this.mutate("pendingMessages:resetInjectedMessages" as any, {
+          conversation_id: conversationId,
+          api_token: this.apiToken,
+          device_id: deviceId(),
+        })
+      );
     } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
+      if (error instanceof AuthExpiredError) throw error;
     }
   }
 
@@ -1715,7 +1655,7 @@ export class SyncService {
     status: "pending" | "injected" | "delivered" | "failed" | "undeliverable";
     deliveredAt?: number;
   }): Promise<void> {
-    try {
+    return this.guarded(async () => {
       await this.mutate("pendingMessages:updateMessageStatus" as any, {
         message_id: params.messageId,
         status: params.status,
@@ -1723,43 +1663,28 @@ export class SyncService {
         api_token: this.apiToken,
         device_id: deviceId(),
       });
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   async retryMessage(messageId: string): Promise<void> {
-    try {
+    return this.guarded(async () => {
       await this.mutate("pendingMessages:retryMessage" as any, {
         message_id: messageId,
         api_token: this.apiToken,
         device_id: deviceId(),
       });
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   async claimPendingMessageForDelivery(messageId: string): Promise<PendingMessageForDelivery | null> {
-    try {
+    return this.guarded(async () => {
       const result = await this.mutate("pendingMessages:claimPendingMessageForDelivery" as any, {
         message_id: messageId,
         api_token: this.apiToken,
         device_id: deviceId(),
       });
       return (result ?? null) as PendingMessageForDelivery | null;
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   // `origin: "scheduler"` marks a machine-initiated injection (task scheduler):
@@ -1767,7 +1692,7 @@ export class SyncService {
   // working out of the user's active queue. Human/agent sends omit it.
   async sendMessageToSession(conversationId: string, content: string, origin?: "scheduler"): Promise<string | null> {
     if (!this.apiToken) return null;
-    try {
+    return this.guarded(async () => {
       const result = await this.mutate(
         "pendingMessages:sendMessageToSession" as any,
         {
@@ -1778,12 +1703,7 @@ export class SyncService {
         },
       );
       return result as string;
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
 
@@ -1920,7 +1840,7 @@ export class SyncService {
     tool_name: string;
     arguments_preview: string;
   }): Promise<string> {
-    try {
+    return this.guarded(async () => {
       const permissionId = await this.mutate(
         "permissions:createPermissionRequest" as any,
         {
@@ -1932,16 +1852,11 @@ export class SyncService {
         }
       );
       return permissionId as string;
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   async cancelPermissionRequest(permissionId: string): Promise<boolean> {
-    try {
+    return this.guarded(async () => {
       const ok = await this.mutate(
         "permissions:cancelPermissionRequest" as any,
         {
@@ -1950,16 +1865,11 @@ export class SyncService {
         }
       );
       return Boolean(ok);
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   async cancelPendingPermissions(sessionId: string, createdBefore?: number): Promise<number> {
-    try {
+    return this.guarded(async () => {
       const cancelled = await this.mutate(
         "permissions:cancelPendingPermissions" as any,
         {
@@ -1969,12 +1879,7 @@ export class SyncService {
         }
       );
       return Number(cancelled) || 0;
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   async getPermissionDecision(sessionId: string, permissionId?: string): Promise<{
@@ -1983,7 +1888,7 @@ export class SyncService {
     resolved_at?: number;
     tool_name: string;
   } | null> {
-    try {
+    return this.guarded(async () => {
       const decision = await this.client.query(
         "permissions:getPermissionDecision" as any,
         {
@@ -1993,12 +1898,7 @@ export class SyncService {
         }
       );
       return decision as any;
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   async getMinCliVersion(): Promise<string | null> {
@@ -2089,7 +1989,7 @@ export class SyncService {
     if (!this.apiToken || sessionIds.length === 0) {
       return [];
     }
-    try {
+    return this.guarded(async () => {
       const result = await this.client.query(
         "conversations:getMessageCountsForReconciliation" as any,
         {
@@ -2104,12 +2004,7 @@ export class SyncService {
         message_count: number;
         updated_at: number;
       }>;
-    } catch (error) {
-      if (isAuthError(error)) {
-        throw new AuthExpiredError();
-      }
-      throw error;
-    }
+    });
   }
 
   // --- Agent Tasks ---
