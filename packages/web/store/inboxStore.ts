@@ -30,6 +30,7 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { type AgentStatus, ACTIVE_AGENT_STATUSES, isLivenessStale, modelOptionKey } from "@codecast/shared/contracts";
+import { liftQuestions } from "../lib/decisionQueue";
 import type { OpenTaskReport } from "@codecast/shared/contracts";
 import { isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
@@ -128,6 +129,8 @@ export type {
 } from "./chatSlice";
 export type { ThreadInboxRow, ThreadKind, ThreadLastReply } from "./threadTypes";
 export { threadRowId } from "./threadTypes";
+import type { ThreadCardOpenEntry } from "./threadTypes";
+export type { ThreadCardOpenEntry } from "./threadTypes";
 
 // Critical UI prefs mirrored to localStorage so they're available
 // synchronously at module load — avoids a layout flash between first paint
@@ -2210,11 +2213,21 @@ export function visualOrderSessions(
     absorbedIds?: ReadonlySet<string>;
     // See categorizeSessions — forwarded through.
     reviveRequestedAt?: Record<string, number>;
+    // Status view only: the QUESTIONS section's inputs (lib/decisionQueue
+    // liftQuestions) — pending `cast decide` rows and the viewer's own
+    // sessions, unscoped, so a question hidden by scope still walks.
+    questions?: { decisions: Record<string, SessionDecisionItem>; mine: Record<string, InboxSession> };
   } = {},
 ): InboxSession[] {
   const { pinned, newSessions, needsInput, done, dormant, working } =
     categorizeSessions(sessions, sessionsWithQueuedMessages, pendingSendIds, opts);
   const collapsed = opts.collapsedSections;
+  // Questions lift out of every other section (the ask outranks placement),
+  // exactly as the panel renders; without the inputs nothing lifts.
+  const { questions, isQuestion } = opts.questions
+    ? liftQuestions([pinned, newSessions, needsInput, done, dormant, working], opts.questions.decisions, opts.questions.mine)
+    : { questions: [] as InboxSession[], isQuestion: () => false };
+  const rest = (arr: InboxSession[]) => (opts.questions ? arr.filter((s) => !isQuestion(s)) : arr);
   const absorbed = opts.absorbedIds?.size ? opts.absorbedIds : null;
   const stripAbsorbed = (arr: InboxSession[]) =>
     absorbed ? arr.filter((s) => !absorbed.has(s._id)) : arr;
@@ -2222,12 +2235,12 @@ export function visualOrderSessions(
     ? [...needsInput, ...done].filter((s) => absorbed.has(s._id))
     : [];
   const result: InboxSession[] = [];
-  // Same order the status view renders: pinned, new, needs input, done,
-  // working, dormant (declared/inferred parks first, then absorbed rests).
+  // Same order the status view renders: questions, pinned, new, needs input,
+  // done, working, dormant (declared/inferred parks first, then absorbed rests).
   const sections: Array<[InboxSession[], string]> = [
-    [pinned, "pinned"], [newSessions, "new"],
-    [stripAbsorbed(needsInput), "needs_input"], [stripAbsorbed(done), "done"],
-    [working, "working"], [[...dormant, ...absorbedSettled], "dormant"],
+    [questions, "questions"], [rest(pinned), "pinned"], [rest(newSessions), "new"],
+    [rest(stripAbsorbed(needsInput)), "needs_input"], [rest(stripAbsorbed(done)), "done"],
+    [rest(working), "working"], [rest([...dormant, ...absorbedSettled]), "dormant"],
   ];
   for (const [section, key] of sections) {
     if (collapsed?.[key]) continue;
@@ -2771,6 +2784,10 @@ export function computeVisualOrder(state: {
   // order (trigger data lives in a component Convex subscription, never the
   // store). Null until the panel has schedule data.
   scheduleNavSets?: ScheduleNavSets | null;
+  // Pending `cast decide` rows — with the viewer's own sessions they define the
+  // status view's QUESTIONS section (liftQuestions). Optional for callers
+  // (tests) that model no questions.
+  sessionDecisions?: Record<string, SessionDecisionItem>;
   clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean } };
 }): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
@@ -2834,7 +2851,20 @@ export function computeVisualOrder(state: {
   // Grouped/bucket: the categorized status buckets over the SAME visible set, so
   // old sessions hidden from the render are skipped by nav too. The bucket branch
   // below splits pinned out and regroups the rest by label/project.
-  const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, filterExclude: state.chipFilterExclude, bucketByConv, collapsedSections: mode === "grouped" ? collapsed : undefined, absorbedIds: mode === "grouped" || mode === "bucket" || mode === "plan" ? state.scheduleNavSets?.absorbed : undefined, reviveRequestedAt: state.blockedReviveRequestedAt });
+  const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), {
+    currentSessionId: state.currentSessionId,
+    pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)),
+    bucketFilter: state.activeBucketFilter,
+    filterExclude: state.chipFilterExclude,
+    bucketByConv,
+    collapsedSections: mode === "grouped" ? collapsed : undefined,
+    absorbedIds: mode === "grouped" || mode === "bucket" || mode === "plan" ? state.scheduleNavSets?.absorbed : undefined,
+    reviveRequestedAt: state.blockedReviveRequestedAt,
+    // Only the status view renders QUESTIONS; the lenses dissolve it.
+    questions: mode === "grouped"
+      ? { decisions: state.sessionDecisions ?? {}, mine: filterInboxScope(state.sessions, "mine", state.currentUser?._id?.toString?.() ?? null) }
+      : undefined,
+  });
   if (mode === "bucket") {
     const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
     const rest = base.filter((s) => !s.is_pinned);
@@ -3123,6 +3153,13 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   openCommentThread: (messageId?: string | null) => void;
   closeCommentRail: () => void;
   setCommentRailWidth: (conversationId: string, w: number) => void;
+
+  // ── Threads page: per-card open state (ephemeral UI, raw set — the same
+  // class as the palette toggle). Keyed by card id; the resolution rules
+  // (default-open on unread, a user collapse holding until newer unread)
+  // live in lib/threadCards. ──
+  threadCardOpen: Record<string, ThreadCardOpenEntry>;
+  patchThreadCardOpen: (patch: Record<string, ThreadCardOpenEntry>) => void;
 
   currentConversation: CurrentConversationContext;
   isolatedWorktreeMode: boolean;
@@ -5281,6 +5318,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // open the global dock — anchored threads live inline at their message.
   openCommentThread: (messageId: string | null = null) =>
     set((s: any) => ({ commentRailAnchor: messageId, commentRailNonce: s.commentRailNonce + 1 })),
+  threadCardOpen: {},
+  patchThreadCardOpen: (patch: Record<string, ThreadCardOpenEntry>) =>
+    set((s: any) => ({ threadCardOpen: { ...s.threadCardOpen, ...patch } })),
   closeCommentRail: () => get().setCommentRailOpen(false),
   setCommentRailWidth: (conversationId: string, w: number) =>
     set((s: any) => {

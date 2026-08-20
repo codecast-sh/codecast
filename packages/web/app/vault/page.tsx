@@ -363,10 +363,13 @@ function VaultContent() {
       router.replace(filesHref());
       return;
     }
-    // Nothing by that name: open the nearest directory that does exist and say so.
+    // Nothing by that name: open the nearest directory that does exist, say
+    // so, and put the name into the quick switcher — the near-misses (a moved
+    // file, a typo in the transcript) are then one keystroke away.
     const existing = ancestorDirs(rel).filter((d) => files[d]?.dir || Object.keys(files).some((p) => p.startsWith(`${d}/`)));
     if (existing.length) store.setDirsExpanded(existing, true);
     useVaultStore.setState({ opError: `${target.abs} isn't in this vault.` });
+    store.openQuickSwitch(rel.slice(rel.lastIndexOf("/") + 1));
     router.replace(filesHref());
   }, [localPath, connection, vaults, activeVaultId, scannedAtForPath, selectVault, router, targetLine]);
 

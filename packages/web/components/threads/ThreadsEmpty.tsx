@@ -20,6 +20,8 @@ export function ThreadsEmpty({
     : chip === "chat" ? "No channel threads yet"
     : chip === "dm" ? "No direct messages yet"
     : chip === "comment" ? "No comment threads yet"
+    : chip === "page" ? "No page discussions yet"
+    : chip === "question" ? "No open questions"
     : "No task threads yet";
   // The default view holds every kind, so it keeps one title and one sentence.
   // The Sessions switch adds a source; it does not replace the others.
@@ -28,7 +30,7 @@ export function ThreadsEmpty({
     : THREAD_KIND_META[chip].emptyCopy;
   return (
     <div className="ch-empty">
-      <div className="ch-empty-icon" aria-hidden="true">
+      <div className="ch-empty-icon th-empty-icon" aria-hidden="true">
         <Icon className="w-5 h-5" />
       </div>
       <div className="ch-empty-title">{title}</div>

@@ -83,6 +83,10 @@ function isNotificationEnabled(
   return val !== false;
 }
 
+// Who performed the act behind a subscription. See schema entity_subscriptions.via.
+export const SUBSCRIPTION_VIA = v.union(v.literal("human"), v.literal("agent"));
+export type SubscriptionVia = "human" | "agent";
+
 export const ensureSubscribed = internalMutation({
   args: {
     user_id: v.id("users"),
@@ -95,6 +99,7 @@ export const ensureSubscribed = internalMutation({
       v.literal("commenter"),
       v.literal("watching")
     ),
+    via: v.optional(SUBSCRIPTION_VIA),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -107,13 +112,21 @@ export const ensureSubscribed = internalMutation({
       )
       .first();
 
-    if (existing) return existing._id;
+    if (existing) {
+      // A human act on a row an agent (or legacy write) enrolled upgrades it:
+      // the person has now shown attention. Never downgrade human to agent.
+      if (args.via === "human" && existing.via !== "human") {
+        await ctx.db.patch(existing._id, { via: "human" });
+      }
+      return existing._id;
+    }
 
     return await ctx.db.insert("entity_subscriptions", {
       user_id: args.user_id,
       entity_type: args.entity_type,
       entity_id: args.entity_id,
       reason: args.reason,
+      ...(args.via ? { via: args.via } : {}),
       muted: false,
       created_at: Date.now(),
     });

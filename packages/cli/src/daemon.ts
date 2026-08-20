@@ -5,6 +5,7 @@ import { randomUUID, createHash } from "node:crypto";
 import * as http from "http";
 import { Database } from "bun:sqlite";
 import { execSync, execFileSync, exec, execFile, spawn, spawnSync, setSlowSyncSpawnSink } from "./proc.js";
+import { parseProcessTable } from "./processTable.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
@@ -159,6 +160,7 @@ import {
   copyJsonlAsSession,
   extractJsonlPermissionMode,
   isForkArtifactSessionId,
+  isWorkflowAgentTranscriptPath,
   isManagedTmuxName,
   isValidResumeSessionId,
   removeForkArtifactJsonl,
@@ -1444,6 +1446,11 @@ function startHookServer(
   setTimeout(() => reapStaleTerminalSessions(log), 30_000).unref?.();
   const terminalReapTimer = setInterval(() => reapStaleTerminalSessions(log), 6 * 60 * 60 * 1000);
   terminalReapTimer.unref?.();
+  // Agent windows left squeezed by a viewer the previous daemon took down
+  // with it (see healSqueezedAgentWindows).
+  setTimeout(() => { void healSqueezedAgentWindows(); }, 15_000).unref?.();
+  const squeezeHealTimer = setInterval(() => { void healSqueezedAgentWindows(); }, 5 * 60 * 1000);
+  squeezeHealTimer.unref?.();
 
   server.listen(0, "127.0.0.1", () => {
     const addr = server.address();
@@ -5685,8 +5692,20 @@ export function sessionProcessOwnership(sessionId: string): ProcessOwnership {
 /** Metrics fail OPEN: only a session we positively know to be a borrower is
  *  denied credit for its subtree. An undecided session keeps reporting — the
  *  worst case is a transiently double-counted tree, not a lost signal. */
+// Metrics-side negative memo: an "unknown" verdict re-walks two directory
+// scans per call, and collectResourceSnapshot asks for every cached session
+// every tick — under load that loop alone froze the event loop 6s (readdirSync,
+// 2026-08-21). The kill guard keeps re-asking (it must); metrics, which fail
+// open anyway, can reuse an undecided answer for a few minutes.
+const borrowsUnknownUntil = new Map<string, number>();
+const BORROWS_UNKNOWN_MEMO_MS = 5 * 60_000;
 function sessionBorrowsProcess(sessionId: string): boolean {
-  return sessionProcessOwnership(sessionId) === "borrowed";
+  const until = borrowsUnknownUntil.get(sessionId);
+  if (until !== undefined && until > Date.now()) return false;
+  const ownership = sessionProcessOwnership(sessionId);
+  if (ownership === "unknown") borrowsUnknownUntil.set(sessionId, Date.now() + BORROWS_UNKNOWN_MEMO_MS);
+  else borrowsUnknownUntil.delete(sessionId);
+  return ownership === "borrowed";
 }
 
 // ── Agent-team "spawned by" linking ──────────────────────────────────────────
@@ -5750,7 +5769,7 @@ async function resolveTeamLeadConversation(
     // One process snapshot → children map → BFS from the candidate panes' root
     // pids. Any descendant with a ~/.claude/sessions/<pid>.json entry is a live
     // agent whose registry names its current session id.
-    const { stdout: psOut } = await execAsync("ps -axo pid=,ppid=");
+    const psOut = (await psSnapshotLines(["-axo", "pid=,ppid="])).join("\n");
     const children = new Map<number, number[]>();
     for (const line of psOut.trim().split("\n")) {
       const [pidStr, ppidStr] = line.trim().split(/\s+/);
@@ -5898,7 +5917,7 @@ async function resolveSpawnerConversation(
     if (proc) pids = [proc.pid];
   }
   if (pids.length === 0) return null;
-  const { stdout: psOut } = await execAsync("ps -axo pid=,ppid=");
+  const psOut = (await psSnapshotLines(["-axo", "pid=,ppid="])).join("\n");
   const pidToPpid = parsePidPpidMap(psOut);
   for (const pid of pids) {
     const ancestors = collectAncestorPids(pidToPpid, pid);
@@ -8593,6 +8612,52 @@ function tryRegisterSessionProcess(sessionId: string, agentType: AgentClientId):
   } catch {}
 }
 
+// One `ps aux` for the whole daemon, refreshed at most every few seconds.
+// findSessionProcessImpl used to grep the process table per session; a fleet
+// sweep on a cache-cold daemon fired dozens of concurrent `ps aux | grep`
+// pipelines, each 8s and ~20% CPU on a loaded box (load avg 389 on
+// 2026-08-21) — a feedback loop where the probe itself was the load. Snapshot
+// once, share across callers, filter in JS. `codecast` lines are dropped as the
+// old `grep -v codecast` did (the daemon's own processes).
+const PS_SNAPSHOT_TTL_MS = 3_000;
+// One shared snapshot per `ps` argument list ("aux", "-axo pid=,ppid="), with
+// in-flight dedup. execFile, not exec: through `/bin/sh -c` a timeout kills the
+// shell and orphans `ps` to launchd still burning CPU (9 such orphans seen
+// 2026-08-21); execFile's timeout kills ps itself. The duration is logged when
+// slow so saturation is visible — on a 2000-process box one ps took 20s+.
+const psSnapshots = new Map<string, { ts: number; lines: string[] }>();
+const psSnapshotInflight = new Map<string, Promise<string[]>>();
+async function psSnapshotLines(args: string[]): Promise<string[]> {
+  const key = args.join(" ");
+  const cached = psSnapshots.get(key);
+  if (cached && Date.now() - cached.ts < PS_SNAPSHOT_TTL_MS) return cached.lines;
+  const inflight = psSnapshotInflight.get(key);
+  if (inflight) return inflight;
+  const startedAt = Date.now();
+  const run = (async () => {
+    try {
+      const { stdout } = await _execFileAsync("ps", args, { timeout: 30_000, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024, env: SAFE_ENV });
+      const lines = String(stdout).split("\n").filter((l) => l.trim() && !l.includes("codecast"));
+      psSnapshots.set(key, { ts: Date.now(), lines });
+      const took = Date.now() - startedAt;
+      if (took > 2_000) log(`[PS-SNAPSHOT] ps ${key} took ${took}ms (${lines.length} lines)`);
+      return lines;
+    } finally {
+      psSnapshotInflight.delete(key);
+    }
+  })();
+  psSnapshotInflight.set(key, run);
+  return run;
+}
+async function psAuxLines(): Promise<string[]> {
+  return psSnapshotLines(["aux"]);
+}
+/** Lines of the shared `ps aux` snapshot matching an ERE-style pattern. */
+async function psAuxGrep(pattern: string): Promise<string[]> {
+  const re = new RegExp(pattern);
+  return (await psAuxLines()).filter((l) => re.test(l));
+}
+
 const findSessionProcessInflight = new Map<string, Promise<ClaudeSessionInfo | null>>();
 
 /**
@@ -8760,8 +8825,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
 
     // Strategy A: find resumed sessions by command line
     try {
-      const { stdout } = await execAsync(`ps aux | grep -E '${binaryPattern}' | grep -v grep | grep -v 'codecast'`);
-      const lines = stdout.trim().split("\n");
+      const lines = await psAuxGrep(binaryPattern);
       const geminiCandidates: Array<{ pid: number; tty: string }> = [];
       for (const line of lines) {
         if (!line.trim()) continue;
@@ -8827,7 +8891,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
     // Strategy A2: Codex live-session matching by open JSONL file (works for non-resume iTerm sessions)
     if (agentType === "codex") {
       try {
-        const { stdout } = await execAsync(`ps aux | grep -E 'codex' | grep -v grep | grep -v 'codecast'`);
+        const stdout = (await psAuxGrep("codex")).join("\n");
         const lines = stdout.trim().split("\n");
         const candidates: Array<{ pid: number; tty: string; tmuxTarget: string | null }> = [];
         for (const line of lines) {
@@ -8901,7 +8965,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
                   return result;
                 }
                 // No agent child process found - check if pane shell itself is an agent
-                if (isAgentProcess(panePid) && !(await rejectsForeignProcess(sessionId, panePid, `tmux ${tmuxName}`))) {
+                if ((await isAgentProcess(panePid)) && !(await rejectsForeignProcess(sessionId, panePid, `tmux ${tmuxName}`))) {
                   const result = { pid: panePid, tty: normalizeTty(paneTty), sessionId };
                   cacheSessionProcess(sessionId, result, `${tmuxName}:0.0`);
                   log(`Found session ${shortId(sessionId)} via tmux session ${tmuxName}: pid=${panePid} (direct)`);
@@ -8929,7 +8993,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
         if (projectCwd) {
           try {
             const psPattern = sessionProcessGrepToken(agentType, "/claude\\b|claude-code");
-            const { stdout: psOut } = await execAsync(`ps aux | grep -E '${psPattern}' | grep -v grep | grep -v 'codecast'`);
+            const psOut = (await psAuxGrep(psPattern)).join("\n");
             const candidates: Array<{ pid: number; tty: string }> = [];
 
             for (const line of psOut.trim().split("\n")) {
@@ -9787,6 +9851,7 @@ export type TmuxLiveState =
   | "busy"          // spinner / "esc to interrupt" — wait
   | "interrupted"   // "What should Claude do instead?" dialog — Escape to clear
   | "rewind"        // Rewind/Restore modal — Escape to cancel (NEVER Enter, that rewinds)
+  | "trust"         // workspace "Quick safety check" prompt — Enter accepts ("Yes, I trust" is preselected)
   | "warning"       // dismissable banner — Enter to ack
   | "exited"        // bare shell, agent has exited — abort
   | "unknown";      // anything we don't recognize — defer, do not guess
@@ -9802,6 +9867,12 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // Rewind / cancel-able modal: distinguished from warnings by an Esc option.
   // Warnings have only "Press enter to continue" (no Esc). The "❯ (current)" marker
   // is also unique to the Rewind option list.
+  // Workspace trust prompt (first launch in a directory). Its footer is
+  // "Enter to confirm · Esc to cancel", so it must be recognized BEFORE the
+  // Rewind rule below — misread as Rewind, the Escape we send is this dialog's
+  // "No, exit": the agent quits, the resume loops, and the message never lands
+  // (17 panes found dead on this on 2026-08-21).
+  if (/Quick safety check|trust this folder|Is this a project you created/i.test(region)) return "trust";
   if (/Esc to cancel|❯\s*\(current\)/i.test(region)) return "rewind";
   if (/What should Claude do instead\?/i.test(region)) return "interrupted";
   // Teammate panel: a lead session with in-process agents renders a chip list
@@ -10316,21 +10387,7 @@ function ensureProcessSnapshotFresh(): void {
     processSnapshot = { at: startedAt, procs: parseProcessTable(stdout) };
   });
 }
-// `ps -o command` prints a multi-line command line with its newlines intact,
-// so a row can span lines: a line that does not start with a pid continues
-// the previous row's command.
-export function parseProcessTable(stdout: string): ProcessSnapshot["procs"] {
-  const procs: ProcessSnapshot["procs"] = [];
-  for (const line of stdout.split("\n")) {
-    const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
-    if (m) {
-      procs.push({ pid: Number(m[1]), ppid: Number(m[2]), command: m[3] });
-    } else if (procs.length && line.length) {
-      procs[procs.length - 1].command += "\n" + line;
-    }
-  }
-  return procs;
-}
+export { parseProcessTable };
 // The fragment of the harness wrapper that names this task's command: the
 // literal `eval '` followed by the command up to its first single quote or
 // newline (the harness escapes quotes in more than one style across versions,
@@ -10864,6 +10921,40 @@ async function ensureTmuxPaneWide(target: string): Promise<void> {
   } catch {}
 }
 
+// Boot + periodic sweep over every managed agent window nobody is attached
+// to. The per-target heal above only runs when a message is injected, so a
+// pane left squeezed by a viewer that never handed the size back — the daemon
+// died or restarted under it, and no in-band restore survives that — stays
+// squeezed for as long as the agent goes without a message, painting a
+// screen too small to render into (165x6 across a restart, 2026-08-21).
+// Unattended only: a live client, web or human, owns the size while it is
+// there and restores it when it leaves.
+async function healSqueezedAgentWindows(): Promise<number> {
+  if (!hasTmux()) return 0;
+  let healed = 0;
+  try {
+    const { stdout } = await tmuxExec([
+      "list-windows", "-a", "-F", "#{session_name}|#{session_attached}|#{pane_width}|#{window_panes}|#{window_height}",
+    ]);
+    for (const line of stdout.split("\n")) {
+      const [name, attached, paneWidth, windowPanes, windowHeight] = line.split("|");
+      if (!name || !isManagedTmuxName(name)) continue;
+      if ((parseInt(attached ?? "", 10) || 0) > 0) continue;
+      const heals = planLeadPaneHeal(
+        parseInt(paneWidth ?? "", 10),
+        parseInt(windowPanes ?? "", 10) || 1,
+        parseInt(windowHeight ?? "", 10),
+        0,
+      );
+      if (!heals.length) continue;
+      for (const [cmd, ...rest] of heals) await tmuxExec([cmd, "-t", name, ...rest]);
+      healed++;
+      log(`[TERM] healed squeezed agent window ${name} (was ${paneWidth}x${windowHeight}, nobody attached)`);
+    }
+  } catch {}
+  return healed;
+}
+
 export async function ensureTmuxReady(target: string, agentType?: AgentClientId): Promise<{ busy: boolean }> {
   const STUCK_BUDGET_MS = 8_000;
   await ensureTmuxPaneWide(target);
@@ -10938,6 +11029,10 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId)
       log(`Cancelling Rewind dialog in ${target} (Escape, never Enter)`);
       await tmuxExec(["send-keys", "-t", target, "Escape"]);
       await new Promise(resolve => setTimeout(resolve, 500));
+    } else if (state === "trust") {
+      log(`Accepting workspace trust prompt in ${target} (Enter)`);
+      await tmuxExec(["send-keys", "-t", target, "Enter"]);
+      await new Promise(resolve => setTimeout(resolve, 2000));
     } else if (state === "warning") {
       log(`Dismissing warning banner in ${target}`);
       await tmuxExec(["send-keys", "-t", target, "Enter"]);
@@ -11865,6 +11960,11 @@ async function injectViaTerminal(
 
 type SessionFileInfo = { path: string; agentType: AgentClientId };
 
+// A message that can never reach its target, whatever we retry: the delivery
+// loop cancels the row instead of walking the retry ladder (and instead of
+// "undeliverable", which the server re-pends).
+class UndeliverableMessageError extends Error {}
+
 /** The Codex rollout for a session id, if one exists:
  *  ~/.codex/sessions/YYYY/MM/DD/<name>-<timestamp>-<sessionId>.jsonl
  *
@@ -11902,40 +12002,58 @@ function findSessionJsonlPath(sessionId: string): string | null {
   return findSessionFile(sessionId)?.path ?? null;
 }
 
-export function findSessionFile(sessionId: string): SessionFileInfo | null {
-  // Claude sessions: ~/.claude/projects/<hash>/<sessionId>.jsonl
+// Every path a Claude transcript for `sessionId` can live at, in lookup
+// order: the project dir's own <sessionId>.jsonl, then under each session dir
+// the subagent layouts —
+//   <parent-session-id>/<sessionId>.jsonl
+//   <parent-session-id>/subagents/<sessionId>.jsonl            (Agent tool)
+//   <parent-session-id>/subagents/workflows/<run>/<id>.jsonl   (Workflow tool)
+// Paths are yielded whether or not they exist; callers check.
+function* claudeTranscriptCandidates(sessionId: string): Generator<string> {
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-  if (fs.existsSync(claudeProjectsDir)) {
-    const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true })
-      .filter(d => d.isDirectory()).map(d => d.name);
-    for (const dir of projectDirs) {
-      const jsonlPath = path.join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
-      if (fs.existsSync(jsonlPath)) return { path: jsonlPath, agentType: "claude" };
-      // Check subagent layouts under each parent session dir:
-      //   <parent-session-id>/subagents/<sessionId>.jsonl            (Agent tool)
-      //   <parent-session-id>/subagents/workflows/<run>/<id>.jsonl   (Workflow tool)
-      const dirPath = path.join(claudeProjectsDir, dir);
-      try {
-        const subEntries = fs.readdirSync(dirPath, { withFileTypes: true })
-          .filter(d => d.isDirectory());
-        for (const subDir of subEntries) {
-          const parentDir = path.join(dirPath, subDir.name);
-          const subPath = path.join(parentDir, `${sessionId}.jsonl`);
-          if (fs.existsSync(subPath)) return { path: subPath, agentType: "claude" };
-          const subagentsDir = path.join(parentDir, "subagents");
-          const agentPath = path.join(subagentsDir, `${sessionId}.jsonl`);
-          if (fs.existsSync(agentPath)) return { path: agentPath, agentType: "claude" };
-          const workflowsDir = path.join(subagentsDir, "workflows");
-          if (fs.existsSync(workflowsDir)) {
-            for (const wfRun of fs.readdirSync(workflowsDir, { withFileTypes: true })) {
-              if (!wfRun.isDirectory()) continue;
-              const wfPath = path.join(workflowsDir, wfRun.name, `${sessionId}.jsonl`);
-              if (fs.existsSync(wfPath)) return { path: wfPath, agentType: "claude" };
-            }
+  if (!fs.existsSync(claudeProjectsDir)) return;
+  const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true })
+    .filter(d => d.isDirectory()).map(d => d.name);
+  for (const dir of projectDirs) {
+    const dirPath = path.join(claudeProjectsDir, dir);
+    yield path.join(dirPath, `${sessionId}.jsonl`);
+    try {
+      const subEntries = fs.readdirSync(dirPath, { withFileTypes: true })
+        .filter(d => d.isDirectory());
+      for (const subDir of subEntries) {
+        const parentDir = path.join(dirPath, subDir.name);
+        yield path.join(parentDir, `${sessionId}.jsonl`);
+        const subagentsDir = path.join(parentDir, "subagents");
+        yield path.join(subagentsDir, `${sessionId}.jsonl`);
+        const workflowsDir = path.join(subagentsDir, "workflows");
+        if (fs.existsSync(workflowsDir)) {
+          for (const wfRun of fs.readdirSync(workflowsDir, { withFileTypes: true })) {
+            if (!wfRun.isDirectory()) continue;
+            yield path.join(workflowsDir, wfRun.name, `${sessionId}.jsonl`);
           }
         }
-      } catch {}
-    }
+      }
+    } catch {}
+  }
+}
+
+// The Workflow-tool agent transcript for `sessionId`, if one exists anywhere,
+// else null. Deliberately NOT findSessionFile(...).path: the resume repair
+// ladder copies such a transcript to the project dir's top level (so
+// `claude --resume` can see it), and that copy is what findSessionFile returns
+// first — a path check on it would wave the agent through. The agent has no
+// process of its own to reach and no standalone resume that means anything, so
+// both the delivery rail and autoResumeSession refuse it.
+export function workflowAgentTranscriptPathFor(sessionId: string): string | null {
+  for (const candidate of claudeTranscriptCandidates(sessionId)) {
+    if (isWorkflowAgentTranscriptPath(candidate) && fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+export function findSessionFile(sessionId: string): SessionFileInfo | null {
+  for (const candidate of claudeTranscriptCandidates(sessionId)) {
+    if (fs.existsSync(candidate)) return { path: candidate, agentType: "claude" };
   }
 
   const codexPath = findCodexRolloutPath(sessionId);
@@ -13884,6 +14002,17 @@ async function handleDeadSession(sessionId: string, tmuxSession: string): Promis
     return;
   }
 
+  // A Workflow-tool agent's pane going away is not a crash either: the agent
+  // lives inside its host session, and the only pane it could have had was a
+  // standalone copy. Nothing to reconstitute — the regeneration below would
+  // rewrite the host's transcript and the resume would be refused anyway.
+  const workflowAgentTranscript = workflowAgentTranscriptPathFor(sessionId);
+  if (workflowAgentTranscript) {
+    log(`[HEARTBEAT-HEALTH] not reconstituting ${sessionId.slice(0, 8)} — workflow agent transcript (${workflowAgentTranscript}); the host session owns it`);
+    if (conversationId && syncServiceRef) await syncServiceRef.updateSessionAgentStatus(conversationId, "idle").catch(() => {});
+    return;
+  }
+
   // Crash recovery shares the kill_session lifecycle contract: the tmux pane has
   // been torn down, any "injected" messages on Convex were lost with it, and the
   // daemon's local dedup state now references a dead pane. Reset both so the
@@ -14175,7 +14304,7 @@ async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSession
   if (Date.now() - cached.lastVerified > PROCESS_CACHE_TTL_MS) {
     // Alive, an agent, and still THIS session's agent — a cached pid outlives an
     // in-process /clear or /resume switch as easily as it outlives the process.
-    if (!isProcessRunning(cached.pid) || !isAgentProcess(cached.pid) || await rejectsForeignProcess(sessionId, cached.pid, "cache")) {
+    if (!isProcessRunning(cached.pid) || !(await isAgentProcess(cached.pid)) || await rejectsForeignProcess(sessionId, cached.pid, "cache")) {
       sessionProcessCache.delete(sessionId);
       return null;
     }
@@ -14184,9 +14313,9 @@ async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSession
   return { pid: cached.pid, tty: cached.tty, sessionId, termProgram: cached.termProgram };
 }
 
-function validateProcessCache(): void {
+async function validateProcessCache(): Promise<void> {
   for (const [sessionId, cached] of sessionProcessCache) {
-    if (!isProcessRunning(cached.pid) || !isAgentProcess(cached.pid)) {
+    if (!isProcessRunning(cached.pid) || !(await isAgentProcess(cached.pid))) {
       sessionProcessCache.delete(sessionId);
     }
   }
@@ -14374,7 +14503,7 @@ async function reconcileSessionLiveness(): Promise<void> {
       const panePid = row.tmux_session ? paneByTmux.get(row.tmux_session) : undefined;
       if (panePid !== undefined) {
         agentPid = await findAgentPidInTree(panePid);
-      } else if (row.agent_pid && isProcessRunning(row.agent_pid) && isAgentProcess(row.agent_pid)) {
+      } else if (row.agent_pid && isProcessRunning(row.agent_pid) && (await isAgentProcess(row.agent_pid))) {
         agentPid = row.agent_pid;
       }
       if (agentPid !== null) {
@@ -14536,7 +14665,7 @@ async function resolveLiveTmuxTarget(
   const isMaterialized = materializedSessions.has(sessionId);
   const proc = isMaterialized ? null : await findSessionProcess(sessionId, agentType);
   if (proc) {
-    if (!isAgentProcess(proc.pid)) {
+    if (!(await isAgentProcess(proc.pid))) {
       // Leftover shell, not an agent — drop the stale process cache and give up on it.
       sessionProcessCache.delete(sessionId);
       return { tmuxTarget: null, source: null, proc: null, cachedStillValid };
@@ -14790,6 +14919,14 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     }
   } else if (!sessionFile && !isStoreOwnedResume) {
     logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: session JSONL file not found${!conversationId ? " (no conversation ID for reconstitution)" : ""}`);
+    return false;
+  }
+
+  // Every caller lands here (delivery, kill & restart, `cast restart <id>`):
+  // a Workflow-tool agent transcript is never resumed as a session of its own.
+  const workflowAgentTranscript = workflowAgentTranscriptPathFor(sessionId);
+  if (workflowAgentTranscript) {
+    logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: workflow agent transcript (${workflowAgentTranscript}) — the host session owns it`);
     return false;
   }
 
@@ -15157,6 +15294,16 @@ async function repairAndResumeSession(
   const lastAttempt = repairAttempts.get(cooldownKey) || repairAttempts.get(sessionId);
   if (lastAttempt && Date.now() - lastAttempt < REPAIR_COOLDOWN_MS) {
     log(`Repair cooldown active for ${sessionId.slice(0, 8)} (conv=${conversationId?.slice(0, 8) ?? "?"}), skipping`);
+    return false;
+  }
+
+  // A Workflow-tool agent has no standalone session to repair into: regenerating
+  // its transcript from Convex overwrites the host run's agent file (the
+  // `.bak` + truncated `agent-*.jsonl` pairs of 2026-08-20) and the resume is
+  // refused downstream anyway. Stop before touching the disk.
+  const workflowAgentTranscript = workflowAgentTranscriptPathFor(sessionId);
+  if (workflowAgentTranscript) {
+    log(`Cannot repair ${sessionId.slice(0, 8)}: workflow agent transcript (${workflowAgentTranscript}) — the host session owns it`);
     return false;
   }
 
@@ -16046,6 +16193,16 @@ async function deliverMessage(
     logDelivery(`No running process found for session=${sessionId.slice(0, 12)} type=${detectedType}`);
   }
 
+  // A Workflow-tool agent has no process to reach once its host's turn is
+  // over, and a standalone resume of it only spawns a copy that runs the brief
+  // again for nobody. Cancel the message rather than retry: no injection path
+  // can ever succeed for it.
+  const workflowAgentPath = workflowAgentTranscriptPathFor(sessionId);
+  if (workflowAgentPath) {
+    logDelivery(`Refusing to resume workflow agent ${sessionId.slice(0, 8)} for msg=${messageId.slice(0, 8)}: ${workflowAgentPath}`);
+    throw new UndeliverableMessageError(`workflow agent transcript ${workflowAgentPath}`);
+  }
+
   // Circuit breaker: skip auto-resume if this session has failed too many times recently
   if (isSessionCircuitOpen(sessionId)) {
     logDelivery(`Circuit breaker OPEN for session=${sessionId.slice(0, 8)}, skipping auto-resume (cooldown ${SESSION_CIRCUIT_BREAKER_COOLDOWN_MS / 1000}s)`);
@@ -16366,7 +16523,7 @@ async function findAgentPidInTree(rootPid: number, maxDepth = 4): Promise<number
     for (const pid of pids) {
       if (visited.has(pid)) continue;
       visited.add(pid);
-      if (isAgentProcess(pid)) return pid;
+      if (await isAgentProcess(pid)) return pid;
     }
     for (const pid of pids) {
       try {
@@ -16379,7 +16536,7 @@ async function findAgentPidInTree(rootPid: number, maxDepth = 4): Promise<number
     return null;
   }
   // Include the root itself, then descend — a bare `claude` pane_pid is the agent.
-  if (isAgentProcess(rootPid)) return rootPid;
+  if (await isAgentProcess(rootPid)) return rootPid;
   try {
     const { stdout } = await execAsync(`pgrep -P ${rootPid}`, { timeout: 3000, killSignal: "SIGKILL" });
     const childPids = stdout.trim().split(/\s+/).filter(Boolean).map(Number);
@@ -16388,10 +16545,14 @@ async function findAgentPidInTree(rootPid: number, maxDepth = 4): Promise<number
   return null;
 }
 
-function isAgentProcess(pid: number): boolean {
+// Async on purpose: this runs per session in fleet-wide sweeps (liveness
+// reconcile, process-tree scans). As a sync `ps` it blocked the event loop
+// ~1.8s per call under load (SLOW-SYNC-SPAWN, 2026-08-21) — dozens of calls per
+// sweep froze delivery for the whole fleet.
+async function isAgentProcess(pid: number): Promise<boolean> {
   try {
-    const comm = execSync(`ps -o comm= -p ${pid} 2>/dev/null`, { encoding: "utf-8" }).trim();
-    return isRecognizedAgentComm(comm);
+    const { stdout } = await execAsync(`ps -o comm= -p ${pid} 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
+    return isRecognizedAgentComm(stdout.trim());
   } catch {
     return false;
   }
@@ -17672,7 +17833,7 @@ function startWatchdog(
     }
 
     // Validate process cache
-    validateProcessCache();
+    validateProcessCache().catch(() => {});
 
     // Prune the daemon's internal tracking of started sessions older than
     // STARTED_SESSION_TTL_MS. Two cases:
@@ -18255,15 +18416,23 @@ async function main(): Promise<void> {
       const sessions = tmuxExecSync(["list-sessions", "-F", "#{session_name}"], { timeout: 5000 }).trim().split("\n").filter(Boolean);
       const ccSessions = sessions.filter(isManagedTmuxName);
       let recovered = 0;
-      for (const tmuxSession of ccSessions) {
+      // Bounded-parallel, not sequential: each session costs a process-tree
+      // aliveness probe plus four tmux option reads, and a fleet of ~100 managed
+      // tmuxes walked one at a time held the rest of boot (watcher, watchdog,
+      // delivery subscriptions) for 3-4 minutes on 2026-08-20 — every daemon
+      // restart was a multi-minute delivery blackout. `continue` became `return`.
+      const recoveredAt = Date.now();
+      await runBounded(ccSessions, 8, async (tmuxSession) => {
         try {
           const alive = await isTmuxAgentAlive(tmuxSession);
-          if (!alive) continue;
+          if (!alive) return;
 
-          const sessionId = await getTmuxSessionOption(tmuxSession, "@codecast_session_id");
-          const tmuxConvId = await getTmuxSessionOption(tmuxSession, "@codecast_conversation_id");
-          const tmuxAgentType = await getTmuxSessionOption(tmuxSession, "@codecast_agent_type");
-          const tmuxProjectPath = await getTmuxSessionOption(tmuxSession, "@codecast_project_path");
+          const [sessionId, tmuxConvId, tmuxAgentType, tmuxProjectPath] = await Promise.all([
+            getTmuxSessionOption(tmuxSession, "@codecast_session_id"),
+            getTmuxSessionOption(tmuxSession, "@codecast_conversation_id"),
+            getTmuxSessionOption(tmuxSession, "@codecast_agent_type"),
+            getTmuxSessionOption(tmuxSession, "@codecast_project_path"),
+          ]);
 
           if (sessionId) {
             resumeSessionCache.set(sessionId, tmuxSession);
@@ -18273,7 +18442,7 @@ async function main(): Promise<void> {
               ensureManagedSessionHeartbeat(sessionId);
             }
             recovered++;
-            continue;
+            return;
           }
 
           if (tmuxConvId) {
@@ -18288,7 +18457,7 @@ async function main(): Promise<void> {
                 }
               }
               recovered++;
-              continue;
+              return;
             }
             startedSessionTmux.set(tmuxConvId, {
               tmuxSession,
@@ -18301,7 +18470,7 @@ async function main(): Promise<void> {
               ensureManagedSessionHeartbeat(tmuxSession);
             }
             recovered++;
-            continue;
+            return;
           }
 
           if (syncServiceRef) {
@@ -18310,9 +18479,9 @@ async function main(): Promise<void> {
             recovered++;
           }
         } catch {}
-      }
+      });
       if (recovered > 0) {
-        log(`[WARM-RESTART] Recovered ${recovered} live session(s) from tmux`);
+        log(`[WARM-RESTART] Recovered ${recovered} live session(s) from tmux in ${Date.now() - recoveredAt}ms`);
         // Scan recovered sessions for undetected interactive prompts
         setTimeout(() => {
           const cache = readConversationCache();
@@ -20171,9 +20340,16 @@ async function main(): Promise<void> {
                 }
               } catch (err) {
                 const errMsg = err instanceof Error ? err.message : String(err);
-                logDelivery(`ERROR: msg=${msg._id.slice(0, 8)} exception: ${errMsg}`);
                 injectedMessageTs.delete(msg._id);
-                scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content);
+                if (err instanceof UndeliverableMessageError) {
+                  // Terminal by construction: cancel (a status the server never
+                  // re-pends) instead of burning the retry ladder.
+                  logDelivery(`CANCELLED: msg=${msg._id.slice(0, 8)} can never be delivered: ${errMsg}`);
+                  syncService.cancelPendingMessage(msg._id).catch(logConvexFailure);
+                } else {
+                  logDelivery(`ERROR: msg=${msg._id.slice(0, 8)} exception: ${errMsg}`);
+                  scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content);
+                }
               } finally {
                 if (timeoutHandle) clearTimeout(timeoutHandle);
                 messagesInFlight.delete(msg._id);

@@ -157,6 +157,7 @@ import type * as teamScopeSweep from "../teamScopeSweep.js";
 import type * as teams from "../teams.js";
 import type * as terminalStream from "../terminalStream.js";
 import type * as testDb from "../testDb.js";
+import type * as threadMembershipSweep from "../threadMembershipSweep.js";
 import type * as threadReads from "../threadReads.js";
 import type * as threads from "../threads.js";
 import type * as titleGeneration from "../titleGeneration.js";
@@ -324,6 +325,7 @@ declare const fullApi: ApiFromModules<{
   teams: typeof teams;
   terminalStream: typeof terminalStream;
   testDb: typeof testDb;
+  threadMembershipSweep: typeof threadMembershipSweep;
   threadReads: typeof threadReads;
   threads: typeof threads;
   titleGeneration: typeof titleGeneration;

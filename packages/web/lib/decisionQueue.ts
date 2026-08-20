@@ -214,3 +214,56 @@ export function sessionHasOpenQuestion(s: InboxSession): boolean {
   if (s.pending_api_error_kind && BLOCKED_BANNER_KINDS.has(s.pending_api_error_kind)) return false;
   return !!s.awaiting_input || s.agent_status === "permission_blocked";
 }
+
+/** Conversation ids with a pending `cast decide` row. */
+export function pendingDecisionConvIds(decisions: Record<string, SessionDecisionItem>): Set<string> {
+  const ids = new Set<string>();
+  for (const d of Object.values(decisions)) if (d.status === "pending") ids.add(d.conversation_id);
+  return ids;
+}
+
+/**
+ * The inbox rail's QUESTIONS section — ONE rule for what it holds, shared by
+ * the render (GlobalSessionPanel) and the keyboard order (visualOrderSessions),
+ * so Ctrl+J/K walks exactly what is on screen.
+ *
+ * A session that has asked you something files under Questions whatever its
+ * pin or rest verdict: a pending `cast decide` row, or an open AskUserQuestion
+ * / permission prompt (sessionHasOpenQuestion). The ask outranks placement —
+ * "who acts next" is you, explicitly — so every row lifted here must leave the
+ * section it would otherwise sit in (callers filter with `isQuestion`).
+ *
+ * `sections` are the rail's rows as scoped for display (mine/team, workspace,
+ * the old-session window, chip filter). The decision queue is user-scoped and
+ * workspace-blind, so a question on a session that scope hides is still your
+ * question: `mine` (the viewer's own sessions, unscoped) supplies those rows,
+ * which keeps the section's count equal to the queue badge. Killed rows are
+ * the exception — they render in the hidden Killed bucket, and a question on
+ * a dead session is the queue's tier-2 case, not a rail row. Nested subagents
+ * ride their parent and are never lifted loose.
+ */
+export function liftQuestions(
+  sections: InboxSession[][],
+  decisions: Record<string, SessionDecisionItem>,
+  mine: Record<string, InboxSession>,
+): { questions: InboxSession[]; isQuestion: (s: InboxSession) => boolean } {
+  const pending = pendingDecisionConvIds(decisions);
+  const isQuestion = (s: InboxSession) => pending.has(s._id) || sessionHasOpenQuestion(s);
+  const questions: InboxSession[] = [];
+  const seen = new Set<string>();
+  for (const section of sections) {
+    for (const s of section) {
+      if (seen.has(s._id) || !isQuestion(s)) continue;
+      seen.add(s._id);
+      questions.push(s);
+    }
+  }
+  for (const s of Object.values(mine)) {
+    if (seen.has(s._id) || !isQuestion(s)) continue;
+    if (s.inbox_killed_at || s.inbox_dismissed_at) continue;
+    if (s.parent_conversation_id || s.spawned_by_conversation_id) continue;
+    seen.add(s._id);
+    questions.push(s);
+  }
+  return { questions, isQuestion };
+}

@@ -35,6 +35,7 @@ import { getMachineKey, hardwareId } from "./machineKey.js";
 import { deviceId } from "./remote/device.js";
 import { probeAllClients, hasBin } from "./doctorClients.js";
 import { defaultCursorPath } from "./cursorWatcher.js";
+import { findStaleTmuxServers, descendantPids, killProcessTree, liveTmuxServerPid, snapshotProcessTable } from "./processTable.js";
 
 // ── deps handed in by index.ts ───────────────────────────────────────────────
 // The CLI entrypoint owns config decryption and the daemon state-file helpers;
@@ -67,6 +68,8 @@ export interface DoctorOptions {
   keep: boolean;
   /** Override the scratch project dir (must be syncable under the current config). */
   projectDir?: string;
+  /** Kill stale tmux server generations (the server and its whole process tree). */
+  reapTmux?: boolean;
 }
 
 export interface DoctorCheck {
@@ -348,6 +351,33 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
         ? `${retryDepth} retry item(s) draining`
         : "clear",
   });
+
+  // ── tmux server generations ──
+  // A replaced default socket leaves the old server running unreachable with
+  // every pane and agent of its generation (see processTable.ts). Invisible to
+  // `tmux list-sessions`, visible only in the process table.
+  if (hasBin("tmux")) {
+    const procs = snapshotProcessTable();
+    const stale = findStaleTmuxServers(procs, liveTmuxServerPid());
+    if (stale.length === 0) {
+      record({ name: "tmux servers", status: "pass", detail: "one server on the default socket" });
+    } else {
+      const trees = stale.reduce((n, s) => n + s.descendants, 0);
+      const agents = stale.reduce((n, s) => n + s.agents, 0);
+      const summary = `${stale.length} stale server(s) (pid ${stale.map((s) => s.pid).join(", ")}) holding ${trees} process(es), ${agents} agent(s), unreachable from tmux`;
+      if (opts.reapTmux) {
+        let killed = 0;
+        for (const s of stale) {
+          const r = await killProcessTree([...descendantPids(procs, s.pid), s.pid]);
+          killed += r.terminated + r.killed;
+        }
+        record({ name: "tmux servers", status: "warn", detail: `${summary} — reaped ${killed} process(es)` });
+        cleanup.push(`reaped stale tmux server(s) ${stale.map((s) => s.pid).join(", ")}`);
+      } else {
+        record({ name: "tmux servers", status: "warn", detail: `${summary} — run \`cast doctor --no-e2e --reap-tmux\` to kill them` });
+      }
+    }
+  }
 
   // ── macOS app-data access (TCC) ──
   // Reading another app's data (Cursor's chat db) needs a per-app macOS grant;

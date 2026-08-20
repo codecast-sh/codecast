@@ -475,6 +475,7 @@ async function executeCreateComment(
     entity_type: "conversation",
     entity_id: args.conversation_id.toString(),
     reason: "commenter",
+    via: "human",
   });
 
   const mentions = Array.from(args.content.matchAll(/@(\w+)/g)).map((match) => match[1]);
@@ -499,6 +500,7 @@ async function executeCreateComment(
           entity_type: "conversation",
           entity_id: args.conversation_id.toString(),
           reason: "mentioned",
+          via: "human",
         });
         await ctx.runMutation(internal.notificationRouter.emit, {
           event_type: "mention",
@@ -542,6 +544,7 @@ async function executeCreateComment(
       entity_type: "conversation",
       entity_id: args.conversation_id.toString(),
       reason: "watching",
+      via: "human",
     });
     // A code-anchored comment names its exact spot — "commented on foo.ts:42"
     // reads as actionable where "commented on your conversation" reads as noise.

@@ -8,10 +8,12 @@ import {
   MAX_TASK_DEPTH,
   TASK_STATUS_CATEGORIES,
   isActiveTask,
+  isHumanOrigin,
   subtaskProgressOf,
   teamTaskStatuses,
 } from "@codecast/shared/tasks";
 import { Id } from "./_generated/dataModel";
+import type { SubscriptionVia } from "./notificationRouter";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopeByProject } from "./data";
 import { nextShortId } from "./counters";
@@ -287,18 +289,29 @@ export async function notifySubscribers(
   });
 }
 
+// `via` says who performed the enrolling act. Agents run under the owner's
+// token, so identity alone cannot tell a person's act from an agent's; every
+// caller states it. The rule for CLI mutations: a conversation_id on the
+// call means an agent inside a session; none means a person at the terminal.
 export async function subscribeUser(
   ctx: any,
   userId: Id<"users">,
   taskId: Id<"tasks">,
-  reason: "creator" | "assignee" | "commenter" | "mentioned" | "watching"
+  reason: "creator" | "assignee" | "commenter" | "mentioned" | "watching",
+  via: SubscriptionVia,
 ) {
   await ctx.runMutation(internal.notificationRouter.ensureSubscribed, {
     user_id: userId,
     entity_type: "task",
     entity_id: taskId.toString(),
     reason,
+    via,
   });
+}
+
+// Actor kind for a CLI mutation: see subscribeUser.
+function cliVia(args: { conversation_id?: string }): SubscriptionVia {
+  return args.conversation_id ? "agent" : "human";
 }
 
 export async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedTaskId: Id<"tasks">, newStatus: string) {
@@ -791,7 +804,11 @@ export const create = mutation({
       }
     }
 
-    await subscribeUser(ctx, auth.userId, id, "creator");
+    // Creator enrollment is human only when a person decided the task: human
+    // or meeting origin, or an explicit promotion to the human board. An
+    // agent's own work task enrolls its owner as an agent act.
+    const createdHuman = isHumanOrigin({ source: args.source || "human" }) || !!args.promoted;
+    await subscribeUser(ctx, auth.userId, id, "creator", createdHuman ? "human" : "agent");
     // A subtask created directly in progress flips its parent chain, same as a
     // later start would — the parent must never sit "open" under running work.
     if (parent_id) {
@@ -801,7 +818,7 @@ export const create = mutation({
       const createdTask = await ctx.db.get(id) as any;
       const assigneeId = await resolveAssigneeToUserId(ctx, resolvedAssignee, createdTask?.team_id);
       if (assigneeId) {
-        await subscribeUser(ctx, assigneeId, id, "assignee");
+        await subscribeUser(ctx, assigneeId, id, "assignee", cliVia(args));
         await ctx.runMutation(internal.notificationRouter.emit, {
           event_type: "task_assigned",
           actor_user_id: auth.userId,
@@ -1565,8 +1582,9 @@ export const update = mutation({
     }
     if (args.assignee !== undefined && updates.assignee !== task.assignee) {
       const assigneeId = await resolveAssigneeToUserId(ctx, updates.assignee || "", task.team_id);
-      if (assigneeId) {
-        await subscribeUser(ctx, assigneeId, task._id, "assignee");
+      // Same rule as webUpdate: assigning yourself is not an event to announce.
+      if (assigneeId && assigneeId.toString() !== auth.userId.toString()) {
+        await subscribeUser(ctx, assigneeId, task._id, "assignee", cliVia(args));
         await ctx.runMutation(internal.notificationRouter.emit, {
           event_type: "task_assigned",
           actor_user_id: auth.userId,
@@ -1687,7 +1705,7 @@ export const addComment = mutation({
       comment_type: args.comment_type || "note",
     }, args.conversation_id ? undefined : auth.userId);
 
-    await subscribeUser(ctx, auth.userId, task._id, "commenter");
+    await subscribeUser(ctx, auth.userId, task._id, "commenter", cliVia(args));
     await notifySubscribers(ctx, "task_commented", auth.userId, task as any, `commented on ${task.short_id}: ${args.text.slice(0, 100)}`, conversation_id);
 
     return { id };
@@ -2781,7 +2799,7 @@ export const webUpdate = mutation({
         ? userId
         : await resolveAssigneeToUserId(ctx, resolvedAssignee || "", task.team_id);
       if (assigneeUserId && assigneeUserId.toString() !== userId.toString()) {
-        await subscribeUser(ctx, assigneeUserId, task._id, "assignee");
+        await subscribeUser(ctx, assigneeUserId, task._id, "assignee", "human");
         await ctx.runMutation(internal.notificationRouter.emit, {
           event_type: "task_assigned",
           actor_user_id: userId,
@@ -2823,7 +2841,7 @@ export const webAddComment = mutation({
       image_storage_ids: args.image_storage_ids,
     }, userId);
 
-    await subscribeUser(ctx, userId, task._id, "commenter");
+    await subscribeUser(ctx, userId, task._id, "commenter", "human");
     await notifySubscribers(ctx, "task_commented", userId, task as any, `commented on ${task.short_id}: ${args.text.slice(0, 100)}`);
 
     return { success: true };
@@ -3467,7 +3485,7 @@ export const batchAssign = mutation({
       if (resolvedAssignee !== task.assignee) {
         const assigneeId = await resolveAssigneeToUserId(ctx, resolvedAssignee, task.team_id);
         if (assigneeId) {
-          await subscribeUser(ctx, assigneeId, task._id, "assignee");
+          await subscribeUser(ctx, assigneeId, task._id, "assignee", "human");
           await ctx.runMutation(internal.notificationRouter.emit, {
             event_type: "task_assigned",
             actor_user_id: auth.userId,

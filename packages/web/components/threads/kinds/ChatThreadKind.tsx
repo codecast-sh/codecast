@@ -5,12 +5,13 @@ import { useInboxStore, type ThreadInboxRow } from "../../../store/inboxStore";
 import type { ChatAttachment } from "../../../store/chatSlice";
 import { useThreadMessages, useThreadSync } from "../../../hooks/useChatSync";
 import { channelDisplayName } from "../../../lib/chatViews";
-import { setChatFocus, clearChatFocus } from "../../../lib/chatFocus";
+import { holdChatFocus } from "../../../lib/chatFocus";
 import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
 import { CommentAvatar } from "../../comments/CommentAvatar";
 import { ChatMessage, ChatNewDivider } from "../../chat/ChatMessage";
 import { ChatComposer } from "../../chat/ChatComposer";
 import type { ChatMessageView } from "../../chat/chatTypes";
+import { useTailPin } from "../cardWindow";
 import { useThreadsPage } from "../threadsContext";
 
 // The chat kind: a channel thread the viewer is in. The collapsed card shows
@@ -86,8 +87,11 @@ export function ChatTimelineRows({
   const retry = useCallback((id: string) => {
     useInboxStore.getState().retryChatSend(id);
   }, []);
+  // Pinned to the tail so the newest message is what the capped region shows —
+  // the read law's sentinel below this region assumes exactly that.
+  const pinRef = useTailPin(messages.length ? `${messages[messages.length - 1].id}|${messages.length}` : "");
   return (
-    <div className="th-card-replies">
+    <div ref={pinRef} className="th-card-replies">
       {rows.map((row) =>
         row.kind === "new" ? (
           <ChatNewDivider key={row.key} />
@@ -168,12 +172,15 @@ export function ChatRoot({ card, expanded }: { card: ThreadCardModel; expanded: 
  *  open card. */
 export function ChatExpanded({
   card,
-  present,
+  seen,
   frozenReadAt,
+  focusComposer,
 }: {
   card: ThreadCardModel;
   present: boolean;
+  seen: boolean;
   frozenReadAt: number;
+  focusComposer: boolean;
 }) {
   const entry = rowOf(card);
   const rootId = entry.root_key;
@@ -184,22 +191,23 @@ export function ChatExpanded({
   useThreadSync(rootId);
   const thread = useThreadMessages(rootId);
 
-  // Reading is presence + the thread being open, the same statement the
-  // channel makes by reporting "newest on screen". Re-marks when new replies
-  // land while the reader is still looking (last_activity_at moves).
+  // The read law: presence + the card's newest content actually in the
+  // viewport (`seen`, witnessed by the shell's tail sentinel). Re-marks when
+  // new replies land while the reader is still looking (last_activity_at
+  // moves); a card expanded below the fold stays unread.
   useEffect(() => {
-    if (!present) return;
+    if (!seen) return;
     if (entry.last_read_at >= entry.last_activity_at && entry.unread === 0) return;
     useInboxStore.getState().markThreadRead("chat", rootId);
-  }, [present, rootId, entry.last_activity_at, entry.last_read_at, entry.unread]);
+  }, [seen, rootId, entry.last_activity_at, entry.last_read_at, entry.unread]);
 
-  // The open thread is being read: its own arrivals must not toast at the
-  // reader (lib/chatFocus is the toast layer's source of truth).
+  // The thread on the reader's screen is being read: its own arrivals must not
+  // toast at them. A hold, not the page's single slot — several cards can be
+  // on screen at once, and releasing this one must not erase another's.
   useEffect(() => {
-    if (!present) return;
-    setChatFocus({ channelId, threadRootId: rootId });
-    return () => clearChatFocus();
-  }, [present, channelId, rootId]);
+    if (!seen) return;
+    return holdChatFocus({ channelId, threadRootId: rootId });
+  }, [seen, channelId, rootId]);
 
   const send = useCallback(
     (content: string, attachments?: ChatAttachment[], opts?: { broadcast?: boolean }) => {
@@ -225,7 +233,7 @@ export function ChatExpanded({
         placeholder={channel?.kind === "dm" ? `Reply to ${roomName}…` : `Reply in #${roomName}…`}
         onSend={send}
         compact
-        autoFocus
+        autoFocus={focusComposer}
       />
     </div>
   );

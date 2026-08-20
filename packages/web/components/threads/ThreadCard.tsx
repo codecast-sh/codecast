@@ -6,6 +6,7 @@ import { relTimeShort } from "../../lib/utils";
 import type { ThreadInboxRow } from "../../store/threadTypes";
 import { THREAD_KIND_SPECS } from "../../lib/threadKinds";
 import type { ThreadCardModel } from "../../lib/threadCards";
+import { ghostHeight, useBodyMeasure, useNearViewport, useOnScreen } from "./cardWindow";
 import { useThreadsPage } from "./threadsContext";
 
 // One card, whatever the kind: the generic shell — kind tile and object
@@ -15,16 +16,33 @@ import { useThreadsPage } from "./threadsContext";
 // hit area toggles, the tool opens. The kind is looked up in lib/threadKinds;
 // nothing here branches on it except the open link for a comment, which lands
 // the conversation on its message.
+//
+// Many cards are expanded at once (unread opens by default), so the shell
+// owns two viewport judgments the kinds inherit:
+//  - the mount window: the heavy body exists only near the viewport; far
+//    cards hold their place with a measured-height ghost (cardWindow.ts);
+//  - the read law's witness: `seen` is true only while the reader is present
+//    AND the card's tail — the newest content, since bodies pin to their
+//    tail — has actually been in the viewport. Kinds mark read on `seen`,
+//    never on mount, so a card expanded below the fold stays unread.
 
 export const ThreadCard = memo(function ThreadCard({
   card,
   expanded,
+  expandedBy,
   frozenReadAt,
+  defaultNear,
 }: {
   card: ThreadCardModel;
   expanded: boolean;
+  /** Who expanded it: the default rule, or the user's click. Only a user's
+   *  click may steal scroll and focus. */
+  expandedBy: "auto" | "user";
   /** The unread boundary as it stood when the card was expanded. */
   frozenReadAt: number;
+  /** First-screenful cards mount their bodies on the first frame, before the
+   *  viewport observer has answered. */
+  defaultNear: boolean;
 }) {
   const router = useRouter();
   const { now, present, toggle } = useThreadsPage();
@@ -50,13 +68,32 @@ export const ThreadCard = memo(function ThreadCard({
   // Opening a long thread mounts a composer that focuses itself, and the
   // browser scrolls that focus into view — which pushes the card's own head off
   // the top of the page. This effect runs after the child's focus, so bringing
-  // the card head back wins. The head then stays put: it is sticky while the
-  // card is on screen (threads.css), so the reader keeps the thread's name.
+  // the card head back wins. Only a USER's expand may move the page (and never
+  // the mount itself): default-open cards and revisits must not scroll-fight
+  // over a list where most cards are expanded.
   const ref = useRef<HTMLElement | null>(null);
+  // True only on the commit where the user's own click expanded the card —
+  // NOT on mount (a persisted user entry on a revisit), and NOT when a
+  // windowed-out body of a user-expanded card mounts again later: an
+  // autofocus on that late mount would yank the page scroll to a card the
+  // reader long since walked away from. The composer inherits this window
+  // (focusComposer below), so focus rides the gesture, never the mount.
+  const prevExpandedRef = useRef(expanded);
+  const justUserExpanded = expanded && !prevExpandedRef.current && expandedBy === "user";
   useEffect(() => {
-    if (!expanded) return;
+    prevExpandedRef.current = expanded;
+    if (!justUserExpanded) return;
     ref.current?.scrollIntoView({ block: "start" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded]);
+
+  // The mount window and the read law's witness (see the header comment).
+  const near = useNearViewport(ref, defaultNear);
+  const mountBody = expanded && near;
+  const measureRef = useBodyMeasure(card.id);
+  const tailRef = useRef<HTMLDivElement | null>(null);
+  const tailSeen = useOnScreen(tailRef, mountBody);
+  const seen = present && mountBody && tailSeen;
 
   const Glyph = spec.Glyph;
   const Label = spec.Label;
@@ -93,7 +130,20 @@ export const ThreadCard = memo(function ThreadCard({
 
       <Root card={card} expanded={expanded} />
 
-      {expanded && <Expanded card={card} present={present} frozenReadAt={frozenReadAt} />}
+      {expanded && (mountBody ? (
+        <div ref={measureRef} className="th-card-body">
+          <Expanded
+            card={card}
+            present={present}
+            seen={seen}
+            frozenReadAt={frozenReadAt}
+            focusComposer={justUserExpanded}
+          />
+          <div ref={tailRef} className="th-card-tail" aria-hidden="true" />
+        </div>
+      ) : (
+        <div className="th-card-body th-card-body-ghost" style={{ height: ghostHeight(card.id) }} aria-hidden="true" />
+      ))}
     </section>
   );
 });

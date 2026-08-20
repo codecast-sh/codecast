@@ -48,6 +48,7 @@ import {
   MAX_DISTINCT_EMOJI,
   MAX_MENTIONS,
   UNREAD_CAP,
+  DM_INBOUND_SCAN,
   botHandle,
   chatPermalink,
   extractMentionHandles,
@@ -487,13 +488,25 @@ export const listChannels = query({
       const read = readByChannel.get(channel._id.toString());
       const lastReadAt = read?.last_read_at ?? 0;
 
+      const mine = (row: Doc<"chat_messages">) =>
+        row.user_id.toString() === userId.toString();
       // Newest few, so a tombstone at the head doesn't blank the rail preview.
+      // A DM reads deeper on the same index: the rail also needs the newest
+      // line the OTHER person wrote, and the viewer's own run of sends can push
+      // it well past the head. One read serves both — the first rows are the
+      // same rows the preview would have seen.
       const newest = await ctx.db
         .query("chat_messages")
         .withIndex("by_channel_created", (q: any) => q.eq("channel_id", channel._id))
         .order("desc")
-        .take(4);
-      const lastMessage = newest.find((m) => !m.deleted_at && !isSilentAgentRow(m)) ?? null;
+        .take(channel.kind === "dm" ? DM_INBOUND_SCAN : 4);
+      const visible = (m: Doc<"chat_messages">) => !m.deleted_at && !isSilentAgentRow(m);
+      const lastMessage = newest.find(visible) ?? null;
+      // The newest line from the other side, or null when the viewer has only
+      // ever spoken (or the other side's last word is beyond the scan).
+      const lastInbound = channel.kind === "dm"
+        ? newest.find((m) => visible(m) && !mine(m)) ?? null
+        : null;
 
       // Read MORE rows than the cap before filtering. Tombstones and the
       // caller's own lines are dropped after the read, so taking exactly the cap
@@ -504,8 +517,6 @@ export const listChannels = query({
         .withIndex("by_channel_created", (q: any) =>
           q.eq("channel_id", channel._id).gt("created_at", lastReadAt))
         .take(UNREAD_CAP * 2 + 1);
-      const mine = (row: Doc<"chat_messages">) =>
-        row.user_id.toString() === userId.toString();
       // Channel-LEVEL rows only. A thread reply does not tick the channel's
       // number: the reader cannot clear it from the channel view (the reply's
       // body never appears there), so counting it makes a badge that reading
@@ -545,6 +556,11 @@ export const listChannels = query({
               created_at: lastMessage.created_at,
               preview: plainPreview(lastMessage.content, 120),
             }
+          : null,
+        // DM rooms only: what the other person last said, so a surface can key
+        // presence and rank to THEIR activity and ignore the viewer's sends.
+        last_inbound: lastInbound
+          ? { _id: lastInbound._id, created_at: lastInbound.created_at }
           : null,
         // Sorts the rail by recency without any denormalized field.
         sort_at: lastMessage?.created_at ?? channel.created_at,
