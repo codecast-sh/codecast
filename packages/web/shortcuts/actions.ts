@@ -209,7 +209,7 @@ export function useGlobalShortcutActions() {
     useInboxStore.getState().toggleAnchorPanel();
   }, []));
 
-  // ⌥1–⌥4: the first four saved workbenches, in the rail's own order — the
+  // ⌥1–⌥9: the first nine saved workbenches, in the rail's own order — the
   // hint printed on a row is the key that switches to it. No saved layouts,
   // no keys: the chords cost nothing until you save one.
   const switchWorkbench = useCallback((i: number) => {
@@ -221,6 +221,11 @@ export function useGlobalShortcutActions() {
   useShortcutAction('workbench.2', useCallback(() => switchWorkbench(1), [switchWorkbench]));
   useShortcutAction('workbench.3', useCallback(() => switchWorkbench(2), [switchWorkbench]));
   useShortcutAction('workbench.4', useCallback(() => switchWorkbench(3), [switchWorkbench]));
+  useShortcutAction('workbench.5', useCallback(() => switchWorkbench(4), [switchWorkbench]));
+  useShortcutAction('workbench.6', useCallback(() => switchWorkbench(5), [switchWorkbench]));
+  useShortcutAction('workbench.7', useCallback(() => switchWorkbench(6), [switchWorkbench]));
+  useShortcutAction('workbench.8', useCallback(() => switchWorkbench(7), [switchWorkbench]));
+  useShortcutAction('workbench.9', useCallback(() => switchWorkbench(8), [switchWorkbench]));
 
   useShortcutAction('ui.undo', useCallback(() => {
     return performUndo() || false;

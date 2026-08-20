@@ -137,7 +137,7 @@ import { attachWatchServer } from "./browser/watchServer.js";
 import { handleBrowserFocusHttp } from "./browser/focusHttp.js";
 import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOptions } from "./vault/vaultServer.js";
 import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
-import { enumerateProjectRoots, MAX_PROJECT_ROOTS } from "./projectRoots.js";
+import { enumerateProjectRoots, enumerateAgentHomeDirs, MAX_PROJECT_ROOTS } from "./projectRoots.js";
 import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
@@ -1887,7 +1887,7 @@ async function pollDaemonCommands(): Promise<void> {
 // ~/dev/union/union-mobile remain available in the recent-project picker.
 // Bounded scan: only directories that actually exist on this host.
 function computeLocalProjectRoots(): string[] {
-  const roots = new Set<string>(enumerateProjectRoots());
+  const roots = new Set<string>([...enumerateProjectRoots(), ...enumerateAgentHomeDirs()]);
   // Also include any project_paths we've actually started a session in — covers
   // non-conventional locations the user has used recently.
   for (const info of startedSessionTmux.values()) {

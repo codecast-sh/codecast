@@ -45,3 +45,29 @@ export function enumerateProjectRoots(home = process.env.HOME): string[] {
   }
   return Array.from(roots).slice(0, MAX_PROJECT_ROOTS);
 }
+
+/** Per-agent config dirs in $HOME that codecast users routinely open sessions
+ *  in. They live outside the conventional project parents (and are dotfiles,
+ *  which the scan above skips), so without this whitelist the recent-project
+ *  picker would hide them. Deliberately NOT part of enumerateProjectRoots: the
+ *  vault registry shares that list, and ~/.claude is not a notes vault. */
+export const AGENT_HOME_DIRS = [".claude", ".codex", ".gemini", ".cursor", ".pi", ".opencode"] as const;
+
+/**
+ * The agent home dirs that exist on this host, symlinks resolved. Resolving
+ * (rather than skipping) symlinks matters because agents record the physical
+ * cwd, so a `~/.claude -> ~/dotfiles/claude` link means sessions are filed
+ * under the target; reporting the target is what makes them match. Deduped so
+ * two links to one dir report once.
+ */
+export function enumerateAgentHomeDirs(home = process.env.HOME): string[] {
+  if (!home) return [];
+  const dirs = new Set<string>();
+  for (const name of AGENT_HOME_DIRS) {
+    try {
+      const real = fs.realpathSync(path.join(home, name));
+      if (fs.statSync(real).isDirectory()) dirs.add(real);
+    } catch {}
+  }
+  return Array.from(dirs);
+}

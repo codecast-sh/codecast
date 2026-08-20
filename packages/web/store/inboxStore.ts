@@ -11,7 +11,7 @@ import {
   type DurableCreateContinuation,
 } from "./mutativeMiddleware";
 import { createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, promote as wsPromotePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
-import { applyWorkbench as applyWorkbenchPure, captureWorkbench, type WorkbenchSnapshot } from "./workbench";
+import { applyWorkbench as applyWorkbenchPure, captureWorkbench, chipFilterOf, resolveWorkbenchFilter, type WorkbenchSnapshot } from "./workbench";
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { isDraft, original } from "mutative";
@@ -88,7 +88,8 @@ import { deriveDocDisplayTitle, isForeignSession } from "../lib/liveEntities";
 import { DEFAULT_SETTINGS_SECTION, type SettingsSectionId } from "../lib/settingsSections";
 import type { PendingComment } from "../lib/quoteFormat";
 import type { Comment as CommentRow } from "../lib/commentThread";
-import { pushInboxViewHistory, isApplyingViewHistory, type InboxViewSnapshot } from "../lib/inboxViewHistory";
+import { pushInboxViewHistory, isApplyingViewHistory, sameInboxView, type InboxViewSnapshot } from "../lib/inboxViewHistory";
+import { sessionFocusKind, type SessionFocusKind } from "../lib/inboxRouting";
 // Team chat lives in its own slice: four delta-synced collections plus the
 // optimistic writers over them. Spread into the config below, and its state
 // shape is folded into InboxStoreState so the draft type covers it.
@@ -3620,10 +3621,12 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   wsToggle: (slot: SlotId, pane: Pane) => void;
   wsPromote: (slot: SlotId) => void;
   wsSetPresentation: (slot: SlotId, presentation: Presentation) => void;
-  /** Restore a saved arrangement wholesale — every slot, plus zen. `id` stamps
-   *  which saved workbench this is, so the rail can keep it highlighted (and
-   *  offer "update") while you adjust panels away from it. */
-  applyWorkbench: (snap: WorkbenchSnapshot, id?: string) => void;
+  /** Restore a saved arrangement wholesale — every slot, plus zen and the chip
+   *  filter. `id` stamps which saved workbench this is, so the rail can keep it
+   *  highlighted (and offer "update") while you adjust panels away from it.
+   *  `pathname` is the surface the switch LANDS on, so a filter that evicts the
+   *  focused session moves whichever pointer that surface highlights. */
+  applyWorkbench: (snap: WorkbenchSnapshot, id?: string, pathname?: string | null) => void;
   /** The saved workbench the chrome was last switched to. Ephemeral bookkeeping
    *  for the rail's highlight/update affordance — cleared on plain boots. */
   activeWorkbenchId: string | null;
@@ -4906,6 +4909,59 @@ function hideSessionInDraft(
   return { hidden, forgotten, ts: now };
 }
 
+// The focused session fell out of the list the panel renders — a filter changed
+// under it, so nothing was hidden, the view simply stopped containing it. The
+// highlight cannot stay on a row that isn't there, so it lands on the top of the
+// new order: the row Ctrl+J would walk to first. An emptied order clears the
+// pointer the same way a dismiss-and-advance with nothing left to advance to
+// does. WHICH pointer is the rail's own three-way answer (sessionFocusKind) —
+// the working pages highlight currentSessionId like the inbox, so treating them
+// as "not the inbox" wrote the dead sidePanelSessionId and left the highlighted
+// row stranded outside the list.
+function evictFocusOutsideOrderInDraft(draft: Draft, focusKind: SessionFocusKind) {
+  const usesPanel = focusKind === "panel";
+  const focusedId = usesPanel ? draft.sidePanelSessionId : (draft.viewingDismissedId ?? draft.currentSessionId);
+  if (!focusedId) return;
+  const ordered = computeVisualOrder(draft);
+  if (ordered.some((s) => s._id === focusedId)) return;
+  const top = ordered[0]?._id ?? null;
+  if (usesPanel) {
+    draft.sidePanelSessionId = top;
+    return;
+  }
+  declareViewNav("gesture");
+  if (top) {
+    commitCurrentSession(draft, top);
+    return;
+  }
+  draft.currentSessionId = null;
+  draft.viewingDismissedId = null;
+  recordCurrentConversationPointer(draft, undefined);
+  syncActiveInboxTabPath(draft, null);
+}
+
+// The surface on screen, as the store can see it: the active tab's path is what
+// usePathname() reports inside the shell; outside tab routing (a detached
+// window) it is the real location. Lets the chip setters evict focus without
+// every caller threading a pathname through.
+function mountedPathname(draft: Draft): string | undefined {
+  const tab = draft.activeTabId ? draft.tabs.find((t) => t.id === draft.activeTabId) : undefined;
+  // Tab paths keep their query (/inbox?s=…); the surface helpers want the bare
+  // pathname, as usePathname reports it.
+  if (tab) return tab.path.split("?")[0];
+  return typeof window !== "undefined" ? window.location.pathname : undefined;
+}
+
+// One chip filter changed: record it for Back, and if the focused session just
+// left the rendered list, move focus the same way a layout switch does — the
+// two are the same gesture at different sizes, so they must not disagree.
+function commitChipFilterChange(draft: Draft, prev: InboxViewSnapshot) {
+  const next = snapshotInboxViewFromDraft(draft);
+  if (sameInboxView(prev, next)) return;
+  pushInboxViewHistory(prev, next);
+  evictFocusOutsideOrderInDraft(draft, sessionFocusKind(mountedPathname(draft), draft.currentConversation?.source));
+}
+
 // The signed-in user, as the gesture bridge stamps it on outbound messages and
 // matches it on inbound ones. Exported for undoActions, whose undo closures
 // broadcast the reverted value (an un-announced undo leaves a sibling holding
@@ -5453,7 +5509,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // An exclusion isn't a "view" you revisit — only include mode records.
       if (!exclude) recordVisitInDraft(this, { kind: "view", key: `project:${name}`, label: name, path: path ?? undefined });
     }
-    pushInboxViewHistory(prev, snapshotInboxViewFromDraft(this));
+    commitChipFilterChange(this, prev);
   }),
 
   // -- Capability library --
@@ -5542,7 +5598,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       this.activeProjectPath = null;
       if (!exclude) recordVisitInDraft(this, { kind: "view", key: `label:${bucketId}`, label: (this.buckets as any)[bucketId]?.name });
     }
-    pushInboxViewHistory(prev, snapshotInboxViewFromDraft(this));
+    commitChipFilterChange(this, prev);
   }),
   inboxViewMode: () => resolveInboxViewMode(get().clientState.ui),
   setInboxViewMode: (mode: InboxViewMode) => {
@@ -8475,7 +8531,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // screen); a device that cannot host a terminal never inherits one.
   activeWorkbenchId: null,
 
-  applyWorkbench: action(function (this: Draft, snap: WorkbenchSnapshot, id?: string) {
+  applyWorkbench: action(function (this: Draft, snap: WorkbenchSnapshot, id?: string, pathname?: string | null) {
     const conversationId = this.currentSessionId ?? this.viewingDismissedId ?? null;
     const allowTerminal = typeof window === "undefined" || window.innerWidth >= 768;
     this.workspace = applyWorkbenchPure(this.workspace as WorkspaceState, snap, { conversationId, allowTerminal });
@@ -8487,6 +8543,24 @@ const inboxStoreConfig = (set: any, get: any) => ({
       this.clientState.ui.zen_mode = zen;
       writeCriticalUiPrefs({ zen_mode: zen });
     }
+    // The chip rides along with the panes. Both axes are assigned together
+    // rather than through the single-axis setters, whose "don't clobber the
+    // other axis's exclude" guards exist for one-chip clicks; here the whole
+    // filter is being replaced at once — including with nothing, which is what
+    // a layout saved with a clear chip (or an older save, from before this
+    // field) means.
+    const prev = snapshotInboxViewFromDraft(this);
+    const want = resolveWorkbenchFilter(snap.filter, this.buckets);
+    this.activeBucketFilter = want.bucket;
+    this.activeProjectFilter = want.project;
+    this.activeProjectPath = want.projectPath;
+    this.chipFilterExclude = want.exclude;
+    const next = snapshotInboxViewFromDraft(this);
+    if (sameInboxView(prev, next)) return;
+    pushInboxViewHistory(prev, next);
+    // The landing surface is passed in: a layout can change surface, and the
+    // active tab still shows the one being left.
+    evictFocusOutsideOrderInDraft(this, sessionFocusKind(pathname, this.currentConversation?.source));
   }),
 
   // Save and update reuse the saved-view pipeline wholesale (optimistic stub,
@@ -8497,6 +8571,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const snap = captureWorkbench(st.workspace as WorkspaceState, {
       zen: st.clientState.ui?.zen_mode ?? false,
       path,
+      filter: chipFilterOf(st),
     });
     return st.createSavedView({ name, page: "workspace", prefs: snap });
   },
@@ -8509,6 +8584,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // Keep the workbench's surface unless the caller states a new one — an
       // update from a different page shouldn't silently retarget the switch.
       path: path ?? prev?.path,
+      filter: chipFilterOf(st),
     });
     st.updateSavedView(id, { prefs: snap });
   },

@@ -7597,12 +7597,14 @@ async function mergeForeignConversationLiveness(
   convs: any[],
   now: number,
 ): Promise<void> {
-  for (const conv of convs) {
+  const managedRows = await Promise.all(convs.map((conv: any) => ctx.db
+    .query("managed_sessions")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+    .first()));
+  for (let i = 0; i < convs.length; i++) {
+    const conv = convs[i];
     const cid = conv._id.toString();
-    const managed = await ctx.db
-      .query("managed_sessions")
-      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
-      .first();
+    const managed = managedRows[i];
     if (!managed) continue;
     const heartbeatAlive = now - managed.last_heartbeat < INBOX_HEARTBEAT_ALIVE_MS;
     if (heartbeatAlive) maps.liveConvIds.add(cid);
@@ -8097,7 +8099,7 @@ export async function scanInboxConversations(
   // Recent window is bounded by both the row cap AND the 30d activity window:
   // the index range stops the scan at the cutoff so old sessions are never read.
   // Pinned/dismissed have their own (separate) queries below and stay exempt.
-  const recentConversations = await ctx.db
+  const recentConversationsQ = ctx.db
     .query("conversations")
     .withIndex("by_user_updated", (q: any) =>
       q.eq("user_id", userId).gte("updated_at", sessionWindowCutoff)
@@ -8109,14 +8111,14 @@ export async function scanInboxConversations(
     ))
     .take(200);
 
-  const pinnedConversations = await ctx.db
+  const pinnedConversationsQ = ctx.db
     .query("conversations")
     .withIndex("by_user_pinned", (q: any) =>
       q.eq("user_id", userId).gt("inbox_pinned_at", 0)
     )
     .take(20);
 
-  const dismissedConversations = await ctx.db
+  const dismissedConversationsQ = ctx.db
     .query("conversations")
     .withIndex("by_user_dismissed", (q: any) =>
       q.eq("user_id", userId).gte("inbox_dismissed_at", dismissedCutoff)
@@ -8126,7 +8128,7 @@ export async function scanInboxConversations(
 
   // Stashed (set aside, agent still alive) mirror the dismissed window so the
   // Stashed bucket is populated even for rows older than the recent window.
-  const stashedConversations = await ctx.db
+  const stashedConversationsQ = ctx.db
     .query("conversations")
     .withIndex("by_user_stashed", (q: any) =>
       q.eq("user_id", userId).gte("inbox_stashed_at", dismissedCutoff)
@@ -8145,11 +8147,18 @@ export async function scanInboxConversations(
   // Owner rows are keyed by user alone (no denormalized updated_at — that would
   // make every conversation heartbeat fan out and patch all of its owner rows),
   // so hydrate here and apply the same recency/status window as the main scan.
-  const ownerRows = await ctx.db
+  const ownerRowsQ = ctx.db
     .query("session_owners")
     .withIndex("by_user", (q: any) => q.eq("user_id", userId))
     .order("desc")
     .take(200);
+  // The five window scans are independent — issue them in ONE batched round
+  // trip. This scan backs the heartbeat-hot sessionsLiveness/listInboxSessions
+  // queries, whose latency was almost entirely sequential await depth (each
+  // await is a db round trip; under load the sum crossed the system-op
+  // timeout: "Your request timed out performing too many system operations").
+  const [recentConversations, pinnedConversations, dismissedConversations, stashedConversations, ownerRows] =
+    await Promise.all([recentConversationsQ, pinnedConversationsQ, dismissedConversationsQ, stashedConversationsQ, ownerRowsQ]);
   const ownedByMeIds = new Set<string>(
     ownerRows.map((r: any) => r.conversation_id.toString())
   );
@@ -8166,15 +8175,15 @@ export async function scanInboxConversations(
   // Hydrate only the owned conversations the window scans above didn't already
   // fetch (an owned session of my OWN is usually in the recent window — the get
   // would be a wasted read on a query that re-runs every heartbeat).
-  for (const r of ownerRows) {
-    const idStr = r.conversation_id.toString();
-    if (byId.has(idStr)) continue;
-    let conv: any = null;
-    try { conv = await ctx.db.get(r.conversation_id); } catch { conv = null; }
+  const ownerRowsToHydrate = ownerRows.filter((r: any) => !byId.has(r.conversation_id.toString()));
+  const ownerHydrated = await Promise.all(
+    ownerRowsToHydrate.map((r: any) => Promise.resolve(ctx.db.get(r.conversation_id)).catch(() => null))
+  );
+  for (const conv of ownerHydrated) {
     if (!conv) continue;
     if ((conv.updated_at ?? 0) < sessionWindowCutoff) continue;
     if (conv.status !== "active" && conv.status !== "completed") continue;
-    byId.set(idStr, conv);
+    byId.set(conv._id.toString(), conv);
   }
 
   // TEAM SCOPE (inbox "team mode"): fold every teammate's team-visible session
@@ -8192,18 +8201,18 @@ export async function scanInboxConversations(
       .map((m) => m.user_id)
       .filter((id) => id.toString() !== userId.toString())
       .slice(0, TEAM_INBOX_MEMBER_CAP);
-    for (const memberId of memberIds) {
-      const memberRecent = await ctx.db
-        .query("conversations")
-        .withIndex("by_team_user_updated", (q: any) =>
-          q.eq("team_id", opts.teamScope).eq("user_id", memberId).gte("updated_at", sessionWindowCutoff)
-        )
-        .order("desc")
-        .filter((q: any) => q.or(
-          q.eq(q.field("status"), "active"),
-          q.eq(q.field("status"), "completed")
-        ))
-        .take(TEAM_INBOX_PER_MEMBER_CAP);
+    const memberScans = await Promise.all(memberIds.map((memberId) => ctx.db
+      .query("conversations")
+      .withIndex("by_team_user_updated", (q: any) =>
+        q.eq("team_id", opts.teamScope).eq("user_id", memberId).gte("updated_at", sessionWindowCutoff)
+      )
+      .order("desc")
+      .filter((q: any) => q.or(
+        q.eq(q.field("status"), "active"),
+        q.eq(q.field("status"), "completed")
+      ))
+      .take(TEAM_INBOX_PER_MEMBER_CAP)));
+    for (const memberRecent of memberScans) {
       for (const c of memberRecent) {
         if (byId.has(c._id.toString())) continue;
         if (c.inbox_dismissed_at || c.inbox_stashed_at) continue; // teammate's own triage
@@ -8315,17 +8324,20 @@ export async function computeInboxSessions(
   // User docs for run-by / owner display, cached across rows (both are sparse:
   // only second-party-owned sessions ever hit this).
   const userDocCache = new Map<string, any>();
-  const getUserDoc = async (id: any) => {
+  const getUserDoc = (id: any) => {
     const key = id.toString();
     if (!userDocCache.has(key)) {
-      let doc: any = null;
-      try { doc = await ctx.db.get(id); } catch { doc = null; }
-      userDocCache.set(key, doc);
+      // Cache the PROMISE, not the value: rows enrich concurrently and two rows
+      // asking for the same user must share one read.
+      userDocCache.set(key, Promise.resolve(ctx.db.get(id)).catch(() => null));
     }
     return userDocCache.get(key);
   };
-  for (const conv of conversations) {
-    if (!shouldShowInInbox(conv)) continue;
+  // Rows are independent — enrich them concurrently (sequential per-row awaits
+  // made this heartbeat-hot path slow enough to time out under load; see
+  // computeSessionsLiveness). Assembly below stays in candidate order.
+  const shownConvs = conversations.filter((conv) => shouldShowInInbox(conv));
+  const enrichedRows = await Promise.all(shownConvs.map(async (conv) => {
     // Deliberately-filed rows (label extras, sessions assigned to me by another
     // account) never cluster-hide: an assignment routes a session into my inbox
     // on purpose, and it stays there until I dismiss it — otherwise a decision
@@ -8333,10 +8345,6 @@ export async function computeInboxSessions(
     // with explicit ids still lists it as needs input.
     const cutoff = deliberateIds.has(conv._id.toString()) ? 0 : clusterCutoff;
     const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, cutoff);
-    if (hidden) {
-      hiddenCount++;
-      if (!opts.show_all) continue;
-    }
     if (conv.user_id.toString() !== userId.toString()) {
       const author = await getUserDoc(conv.user_id);
       row.author_name = author?.name ?? author?.email ?? null;
@@ -8364,13 +8372,20 @@ export async function computeInboxSessions(
       row.owner_name = ownerDoc?.name ?? null;
       row.owner_email = ownerDoc?.email ?? null;
     }
-    results.push(row);
+    return { conv, row, subagentChildren, dismissed, stashed, hidden };
+  }));
+  for (const r of enrichedRows) {
+    if (r.hidden) {
+      hiddenCount++;
+      if (!opts.show_all) continue;
+    }
+    results.push(r.row);
     // Don't surface subagents under a dismissed/stashed parent — they used to be
     // invisible (parent was excluded from the idle query entirely) and
     // exposing them now would make active buckets pick them up as orphans.
-    if (dismissed || stashed) continue;
-    for (const child of subagentChildren) {
-      results.push(buildSubagentChildRow(child, maps, now, conv._id));
+    if (r.dismissed || r.stashed) continue;
+    for (const child of r.subagentChildren) {
+      results.push(buildSubagentChildRow(child, maps, now, r.conv._id));
     }
   }
 
@@ -8506,12 +8521,11 @@ async function buildProducingParents(
 ): Promise<Set<string>> {
   const seen = new Set<string>(conversations.map((c: any) => c._id.toString()));
   const pool = [...conversations];
-  for (const cid of maps.liveConvIds) {
-    if (seen.has(cid)) continue;
-    let c: any = null;
-    try { c = await ctx.db.get(cid as Id<"conversations">); } catch { c = null; }
-    if (c) pool.push(c);
-  }
+  const missingLiveIds = [...maps.liveConvIds].filter((cid) => !seen.has(cid));
+  const hydratedLive = await Promise.all(
+    missingLiveIds.map((cid) => Promise.resolve(ctx.db.get(cid as Id<"conversations">)).catch(() => null))
+  );
+  for (const c of hydratedLive) if (c) pool.push(c);
   return deriveProducingParents(pool, maps, now);
 }
 
@@ -8671,7 +8685,7 @@ async function enrichLivenessFields(
 // (@codecast/shared/contracts): a frozen ACTIVE status is distrusted past the 1h trust
 // TTL, and a statusless row settles after the 45s idle grace. syncOverlay ignores ids
 // it doesn't have.
-async function computeSessionsLiveness(
+export async function computeSessionsLiveness(
   ctx: any,
   userId: Id<"users">,
   teamScope?: Id<"teams">,
@@ -8687,13 +8701,18 @@ async function computeSessionsLiveness(
   const foreignScanBudget = { remaining: 40 };
   const uid = userId.toString();
   const liveness: Record<string, LivenessFields> = {};
-  for (const conv of conversations) {
-    if (!shouldShowInInbox(conv)) continue;
-    liveness[conv._id.toString()] = await enrichLivenessFields(ctx, conv, maps, now, {
+  // Rows are independent — enrich them concurrently so per-row reads batch
+  // into a handful of round trips instead of one await per row (the depth that
+  // made this heartbeat-hot query slow, and under load time out). The foreign
+  // scan budget stays sound: it decrements synchronously before the await.
+  const shownConvs = conversations.filter((conv) => shouldShowInInbox(conv));
+  const enriched = await Promise.all(shownConvs.map((conv) =>
+    enrichLivenessFields(ctx, conv, maps, now, {
       producingParents,
       foreignScanBudget: conv.user_id.toString() !== uid ? foreignScanBudget : null,
-    });
-  }
+    })
+  ));
+  shownConvs.forEach((conv, i) => { liveness[conv._id.toString()] = enriched[i]; });
   return liveness;
 }
 
