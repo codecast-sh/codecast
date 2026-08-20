@@ -146,6 +146,22 @@ export function removeForkArtifactJsonl(sessionId: string, sourceJsonlPath: stri
 }
 
 /**
+ * True for a transcript written by a Workflow-tool agent:
+ * `<projectDir>/<hostSession>/subagents/workflows/<wf_run>/<file>.jsonl`.
+ * Such an agent runs inside its host claude process and hands its result to
+ * the orchestrator script, which replays it from cache on resume. The
+ * transcript is never a session of its own: `claude --resume` on it spawns a
+ * standalone copy that runs the brief again for nobody (the 2026-08-20
+ * doppelgänger fleet: 53 copies executing stale briefs in the shared checkout).
+ * Callers use this to refuse the standalone resume.
+ */
+export function isWorkflowAgentTranscriptPath(filePath: string): boolean {
+  const parts = filePath.split(path.sep);
+  const idx = parts.lastIndexOf("subagents");
+  return idx >= 0 && parts[idx + 1] === "workflows" && idx + 3 < parts.length;
+}
+
+/**
  * True when `flags` already specifies a Claude permission mode flag. Used to
  * avoid stacking conflicting permission settings.
  */

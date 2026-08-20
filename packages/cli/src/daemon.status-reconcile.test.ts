@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { classifyCodexTranscriptTail, classifyTranscriptTail, findCachedSessionIdForConversation, findSessionFile, isInterruptControlMessage, paneReconcileTarget, preferLiveSessionId, reconciledStatus, resumeShortId, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked } from "./daemon.js";
+import { classifyCodexTranscriptTail, classifyTranscriptTail, findCachedSessionIdForConversation, findSessionFile, workflowAgentTranscriptPathFor, isInterruptControlMessage, paneReconcileTarget, preferLiveSessionId, reconciledStatus, resumeShortId, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked } from "./daemon.js";
 import type { TranscriptTurnState } from "./daemon.js";
 
 // Regression test for the "session stuck in 'working' (or 'stopped') forever" bug,
@@ -348,6 +348,40 @@ describe("findSessionFile subagent layouts", () => {
         path.join(wfDir, "agent-a920233e1ad3a0d16.jsonl"),
       );
       expect(findSessionFile("agent-missing")).toBeNull();
+    } finally {
+      process.env.HOME = prevHome;
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  // The resume repair ladder copies a workflow agent's transcript to the project
+  // dir's top level and to a UUID twin beside the original. findSessionFile then
+  // answers with the top-level copy — which is exactly why a path check on its
+  // result let the 2026-08-20 doppelgänger fleet through. The workflow probe
+  // must see past that copy for both the agent id and the UUID twin.
+  test("workflowAgentTranscriptPathFor sees the workflow layout past a relocated top-level copy", () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "cc-wf-agent-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+    try {
+      const projectDir = path.join(tmpHome, ".claude", "projects", "-Users-x-proj");
+      const wfDir = path.join(projectDir, "0c25e223-db89-44dd-b7c2-a14b21298e4d", "subagents", "workflows", "wf_adebb5af-f7d");
+      fs.mkdirSync(wfDir, { recursive: true });
+      const uuid = "89b2bd61-7fdc-4491-89fc-7e64dbe39844";
+      fs.writeFileSync(path.join(wfDir, "agent-a920233e1ad3a0d16.jsonl"), "{}\n");
+      fs.writeFileSync(path.join(wfDir, `${uuid}.jsonl`), "{}\n");
+      fs.writeFileSync(path.join(projectDir, `${uuid}.jsonl`), "{}\n");
+
+      expect(findSessionFile(uuid)?.path).toBe(path.join(projectDir, `${uuid}.jsonl`));
+      expect(workflowAgentTranscriptPathFor(uuid)).toBe(path.join(wfDir, `${uuid}.jsonl`));
+      expect(workflowAgentTranscriptPathFor("agent-a920233e1ad3a0d16")).toBe(path.join(wfDir, "agent-a920233e1ad3a0d16.jsonl"));
+
+      // An Agent-tool subagent and a plain session are not workflow agents.
+      const subagentsDir = path.dirname(path.dirname(wfDir));
+      fs.writeFileSync(path.join(subagentsDir, "agent-abc123.jsonl"), "{}\n");
+      fs.writeFileSync(path.join(projectDir, "0c25e223-db89-44dd-b7c2-a14b21298e4d.jsonl"), "{}\n");
+      expect(workflowAgentTranscriptPathFor("agent-abc123")).toBeNull();
+      expect(workflowAgentTranscriptPathFor("0c25e223-db89-44dd-b7c2-a14b21298e4d")).toBeNull();
     } finally {
       process.env.HOME = prevHome;
       fs.rmSync(tmpHome, { recursive: true, force: true });

@@ -1,7 +1,12 @@
 // Hydration-time retention policy for the persisted caches, shared by both
 // persistence engines (web Dexie idbCache.ts + native kv-store
-// idbCache.native.ts) the same way idbCollectionDiff is. Pure functions only —
-// each engine owns how the pruned result reaches its own disk.
+// idbCache.native.ts) the same way idbCollectionDiff is. The generic partition
+// and tombstone expiry live in @platform/engine (cacheRetention / idbCache
+// there); this module injects codecast's session-shaped policy.
+import {
+  partitionCacheRetention,
+  expireExcludeTombstones as engineExpireExcludeTombstones,
+} from "@platform/engine";
 import { isConvexId } from "../lib/entityLinks";
 
 // Retention for the persisted sessions collection, applied at hydration. The
@@ -33,25 +38,15 @@ export function partitionSessionRetention(
   now: number,
 ): { keep: any[]; drop: string[] } {
   const liveIds = new Set(liveInboxIdList ?? []);
-  const pinnedKeep: any[] = [];
-  const windowed: any[] = [];
-  const drop: string[] = [];
-  for (const row of rows) {
-    const stampedAt = Math.max(row.updated_at ?? 0, row._creationTime ?? 0, row.inbox_stashed_at ?? 0, row.inbox_dismissed_at ?? 0);
-    if (liveIds.has(row._id) || row._id === lastFocusedId || !isConvexId(row._id) || row.is_pinned) {
-      pinnedKeep.push(row);
-    } else if (now - stampedAt <= SESSION_CACHE_TTL_MS) {
-      windowed.push(row);
-    } else {
-      drop.push(row._id);
-    }
-  }
-  // Cap the TTL-window survivors (never the always-keep set), newest first.
-  if (windowed.length > MAX_CACHED_SESSIONS) {
-    windowed.sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
-    for (const row of windowed.splice(MAX_CACHED_SESSIONS)) drop.push(row._id);
-  }
-  return { keep: pinnedKeep.concat(windowed), drop };
+  return partitionCacheRetention(rows, now, {
+    ttlMs: SESSION_CACHE_TTL_MS,
+    maxRows: MAX_CACHED_SESSIONS,
+    alwaysKeep: (row) =>
+      liveIds.has(row._id) || row._id === lastFocusedId || !isConvexId(row._id) || !!row.is_pinned,
+    stampedAt: (row) =>
+      Math.max(row.updated_at ?? 0, row._creationTime ?? 0, row.inbox_stashed_at ?? 0, row.inbox_dismissed_at ?? 0),
+    sortStamp: (row) => row.updated_at ?? 0,
+  });
 }
 
 // Exclude tombstones never clear for delta tables (absence ≠ deletion in
@@ -67,13 +62,5 @@ export function expireExcludeTombstones(
   pending: Record<string, any>,
   now: number,
 ): Record<string, any> {
-  const cleaned: Record<string, any> = {};
-  for (const [key, entry] of Object.entries(pending)) {
-    if (entry?.type === "exclude") {
-      if (!entry.ts) { cleaned[key] = { ...entry, ts: now }; continue; }
-      if (now - entry.ts > SESSION_CACHE_TTL_MS) continue;
-    }
-    cleaned[key] = entry;
-  }
-  return cleaned;
+  return engineExpireExcludeTombstones(pending, now, SESSION_CACHE_TTL_MS);
 }

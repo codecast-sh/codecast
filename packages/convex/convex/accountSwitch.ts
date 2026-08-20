@@ -17,6 +17,7 @@ import { internal } from "./_generated/api";
 import { getAuthenticatedUserId, enqueuePendingMessage } from "./pendingMessages";
 import { classifyApiErrorBanner, blockedContinueClientId, CONTINUE_BANNER_KINDS } from "./inboxFilters";
 import {
+  actedBlockedConversations,
   ccAccountsValidator,
   decideAutoSwitch,
   AUTO_SWITCH_CONTINUE_KEY,
@@ -80,10 +81,10 @@ async function listBlockedConversations(
     .withIndex("by_user_updated", (q: any) => q.eq("user_id", userId).gt("updated_at", since))
     .order("desc")
     .take(1000);
-  const all = recent.filter(isBlockedConversation);
+  const all: Doc<"conversations">[] = recent.filter(isBlockedConversation);
   const topLevel = all.filter((c: Doc<"conversations">) => !isSubagentConversation(c));
   const subagents = all.filter(isSubagentConversation);
-  const acted = (includeSubagents ? [...topLevel, ...subagents] : topLevel).slice(0, MAX_REVIVE);
+  const acted = actedBlockedConversations(all, includeSubagents).slice(0, MAX_REVIVE);
   return {
     blocked: acted,
     topLevelCount: topLevel.length,

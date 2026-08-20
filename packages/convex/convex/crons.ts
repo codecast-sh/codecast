@@ -176,4 +176,15 @@ crons.interval(
   {}
 );
 
+crons.interval(
+  // Sync-log retention: delete actions past the 30d window in bounded batches
+  // and advance per-scope floors (syncLogPrune.ts). Hourly keeps the drain far
+  // ahead of write volume; the table is bounded by churned-entity count anyway
+  // (coalescing), so each run is small.
+  "prune sync log actions",
+  { hours: 1 },
+  internal.syncLogPrune.pruneSyncActions,
+  {}
+);
+
 export default crons;

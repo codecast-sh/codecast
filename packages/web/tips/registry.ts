@@ -65,7 +65,7 @@ export const TIPS: TipDef[] = [
 
   // Nudges: contextual suggestions
   { id: 'n-many-sessions', type: 'nudge', phase: 2,
-    content: 'Jump to idle sessions instantly' },
+    content: 'Jump to sessions needing input instantly' },
   { id: 'n-session-nav', type: 'nudge', phase: 2,
     content: 'Navigate sessions without the mouse' },
 
@@ -100,7 +100,7 @@ export const TIPS: TipDef[] = [
   { id: 'w-mru', type: 'whisper', shortcutAction: 'session.mruSwitch', phase: 4,
     content: 'Switch to last session' },
   { id: 'w-jump-idle', type: 'whisper', shortcutAction: 'session.jumpIdle', phase: 4,
-    content: 'Jump to idle session' },
+    content: 'Jump to top needs-input session' },
   { id: 'w-cycle-density', type: 'whisper', shortcutAction: 'conv.cycleDensity', phase: 4,
     content: 'Cycle message density' },
   { id: 'w-defer', type: 'whisper', shortcutAction: 'session.deferAdvance', phase: 4,

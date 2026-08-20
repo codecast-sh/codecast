@@ -3107,11 +3107,16 @@ export default defineSchema({
     // Opaque anchor JSON from the viewer page (selector/snippet/position);
     // the server never interprets it.
     anchor: v.optional(v.string()),
+    // Client-minted idempotency key: a retried submit with the same
+    // (artifact, client_id) returns the existing row instead of a twin.
+    client_id: v.optional(v.string()),
     version: v.number(),
     status: v.string(), // "open" | "resolved"
     delivered: v.boolean(),
     created_at: v.number(),
-  }).index("by_artifact", ["artifact_id", "created_at"]),
+  })
+    .index("by_artifact", ["artifact_id", "created_at"])
+    .index("by_artifact_client_id", ["artifact_id", "client_id"]),
 
   // View counters, isolated from the artifacts row so beacon writes never churn
   // the row that queries/pages watch.
@@ -3694,6 +3699,12 @@ export default defineSchema({
       v.literal("commenter"),
       v.literal("watching")
     ),
+    // Who performed the act that enrolled this user. "human": a person typed
+    // it (web, manual CLI, meeting, human board origin). "agent": an agent
+    // acting under the owner's token. Absent = legacy row, classified by the
+    // retroactive sweep. Membership rules (thread inbox) read this; identity
+    // alone never implies attention.
+    via: v.optional(v.union(v.literal("human"), v.literal("agent"))),
     muted: v.boolean(),
     created_at: v.number(),
   })
@@ -3735,6 +3746,54 @@ export default defineSchema({
     .index("by_entity", ["entity_id"])
     .index("by_owner_seq", ["owner_user_id", "seq"])
     .index("by_team_seq", ["team_id", "seq"]),
+
+  // ── Sync log ────────────────────────────────────────────────────────────────
+  // Append-only per-scope sync action log (docs/architecture/sync-log-migration.md).
+  // Supersedes change_log's Date.now() heuristic for NEW clients; change_log stays
+  // dual-written for deployed bundles. The write interceptor in functions.ts is
+  // the sole writer (see syncLog.ts). `position` is allocated from sync_heads in
+  // the same serializable transaction as the domain write, so per scope it is
+  // strictly increasing and a reader who has applied up to a head has provably
+  // seen every action at or below it. `ts` is retention/debug metadata only —
+  // never an ordering key.
+  sync_actions: defineTable({
+    // "user:<userId>" | "team:<teamId>" — same vocabulary as the workspace key.
+    scope_key: v.string(),
+    position: v.number(),
+    entity_type: v.union(
+      v.literal("conversations"),
+      v.literal("tasks"),
+      v.literal("docs"),
+      v.literal("plans"),
+      v.literal("projects"),
+      // Scope membership lifecycle: entity_id is the team id, op is
+      // scope_added | scope_removed, emitted in the affected USER's scope.
+      v.literal("scope"),
+    ),
+    entity_id: v.string(),
+    op: v.union(
+      v.literal("upsert"),
+      v.literal("delete"),
+      v.literal("scope_added"),
+      v.literal("scope_removed"),
+    ),
+    ts: v.number(),
+  })
+    .index("by_scope_position", ["scope_key", "position"])
+    // Coalescing lookup: is this entity's latest action already at the head?
+    .index("by_scope_entity", ["scope_key", "entity_id"])
+    .index("by_ts", ["ts"]),
+
+  // One row per scope: the head position (highest allocated) and the floor
+  // (highest position retired by retention; a client whose cursor is below the
+  // floor must resync via full backfill). Heads are never deleted.
+  sync_heads: defineTable({
+    scope_key: v.string(),
+    position: v.number(),
+    floor: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_scope", ["scope_key"]),
 
   // ── Team chat ───────────────────────────────────────────────────────────────
   // A Slack-shaped chat inside codecast: channels, private channels, DMs, flat

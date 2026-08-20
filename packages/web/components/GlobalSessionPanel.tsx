@@ -24,7 +24,7 @@ import { sessionsWakeSig, resolveShowOld, showsBlockedBadge } from "../store/inb
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
-import { isBlockedConversation, isSubagentConversation, isUsageExhausted, nestParentIdOf, worstUsagePercent, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { actedBlockedConversations, isBlockedConversation, isSubagentConversation, isUsageExhausted, nestParentIdOf, worstUsagePercent, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { isLivenessStale, blockedContinueClientId, rankByHeadroom, CONTINUE_BANNER_KINDS } from "@codecast/shared/contracts";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
@@ -38,7 +38,7 @@ import { partitionTriggerInbox, groupSessionsByTrigger, taskDisplayTitle, latest
 import { useTriggers, fetchTriggerRuns } from "../hooks/useSyncTriggers";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { cleanUserMessage } from "./sessionMessage";
-import { sessionHasOpenQuestion } from "../lib/decisionQueue";
+import { liftQuestions } from "../lib/decisionQueue";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
 import { AnchorGlyph, AnchorScopePill } from "./anchor/AnchorIdentity";
 import { useAnchorIdentity } from "../hooks/useSyncAnchors";
@@ -579,12 +579,12 @@ function BlockedSessionsBanner({
   // waiting for. Same predicate the server selection uses, so the counts on
   // the buttons are exactly what the mutations will touch.
   const subagents = blocked.filter(isSubagentConversation);
-  // The skip-subagents default exists to protect a MIXED fleet from wasting
-  // the fresh account on abandoned workers. When subagents are all there is,
-  // skipping them leaves a banner with zero actions — so the exclusion yields.
-  const allSubs = blocked.length > 0 && subagents.length === blocked.length;
-  const effectiveInclude = includeSubs || allSubs;
-  const acted = effectiveInclude ? blocked : blocked.filter((sess) => !isSubagentConversation(sess));
+  // Workers join the acted set only through the checkbox — never because they
+  // are all that is blocked. Continuing an in-process worker cannot reach it;
+  // it resumes a standalone copy that reruns its brief for nobody (the
+  // 2026-08-20 fleet: 53 copies running stale briefs in the shared checkout).
+  // Left unticked, the banner offers nothing to continue and says so.
+  const acted = actedBlockedConversations(blocked, includeSubs);
   const authCount = acted.filter((sess) => sess.pending_api_error_kind === "auth").length;
   const connCount = acted.filter((sess) => sess.pending_api_error_kind === "connection").length;
   const fatalCount = acted.filter((sess) => sess.pending_api_error_kind === "fatal").length;
@@ -702,7 +702,7 @@ function BlockedSessionsBanner({
     try {
       const res = await requestSwitch({
         profile,
-        include_subagents: effectiveInclude,
+        include_subagents: includeSubs,
         continue_client_ids: clientIds,
       });
       toast.success(
@@ -763,7 +763,7 @@ function BlockedSessionsBanner({
         <div className="min-w-0">
           <button
             onClick={() => setExpanded((v) => !v)}
-            className="flex items-center gap-1 text-xs font-semibold text-sol-text hover:text-amber-500 transition-colors"
+            className="flex items-center gap-1 text-left text-xs font-semibold text-sol-text hover:text-amber-500 transition-colors"
             title={expanded ? "Hide the affected sessions" : "Show which sessions are blocked"}
           >
             <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
@@ -788,7 +788,7 @@ function BlockedSessionsBanner({
               connCount > 0 ? `${connCount} dropped mid-response` : null,
               fatalCount > 0 ? `${fatalCount} failed on an api error` : null,
               authCount > 0 ? `${authCount} signed out` : null,
-              !effectiveInclude && subagents.length > 0
+              !includeSubs && subagents.length > 0
                 ? `${subagents.length} subagent worker${subagents.length === 1 ? "" : "s"} skipped`
                 : null,
               acted.length > 30 ? "each pass acts on the 30 most recent" : null,
@@ -796,13 +796,7 @@ function BlockedSessionsBanner({
               .filter(Boolean)
               .join(" · ")}
           </div>
-          {allSubs ? (
-            <div className="mt-1 text-[11px] text-sol-text-dim">
-              {subagents.length === 1
-                ? "It's a subagent worker — nothing else is blocked, so the actions include it."
-                : `All ${subagents.length} are subagent workers — nothing else is blocked, so the actions include them.`}
-            </div>
-          ) : subagents.length > 0 && (
+          {subagents.length > 0 && (
             <label
               className="mt-1 flex w-fit cursor-pointer items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text"
               title="Subagent workers are skipped by default — their parent session has usually moved on, so reviving them spends the account on work nobody is waiting for"
@@ -847,7 +841,7 @@ function BlockedSessionsBanner({
                 title="Open this session"
               >
                 <AuthErrorBadge kind={sess.pending_api_error_kind} agentType={sess.agent_type} />
-                <span className={`min-w-0 flex-1 truncate text-[11px] ${isSubagentConversation(sess) && !effectiveInclude ? "text-sol-text-dim" : "text-sol-text"}`}>
+                <span className={`min-w-0 flex-1 truncate text-[11px] ${isSubagentConversation(sess) && !includeSubs ? "text-sol-text-dim" : "text-sol-text"}`}>
                   {cleanTitle(sess.title || "") || "Untitled session"}
                 </span>
                 {isSubagentConversation(sess) && (
@@ -878,8 +872,8 @@ function BlockedSessionsBanner({
       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
         <button
           onClick={handleContinue}
-          disabled={busy !== null}
-          title={continueTitle}
+          disabled={busy !== null || acted.length === 0}
+          title={acted.length === 0 ? "Only subagent workers are blocked — tick the box above to include them" : continueTitle}
           className="rounded bg-amber-500 px-3 py-1 text-[11px] font-bold text-sol-bg shadow-sm transition-colors hover:bg-amber-400 disabled:opacity-60"
         >
           {busy !== null
@@ -3047,6 +3041,9 @@ export function SessionListPanel({
     // Explicit decisions (cast decide) split their sessions out of Needs Input
     // into their own Questions section.
     s => decisionsSectionSig(s.sessionDecisions),
+    // Local answered/dismissed marks — drop a question from the section in the
+    // same commit the user acted in (lib/decisionQueue). Ref changes on stamp.
+    s => s.questionResolutions,
   ]);
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const router = useRouter();
@@ -3234,24 +3231,25 @@ export function SessionListPanel({
   const filteredDormant = useMemo(() => filterByChip(dormant), [filterByChip, dormant]);
   const filteredWorking = useMemo(() => filterByChip(working), [filterByChip, working]);
   // QUESTIONS is its own section, not a slice of the feed: a session that has
-  // ASKED something explicit is a different obligation from one that merely
-  // finished its turn. An authored `cast decide` row always qualifies; so does
-  // an open AskUserQuestion / permission prompt (sessionHasOpenQuestion). The
-  // ask outranks the rest verdict for PLACEMENT: a dormant session that queued
-  // a decision before parking shows here, not in Dormant, until it is answered
-  // — that is how "parked, but something warrants input" stays visible.
-  const questionConvIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const d of Object.values(s.sessionDecisions) as any[]) {
-      if (d.status === "pending") ids.add(d.conversation_id);
-    }
-    return ids;
+  // ASKED something explicit (a `cast decide` row, an open AskUserQuestion or
+  // permission prompt) is a different obligation from one that merely finished
+  // its turn, so it files here whatever its pin or rest verdict — the ask
+  // outranks placement, and the section reads first. liftQuestions is the ONE
+  // rule (shared with the store's keyboard order) for what qualifies and for
+  // the rows that come along from outside the rail's scope, so the section's
+  // count is the queue badge's count. See lib/decisionQueue.
+  const mineSessions = useMemo(() => filterInboxScope(s.sessions, "mine", meId), [s.sessions, meId]);
+  const { questions: statusQuestions, isQuestion } = useMemo(() => {
+    const lifted = liftQuestions(
+      [filteredPinned, filteredNew, filteredNeedsInput, filteredDone, filteredDormant, filteredWorking],
+      s.sessionDecisions,
+      mineSessions,
+      s.questionResolutions,
+    );
+    // Rows lifted from outside the rail still honor the active chip.
+    return { ...lifted, questions: filterByChip(lifted.questions) };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [decisionsSectionSig(s.sessionDecisions)]);
-  const isQuestion = useCallback(
-    (sess: InboxSession) => questionConvIds.has(sess._id) || sessionHasOpenQuestion(sess),
-    [questionConvIds],
-  );
+  }, [filteredPinned, filteredNew, filteredNeedsInput, filteredDone, filteredDormant, filteredWorking, decisionsSectionSig(s.sessionDecisions), s.questionResolutions, mineSessions, filterByChip]);
   // STATUS view only: sessions absorbed behind a TRIGGERS row (a loop's resting
   // home, a spawn trigger's uneventful runs — partitionTriggerInbox) are parked
   // on the trigger's next fire, so a settled one files under DORMANT alongside
@@ -3259,10 +3257,8 @@ export function SessionListPanel({
   // vanishes: hiding is only ever the user's own stash/kill. The label/plan
   // lenses keep the plain chip-filtered lists. Mirrors visualOrderSessions so
   // Ctrl+J/K walks exactly what's on screen.
-  const statusQuestions = useMemo(
-    () => [...filteredNeedsInput, ...filteredDone, ...filteredDormant].filter(isQuestion),
-    [filteredNeedsInput, filteredDone, filteredDormant, isQuestion],
-  );
+  const statusPinned = useMemo(() => filteredPinned.filter((sess) => !isQuestion(sess)), [filteredPinned, isQuestion]);
+  const statusNew = useMemo(() => filteredNew.filter((sess) => !isQuestion(sess)), [filteredNew, isQuestion]);
   const statusNeedsInputRest = useMemo(
     () => filteredNeedsInput.filter((sess) => !isQuestion(sess) && !schedulePartition.absorbedIds.has(sess._id)),
     [filteredNeedsInput, isQuestion, schedulePartition.absorbedIds],
@@ -3276,7 +3272,7 @@ export function SessionListPanel({
       .filter((sess) => schedulePartition.absorbedIds.has(sess._id));
     return [...filteredDormant, ...absorbedSettled].filter((sess) => !isQuestion(sess));
   }, [filteredDormant, filteredNeedsInput, filteredDone, isQuestion, schedulePartition.absorbedIds]);
-  const statusWorking = filteredWorking;
+  const statusWorking = useMemo(() => filteredWorking.filter((sess) => !isQuestion(sess)), [filteredWorking, isQuestion]);
   // What the keyboard walk and the collapse state treat as "needs input" in the
   // status view — the plain, unabsorbed, question-free rest.
   const statusNeedsInput = statusNeedsInputRest;
@@ -3637,11 +3633,11 @@ export function SessionListPanel({
     // Absorbed-filtered lists: the label view renders the TRIGGERS section too,
     // so sessions resting behind a schedule row must not double-render in groups.
     return groupSessionsForLabelView(
-      [...filteredNew, ...lensSettled, ...statusWorking],
+      [...filteredNew, ...lensSettled, ...filteredWorking],
       s.buckets,
       bucketByConv,
     );
-  }, [viewMode, filteredNew, lensSettled, statusWorking, bucketByConv, s.buckets]);
+  }, [viewMode, filteredNew, lensSettled, filteredWorking, bucketByConv, s.buckets]);
 
   // "By plan" lens — same active set as the bucket view (status buckets dissolved
   // back to flat), regrouped by plan instead of label. Every plan shows, even a
@@ -3651,9 +3647,9 @@ export function SessionListPanel({
   const planView = useMemo(() => {
     if (viewMode !== "plan") return null;
     return groupSessionsByPlan(
-      [...filteredNew, ...lensSettled, ...statusWorking],
+      [...filteredNew, ...lensSettled, ...filteredWorking],
     );
-  }, [viewMode, filteredNew, lensSettled, statusWorking]);
+  }, [viewMode, filteredNew, lensSettled, filteredWorking]);
   // Offer the "By plan" option only when a plan is actually in play, mirroring how
   // "By label" appears only with buckets.
   const hasPlanSessions = useMemo(() => activeSessions.some((x) => !!x.active_plan), [activeSessions]);
@@ -3858,8 +3854,8 @@ export function SessionListPanel({
             ...triggerView.projectGroups.map(({ name, items }) => [items, `trigproj_${name}`] as [InboxSession[], string]),
           ]
         : [
-            [filteredPinned, "pinned"], [filteredNew, "new"],
-            [statusQuestions, "questions"], [statusNeedsInput, "needs_input"],
+            [statusQuestions, "questions"],
+            [statusPinned, "pinned"], [statusNew, "new"], [statusNeedsInput, "needs_input"],
             [statusDone, "done"], [statusWorking, "working"], [statusDormant, "dormant"],
           ];
     for (const [items, key] of sections) {
@@ -4090,9 +4086,11 @@ export function SessionListPanel({
           >
             <button
               onClick={() => s.toggleCollapsedSection(key)}
-              className={`flex-1 min-w-0 text-left text-[10px] font-semibold uppercase tracking-wider ${color}`}
+              className="flex-1 min-w-0 text-left"
             >
-              {label} ({items.length})
+              <span className={`text-[10px] font-semibold uppercase tracking-wider ${color}`}>
+                {label} ({items.length})
+              </span>
             </button>
             {opts.headerAction}
             <button onClick={() => s.toggleCollapsedSection(key)} className="shrink-0">
@@ -4604,11 +4602,10 @@ export function SessionListPanel({
         {/* An exclude chip is a near-global view ("everything but X") — the
             failed/blocked banner must not vanish behind it. */}
         {(s.chipFilterExclude || (!s.activeProjectFilter && !s.activeBucketFilter)) && <NeedsAttentionSection />}
-        {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
-        {renderSection("New", filteredNew, "text-sol-blue")}
-        {/* One header, two clear moves: the header action answers them all in
-            one full-width pass; a card below opens that session, same as any
-            other section. */}
+        {/* Questions lead: a session that asked you something is your move
+            before anything else, pinned or not. One header, two clear moves:
+            the header action answers them all in one full-width pass; a card
+            below opens that session, same as any other section. */}
         {renderSection("Questions", statusQuestions, "text-sol-violet", undefined, undefined, {
           key: "questions",
           headerAction: (
@@ -4621,6 +4618,8 @@ export function SessionListPanel({
             </button>
           ),
         })}
+        {renderSection("Pinned", statusPinned, "text-sol-magenta")}
+        {renderSection("New", statusNew, "text-sol-blue")}
         {renderSection("Needs Input", statusNeedsInputRest, "text-sol-yellow")}
         {/* Sections read top-down as "who acts next": you (Questions, Needs
             Input, Done to review), the agent right now (Working), then a

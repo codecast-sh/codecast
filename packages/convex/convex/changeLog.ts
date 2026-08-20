@@ -8,6 +8,11 @@
 //
 // The pure helpers (scopeFromDoc / decidePatchScope) are unit-tested without a
 // db; the db-touching emit/lookup are thin shells around them.
+import {
+  emitScopeAction,
+  emitSyncActions,
+  type SyncAckCollector,
+} from "./syncLog";
 
 export type ChangeEntity =
   | "conversations"
@@ -108,13 +113,19 @@ export async function emitChange(
 }
 
 // Wrap a raw Convex DatabaseWriter so every insert/patch/replace/delete to a
-// tracked table also upserts the entity's change_log row. Reads and id helpers
-// pass straight through. The interceptor's own change_log writes go through the
-// RAW db handed in here, so they never re-enter the wrapper (no recursion;
-// change_log is untracked regardless). functions.ts builds the custom mutation
-// ctx from this; tests drive it with a fake in-memory db. Pure factory — the only
-// imports it needs are the helpers above, so it loads without the Convex runtime.
-export function makeChangeTrackedDb(rawDb: any): any {
+// tracked table also upserts the entity's change_log row AND appends the entity's
+// sync-log actions (syncLog.ts — the ordered per-scope log that supersedes this
+// table's Date.now() heuristic for new clients; both are written until deployed
+// bundles roll off getChangesSince). Reads and id helpers pass straight through.
+// The interceptor's own change_log/sync_log writes go through the RAW db handed in
+// here, so they never re-enter the wrapper (no recursion; both tables are
+// untracked regardless). functions.ts builds the custom mutation ctx from this;
+// tests drive it with a fake in-memory db. Pure factory — it loads without the
+// Convex runtime.
+//
+// `collector` (optional) accumulates the sync positions this transaction appended;
+// dispatch returns them to an opting-in client as its write acknowledgement.
+export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | null = null): any {
   // Only wrap a real Convex DatabaseWriter, detected via normalizeId — the
   // table-from-id primitive the interceptor relies on. A partial test mock that
   // lacks it is returned untouched, so the interceptor never changes a mock's
@@ -129,13 +140,21 @@ export function makeChangeTrackedDb(rawDb: any): any {
     async insert(table: string, doc: any) {
       const id = await rawDb.insert(table, doc);
       if (TRACKED_TABLES.has(table as any)) {
-        await emitChange(rawDb, table as ChangeEntity, String(id), "upsert", scopeFromDoc(doc), null);
+        const scope = scopeFromDoc(doc);
+        await emitChange(rawDb, table as ChangeEntity, String(id), "upsert", scope, null);
+        await emitSyncActions(rawDb, collector, table as ChangeEntity, String(id), "upsert", scope);
+      } else if (table === "team_memberships" && doc?.user_id && doc?.team_id) {
+        await emitScopeAction(rawDb, collector, String(doc.user_id), String(doc.team_id), "scope_added");
       }
       return id;
     },
 
     async patch(id: any, fields: any) {
       const table = trackedTableOf(rawDb, id);
+      // A patch that touches scope fields can MOVE the entity between scopes; the
+      // departed scope needs a revocation action, which requires the pre-write doc.
+      const movesScope = !!table && ("user_id" in fields || "team_id" in fields);
+      const preDoc = movesScope ? await rawDb.get(id) : null;
       const res = await rawDb.patch(id, fields);
       if (table) {
         const entityId = String(id);
@@ -150,23 +169,36 @@ export function makeChangeTrackedDb(rawDb: any): any {
           scope = { owner_user_id: existing.owner_user_id, team_id: existing.team_id };
         }
         await emitChange(rawDb, table, entityId, "upsert", scope, existing);
+        await emitSyncActions(
+          rawDb, collector, table, entityId, "upsert", scope,
+          preDoc ? scopeFromDoc(preDoc) : null,
+        );
       }
       return res;
     },
 
     async replace(id: any, doc: any) {
       const table = trackedTableOf(rawDb, id);
+      const preDoc = table ? await rawDb.get(id) : null;
       const res = await rawDb.replace(id, doc);
       if (table) {
         // `undefined` (not null): a replaced entity usually already has a
         // change_log row from its insert — look it up and flip it, don't add one.
         await emitChange(rawDb, table, String(id), "upsert", scopeFromDoc(doc));
+        await emitSyncActions(
+          rawDb, collector, table, String(id), "upsert", scopeFromDoc(doc),
+          preDoc ? scopeFromDoc(preDoc) : null,
+        );
       }
       return res;
     },
 
     async delete(id: any) {
       const table = trackedTableOf(rawDb, id);
+      const membershipDoc =
+        !table && typeof rawDb.normalizeId === "function" && rawDb.normalizeId("team_memberships", id)
+          ? await rawDb.get(id)
+          : null;
       // Read scope BEFORE the row is gone.
       const scope = table ? scopeFromDoc(await rawDb.get(id)) : null;
       const res = await rawDb.delete(id);
@@ -174,6 +206,11 @@ export function makeChangeTrackedDb(rawDb: any): any {
         // `undefined`: find the entity's existing upsert row and flip it to a
         // delete tombstone, rather than inserting a duplicate.
         await emitChange(rawDb, table, String(id), "delete", scope);
+        await emitSyncActions(rawDb, collector, table, String(id), "delete", scope);
+      } else if (membershipDoc?.user_id && membershipDoc?.team_id) {
+        await emitScopeAction(
+          rawDb, collector, String(membershipDoc.user_id), String(membershipDoc.team_id), "scope_removed",
+        );
       }
       return res;
     },

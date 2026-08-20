@@ -534,12 +534,17 @@ function shortTitle(sessionName: string | undefined, cwd: string | undefined): s
   return sessionName?.replace(/^cast-term-/, "") ?? "shell";
 }
 
-// A fit below this is a container that hasn't laid out yet (a split
-// mid-transition, a hidden tab), not a size anyone asked for. An interactive
-// attach forwards its size to the agent's real pane, and a stray fit once
-// left one at 6x11 — so degenerate sizes are ignored, not applied.
-const MIN_FIT_COLS = 40;
-const MIN_FIT_ROWS = 3;
+// The smallest geometry an interactive attach may impose on an agent's real
+// pane. Claude Code's renderer needs roughly a composer, a footer and a few
+// content rows; below that it drops and splices lines, and because the pane
+// IS the agent's screen that damage lands in its scrollback for good (a pane
+// squeezed to 165x6 lost a line of every reply, 2026-08-21). A split that
+// can't fit this keeps the pane at its current size and scrolls it — the
+// attach view is built for a pane taller than its container — rather than
+// reshaping the agent to a size nothing can render in. The daemon enforces
+// the same floor server-side for older clients (terminalServer.ts).
+const MIN_FIT_COLS = 80;
+const MIN_FIT_ROWS = 12;
 
 function fitInstance(inst: TermInstance): void {
   if (!inst.container || inst.container.clientWidth < 20 || inst.container.clientHeight < 20) return;
