@@ -1,4 +1,4 @@
-import { memo, useRef } from "react";
+import { memo, useRef, useState } from "react";
 import { ImagePlus } from "lucide-react";
 import { MessageInput } from "../ConversationView";
 import { KeyCap } from "../KeyboardShortcutsHelp";
@@ -43,6 +43,7 @@ export const ChatComposer = memo(function ChatComposer({
   threadRootId,
   teamId,
   placeholder,
+  channelName,
   onSend,
   autoFocus,
   compact,
@@ -55,7 +56,10 @@ export const ChatComposer = memo(function ChatComposer({
    *  every team task/doc/plan vanishes from the @ popup. */
   teamId?: string;
   placeholder: string;
-  onSend: (content: string, attachments?: ChatAttachment[]) => void;
+  /** Names the "Also send to #channel" checkbox — offered only in a thread
+   *  (Slack's broadcast). Absent = no checkbox. */
+  channelName?: string;
+  onSend: (content: string, attachments?: ChatAttachment[], opts?: { broadcast?: boolean }) => void;
   autoFocus?: boolean;
   /** The thread panel is narrower and sits under its own scroll region. */
   compact?: boolean;
@@ -69,6 +73,10 @@ export const ChatComposer = memo(function ChatComposer({
   const ownDropRef = useRef<((files: File[]) => void) | null>(null);
   const dropRef = dropFilesRef ?? ownDropRef;
   const pickerRef = useRef<HTMLInputElement | null>(null);
+  // Slack's "also send to #channel". Per-send, not sticky: it resets after each
+  // send, because broadcasting is a choice about ONE message, not a mode.
+  const [broadcast, setBroadcast] = useState(false);
+  const offerBroadcast = !!threadRootId && !!channelName;
   return (
     <div
       className="ch-composer"
@@ -106,7 +114,12 @@ export const ChatComposer = memo(function ChatComposer({
           // Every upload failed and nothing was typed — uploadImage already
           // toasted each failure; there is nothing real to send.
           if (!content && attachments.length === 0) return;
-          onSend(content, attachments.length ? attachments : undefined);
+          onSend(
+            content,
+            attachments.length ? attachments : undefined,
+            offerBroadcast && broadcast ? { broadcast: true } : undefined,
+          );
+          setBroadcast(false);
         }}
       />
       <div className="ch-composer-foot">
@@ -130,6 +143,16 @@ export const ChatComposer = memo(function ChatComposer({
             e.target.value = "";
           }}
         />
+        {offerBroadcast && (
+          <label className={`ch-composer-broadcast ${broadcast ? "ch-composer-broadcast-on" : ""}`}>
+            <input
+              type="checkbox"
+              checked={broadcast}
+              onChange={(e) => setBroadcast(e.target.checked)}
+            />
+            Also send to #{channelName}
+          </label>
+        )}
         <TypingIndicator members={typists} />
         {/* The optional half is shed by WIDTH, not by which panel this is. The
             thread panel was the narrow case the flag was written for, but the

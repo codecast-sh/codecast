@@ -287,6 +287,7 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
   return {
     id: row._id,
     author: authorFor(row.user_id, row.author_kind, ctx.members),
+    threadRootId: row.thread_root_id,
     content: row.content,
     createdAt: row.created_at,
     editedAt: row.edited_at,

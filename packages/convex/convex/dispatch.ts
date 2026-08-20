@@ -1,4 +1,5 @@
 import { mutation } from "./functions";
+import type { ThreadKind } from "./threadReads";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { enqueueStartSession } from "./devices";
@@ -1535,7 +1536,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       string,
       string,
       string,
-      { threadRootId?: string; attachments?: any[]; origin?: "agent" }?,
+      { threadRootId?: string; broadcast?: boolean; attachments?: any[]; origin?: "agent" }?,
     ],
   ) => {
     if (!isServerId(channelId)) return;
@@ -1546,7 +1547,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       // inserting a twin, and does not wake the anchor a second time.
       client_id: clientId,
       ...(opts?.threadRootId && isServerId(opts.threadRootId)
-        ? { thread_root_id: opts.threadRootId as Id<"chat_messages"> }
+        ? {
+          thread_root_id: opts.threadRootId as Id<"chat_messages">,
+          ...(opts?.broadcast ? { broadcast: true } : {}),
+        }
         : {}),
       ...(opts?.attachments?.length ? { attachments: opts.attachments } : {}),
       ...(opts?.origin ? { origin: opts.origin } : {}),
@@ -1583,15 +1587,22 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         : {}),
     });
   },
-  markThreadRead: async (ctx, _userId, [rootId]: [string]) => {
-    if (!isServerId(rootId)) return;
-    return await ctx.runMutation!(api.chat.markThreadRead, {
-      root_id: rootId as Id<"chat_messages">,
-    });
+  // Two arg shapes: the legacy [rootId] (old bundles and persisted outbox
+  // entries, always a chat thread) and [kind, rootKey]. A comment key is
+  // `${conversation_id}:${anchor}`, so only its conversation half is an id.
+  markThreadRead: async (ctx, _userId, args: [string] | [ThreadKind, string]) => {
+    const [kind, rootKey] = args.length >= 2
+      ? [args[0] as ThreadKind, String(args[1])]
+      : ["chat" as ThreadKind, String(args[0])];
+    if (!["chat", "comment", "task", "page"].includes(kind)) return;
+    const idPart = kind === "comment" ? rootKey.split(":")[0] : rootKey;
+    if (!isServerId(idPart)) return;
+    return await ctx.runMutation!(api.threads.markRead, { kind, root_key: rootKey });
   },
-  markAllThreadsRead: async (ctx, _userId, [teamId]: [string?]) => {
-    return await ctx.runMutation!(api.chat.markAllThreadsRead, {
+  markAllThreadsRead: async (ctx, _userId, [teamId, kind]: [string?, ThreadKind?]) => {
+    return await ctx.runMutation!(api.threads.markAllRead, {
       ...(teamId && isServerId(teamId) ? { team_id: teamId as Id<"teams"> } : {}),
+      ...(kind && ["chat", "comment", "task", "page"].includes(kind) ? { kind } : {}),
     });
   },
   setChannelNotifyLevel: async (

@@ -59,6 +59,7 @@ import { useSyncChangeFeed } from "../hooks/useSyncChangeFeed";
 import { useSyncBuckets } from "../hooks/useSyncBuckets";
 import { useSyncSessionDecisions } from "../hooks/useSyncSessionDecisions";
 import { useChatChannelsSync, useChatUnread } from "../hooks/useChatSync";
+import { useThreadUnreadSync } from "../hooks/useThreadsSync";
 import { useChatToasts } from "../hooks/useChatToasts";
 import { useCallSync } from "../hooks/useCallSync";
 import { useCallRing } from "../hooks/useCallRing";
@@ -220,6 +221,9 @@ function DashboardSyncEffects() {
   // the document title and the arrival toasts all read it, and a toast that only
   // fires while chat is open is a toast nobody needs.
   useChatChannelsSync();
+  // The Threads badge: one scalar, every workspace, not chat-gated — comment
+  // and task threads exist whether or not the team has chat on.
+  useThreadUnreadSync();
   useChatToasts();
   // The anchors collection feeds the header chip, the slide-over, the inbox's
   // anchor marks and chat's DM naming — one subscription for the whole shell.

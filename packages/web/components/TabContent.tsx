@@ -56,6 +56,8 @@ const Artifacts = lazyPage("@/app/artifacts/page", () => import("@/app/artifacts
 const Notifications = lazyPage("@/app/notifications/page", () => import("@/app/notifications/page"));
 // The decision queue: one question at a time, full width.
 const Questions = lazyPage("@/app/questions/page", () => import("@/app/questions/page"));
+// The Threads inbox: every conversation the viewer is in, one page.
+const Threads = lazyPage("@/app/threads/page", () => import("@/app/threads/page"));
 const AdminDaemonLogs = lazyPage("@/app/admin/daemon-logs/page", () => import("@/app/admin/daemon-logs/page"));
 
 type RouteEntry = {
@@ -115,6 +117,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/config$/, paramNames: [], component: ConfigPage },
   { pattern: /^\/notifications$/, paramNames: [], component: Notifications },
   { pattern: /^\/questions$/, paramNames: [], component: Questions },
+  { pattern: /^\/threads$/, paramNames: [], component: Threads },
   { pattern: /^\/admin\/daemon-logs$/, paramNames: [], component: AdminDaemonLogs },
 ];
 

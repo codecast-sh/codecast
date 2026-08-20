@@ -52,7 +52,6 @@ import {
   useChannelMessagesSync,
   useChatMembers,
   useChatRail,
-  useChatUnread,
   useOpenDm,
   useEnsureChatMessage,
   useChatMessageRow,
@@ -60,9 +59,8 @@ import {
   useThreadMessages,
   useThreadSync,
 } from "../../hooks/useChatSync";
-import { useTabContext } from "../../lib/tabParams";
+import { usePagePresence, useTabActive } from "../../hooks/usePagePresence";
 import { ChatChannelRail } from "../../components/chat/ChatChannelRail";
-import { ChatThreadsView } from "../../components/chat/ChatThreadsView";
 import { ChatMessageList } from "../../components/chat/ChatMessageList";
 import { ChatThreadPanel } from "../../components/chat/ChatThreadPanel";
 import { ChatComposer } from "../../components/chat/ChatComposer";
@@ -75,23 +73,6 @@ import "../../components/chat/chat.css";
 /** The clock the whole surface shares. Relative times ("3m ago") must stay
  *  honest without a re-render per row per second — see hooks/useCoarseNow. */
 const CLOCK_MS = 30_000;
-
-/** Is the window focused and the document visible, right now, reactively?
- *  document.hasFocus() is not state React can see, so it is subscribed to. */
-function subscribePresence(fn: () => void): () => void {
-  window.addEventListener("focus", fn);
-  window.addEventListener("blur", fn);
-  document.addEventListener("visibilitychange", fn);
-  return () => {
-    window.removeEventListener("focus", fn);
-    window.removeEventListener("blur", fn);
-    document.removeEventListener("visibilitychange", fn);
-  };
-}
-
-function readPresence(): boolean {
-  return document.visibilityState === "visible" && document.hasFocus();
-}
 
 /** The header's search affordance — a quiet pill wearing its shortcut. */
 function SearchPill({ onOpen }: { onOpen: () => void }) {
@@ -112,22 +93,22 @@ export default function ChatPage() {
 
   const rail = useChatRail();
   const { members: teamMembers, viewerId, handles } = useChatMembers();
-  const { threads: threadsUnread } = useChatUnread();
 
   // ── Is the reader actually here? ──────────────────────────────────────────
-  const tab = useTabContext();
-  // No tab shell (a standalone window, a test) means this page IS the view.
-  const tabActive = tab ? tab.isActive : true;
-  const windowPresent = useSyncExternalStore(subscribePresence, readPresence, () => false);
-  const present = tabActive && windowPresent;
+  const tabActive = useTabActive();
+  const present = usePagePresence();
 
   // The channel from the URL, falling back to the busiest room the viewer is in.
   // A fallback rather than a redirect: rewriting the URL on arrival would put a
   // channel id in the history stack that the reader never chose.
   const urlChannelId = params.channelId;
-  // /chat/threads is the Threads inbox — a literal segment, never a channel id
-  // (Convex ids can't collide with it). The rail highlights it like a room.
+  // /chat/threads was the Threads inbox before it became a page of its own.
+  // The segment stays an alias (old tabs, bookmarks, notifications) and
+  // forwards to /threads; it is never a channel id (Convex ids can't collide).
   const isThreadsView = urlChannelId === "threads";
+  useEffect(() => {
+    if (isThreadsView) router.replace("/threads");
+  }, [isThreadsView, router]);
   // A channel created here is navigated to by its local stub id. When the server
   // row lands the stub is superseded, and a URL still naming it points at a
   // channel that no longer exists — an empty room beside the real one in the
@@ -181,7 +162,7 @@ export default function ChatPage() {
     [outOfScopeRow],
   );
   const activeChannelId = useMemo(() => {
-    if (isThreadsView) return undefined; // the Threads inbox owns the pane
+    if (isThreadsView) return undefined; // forwarding to /threads
     if (supersededTo) return supersededTo;
     if (outOfScopeChannel) return undefined; // handled by the interstitial
     if (urlChannelId && rail.some((c) => c.id === urlChannelId)) return urlChannelId;
@@ -223,16 +204,13 @@ export default function ChatPage() {
   // chat tab hidden behind Inbox was silencing its own toasts for a room the
   // reader could not see.
   useEffect(() => {
-    // The Threads inbox owns its own focus claim (only its EXPANDED thread is
-    // being read); the page claiming "no channel" here would overwrite it.
-    if (isThreadsView) return;
     if (!present) {
       clearChatFocus();
       return;
     }
     setChatFocus({ channelId: activeChannelId, threadRootId });
     return () => clearChatFocus();
-  }, [present, activeChannelId, threadRootId, isThreadsView]);
+  }, [present, activeChannelId, threadRootId]);
 
   // ── The unread rule ───────────────────────────────────────────────────────
   // Frozen at channel entry. If it tracked the live read mark, the rule would
@@ -269,9 +247,13 @@ export default function ChatPage() {
   );
 
   const sendReply = useCallback(
-    (content: string, attachments?: ChatAttachment[]) => {
+    (content: string, attachments?: ChatAttachment[], opts?: { broadcast?: boolean }) => {
       if (!activeChannelId || !threadRootId) return;
-      useInboxStore.getState().sendChatMessage(activeChannelId, content, { threadRootId, attachments });
+      useInboxStore.getState().sendChatMessage(activeChannelId, content, {
+        threadRootId,
+        attachments,
+        broadcast: opts?.broadcast,
+      });
     },
     [activeChannelId, threadRootId],
   );
@@ -404,8 +386,7 @@ export default function ChatPage() {
     <div className="ch-shell">
       {showInlineRail && <ChatChannelRail
         channels={rail}
-        activeChannelId={isThreadsView ? "threads" : activeChannelId}
-        threadsUnread={threadsUnread}
+        activeChannelId={activeChannelId}
         onChannelContextMenu={(e, c) =>
           channelMenu.open(e, {
             channelId: c.id,
@@ -431,9 +412,7 @@ export default function ChatPage() {
             <div className="ch-drop-card">Drop images to attach</div>
           </div>
         )}
-        {isThreadsView ? (
-          <ChatThreadsView present={present} />
-        ) : activeChannelId ? (
+        {activeChannelId ? (
           <>
             <header ref={headTitlebarRef} className="ch-head">
               {activeChannel?.kind === "dm" ? (

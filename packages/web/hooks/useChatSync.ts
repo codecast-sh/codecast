@@ -34,7 +34,6 @@ import {
   type ChatReadRow,
   type ChatRailRow,
   type ChatRailChannel,
-  type ChatThreadInboxRow,
 } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
 import { memberListSig } from "./useTeamRoster";
@@ -73,7 +72,7 @@ function hash(s: string): number {
 
 /** Everything a TRANSCRIPT renders, message text included. Only the chat page's
  *  own readers subscribe to this. */
-const messagesSig = makeCollectionSig<ChatMessageRow>(
+export const messagesSig = makeCollectionSig<ChatMessageRow>(
   (m) =>
     `${m._id}|${m.channel_id}|${m.thread_root_id ?? ""}|${m.user_id}|${m.author_kind ?? ""}` +
     `|${m.created_at}|${m.edited_at ?? 0}|${m.deleted_at ?? 0}|${m.agent_status ?? ""}` +
@@ -103,7 +102,7 @@ const readsSig = makeCollectionSig<ChatReadRow>(
   (r) => `${r._id}|${r.channel_id}|${r.last_read_at}|${r.notify_level}|${r.joined_at ?? 0}`,
 );
 
-const reactionsSig = makeCollectionSig<ChatReactionRow>(
+export const reactionsSig = makeCollectionSig<ChatReactionRow>(
   (r) => `${r._id}|${r.message_id}|${r.user_id}|${r.emoji}`,
 );
 
@@ -158,9 +157,6 @@ export function useChatChannelsSync(): { error?: Error } {
         syncTable("chatChannels", data.channels ?? []);
         syncTable("chatReads", data.reads ?? []);
         syncTable("chatRail", data.rail ?? []);
-        // The Threads badge rides the same app-wide subscription: it has to be
-        // honest on every page, not only after the Threads page has mounted.
-        syncTable("chatThreadUnread", data.thread_unread ?? 0);
         // This rail came from the server, not from IndexedDB. Only now is a
         // change in it evidence that something ARRIVED — see lib/chatLive.
         markChatRailLive();
@@ -343,165 +339,6 @@ export function useThreadSync(rootId: string | undefined): { loading: boolean; e
   return { loading: !!live && result === undefined && !error, error };
 }
 
-// ── The Threads inbox ───────────────────────────────────────────────────────
-
-/** What the Threads page renders from an entry. */
-const threadInboxSig = makeCollectionSig<ChatThreadInboxRow>(
-  (e) =>
-    `${e._id}|${e.channel_id}|${e.last_activity_at}|${e.last_read_at}|${e.unread}` +
-    `|${e.unread_capped ? 1 : 0}|${e.last_reply?._id ?? ""}|${e.last_reply?.preview ?? ""}`,
-);
-
-/** The newest page of the viewer's threads, live, plus backwards paging.
- *  Mounted by the Threads view only; the badge does not need it (it rides
- *  listChannels). Entries sync as deltas; the roots land in chatMessages and
- *  the rollups in chatThreadSummaries, so every other chat surface can serve
- *  them too. */
-export function useThreadsInboxSync(): {
-  loading: boolean;
-  error?: Error;
-  hasMore: boolean;
-  isLoadingOlder: boolean;
-  loadOlder: () => void;
-} {
-  const teamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as string | undefined;
-  const syncTable = useInboxStore((s) => s.syncTable);
-  const convex = useConvex();
-  const chatOn = useTeamFeature("chat");
-  const live = chatOn && teamId && isConvexId(teamId);
-  const { data: result, error } = useQueryNoThrow(
-    api.chat.listMyThreads,
-    live ? { team_id: teamId } : "skip",
-  );
-
-  const [olderCursor, setOlderCursor] = useState<string | null>(null);
-  const [olderExhausted, setOlderExhausted] = useState(false);
-  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
-  const teamRef = useRef(teamId);
-  if (teamRef.current !== teamId) {
-    teamRef.current = teamId;
-    if (olderCursor !== null) setOlderCursor(null);
-    if (olderExhausted) setOlderExhausted(false);
-    if (isLoadingOlder) setIsLoadingOlder(false);
-  }
-
-  const ingest = useCallback(
-    (data: any) => {
-      if (!data) return;
-      syncTable("chatThreadInbox", data.entries ?? []);
-      if (data.roots?.length) syncTable("chatMessages", data.roots);
-      syncTable(
-        "chatThreadSummaries",
-        (data.threads ?? []).map((t: any) => ({ ...t, _id: String(t.root_id) })),
-      );
-    },
-    [syncTable],
-  );
-
-  useConvexSync(
-    result,
-    useCallback(
-      (data: any) => {
-        ingest(data);
-        if (data) setOlderCursor((prev) => (prev === null ? (data.next_cursor ?? null) : prev));
-      },
-      [ingest],
-    ),
-  );
-
-  const loadOlder = useCallback(() => {
-    if (!live || !olderCursor || isLoadingOlder || olderExhausted) return;
-    const forTeam = teamId;
-    setIsLoadingOlder(true);
-    void convex
-      .query(api.chat.listMyThreads, { team_id: forTeam, cursor: olderCursor })
-      .then((page: any) => {
-        if (teamRef.current !== forTeam) return;
-        ingest(page);
-        setOlderCursor(page?.next_cursor ?? null);
-        if (!page?.has_more) setOlderExhausted(true);
-      })
-      .catch(() => {
-        // Leave the cursor: the affordance stays, the next click retries.
-      })
-      .finally(() => {
-        if (teamRef.current === forTeam) setIsLoadingOlder(false);
-      });
-  }, [convex, live, teamId, olderCursor, isLoadingOlder, olderExhausted, ingest]);
-
-  return {
-    loading: !!live && result === undefined && !error,
-    error,
-    hasMore: !!olderCursor && !olderExhausted,
-    isLoadingOlder,
-    loadOlder,
-  };
-}
-
-/** The viewer's threads for the active team, newest activity first. Reads the
- *  STORE (the feeder above only fills it), so a revisit paints from cache. */
-export function useThreadInbox(): ChatThreadInboxRow[] {
-  const s = useTrackedStore([
-    (s: any) => threadInboxSig(s.chatThreadInbox),
-    (s: any) => s.clientState?.ui?.active_team_id,
-  ]);
-  const teamId = s.clientState?.ui?.active_team_id;
-  const sig = threadInboxSig(s.chatThreadInbox);
-  return useMemo(() => {
-    const out: ChatThreadInboxRow[] = [];
-    for (const id in s.chatThreadInbox) {
-      const row = s.chatThreadInbox[id];
-      if (teamId && String(row.team_id) !== String(teamId)) continue;
-      out.push(row);
-    }
-    return out.sort((a, b) => b.last_activity_at - a.last_activity_at);
-    // The signature is the real dep: the raw map ref flips on every push.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sig, teamId]);
-}
-
-export type ThreadInboxCard = {
-  entry: ChatThreadInboxRow;
-  /** The root, ready to render — null while the cache is genuinely cold. */
-  root: ChatMessageView | null;
-  /** The rail's view of the thread's room: display name, DM roster, team. */
-  channel: ChatRailChannel | undefined;
-};
-
-/** The Threads page's card models: entry + rendered root + room, assembled
- *  here so the view stays presentational. One store subscription for every
- *  card — a per-card reader would recompute a full-collection signature per
- *  push per card. */
-export function useThreadInboxCards(): ThreadInboxCard[] {
-  const entries = useThreadInbox();
-  const rail = useChatRail();
-  const { byId, viewerId } = useChatMembers();
-  const s = useTrackedStore([
-    (s: any) => messagesSig(s.chatMessages),
-    (s: any) => reactionsSig(s.chatReactions),
-    (s: any) => s.chatThreadSummaries,
-  ]);
-  const rootRows = useMemo(
-    () =>
-      entries
-        .map((e) => (s.chatMessages as Record<string, ChatMessageRow>)[e.root_id])
-        .filter(Boolean) as ChatMessageRow[],
-    // The signature is the real dep: the raw map ref flips on every push.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [entries, messagesSig(s.chatMessages)],
-  );
-  const views = useMessageViews(rootRows, s.chatReactions, byId, viewerId, s.chatMessages, s.chatThreadSummaries);
-  return useMemo(() => {
-    const viewById = new Map(views.map((v) => [v.id, v]));
-    const railById = new Map(rail.map((c) => [c.id, c]));
-    return entries.map((entry) => ({
-      entry,
-      root: viewById.get(entry.root_id) ?? null,
-      channel: railById.get(String(entry.channel_id)),
-    }));
-  }, [entries, views, rail]);
-}
-
 // ── Readers ─────────────────────────────────────────────────────────────────
 
 /** The viewer plus the team roster, as chat identity. Bots (the anchor) are
@@ -595,7 +432,7 @@ export function useChatRail(): ChatRailChannel[] {
   return selectChatRail(s as any, String(s.currentUser?._id ?? ""), teamId ? String(teamId) : undefined);
 }
 
-function useMessageViews(
+export function useMessageViews(
   rows: ChatMessageRow[],
   reactionRows: Record<string, ChatReactionRow>,
   byId: Map<string, ChatMember>,
@@ -686,7 +523,16 @@ export function useThreadMessages(rootId: string | undefined): {
  */
 export function useSupersededChannelId(channelId: string | undefined): string | undefined {
   const s = useTrackedStore([(s: any) => channelsSig(s.chatChannels)]);
-  const channels = s.chatChannels as Record<string, ChatChannelRow>;
+  return supersededChannelId(s.chatChannels as Record<string, ChatChannelRow>, channelId);
+}
+
+/** The plain-function core of useSupersededChannelId, for callers that already
+ *  hold the channels map (the sidebar's pin resolution runs per pin, where a
+ *  hook per item can't). */
+export function supersededChannelId(
+  channels: Record<string, ChatChannelRow>,
+  channelId: string | undefined,
+): string | undefined {
   if (!channelId || isConvexId(channelId) || channels[channelId]) return undefined;
   for (const id in channels) {
     if (channels[id]?.client_id === channelId) return id;
@@ -704,17 +550,9 @@ export function useChatMessageRow(messageId: string | undefined): ChatMessageRow
 
 /** Unread totals across every channel, for the sidebar and the document title.
  *  Weight is the count of unread channels; only mentions produce a number.
- *  `threads` is the count of followed threads with unseen replies — the local
- *  rows answer when the Threads page has synced (they clear the instant a
- *  thread is read), the server's app-wide scalar stands in until then. */
-export function useChatUnread(): { channels: number; mentions: number; threads: number } {
+ *  Threads have their own badge (hooks/useThreadsSync useThreadUnread). */
+export function useChatUnread(): { channels: number; mentions: number } {
   const rail = useChatRail();
-  const s = useTrackedStore([
-    (s: any) => threadInboxSig(s.chatThreadInbox),
-    (s: any) => s.chatThreadUnread,
-    (s: any) => s.clientState?.ui?.active_team_id,
-  ]);
-  const teamId = s.clientState?.ui?.active_team_id;
   return useMemo(() => {
     let channels = 0;
     let mentions = 0;
@@ -722,19 +560,8 @@ export function useChatUnread(): { channels: number; mentions: number; threads: 
       if ((c.unreadCount ?? 0) > 0 && !c.muted) channels++;
       mentions += c.mentionCount ?? 0;
     }
-    let localThreads = 0;
-    let haveLocal = false;
-    for (const id in s.chatThreadInbox) {
-      const row = s.chatThreadInbox[id];
-      if (teamId && String(row.team_id) !== String(teamId)) continue;
-      haveLocal = true;
-      if ((row.unread ?? 0) > 0) localThreads++;
-    }
-    const threads = haveLocal ? localThreads : (s.chatThreadUnread ?? 0);
-    return { channels, mentions, threads };
-    // The signature gates the wake; the body reads the raw collection.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rail, threadInboxSig(s.chatThreadInbox), s.chatThreadUnread, teamId]);
+    return { channels, mentions };
+  }, [rail]);
 }
 
 /** Fetch one message by id when the store has never seen it — the permalink

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQueries, type RequestForQueries } from "convex/react";
 import { getFunctionName } from "convex/server";
 import type { FunctionArgs, FunctionReference, FunctionReturnType } from "convex/server";
@@ -26,11 +26,16 @@ export const queryCircuitOpenError = new Error(
 // few seconds. If the query hasn't resolved within the deadline, we UNSUBSCRIBE
 // it (that's what actually stops the re-send loop) and return
 // queryCircuitOpenError. The breaker re-arms when the args change.
+//
+// retry() re-subscribes the same query: it drops the subscription for one
+// render (so the client forgets the terminal result) and re-adds it, and it
+// re-arms the breaker. A surface that shows the error can offer it as its
+// "try again".
 export function useQueryNoThrow<Query extends FunctionReference<"query">>(
   query: Query,
   args: FunctionArgs<Query> | "skip",
   opts?: { breakAfterMs?: number },
-): { data: FunctionReturnType<Query> | undefined; error: Error | undefined } {
+): { data: FunctionReturnType<Query> | undefined; error: Error | undefined; retry: () => void } {
   const skip = args === "skip";
   const queryName = getFunctionName(query);
   // Key the memo on serialized args, not object identity: useQueries treats a
@@ -39,8 +44,10 @@ export function useQueryNoThrow<Query extends FunctionReference<"query">>(
   const argsJson = JSON.stringify(skip ? {} : convexToJson(args as Record<string, Value>));
   const key = `${queryName}:${argsJson}`;
   const [brokenKey, setBrokenKey] = useState<string | null>(null);
+  const [pausedKey, setPausedKey] = useState<string | null>(null);
   const broken = !skip && brokenKey === key;
-  const subscribed = !skip && !broken;
+  const paused = !skip && pausedKey === key;
+  const subscribed = !skip && !broken && !paused;
   const queries = useMemo<RequestForQueries>(
     () => (subscribed ? { value: { query, args: args as Record<string, Value> } } : ({} as RequestForQueries)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -50,6 +57,16 @@ export function useQueryNoThrow<Query extends FunctionReference<"query">>(
   const value = subscribed ? results.value : undefined;
   const loading = subscribed && value === undefined;
 
+  // The pause lasts one commit: useQueries (above) has already dropped the
+  // subscription by the time this effect runs, so the next render re-adds it.
+  useEffect(() => {
+    if (paused) setPausedKey(null);
+  }, [paused]);
+  const retry = useCallback(() => {
+    setBrokenKey(null);
+    setPausedKey(key);
+  }, [key]);
+
   const breakAfterMs = opts?.breakAfterMs;
   useEffect(() => {
     if (!breakAfterMs || !loading) return;
@@ -57,7 +74,7 @@ export function useQueryNoThrow<Query extends FunctionReference<"query">>(
     return () => clearTimeout(timer);
   }, [key, loading, breakAfterMs]);
 
-  if (broken) return { data: undefined, error: queryCircuitOpenError };
-  if (value instanceof Error) return { data: undefined, error: value };
-  return { data: value, error: undefined };
+  if (broken) return { data: undefined, error: queryCircuitOpenError, retry };
+  if (value instanceof Error) return { data: undefined, error: value, retry };
+  return { data: value, error: undefined, retry };
 }

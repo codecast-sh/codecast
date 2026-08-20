@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
 import {
   addChannelMembers,
@@ -11,11 +12,10 @@ import {
   getThread,
   listChannels,
   listMessages,
+  listMyThreads,
+  markAllThreadsRead,
   markRead,
   markThreadRead,
-  markAllThreadsRead,
-  listMyThreads,
-  backfillThreadReads,
   openDm,
   listChannelMembers,
   removeChannelMember,
@@ -43,6 +43,8 @@ import {
   plainPreview,
 } from "./chatText";
 import schema from "./schema";
+import { listMine, markAllRead, markRead as markThreadReadMine, unreadCount } from "./threads";
+import { backfillThreadReads } from "./threadReads";
 import { ENTITY_TYPE, NOTIFICATION_TYPE, PREFERENCE_MAP } from "./notificationRouter";
 
 const ALICE = "user-alice" as any;
@@ -145,14 +147,25 @@ function context(authenticatedUser: string | null, seed: Record<string, any[]> =
   });
   const emitted: Array<{ reference: unknown; args: any }> = [];
   const scheduled: Array<{ delay: number; reference: unknown; args: any }> = [];
-  return {
+  // run*/dispatch: a threads.* reference runs the real handler over this same
+  // ctx, the way production's runQuery/runMutation would, so the deploy-window
+  // shims in chat.ts are exercised end to end. Anything else is recorded as an
+  // emit (notificationRouter.emit is the only other caller).
+  const ctx: any = {
     db,
     auth: {
       async getUserIdentity() {
         return authenticatedUser ? { subject: `${authenticatedUser}|session` } : null;
       },
     },
+    async runQuery(reference: unknown, args: any) {
+      const fn = threadsHandlers[getFunctionName(reference as any)];
+      if (!fn) throw new Error(`no test handler registered for "${getFunctionName(reference as any)}"`);
+      return (fn as any)._handler(ctx, args);
+    },
     async runMutation(reference: unknown, args: any) {
+      const fn = threadsHandlers[getFunctionName(reference as any)];
+      if (fn) return (fn as any)._handler(ctx, args);
       emitted.push({ reference, args });
       return undefined;
     },
@@ -163,8 +176,15 @@ function context(authenticatedUser: string | null, seed: Record<string, any[]> =
     },
     _emitted: emitted,
     _scheduled: scheduled,
-  } as any;
+  };
+  return ctx;
 }
+
+const threadsHandlers: Record<string, unknown> = {
+  "threads:listMine": listMine,
+  "threads:markRead": markThreadReadMine,
+  "threads:markAllRead": markAllRead,
+};
 
 const call = (fn: any, ctx: any, args: any) => (fn as any)._handler(ctx, args);
 
@@ -829,6 +849,27 @@ describe("paging", () => {
     });
     const page = await call(listMessages, ctx, { channel_id: CHANNEL });
     expect(page.messages.map((m: any) => m.content)).toEqual(["root"]);
+  });
+
+  test("a broadcast reply shows in the channel AND its thread; the flag is inert on a root", async () => {
+    const ctx = context(ALICE);
+    const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "root" });
+    await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "for everyone", thread_root_id: root.message_id, broadcast: true,
+    });
+    await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "thread only", thread_root_id: root.message_id,
+    });
+    // A stray flag on a root must not mean anything — it is already in the channel.
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "another root", broadcast: true });
+
+    const page = await call(listMessages, ctx, { channel_id: CHANNEL });
+    expect(page.messages.map((m: any) => m.content)).toEqual(["root", "for everyone", "another root"]);
+    expect(page.messages.find((m: any) => m.content === "another root").broadcast).toBeUndefined();
+
+    // The broadcast reply still lives in its thread like any other.
+    const thread = await call(getThread, ctx, { root_id: root.message_id });
+    expect(thread.replies.map((m: any) => m.content)).toEqual(["for everyone", "thread only"]);
   });
 
   test("a thread's page is its NEWEST replies, so an answer is never past the end", async () => {
@@ -2112,17 +2153,30 @@ describe("the anchor speaking on its own", () => {
 describe("the Threads inbox", () => {
   const reply = (ctx: any, rootId: any, content = "a reply") =>
     call(sendMessage, ctx, { channel_id: CHANNEL, content, thread_root_id: rootId });
+  // The chat view of threads.listMine: chat entries in the legacy shape
+  // (root_id = root_key) with the chat payload hoisted, as the web read it.
+  const listThreads = async (ctx: any, args: any) => {
+    const result = await call(listMine, ctx, args);
+    return {
+      entries: result.entries
+        .filter((e: any) => e.kind === "chat")
+        .map((e: any) => ({ ...e, root_id: e.root_key })),
+      roots: result.payload.chat.roots,
+      threads: result.payload.chat.threads,
+      authors: result.payload.chat.authors,
+    };
+  };
 
   test("a reply files the thread for every participant; the author's copy is read", async () => {
     const ctx = context(ALICE);
     const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "question" });
     // A root with no replies is not a thread: nobody's inbox holds it yet.
-    expect((await call(listMyThreads, ctx, { team_id: TEAM })).entries).toEqual([]);
+    expect((await listThreads(ctx, { team_id: TEAM })).entries).toEqual([]);
 
     const bob = as(ctx, BOB);
     await reply(bob, root.message_id);
 
-    const alice = await call(listMyThreads, ctx, { team_id: TEAM });
+    const alice = await listThreads(ctx, { team_id: TEAM });
     expect(alice.entries.length).toBe(1);
     expect(alice.entries[0].unread).toBe(1);
     expect(String(alice.entries[0].root_id)).toBe(String(root.message_id));
@@ -2132,7 +2186,7 @@ describe("the Threads inbox", () => {
     expect(alice.entries[0].last_reply.preview).toBe("a reply");
 
     // Bob wrote the reply: his copy is filed AND read.
-    const bobs = await call(listMyThreads, bob, { team_id: TEAM });
+    const bobs = await listThreads(bob, { team_id: TEAM });
     expect(bobs.entries.length).toBe(1);
     expect(bobs.entries[0].unread).toBe(0);
   });
@@ -2143,16 +2197,16 @@ describe("the Threads inbox", () => {
     const bob = as(ctx, BOB);
     await reply(bob, root.message_id);
 
-    expect((await call(listChannels, ctx, { team_id: TEAM })).thread_unread).toBe(1);
-    await call(markThreadRead, ctx, { root_id: root.message_id });
-    expect((await call(listChannels, ctx, { team_id: TEAM })).thread_unread).toBe(0);
-    expect((await call(listMyThreads, ctx, { team_id: TEAM })).entries[0].unread).toBe(0);
+    expect((await call(unreadCount, ctx, { team_id: TEAM }))).toBe(1);
+    await call(markThreadReadMine, ctx, { kind: "chat", root_key: root.message_id });
+    expect((await call(unreadCount, ctx, { team_id: TEAM }))).toBe(0);
+    expect((await listThreads(ctx, { team_id: TEAM })).entries[0].unread).toBe(0);
 
     await reply(bob, root.message_id, "more");
-    expect((await call(listChannels, ctx, { team_id: TEAM })).thread_unread).toBe(1);
+    expect((await call(unreadCount, ctx, { team_id: TEAM }))).toBe(1);
     // One sweep clears everything.
-    await call(markAllThreadsRead, ctx, { team_id: TEAM });
-    expect((await call(listChannels, ctx, { team_id: TEAM })).thread_unread).toBe(0);
+    await call(markAllRead, ctx, { team_id: TEAM });
+    expect((await call(unreadCount, ctx, { team_id: TEAM }))).toBe(0);
   });
 
   test("being mentioned in a reply starts following the thread", async () => {
@@ -2162,7 +2216,7 @@ describe("the Threads inbox", () => {
     await reply(bob, root.message_id, "ask @carol");
 
     const carol = as(ctx, CAROL);
-    const view = await call(listMyThreads, carol, { team_id: TEAM });
+    const view = await listThreads(carol, { team_id: TEAM });
     expect(view.entries.length).toBe(1);
     // Carol never spoke: the whole thread is news to her.
     expect(view.entries[0].unread).toBe(1);
@@ -2174,7 +2228,7 @@ describe("the Threads inbox", () => {
     const bob = as(ctx, BOB);
     await reply(bob, root.message_id, "one");
     await reply(ctx, root.message_id, "two (mine)");
-    const view = await call(listMyThreads, ctx, { team_id: TEAM });
+    const view = await listThreads(ctx, { team_id: TEAM });
     // Replying marked the thread read; the only rows after the mark are Alice's own.
     expect(view.entries[0].unread).toBe(0);
   });
@@ -2186,12 +2240,12 @@ describe("the Threads inbox", () => {
     const second = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "second" });
     await reply(bob, first.message_id);
     await reply(bob, second.message_id);
-    let view = await call(listMyThreads, ctx, { team_id: TEAM });
+    let view = await listThreads(ctx, { team_id: TEAM });
     expect(view.entries.map((e: any) => String(e.root_id)))
       .toEqual([String(second.message_id), String(first.message_id)]);
     // New activity on the older thread moves it back to the top.
     await reply(bob, first.message_id, "bump");
-    view = await call(listMyThreads, ctx, { team_id: TEAM });
+    view = await listThreads(ctx, { team_id: TEAM });
     expect(String(view.entries[0].root_id)).toBe(String(first.message_id));
   });
 
@@ -2215,13 +2269,13 @@ describe("the Threads inbox", () => {
     const bob = as(ctx, BOB);
     const root = await call(sendMessage, bob, { channel_id: PRIV, content: "question" });
     await call(sendMessage, ctx, { channel_id: PRIV, content: "reply", thread_root_id: root.message_id });
-    expect((await call(listMyThreads, bob, { team_id: TEAM })).entries.length).toBe(1);
-    expect((await call(listChannels, bob, { team_id: TEAM })).thread_unread).toBe(1);
+    expect((await listThreads(bob, { team_id: TEAM })).entries.length).toBe(1);
+    expect((await call(unreadCount, bob, { team_id: TEAM }))).toBe(1);
 
     // Bob leaves the room: the follow rows go with the read row.
     await call(removeChannelMember, bob, { channel_id: PRIV, user_id: BOB });
-    expect((await call(listMyThreads, bob, { team_id: TEAM })).entries).toEqual([]);
-    expect((await call(listChannels, bob, { team_id: TEAM })).thread_unread).toBe(0);
+    expect((await listThreads(bob, { team_id: TEAM })).entries).toEqual([]);
+    expect((await call(unreadCount, bob, { team_id: TEAM }))).toBe(0);
   });
 
   test("leaving the team purges every follow row", async () => {
@@ -2230,9 +2284,9 @@ describe("the Threads inbox", () => {
     const bob = as(ctx, BOB);
     await reply(bob, root.message_id);
     await purgeChatMembership(ctx as any, ALICE, TEAM);
-    expect(ctx.db._tables.chat_thread_reads.filter((r: any) => r.user_id === ALICE)).toEqual([]);
+    expect(ctx.db._tables.thread_reads.filter((r: any) => r.user_id === ALICE)).toEqual([]);
     // Bob's rows survive: the purge is one member's, not the channel's.
-    expect(ctx.db._tables.chat_thread_reads.filter((r: any) => r.user_id === BOB).length).toBe(1);
+    expect(ctx.db._tables.thread_reads.filter((r: any) => r.user_id === BOB).length).toBe(1);
   });
 
   test("a visible agent error reply cannot outlive a read: the mark clears past it", async () => {
@@ -2256,10 +2310,10 @@ describe("the Threads inbox", () => {
       created_at: last.created_at + 1,
       updated_at: last.created_at + 1,
     });
-    let view = await call(listMyThreads, ctx, { team_id: TEAM });
+    let view = await listThreads(ctx, { team_id: TEAM });
     expect(view.entries[0].unread).toBe(2);
-    await call(markThreadRead, ctx, { root_id: root.message_id });
-    view = await call(listMyThreads, ctx, { team_id: TEAM });
+    await call(markThreadReadMine, ctx, { kind: "chat", root_key: root.message_id });
+    view = await listThreads(ctx, { team_id: TEAM });
     expect(view.entries[0].unread).toBe(0);
     // The sweep survives the same shape: a second error row after the mark.
     messagesIn(ctx).push({
@@ -2274,9 +2328,9 @@ describe("the Threads inbox", () => {
       created_at: last.created_at + 2,
       updated_at: last.created_at + 2,
     });
-    expect((await call(listMyThreads, ctx, { team_id: TEAM })).entries[0].unread).toBe(1);
-    await call(markAllThreadsRead, ctx, { team_id: TEAM });
-    expect((await call(listMyThreads, ctx, { team_id: TEAM })).entries[0].unread).toBe(0);
+    expect((await listThreads(ctx, { team_id: TEAM })).entries[0].unread).toBe(1);
+    await call(markAllRead, ctx, { team_id: TEAM });
+    expect((await listThreads(ctx, { team_id: TEAM })).entries[0].unread).toBe(0);
   });
 
   test("the backfill seeds existing threads as READ and reschedules until done", async () => {
@@ -2285,13 +2339,61 @@ describe("the Threads inbox", () => {
     const bob = as(ctx, BOB);
     await reply(bob, root.message_id, "old answer");
     // Wipe the live-written rows to simulate pre-feature history.
-    ctx.db._tables.chat_thread_reads.length = 0;
+    ctx.db._tables.thread_reads.length = 0;
 
-    await call(backfillThreadReads, ctx, {});
-    const view = await call(listMyThreads, ctx, { team_id: TEAM });
+    await call(backfillThreadReads, ctx, { kind: "chat" });
+    const view = await listThreads(ctx, { team_id: TEAM });
     expect(view.entries.length).toBe(1);
     // Months of history must not arrive as phantom unread.
     expect(view.entries[0].unread).toBe(0);
-    expect((await call(listChannels, ctx, { team_id: TEAM })).thread_unread).toBe(0);
+    expect((await call(unreadCount, ctx, { team_id: TEAM }))).toBe(0);
+  });
+
+  // The deploy-window shims in chat.ts. A web bundle built before threads.ts
+  // shipped calls these; they forward to threads.* and reshape the answer to
+  // the legacy chat view (root_id = root_key, chat payload hoisted).
+  describe("legacy chat.* wrappers forward to threads.*", () => {
+    test("listMyThreads returns chat entries in the legacy shape", async () => {
+      const ctx = context(ALICE);
+      const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "question" });
+      await reply(as(ctx, BOB), root.message_id);
+
+      const legacy = await call(listMyThreads, ctx, { team_id: TEAM });
+      const direct = await listThreads(ctx, { team_id: TEAM });
+      expect(legacy.entries.length).toBe(1);
+      expect(String(legacy.entries[0].root_id)).toBe(String(root.message_id));
+      expect(String(legacy.entries[0]._id)).toBe(String(root.message_id));
+      expect(legacy.entries[0].unread).toBe(1);
+      expect(legacy.roots).toEqual(direct.roots);
+      expect(legacy.threads).toEqual(direct.threads);
+      expect(legacy.authors).toEqual(direct.authors);
+      expect(legacy.has_more).toBe(false);
+      expect(legacy.next_cursor).toBeNull();
+    });
+
+    test("listMyThreads is empty for a signed-out caller and for a stranger to the team", async () => {
+      const empty = { entries: [], roots: [], threads: [], authors: [], has_more: false, next_cursor: null };
+      expect(await call(listMyThreads, context(null), { team_id: TEAM })).toEqual(empty);
+      expect(await call(listMyThreads, context(OUTSIDER), { team_id: TEAM })).toEqual(empty);
+    });
+
+    test("markThreadRead and markAllThreadsRead clear the badge through the shim", async () => {
+      const ctx = context(ALICE);
+      const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "question" });
+      const bob = as(ctx, BOB);
+      await reply(bob, root.message_id);
+      expect((await call(unreadCount, ctx, { team_id: TEAM }))).toBe(1);
+
+      const marked = await call(markThreadRead, ctx, { root_id: root.message_id });
+      expect(String(marked.root_id)).toBe(String(root.message_id));
+      expect(typeof marked.last_read_at).toBe("number");
+      expect((await call(unreadCount, ctx, { team_id: TEAM }))).toBe(0);
+
+      await reply(bob, root.message_id, "more");
+      expect((await call(unreadCount, ctx, { team_id: TEAM }))).toBe(1);
+      const swept = await call(markAllThreadsRead, ctx, { team_id: TEAM });
+      expect(swept.marked).toBe(1);
+      expect((await call(unreadCount, ctx, { team_id: TEAM }))).toBe(0);
+    });
   });
 });

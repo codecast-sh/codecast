@@ -1,0 +1,416 @@
+/* ── Threads page ────────────────────────────────────────────────────────────
+   One card per conversation the viewer is in, whatever the kind. Unread
+   carries the rail's grammar: weight plus a cyan accent, never a shout. The
+   expanded card is the thread's own panel content inlined — same message
+   rows, same composer. Page chrome (ch-shell, ch-main, ch-head, ch-empty,
+   ch-skeleton) is shared with chat.css; everything card-shaped lives here. */
+
+/* Centred on the same column as the cards: the bar's own 18px of padding then
+   lands on the card's left edge at any width, not only where the two happen to
+   coincide. */
+.th-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: calc(920px + 36px);
+  margin: 0 auto;
+  padding: 8px 18px 2px;
+  flex: 0 0 auto;
+}
+
+/* The Sessions switch: an additive control beside the chips, so it never
+   reads as a second selected chip. */
+.th-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--sol-text-muted);
+  cursor: pointer;
+  transition: background-color 100ms ease, color 100ms ease;
+}
+
+.th-toggle:hover { color: var(--sol-text); }
+
+.th-scroll {
+  /* The list's own top inset. The sticky card head reads it back: a scroll
+     container's padding does not clip, so a head pinned at top: 0 would leave
+     this much of the thread showing above it. */
+  --th-scroll-pad: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--th-scroll-pad) 18px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.th-card {
+  width: 100%;
+  max-width: 920px;
+  margin: 0 auto;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 32%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--sol-card) 55%, var(--sol-bg));
+  overflow: clip;
+  flex: 0 0 auto;
+  /* Opening is frequent, so the height never animates — but the border and the
+     shadow should arrive rather than pop. */
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+  /* ThreadCard scrolls an opening card to the top of .th-scroll; this keeps the
+     head off the very edge. */
+  scroll-margin-top: 8px;
+  /* One body inset for every kind: 14px from the card edge. The chat and DM
+     kinds reach it through the message grid's own gutter — a 22px face
+     right-aligned in this column, with the gutter's 8px of padding, starts at
+     14px. `overflow: clip` makes no scroll container, so the sticky head below
+     resolves against .th-scroll. */
+  --ch-gutter: 44px;
+}
+
+.th-card-unread {
+  border-color: color-mix(in srgb, var(--sol-cyan) 38%, transparent);
+}
+
+.th-card-expanded {
+  border-color: color-mix(in srgb, var(--sol-blue) 40%, transparent);
+  box-shadow: 0 3px 14px color-mix(in srgb, var(--sol-text) 8%, transparent);
+}
+
+/* The head is one flat surface while collapsed — head and body read as one
+   block, and a page of cards is not a page of bands. Open, it earns its band
+   and rule. Two sibling buttons inside: the hit area (toggle) and the tool
+   (open), never one inside the other. */
+.th-card-head {
+  display: flex;
+  align-items: center;
+  padding: 0 10px 0 0;
+  font-size: 11.5px;
+  color: var(--sol-text-muted);
+  background: transparent;
+  transition: background-color 100ms ease;
+}
+
+/* The same hover weight the page's own tools use (.ch-tool:hover); at 18% the
+   hovered head was hard to tell from its neighbours. */
+.th-card-head:hover {
+  background: color-mix(in srgb, var(--sol-border) 22%, transparent);
+}
+
+/* Open, the head stays on screen while the card does, so a reader deep in a
+   long thread still has its name. The background is an opaque mix, never a
+   transparent one: message rows scroll under it. */
+.th-card-expanded .th-card-head {
+  position: sticky;
+  top: calc(-1 * var(--th-scroll-pad, 0px));
+  z-index: 1;
+  background: color-mix(in srgb, var(--sol-bg-alt) 32%, var(--sol-bg));
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 20%, transparent);
+}
+
+.th-card-hit {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px 2px 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.th-card-expanded .th-card-hit { padding-bottom: 6px; }
+
+.th-card-hit:focus-visible,
+.th-card-summary:focus-visible,
+.th-card-tool:focus-visible,
+.th-toggle:has(:focus-visible),
+.th-markall:focus-visible,
+.th-older:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--sol-cyan) 55%, transparent);
+}
+
+/* The kind glyph: a tinted square so a scan down the page reads kinds by
+   colour before it reads names. */
+.th-card-kind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  flex: 0 0 auto;
+}
+
+.th-tone-blue { color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 14%, transparent); }
+.th-tone-violet { color: var(--sol-violet); background: color-mix(in srgb, var(--sol-violet) 14%, transparent); }
+.th-tone-magenta { color: var(--sol-magenta); background: color-mix(in srgb, var(--sol-magenta) 14%, transparent); }
+.th-tone-orange { color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 14%, transparent); }
+.th-tone-green { color: var(--sol-green); background: color-mix(in srgb, var(--sol-green) 14%, transparent); }
+
+/* The rail's grammar: weight plus cyan says unread, a quiet label says read. */
+.th-card-chan {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 500;
+  color: var(--sol-text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.th-card-unread .th-card-chan {
+  font-weight: 600;
+  color: var(--sol-text);
+}
+
+.th-card-badge {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--sol-cyan) 16%, transparent);
+  color: var(--sol-cyan);
+}
+
+.th-card-spacer { flex: 1 1 auto; }
+
+.th-card-age {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  color: var(--sol-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.th-card-tool { flex: 0 0 auto; }
+
+.th-card-caret {
+  color: var(--sol-text-dim);
+  display: inline-flex;
+}
+
+.th-card-root { padding: 8px 6px 2px; }
+
+/* The message grid brings its own left gutter, so the card adds none. */
+.th-kind-chat .th-card-root,
+.th-kind-dm .th-card-root { padding-left: 0; }
+
+.th-card-ghost {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+}
+
+.th-card-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 14px 9px;
+  font-size: 11.5px;
+  color: var(--sol-blue);
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 100ms ease;
+}
+
+.th-card-summary:hover {
+  background: color-mix(in srgb, var(--sol-border) 14%, transparent);
+}
+
+.th-card-face { display: inline-flex; margin-right: -2px; }
+
+.th-card-count { font-weight: 600; flex: 0 0 auto; }
+
+.th-card-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sol-text-muted);
+}
+
+.th-card-preview-name { color: var(--sol-text-secondary); font-weight: 500; }
+
+.th-card-open {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid color-mix(in srgb, var(--sol-border) 18%, transparent);
+}
+
+/* Bounded so one long thread doesn't swallow the page; the page keeps its own
+   scroll for walking BETWEEN cards, the card scrolls WITHIN one. */
+.th-card-replies {
+  max-height: 55vh;
+  overflow-y: auto;
+  /* No left padding: the timeline reads the card's gutter, the way the root
+     message above it does, so the two line up. */
+  padding: 4px 6px 8px 0;
+}
+
+.th-card-open-comments,
+.th-card-open-task {
+  padding: 6px 12px 10px;
+  max-height: 65vh;
+  overflow-y: auto;
+}
+
+/* The comment thread on the card's own surface. Its composer wears the app's
+   one composer frame — CommentKind hands CommentComposer the `ch-composer`
+   class, which draws the border, background and focus ring AND cancels the
+   floating scrim and page background MessageInput carries. Duplicating the
+   frame here drew a second, darker box inside the first. Only the margin is
+   the card's own. */
+.th-card-open-comments .cc-thread-list { padding: 0.2rem 0; }
+
+.th-card-open-comments .cc-cmt-composer {
+  margin: 6px 0 2px;
+  padding: 4px 6px 5px;
+}
+
+.th-card-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  font-size: 11.5px;
+  color: var(--sol-text-dim);
+}
+
+/* ── Comment kind ── */
+
+.th-card-anchorrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px 0;
+}
+
+.th-card-anchor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--sol-text-dim);
+}
+
+.th-card-anchor-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+}
+
+.th-card-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.th-card-chip-resolved {
+  color: var(--sol-green);
+  background: color-mix(in srgb, var(--sol-green) 14%, transparent);
+}
+
+/* 8px here plus .cc-cmt's own 0.4rem puts the face on the 14px inset. */
+.th-card-comment { padding: 4px 8px 0; }
+
+/* The collapsed card's only action is its summary line; the root comment's
+   hover actions (opacity 0) would otherwise hold a blank band under it. */
+.th-card-comment .cc-cmt-actions { display: none; }
+
+/* ── Task kind ── */
+
+.th-card-taskrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 4px;
+}
+
+.th-card-task-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sol-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.th-task-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+/* ── Session kind ── */
+
+.th-card-session-line {
+  padding: 8px 14px 0;
+  font-size: 12px;
+  color: var(--sol-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Header + paging ── */
+
+.th-markall {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--sol-text-muted);
+  border: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent);
+  cursor: pointer;
+  transition: background-color 100ms ease, color 100ms ease;
+}
+
+.th-markall:hover {
+  color: var(--sol-text);
+  background: color-mix(in srgb, var(--sol-border) 20%, transparent);
+}
+
+.th-older {
+  align-self: center;
+  margin-top: 2px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: var(--sol-text-muted);
+  border: 1px solid color-mix(in srgb, var(--sol-border) 36%, transparent);
+  cursor: pointer;
+  transition: background-color 100ms ease, color 100ms ease;
+}
+
+.th-older:hover {
+  color: var(--sol-text);
+  background: color-mix(in srgb, var(--sol-border) 18%, transparent);
+}
+
+.th-older:disabled { opacity: 0.6; cursor: default; }

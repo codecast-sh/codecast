@@ -264,6 +264,20 @@ export const ChatMessage = memo(function ChatMessage({
           </div>
         )}
 
+        {/* A broadcast reply ("also send to #channel"): the only way a reply
+            reaches the channel timeline. The context line is the way back to
+            the conversation it belongs to. */}
+        {!inThread && message.threadRootId && !message.deletedAt && (
+          <button
+            type="button"
+            className="ch-msg-threadctx"
+            onClick={() => onOpenThread?.(message.threadRootId!)}
+          >
+            <MessageSquare className="w-3 h-3" />
+            replied to a thread
+          </button>
+        )}
+
         {message.deletedAt ? (
           <div className="ch-msg-deleted">This message was deleted</div>
         ) : thinking ? (

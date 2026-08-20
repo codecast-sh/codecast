@@ -231,23 +231,27 @@ export function useSyncMentionTasks() {
   }, [syncMentionIndex]));
 }
 
+/** Store one task detail row (taskMining.webGetTaskDetail shape: the task plus
+ *  its comments). Shared by the detail feeder below and the Threads inbox,
+ *  whose payload carries the same rows for every task thread on the page. */
+export function ingestTaskDetail(d: any): void {
+  // Only persist genuine tasks. The detail route can be loaded with a foreign
+  // id (/tasks/<conversationId>); storing whatever comes back plants a phantom
+  // task in the never-pruned cache (see validRow in clientSyncRegistry).
+  // Key by the record's OWN _id, never the URL param: canonical task links
+  // use short ids (/tasks/ct-123), and syncRecord(key=short_id) would store a
+  // second copy of the row under that key — the never-pruned duplicate then
+  // double-counts in subtaskProgressOf / taskFamilyIndex.
+  if (d && collectionRowValidator("tasks")!(d)) useInboxStore.getState().syncRecord("tasks", String(d._id), d);
+}
+
 export function useSyncTaskDetail(id?: string) {
   const data = useQuery(
     api.taskMining.webGetTaskDetail,
     id ? { id: id as any } : "skip"
   );
-  const syncRecord = useInboxStore((s) => s.syncRecord);
 
-  useConvexSync(data, useCallback((d: any) => {
-    // Only persist genuine tasks. The detail route can be loaded with a foreign
-    // id (/tasks/<conversationId>); storing whatever comes back plants a phantom
-    // task in the never-pruned cache (see validRow in clientSyncRegistry).
-    // Key by the record's OWN _id, never the URL param: canonical task links
-    // use short ids (/tasks/ct-123), and syncRecord(key=short_id) would store a
-    // second copy of the row under that key — the never-pruned duplicate then
-    // double-counts in subtaskProgressOf / taskFamilyIndex.
-    if (d && collectionRowValidator("tasks")!(d)) syncRecord("tasks", String(d._id), d);
-  }, [syncRecord]));
+  useConvexSync(data, ingestTaskDetail);
 
   return data;
 }

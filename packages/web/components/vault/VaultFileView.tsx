@@ -108,9 +108,12 @@ export const VaultFileView = memo(function VaultFileView({ path }: { path: strin
 
   // Text arrives on demand — unlike notes, which are all held from the scan.
   // The store declines above the cap on its own, so this asks unconditionally.
+  // `endpoint` is a dep on purpose: a cached boot paints this view before the
+  // daemon handshake lands, and the store can't fetch without an endpoint —
+  // the ask has to repeat once there is one.
   useWatchEffect(() => {
-    if (kind === "text" && !body) void useVaultStore.getState().loadTextBody(path);
-  }, [kind, path, !!body]);
+    if (kind === "text" && !body && endpoint) void useVaultStore.getState().loadTextBody(path);
+  }, [kind, path, !!body, endpoint]);
 
   if (!entry) {
     return (
@@ -173,7 +176,9 @@ export const VaultFileView = memo(function VaultFileView({ path }: { path: strin
 
   return (
     <div className="h-full overflow-y-auto" data-vault-note-scroll>
-      <div className="max-w-4xl mx-auto px-8 py-6">
+      {/* Code fills the pane: lines are wide and nobody reads them as prose.
+          Notes (VaultNoteView) keep a measured reading column. */}
+      <div className={kind === "text" ? "px-6 pr-10 py-5" : "max-w-4xl mx-auto px-8 py-6"}>
         <VaultFileHeader path={path} title={title} />
 
         {renderBody()}

@@ -916,14 +916,29 @@ function installHookScript(fileName: string, script: string, events: readonly st
     }
     if (!settings.hooks) settings.hooks = {};
 
-    const hookEntry = { type: "command", command: hookFile, timeout: 5 };
+    // 10s, not 5: these scripts normally finish in well under a second, but a
+    // loaded machine (dozens of live sessions spawning processes) can stretch
+    // interpreter startup past 5s. A timed-out UserPromptSubmit/Stop hook loses
+    // the status transition behind it, and a session that just took a message
+    // then reads as dormant/idle for minutes — the false "message hasn't
+    // reached the agent" chain. The extra headroom only ever costs anything
+    // when the hook would otherwise have been killed.
+    const HOOK_TIMEOUT_S = 10;
+    const hookEntry = { type: "command", command: hookFile, timeout: HOOK_TIMEOUT_S };
 
     for (const event of events) {
       if (!settings.hooks[event]) settings.hooks[event] = [];
       const hookArray = settings.hooks[event] as any[];
-      const alreadyPresent = hookArray.some((matcher: any) =>
-        (matcher.hooks || []).some((h: any) => h.command?.includes(fileName))
-      );
+      let alreadyPresent = false;
+      for (const matcher of hookArray) {
+        for (const h of matcher.hooks || []) {
+          if (!h.command?.includes(fileName)) continue;
+          alreadyPresent = true;
+          // Idempotent registration still refreshes the timeout, or installs
+          // from before the bump would keep the old 5s cap forever.
+          if (typeof h.timeout !== "number" || h.timeout < HOOK_TIMEOUT_S) h.timeout = HOOK_TIMEOUT_S;
+        }
+      }
       if (alreadyPresent) continue;
       if (hookArray.length > 0 && hookArray[0].matcher === "") {
         hookArray[0].hooks = hookArray[0].hooks || [];

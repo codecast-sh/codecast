@@ -33,8 +33,11 @@ describe("chat page titles", () => {
     expect(chatTabTitle("/inbox", state.chatChannels)).toBeNull();
   });
 
-  it("names the Threads inbox without treating it as a channel id", () => {
-    expect(chatTabTitle("/chat/threads", state.chatChannels)).toBe("Threads");
-    expect(chatTabTitle("/chat/threads", {})).toBe("Threads");
+  it("leaves the legacy /chat/threads alias to pathLabel, never treating it as a channel id", async () => {
+    expect(chatTabTitle("/chat/threads", state.chatChannels)).toBeNull();
+    const { tabTitle } = await import("../tabTitle");
+    const tab = { id: "t1", title: "", path: "/chat/threads", createdAt: 1 };
+    expect(tabTitle(tab as any, {}, state.chatChannels)).toBe("Threads");
+    expect(tabTitle({ ...tab, path: "/threads" } as any, {}, {})).toBe("Threads");
   });
 });

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { getFunctionName } from "convex/server";
 import { applyPatches, classifyHideTransition, dispatch } from "./dispatch";
 import { reconfigureSession } from "./conversations";
 import { getReceipt } from "./localFirstCommands";
@@ -945,6 +946,84 @@ describe("reconfigureSession stable-context forwarding", () => {
       stable_mode: "solo",
       stable_exclude: ["conversation-old"],
     });
+  });
+});
+
+// markThreadRead takes two arg shapes: the legacy [rootId] (persisted outbox
+// entries from old bundles, always a chat thread) and the new [kind, rootKey].
+// A comment root key is `${conversation_id}:${anchor}` — colons inside, and
+// only the conversation half is a server id. These pin the branch.
+describe("thread read side effects: both arg shapes", () => {
+  const CHAT_ROOT = "m".repeat(32);
+  const CONV = "c".repeat(32);
+  const TASK = "t".repeat(32);
+  const TEAM = "e".repeat(32);
+  const COMMENT_KEY = `${CONV}:msg:${"g".repeat(32)}`;
+
+  function makeCtx() {
+    const calls: Array<{ name: string; args: any }> = [];
+    const ctx = {
+      auth: { getUserIdentity: async () => ({ subject: "users_owner|session" }) },
+      db: makeFakeDb({}),
+      runMutation: async (fn: unknown, args: any) => {
+        calls.push({ name: getFunctionName(fn as any), args });
+      },
+    };
+    return { ctx, calls };
+  }
+
+  const run = (ctx: any, action: string, args: any[]) =>
+    (dispatch as any)._handler(ctx, { action, args });
+
+  test("legacy [rootId] shape marks a chat thread", async () => {
+    const { ctx, calls } = makeCtx();
+    await run(ctx, "markThreadRead", [CHAT_ROOT]);
+    expect(calls).toEqual([{
+      name: "threads:markRead",
+      args: { kind: "chat", root_key: CHAT_ROOT },
+    }]);
+  });
+
+  test("new [kind, rootKey] shape forwards the kind", async () => {
+    const { ctx, calls } = makeCtx();
+    await run(ctx, "markThreadRead", ["task", TASK]);
+    expect(calls).toEqual([{
+      name: "threads:markRead",
+      args: { kind: "task", root_key: TASK },
+    }]);
+  });
+
+  test("a comment key keeps its colons; only its conversation half is id-checked", async () => {
+    const { ctx, calls } = makeCtx();
+    await run(ctx, "markThreadRead", ["comment", COMMENT_KEY]);
+    expect(calls).toEqual([{
+      name: "threads:markRead",
+      args: { kind: "comment", root_key: COMMENT_KEY },
+    }]);
+  });
+
+  test("stub ids and unknown kinds are dropped, not forwarded", async () => {
+    const { ctx, calls } = makeCtx();
+    await run(ctx, "markThreadRead", ["local-stub-id"]); // legacy shape, stub
+    await run(ctx, "markThreadRead", ["comment", "convstub:msg:abc"]); // stub conversation half
+    await run(ctx, "markThreadRead", ["channel" as any, CHAT_ROOT]); // unknown kind
+    expect(calls).toEqual([]);
+  });
+
+  test("markAllThreadsRead with no args sweeps everything", async () => {
+    const { ctx, calls } = makeCtx();
+    await run(ctx, "markAllThreadsRead", []);
+    expect(calls).toEqual([{ name: "threads:markAllRead", args: {} }]);
+  });
+
+  test("markAllThreadsRead forwards a valid team and kind, drops invalid ones", async () => {
+    const { ctx, calls } = makeCtx();
+    await run(ctx, "markAllThreadsRead", [TEAM, "comment"]);
+    await run(ctx, "markAllThreadsRead", ["team-stub", "channel"]);
+    expect(calls).toEqual([
+      { name: "threads:markAllRead", args: { team_id: TEAM, kind: "comment" } },
+      { name: "threads:markAllRead", args: {} },
+    ]);
   });
 });
 

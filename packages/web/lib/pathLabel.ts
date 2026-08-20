@@ -11,6 +11,8 @@ export function pathLabel(path: string): string {
   // the original path because its label lives IN the query (?f=<file>).
   const clean = path.split("?")[0].split("#")[0];
   if (clean.startsWith("/conversation/")) return "Conversation";
+  // /chat/threads is the pre-move alias of /threads — old saved tabs keep it.
+  if (clean === "/chat/threads") return "Threads";
   // A chat tab is titled by the surface, not the channel id — the id is opaque,
   // and the channel's own name is only knowable from the store.
   if (clean.startsWith("/chat/")) return "Chat";
@@ -43,6 +45,7 @@ export function pathLabel(path: string): string {
     "/feed": "Feed",
     "/crosstalk": "Crosstalk",
     "/chat": "Chat",
+    "/threads": "Threads",
     "/settings": "Settings",
     "/team/activity": "Activity",
   };

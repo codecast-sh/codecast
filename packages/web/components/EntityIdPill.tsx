@@ -38,6 +38,8 @@ import {
 import { findEntityInStore } from "../lib/liveEntities";
 import { useInboxStore } from "../store/inboxStore";
 import { DocEmbed } from "./DocEmbed";
+import { FilePathLink } from "./FilePathLink";
+import { filePathMention, parseFilePathHref } from "../lib/filePathLinks";
 import { PublishedPageEmbed, PublishedPagePill } from "./PublishedPageEmbed";
 import { FormattedSummary } from "./FormattedSummary";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
@@ -505,7 +507,12 @@ export function EntityAwareCode({ children, className, ...props }: any) {
   if (!className && isEntityId(text)) {
     return <EntityIdPill shortId={text} fallback={<code className={className} {...props}>{children}</code>} />;
   }
-  return <code className={className} {...props}>{children}</code>;
+  const code = <code className={className} {...props}>{children}</code>;
+  // `lib/foo.ts:38` in backticks — the commonest way an agent names a file.
+  // The code span keeps its look; the link wraps it.
+  const mention = className ? null : filePathMention(text);
+  if (mention) return <FilePathLink path={mention.path} line={mention.line}>{code}</FilePathLink>;
+  return code;
 }
 
 export function EntityAwareLink({ href, children, ...props }: any) {
@@ -532,6 +539,10 @@ export function EntityAwareLink({ href, children, ...props }: any) {
     if (ref.startsWith("doc:")) return <EntityIdPill type="doc" id={ref.slice(4)} />;
     return <EntityIdPill shortId={ref} />;
   }
+  // A file mention remarkEntityIds turned into a /files?path= link: re-resolve
+  // it here, where the conversation's working directory is in context.
+  const fileRef = parseFilePathHref(href);
+  if (fileRef) return <FilePathLink path={fileRef.path} line={fileRef.line}>{children}</FilePathLink>;
   if (href?.startsWith("mention://")) {
     const name = decodeURIComponent(href.slice(10));
     return (

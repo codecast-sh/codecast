@@ -31,7 +31,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Command } from "commander";
 import {
-  ENGINE_PACKAGE, engineHelpText, engineHome, engineSession, engineTabs, engineVersion, ensureEngine, findEngine, runEngine,
+  ENGINE_PACKAGE, engineHelpText, engineHome, engineSession, engineTabs, engineVersion, ensureEngine, findEngine, runEngine, runEngineJson,
 } from "./engine.js";
 import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans } from "./engineReap.js";
 import { matchRefs, nearMatches } from "./snapshot.js";
@@ -48,6 +48,7 @@ import { registerAuditCommand } from "./auditCommand.js";
 import { autoShotsEnabled, clearAutoShots, isMutatingStep, maybeAutoShot, setAutoShots, type AutoShotSource } from "./autoShot.js";
 import { tabFooterLines, TAB_AFFECTING_VERBS } from "./tabFooter.js";
 import { tokenize } from "./batch.js";
+import { evalInPage, grantPermissions } from "./pageEval.js";
 import { ownerKey } from "./owner.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { uploadOne } from "../imageCommand.js";
@@ -133,7 +134,6 @@ const PASSTHROUGH: Array<{ verb: string; engine?: string; args: string; desc: st
   { verb: "download", args: "[args...]", desc: "Download a file by clicking an element" },
   { verb: "drag", args: "[args...]", desc: "Drag one element onto another" },
   { verb: "wait", args: "[args...]", desc: "Wait for --text <s>, --url <pat>, --load <state>, --fn <js>, a selector, or ms" },
-  { verb: "eval", args: "[args...]", desc: "Run JavaScript in the page (--stdin reads a heredoc — no quote escaping)" },
   { verb: "text", engine: "read", args: "[args...]", desc: "Visible text of the page, or of one element (text <selector>)" },
   { verb: "get", args: "[args...]", desc: "Element data without eval: get text|html|value|attr|count|box|styles <sel>" },
   { verb: "diff", args: "[args...]", desc: "What changed: diff snapshot (since your last snapshot; -s <sel> scope), diff url <u1> <u2>" },
@@ -250,17 +250,28 @@ export function quoteAttrValues(sel: string): string {
 function lastFindPath(session: string): string {
   return path.join(engineHome(), "sessions", session, "last-find");
 }
-function rememberFind(session: string, ref: string): void {
+function rememberFind(session: string, ref: string, query?: string): void {
   try {
     fs.mkdirSync(path.dirname(lastFindPath(session)), { recursive: true });
-    fs.writeFileSync(lastFindPath(session), ref);
+    fs.writeFileSync(lastFindPath(session), query ? `${ref} ${query}` : ref);
   } catch {
     /* courtesy only */
   }
 }
 function recallFind(session: string): string | null {
   try {
-    return fs.readFileSync(lastFindPath(session), "utf-8").trim() || null;
+    const line = fs.readFileSync(lastFindPath(session), "utf-8").trim();
+    return line.split(/\s+/)[0] || null;
+  } catch {
+    return null;
+  }
+}
+/** The words the last `find` matched on — what a stale-ref retry re-finds. */
+function recallFindQuery(session: string): string | null {
+  try {
+    const line = fs.readFileSync(lastFindPath(session), "utf-8").trim();
+    const i = line.indexOf(" ");
+    return i > 0 ? line.slice(i + 1) : null;
   } catch {
     return null;
   }
@@ -467,8 +478,31 @@ export async function runVerb(verb: string, args: string[], o: Ctx = ctx(), run:
   const shot = !args.includes("--no-shot");
   const forwarded = args.filter((a) => a !== "--no-capture" && a !== "--no-shot");
 
-  for (const call of translate(verb, forwarded, recallFind(session))) {
+  // Did translate() have to reach for the last find? Then a failure may just
+  // be that ref going stale (a re-render, a route change since the find) —
+  // re-find by the remembered words and retry once before reporting.
+  const positionals = forwarded.filter((x) => !x.startsWith("--")).length;
+  const usedLastFind =
+    TARGETED.has(verb) && (TARGET_PLUS_VALUE.has(verb) ? positionals === 1 : positionals === 0);
+
+  let calls = translate(verb, forwarded, recallFind(session));
+  let refound = false;
+  for (let i = 0; i < calls.length; i++) {
+    const call = calls[i];
     let res = runEngine(call.args, o);
+    if (res.status !== 0 && usedLastFind && !refound && i === 0 && !/tab_gone/.test(res.stderr + res.stdout)) {
+      const query = recallFindQuery(session);
+      if (query) {
+        refound = true;
+        const again = findRefs(query, o, { lenient: true }); // re-snapshots and re-remembers
+        const fresh = recallFind(session);
+        if (again.hits.length && fresh && fresh !== call.args.find((x) => /^@e\d+$/.test(x))) {
+          console.log(fmt.muted(`  ref went stale — re-found ${JSON.stringify(query)} as ${fresh.replace("@", "#")}`));
+          calls = translate(verb, forwarded, fresh);
+          res = runEngine(calls[i].args, o);
+        }
+      }
+    }
     // The session is pinned to one tab. When that tab is gone (closed by the
     // human, or by a reap of an earlier incarnation of this session), an
     // `open` binds a fresh one instead of failing; anything else is asked to
@@ -614,25 +648,61 @@ export function parseEngineRefs(stdout: string): Array<{ line: string; role: str
     }));
 }
 
+/** Reorder ambiguous matches so on-screen elements come first, given each
+ *  ref's box (zero size = hidden: display:none, a kept-alive background tab
+ *  pane, a collapsed menu). Pure, so it is testable without a browser. */
+export function rankByVisibility<T>(
+  hits: T[],
+  boxOf: (hit: T) => { width: number; height: number } | null,
+): { ordered: T[]; hidden: Set<T> } {
+  const hidden = new Set<T>();
+  for (const h of hits) {
+    const b = boxOf(h);
+    if (b && (b.width <= 0 || b.height <= 0)) hidden.add(h);
+  }
+  return { ordered: [...hits.filter((h) => !hidden.has(h)), ...hits.filter((h) => hidden.has(h))], hidden };
+}
+
 /** `find <text>`: refs on the page whose accessible name matches, best first.
  *  Parses the engine's snapshot lines into (role, name) and hands matching to
- *  the shared matcher, so both drivers rank identically. Remembers the best
- *  hit so a following bare action can use it. */
-function findRefs(text: string, o: Ctx): { hits: string[]; near: string[]; total: number } {
+ *  the shared matcher, so both drivers rank identically. With several matches,
+ *  hidden elements (zero-size box) sink to the bottom — the wrong-"huddle"
+ *  class of miss, where a kept-alive background pane held the same label.
+ *  Remembers the best hit AND the query, so a following bare action can use
+ *  it and a stale ref can be re-found. */
+function findRefs(text: string, o: Ctx, opts: { lenient?: boolean } = {}): { hits: string[]; near: string[]; total: number } {
   const res = runEngine(["snapshot"], o);
-  if (res.status !== 0) die((res.stderr || res.stdout).trim().split("\n")[0] || "could not read the page");
+  if (res.status !== 0) {
+    if (opts.lenient) return { hits: [], near: [], total: 0 };
+    die((res.stderr || res.stdout).trim().split("\n")[0] || "could not read the page");
+  }
   const items = parseEngineRefs(res.stdout);
-  const hits = matchRefs(items, text);
+  let hits = matchRefs(items, text);
+  if (hits.length > 1) {
+    const boxes = new Map<string, { width: number; height: number } | null>();
+    for (const h of hits.slice(0, 5)) {
+      const ref = h.line.match(REF_IN_LINE)?.[1];
+      if (!ref) continue;
+      try {
+        const box = runEngineJson<{ width?: number; height?: number }>(["get", "box", `@${ref}`], o);
+        boxes.set(h.line, box?.width !== undefined ? { width: box.width ?? 0, height: box.height ?? 0 } : null);
+      } catch {
+        boxes.set(h.line, null);
+      }
+    }
+    const { ordered, hidden } = rankByVisibility(hits, (h) => boxes.get(h.line) ?? null);
+    hits = ordered.map((h) => (hidden.has(h) ? { ...h, line: `${h.line}  (hidden)` } : h));
+  }
   const near = hits.length ? [] : nearMatches(items, text);
   const ref = hits[0]?.line.match(REF_IN_LINE)?.[1];
-  if (ref) rememberFind(o.session, `@${ref}`);
+  if (ref) rememberFind(o.session, `@${ref}`, text);
   return { hits: hits.map((h) => h.line), near: near.map((h) => h.line), total: items.length };
 }
 
 /** `shot`: screenshot to a file, inline in the conversation, optionally shared. */
 async function takeShot(
   pathArg: string | undefined,
-  o: { full?: boolean; annotate?: boolean; share?: boolean; alt?: string; inline?: boolean; extra?: string[] },
+  o: { full?: boolean; annotate?: boolean; share?: boolean; alt?: string; inline?: boolean; selector?: string; extra?: string[] },
   c: Ctx,
   deps: PublishDeps,
 ): Promise<string> {
@@ -641,7 +711,11 @@ async function takeShot(
   const extra = [...(o.extra ?? [])];
   if (o.full) extra.push("--full-page");
   if (o.annotate) extra.push("--annotate");
-  const res = runEngine(["screenshot", out, ...extra], c);
+  // The engine's screenshot takes `[selector] [path]`: a selector (or ref)
+  // clips the capture to that element — one region readable at full size,
+  // no post-hoc cropping.
+  const target = o.selector ? [engineRef(quoteAttrValues(o.selector))] : [];
+  const res = runEngine(["screenshot", ...target, out, ...extra], c);
   if (res.status !== 0) {
     die((res.stderr || res.stdout).trim().split("\n")[0] || "the screenshot failed");
   }
@@ -669,6 +743,33 @@ async function takeShot(
     console.log(img.markdown);
   }
   return out;
+}
+
+/**
+ * The script an `eval` should run, from wherever the agent put it: a
+ * positional argument, `--file <path>`, `-b <base64>`, or (command form only)
+ * `--stdin`. `stdinBody` is null inside a `do` flow, whose stdin is the plan.
+ */
+export function readEvalScript(args: string[], stdinBody: string | null): string {
+  const fi = args.findIndex((a) => a === "--file" || a === "-f");
+  if (fi >= 0) {
+    const p = args[fi + 1];
+    if (!p) throw new Error("--file needs a path");
+    return fs.readFileSync(p, "utf-8");
+  }
+  const bi = args.findIndex((a) => a === "-b" || a === "--base64");
+  if (bi >= 0) {
+    const enc = args[bi + 1];
+    if (!enc) throw new Error("-b needs a base64 string");
+    return Buffer.from(enc, "base64").toString("utf-8");
+  }
+  if (args.includes("--stdin")) {
+    if (stdinBody === null) throw new Error("--stdin is not available here — use --file or a quoted script");
+    return stdinBody;
+  }
+  const positional = args.filter((a) => !a.startsWith("--") && a !== "-b" && a !== "-f");
+  if (!positional.length) throw new Error("no script given");
+  return positional.join(" ");
 }
 
 /** The index of the last page-changing step in a flow, or -1 when none is.
@@ -711,7 +812,15 @@ async function runFlow(
     console.log(`${fmt.highlight("›")} ${raw}`);
     try {
       if (verb === "shot") {
-        await takeShot(args.find((a) => !a.startsWith("--")), { full: args.includes("--full") }, c, deps);
+        const si = args.findIndex((a) => a === "-s" || a === "--selector");
+        const selector = si >= 0 ? args[si + 1] : undefined;
+        const rest = si >= 0 ? args.filter((_, j) => j !== si && j !== si + 1) : args;
+        await takeShot(rest.find((a) => !a.startsWith("--")), { full: args.includes("--full"), selector }, c, deps);
+      } else if (verb === "eval") {
+        const script = readEvalScript(rest, null);
+        const out = await evalInPage(script, c.session);
+        console.log(out.output);
+        if (!out.ok) throw new Error(out.hint ?? "eval failed");
       } else if (verb === "find") {
         // The query is the step's own words — flow-level flags are not part
         // of what the agent asked to find.
@@ -800,8 +909,9 @@ The cheap-browsing loop — scope reads instead of dumping whole pages:
   text <sel>               same, in one word
   diff snapshot            only what changed since your last snapshot
   wait --text/--url/--fn   wait for the state you mean, not a fixed delay
-  eval --stdin             JavaScript from a heredoc, no quote escaping
-  shot --annotate          screenshot with numbered labels matching snapshot refs
+  eval                     JavaScript in the page; promises are awaited (--stdin heredoc, --file <path>)
+  grant                    camera/mic/clipboard permission for this origin — no prompt, no restart
+  shot -s <sel>            screenshot ONE element (--annotate numbers refs on a full shot)
 
 \`cast browser help <command>\` documents every flag; \`cast browser skills get core --full\` is the engine's full guide.`,
   );
@@ -823,7 +933,8 @@ The cheap-browsing loop — scope reads instead of dumping whole pages:
   // -------------------------------------------------------------- screenshots
 
   br.command("shot [pathArg]")
-    .description("Screenshot the page — appears inline in this conversation (--annotate labels refs on it)")
+    .description("Screenshot the page — appears inline in this conversation (--annotate labels refs on it, -s clips to one element)")
+    .option("-s, --selector <sel>", "Screenshot just this element (CSS selector or #eNN ref)")
     .option("--full", "Whole scroll height, not just the viewport")
     .option("--annotate", "Number every interactive element on the image; each [N] label is snapshot ref #eN, with a legend")
     .option("--share", "Also upload it and print a link you can paste elsewhere")
@@ -934,6 +1045,94 @@ frames are superseded before anyone reads them.`,
       if (hits.length > 25) console.log(fmt.muted(`  … and ${hits.length - 25} more`));
     });
 
+  const EVAL_HELP = `cast browser eval - Run JavaScript in this session's page
+
+Usage: cast browser eval [options] [script]
+
+Runs over CDP with promise support: a returned promise is AWAITED and its
+settled value printed, and top-level \`await\` works. Multi-line scripts come
+from a heredoc or a file — no quote escaping:
+
+  cast browser eval "document.title"
+  cast browser eval "await fetch('/api/health').then(r => r.status)"
+  cast browser eval --stdin <<'EOF'
+  const ds = await navigator.mediaDevices.enumerateDevices();
+  ds.map(d => d.kind + ':' + d.label)
+  EOF
+  cast browser eval --file scenario.js
+
+Options:
+  --stdin           Read the script from stdin (heredoc)
+  --file, -f <p>    Read the script from a file
+  -b, --base64 <s>  Script as base64 (rarely needed now — heredocs work)
+  --timeout <ms>    How long an awaited promise may take (default 15000)
+
+A script that throws prints the page's exception and exits 1.`;
+
+  const evalCmd = br.command("eval [script...]")
+    .description("Run JavaScript in the page — promises are awaited (--stdin heredoc, --file <path>)")
+    .allowUnknownOption(true)
+    .helpOption(false)
+    .action(async (scriptArgs: string[] = []) => {
+      if (scriptArgs.includes("--help") || scriptArgs.includes("-h")) {
+        console.log(EVAL_HELP);
+        process.exit(0);
+      }
+      await ensureBrowser();
+      await ensurePinnedTab(engineSession());
+      let stdinBody: string | null = null;
+      if (scriptArgs.includes("--stdin")) {
+        stdinBody = await new Promise<string>((resolve) => {
+          let buf = "";
+          process.stdin.setEncoding("utf-8");
+          process.stdin.on("data", (d) => (buf += d));
+          process.stdin.on("end", () => resolve(buf));
+        });
+      }
+      const ti = scriptArgs.findIndex((a) => a === "--timeout");
+      const timeout = ti >= 0 ? parseInt(scriptArgs[ti + 1] ?? "", 10) || 15_000 : 15_000;
+      const rest = ti >= 0 ? scriptArgs.filter((_, i) => i !== ti && i !== ti + 1) : scriptArgs;
+      let script: string;
+      try {
+        script = readEvalScript(rest, stdinBody);
+      } catch (err) {
+        die((err as Error).message);
+      }
+      const out = await evalInPage(script, engineSession(), timeout);
+      console.log(out.output);
+      if (!out.ok && out.hint) console.log(fmt.muted(`  ${out.hint}`));
+      process.exit(out.ok ? 0 : 1);
+    });
+  evalCmd.helpInformation = () => `${EVAL_HELP}\n`;
+
+  br.command("grant [permissions...]")
+    .description("Grant browser permissions to the current origin, no prompt, no restart (default: camera microphone)")
+    .option("--origin <origin>", "Grant to this origin instead of the current tab's")
+    .option("--reset", "Reset ALL granted permissions to defaults")
+    .addHelpText(
+      "after",
+      `
+The permission prompt an agent cannot see simply never appears; getUserMedia
+resolves with the real device. Names: camera, microphone, clipboard,
+notifications, geolocation, midi — or any raw CDP PermissionType.
+
+  cast browser grant                          # camera + microphone, current origin
+  cast browser grant clipboard --origin https://app.example.com
+  cast browser grant --reset
+
+A machine with no camera still needs fake devices at launch:
+\`cast browser start --fake-media\` (restart — coordinate, it closes other
+sessions' tabs).`,
+    )
+    .action(async (permissions: string[] = [], o: { origin?: string; reset?: boolean }) => {
+      await ensureBrowser();
+      await ensurePinnedTab(engineSession());
+      const out = await grantPermissions(permissions, engineSession(), o);
+      console.log(`${out.ok ? OK : BAD} ${out.output}`);
+      if (out.hint) console.log(fmt.muted(`  ${out.hint}`));
+      process.exit(out.ok ? 0 : 1);
+    });
+
   br.command("viewport [size]")
     .description("Resize the page, or emulate a device: desktop, laptop, wide, tablet, mobile, mobile-small")
     .option("--reset", "Back to the default size")
@@ -982,6 +1181,7 @@ frames are superseded before anyone reads them.`,
     .option("--fresh", "Start signed out of everything")
     .option("--resync", "Re-copy the profile even if a clone already exists")
     .option("--headless", "Run without a visible window")
+    .option("--fake-media", "Fake camera/mic devices (test pattern + tone) — for machines without real ones; permission prompts are auto-accepted")
     .option("--size <WxH>", "Window size", DEFAULT_START.size)
     .option("--remote [host]", "Run the browser on a remote host (see `cast browser hosts`)")
     .action(async (o: Partial<StartOptions>) => {
@@ -1012,7 +1212,7 @@ frames are superseded before anyone reads them.`,
       }
       const c = ctx();
       const alive = isPidAlive(state.pid);
-      console.log(`${alive ? OK : BAD} browser ${alive ? "up" : "gone"} — pid ${state.pid}, CDP 127.0.0.1:${state.port}${state.headless ? ", headless" : ""}`);
+      console.log(`${alive ? OK : BAD} browser ${alive ? "up" : "gone"} — pid ${state.pid}, CDP 127.0.0.1:${state.port}${state.headless ? ", headless" : ""}${state.fakeMedia ? ", fake media devices" : ""}`);
       console.log(`  engine: ${ENGINE_PACKAGE} ${engineVersion() ?? "?"}  ${fmt.muted(binary)}`);
       console.log(`  session: ${c.session}`);
       console.log(`  profile: ${state.sourceProfile ? `${state.sourceProfile} (logins inherited; Google is its own — \`cast browser login\` once)` : "fresh — signed out"}`);

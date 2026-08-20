@@ -125,8 +125,9 @@ export type {
   ChatRailChannel,
   ChatNotifyLevel,
   ChatSendOptions,
-  ChatThreadInboxRow,
 } from "./chatSlice";
+export type { ThreadInboxRow, ThreadKind, ThreadLastReply } from "./threadTypes";
+export { threadRowId } from "./threadTypes";
 
 // Critical UI prefs mirrored to localStorage so they're available
 // synchronously at module load — avoids a layout flash between first paint
@@ -1126,6 +1127,9 @@ export type ClientUI = {
   // Structural shape rather than the SidebarPin import: sidebarPins.ts imports
   // this store, and a type import back the other way invites a require cycle.
   sidebar_pins?: Array<{ kind: "project" | "view" | "channel"; id: string; label: string }>;
+  // The Threads page's "include agent sessions" toggle. Off unless exactly
+  // true. Stamped (STAMPED_UI_KEYS): a per-user view preference.
+  threads_include_sessions?: boolean;
   // The workspace arrangement (see store/workspace.ts): which slots are open,
   // peek vs split, and their sizes. Subject-bearing panes are deliberately NOT
   // persisted — the arrangement is worth remembering, its contents are
@@ -3521,6 +3525,9 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // -- Recently visited (sessions, chip views, pages) — newest first --
   recentVisits: RecentVisit[];
   recordRecentVisit: (visit: Omit<RecentVisit, "ts">) => void;
+  /** The Threads page's session read mark: "seen up to the current message
+   *  count". Local only — a session's read state never dispatches. */
+  markSessionSeen: (id: string) => void;
   createBucket: (opts: { name: string; color?: string }, continuation?: DurableCreateContinuation) => Promise<{ bucketId: string }>;
   updateBucket: (id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) => void;
   assignSessionToBucket: (conversationId: string, bucketId: string | null) => void;
@@ -3975,7 +3982,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 // silently globalizing them would yank screens out from under people.
 export const STAMPED_UI_KEYS = new Set([
   "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "show_triggers", "inbox_show_old",
-  "simple_view", "inbox_image_thumbs", "composer_suggestions", "inbox_home",
+  "simple_view", "inbox_image_thumbs", "composer_suggestions", "inbox_home", "threads_include_sessions",
 ]);
 
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
@@ -5588,6 +5595,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
     recordVisitInDraft(this, visit);
   }),
 
+  // Same cursors recordSessionView writes when LEAVING a session, written
+  // here on demand: expanding a session card on the Threads page is reading
+  // it, so its unread badge (message_count > _seenMessageCount) clears.
+  markSessionSeen: sync(function (this: Draft, id: string) {
+    if (!id) return;
+    const count = this.conversations[id]?.message_count ?? this.sessions[id]?.message_count;
+    if (typeof count === "number") this._seenMessageCount[id] = count;
+    this._seenUpToAt[id] = Date.now();
+  }),
+
   // =====================
   // ACTIONS (wrapped by middleware: mutative draft + server dispatch)
   // =====================
@@ -6593,6 +6610,19 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
 
     // collection
+    // A non-array here is a broken contract, not data: a field renamed out of
+    // the registry while a stale feeder still pushes its old scalar (an HMR
+    // batch re-ran the old useChatSync against the new registry and sent
+    // `chatThreadUnread: 0` down this path), or a server shape change inside
+    // a deploy window. Drop the push and keep the cached rows — throwing here
+    // unmounted the whole DashboardSyncEffects boundary, which stops EVERY
+    // feeder, not just the bad one.
+    if (!Array.isArray(incoming)) {
+      if (process.env.NODE_ENV !== "production") {
+        console.error(`[sync] ${field}: collection push is not an array (${typeof incoming}); dropped`);
+      }
+      return;
+    }
     // Read the previous collection and pending map from the BASE state, not
     // through the draft: applySyncTable walks every row of prev, and each read
     // through the mutative proxy allocates a child draft (a 14k-row docs

@@ -27,6 +27,7 @@ export function CommentComposer({
   onSubmit,
   placeholder = "Comment…",
   autoFocus,
+  className,
 }: {
   conversationId: string;
   messageId?: string;
@@ -41,6 +42,11 @@ export function CommentComposer({
   onSubmit: (content: string) => void | Promise<void>;
   placeholder?: string;
   autoFocus?: boolean;
+  /** Extra frame class from the surface the composer sits on. `ch-composer`
+   *  (chat.css) is the app's one composer frame: it draws the border, card
+   *  background and focus ring, and cancels MessageInput's floating scrim and
+   *  page background, which would otherwise paint a second box inside it. */
+  className?: string;
 }) {
   const draftKey = `comment:${conversationId}:${messageId ?? "global"}`;
   const draft = useInboxStore((s) => (s.drafts[draftKey]?.draft_message as string | undefined) ?? "");
@@ -64,7 +70,7 @@ export function CommentComposer({
   };
 
   return (
-    <div className="cc-cmt-composer" onKeyDownCapture={onKeyDownCapture}>
+    <div className={"cc-cmt-composer" + (className ? " " + className : "")} onKeyDownCapture={onKeyDownCapture}>
       {typing.length > 0 && (
         <div className="cc-cmt-typing">
           <span className="cc-cmt-typing-dots"><i /><i /><i /></span>

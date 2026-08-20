@@ -188,6 +188,11 @@ interface VaultState {
   /** Right panel state — lifted so a #tag pill click can open the tag pane. */
   rightPanelTab: VaultRightPanelTab;
   setRightPanelTab: (tab: VaultRightPanelTab) => void;
+  /** Whether the backlinks/outline side panel is showing. Closed by default —
+   *  most visits are reading, and the panel is a lookup you open on purpose.
+   *  Remembered across reloads. */
+  rightPanelOpen: boolean;
+  setRightPanelOpen: (open: boolean) => void;
   selectedTag: string | null;
   setSelectedTag: (tag: string | null) => void;
   openTagPane: (tag: string) => void;
@@ -390,6 +395,16 @@ const SHOW_ALL_KEY = "cast_vault_show_all";
  * first impression, and a notes folder full of dotfiles is too. An explicit
  * choice, once made, outranks both.
  */
+const RIGHT_PANEL_KEY = "vault.rightPanelOpen";
+
+function readRightPanelOpen(): boolean {
+  try {
+    return localStorage.getItem(RIGHT_PANEL_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 function readShowAllFiles(vaultId: string, vaults: VaultInfo[]): boolean {
   try {
     const stored = localStorage.getItem(`${SHOW_ALL_KEY}:${vaultId}`);
@@ -702,6 +717,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   leftPaneTab: "files" as const,
   searchQuery: "",
   rightPanelTab: "backlinks" as const,
+  rightPanelOpen: readRightPanelOpen(),
   selectedTag: null,
   bookmarks: [],
   bookmarksVaultId: null,
@@ -796,6 +812,12 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   setRenameTarget: (path) => set({ renameTarget: path }),
 
   setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
+  setRightPanelOpen: (open) => {
+    try {
+      localStorage.setItem(RIGHT_PANEL_KEY, open ? "1" : "0");
+    } catch {}
+    set({ rightPanelOpen: open });
+  },
   revealTarget: null,
   requestReveal: (path) => {
     const dirs = path.split("/").slice(0, -1);
@@ -813,7 +835,10 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   },
   clearReveal: () => set({ revealTarget: null }),
   setSelectedTag: (tag) => set({ selectedTag: tag }),
-  openTagPane: (tag) => set({ rightPanelTab: "tags", selectedTag: tag }),
+  openTagPane: (tag) => {
+    get().setRightPanelOpen(true);
+    set({ rightPanelTab: "tags", selectedTag: tag });
+  },
 
   toggleDir: (path) =>
     set((s) => ({ expandedDirs: { ...s.expandedDirs, [path]: !s.expandedDirs[path] } })),

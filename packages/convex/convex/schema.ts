@@ -2884,6 +2884,9 @@ export default defineSchema({
   task_comments: defineTable({
     task_id: v.id("tasks"),
     author: v.string(),
+    // The writer when a person wrote it. Absent on agent and system rows, so
+    // the Threads unread rule counts them as someone else's.
+    author_user_id: v.optional(v.id("users")),
     text: v.string(),
     conversation_id: v.optional(v.id("conversations")),
     comment_type: v.union(
@@ -2895,7 +2898,8 @@ export default defineSchema({
     image_storage_ids: v.optional(v.array(v.string())),
     created_at: v.number(),
   })
-    .index("by_task_id", ["task_id"]),
+    .index("by_task_id", ["task_id"])
+    .index("by_task_created", ["task_id", "created_at"]),
 
   task_history: defineTable({
     task_id: v.id("tasks"),
@@ -3833,6 +3837,11 @@ export default defineSchema({
     // reads the root by id and the replies by index, and a self-reference would
     // put the root in both halves.
     thread_root_id: v.optional(v.id("chat_messages")),
+    // Slack's "also send to #channel": a thread reply that ALSO shows in the
+    // channel timeline. Only meaningful with thread_root_id set — the channel
+    // list includes replies carrying this flag, and nothing else changes: the
+    // row still lives in its thread, still counts in the rollup.
+    broadcast: v.optional(v.boolean()),
     // The author. For an anchor's reply this is the anchor's `bot_user_id`.
     user_id: v.id("users"),
     author_kind: v.optional(v.union(v.literal("user"), v.literal("agent"))),
@@ -3964,39 +3973,36 @@ export default defineSchema({
     // channel is a read-receipt surface nobody asked for.
     .index("by_user_channel", ["user_id", "channel_id"]),
 
-  // Per (user, thread root): the threads this person is IN, and where they have
-  // read each one to — the Slack "Threads" inbox. A row appears when a thread
-  // gains a reply and this user is one of its participants (root author, any
-  // reply author, or someone a reply mentioned). Written only from the two
-  // places a visible reply lands (postChatMessage, fillAnchorReply), so the
-  // set of rows tracks exactly the audience chat_reply notifications reach.
-  //
-  // Channel reads cannot serve this: the channel mark moves past a reply's
-  // stamp when the reader reaches the bottom of the ROOM, where the reply's
-  // body never renders — which is exactly why listChannels excludes replies
-  // from the channel badge. Per-thread unread needs its own mark.
-  //
-  // Bots never get a row: an anchor has no inbox, and a row per bot per thread
-  // would double the table for nothing.
-  chat_thread_reads: defineTable({
+  // One row per (user, thread) across every threaded system: chat threads,
+  // session comment threads, task comment streams and published page
+  // discussions. Unread is one comparison: last_activity_at > last_read_at.
+  // team_id is the entity's routing team; undefined is the personal inbox
+  // (personal is a value, not a missing pointer). Bots never get a row.
+  thread_reads: defineTable({
     user_id: v.id("users"),
-    root_id: v.id("chat_messages"),
-    // Denormalized so the Threads page filters and joins without re-reading
-    // every root: which room the thread lives in, and which team's inbox it
-    // belongs to.
-    channel_id: v.id("chat_channels"),
-    team_id: v.id("teams"),
-    // The newest visible reply's stamp. Unread is one comparison:
-    // last_activity_at > last_read_at.
+    kind: v.union(v.literal("chat"), v.literal("comment"), v.literal("task"), v.literal("page")),
+    // chat: root chat_messages id. comment: `${conversation_id}:${anchorKey}`
+    // where anchorKey is `msg:<message_id>` | `file:<path>:<line>` | `global`
+    // (commentAnchorKey in @codecast/shared/comments). task: task id.
+    // page: artifact id (one card per page discussion).
+    root_key: v.string(),
+    team_id: v.optional(v.id("teams")),
     last_activity_at: v.number(),
     last_read_at: v.number(),
     updated_at: v.number(),
+    // Typed refs for access checks, payload loads and cleanup.
+    channel_id: v.optional(v.id("chat_channels")),
+    conversation_id: v.optional(v.id("conversations")),
+    task_id: v.optional(v.id("tasks")),
+    artifact_id: v.optional(v.id("artifacts")),
+    // Comment anchor (comment kind only).
+    message_id: v.optional(v.id("messages")),
+    file_path: v.optional(v.string()),
+    line_number: v.optional(v.number()),
   })
-    // The Threads page: one user's threads in one team, newest activity first.
     .index("by_user_team_activity", ["user_id", "team_id", "last_activity_at"])
-    // The write path's upsert lookup.
-    .index("by_user_root", ["user_id", "root_id"])
-    // Scoped cleanup when a channel is purged.
+    .index("by_user_kind_root", ["user_id", "kind", "root_key"])
+    .index("by_kind_root", ["kind", "root_key"])
     .index("by_channel", ["channel_id"]),
 
   // Who is typing where, right now. ONE row per (channel, user) — a person

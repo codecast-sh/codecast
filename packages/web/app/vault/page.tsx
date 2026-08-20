@@ -12,7 +12,7 @@ import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useConvex } from "convex/react";
-import { Panel, Group, Separator } from "react-resizable-panels";
+import { Panel, Group, Separator, usePanelRef } from "react-resizable-panels";
 import {
   ArrowUpDown,
   Cloud,
@@ -21,13 +21,14 @@ import {
   FolderPlus,
   FileCode2,
   FolderTree,
+  PanelRight,
   RefreshCw,
   Search,
   Waypoints,
   WifiOff,
   X,
 } from "lucide-react";
-import { isVaultMarkdownPath } from "@codecast/shared/contracts";
+import { isVaultAssetPath, isVaultMarkdownPath } from "@codecast/shared/contracts";
 import { AuthGuard } from "../../components/AuthGuard";
 import {
   DropdownMenu,
@@ -36,7 +37,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
-import { VAULT_SORT_OPTIONS, type VaultSortMode } from "../../lib/vault/explorerModel";
+import { VAULT_SORT_OPTIONS, ancestorDirs, type VaultSortMode } from "../../lib/vault/explorerModel";
 import { useTabContext } from "../../lib/tabParams";
 import { useShortcutAction } from "../../shortcuts";
 import { VaultExplorer } from "../../components/vault/VaultExplorer";
@@ -51,7 +52,7 @@ import { VaultScopeLine } from "../../components/vault/VaultScopeLine";
 import { useDocForFile, useVaultTeamResolver } from "../../components/vault/useVaultScope";
 import { vaultPresence } from "../../lib/vault/scopeModel";
 import { vaultLandingPath } from "../../lib/vault/projectVault";
-import { filesHref } from "../../lib/vault/vaultHref";
+import { filesHref, resolveVaultTarget } from "../../lib/vault/vaultHref";
 import { useVaultStore, type VaultUnreachableReason } from "../../store/vaultStore";
 import {
   toggleVaultEditMode,
@@ -68,6 +69,8 @@ const VaultGraphView = lazy(() =>
 );
 
 const headerButtonClass = "text-sol-text-dim hover:text-sol-text transition-colors";
+
+const SIDE_MIN_PX = 200;
 
 const separatorClass =
   "relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan";
@@ -254,15 +257,118 @@ function VaultContent() {
   const setShowAllFiles = useVaultStore((s) => s.setShowAllFiles);
 
   const activePath = searchParams.get("f");
+  // A local path as written somewhere else — a conversation, a CLI link —
+  // rather than vault-relative. Resolved below once the vault list is in.
+  const localPath = searchParams.get("path");
   const targetLineRaw = searchParams.get("l");
   const targetLine = targetLineRaw ? parseInt(targetLineRaw, 10) : undefined;
   const showGraph = searchParams.get("view") === "graph";
+
+  // The side panel (backlinks / outline / tags) is closed by default and
+  // toggled from a button in the content pane. The store flag is the truth;
+  // this effect drives the resizable panel to match it. Expanding resizes to
+  // an explicit width rather than calling expand(): the library's restored
+  // size can land below the collapse midpoint and clamp straight back to 0.
+  const rightPanelOpen = useVaultStore((s) => s.rightPanelOpen);
+  const setRightPanelOpen = useVaultStore((s) => s.setRightPanelOpen);
+  const sidePanelRef = usePanelRef();
+  const sideAppliedRef = useRef<boolean | null>(null);
+  useWatchEffect(() => {
+    const ref = sidePanelRef.current;
+    if (!ref || showGraph) return;
+    if (sideAppliedRef.current === rightPanelOpen) return;
+    const firstSync = sideAppliedRef.current === null;
+    sideAppliedRef.current = rightPanelOpen;
+    if (firstSync && ref.isCollapsed() !== rightPanelOpen) return;
+    if (!rightPanelOpen) {
+      ref.collapse();
+      return;
+    }
+    ref.resize("22%");
+    // A narrow window: 22% can fall under the panel's pixel minimum and the
+    // library silently refuses. Ask for the minimum itself, and if that can't
+    // fit either, put the flag back so the button never claims an open panel.
+    requestAnimationFrame(() => {
+      if (!ref.isCollapsed()) return;
+      ref.resize(`${SIDE_MIN_PX}px`);
+      requestAnimationFrame(() => {
+        if (ref.isCollapsed()) {
+          sideAppliedRef.current = false;
+          setRightPanelOpen(false);
+        }
+      });
+    });
+    // `connection` is a dep because the panel group only mounts once the vault
+    // is reachable; before that the ref is empty and the effect must retry.
+  }, [rightPanelOpen, showGraph, connection]);
   const leftTab = useVaultStore((s) => s.leftPaneTab);
   const setLeftTab = useVaultStore((s) => s.setLeftPaneTab);
 
   useWatchEffect(() => {
     if (connection === "idle") void connect(convex);
   }, [connection, connect, convex]);
+
+  // ?path=<local path> → pick the vault whose root contains it, then rewrite
+  // the URL to the ordinary ?f= form (replace, so Back skips the redirect).
+  // A file opens; a directory expands in the tree with nothing selected. The
+  // effect re-runs as each prerequisite lands: the vault list, the selected
+  // vault, its file table.
+  const scannedAtForPath = useVaultStore((s) => s.scannedAt);
+  useWatchEffect(() => {
+    if (!localPath) return;
+    if (connection !== "connected" && connection !== "cached") return;
+    const store = useVaultStore.getState();
+    const activeRoot = vaults.find((v) => v.id === activeVaultId)?.root;
+    const target = resolveVaultTarget(localPath, vaults, activeRoot);
+    if (!target) {
+      useVaultStore.setState({
+        opError: `No vault on this machine contains ${localPath}. Add one with \`cast vault add <dir>\`.`,
+      });
+      router.replace(filesHref());
+      return;
+    }
+    if (target.vaultId !== activeVaultId) {
+      void selectVault(target.vaultId);
+      return;
+    }
+    if (!scannedAtForPath) return;
+    if (store.opError) store.clearOpError(); // a stale "no vault contains…" from an earlier link
+    const { files } = store;
+    let rel = target.rel;
+    let entry = rel ? files[rel] : undefined;
+    // Agents write paths relative to wherever they were looking — a package
+    // dir, not the repo root. When the literal path isn't here but exactly one
+    // file ends with it, that is the file they meant.
+    if (rel && !entry && !Object.keys(files).some((p) => p.startsWith(`${rel}/`))) {
+      const suffix = `/${rel}`;
+      const candidates = Object.keys(files).filter((p) => p.endsWith(suffix) && !files[p].dir);
+      if (candidates.length === 1) {
+        rel = candidates[0];
+        entry = files[rel];
+      }
+    }
+    const isDir = !rel || !!entry?.dir || Object.keys(files).some((p) => p.startsWith(`${rel}/`));
+    store.setLeftPaneTab("files");
+    if (entry && !entry.dir) {
+      // A source file in a notes vault sits behind the "all files" toggle;
+      // flip it so the tree shows what the link opened.
+      if (!store.showAllFiles && !isVaultMarkdownPath(rel) && !isVaultAssetPath(rel)) store.setShowAllFiles(true);
+      store.noteOpened(rel);
+      store.requestReveal(rel);
+      router.replace(filesHref({ path: rel, line: targetLine }));
+      return;
+    }
+    if (isDir) {
+      if (rel) store.setDirsExpanded([...ancestorDirs(rel), rel], true);
+      router.replace(filesHref());
+      return;
+    }
+    // Nothing by that name: open the nearest directory that does exist and say so.
+    const existing = ancestorDirs(rel).filter((d) => files[d]?.dir || Object.keys(files).some((p) => p.startsWith(`${d}/`)));
+    if (existing.length) store.setDirsExpanded(existing, true);
+    useVaultStore.setState({ opError: `${target.abs} isn't in this vault.` });
+    router.replace(filesHref());
+  }, [localPath, connection, vaults, activeVaultId, scannedAtForPath, selectVault, router, targetLine]);
 
   // `line` rides along in the URL for search results: the note view doesn't
   // scroll to it yet, but the link already carries where the hit was.
@@ -393,7 +499,8 @@ function VaultContent() {
   // scannedAt moves once per scan, which is exactly when the table fills.
   const scannedAt = useVaultStore((s) => s.scannedAt);
   useWatchEffect(() => {
-    if (!activeVault || activePath || showGraph || !scannedAt) return;
+    // A ?path= deep link is choosing the note; the landing must not race it.
+    if (!activeVault || activePath || localPath || showGraph || !scannedAt) return;
     if (landedVaults.current.has(activeVault.id)) return;
     const paths = Object.keys(useVaultStore.getState().files);
     if (!paths.length) return;
@@ -474,7 +581,7 @@ function VaultContent() {
       <Group
         orientation="horizontal"
         className="flex-1 min-h-0"
-        defaultLayout={{ "vault-tree": 20, "vault-content": 58, "vault-side": 22 }}
+        defaultLayout={{ "vault-tree": 20, "vault-content": rightPanelOpen ? 58 : 80, "vault-side": rightPanelOpen ? 22 : 0 }}
       >
         <Panel id="vault-tree" minSize={180} maxSize="42%" className="min-w-0">
           <div className="h-full flex flex-col border-r-0 bg-sol-bg-alt/40">
@@ -605,7 +712,20 @@ function VaultContent() {
         <Separator className={separatorClass} />
         {/* The graph owns everything right of the explorer: the backlinks pane
             is a list of the same edges it already draws. */}
-        <Panel id="vault-content" minSize={400} className="min-w-0 relative">
+        <Panel id="vault-content" minSize={320} className="min-w-0 relative">
+          {!showGraph && !findOpen && (
+            <button
+              type="button"
+              onClick={() => setRightPanelOpen(!rightPanelOpen)}
+              title={rightPanelOpen ? "Hide side panel" : "Show backlinks, outline and tags"}
+              aria-pressed={rightPanelOpen}
+              className={`absolute top-2 right-2 z-10 p-1 rounded transition-colors hover:bg-sol-bg-alt ${
+                rightPanelOpen ? "text-sol-text" : "text-sol-text-dim hover:text-sol-text"
+              }`}
+            >
+              <PanelRight className="w-4 h-4" />
+            </button>
+          )}
           {showGraph ? (
             <Suspense
               fallback={
@@ -646,14 +766,24 @@ function VaultContent() {
         </Panel>
         {!showGraph && (
           <>
-            <Separator className={separatorClass} />
+            <Separator className={`${separatorClass} ${rightPanelOpen ? "" : "invisible"}`} />
             <Panel
               id="vault-side"
-              minSize={200}
+              panelRef={sidePanelRef}
+              minSize={SIDE_MIN_PX}
               maxSize="34%"
+              defaultSize={rightPanelOpen ? 22 : 0}
               collapsible
               collapsedSize={0}
               className="min-w-0"
+              onResize={(size) => {
+                // A drag all the way shut is a close; keep the store honest so
+                // the toggle button reopens it instead of doing nothing.
+                if (size.asPercentage === 0 && useVaultStore.getState().rightPanelOpen) {
+                  sideAppliedRef.current = false;
+                  setRightPanelOpen(false);
+                }
+              }}
             >
               <VaultRightPanel activePath={activePath} onNavigate={(p) => openNote(p)} />
             </Panel>

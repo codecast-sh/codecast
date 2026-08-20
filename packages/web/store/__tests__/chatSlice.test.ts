@@ -130,6 +130,43 @@ describe("chat store slice", () => {
     });
   });
 
+  // ── Broadcast: Slack's "also send to #channel" ────────────────────────────
+
+  describe("broadcast replies", () => {
+    it("shows a broadcast reply in the channel AND its thread; a plain reply stays thread-only", () => {
+      const rootId = serverId("root1");
+      useInboxStore.getState().syncTable("chatMessages", [{
+        _id: rootId, channel_id: CHANNEL, user_id: THEM, content: "root", created_at: 1, updated_at: 1,
+      }]);
+
+      useInboxStore.getState().sendChatMessage(CHANNEL, "thread only", { threadRootId: rootId });
+      const bcast = useInboxStore.getState().sendChatMessage(CHANNEL, "for everyone", {
+        threadRootId: rootId, broadcast: true,
+      });
+
+      expect(messagesIn(CHANNEL).map((r) => r.content)).toEqual(["root", "for everyone"]);
+      // Both optimistic rows can share a millisecond, so compare as a set —
+      // the server's per-channel monotonic stamp owns real ordering.
+      expect(selectThreadReplies(chatState(), rootId).map((r) => r.content).sort())
+        .toEqual(["for everyone", "thread only"]);
+
+      // The flag rides the dispatch, so retry and delivery both keep it.
+      const sendCall = calls.find((c) => c.action === "dispatchChatSend" && c.args[2] === bcast);
+      expect(sendCall?.args[3]?.broadcast).toBe(true);
+    });
+
+    it("keeps the flag across a retry", () => {
+      const rootId = serverId("root2");
+      const clientId = useInboxStore.getState().sendChatMessage(CHANNEL, "again", {
+        threadRootId: rootId, broadcast: true,
+      });
+      useInboxStore.getState().markChatSendFailed(clientId);
+      calls.length = 0;
+      useInboxStore.getState().retryChatSend(clientId);
+      expect(calls[0].args[3]?.broadcast).toBe(true);
+    });
+  });
+
   // ── A failed send has to be visible ───────────────────────────────────────
 
   describe("failed sends", () => {

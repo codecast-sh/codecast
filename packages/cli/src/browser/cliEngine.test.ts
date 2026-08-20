@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { lastMutatingIndex, parseEngineRefs, translate } from "./cliEngine.js";
+import { lastMutatingIndex, parseEngineRefs, translate, rankByVisibility, readEvalScript} from "./cliEngine.js";
 
 describe("translate: text", () => {
   test("bare text reads the whole page", () => {
@@ -127,5 +127,48 @@ describe("lastMutatingIndex", () => {
   test("type only counts when it submits", () => {
     expect(lastMutatingIndex(["open x.com", 'type #e1 "hi"'])).toBe(0);
     expect(lastMutatingIndex(["open x.com", 'type #e1 "hi" --submit'])).toBe(1);
+  });
+});
+
+describe("readEvalScript", () => {
+  test("positional args join into one script", () => {
+    expect(readEvalScript(["document.title"], null)).toBe("document.title");
+  });
+
+  test("--file reads the script from disk", () => {
+    const p = `${process.env.TMPDIR ?? "/tmp"}/eval-test-${process.pid}.js`;
+    require("node:fs").writeFileSync(p, "1 + 1");
+    expect(readEvalScript(["--file", p], null)).toBe("1 + 1");
+    require("node:fs").rmSync(p);
+  });
+
+  test("-b decodes base64", () => {
+    expect(readEvalScript(["-b", Buffer.from("2+2").toString("base64")], null)).toBe("2+2");
+  });
+
+  test("--stdin uses the body when available and refuses inside a flow", () => {
+    expect(readEvalScript(["--stdin"], "a\nb")).toBe("a\nb");
+    expect(() => readEvalScript(["--stdin"], null)).toThrow(/not available/);
+  });
+
+  test("no script at all is an error", () => {
+    expect(() => readEvalScript([], null)).toThrow(/no script/);
+  });
+});
+
+describe("rankByVisibility", () => {
+  const boxes: Record<string, { width: number; height: number } | null> = {
+    a: { width: 0, height: 0 },
+    b: { width: 120, height: 24 },
+    c: null, // box unknown — treated as visible, never demoted on a guess
+  };
+  test("zero-size elements sink below visible ones, order otherwise kept", () => {
+    const { ordered, hidden } = rankByVisibility(["a", "b", "c"], (h) => boxes[h]);
+    expect(ordered).toEqual(["b", "c", "a"]);
+    expect([...hidden]).toEqual(["a"]);
+  });
+
+  test("all visible: untouched", () => {
+    expect(rankByVisibility(["b", "c"], (h) => boxes[h]).ordered).toEqual(["b", "c"]);
   });
 });

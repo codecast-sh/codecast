@@ -56,6 +56,8 @@ interface TermInstance {
   resizeObserver: ResizeObserver | null;
   /** queued while the socket is still connecting */
   pendingResize: { cols: number; rows: number } | null;
+  /** geometry adopted FROM the server (ready/reseed) — see onResize below */
+  adoptedSize: { cols: number; rows: number } | null;
   /** kill asked for before the session was ready; honored on ready */
   killRequested?: boolean;
   /** lives outside the bottom panel (per-conversation split) */
@@ -259,6 +261,7 @@ export function openTerminal(opts: OpenTerminalOptions): string {
     container: null,
     resizeObserver: null,
     pendingResize: null,
+    adoptedSize: null,
     filter: new PaneStreamFilter({ syncFrames: true }),
   };
   inst.detached = !!opts.detached;
@@ -330,7 +333,10 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
           // sizes the pane to the panel like any real terminal client — but
           // only from a laid-out container (fitInstance), never from a guess,
           // because the size we impose sticks to the agent's pane.
-          if (msg.cols && msg.rows && !inst.pendingResize) inst.term.resize(msg.cols, msg.rows);
+          if (msg.cols && msg.rows && !inst.pendingResize) {
+            inst.adoptedSize = { cols: msg.cols, rows: msg.rows };
+            inst.term.resize(msg.cols, msg.rows);
+          }
           if (!inst.state.paneSized && inst.pendingResize) {
             const { cols, rows } = inst.pendingResize;
             inst.pendingResize = null;
@@ -353,7 +359,10 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
           // old repaint completes, gets wiped, and the seed lands clean.
           inst.term.write("", () => {
             inst.term.reset();
-            if (msg.cols && msg.rows) inst.term.resize(msg.cols, msg.rows);
+            if (msg.cols && msg.rows) {
+              inst.adoptedSize = { cols: msg.cols, rows: msg.rows };
+              inst.term.resize(msg.cols, msg.rows);
+            }
           });
           bump();
         } else if (msg.type === "exit") {
@@ -412,6 +421,13 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
   });
   inst.term.onResize(({ cols, rows }) => {
     if (inst.state.paneSized) return; // the pane's own size wins
+    // A size ADOPTED from the server (ready/reseed) must not be echoed back
+    // as a client resize. On a single-pane window the echo is a no-op (pane
+    // == window), but teammate panes make the pane SMALLER than its window:
+    // the echo then shrinks the window to the pane, tmux re-tiles every pane
+    // into the smaller window, and the next reseed reports a narrower pane
+    // still — a collapse loop (220 → 109 → 54 → 27 → …, real-tmux repro).
+    if (inst.adoptedSize && inst.adoptedSize.cols === cols && inst.adoptedSize.rows === rows) return;
     if (ws.readyState === WebSocket.OPEN && inst.state.status === "open") {
       ws.send(JSON.stringify({ type: "resize", cols, rows }));
     } else {
@@ -699,6 +715,24 @@ if (typeof window !== "undefined" && import.meta.env?.DEV) {
     },
   };
 }
+// Release every live connection when the page goes away. Without this, a
+// real navigation parks the document in the back/forward cache WITH its
+// sockets open (observed via lsof): the daemon never sees a close, so an
+// interactive attach keeps its size imposed on the agent's real window
+// until Chrome evicts the cached page. Closing here lets the server detach
+// and restore the pane immediately; if the page returns from the cache, the
+// tab shows its normal disconnected state with a Reconnect button.
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    for (const inst of instances.values()) {
+      try {
+        inst.ws?.close();
+      } catch {}
+      inst.remoteDispose?.();
+    }
+  });
+}
+
 const helloLog: Array<Record<string, unknown>> = [];
 export function logHello(entry: Record<string, unknown>): void {
   helloLog.push({ ...entry, token: "<redacted>", at: Date.now() });

@@ -80,7 +80,7 @@ export function makeFakeDb(tables: Record<string, any[]>) {
       // Every time-ordered index in this schema is keyed on one of these, so
       // ordering by it is what `order()` means here. Rows without one keep
       // insertion order (the sort is stable). `last_activity_at` comes first:
-      // the one table that has it (chat_thread_reads) indexes on it, and its
+      // the tables that have it (thread_reads) index on it, and their
       // `updated_at` moves on every mark-read — ordering by that would shuffle
       // the Threads inbox whenever a row was touched.
       const timeKey = (row: any) =>

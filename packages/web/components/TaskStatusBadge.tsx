@@ -76,7 +76,7 @@ export function TaskStatusBadge({
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full border font-medium",
+        "inline-flex items-center rounded-full border font-medium whitespace-nowrap shrink-0",
         sizeClasses,
         config.bg,
         config.color,

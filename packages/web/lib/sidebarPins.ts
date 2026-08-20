@@ -37,6 +37,14 @@ export function isPinned(state: any, kind: SidebarPinKind, id: string): boolean 
   return readPins(state).some((p) => p.kind === kind && p.id === id);
 }
 
+/** The Threads page's pin. It pins as a view today; before the page left chat
+ *  it pinned as `{kind:"channel", id:"threads"}` (the route segment it had),
+ *  and persisted arrays still carry that form. Both resolve to /threads — the
+ *  stored array is never rewritten (readPins must hand back a stable ref). */
+export function isThreadsPin(pin: Pick<SidebarPin, "kind" | "id">): boolean {
+  return pin.id === "threads" && (pin.kind === "view" || pin.kind === "channel");
+}
+
 /** Add or remove one pin. Order is pin order — newest last, no re-sorting:
  *  the user's own sequence IS the arrangement. */
 export function togglePin(kind: SidebarPinKind, id: string, label: string): void {
