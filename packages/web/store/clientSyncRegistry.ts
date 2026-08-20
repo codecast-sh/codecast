@@ -261,6 +261,19 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "meta", key: "chatRail" },
     hydration: { phase: "deferred" },
   },
+  // The Threads inbox (chat.listMyThreads' entries): derived snapshot rows keyed
+  // by thread root. Persisted so the page opens on its cached threads.
+  chatThreadInbox: {
+    persistence: { kind: "collection", key: "chatThreadInbox" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, channel_id",
+  },
+  // The Threads badge (chat.listChannels' thread_unread): a scalar, live-synced
+  // app-wide with the rail; a stale cached count must not clobber a fresh one.
+  chatThreadUnread: {
+    persistence: { kind: "meta", key: "chatThreadUnread" },
+    hydration: { phase: "deferred", merge: "fill" },
+  },
 
   // ── Tier-2 collections: surfaces that used to render from a live query ──
   // Each is ONE entry. The Dexie table, the sync defaults, the {} at boot, the

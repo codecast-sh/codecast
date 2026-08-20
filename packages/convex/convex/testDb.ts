@@ -79,9 +79,12 @@ export function makeFakeDb(tables: Record<string, any[]>) {
       const predicates: FilterExpr[] = [];
       // Every time-ordered index in this schema is keyed on one of these, so
       // ordering by it is what `order()` means here. Rows without one keep
-      // insertion order (the sort is stable).
+      // insertion order (the sort is stable). `last_activity_at` comes first:
+      // the one table that has it (chat_thread_reads) indexes on it, and its
+      // `updated_at` moves on every mark-read — ordering by that would shuffle
+      // the Threads inbox whenever a row was touched.
       const timeKey = (row: any) =>
-        row.created_at ?? row.timestamp ?? row.updated_at ?? null;
+        row.last_activity_at ?? row.created_at ?? row.timestamp ?? row.updated_at ?? null;
       const apply = () => {
         const rows = (tables[table] ?? [])
           .filter((r) => filters.every(([f, v]) => r[f] === v))

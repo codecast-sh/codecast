@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
-import { Hash, Lock, Plus, BellOff, Users, SquarePen } from "lucide-react";
+import { Hash, Lock, Plus, BellOff, Users, SquarePen, MessagesSquare } from "lucide-react";
 import type { ChatChannelView } from "./chatTypes";
 import { OccupancyChip } from "../calls/OccupancyChip";
 import { CommentAvatar } from "../comments/CommentAvatar";
@@ -104,6 +104,7 @@ function RailRow({
 export const ChatChannelRail = memo(function ChatChannelRail({
   channels,
   activeChannelId,
+  threadsUnread = 0,
   onSelect,
   onCreate,
   onNewMessage,
@@ -112,6 +113,8 @@ export const ChatChannelRail = memo(function ChatChannelRail({
 }: {
   channels: ChatChannelView[];
   activeChannelId?: string;
+  /** Threads with unseen replies — the badge on the pinned Threads row. */
+  threadsUnread?: number;
   onSelect: (channelId: string) => void;
   onCreate?: () => void;
   /** Opens the new-message modal. */
@@ -129,8 +132,35 @@ export const ChatChannelRail = memo(function ChatChannelRail({
   // right below the real conversations, dimmer, one click from becoming one.
   const suggested = onOpenDm ? suggestedDmMembers(dms, members, viewer) : [];
   const headTitlebarRef = useTitlebarHead<HTMLDivElement>();
+  const threadsActive = activeChannelId === "threads";
   return (
     <nav className="ch-rail" aria-label="Channels">
+      {/* Slack's pinned entry: the one row that is a VIEW, not a room. Same row
+          grammar as a channel — weight for unread, a count only for what is
+          addressed to you (every thread reply here is). */}
+      <div className="ch-rail-list ch-rail-threads">
+        <button
+          type="button"
+          className={[
+            "ch-chan",
+            threadsActive ? "ch-chan-active" : "",
+            threadsUnread > 0 && !threadsActive ? "ch-chan-unread" : "",
+          ].filter(Boolean).join(" ")}
+          onClick={() => onSelect("threads")}
+          aria-current={threadsActive ? "page" : undefined}
+          title="Every conversation you're in"
+        >
+          <span className="ch-chan-hash" aria-hidden="true">
+            <MessagesSquare className="w-3 h-3" />
+          </span>
+          <span className="ch-chan-name">Threads</span>
+          {threadsUnread > 0 && (
+            <span className="ch-chan-badge ch-chan-badge-threads" aria-label={`${threadsUnread} threads with new replies`}>
+              {threadsUnread > 99 ? "99+" : threadsUnread}
+            </span>
+          )}
+        </button>
+      </div>
       <div ref={headTitlebarRef} className="ch-rail-head">
         <span className="ch-rail-title">Channels</span>
         {onCreate && (

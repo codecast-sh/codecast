@@ -38,7 +38,7 @@ import { CreateTaskModal } from "./CreateTaskModal";
 import { CreateDocModal } from "./CreateDocModal";
 import { CreateChannelModal } from "./CreateChannelModal";
 import { NewMessageModal } from "./chat/NewMessageModal";
-import { Globe, Workflow, Zap, MessageSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Blocks, Lock, SquarePen, Phone, PhoneCall } from "lucide-react";
+import { Globe, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Blocks, Lock, SquarePen, Phone, PhoneCall } from "lucide-react";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
@@ -305,7 +305,7 @@ const ChatNavRow = memo(function ChatNavRow({
   onToggle: () => void;
   onMobileClose?: () => void;
 }) {
-  const { channels, mentions } = useChatUnread();
+  const { channels, mentions, threads } = useChatUnread();
   const rail = useChatRail();
   const router = useRouter();
   // Signature-gated roster (useChatMembers), not the raw array: this row is
@@ -320,6 +320,26 @@ const ChatNavRow = memo(function ChatNavRow({
   // would change, so a pinned channel offers "Unpin" right where it was pinned.
   const pinnedKeys = useInboxStore((s) => readPins(s).map((x) => `${x.kind}:${x.id}`).join(","));
   const isChannelPinned = (id: string) => pinnedKeys.split(",").includes(`channel:${id}`);
+
+  // Slack's pinned entry above the rooms: the Threads inbox — a view, not a
+  // room. Its count is cyan (replies in your threads are addressed to you,
+  // but nobody typed your name), and it never carries channel actions.
+  const threadsItem = {
+    id: "threads",
+    name: "Threads",
+    icon: <MessagesSquare className="w-3 h-3 flex-shrink-0 opacity-60" />,
+    active: pathname === "/chat/threads",
+    trailing:
+      threads > 0 ? (
+        <span className="min-w-[16px] h-[15px] px-1 flex items-center justify-center text-[9.5px] font-bold bg-sol-cyan text-sol-bg rounded-full flex-shrink-0">
+          {threads > 99 ? "99+" : threads}
+        </span>
+      ) : null,
+    onSelect: () => {
+      router.push("/chat/threads");
+      onMobileClose?.();
+    },
+  };
 
   // Channels first, then direct messages — each half keeps its own activity
   // order. The icon carries the distinction: a hash is a room, a face is a
@@ -435,7 +455,7 @@ const ChatNavRow = memo(function ChatNavRow({
           ) : null
         }
         icon={<MessageSquare className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-        items={[...items, ...suggestedItems]}
+        items={[threadsItem, ...items, ...suggestedItems]}
         expanded={expanded}
         onToggle={onToggle}
       />

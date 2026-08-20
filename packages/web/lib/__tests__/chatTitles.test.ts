@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { resolveRecentVisits } from "../recentVisits";
-import { chatTabTitle } from "../../components/TabBar";
+import { chatTabTitle } from "../tabTitle";
 
 // A channel is named by its bare name — the hash is the icon beside it. pathLabel can only say "Chat", which turns
 // three open channels into three identical tabs and fills the recently-visited
@@ -31,5 +31,10 @@ describe("chat page titles", () => {
     expect(chatTabTitle(`/chat/${CHANNEL}?m=abc`, state.chatChannels)).toBe("design");
     expect(chatTabTitle("/chat", state.chatChannels)).toBeNull();
     expect(chatTabTitle("/inbox", state.chatChannels)).toBeNull();
+  });
+
+  it("names the Threads inbox without treating it as a channel id", () => {
+    expect(chatTabTitle("/chat/threads", state.chatChannels)).toBe("Threads");
+    expect(chatTabTitle("/chat/threads", {})).toBe("Threads");
   });
 });

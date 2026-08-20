@@ -125,6 +125,7 @@ export type {
   ChatRailChannel,
   ChatNotifyLevel,
   ChatSendOptions,
+  ChatThreadInboxRow,
 } from "./chatSlice";
 
 // Critical UI prefs mirrored to localStorage so they're available

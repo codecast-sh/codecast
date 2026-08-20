@@ -2202,3 +2202,198 @@ button.ch-search-chip:hover { color: var(--sol-text); }
   color: var(--sol-text-muted);
   border-color: color-mix(in srgb, var(--sol-border) 90%, transparent);
 }
+
+/* ── Threads inbox ───────────────────────────────────────────────────────────
+   One card per thread the viewer is in. Unread carries the same grammar as the
+   rail: weight plus a cyan accent, never a shout. The expanded card is the
+   thread panel's content inlined — same message rows, same composer. */
+
+.ch-threads-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 18px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ch-tcard {
+  width: 100%;
+  max-width: 920px;
+  margin: 0 auto;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 32%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--sol-card) 55%, var(--sol-bg));
+  overflow: clip;
+  flex: 0 0 auto;
+}
+
+.ch-tcard-unread {
+  border-color: color-mix(in srgb, var(--sol-cyan) 38%, transparent);
+}
+
+.ch-tcard-expanded {
+  border-color: color-mix(in srgb, var(--sol-blue) 40%, transparent);
+  box-shadow: 0 3px 14px color-mix(in srgb, var(--sol-text) 8%, transparent);
+}
+
+.ch-tcard-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px 7px 12px;
+  font-size: 11.5px;
+  color: var(--sol-text-muted);
+  background: color-mix(in srgb, var(--sol-bg-alt) 32%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 20%, transparent);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ch-tcard-head:hover {
+  background: color-mix(in srgb, var(--sol-border) 18%, transparent);
+}
+
+.ch-tcard-chan {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+  color: var(--sol-text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ch-tcard-chanicon {
+  color: var(--sol-text-dim);
+  display: inline-flex;
+}
+
+.ch-tcard-badge {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--sol-cyan) 16%, transparent);
+  color: var(--sol-cyan);
+}
+
+.ch-tcard-spacer { flex: 1 1 auto; }
+
+.ch-tcard-age {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  color: var(--sol-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.ch-tcard-tool { flex: 0 0 auto; }
+
+.ch-tcard-caret {
+  color: var(--sol-text-dim);
+  display: inline-flex;
+}
+
+.ch-tcard-root { padding: 8px 6px 2px; }
+
+.ch-tcard-ghost {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+}
+
+.ch-tcard-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 14px 9px;
+  font-size: 11.5px;
+  color: var(--sol-blue);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ch-tcard-summary:hover {
+  background: color-mix(in srgb, var(--sol-border) 14%, transparent);
+}
+
+.ch-tcard-face { display: inline-flex; margin-right: -2px; }
+
+.ch-tcard-count { font-weight: 600; flex: 0 0 auto; }
+
+.ch-tcard-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sol-text-muted);
+}
+
+.ch-tcard-preview-name { color: var(--sol-text-secondary); font-weight: 500; }
+
+.ch-tcard-open {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid color-mix(in srgb, var(--sol-border) 18%, transparent);
+}
+
+/* Bounded so one long thread doesn't swallow the page; the page keeps its own
+   scroll for walking BETWEEN threads, the card scrolls WITHIN one. */
+.ch-tcard-replies {
+  max-height: 55vh;
+  overflow-y: auto;
+  padding: 4px 6px 8px;
+}
+
+.ch-tcard-markall {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--sol-text-muted);
+  border: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent);
+  cursor: pointer;
+}
+
+.ch-tcard-markall:hover {
+  color: var(--sol-text);
+  background: color-mix(in srgb, var(--sol-border) 20%, transparent);
+}
+
+.ch-tcard-older {
+  align-self: center;
+  margin-top: 2px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: var(--sol-text-muted);
+  border: 1px solid color-mix(in srgb, var(--sol-border) 36%, transparent);
+  cursor: pointer;
+}
+
+.ch-tcard-older:hover {
+  color: var(--sol-text);
+  background: color-mix(in srgb, var(--sol-border) 18%, transparent);
+}
+
+.ch-tcard-older:disabled { opacity: 0.6; cursor: default; }
+
+.ch-rail-threads { padding-top: 8px; }
+
+/* Threads count is cyan, not red: replies in your threads are addressed to
+   you, but they are not someone typing your name. */
+.ch-chan-badge-threads {
+  background: color-mix(in srgb, var(--sol-cyan) 18%, transparent);
+  color: var(--sol-cyan);
+}

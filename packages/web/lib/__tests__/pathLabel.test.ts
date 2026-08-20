@@ -35,13 +35,13 @@ describe("tabTitle — a stamped inbox tab is titled by its session", () => {
   const sessions = { [SID]: { _id: SID, title: "Broker outreach pipeline monitor" } };
 
   it("resolves the session title from the ?s= param", async () => {
-    const { tabTitle } = await import("../../components/TabBar");
+    const { tabTitle } = await import("../tabTitle");
     const tab = { id: "t1", title: "Inbox", path: `/inbox?s=${SID}`, createdAt: 1 };
     expect(tabTitle(tab as any, sessions, {})).toBe("Broker outreach pipeline monitor");
   });
 
   it("never shows a stored raw-path title from before the pathLabel fix", async () => {
-    const { tabTitle } = await import("../../components/TabBar");
+    const { tabTitle } = await import("../tabTitle");
     const tab = { id: "t1", title: "inbox?s=jx77e151jzzb8jn", path: "/inbox?s=unknownsession", createdAt: 1 };
     expect(tabTitle(tab as any, {}, {})).toBe("Inbox");
   });
