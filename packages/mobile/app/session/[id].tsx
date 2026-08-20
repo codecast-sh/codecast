@@ -33,8 +33,13 @@ import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/u
 import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '@/constants/Theme';
 import {
   extractNestedActions,
-  structuredPayloadSummary,
-  toolSummary as sharedToolSummary,
+  toolSummary,
+  formatToolName,
+  mcpToolNames,
+  stripLineNumbers,
+  isPlanWriteToolCall,
+  toolIcon,
+  type ToolColorToken,
 } from '@codecast/shared/render';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // A real gradient WITHOUT a native module: expo-linear-gradient's native side
@@ -484,72 +489,24 @@ function formatDuration(startTs: number): string {
   return `${days}d ${hours % 24}h`;
 }
 
-const mcpToolNames: Record<string, string> = {
-  "mcp__claude-in-chrome__computer": "Browser",
-  "mcp__claude-in-chrome__navigate": "Navigate",
-  "mcp__claude-in-chrome__read_page": "Read Page",
-  "mcp__claude-in-chrome__find": "Find",
-  "mcp__claude-in-chrome__form_input": "Form",
-  "mcp__claude-in-chrome__javascript_tool": "JS",
-  "mcp__claude-in-chrome__tabs_context_mcp": "Tabs",
-  "mcp__claude-in-chrome__tabs_create_mcp": "New Tab",
-  "mcp__claude-in-chrome__update_plan": "Plan",
-  "mcp__claude-in-chrome__gif_creator": "GIF",
-  "mcp__claude-in-chrome__read_console_messages": "Console",
-  "mcp__claude-in-chrome__read_network_requests": "Network",
-  "mcp__claude-in-chrome__get_page_text": "Page Text",
-  "mcp__claude-in-chrome__upload_image": "Upload",
-  "mcp__claude-in-chrome__resize_window": "Resize",
-  "mcp__claude-in-chrome__shortcuts_list": "Shortcuts",
-  "mcp__claude-in-chrome__shortcuts_execute": "Shortcut",
+// Concrete hex for each semantic color token the shared tool visuals return.
+const toolColorHex: Record<ToolColorToken, string> = {
+  green: Theme.green,
+  blue: Theme.blue,
+  violet: Theme.violet,
+  orange: Theme.orange,
+  cyan: Theme.cyan,
+  magenta: Theme.magenta,
+  red: Theme.red,
+  textDim: Theme.textDim,
+  emerald: Theme.greenBright,
+  amber: '#f59e0b',
 };
 
-const codexToolNames: Record<string, string> = {
-  exec: "Actions",
-  shell_command: "Terminal",
-  shell: "Terminal",
-  exec_command: "Terminal",
-  "container.exec": "Terminal",
-  commandExecution: "Terminal",
-  apply_patch: "Patch",
-  file_read: "Read",
-  file_write: "Write",
-  file_edit: "Edit",
-  web_search: "Search",
-  web_fetch: "Fetch",
-  code_search: "Search",
-  code_analysis: "Analyze",
-};
-
-function formatToolName(name: string): string {
-  if (mcpToolNames[name]) return mcpToolNames[name];
-  if (codexToolNames[name]) return codexToolNames[name];
-  if (name.startsWith("mcp__")) {
-    const parts = name.split("__");
-    const method = parts[2] || parts[1] || "MCP";
-    return method.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()).slice(0, 12);
-  }
-  return name.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-}
-
-function truncateStr(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max) + "..." : s;
-}
-
-function stripLineNumbers(content: string): string {
-  return content.split("\n").map(line => line.replace(/^\s*\d+→/, "")).join("\n");
-}
-
-function shortenUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    const host = parsed.hostname.replace(/^www\./, "");
-    const path = parsed.pathname;
-    if (path === "/" || path === "") return host;
-    return host + (path.length > 25 ? path.slice(0, 22) + "..." : path);
-  } catch {
-    return truncateStr(url, 40);
-  }
+// Uncurated mcp__server__method labels get clipped to fit the collapsed row.
+function toolLabel(name: string): string {
+  const label = formatToolName(name);
+  return name.startsWith('mcp__') && !mcpToolNames[name] ? label.slice(0, 12) : label;
 }
 
 function hasRichMarkdown(text: string): boolean {
@@ -610,16 +567,6 @@ function isPlanFile(filePath: string, content: string): boolean {
   return false;
 }
 
-function isPlanWriteToolCall(tc: ToolCall): boolean {
-  if (tc.name !== 'Write') return false;
-  try {
-    const parsed = JSON.parse(tc.input);
-    return String(parsed.file_path || '').includes('.claude/plans/');
-  } catch {
-    return false;
-  }
-}
-
 function getFileExtension(filePath: string): string | undefined {
   const ext = filePath.split('.').pop()?.toLowerCase();
   const langMap: Record<string, string> = {
@@ -631,228 +578,6 @@ function getFileExtension(filePath: string): string | undefined {
     sh: 'bash', bash: 'bash', zsh: 'bash', swift: 'swift', kt: 'kotlin',
   };
   return ext ? langMap[ext] : undefined;
-}
-
-function getRelativePath(fullPath: string): string {
-  const patterns = [
-    /\/Users\/[^/]+\/src\/(.+)$/,
-    /\/Users\/[^/]+\/(.+)$/,
-    /\/home\/[^/]+\/(?:src|projects|code)\/(.+)$/,
-    /\/home\/[^/]+\/(.+)$/,
-  ];
-  for (const pattern of patterns) {
-    const match = fullPath.match(pattern);
-    if (match) return match[1];
-  }
-  const parts = fullPath.split("/").filter(Boolean);
-  return parts.slice(-3).join("/");
-}
-
-function toolIcon(name: string): { icon: React.ComponentProps<typeof FontAwesome>['name']; color: string } {
-  if (name === 'Bash' || name === 'shell_command' || name === 'shell' || name === 'exec_command' || name === 'container.exec' || name === 'commandExecution') return { icon: 'terminal', color: Theme.green };
-  if (name === 'exec') return { icon: 'cog', color: Theme.cyan };
-  if (name === 'Read' || name === 'file_read') return { icon: 'file-code-o', color: Theme.blue };
-  if (name === 'Glob' || name === 'Grep') return { icon: 'search', color: Theme.violet };
-  if (name === 'Edit' || name === 'Write' || name === 'file_write' || name === 'file_edit' || name === 'apply_patch') return { icon: 'pencil', color: Theme.orange };
-  if (name === 'WebSearch' || name === 'web_search' || name === 'code_search' || name === 'code_analysis') return { icon: 'globe', color: Theme.violet };
-  if (name === 'WebFetch' || name === 'web_fetch') return { icon: 'globe', color: Theme.cyan };
-  if (name === 'Task') return { icon: 'code-fork', color: Theme.cyan };
-  if (name === 'TaskCreate' || name === 'TaskUpdate' || name === 'TaskList' || name === 'TaskGet') return { icon: 'tasks', color: '#10b981' };
-  if (name === 'SendMessage') return { icon: 'comment', color: '#f59e0b' };
-  if (name === 'StructuredOutput') return { icon: 'check-square-o', color: Theme.cyan };
-  if (name === 'TodoWrite') return { icon: 'check-square-o', color: Theme.magenta };
-  if (name === 'Skill') return { icon: 'bolt', color: Theme.cyan };
-  if (name === 'EnterPlanMode' || name === 'ExitPlanMode') return { icon: 'map-o', color: Theme.violet };
-  if (name === 'AskUserQuestion') return { icon: 'question-circle-o', color: Theme.blue };
-  if (name === 'TeamCreate' || name === 'TeamDelete') return { icon: 'users', color: Theme.cyan };
-  if (name === 'TaskOutput' || name === 'TaskStop') return { icon: 'tasks', color: '#10b981' };
-  if (name === 'NotebookEdit') return { icon: 'book', color: Theme.orange };
-
-  if (name.startsWith('mcp__')) {
-    if (name.includes('tabs_context') || name.includes('tabs_create')) {
-      return { icon: 'chrome', color: Theme.textDim };
-    }
-    if (name.includes('computer') || name.includes('screenshot')) {
-      return { icon: 'desktop', color: Theme.orange };
-    }
-    if (name.includes('navigate')) {
-      return { icon: 'chrome', color: Theme.blue };
-    }
-    if (name.includes('read_page') || name.includes('get_page_text')) {
-      return { icon: 'chrome', color: Theme.blue };
-    }
-    if (name.includes('find')) {
-      return { icon: 'search', color: Theme.violet };
-    }
-    if (name.includes('form_input') || name.includes('javascript_tool')) {
-      return { icon: 'chrome', color: Theme.orange };
-    }
-    if (name.includes('gif_creator')) {
-      return { icon: 'chrome', color: Theme.magenta };
-    }
-    if (name.includes('console') || name.includes('network')) {
-      return { icon: 'chrome', color: Theme.green };
-    }
-    if (name.includes('update_plan')) {
-      return { icon: 'chrome', color: Theme.cyan };
-    }
-    if (name.includes('upload_image')) {
-      return { icon: 'upload', color: Theme.blue };
-    }
-    if (name.includes('resize_window')) {
-      return { icon: 'arrows-alt', color: Theme.textDim };
-    }
-    if (name.includes('shortcuts')) {
-      return { icon: 'bolt', color: Theme.violet };
-    }
-    return { icon: 'plug', color: Theme.cyan };
-  }
-
-  return { icon: 'cog', color: Theme.textDim };
-}
-
-function toolSummary(tc: ToolCall): string {
-  let parsedInput: Record<string, any> = {};
-  try {
-    parsedInput = JSON.parse(tc.input);
-  } catch {
-    return '';
-  }
-
-  // File-based tools
-  if (tc.name === 'Read' || tc.name === 'Edit' || tc.name === 'Write') {
-    return getRelativePath(String(parsedInput.file_path || ''));
-  }
-  if (tc.name === 'file_read' || tc.name === 'file_write' || tc.name === 'file_edit') {
-    return getRelativePath(String(parsedInput.file_path || parsedInput.path || ''));
-  }
-
-  // Shell/Terminal tools
-  if (tc.name === 'Bash' || tc.name === 'shell_command' || tc.name === 'shell' || tc.name === 'exec_command' || tc.name === 'container.exec') {
-    const cmd = String(parsedInput.command || parsedInput.cmd || '');
-    return cmd ? truncateStr(cmd, 100) : '';
-  }
-
-  // Search tools
-  if (tc.name === 'Glob' && parsedInput.pattern) return String(parsedInput.pattern);
-  if (tc.name === 'Grep' && parsedInput.pattern) return String(parsedInput.pattern);
-  if (tc.name === 'WebSearch' || tc.name === 'web_search' || tc.name === 'code_search') return parsedInput.query ? truncateStr(String(parsedInput.query), 40) : '';
-  if (tc.name === 'WebFetch' || tc.name === 'web_fetch') return parsedInput.url ? shortenUrl(String(parsedInput.url)) : '';
-
-  // Patch tool
-  if (tc.name === 'apply_patch') {
-    const input = String(parsedInput.input || parsedInput.patch || '');
-    const fileMatch = input.match(/\*\*\* (?:Update|Add|Delete) File: (.+)/);
-    if (fileMatch) return getRelativePath(fileMatch[1].trim());
-    return 'Apply patch';
-  }
-
-  // MCP Browser tools
-  if (tc.name === 'mcp__claude-in-chrome__computer') {
-    const action = String(parsedInput.action || '');
-    if (action === 'screenshot') return 'Screenshot';
-    if (action === 'left_click') {
-      const coord = parsedInput.coordinate as number[] | undefined;
-      return coord ? `Click (${coord[0]}, ${coord[1]})` : 'Click';
-    }
-    if (action === 'type') return `Type "${truncateStr(String(parsedInput.text || ''), 20)}"`;
-    if (action === 'key') return `Key: ${String(parsedInput.text || '')}`;
-    if (action === 'scroll') return `Scroll ${String(parsedInput.scroll_direction || '')}`;
-    if (action === 'wait') return `Wait ${String(parsedInput.duration || '')}s`;
-    return action || '';
-  }
-  if (tc.name === 'mcp__claude-in-chrome__navigate') {
-    const url = String(parsedInput.url || '');
-    if (url === 'back') return 'Back';
-    if (url === 'forward') return 'Forward';
-    return url ? shortenUrl(url) : '';
-  }
-  if (tc.name === 'mcp__claude-in-chrome__read_page') {
-    if (parsedInput.ref_id) return `Element ${String(parsedInput.ref_id)}`;
-    if (parsedInput.filter === 'interactive') return 'Interactive elements';
-    return 'Page content';
-  }
-  if (tc.name === 'mcp__claude-in-chrome__find') {
-    return parsedInput.query ? `"${truncateStr(String(parsedInput.query), 30)}"` : '';
-  }
-  if (tc.name === 'mcp__claude-in-chrome__form_input') {
-    const ref = parsedInput.ref ? String(parsedInput.ref) : '';
-    const val = parsedInput.value;
-    if (ref && val !== undefined) return `${ref} = "${truncateStr(String(val), 20)}"`;
-    return '';
-  }
-  if (tc.name === 'mcp__claude-in-chrome__javascript_tool') {
-    return parsedInput.text ? truncateStr(String(parsedInput.text), 40) : '';
-  }
-  if (tc.name === 'mcp__claude-in-chrome__tabs_context_mcp') return 'Get tabs';
-  if (tc.name === 'mcp__claude-in-chrome__tabs_create_mcp') return 'Create tab';
-  if (tc.name === 'mcp__claude-in-chrome__update_plan') {
-    const domains = parsedInput.domains as string[] | undefined;
-    if (Array.isArray(domains) && domains.length) {
-      return domains.slice(0, 2).join(', ') + (domains.length > 2 ? '...' : '');
-    }
-    return '';
-  }
-  if (tc.name === 'mcp__claude-in-chrome__gif_creator') return String(parsedInput.action || '');
-  if (tc.name === 'mcp__claude-in-chrome__read_console_messages') {
-    return parsedInput.pattern ? `Filter: ${String(parsedInput.pattern)}` : '';
-  }
-  if (tc.name === 'mcp__claude-in-chrome__read_network_requests') {
-    return parsedInput.urlPattern ? `Filter: ${String(parsedInput.urlPattern)}` : '';
-  }
-  if (tc.name === 'mcp__claude-in-chrome__get_page_text') return 'Extract text';
-  if (tc.name === 'mcp__claude-in-chrome__upload_image') return parsedInput.filename ? String(parsedInput.filename) : 'Upload';
-  if (tc.name === 'mcp__claude-in-chrome__resize_window') return parsedInput.width && parsedInput.height ? `${parsedInput.width}x${parsedInput.height}` : 'Resize';
-  if (tc.name === 'mcp__claude-in-chrome__shortcuts_list') return 'List shortcuts';
-  if (tc.name === 'mcp__claude-in-chrome__shortcuts_execute') return parsedInput.command ? `/${String(parsedInput.command)}` : 'Shortcut';
-
-  if (tc.name === 'StructuredOutput') return structuredPayloadSummary(parsedInput);
-
-  // Task tools
-  if (tc.name === 'Task') return parsedInput.description ? truncateStr(String(parsedInput.description), 40) : '';
-  if (tc.name === 'AskUserQuestion') {
-    const questions = parsedInput.questions as any[];
-    return questions?.[0]?.question ? truncateStr(String(questions[0].question), 50) : '';
-  }
-  if (tc.name === 'TodoWrite') {
-    const todos = parsedInput.todos as any[];
-    return `${todos?.length || 0} tasks`;
-  }
-  if (tc.name === 'TaskGet') return parsedInput.taskId ? `#${parsedInput.taskId}` : '';
-  if (tc.name === 'TaskOutput') return parsedInput.task_id ? `task ${String(parsedInput.task_id).slice(0, 8)}` : '';
-  if (tc.name === 'TaskStop') return parsedInput.task_id ? `stop ${String(parsedInput.task_id).slice(0, 8)}` : '';
-  if (tc.name === 'TaskList') return '';
-  if (tc.name === 'TaskCreate') return parsedInput.subject ? truncateStr(String(parsedInput.subject), 40) : '';
-  if (tc.name === 'TaskUpdate') {
-    const id = parsedInput.taskId ? `#${parsedInput.taskId}` : '';
-    const status = parsedInput.status ? String(parsedInput.status) : '';
-    if (id && status) return `${id} → ${status}`;
-    return id || '';
-  }
-  if (tc.name === 'SendMessage') {
-    if (parsedInput.summary) return truncateStr(String(parsedInput.summary), 40);
-    if (parsedInput.recipient) return `to ${String(parsedInput.recipient)}`;
-    if (parsedInput.type === 'broadcast') return 'broadcast';
-    return '';
-  }
-  if (tc.name === 'TeamCreate') return parsedInput.team_name ? String(parsedInput.team_name) : '';
-  if (tc.name === 'TeamDelete') return 'Cleanup';
-  if (tc.name === 'Skill') return `/${parsedInput.skill || ''}`;
-  if (tc.name === 'NotebookEdit') {
-    const path = parsedInput.notebook_path ? getRelativePath(String(parsedInput.notebook_path)) : '';
-    return path;
-  }
-
-  if (tc.name.startsWith('mcp__')) {
-    const parts = tc.name.split('__');
-    const method = parts[2] || '';
-    const displayMethod = method.replace(/_/g, ' ');
-    if (parsedInput.url) return shortenUrl(String(parsedInput.url));
-    if (parsedInput.query) return truncateStr(String(parsedInput.query), 30);
-    return displayMethod || parts[1] || '';
-  }
-
-  return '';
 }
 
 // Specialized tool rendering components
@@ -2237,10 +1962,8 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
   const displayToolName = nestedActions.length === 1
     ? nestedActions[0].name
     : toolCall.name;
-  const { color } = toolIcon(displayToolName);
-  const summary = nestedActions.length > 0
-    ? sharedToolSummary(nestedActions.length === 1 ? nestedActions[0] : toolCall)
-    : toolSummary(toolCall);
+  const color = toolColorHex[toolIcon(displayToolName).color];
+  const summary = toolSummary(nestedActions.length === 1 ? nestedActions[0] : toolCall);
   const [viewMode, setViewMode] = useState<'raw' | 'rendered'>('rendered');
 
   // Format input nicely - parse JSON and extract relevant fields
@@ -2414,7 +2137,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
   return (
     <Pressable onPress={onToggle} style={styles.toolCallContainer}>
       <RNText style={styles.toolCallHeader} numberOfLines={expanded ? undefined : 1}>
-        <RNText style={[styles.toolCallName, { color }]}>{formatToolName(displayToolName)}</RNText>
+        <RNText style={[styles.toolCallName, { color }]}>{toolLabel(displayToolName)}</RNText>
         {summary ? (
           <RNText style={styles.toolCallSummary}> {summary}</RNText>
         ) : null}
@@ -4121,19 +3844,15 @@ export default function SessionDetailScreen() {
   }, [conversation, id, generateShareLink, setPrivacy, setTeamVisibility, showToast]);
 
   const searchLower = searchQuery.toLowerCase();
-  const searchMatchIds = useMemo(() => {
-    if (!searchLower) return null;
-    const ids = new Set<string>();
-    for (const msg of allMessages) {
-      if (msg.content && msg.content.toLowerCase().includes(searchLower)) ids.add(msg._id);
-    }
-    return ids;
-  }, [searchLower, allMessages]);
-
   const searchMatchList = useMemo(() => {
     if (!searchLower) return [];
     return allMessages.filter(msg => msg.content && msg.content.toLowerCase().includes(searchLower)).map(m => m._id);
   }, [searchLower, allMessages]);
+
+  const searchMatchIds = useMemo(
+    () => (searchLower ? new Set(searchMatchList) : null),
+    [searchLower, searchMatchList],
+  );
 
   useEffect(() => { setCurrentMatchIndex(0); }, [searchQuery]);
 

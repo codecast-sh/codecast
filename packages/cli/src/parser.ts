@@ -83,14 +83,16 @@ export interface ParsedMessage {
   model?: string;
 }
 
-export function parseSessionLine(line: string): ClaudeSessionEntry | null {
+export function parseSessionLine(line: string, opts?: { quiet?: boolean }): ClaudeSessionEntry | null {
   if (!line.trim()) return null;
   try {
     return JSON.parse(line) as ClaudeSessionEntry;
   } catch (err) {
-    const preview = line.length > 100 ? line.slice(0, 100) + '...' : line;
-    console.warn(`[parser] Failed to parse session line: ${err instanceof Error ? err.message : String(err)}`);
-    console.warn(`[parser] Line content: ${preview}`);
+    if (!opts?.quiet) {
+      const preview = line.length > 100 ? line.slice(0, 100) + '...' : line;
+      console.warn(`[parser] Failed to parse session line: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[parser] Line content: ${preview}`);
+    }
     return null;
   }
 }
@@ -321,7 +323,7 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
 export function parseSessionFile(content: string): ParsedMessage[] {
   const lines = content.split("\n");
   const entries = lines
-    .map(parseSessionLine)
+    .map(line => parseSessionLine(line))
     .filter((e): e is ClaudeSessionEntry => e !== null);
   return extractMessages(entries);
 }
@@ -374,10 +376,10 @@ export function extractTeamInfo(content: string): { teamName: string; agentName:
   return undefined;
 }
 
-export function extractCwd(content: string): string | undefined {
+export function extractCwd(content: string, opts?: { quiet?: boolean }): string | undefined {
   const lines = content.split("\n");
   for (const line of lines) {
-    const entry = parseSessionLine(line);
+    const entry = parseSessionLine(line, opts);
     if (entry?.cwd) {
       return entry.cwd;
     }

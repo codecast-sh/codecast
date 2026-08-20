@@ -10,12 +10,15 @@ export interface WindowBounds {
   height: number;
 }
 
+export type WindowVisualState = "normal" | "minimized" | "maximized";
+
 export interface WindowState extends WindowBounds {
   id: string;
   sessionId: string;
   zIndex: number;
-  minimized: boolean;
-  maximized: boolean;
+  visualState: WindowVisualState;
+  /** What restoreWindow returns to after a minimize, captured at minimize time */
+  restoreTo?: "normal" | "maximized";
   /** Saved bounds before maximize, for restore */
   prevBounds?: WindowBounds;
 }
@@ -143,7 +146,7 @@ export const useWindowManager = create<WindowManagerState>((set, get) => ({
     // If already open for this session, just bring to front
     const existing = Object.values(state.windows).find(w => w.sessionId === sessionId);
     if (existing) {
-      if (existing.minimized) get().restoreWindow(existing.id);
+      if (existing.visualState === "minimized") get().restoreWindow(existing.id);
       get().bringToFront(existing.id);
       return existing.id;
     }
@@ -158,8 +161,7 @@ export const useWindowManager = create<WindowManagerState>((set, get) => ({
       width: bounds?.width ?? DEFAULT_WIDTH,
       height: bounds?.height ?? DEFAULT_HEIGHT,
       zIndex: state.nextZIndex,
-      minimized: false,
-      maximized: false,
+      visualState: "normal",
     };
     set({
       windows: { ...state.windows, [id]: win },
@@ -181,9 +183,16 @@ export const useWindowManager = create<WindowManagerState>((set, get) => ({
 
   minimizeWindow(id) {
     const win = get().windows[id];
-    if (!win) return;
+    if (!win || win.visualState === "minimized") return;
     set({
-      windows: { ...get().windows, [id]: { ...win, minimized: true } },
+      windows: {
+        ...get().windows,
+        [id]: {
+          ...win,
+          visualState: "minimized",
+          restoreTo: win.visualState === "maximized" ? "maximized" : "normal",
+        },
+      },
       focusedWindowId: get().focusedWindowId === id ? null : get().focusedWindowId,
     });
   },
@@ -197,9 +206,9 @@ export const useWindowManager = create<WindowManagerState>((set, get) => ({
         ...get().windows,
         [id]: {
           ...win,
-          maximized: true,
-          minimized: false,
-          prevBounds,
+          visualState: "maximized",
+          restoreTo: undefined,
+          prevBounds: win.visualState === "maximized" ? win.prevBounds : prevBounds,
           x: 0,
           y: 0,
           width: viewport.width,
@@ -215,17 +224,22 @@ export const useWindowManager = create<WindowManagerState>((set, get) => ({
   restoreWindow(id) {
     const win = get().windows[id];
     if (!win) return;
-    const restored = win.prevBounds ?? { x: win.x, y: win.y, width: win.width, height: win.height };
+    // A minimized window kept its bounds (maximized ones included) — just come
+    // back at whatever visual state it was minimized from. Otherwise this is an
+    // un-maximize: reapply the bounds saved before the maximize.
+    const next: WindowState =
+      win.visualState === "minimized"
+        ? { ...win, visualState: win.restoreTo ?? "normal", restoreTo: undefined }
+        : {
+            ...win,
+            visualState: "normal",
+            ...(win.prevBounds ?? { x: win.x, y: win.y, width: win.width, height: win.height }),
+            prevBounds: undefined,
+          };
     set({
       windows: {
         ...get().windows,
-        [id]: {
-          ...win,
-          minimized: false,
-          maximized: false,
-          ...restored,
-          zIndex: get().nextZIndex,
-        },
+        [id]: { ...next, zIndex: get().nextZIndex },
       },
       nextZIndex: get().nextZIndex + 1,
       focusedWindowId: id,
@@ -235,7 +249,7 @@ export const useWindowManager = create<WindowManagerState>((set, get) => ({
   toggleMinimize(id) {
     const win = get().windows[id];
     if (!win) return;
-    if (win.minimized) {
+    if (win.visualState === "minimized") {
       get().restoreWindow(id);
     } else {
       get().minimizeWindow(id);
@@ -258,33 +272,36 @@ export const useWindowManager = create<WindowManagerState>((set, get) => ({
   updatePosition(id, x, y) {
     const win = get().windows[id];
     if (!win) return;
+    const visualState = win.visualState === "maximized" ? "normal" : win.visualState;
     set({
-      windows: { ...get().windows, [id]: { ...win, x, y, maximized: false } },
+      windows: { ...get().windows, [id]: { ...win, x, y, visualState } },
     });
   },
 
   updateSize(id, width, height) {
     const win = get().windows[id];
     if (!win) return;
+    const visualState = win.visualState === "maximized" ? "normal" : win.visualState;
     set({
-      windows: { ...get().windows, [id]: { ...win, width, height, maximized: false } },
+      windows: { ...get().windows, [id]: { ...win, width, height, visualState } },
     });
   },
 
   updateBounds(id, bounds) {
     const win = get().windows[id];
     if (!win) return;
+    const visualState = win.visualState === "maximized" ? "normal" : win.visualState;
     set({
       windows: {
         ...get().windows,
-        [id]: { ...win, ...bounds, maximized: false },
+        [id]: { ...win, ...bounds, visualState },
       },
     });
   },
 
   autoArrange(mode, viewport) {
     const state = get();
-    const visible = Object.values(state.windows).filter(w => !w.minimized);
+    const visible = Object.values(state.windows).filter(w => w.visualState !== "minimized");
     if (visible.length === 0) return;
 
     const layoutFn = { tile: tileLayout, cascade: cascadeLayout, horizontal: horizontalLayout, vertical: verticalLayout }[mode];
@@ -295,7 +312,7 @@ export const useWindowManager = create<WindowManagerState>((set, get) => ({
       updated[win.id] = {
         ...win,
         ...positions[i],
-        maximized: false,
+        visualState: "normal",
         prevBounds: undefined,
         zIndex: state.nextZIndex + i,
       };

@@ -23,7 +23,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { deriveProfileName, isLegacyDerivedName } from "./ccAccounts.js";
+import { createMtimeGatedCache, deriveProfileName, isLegacyDerivedName } from "./ccAccounts.js";
 import { atomicWriteFile } from "./atomicWrite.js";
 import { readProfileIndexFile } from "./readForUpdate.js";
 import {
@@ -409,62 +409,42 @@ export interface CodexAccountsHeartbeatPayload {
   }>;
 }
 
-let payloadCache: {
-  value: CodexAccountsHeartbeatPayload | null;
-  indexMtime: number;
-  authMtime: number;
-  usageMtime: number;
-} | null = null;
-
-function mtimeOf(p: string): number {
-  try {
-    return fs.statSync(p).mtimeMs;
-  } catch {
-    return 0;
-  }
-}
+const payloadCache = createMtimeGatedCache<CodexAccountsHeartbeatPayload | null>(
+  () => [indexPath(), activeAuthPath(), usageCachePath()],
+  () => {
+    let value: CodexAccountsHeartbeatPayload | null = null;
+    try {
+      const active = activeCodexSummary();
+      const usage = readUsageCache().accounts;
+      const profiles = Object.entries(readProfileIndex().profiles)
+        .map(([name, meta]) => {
+          const snap = usage[meta.account_id || meta.email || ""];
+          let usageOut: CodexAccountsHeartbeatPayload["profiles"][number]["usage"];
+          let plan = meta.plan;
+          if (snap) {
+            const { plan_type, ...rest } = snap;
+            usageOut = rest;
+            // The RPC's live plan reading beats the id_token claim saved at
+            // snapshot time (upgrades/downgrades show without a re-login).
+            if (plan_type) plan = plan_type;
+          }
+          return { name, email: meta.email, subscription: plan, usage: usageOut };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
+      if (active.email || active.account_id || profiles.length > 0) {
+        value = { active_email: active.email, active_uuid: active.account_id, profiles };
+      }
+    } catch {
+      value = null;
+    }
+    return value;
+  },
+);
 
 export function invalidateCodexAccountsCache(): void {
-  payloadCache = null;
+  payloadCache.invalidate();
 }
 
 export function getCodexAccountsHeartbeatPayload(): CodexAccountsHeartbeatPayload | null {
-  const indexMtime = mtimeOf(indexPath());
-  const authMtime = mtimeOf(activeAuthPath());
-  const usageMtime = mtimeOf(usageCachePath());
-  if (
-    payloadCache &&
-    payloadCache.indexMtime === indexMtime &&
-    payloadCache.authMtime === authMtime &&
-    payloadCache.usageMtime === usageMtime
-  ) {
-    return payloadCache.value;
-  }
-  let value: CodexAccountsHeartbeatPayload | null = null;
-  try {
-    const active = activeCodexSummary();
-    const usage = readUsageCache().accounts;
-    const profiles = Object.entries(readProfileIndex().profiles)
-      .map(([name, meta]) => {
-        const snap = usage[meta.account_id || meta.email || ""];
-        let usageOut: CodexAccountsHeartbeatPayload["profiles"][number]["usage"];
-        let plan = meta.plan;
-        if (snap) {
-          const { plan_type, ...rest } = snap;
-          usageOut = rest;
-          // The RPC's live plan reading beats the id_token claim saved at
-          // snapshot time (upgrades/downgrades show without a re-login).
-          if (plan_type) plan = plan_type;
-        }
-        return { name, email: meta.email, subscription: plan, usage: usageOut };
-      })
-      .sort((a, b) => a.name.localeCompare(b.name));
-    if (active.email || active.account_id || profiles.length > 0) {
-      value = { active_email: active.email, active_uuid: active.account_id, profiles };
-    }
-  } catch {
-    value = null;
-  }
-  payloadCache = { value, indexMtime, authMtime, usageMtime };
-  return value;
+  return payloadCache.get();
 }

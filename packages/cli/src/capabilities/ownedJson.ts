@@ -302,6 +302,10 @@ export function readLedger(target: string): OwnershipLedger {
 }
 
 export interface ApplyResult extends MergePlan {
+  /** "needs_upgrade": the ledger was written by a newer CLI — nothing was
+   *  written or removed; update codecast on this machine before changing the
+   *  file here. */
+  status: "applied" | "needs_upgrade";
   /** False in a dry run, or when nothing needed writing. */
   wrote: boolean;
 }
@@ -345,20 +349,15 @@ export function applyOwnedJson(
   const detailed = readLedgerDetailed(target);
   if (detailed.needsUpgrade) {
     return {
+      status: "needs_upgrade",
       next: raw,
       changed: false,
       ledger: {},
       writes: [],
       removals: [],
-      conflicts: [
-        {
-          keyPath: [],
-          reason: "ledger_needs_upgrade",
-          detail: "this file's ownership ledger was written by a newer CLI — update codecast on this machine before changing it here",
-        } as unknown as MergeConflict,
-      ],
+      conflicts: [],
       wrote: false,
-    } as ApplyResult;
+    };
   }
 
   const plan = planJsonMerge(raw, desired, previous);
@@ -370,7 +369,7 @@ export function applyOwnedJson(
   const ledgerChanged = !sameValue(plan.ledger, readLedger(target));
 
   if (opts.dryRun || (!plan.changed && !ledgerChanged)) {
-    return { ...plan, wrote: false };
+    return { ...plan, status: "applied", wrote: false };
   }
 
   fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -391,5 +390,5 @@ export function applyOwnedJson(
     };
     fs.writeFileSync(ledgerFile, JSON.stringify(envelope, null, 2) + "\n", { mode: 0o600 });
   }
-  return { ...plan, wrote: plan.changed };
+  return { ...plan, status: "applied", wrote: plan.changed };
 }

@@ -71,6 +71,8 @@ export const TOOL_VISUALS: Record<string, ToolVisual> = {
   shell: { icon: "terminal", color: "green" },
   exec_command: { icon: "terminal", color: "green" },
   "container.exec": { icon: "terminal", color: "green" },
+  exec: { icon: "cog", color: "cyan" },
+  commandExecution: { icon: "terminal", color: "green" },
 
   Read: { icon: "file-code-o", color: "blue" },
   file_read: { icon: "file-code-o", color: "blue" },

@@ -22,6 +22,7 @@ import { allocatePorts, portsToEnv } from "../ports.js";
 import {
   readState,
   deleteState,
+  stateToWorkspace,
   writeState,
   type PersistedWorkspaceState,
 } from "../contract.js";
@@ -176,17 +177,7 @@ export const E2bBackend: SandboxBackend = {
     const existing = readE2bState(repoRoot, name);
     if (existing && existing.state === "ready" && existing.e2bSandboxId) {
       // Re-attach path: sandbox already exists.
-      const ws: Workspace = {
-        name: existing.name,
-        path: existing.path,
-        branch: existing.branch,
-        resourceIndex: existing.resourceIndex,
-        manifest: existing.manifest,
-        ports: existing.ports,
-        env: existing.env,
-        state: existing.state,
-      };
-      return ws;
+      return stateToWorkspace(existing);
     }
 
     const sdk = await loadE2bSdk();
@@ -253,16 +244,7 @@ export const E2bBackend: SandboxBackend = {
     };
     writeState(repoRoot, persisted);
 
-    return {
-      name,
-      path: workspacePath,
-      branch: persisted.branch,
-      resourceIndex: portAlloc.resourceIndex,
-      manifest,
-      ports: portAlloc.ports,
-      env,
-      state: "ready",
-    };
+    return stateToWorkspace(persisted);
   },
 
   async release(repoRoot, name): Promise<void> {
@@ -321,16 +303,7 @@ export const E2bBackend: SandboxBackend = {
       if (entry.startsWith("_")) continue;
       const s = readE2bState(repoRoot, entry);
       if (s && s.e2bSandboxId) {
-        out.push({
-          name: s.name,
-          path: s.path,
-          branch: s.branch,
-          resourceIndex: s.resourceIndex,
-          manifest: s.manifest,
-          ports: s.ports,
-          env: s.env,
-          state: s.state,
-        });
+        out.push(stateToWorkspace(s));
       }
     }
     return out;

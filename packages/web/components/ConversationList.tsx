@@ -816,7 +816,26 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
     onBeforeReorder: beforeReorder,
   });
 
-  const flatConversations = stableConversations;
+  // useStableOrder returns a fresh array identity every render; pin the
+  // identity while the elements are unchanged so the memos below hold.
+  const flatRef = useRef<Conversation[]>([]);
+  if (
+    flatRef.current.length !== stableConversations.length ||
+    stableConversations.some((c, i) => flatRef.current[i] !== c)
+  ) {
+    flatRef.current = stableConversations;
+  }
+  const flatConversations = flatRef.current;
+
+  const convIndexById = useMemo(
+    () => new Map(flatConversations.map((c, i) => [c._id, i])),
+    [flatConversations]
+  );
+
+  const groups = useMemo(
+    () => groupByTime(flatConversations),
+    [flatConversations, currentTime]
+  );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -890,8 +909,6 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
       />
     );
   }
-
-  const groups = groupByTime(stableConversations);
 
   return (
     <div
@@ -1009,24 +1026,23 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
 
           <div className="space-y-2 sm:space-y-3">
             {group.conversations.map((conv) => {
-              const convIndex = flatConversations.findIndex(c => c._id === conv._id);
+              const convIndex = convIndexById.get(conv._id) ?? -1;
               const isFocused = convIndex === focusedIndex;
 
               // Minimal mode: just show activity line (e.g., "Worked in outreach for 4m")
               if (conv.visibility_mode === "minimal") {
                 const minimalContent = (
                   <div className="flex items-center gap-3 min-w-0">
-                    {conv.author_avatar ? (
-                      <img
-                        src={conv.author_avatar}
-                        alt={conv.author_name}
-                        className="w-6 h-6 rounded-full shrink-0"
-                      />
-                    ) : (
-                      <div className="w-6 h-6 rounded-full bg-sol-base02 flex items-center justify-center shrink-0">
-                        <span className="text-xs text-sol-text-muted">{conv.author_name?.charAt(0).toUpperCase()}</span>
-                      </div>
-                    )}
+                    <AvatarImg
+                      src={conv.author_avatar}
+                      alt={conv.author_name}
+                      className="w-6 h-6 rounded-full shrink-0"
+                      fallback={
+                        <div className="w-6 h-6 rounded-full bg-sol-base02 flex items-center justify-center shrink-0">
+                          <span className="text-xs text-sol-text-muted">{conv.author_name?.charAt(0).toUpperCase()}</span>
+                        </div>
+                      }
+                    />
                     <span className="font-medium text-sol-text text-sm shrink-0">{conv.author_name}</span>
                     {conv.is_active && (
                       <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />

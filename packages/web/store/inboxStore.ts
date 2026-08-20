@@ -2165,9 +2165,11 @@ export function categorizeSessions(
       if (!!a.is_deferred !== !!b.is_deferred) return a.is_deferred ? 1 : -1;
       return (a.updated_at || 0) - (b.updated_at || 0);
     });
-  // Newest delivery first: the thing that just finished is the one to read.
+  // Oldest delivery first: Done is a queue you clear top-down, so the item
+  // that has waited longest for review sits at the top (same order as Needs
+  // Input) and a fresh delivery never displaces what you're reading.
   const done = settled.filter((s) => restOf(s) === "done")
-    .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+    .sort((a, b) => (a.updated_at || 0) - (b.updated_at || 0));
   // Most recently parked first.
   const dormant = settled.filter((s) => restOf(s) === "dormant")
     .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));

@@ -48,7 +48,7 @@ if [ ! -f "$DIR/$SESSION_ID.json" ]; then
   RECRUIT="$DIR/recruited/$SESSION_ID"
   [ -f "$RECRUIT" ] && exit 0
   : > "$RECRUIT"
-  MSG="You are ending your turn without declaring who acts next. Run cast state --status done|blocked|dormant with one line saying where this stands (done = delivered, blocked = a human must act, dormant = a machine wakes you — name the wake), then stop. It decides where this session files in the inbox."
+  MSG="You are ending your turn without declaring who acts next. Run cast state --status done|blocked|dormant with one line saying where this stands (done = delivered, blocked = a human must act, dormant = a machine wakes you — name the wake), then stop. It decides where this session files in the inbox. The pin is already on the human's screen: run the command and stop, with no reply text about it."
   python3 -c 'import json,sys; print(json.dumps({"decision":"block","reason":sys.argv[1]}))' "$MSG"
   exit 0
 fi
@@ -73,7 +73,7 @@ SINCE=$((COUNT - BASE))
 [ "$EVENT" = "Stop" ] && [ "\${STOP_ACTIVE:-false}" = "true" ] && exit 0
 
 echo "$BASE nudged" > "$MARK"
-MSG="Your pinned state is $SINCE messages old. Before you stop, update it with cast state (and --status if that changed) so it says where this stands now, or clear it."
+MSG="Your pinned state is $SINCE messages old. Before you stop, update it with cast state (and --status if that changed) so it says where this stands now, or clear it. The pin is already on the human's screen: run the command and stop, with no reply text about it."
 if [ "$EVENT" = "Stop" ]; then
   python3 -c 'import json,sys; print(json.dumps({"decision":"block","reason":sys.argv[1]}))' "$MSG"
 else

@@ -61,6 +61,12 @@ export const GUIDES: Guide[] = [
     installSlug: "stable",
   },
   {
+    slug: "team-sessions",
+    title: "See your whole team's Claude Code sessions in one place",
+    dek: "Claude Code already writes every session to disk. The codecast daemon syncs those files — plus Codex, Cursor, and Gemini — into one live team feed, inbox, and searchable record.",
+    category: "Collaboration",
+  },
+  {
     slug: "thread-state",
     title: "Pinned thread state",
     dek: "cast state keeps one agent-written line saying where a thread stands, pinned above the composer and on the inbox card, with its staleness on show.",

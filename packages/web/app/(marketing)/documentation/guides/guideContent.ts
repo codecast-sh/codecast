@@ -16,6 +16,7 @@ import workflows from "./content/workflows.md?raw";
 import orchestration from "./content/orchestration.md?raw";
 import visualCanvas from "./content/visual-canvas.md?raw";
 import publish from "./content/publish.md?raw";
+import teamSessions from "./content/team-sessions.md?raw";
 import threadState from "./content/thread-state.md?raw";
 
 const CONTENT: Record<string, string> = {
@@ -30,6 +31,7 @@ const CONTENT: Record<string, string> = {
   "orchestration": orchestration,
   "visual-canvas": visualCanvas,
   "publish": publish,
+  "team-sessions": teamSessions,
   "thread-state": threadState,
 };
 

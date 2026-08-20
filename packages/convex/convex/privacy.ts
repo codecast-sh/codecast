@@ -80,11 +80,7 @@ export async function isConversationTeamVisible(
     conversation.user_id,
     conversation.team_id
   );
-  if (!isVisibilityShareable(ownerVisibility)) return false;
-  if (conversation.is_private === false) return true;
-  if (conversation.team_visibility && conversation.team_visibility !== "private")
-    return true;
-  return false;
+  return isConversationTeamVisibleSync(conversation, ownerVisibility);
 }
 
 function isConversationTeamVisibleSync(
@@ -107,6 +103,22 @@ export async function canTeamMemberAccess(
   if (!conversation.team_id) return false;
   if (!(await isTeamMember(ctx, viewerId, conversation.team_id))) return false;
   return isConversationTeamVisible(ctx, conversation);
+}
+
+// Owner-or-team gate for a signed-in viewer. "Owner" is the same definition
+// checkConversationAccess uses — primary user_id, the denormalized
+// owner_user_id, or a session_owners row (assigned secondary owners steer with
+// full owner rights). No share-token logic: presenting or having redeemed a
+// share link is a separate, weaker tier.
+export async function canOwnerOrTeamAccess(
+  ctx: DbCtx,
+  viewerId: Id<"users">,
+  conversation: ConversationForAccess
+): Promise<boolean> {
+  if (conversation.user_id.toString() === viewerId.toString()) return true;
+  if ((conversation as any).owner_user_id?.toString() === viewerId.toString()) return true;
+  if (conversation._id && (await isSessionOwner(ctx, conversation._id, viewerId))) return true;
+  return canTeamMemberAccess(ctx, viewerId, conversation);
 }
 
 export async function checkConversationAccess(

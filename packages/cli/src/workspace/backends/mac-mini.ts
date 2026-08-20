@@ -27,6 +27,7 @@ import { atomicWriteFile } from "../../atomicWrite.js";
 import {
   deleteState,
   readState,
+  stateToWorkspace,
   writeState,
   type PersistedWorkspaceState,
 } from "../contract.js";
@@ -343,16 +344,7 @@ export const MacMiniBackend: SandboxBackend = {
 
     const existing = readMacState(repoRoot, name);
     if (existing && existing.state === "ready") {
-      return {
-        name: existing.name,
-        path: existing.path,
-        branch: existing.branch,
-        resourceIndex: existing.resourceIndex,
-        manifest: existing.manifest,
-        ports: existing.ports,
-        env: existing.env,
-        state: existing.state,
-      };
+      return stateToWorkspace(existing);
     }
 
     const host = await ensureHost();
@@ -426,16 +418,7 @@ export const MacMiniBackend: SandboxBackend = {
     };
     writeState(repoRoot, persisted);
 
-    return {
-      name,
-      path: workspacePath,
-      branch: persisted.branch,
-      resourceIndex: portAlloc.resourceIndex,
-      manifest,
-      ports: portAlloc.ports,
-      env,
-      state: "ready",
-    };
+    return stateToWorkspace(persisted);
   },
 
   async release(repoRoot, name): Promise<void> {
@@ -486,11 +469,7 @@ export const MacMiniBackend: SandboxBackend = {
       if (entry.startsWith("_")) continue;
       const s = readMacState(repoRoot, entry);
       if (s && s.macHostId) {
-        out.push({
-          name: s.name, path: s.path, branch: s.branch,
-          resourceIndex: s.resourceIndex, manifest: s.manifest,
-          ports: s.ports, env: s.env, state: s.state,
-        });
+        out.push(stateToWorkspace(s));
       }
     }
     return out;

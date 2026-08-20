@@ -2509,7 +2509,7 @@ export const SessionCard = memo(function SessionCard({
               : isDismissed
                 ? "opacity-60 hover:opacity-80 hover:bg-sol-bg-alt/80"
                 // The agent's declared status tints the resting row: amber for
-                // "needs input", violet for "complete". Liveness outranks it —
+                // "needs input", teal for "complete". Liveness outranks it —
                 // a running agent isn't blocked-on-you right now. (A stale
                 // state has no view at all, so it can't tint anything.)
                 : stateView?.status && stateView.status !== "working" && !session.implementation_session

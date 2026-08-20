@@ -26,7 +26,7 @@ import { shareTokenArg } from "../lib/shareTokenScope";
 import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
-import { classifyApiErrorBanner, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, type ConvexAgentType, type AgentStatus, type ThreadStateFields } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, type ConvexAgentType, type AgentStatus, type ThreadStateFields } from "@codecast/shared/contracts";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import {
   describeSmallToolGroup,
@@ -138,12 +138,13 @@ import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } fr
 import { SessionHuddleButton } from "./calls/OccupancyChip";
 import { FormattedSummary } from "./FormattedSummary";
 import { ThreadStatePanel } from "./ThreadStatePanel";
+import { THREAD_STATE_STATUS_META } from "../lib/threadState";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import remarkBreaks from "remark-breaks";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK, renderMarkdownPre } from "./messageMarkdown";
 import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, type ChatWakePrompt } from "./sessionMessage";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
-import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand } from "./castCommand";
+import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -186,7 +187,7 @@ import { setupDesktopDrag, desktopHeaderClass, isDetachedTabWindow } from "../li
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2 } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin } from "lucide-react";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
 import { useDevices, useDeviceMoveStatus, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, type Device } from "./DeviceBadge";
 import { defaultMachineId, dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection, resolveScopedProjects } from "../lib/machinePicker";
@@ -4915,6 +4916,65 @@ function CastMutationBody({ parts, accent }: { parts: CastBodyPart[]; accent: st
   );
 }
 
+// `cast state …` pins the thread state that already renders expanded above the
+// composer (ThreadStatePanel), so the row stays one line: the declared status
+// as a chip in the panel's own colors, plus the state's first line. The full
+// body would be the same text twice — click still expands the raw command.
+function CastStateBlock({ subcommand, args, fullCmd, output, isError }: { subcommand: string; args: string; fullCmd: string; output: string; isError: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  // `clear`/`show` parse into the subcommand slot; the pinning form's args
+  // start with `--status` or a quoted body, so its subcommand is usually empty.
+  // A bare first word of an unquoted state text also lands there — fold it back.
+  const verb = subcommand === "clear" || subcommand === "show" ? subcommand : null;
+  const { status, headline } = useMemo(
+    () => (verb ? { status: null, headline: null } : extractStateArgs(subcommand ? `${subcommand} ${args}`.trim() : args)),
+    [verb, subcommand, args],
+  );
+  const statusMeta = (() => {
+    const parsed = parseThreadStateStatus(status);
+    return parsed ? THREAD_STATE_STATUS_META[parsed] : null;
+  })();
+
+  return (
+    <div className="my-0.5">
+      <div
+        className="flex items-baseline gap-1.5 text-xs cursor-pointer group flex-wrap"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-cyan/80">
+          <Pin className="w-3 h-3" strokeWidth={2.2} />
+          <span className="group-hover:underline">state{verb ? ` ${verb}` : ""}</span>
+        </span>
+        {statusMeta && (
+          <span className={`self-center shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-[9px] font-semibold uppercase tracking-wide ${statusMeta.chip}`}>
+            <span className="w-1.5 h-1.5 rounded-full bg-current" />
+            {statusMeta.label}
+          </span>
+        )}
+        {headline && <span className="text-sol-text-muted truncate min-w-0">{headline}</span>}
+        {verb === "show" && args && <span className="text-sol-text-dim font-mono">{args.split(/\s+/)[0]}</span>}
+        {isError && <span className="text-sol-red/80 text-[10px]">(error)</span>}
+      </div>
+      {expanded && (
+        <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
+          <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
+            <pre className="text-[11px] sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
+              $ {fullCmd}
+            </pre>
+          </div>
+          {output && output.trim() ? (
+            <pre className={`p-1.5 sm:p-2 text-[11px] sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${isError ? "text-sol-red" : "text-sol-text-secondary"}`}>
+              {renderAnsi(output)}
+            </pre>
+          ) : (
+            <div className="p-2 text-xs text-sol-text-dim">No output</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CastCommandBlock({ tool, result, images, globalImageMap, conversationId }: { tool: ToolCall; result?: ToolResult; images?: ImageData[]; globalImageMap?: Record<string, ImageData[]>; conversationId?: Id<"conversations"> }) {
   const [expanded, setExpanded] = useState(false);
   const convex = useConvex();
@@ -5177,6 +5237,11 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
   const chatSend = cat === "chat" ? extractChatSendArgs(subcommand, args) : null;
   if (chatSend) {
     return <CastChatSendBlock send={chatSend} isReply={subcommand === "reply"} isError={!!isError} />;
+  }
+  // `cast state` — the pinned panel already shows the full text, so the row is
+  // a one-line status + headline instead of the generic body render.
+  if (cat === "state") {
+    return <CastStateBlock subcommand={subcommand} args={args} fullCmd={cast.fullCmd} output={output} isError={!!isError} />;
   }
 
   return (
@@ -11967,8 +12032,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const stickyDisabled = useInboxStore(s => s.clientState.ui?.sticky_headers_disabled ?? false);
   const updateUI = useInboxStore(s => s.updateClientUI);
   const headerRef = useRef<HTMLElement>(null);
-  // Zen mode on desktop: this row is the window titlebar (drag + traffic-light inset).
-  const headerTitlebarRef = useTitlebarHead<HTMLElement>(headerRef);
+  // Zen mode on desktop: the head ROW is the window titlebar (drag +
+  // traffic-light inset). The ref goes on the inner cc-panel__head — the
+  // element that paints the head background and bottom border — so the inset
+  // padding shares its surface; on the outer wrapper the padding area showed
+  // the wrapper's own darker background as a 78px block with a hard seam.
+  const titlebarHeadRef = useTitlebarHead<HTMLDivElement>();
   const [headerHeight, setHeaderHeight] = useState(32);
   const messageInputRef = useRef<HTMLDivElement>(null);
   const [messageInputHeight, setMessageInputHeight] = useState(0);
@@ -15376,9 +15445,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </div>
         </div>
       )}
-      <header ref={headerTitlebarRef} data-sv-convhead className={`cq-container shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
+      <header ref={headerRef} data-sv-convhead className={`cq-container shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
         <div>
-          <div className="cc-panel__head cc-panel__head--flow gap-2 min-w-0">
+          <div ref={titlebarHeadRef} className="cc-panel__head cc-panel__head--flow gap-2 min-w-0">
             <div className="flex items-center gap-2 min-w-0 overflow-hidden flex-1">
             {isZenMode && (
               <ShortcutTooltip label="Exit zen mode" action="ui.zenToggle" side="bottom">

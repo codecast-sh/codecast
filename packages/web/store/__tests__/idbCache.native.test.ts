@@ -128,8 +128,9 @@ describe("idbCache.native", () => {
   it("NEVER clears the cache from a store-shrink — a row missing without an exclude is kept", async () => {
     // Convex-shaped ids: the keep-on-shrink guarantee is for SERVER rows. A
     // non-Convex id is a client-minted stub, and those DO delete (next test).
-    const a = { _id: "k97aaaaaaaaaaaaaaaaaaaaaaaaaaaa1", title: "Alpha" };
-    const b = { _id: "k97bbbbbbbbbbbbbbbbbbbbbbbbbbbb2", title: "Beta" };
+    // Freshly stamped so hydration retention (tested below) keeps them.
+    const a = { _id: "k97aaaaaaaaaaaaaaaaaaaaaaaaaaaa1", title: "Alpha", updated_at: Date.now() };
+    const b = { _id: "k97bbbbbbbbbbbbbbbbbbbbbbbbbbbb2", title: "Beta", updated_at: Date.now() };
     writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { [a._id]: a, [b._id]: b } });
     await Promise.resolve();
     expect((await loadCache())!.sessions).toEqual({ [a._id]: a, [b._id]: b });
@@ -145,7 +146,7 @@ describe("idbCache.native", () => {
     // The chat-transcript twin bug: the altKey supersede removed the stub from
     // the store, this engine kept it on disk, and the next boot resurrected it
     // beside its server twin — every message you sent rendered twice.
-    const server = { _id: "k97cccccccccccccccccccccccccccc3", client_id: "chatmsgstub-x1", content: "hi" };
+    const server = { _id: "k97cccccccccccccccccccccccccccc3", client_id: "chatmsgstub-x1", content: "hi", updated_at: Date.now() };
     const stub = { _id: "chatmsgstub-x1", client_id: "chatmsgstub-x1", content: "hi" };
     writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { [stub._id]: stub, [server._id]: server } });
     await Promise.resolve();
@@ -177,6 +178,72 @@ describe("idbCache.native", () => {
     });
     await Promise.resolve();
     expect(await loadCache()).toBeNull();
+  });
+
+  it("prunes sessions beyond the TTL and cap at load — and the prune reaches disk", async () => {
+    // The web engine sheds months of on-disk accumulation at boot
+    // (cacheRetention.ts); the native engine now applies the same policy.
+    const DAY = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const cid = (n: number) => `k${String(n).padStart(31, "0")}`;
+    const fresh = { _id: cid(1), updated_at: now - 5 * DAY };
+    const stale = { _id: cid(2), updated_at: now - 45 * DAY };
+    const pinnedStale = { _id: cid(3), updated_at: now - 45 * DAY, is_pinned: true };
+    const liveStale = { _id: cid(4), updated_at: now - 45 * DAY };
+    const focusedStale = { _id: cid(5), updated_at: now - 45 * DAY };
+    kv.set("col:sessions", JSON.stringify([fresh, stale, pinnedStale, liveStale, focusedStale]));
+    kv.set("meta:liveInboxIdList", JSON.stringify([cid(4)]));
+    kv.set("meta:lastFocusedConversationId", JSON.stringify(cid(5)));
+
+    const cached = await loadCache();
+    expect(Object.keys(cached!.sessions).sort()).toEqual([cid(1), cid(3), cid(4), cid(5)].sort());
+    // The pruned blob was persisted back — the stale row is gone from disk too.
+    const onDisk = JSON.parse(kv.get("col:sessions")!) as any[];
+    expect(onDisk.map((r) => r._id).sort()).toEqual([cid(1), cid(3), cid(4), cid(5)].sort());
+  });
+
+  it("caps windowed sessions at the newest MAX_CACHED_SESSIONS on load", async () => {
+    const now = Date.now();
+    const cid = (n: number) => `k${String(n).padStart(31, "0")}`;
+    const rows = [];
+    for (let i = 0; i < 1300; i++) rows.push({ _id: cid(i), updated_at: now - i * 1000 });
+    kv.set("col:sessions", JSON.stringify(rows));
+
+    const cached = await loadCache();
+    const ids = Object.keys(cached!.sessions);
+    expect(ids.length).toBe(1200);
+    expect(ids).toContain(cid(0)); // newest survives
+    expect(ids).not.toContain(cid(1299)); // oldest of the windowed set dropped
+  });
+
+  it("prunes the conversations meta blob with the same retention policy", async () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const cid = (n: number) => `k${String(n).padStart(31, "0")}`;
+    kv.set("meta:conversations", JSON.stringify({
+      [cid(1)]: { _id: cid(1), updated_at: now - 5 * DAY },
+      [cid(2)]: { _id: cid(2), updated_at: now - 45 * DAY },
+    }));
+
+    const cached = await loadCache();
+    expect(Object.keys(cached!.conversations)).toEqual([cid(1)]);
+  });
+
+  it("drops expired exclude tombstones at load, keeps recent ones and stamps legacy ones", async () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    kv.set("meta:pending", JSON.stringify({
+      "sessions:old": { type: "exclude", ts: now - 45 * DAY },
+      "sessions:new": { type: "exclude", ts: now - 5 * DAY },
+      "sessions:legacy": { type: "exclude" },
+      "sessions:edit:title": { type: "field", value: "x", ts: now - 400 * DAY },
+    }));
+
+    const cached = await loadCache();
+    expect(Object.keys(cached!.pending).sort()).toEqual(
+      ["sessions:new", "sessions:legacy", "sessions:edit:title"].sort(),
+    );
+    expect(cached!.pending["sessions:legacy"].ts).toBeGreaterThan(0);
   });
 
   it("loads the outbox sorted ascending by ts regardless of enqueue order", async () => {

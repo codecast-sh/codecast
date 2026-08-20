@@ -26,6 +26,7 @@ import { resolveTeamForPath, teamVisibleConvTeam } from "./privacy";
 // auth/access seam). Imported for local use here and re-exported so existing
 // callers keep working unchanged.
 import {
+  type AuthorizedWorkspace,
   canAccessTask,
   canAccessConversation,
   canAccessDoc,
@@ -763,6 +764,10 @@ export const create = mutation({
       estimated_minutes: args.estimated_minutes,
     } as any);
 
+    for (const dep of args.blocked_by || []) {
+      await patchDepMirror(ctx, auth.userId, { short_id, workspace: db.workspace }, dep, "blocks", "add");
+    }
+
     // Subtasks carry plan_id for context but never join plan.task_ids — the
     // parent is the plan's unit of progress, so a decomposition can't inflate
     // the plan bar or flip its auto-done.
@@ -1417,6 +1422,9 @@ export const update = mutation({
         await ctx.db.patch(plan._id, { task_ids: taskIds, updated_at: now });
       }
     }
+    // Snapshot the pre-write edges: the mirror patches below run after the
+    // main patch, which may mutate `task` in place.
+    const prevDeps = { blocked_by: task.blocked_by || [], blocks: task.blocks || [] };
     if (args.blocked_by) updates.blocked_by = args.blocked_by;
     if (args.blocks) updates.blocks = args.blocks;
     if (args.last_session_summary) updates.last_session_summary = args.last_session_summary;
@@ -1523,6 +1531,19 @@ export const update = mutation({
     }
 
     await ctx.db.patch(task._id, updates);
+    // blocked_by/blocks are raw overwrites; reflect the delta onto each
+    // referenced task's other side so the stored mirror stays coherent.
+    for (const [field, mirrorField] of [["blocked_by", "blocks"], ["blocks", "blocked_by"]] as const) {
+      const nextDeps = args[field];
+      if (!nextDeps) continue;
+      const self = { short_id: task.short_id, workspace: targetWorkspace };
+      for (const dep of nextDeps) {
+        if (!prevDeps[field].includes(dep)) await patchDepMirror(ctx, auth.userId, self, dep, mirrorField, "add");
+      }
+      for (const dep of prevDeps[field]) {
+        if (!nextDeps.includes(dep)) await patchDepMirror(ctx, auth.userId, self, dep, mirrorField, "remove");
+      }
+    }
     if (cascadeIds.length > 0) await cascadeClose(ctx, cascadeIds, nextStatus!, auth.userId, task);
     // Rollup walks the EFFECTIVE parent (the new one on a reparent+start), not
     // the pre-patch parent, so the task's actual parent flips to in_progress.
@@ -1649,6 +1670,34 @@ export const addComment = mutation({
     return { id };
   },
 });
+
+// create and update accept blocked_by/blocks as raw arrays; each accepted
+// edge must also land on the referenced task's other side or the stored
+// mirror drifts (addDep/removeDep already keep it for single edges). Same
+// short-id resolution addDep uses, but an unresolvable, inaccessible or
+// cross-workspace reference skips the mirror instead of rejecting a write
+// the caller already made.
+async function patchDepMirror(
+  ctx: any,
+  userId: Id<"users">,
+  self: { short_id: string; workspace: AuthorizedWorkspace },
+  otherShortId: string,
+  mirrorField: "blocks" | "blocked_by",
+  op: "add" | "remove",
+) {
+  const other = await ctx.db
+    .query("tasks")
+    .withIndex("by_short_id", (q: any) => q.eq("short_id", otherShortId))
+    .first();
+  if (!other || !(await canAccessTask(ctx, userId, other))) return;
+  if (op === "add" && !isSameWorkspace(other, self.workspace)) return;
+  const mirror: string[] = other[mirrorField] || [];
+  if (op === "add" ? mirror.includes(self.short_id) : !mirror.includes(self.short_id)) return;
+  const next = op === "add"
+    ? [...mirror, self.short_id]
+    : mirror.filter((id: string) => id !== self.short_id);
+  await ctx.db.patch(other._id, { [mirrorField]: next, updated_at: Date.now() });
+}
 
 export const addDep = mutation({
   args: {

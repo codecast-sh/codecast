@@ -99,7 +99,7 @@ describe("categorizeSessions rest sections", () => {
     expect(ids(working)).toEqual(["busy"]);
   });
 
-  it("orders done and dormant newest-first, needs input oldest-first", () => {
+  it("orders dormant newest-first, done and needs input oldest-first", () => {
     const { needsInput, done, dormant } = cat({
       d1: mk("d1", { agent_status: "done", updated_at: NOW - 30 }),
       d2: mk("d2", { agent_status: "done", updated_at: NOW - 10 }),
@@ -108,7 +108,7 @@ describe("categorizeSessions rest sections", () => {
       n1: mk("n1", { updated_at: NOW - 30 }),
       n2: mk("n2", { updated_at: NOW - 10 }),
     });
-    expect(ids(done)).toEqual(["d2", "d1"]);
+    expect(ids(done)).toEqual(["d1", "d2"]);
     expect(ids(dormant)).toEqual(["p2", "p1"]);
     expect(ids(needsInput)).toEqual(["n1", "n2"]);
   });

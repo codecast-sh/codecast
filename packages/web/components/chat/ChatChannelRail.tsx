@@ -131,10 +131,15 @@ export const ChatChannelRail = memo(function ChatChannelRail({
   // The section never opens empty: teammates without an open room are listed
   // right below the real conversations, dimmer, one click from becoming one.
   const suggested = onOpenDm ? suggestedDmMembers(dms, members, viewer) : [];
-  const headTitlebarRef = useTitlebarHead<HTMLDivElement>();
+  // Zen mode on desktop: the rail is the leftmost surface, but its topmost
+  // row varies (the Threads entry sits above the head), so a lent strip
+  // clears the traffic lights; it has height only while it measures as the
+  // titlebar (same pattern as PageShell).
+  const titlebarStripRef = useTitlebarHead<HTMLDivElement>();
   const threadsActive = activeChannelId === "threads";
   return (
     <nav className="ch-rail" aria-label="Channels">
+      <div ref={titlebarStripRef} className="titlebar-strip shrink-0" />
       {/* Slack's pinned entry: the one row that is a VIEW, not a room. Same row
           grammar as a channel — weight for unread, a count only for what is
           addressed to you (every thread reply here is). */}
@@ -161,7 +166,7 @@ export const ChatChannelRail = memo(function ChatChannelRail({
           )}
         </button>
       </div>
-      <div ref={headTitlebarRef} className="ch-rail-head">
+      <div className="ch-rail-head">
         <span className="ch-rail-title">Channels</span>
         {onCreate && (
           <button type="button" className="ch-rail-add" title="New channel" onClick={onCreate}>

@@ -19,6 +19,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { defaultRegistry, ensureCloudBackendsLoaded } from "./registry.js";
+import { readState, writeState } from "../contract.js";
 import type { SandboxBackend } from "./types.js";
 
 const TESTED_BACKENDS = (process.env.CODECAST_TEST_BACKENDS ?? "local")
@@ -163,5 +164,18 @@ for (const backendName of TESTED_BACKENDS) {
       expect(names).toContain("p-list-a");
       expect(names).toContain("p-list-b");
     }, 45000);
+
+    test("list carries the persisted contract result through", async () => {
+      await acquire("p-contract");
+      const s = readState(repoRoot, "p-contract")!;
+      writeState(repoRoot, {
+        ...s,
+        contract: { ok: true, checks: [{ name: "parity-check", ok: true }] },
+      });
+      const ws = (await backend.list(repoRoot)).find((w) => w.name === "p-contract");
+      expect(ws).toBeTruthy();
+      expect(ws!.contract?.ok).toBe(true);
+      expect(ws!.contract?.checks.map((c) => c.name)).toContain("parity-check");
+    }, 30000);
   });
 }

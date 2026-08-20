@@ -3,6 +3,7 @@ import { Headphones } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { joinCall, startHuddle } from "../../lib/calls/callManager";
 import { sessionRoomKey } from "@codecast/shared/contracts";
+import { AvatarImg } from "../../lib/avatarCache";
 
 // "Someone is in here" — the live-room affordance for channel rows and
 // session headers. Renders nothing while the room is empty (rooms are keys,
@@ -48,13 +49,16 @@ export function OccupancyChip({
             key={m.user_id}
             className="inline-block h-4 w-4 overflow-hidden rounded-full border border-sol-bg"
           >
-            {m.user_image ? (
-              <img src={m.user_image} alt="" className="h-full w-full object-cover" />
-            ) : (
-              <span className="flex h-full w-full items-center justify-center bg-sol-base02 text-[8px]">
-                {(m.user_name || "?").charAt(0).toUpperCase()}
-              </span>
-            )}
+            <AvatarImg
+              src={m.user_image}
+              alt=""
+              className="h-full w-full object-cover"
+              fallback={
+                <span className="flex h-full w-full items-center justify-center bg-sol-base02 text-[8px]">
+                  {(m.user_name || "?").charAt(0).toUpperCase()}
+                </span>
+              }
+            />
           </span>
         ))}
       </span>

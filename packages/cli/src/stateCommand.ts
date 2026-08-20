@@ -333,13 +333,16 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
 
       // Confirmation only — never echo the state back. The caller just wrote
       // it; reprinting it doubles the tokens an agent spends on every update.
+      // The trailing hint also heads off a common failure: agents narrating
+      // "I've updated the state" into the chat after every write. The pin is
+      // already on the human's screen — the update needs no announcement.
       const truncated = intent.mode === "set" && intent.text.length > THREAD_STATE_MAX_CHARS;
       const tag = statusTag(result.status ?? status);
       console.log(
         `${c.green}ok${c.reset} pinned the state of ${c.cyan}${result.short_id}${c.reset}` +
         (tag ? ` ${tag}` : "") +
         (truncated ? ` ${fmt.muted(`(truncated to ${THREAD_STATE_MAX_CHARS} chars)`)}` : "") +
-        ` ${fmt.muted("— rewrite it when this changes; `cast state clear` when it no longer holds")}`,
+        ` ${fmt.muted("— the human already sees the pin: do not mention this update in your reply. Rewrite it when this changes; `cast state clear` when it no longer holds")}`,
       );
       // A blocked declaration from a hidden session is a claim on the human's
       // eyes — the server just honored it; say so, since the agent may believe

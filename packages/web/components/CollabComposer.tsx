@@ -11,6 +11,7 @@ import { useDocPresence, type PresenceRow } from "../hooks/useDocPresence";
 import { useInboxStore } from "../store/inboxStore";
 import { isConvexId } from "../lib/entityLinks";
 import { PresenceFacepile } from "./PresenceFacepile";
+import { AvatarImg } from "../lib/avatarCache";
 import type { ConversationData } from "./ConversationView";
 
 // ── Live composer co-presence ────────────────────────────────────────────────
@@ -350,13 +351,17 @@ export const CollabRequestBanner = memo(function CollabRequestBanner({
 });
 
 function Avatar({ name, image }: { name?: string; image?: string }) {
-  if (image) {
-    return <img src={image} alt={name || ""} className="w-6 h-6 rounded-full shrink-0 object-cover" />;
-  }
   const initial = (name || "?").trim().charAt(0).toUpperCase();
   return (
-    <div className="w-6 h-6 rounded-full shrink-0 grid place-items-center bg-sol-cyan/20 text-sol-cyan text-[11px] font-semibold">
-      {initial}
-    </div>
+    <AvatarImg
+      src={image}
+      alt={name || ""}
+      className="w-6 h-6 rounded-full shrink-0 object-cover"
+      fallback={
+        <div className="w-6 h-6 rounded-full shrink-0 grid place-items-center bg-sol-cyan/20 text-sol-cyan text-[11px] font-semibold">
+          {initial}
+        </div>
+      }
+    />
   );
 }

@@ -21,10 +21,11 @@ import { enqueuePendingMessage, getAuthenticatedUserId } from "./pendingMessages
 // anchor belongs to, or any member of a team anchor's team. Every ACT path (wake,
 // decommission) and the channel/post paths gate on this — authentication alone is
 // not enough (injecting a turn runs and bills code on the host's daemon).
-export async function userCanAccessAnchor(
+async function anchorGrants(
   ctx: { db: any },
   userId: Id<"users">,
   anchor: { host_user_id?: Id<"users">; scope_user_id?: Id<"users">; team_id?: Id<"teams"> } | null,
+  teamRoleAllows: (m: any) => boolean,
 ): Promise<boolean> {
   if (!anchor) return false;
   if (anchor.host_user_id === userId) return true;
@@ -36,9 +37,17 @@ export async function userCanAccessAnchor(
         q.eq("user_id", userId).eq("team_id", anchor.team_id),
       )
       .first();
-    if (m) return true;
+    if (m && teamRoleAllows(m)) return true;
   }
   return false;
+}
+
+export async function userCanAccessAnchor(
+  ctx: { db: any },
+  userId: Id<"users">,
+  anchor: { host_user_id?: Id<"users">; scope_user_id?: Id<"users">; team_id?: Id<"teams"> } | null,
+): Promise<boolean> {
+  return anchorGrants(ctx, userId, anchor, () => true);
 }
 
 // Stricter gate for DESTRUCTIVE / config changes (retire, rename, persona): the
@@ -49,19 +58,7 @@ export async function userCanAdminAnchor(
   userId: Id<"users">,
   anchor: { host_user_id?: Id<"users">; scope_user_id?: Id<"users">; team_id?: Id<"teams"> } | null,
 ): Promise<boolean> {
-  if (!anchor) return false;
-  if (anchor.host_user_id === userId) return true;
-  if (anchor.scope_user_id && anchor.scope_user_id === userId) return true;
-  if (anchor.team_id) {
-    const m = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_team", (q: any) =>
-        q.eq("user_id", userId).eq("team_id", anchor.team_id),
-      )
-      .first();
-    if (m && m.role === "admin") return true;
-  }
-  return false;
+  return anchorGrants(ctx, userId, anchor, (m) => m.role === "admin");
 }
 
 // The anchors a caller may see/act on: their personal anchor plus the team anchor

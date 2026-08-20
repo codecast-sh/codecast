@@ -870,62 +870,71 @@ export interface AccountsHeartbeatPayload {
   }>;
 }
 
-// Keyed on the mtimes of the three files the payload derives from (the profile
-// index, ~/.claude.json's oauthAccount, and the usage cache) rather than a TTL:
+// Keyed on the mtimes of the files the payload derives from rather than a TTL:
 // a `cast accounts save` in another process, a fresh /login, or a usage refresh
 // shows up on the very next heartbeat instead of after a blind expiry window.
-// Recompute is small file reads — never the keychain — so the cache only
-// exists to skip parsing ~/.claude.json when nothing changed.
-let accountsCache: {
-  value: AccountsHeartbeatPayload | null;
-  indexMtime: number;
-  claudeMtime: number;
-  usageMtime: number;
-} | null = null;
-
-function mtimeOf(p: string): number {
-  try {
-    return fs.statSync(p).mtimeMs;
-  } catch {
-    return 0;
-  }
+// The compute result — including a failed/null one — is memoized against the
+// same mtimes, so a broken source file isn't re-parsed every call.
+export function createMtimeGatedCache<T>(
+  paths: () => string[],
+  compute: () => T,
+): { get(): T; invalidate(): void } {
+  let cached: { value: T; mtimes: number[] } | null = null;
+  const mtimeOf = (p: string): number => {
+    try {
+      return fs.statSync(p).mtimeMs;
+    } catch {
+      return 0;
+    }
+  };
+  return {
+    get() {
+      const mtimes = paths().map(mtimeOf);
+      if (cached && cached.mtimes.every((m, i) => m === mtimes[i])) {
+        return cached.value;
+      }
+      const value = compute();
+      cached = { value, mtimes };
+      return value;
+    },
+    invalidate() {
+      cached = null;
+    },
+  };
 }
 
+// Recompute is small file reads — never the keychain — so the cache only
+// exists to skip parsing ~/.claude.json when nothing changed.
+const accountsCache = createMtimeGatedCache<AccountsHeartbeatPayload | null>(
+  () => [indexPath(), claudeJsonPath(), usageCachePath()],
+  () => {
+    let value: AccountsHeartbeatPayload | null = null;
+    try {
+      const active = activeAccountSummary();
+      const usage = readUsageCache().accounts;
+      const profiles = listProfiles().map(({ name, email, uuid, tier, subscription }) => ({
+        name,
+        email,
+        tier,
+        subscription,
+        usage: usage[uuid || email || ""] ?? undefined,
+      }));
+      if (active?.email || profiles.length > 0) {
+        value = { active_email: active?.email, active_uuid: active?.uuid, profiles };
+      }
+    } catch {
+      value = null;
+    }
+    return value;
+  },
+);
+
 export function invalidateAccountsCache(): void {
-  accountsCache = null;
+  accountsCache.invalidate();
 }
 
 export function getAccountsHeartbeatPayload(): AccountsHeartbeatPayload | null {
-  const indexMtime = mtimeOf(indexPath());
-  const claudeMtime = mtimeOf(claudeJsonPath());
-  const usageMtime = mtimeOf(usageCachePath());
-  if (
-    accountsCache &&
-    accountsCache.indexMtime === indexMtime &&
-    accountsCache.claudeMtime === claudeMtime &&
-    accountsCache.usageMtime === usageMtime
-  ) {
-    return accountsCache.value;
-  }
-  let value: AccountsHeartbeatPayload | null = null;
-  try {
-    const active = activeAccountSummary();
-    const usage = readUsageCache().accounts;
-    const profiles = listProfiles().map(({ name, email, uuid, tier, subscription }) => ({
-      name,
-      email,
-      tier,
-      subscription,
-      usage: usage[uuid || email || ""] ?? undefined,
-    }));
-    if (active?.email || profiles.length > 0) {
-      value = { active_email: active?.email, active_uuid: active?.uuid, profiles };
-    }
-  } catch {
-    value = null;
-  }
-  accountsCache = { value, indexMtime, claudeMtime, usageMtime };
-  return value;
+  return accountsCache.get();
 }
 
 // ---------------------------------------------------------------------------

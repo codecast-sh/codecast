@@ -78,6 +78,53 @@ export function prettyCodexModel(name: string): string {
   return parts.map((p) => (/^gpt$/i.test(p) ? "GPT" : p[0].toUpperCase() + p.slice(1))).join("-");
 }
 
+// ---- shared limit fold ------------------------------------------------------
+
+/** One rate limit in the canonical shape both wire formats normalize into. */
+interface CanonicalLimit {
+  limit_id?: string;
+  limit_name?: string | null;
+  plan_type?: string | null;
+  windows: { used_percent?: number; window_minutes?: number; resets_at?: number }[];
+  credits?: { has_credits?: boolean; unlimited?: boolean; balance?: string | null } | null;
+}
+
+/** Fold canonical limits into the limit-window half of a snapshot: plan-type
+ * capture, model-scoped rows, session/weekly routing, credits merge. */
+function foldLimits(limits: CanonicalLimit[], now: number): Omit<CodexUsageSnapshot, "models"> {
+  const snap: Omit<CodexUsageSnapshot, "models"> = { fetched_at: now };
+  const toWindow = (w: CanonicalLimit["windows"][number]) => ({
+    percent: Math.max(0, Math.min(100, w.used_percent ?? 0)),
+    // resets_at arrives in epoch seconds; 0 means "unknown".
+    ...(w.resets_at ? { resets_at: w.resets_at * 1000 } : {}),
+  });
+  for (const rl of limits) {
+    if (rl.plan_type && !snap.plan_type) snap.plan_type = rl.plan_type;
+    if (rl.limit_name) {
+      // Model-scoped limit (e.g. "GPT-5.3-Codex-Spark"): one labeled row.
+      const w = rl.windows[0];
+      if (w) (snap.scoped ??= []).push({ label: prettyCodexModel(rl.limit_name), ...toWindow(w) });
+    } else {
+      for (const w of rl.windows) {
+        const mins = w.window_minutes ?? 0;
+        if (mins > 0 && mins <= SESSION_WINDOW_MAX_MINUTES) snap.session = toWindow(w);
+        // Prefer the base "codex" limit for the weekly bar over exotic ids.
+        else if (!snap.weekly || rl.limit_id === "codex") snap.weekly = toWindow(w);
+      }
+    }
+    const c = rl.credits;
+    if (c && (c.has_credits || c.unlimited || (c.balance && c.balance !== "0"))) {
+      snap.credits = {
+        has_credits: c.has_credits === true,
+        ...(c.unlimited !== undefined ? { unlimited: c.unlimited } : {}),
+        ...(c.balance != null ? { balance: c.balance } : {}),
+      };
+    }
+  }
+  snap.scoped?.sort((a, b) => b.percent - a.percent);
+  return snap;
+}
+
 // ---- account/rateLimits/read (app-server RPC) ------------------------------
 
 /** Parse the `account/rateLimits/read` result (camelCase wire shape) into the
@@ -97,37 +144,30 @@ export function parseRateLimitsReadResult(
         : {};
   if (Object.keys(byId).length === 0) return null;
 
-  const snap: Omit<CodexUsageSnapshot, "models"> = { fetched_at: now };
-  const toWindow = (w: any) => ({
-    percent: Math.max(0, Math.min(100, w.usedPercent ?? 0)),
-    ...(w.resetsAt ? { resets_at: w.resetsAt * 1000 } : {}),
-  });
+  const limits: CanonicalLimit[] = [];
   for (const rl of Object.values(byId)) {
     if (!rl || typeof rl !== "object") continue;
-    if (rl.planType && !snap.plan_type) snap.plan_type = rl.planType;
-    const windows = [rl.primary, rl.secondary].filter((w) => w && typeof w.usedPercent === "number");
-    if (rl.limitName) {
-      const w = windows[0];
-      if (w) (snap.scoped ??= []).push({ label: prettyCodexModel(rl.limitName), ...toWindow(w) });
-    } else {
-      for (const w of windows) {
-        const mins = w.windowDurationMins ?? 0;
-        if (mins > 0 && mins <= SESSION_WINDOW_MAX_MINUTES) snap.session = toWindow(w);
-        else if (!snap.weekly || rl.limitId === "codex") snap.weekly = toWindow(w);
-      }
-    }
-    const c = rl.credits;
-    if (c && (c.hasCredits || c.unlimited || (c.balance && c.balance !== "0"))) {
-      snap.credits = {
-        has_credits: c.hasCredits === true,
-        ...(c.unlimited !== undefined ? { unlimited: c.unlimited } : {}),
-        ...(c.balance != null ? { balance: c.balance } : {}),
-      };
-    }
+    limits.push({
+      limit_id: rl.limitId,
+      limit_name: rl.limitName,
+      plan_type: rl.planType,
+      windows: [rl.primary, rl.secondary]
+        .filter((w) => w && typeof w.usedPercent === "number")
+        .map((w) => ({ used_percent: w.usedPercent, window_minutes: w.windowDurationMins, resets_at: w.resetsAt })),
+      credits: rl.credits
+        ? {
+            has_credits: rl.credits.hasCredits,
+            ...(rl.credits.unlimited !== undefined ? { unlimited: rl.credits.unlimited } : {}),
+            ...(rl.credits.balance != null ? { balance: rl.credits.balance } : {}),
+          }
+        : undefined,
+    });
   }
+  const snap = foldLimits(limits, now);
+  // Grantable "full reset" credits exist only on the RPC shape — the rollout
+  // fallback never populates reset_credits.
   const available = result.rateLimitResetCredits?.availableCount;
   if (typeof available === "number" && available > 0) snap.reset_credits = { available };
-  snap.scoped?.sort((a, b) => b.percent - a.percent);
   return snap;
 }
 
@@ -223,45 +263,21 @@ export function snapshotFromRateLimits(
   latest: Map<string, { at: number; rl: RawRateLimit }>,
   now: number,
 ): Omit<CodexUsageSnapshot, "models"> {
-  const snap: Omit<CodexUsageSnapshot, "models"> = { fetched_at: now };
-  const toWindow = (w: { used_percent?: number; window_minutes?: number; resets_at?: number }) => ({
-    percent: Math.max(0, Math.min(100, w.used_percent ?? 0)),
-    // resets_at arrives in epoch seconds; 0 means "unknown".
-    ...(w.resets_at ? { resets_at: w.resets_at * 1000 } : {}),
-  });
+  const limits: CanonicalLimit[] = [];
   for (const { rl } of latest.values()) {
-    if (rl.plan_type && !snap.plan_type) snap.plan_type = rl.plan_type;
-    const windows = [rl.primary, rl.secondary].filter(
-      (w): w is NonNullable<typeof w> => !!w && typeof w.used_percent === "number",
-    );
-    if (rl.limit_name) {
-      // Model-scoped limit (e.g. "GPT-5.3-Codex-Spark"): one labeled row.
-      const w = windows[0];
-      if (w) {
-        (snap.scoped ??= []).push({ label: prettyCodexModel(rl.limit_name), ...toWindow(w) });
-      }
-      continue;
-    }
-    for (const w of windows) {
-      const mins = w.window_minutes ?? 0;
-      if (mins > 0 && mins <= SESSION_WINDOW_MAX_MINUTES) {
-        snap.session = toWindow(w);
-      } else {
-        // Prefer the base "codex" limit for the weekly bar over exotic ids.
-        if (!snap.weekly || rl.limit_id === "codex") snap.weekly = toWindow(w);
-      }
-    }
-    const c = rl.credits;
-    if (c && (c.has_credits || c.unlimited || (c.balance && c.balance !== "0"))) {
-      snap.credits = {
-        has_credits: c.has_credits === true,
-        ...(c.unlimited !== undefined ? { unlimited: c.unlimited } : {}),
-        ...(c.balance != null ? { balance: c.balance } : {}),
-      };
-    }
+    limits.push({
+      limit_id: rl.limit_id,
+      limit_name: rl.limit_name,
+      plan_type: rl.plan_type,
+      windows: [rl.primary, rl.secondary].filter(
+        (w): w is NonNullable<typeof w> => !!w && typeof w.used_percent === "number",
+      ),
+      // Rollout events carry credits on the base limit only; a scoped limit's
+      // credits block (if any) has always been ignored here.
+      credits: rl.limit_name ? undefined : rl.credits,
+    });
   }
-  snap.scoped?.sort((a, b) => b.percent - a.percent);
-  return snap;
+  return foldLimits(limits, now);
 }
 
 /** Scan raw jsonl text for token_count events; returns the newest rate_limits
