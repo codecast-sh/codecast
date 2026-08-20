@@ -83,6 +83,20 @@ export function useWorkspaceCollection<T = any>(
   const key = activeWorkspaceKey(s.clientState.ui?.active_team_id, s.currentUser?._id ? String(s.currentUser._id) : null);
   const coll = (s as any)[table] as Record<string, T>;
   const memberSig = membershipSig(coll, key);
+  // Rows filed under a store key that isn't their own _id are dropped (e.g. a
+  // task detail-query copy keyed by its URL short id, planted by pre-fix
+  // builds). Every sync channel keys rows by _id, so such a copy never
+  // receives updates — rendered, it's a phantom frozen at stale field values
+  // beside (or instead of) the live row. Stubs pass: keyed by their temp _id.
   // eslint-disable-next-line react-hooks/exhaustive-deps -- memberSig stands in for the churny collection ref
-  return useMemo(() => filterByWorkspace(Object.values(coll) as any[], key) as T[], [memberSig, key, sig ? coll : null]);
+  return useMemo(
+    () =>
+      filterByWorkspace(
+        Object.entries(coll)
+          .filter(([k, row]) => k === String((row as any)?._id))
+          .map(([, row]) => row) as any[],
+        key,
+      ) as T[],
+    [memberSig, key, sig ? coll : null],
+  );
 }
