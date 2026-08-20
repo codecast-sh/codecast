@@ -196,22 +196,47 @@ export function useAddLiveFeed(opts: {
       }
       if (!route) return;
 
-      if (liveTranscriptId) {
-        await convex.mutation(api.transcripts.addRoute, {
-          transcript_id: liveTranscriptId as any,
-          kind: route.kind,
-          target: route.target,
-          mode: "live",
-        });
-      } else {
+      // Attach the route; if the transcript ended between paint and click but
+      // the room is still up, fall back to becoming the scribe with the same
+      // route (same gesture, fresh transcript).
+      const attach = async () => {
+        if (liveTranscriptId) {
+          try {
+            await convex.mutation(api.transcripts.addRoute, {
+              transcript_id: liveTranscriptId as any,
+              kind: route.kind,
+              target: route.target,
+              mode: "live",
+            });
+            return;
+          } catch (err) {
+            if (!String(err).includes("ended")) throw err;
+          }
+        }
         const room = getRoom();
-        if (!room) return;
+        if (!room) {
+          throw new Error("Join the huddle to start its transcription");
+        }
         await startScribe({
           convex: convex as any,
           room,
           roomKey,
           routes: [{ ...route, mode: "live" }],
         });
+      };
+      try {
+        await attach();
+      } catch (err) {
+        // The new-session path spawns the agent BEFORE the route attaches; a
+        // refusal must not leave that session waiting forever for words that
+        // will never come.
+        if (target.kind === "new-session") {
+          (useInboxStore.getState() as any).sendMessage(
+            route.target,
+            "The huddle feed could not be attached — no transcript will arrive. Disregard the briefing above.",
+          );
+        }
+        throw err;
       }
     },
     [convex, roomKey, liveTranscriptId, getRoom],

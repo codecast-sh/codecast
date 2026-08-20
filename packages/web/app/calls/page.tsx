@@ -22,11 +22,16 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
-import { joinCall } from "../../lib/calls/callManager";
+import { toast } from "sonner";
+import { humanizeConvexError } from "@codecast/shared/contracts";
+import { getRoom, joinCall } from "../../lib/calls/callManager";
 import { useInboxStore } from "../../store/inboxStore";
 import { CallChatPanel } from "../../components/calls/CallChatPanel";
+import { FeedChip } from "../../components/calls/FeedChip";
 import {
   openFeedTargetPicker,
+  useAddLiveFeed,
+  useRemoveLiveFeed,
   useSendExcerpt,
   type FeedTarget,
   type TranscriptExcerpt,
@@ -137,6 +142,17 @@ function CallDetail({ id }: { id: string }) {
   const call = useQuery(api.transcripts.webGetCall, { transcript_id: id as any });
   const myCall = useInboxStore((s) => s.call);
   const sendExcerpt = useSendExcerpt();
+  // Live-feed parity with the stage: on a LIVE call this page can point the
+  // flowing words at a session/doc too — the transcript already runs (this
+  // row IS the live transcript), so it is addRoute all the way down.
+  const isLive = call?.status === "live";
+  const addFeed = useAddLiveFeed({
+    roomKey: call?.room_key ?? null,
+    liveTranscriptId: isLive ? id : null,
+    getRoom,
+  });
+  const removeFeed = useRemoveLiveFeed(isLive ? id : null);
+  const myUserId = useInboxStore((s: any) => s.currentUser?._id?.toString?.() ?? null);
 
   // Closed by default: the transcript owns the width until the reader asks
   // for the chat lane (the calls page often shares the shell with other
@@ -169,7 +185,7 @@ function CallDetail({ id }: { id: string }) {
   // Selection resets when the viewer moves to another call.
   useEffect(() => clearSelection(), [id]);
 
-  const live = call?.status === "live";
+  const live = isLive;
 
   // Live transcripts follow the tail while the reader is near the bottom.
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -252,6 +268,37 @@ function CallDetail({ id }: { id: string }) {
                 ))}
               </span>
             )}
+            {live &&
+              (call.routes ?? [])
+                .filter((r: any) => r.kind !== "slack" || r.target)
+                .map((r: any) => (
+                  <FeedChip
+                    key={`${r.kind}:${r.target}`}
+                    route={r}
+                    removable={!!myUserId && r.added_by === myUserId}
+                    onRemove={() => void removeFeed(r.kind, r.target)}
+                  />
+                ))}
+            {live && (
+              <button
+                onClick={() =>
+                  openFeedTargetPicker({
+                    title: "Feed the live words to…",
+                    gesture: "feed",
+                    showSlack: true,
+                    onPick: (t) =>
+                      void addFeed(t).catch((err) =>
+                        toast.error(humanizeConvexError(err)),
+                      ),
+                  })
+                }
+                className="flex items-center gap-1 rounded-md border border-dashed border-sol-violet/50 px-2 py-0.5 font-mono text-[11px] text-sol-violet transition-colors hover:bg-sol-violet/10"
+                title="Point the live transcript at an agent session, doc, or Slack"
+              >
+                <Radio className="h-3 w-3" />
+                feed
+              </button>
+            )}
             {sentTick && <span className="text-sol-green">{sentTick}</span>}
             <span className="flex-1" />
             {live && !inThisRoom && (
@@ -325,10 +372,12 @@ function CallDetail({ id }: { id: string }) {
             </div>
           ) : (
             <>
-              <div className="mb-2 text-[11px] text-sol-text-dim">
-                Click a turn to start a selection, click another to extend — then send the excerpt
-                to an agent.
-              </div>
+              {selectedCount === 0 && (
+                <div className="mb-2 text-[10.5px] text-sol-text-dim/80">
+                  Click a turn to start a selection, click another to extend — then send the
+                  excerpt to an agent.
+                </div>
+              )}
               <div className="space-y-0.5 pb-20">
                 {turns.map((t) => (
                   <div

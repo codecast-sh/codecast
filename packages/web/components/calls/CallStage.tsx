@@ -41,6 +41,7 @@ import { TranscribeControls } from "./TranscribePanel";
 import { AddPeopleButton } from "./AddPeople";
 import { HangUpButton, MicButton } from "./CallControls";
 import { CallChatPanel } from "./CallChatPanel";
+import { FeedChip } from "./FeedChip";
 import { openFeedTargetPicker, useAddLiveFeed, useRemoveLiveFeed, type FeedTarget } from "./useCallFeed";
 import { firstName, fmtClock, speakerColor } from "./speakers";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
@@ -910,50 +911,6 @@ function TranscriptRail({
   );
 }
 
-// A live route rendered as a chip: what kind, where, removable by its adder.
-function FeedChip({
-  route,
-  removable,
-  onRemove,
-}: {
-  route: { kind: string; target: string; mode: string };
-  removable: boolean;
-  onRemove: () => void;
-}) {
-  const label = useMemo(() => {
-    if (route.kind === "slack") return `#${route.target.slice(0, 12)}`;
-    const st = useInboxStore.getState() as any;
-    if (route.kind === "session") {
-      const rows = Object.values(st.sessions ?? {}) as any[];
-      const hit = rows.find(
-        (x) =>
-          x &&
-          (String(x._id) === route.target ||
-            String(x.session_id) === route.target ||
-            String(x.short_id ?? "") === route.target),
-      );
-      return (hit?.title || "session").slice(0, 26);
-    }
-    const doc = (st.docs ?? {})[route.target];
-    return (doc?.title || doc?.display_title || "doc").slice(0, 26);
-  }, [route.kind, route.target]);
-  return (
-    <span className="flex items-center gap-1.5 rounded-full bg-sol-bg-highlight px-2 py-0.5 font-mono text-[10.5px] text-sol-text-muted">
-      <span
-        className={`h-1.5 w-1.5 rounded-full ${
-          route.kind === "session" ? "bg-sol-violet" : route.kind === "doc" ? "bg-sol-yellow" : "bg-sol-cyan"
-        }`}
-      />
-      <span className="max-w-[130px] truncate">{label}</span>
-      {removable && (
-        <button onClick={onRemove} className="text-sol-text-muted hover:text-sol-red" title="Stop this feed">
-          <X className="h-2.5 w-2.5" />
-        </button>
-      )}
-    </span>
-  );
-}
-
 // Attributed captions along the stage bottom — for everyone in the room, not
 // just the scribe: the scribe reads its own local tail, everyone else the
 // synced one. Lines age out so a lull never shows stale words.
@@ -993,8 +950,8 @@ function CaptionsOverlay({
 // sits alone at the right. Round buttons on a borderless pill: state reads
 // by tint (cyan = camera on, violet = sharing, green = transcribing, red =
 // muted), never by outline.
-export const STAGE_CTL = "rounded-full p-2 transition-colors";
-export const STAGE_CTL_IDLE = "text-sol-text-muted hover:bg-white/10 hover:text-sol-text";
+const STAGE_CTL = "rounded-full p-2 transition-colors";
+const STAGE_CTL_IDLE = "text-sol-text-muted hover:bg-white/10 hover:text-sol-text";
 function ControlBar({ call }: { call: any }) {
   const [devicesOpen, setDevicesOpen] = useState(false);
 
