@@ -143,6 +143,7 @@ const Anchor = lazy(() => import("@/app/anchor/page"));
 // so section switches reconcile in place instead of remounting.
 const Team = lazy(() => import("@/app/team/page"));
 const TeamActivity = lazy(() => import("@/app/team/activity/page"));
+const TeamCharts = lazy(() => import("@/app/team/charts/page"));
 const TeamMember = lazy(() => import("@/app/team/[username]/page"));
 const AdminDaemonLogs = lazy(() => import("@/app/admin/daemon-logs/page"));
 const ConfigPage = lazy(() => import("@/app/config/page"));
@@ -260,6 +261,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "anchor", component: cast(Anchor), layout: "dashboardShell", tab: "/anchor" },
   { path: "team", component: cast(Team), layout: "dashboardShell", tab: "/team" },
   { path: "team/activity", component: cast(TeamActivity), layout: "dashboardShell", tab: "/team/activity" },
+  { path: "team/charts", component: cast(TeamCharts), layout: "dashboardShell", tab: "/team/charts" },
   { path: "team/:username", component: cast(TeamMember), layout: "dashboardShell", tab: "/team/:username" },
   { path: "admin/daemon-logs", component: cast(AdminDaemonLogs), layout: "dashboardShell", tab: "/admin/daemon-logs" },
   { path: "config", component: cast(ConfigPage), layout: "dashboardShell", tab: "/config" },
