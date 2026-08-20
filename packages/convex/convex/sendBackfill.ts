@@ -12,9 +12,12 @@ export const backfillUserSendsWeek = internalMutation({
   args: {
     user_id: v.id("users"),
     before: v.number(),
+    // Optional window start for heavy users whose full week exceeds the
+    // per-mutation read budget — run [after, before) windows of a day each.
+    after: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const cutoff = args.before - 7 * 24 * 3600000;
+    const cutoff = Math.max(args.before - 7 * 24 * 3600000, args.after ?? 0);
     let counted = 0;
     const convos = ctx.db
       .query("conversations")
