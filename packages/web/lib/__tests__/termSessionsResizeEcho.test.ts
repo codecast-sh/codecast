@@ -40,19 +40,55 @@ class FakeTerminal {
     cb?.();
   }
   reset() {}
-  loadAddon() {}
+  element: { parentElement: unknown } | undefined;
+  open(el: unknown) {
+    this.element = { parentElement: el };
+  }
+  loadAddon(addon: { activate?: (t: FakeTerminal) => void }) {
+    addon.activate?.(this);
+  }
   attachCustomKeyEventHandler() {}
   focus() {}
   dispose() {}
 }
 
+// Just enough container for attachToContainer: a laid-out box that can be
+// observed, scrolled and listened to.
+class FakeContainer {
+  clientWidth = 1200;
+  clientHeight = 100;
+  scrollTop = 0;
+  scrollHeight = 0;
+  addEventListener() {}
+  removeEventListener() {}
+  appendChild() {}
+}
+(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
+  observe() {}
+  disconnect() {}
+};
+(globalThis as unknown as { requestAnimationFrame: unknown }).requestAnimationFrame = (cb: () => void) => {
+  cb();
+  return 0;
+};
+(globalThis as unknown as { cancelAnimationFrame: unknown }).cancelAnimationFrame = () => {};
+
 mock.module("@xterm/xterm", () => ({ Terminal: FakeTerminal }));
+// The fit proposal is driven per test: `proposeDims` is what the container
+// "measures", and fit() applies it like the real addon (resize → onResize).
+let proposeDims: { cols: number; rows: number } | undefined;
 mock.module("@xterm/addon-fit", () => ({
   FitAddon: class {
-    proposeDimensions() {
-      return undefined;
+    term: FakeTerminal | null = null;
+    activate(t: FakeTerminal) {
+      this.term = t;
     }
-    fit() {}
+    proposeDimensions() {
+      return proposeDims;
+    }
+    fit() {
+      if (proposeDims && this.term) this.term.resize(proposeDims.cols, proposeDims.rows);
+    }
   },
 }));
 mock.module("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
@@ -110,4 +146,25 @@ test("adopted ready/reseed sizes are not echoed back; genuine resizes still are"
   // A genuine fit (container-driven) must still reach the server.
   (getInstance(id)!.term as unknown as FakeTerminal).resize(200, 45);
   expect(ws.resizes()).toEqual([{ type: "resize", cols: 200, rows: 45 }]);
+});
+
+// Claude Code can't render below ~80x12, and an interactive attach's fit IS
+// the agent's screen size — a split too short to fit that must leave the
+// pane alone (and scroll it), never squeeze the agent into it.
+test("a fit below the agent floor is not applied or sent; a fit above it is", async () => {
+  const { openTerminal, getInstance, attachToContainer } = await import("../terminal/termSessions");
+  const id = openTerminal({ endpoint, kind: "attach", target: "cc-y", interactive: true, detached: true });
+  const ws = FakeWebSocket.last!;
+  ws.open();
+  ws.serverSays({ type: "ready", sessionName: "cc-y", readOnly: false, cols: 220, rows: 50 });
+
+  proposeDims = { cols: 165, rows: 6 };
+  attachToContainer(id, new FakeContainer() as unknown as HTMLElement);
+  expect(getInstance(id)!.term.rows).toBe(50);
+  expect(ws.resizes()).toHaveLength(0);
+
+  proposeDims = { cols: 165, rows: 16 };
+  attachToContainer(id, new FakeContainer() as unknown as HTMLElement);
+  expect(getInstance(id)!.term.rows).toBe(16);
+  expect(ws.resizes()).toEqual([{ type: "resize", cols: 165, rows: 16 }]);
 });

@@ -5,6 +5,7 @@ import {
   dmCards,
   frozenReadAtOf,
   serverCards,
+  questionCards,
   sessionCards,
   sessionUnread,
   sortCards,
@@ -61,8 +62,13 @@ describe("chipFromSearch", () => {
   });
 
   it("hides the Chat and DMs chips when chat is off", () => {
-    expect(visibleChips(true).map((c) => c.key)).toEqual(["all", "chat", "dm", "comment", "task"]);
-    expect(visibleChips(false).map((c) => c.key)).toEqual(["all", "comment", "task"]);
+    expect(visibleChips(true).map((c) => c.key)).toEqual(["all", "chat", "dm", "comment", "task", "page", "question"]);
+    expect(visibleChips(false).map((c) => c.key)).toEqual(["all", "comment", "task", "page", "question"]);
+  });
+
+  it("maps the page and question chips regardless of chat", () => {
+    expect(chipFromSearch("page", false)).toBe("page");
+    expect(chipFromSearch("question", false)).toBe("question");
   });
 });
 
@@ -94,16 +100,17 @@ describe("serverCards", () => {
 });
 
 describe("dmCards", () => {
-  it("takes only DM rooms, zeroes unread when muted, sorts by the rail stamp", () => {
+  it("takes only DM rooms, zeroes unread when muted, keys activity to inbound", () => {
     const rail = [
-      railChannel({ id: "a", kind: "dm", unreadCount: 3, sortAt: 10 }),
+      railChannel({ id: "a", kind: "dm", unreadCount: 3, sortAt: 10, lastInboundAt: 8 }),
       railChannel({ id: "b", kind: "public", unreadCount: 9, sortAt: 99 }),
-      railChannel({ id: "c", kind: "dm", unreadCount: 4, muted: true, sortAt: 20, lastReadAt: 7 }),
+      railChannel({ id: "c", kind: "dm", unreadCount: 4, muted: true, sortAt: 20, lastReadAt: 7, lastInboundAt: 20 }),
     ];
     const cards = dmCards(rail);
     expect(cards.map((c) => c.id)).toEqual(["dm:a", "dm:c"]);
     expect(cards.map((c) => c.unread)).toEqual([3, 0]);
-    expect(cards.map((c) => c.activityAt)).toEqual([10, 20]);
+    expect(cards.map((c) => c.activityAt)).toEqual([8, 20]);
+    expect(cards.map((c) => c.browseAt)).toEqual([10, 20]);
     expect(cards[0].href).toBe("/chat/a");
     expect(frozenReadAtOf(cards[1])).toBe(7);
   });
@@ -140,7 +147,7 @@ describe("chip filtering and counts", () => {
       (id) => (id === "dmroom" ? "dm" : "public"),
       () => undefined,
     ),
-    ...dmCards([railChannel({ id: "d1", unreadCount: 2, sortAt: 35 })]),
+    ...dmCards([railChannel({ id: "d1", unreadCount: 2, sortAt: 35, lastInboundAt: 35 })]),
     ...sessionCards([session({ _id: "s1", message_count: 4, updated_at: 50 })], { s1: 1 }),
   ];
 
@@ -160,6 +167,41 @@ describe("chip filtering and counts", () => {
   });
 
   it("counts unread cards per chip and never counts sessions", () => {
-    expect(unreadByChip(cards)).toEqual({ all: 4, chat: 1, dm: 2, comment: 0, task: 1 });
+    expect(unreadByChip(cards)).toEqual({ all: 4, chat: 1, dm: 2, comment: 0, task: 1, page: 0, question: 0 });
+  });
+});
+
+
+describe("page and question kinds", () => {
+  it("links a page card to its published slug when cached, and skips unknown kinds", () => {
+    const rows = [
+      { _id: "page:a1", kind: "page", root_key: "a1", last_activity_at: 9, last_read_at: 0, updated_at: 9, unread: 1 },
+      { _id: "mystery:x", kind: "mystery", root_key: "x", last_activity_at: 8, last_read_at: 0, updated_at: 8, unread: 1 },
+    ] as any[];
+    const cards = serverCards(rows, () => undefined, () => undefined, (id) => (id === "a1" ? "my-page" : undefined));
+    expect(cards.length).toBe(1);
+    expect(cards[0].kind).toBe("page");
+    expect(cards[0].chip).toBe("page");
+    expect(cards[0].href).toBe("/a/my-page");
+  });
+
+  it("makes cards only from pending decisions, always unread", () => {
+    const cards = questionCards([
+      { _id: "d1", conversation_id: "c1", session_id: "s1", question: "Q?", options: [], blocking: true, status: "pending", created_at: 7 },
+      { _id: "d2", conversation_id: "c1", session_id: "s1", question: "Q2?", options: [], blocking: false, status: "answered", created_at: 8 },
+      { _id: "d3", conversation_id: "c1", session_id: "s1", question: "Q3?", options: [], blocking: false, status: "dismissed", created_at: 9 },
+    ] as any);
+    expect(cards.map((c) => c.id)).toEqual(["question:d1"]);
+    expect(cards[0].unread).toBe(1);
+    expect(cards[0].chip).toBe("question");
+  });
+
+  it("questions count on their chip but never in the default view number", () => {
+    const cards = questionCards([
+      { _id: "d1", conversation_id: "c1", session_id: "s1", question: "Q?", options: [], blocking: true, status: "pending", created_at: 7 },
+    ] as any);
+    const counts = unreadByChip(cards);
+    expect(counts.question).toBe(1);
+    expect(counts.all).toBe(0);
   });
 });

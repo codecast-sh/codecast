@@ -195,3 +195,71 @@ describe("answering a decision", () => {
     expect(useInboxStore.getState().pendingMessages[convId] ?? []).toHaveLength(0);
   });
 });
+
+// The local-first question resolution overlay: answering or dismissing an
+// AskUserQuestion/permission ask marks the session in questionResolutions,
+// and EVERY question surface reads that mark through sessionHasOpenQuestion —
+// so the queue and the rail's QUESTIONS section can never disagree while the
+// server's awaiting_input truth round-trips.
+describe("local question resolutions", () => {
+  beforeEach(() => {
+    useInboxStore.setState({ sessions: {}, questionResolutions: {}, pendingMessages: {} } as any);
+  });
+
+  it("a poll answer hides the question in the same commit, and its own echo does not resurface it", () => {
+    const convId = convexId("conv4");
+    const row = session(convId, { awaiting_input: true, message_count: 6 });
+    useInboxStore.setState({ sessions: { [convId]: row } } as any);
+
+    const payload = buildSingleAnswerPayload(
+      { question: "Deploy?", options: [{ label: "Yes" }, { label: "No" }] } as any,
+      0,
+    );
+    useInboxStore.getState().sendMessage(convId, payload);
+
+    const resolutions = useInboxStore.getState().questionResolutions;
+    expect(sessionHasOpenQuestion(row, resolutions)).toBe(false);
+
+    // The answer message itself lands (+1) — still resolved.
+    expect(sessionHasOpenQuestion({ ...row, message_count: 7 }, resolutions)).toBe(false);
+    // The AGENT speaks after that — the mark expires and server truth rules.
+    expect(sessionHasOpenQuestion({ ...row, message_count: 8 }, resolutions)).toBe(true);
+  });
+
+  it("free text answers an awaiting_input session; a plain message to a permission-blocked one does not", () => {
+    const asking = convexId("conv5");
+    const blocked = convexId("conv6");
+    useInboxStore.setState({
+      sessions: {
+        [asking]: session(asking, { awaiting_input: true }),
+        [blocked]: session(blocked, { agent_status: "permission_blocked" }),
+      },
+    } as any);
+
+    useInboxStore.getState().sendMessage(asking, "use the second option but rename it");
+    useInboxStore.getState().sendMessage(blocked, "how is it going?");
+
+    const resolutions = useInboxStore.getState().questionResolutions;
+    expect(resolutions[asking]).toBeDefined();
+    // A chat message does not approve a permission prompt.
+    expect(resolutions[blocked]).toBeUndefined();
+  });
+
+  it("dismissal (sends: 0) hides the ask but any new agent message resurfaces it", () => {
+    const convId = convexId("conv7");
+    const row = session(convId, { awaiting_input: true, message_count: 4 });
+    useInboxStore.setState({ sessions: { [convId]: row } } as any);
+
+    useInboxStore.getState().resolveSessionQuestion(convId);
+
+    const resolutions = useInboxStore.getState().questionResolutions;
+    expect(sessionHasOpenQuestion(row, resolutions)).toBe(false);
+    expect(sessionHasOpenQuestion({ ...row, message_count: 5 }, resolutions)).toBe(true);
+  });
+
+  it("a session with no resolution mark is untouched", () => {
+    const row = session(convexId("conv8"), { awaiting_input: true });
+    expect(sessionHasOpenQuestion(row, {})).toBe(true);
+    expect(sessionHasOpenQuestion(row, undefined)).toBe(true);
+  });
+});

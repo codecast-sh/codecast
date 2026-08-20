@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { useInboxStore, useTrackedStore, sessionsWakeSig, filterInboxScope } from "../store/inboxStore";
+import { createContext, useMemo } from "react";
+import { useTrackedStore, sessionsWakeSig, filterInboxScope } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
 import {
   decisionQueueItems,
@@ -104,6 +104,7 @@ export function useDecisionQueue(): QueueItem[] {
   const s = useTrackedStore([
     (st: any) => decisionsWakeSig(st.sessionDecisions),
     (st: any) => sessionsWakeSig(st.sessions),
+    (st: any) => st.questionResolutions,
     (st: any) => st.currentUser?._id,
   ]);
 
@@ -118,7 +119,9 @@ export function useDecisionQueue(): QueueItem[] {
 
     for (const row of Object.values(mine) as any[]) {
       if (authored.has(row._id)) continue;
-      if (!sessionHasOpenQuestion(row)) {
+      // questionResolutions: answered/dismissed HERE — same predicate the rail
+      // section renders with, so the queue and the rail agree in every render.
+      if (!sessionHasOpenQuestion(row, s.questionResolutions)) {
         // No longer asking — forget the stamp so a future question is timed
         // from when it actually appeared, not from this tab's first boot.
         forgetBlocked(row._id);
@@ -137,7 +140,7 @@ export function useDecisionQueue(): QueueItem[] {
       });
     }
     return sortQueue(items);
-  }, [s.sessionDecisions, s.sessions, s.currentUser?._id]);
+  }, [s.sessionDecisions, s.sessions, s.questionResolutions, s.currentUser?._id]);
 }
 
 /** Options minus Claude Code's synthetic affordance rows, keeping true indices. */
@@ -145,4 +148,54 @@ export function visibleOptions(q: PollQuestion): Array<{ label: string; descript
   return q.options
     .map((o, index) => ({ label: o.label, description: o.description, index }))
     .filter((o) => !SYNTHETIC_POLL_OPTION.test(o.label.trim()));
+}
+
+// The queue (/questions) renders the real conversation pane and only adds a
+// stepper through this context: position, advance, skip, leave. Lives here —
+// not in SessionDecisionCard — so the component module exports only
+// components (Fast Refresh boundary).
+export type DecisionStepper = {
+  position: number;
+  total: number;
+  onDone: () => void;
+  onSkip: () => void;
+  onExit?: () => void;
+  onNotADecision: () => void;
+  // A Claude Code poll / permission prompt has no authored row in the store;
+  // the queue hands the card its model this way.
+  item?: QueueItem;
+};
+
+export const DecisionStepperContext = createContext<DecisionStepper | null>(null);
+
+// The oldest pending `cast decide` row for a conversation, as a queue item.
+// Signature-gated: rows change only on ask/answer.
+export function usePendingDecisionItem(conversationId: string | null | undefined): QueueItem | null {
+  const s = useTrackedStore([
+    (st: any) => {
+      if (!conversationId) return "";
+      let sig = "";
+      for (const d of Object.values(st.sessionDecisions) as any[]) {
+        if (d.conversation_id === conversationId && d.status === "pending") sig += `${d._id}:${d.created_at}|`;
+      }
+      return sig;
+    },
+    (st: any) => {
+      const row = conversationId ? st.sessions[conversationId] : undefined;
+      return row ? `${row.title}|${row.project_path}|${row.is_idle}|${row.agent_status}|${row.is_unresponsive}|${row.inbox_killed_at}` : "";
+    },
+  ]);
+  return useMemo(() => {
+    if (!conversationId) return null;
+    const mine: Record<string, any> = {};
+    for (const d of Object.values(s.sessionDecisions) as any[]) {
+      if (d.conversation_id === conversationId) mine[d._id] = d;
+    }
+    // A blocking ask parks the session, so it outranks an advisory one that
+    // happened to be posted earlier; otherwise oldest first, as in the queue.
+    const items = decisionQueueItems(mine, s.sessions).sort(
+      (a, b) => Number(b.blocking) - Number(a.blocking) || a.createdAt - b.createdAt
+    );
+    return items[0] ?? null;
+  }, [conversationId, s.sessionDecisions, s.sessions]);
 }
