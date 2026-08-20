@@ -50,17 +50,27 @@ export function SessionRoot({ card, expanded }: { card: ThreadCardModel; expande
 }
 
 export function SessionExpanded({ card }: { card: ThreadCardModel; present: boolean; frozenReadAt: number }) {
-  const id = sessionOf(card)._id;
-  // Expanding IS opening: the session shows in the side panel beside the page,
-  // and it is marked seen the way leaving a session marks it.
+  const session = sessionOf(card);
+  const { now } = useThreadsPage();
+  // Expanding is a gesture on THIS card, so it marks the session seen — but it
+  // must not hijack the chevron into moving content to another region; the
+  // side panel opens only on the explicit button.
   useEffect(() => {
-    const st = useInboxStore.getState();
-    st.openSidePanel(id);
-    st.markSessionSeen(id);
-  }, [id]);
+    useInboxStore.getState().markSessionSeen(session._id);
+  }, [session._id]);
+  const state = threadStateView(session as any, session.message_count ?? 0, now);
+  const preview = session.idle_summary ?? session.subtitle;
   return (
-    <div className="th-card-open th-card-note">
-      <PanelRight className="w-3 h-3" /> Open in the side panel
+    <div className="th-card-open th-card-open-session">
+      {state?.cardLine && <div className="th-session-state">{state.cardLine}</div>}
+      {preview && <div className="th-session-preview">{preview}</div>}
+      <button
+        type="button"
+        className="th-session-openpanel"
+        onClick={() => useInboxStore.getState().openSidePanel(session._id)}
+      >
+        <PanelRight className="w-3 h-3" /> Open in the side panel
+      </button>
     </div>
   );
 }

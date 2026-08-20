@@ -5,15 +5,15 @@
 // rules are testable without the React tree behind them.
 
 import type { LucideIcon } from "lucide-react";
-import { Hash, ListChecks, MessageSquare, Terminal, Users } from "lucide-react";
+import { CircleHelp, Globe, Hash, ListChecks, MessageSquare, Terminal, Users } from "lucide-react";
 import type { ThreadInboxRow, ThreadKind } from "../store/threadTypes";
 import type { ChatRailChannel } from "../store/chatSlice";
-import type { InboxSession } from "../store/inboxStore";
+import type { InboxSession, SessionDecisionItem } from "../store/inboxStore";
 
-export type ThreadCardKind = ThreadKind | "dm" | "session";
+export type ThreadCardKind = ThreadKind | "dm" | "session" | "question";
 
 /** The single-select chips. `all` is the default view and carries no ?type=. */
-export type ChipKey = "all" | "chat" | "dm" | "comment" | "task";
+export type ChipKey = "all" | "chat" | "dm" | "comment" | "task" | "page" | "question";
 
 export const CHIPS: Array<{ key: ChipKey; label: string }> = [
   { key: "all", label: "All" },
@@ -21,10 +21,18 @@ export const CHIPS: Array<{ key: ChipKey; label: string }> = [
   { key: "dm", label: "DMs" },
   { key: "comment", label: "Comments" },
   { key: "task", label: "Tasks" },
+  { key: "page", label: "Pages" },
+  { key: "question", label: "Questions" },
 ];
 
 /** Chips that exist only when the team has chat on. */
 const CHAT_CHIPS: ReadonlySet<ChipKey> = new Set(["chat", "dm"]);
+
+/** Chips whose cards the server mark-all-read sweep may clear. Chat is NOT
+ *  here: a chat thread can live in a DM room and file under the DMs chip, so
+ *  a kind-scoped server sweep would erase threads the reader never saw —
+ *  those chips mark their visible cards one by one instead. */
+export const SWEEPABLE_CHIPS: ReadonlySet<ChipKey> = new Set(["comment", "task", "page"]);
 
 /** ?type= → chip. Unknown values, and chat chips on a team with chat off,
  *  fall back to the default view. */
@@ -56,15 +64,16 @@ export type ThreadCardModel = {
   unreadCapped?: boolean;
   /** Open-in-place link. */
   href: string;
-  /** Kind-specific source: row | rail channel | session row. Renderers narrow on kind. */
-  source: ThreadInboxRow | ChatRailChannel | InboxSession;
+  /** Kind-specific source: row | rail channel | session row | decision row.
+   *  Renderers narrow on kind. */
+  source: ThreadInboxRow | ChatRailChannel | InboxSession | SessionDecisionItem;
   teamId?: string;
 };
 
 /* One tone per kind, and no tone is cyan: cyan is the page's unread accent
  * (border, badge, chip count, sidebar pill), so a kind tile in cyan would say
  * "new" on a thread that has nothing new. */
-export type ThreadKindTone = "blue" | "violet" | "magenta" | "orange" | "green";
+export type ThreadKindTone = "blue" | "violet" | "magenta" | "orange" | "green" | "yellow" | "red";
 
 /** The React-free half of a kind's spec. */
 export type ThreadKindMeta = {
@@ -126,10 +135,30 @@ export const THREAD_KIND_META: Record<ThreadCardKind, ThreadKindMeta> = {
     countsTowardBadge: false,
     emptyCopy: "Start one from the CLI or the composer and it shows here.",
   },
+  page: {
+    key: "page",
+    label: "Pages",
+    icon: Globe,
+    tone: "yellow",
+    chip: "page",
+    countsTowardBadge: true,
+    emptyCopy: "Comments on pages you published land here.",
+  },
+  question: {
+    key: "question",
+    label: "Questions",
+    icon: CircleHelp,
+    tone: "red",
+    chip: "question",
+    // Pending questions already badge the sidebar's Questions row; counting
+    // them here too would say the same thing twice.
+    countsTowardBadge: false,
+    emptyCopy: "When an agent queues a decision for you, it lands here.",
+  },
 };
 
 /** The default view's empty copy: the three ways a thread reaches this page. */
-export const ALL_EMPTY_COPY = "Chat replies, session comments and task comments all land here.";
+export const ALL_EMPTY_COPY = "Chat replies, session comments, task comments and page comments all land here.";
 
 /** The collapsed card's count line, one shape for every kind: "3 replies",
  *  "1 comment", or "No messages yet" when there are none. */
@@ -147,10 +176,15 @@ export function serverCards(
   rows: ThreadInboxRow[],
   channelKindOf: (channelId: string) => string | undefined,
   taskShortIdOf: (taskId: string) => string | undefined,
+  pageSlugOf: (artifactId: string) => string | undefined = () => undefined,
 ): ThreadCardModel[] {
   const out: ThreadCardModel[] = [];
   for (const row of rows) {
-    let chip: ThreadCardModel["chip"] = THREAD_KIND_META[row.kind].chip;
+    // A kind this bundle does not know (a newer server, or a rollback) is
+    // skipped, never a crash: one unknown row must not take down the page.
+    const meta = THREAD_KIND_META[row.kind] as ThreadKindMeta | undefined;
+    if (!meta) continue;
+    let chip: ThreadCardModel["chip"] = meta.chip;
     let href: string;
     if (row.kind === "chat") {
       const channelId = String(row.channel_id ?? "");
@@ -158,6 +192,9 @@ export function serverCards(
       href = `/chat/${channelId}?m=${row.root_key}`;
     } else if (row.kind === "comment") {
       href = `/conversation/${row.conversation_id ?? row.root_key.split(":")[0]}`;
+    } else if (row.kind === "page") {
+      const slug = pageSlugOf(row.root_key);
+      href = slug ? `/a/${slug}` : `/a`;
     } else {
       const taskId = String(row.task_id ?? row.root_key);
       href = `/tasks/${taskShortIdOf(taskId) ?? taskId}`;
@@ -225,6 +262,27 @@ export function sessionCards(
   }));
 }
 
+/** Pending decisions (cast decide / AskUserQuestion) as cards. Answered and
+ *  dismissed rows drop off — their history stays on the Questions page. The
+ *  status IS the read mark, so a pending card always shows as unread. */
+export function questionCards(decisions: SessionDecisionItem[]): ThreadCardModel[] {
+  const out: ThreadCardModel[] = [];
+  for (const d of decisions) {
+    if (d.status !== "pending") continue;
+    out.push({
+      id: `question:${d._id}`,
+      kind: "question",
+      chip: "question",
+      activityAt: d.created_at,
+      unread: 1,
+      href: `/questions`,
+      source: d,
+      teamId: undefined,
+    });
+  }
+  return out;
+}
+
 // ── Views ───────────────────────────────────────────────────────────────────
 
 /** The cards one chip shows. Sessions appear only under All, and only when
@@ -242,11 +300,16 @@ export function sortCards(cards: ThreadCardModel[]): ThreadCardModel[] {
 /** How many cards carry unread, per chip and for the default view. Sessions
  *  never count: `all` equals the sidebar badge. */
 export function unreadByChip(cards: ThreadCardModel[]): Record<ChipKey, number> {
-  const out: Record<ChipKey, number> = { all: 0, chat: 0, dm: 0, comment: 0, task: 0 };
+  const out: Record<ChipKey, number> = { all: 0, chat: 0, dm: 0, comment: 0, task: 0, page: 0, question: 0 };
   for (const c of cards) {
-    if (c.unread <= 0 || !THREAD_KIND_META[c.kind].countsTowardBadge) continue;
-    out.all++;
+    const meta = THREAD_KIND_META[c.kind] as ThreadKindMeta | undefined;
+    if (!meta) continue;
+    // A chip's own count includes every unread card it lists; only
+    // badge-counting kinds roll up into the default view's number (which is
+    // what the sidebar shows).
+    if (c.unread <= 0) continue;
     if (c.chip !== "session") out[c.chip]++;
+    if (meta.countsTowardBadge) out.all++;
   }
   return out;
 }
@@ -255,6 +318,6 @@ export function unreadByChip(cards: ThreadCardModel[]): Record<ChipKey, number> 
  *  page so marking read cannot erase it mid-read. */
 export function frozenReadAtOf(card: ThreadCardModel): number {
   if (card.kind === "dm") return (card.source as ChatRailChannel).lastReadAt ?? 0;
-  if (card.kind === "session") return 0;
+  if (card.kind === "session" || card.kind === "question") return 0;
   return (card.source as ThreadInboxRow).last_read_at ?? 0;
 }

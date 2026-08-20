@@ -9955,6 +9955,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     });
   }, [resolvedImageUrls, conversationId]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Root of the composer, used to find the stacking context the image lightbox
+  // must portal into. In the regular conversation the lightbox goes to
+  // document.body (z-10001) and the composer raises itself above it (z-10002).
+  // Inside a dialog host (the new-session compose popup) the composer is capped
+  // by the dialog overlay's stacking context, so a body-level lightbox would
+  // cover the whole dialog and block typing — portal into the dialog instead,
+  // where the same z ordering keeps the input on top.
+  const composerRootRef = useRef<HTMLDivElement>(null);
   const escapeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
   const [lightboxImageIndex, setLightboxImageIndex] = useState<number | null>(null);
@@ -11204,7 +11212,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       }`;
 
   return (
-    <div data-sv-composer className={`shrink-0 pointer-events-none sticky bottom-0 ${lightboxImageIndex !== null ? "z-[10002]" : "z-10"}`}>
+    <div ref={composerRootRef} data-sv-composer className={`shrink-0 pointer-events-none sticky bottom-0 ${lightboxImageIndex !== null ? "z-[10002]" : "z-10"}`}>
       {lightboxImageIndex === null && <div className="h-16 bg-gradient-to-t from-sol-bg via-[color-mix(in_srgb,var(--sol-bg)_80%,transparent)] to-transparent -mt-16 relative" />}
       <div className={`pb-4 pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
         <div className="relative">
@@ -11809,7 +11817,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             )}
           </div>
         </div>,
-        document.body
+        composerRootRef.current?.closest<HTMLElement>('[role="dialog"]') ?? document.body
       )}
     </div>
   );

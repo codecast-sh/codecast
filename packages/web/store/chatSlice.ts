@@ -37,7 +37,7 @@
 // chat.sendMessage dedupes on — so a message that actually landed can never
 // double-post, however many times the user presses retry.
 
-import { threadRowId, type ThreadInboxRow, type ThreadKind } from "./threadTypes";
+import { threadRowId, type PageCommentRow, type PageThreadRow, type ThreadInboxRow, type ThreadKind } from "./threadTypes";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { dmKeyFor, dmOtherIds } from "@codecast/shared/chat";
 import { normalizeChannelName } from "@codecast/convex/convex/chatText";
@@ -228,6 +228,9 @@ export type ChatSliceData = {
   /** The server's workspace-wide count of threads with unseen replies — the
    *  badge for a client that has never opened the Threads page. */
   threadUnread: number;
+  /** Published pages with their newest comments (threads.listMine payload),
+   *  keyed by artifact id — the page kind's root_key. */
+  pageThreads: Record<string, PageThreadRow>;
 };
 
 export type ChatSendOptions = {
@@ -267,7 +270,13 @@ export type ChatSliceActions = {
   markThreadRead: (kind: ThreadKind, rootKey: string) => void;
   /** The Threads page's one sweep. Scoped to the workspace like the page
    *  itself; `kind` narrows it to one chip. */
-  markAllThreadsRead: (teamId?: string, kind?: ThreadKind) => void;
+  markAllThreadsRead: (teamId?: string | null, kind?: ThreadKind | "all") => void;
+  /** Reply on a published page's discussion (the page kind's composer). The
+   *  caller mints the client id (newPageCommentClientId) because the dispatch
+   *  effect reads it from this one argument object. */
+  addPageComment: (o: { artifactId: string; text: string; parentId?: string; clientId: string }) => void;
+  /** Drop local rows a fresh listMine page no longer returns (revoked access). */
+  pruneThreadInbox: (keepIds: string[], teamId: string | undefined | null, floorActivityAt: number) => void;
   setChannelNotifyLevel: (channelId: string, level: ChatNotifyLevel) => void;
   /** Rename or re-topic a channel. Optimistic: the rail and header rename the
    *  moment you confirm; the server enforces creator-or-admin and reconciles. */
@@ -388,6 +397,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
     chatThreadSummaries: {},
     threadInbox: {},
     threadUnread: 0,
+    pageThreads: {},
 
     // ── Sending ─────────────────────────────────────────────────────────────
 
@@ -594,18 +604,75 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
     // Workspace match is by VALUE with absence normalized: a personal row has
     // no team_id, and the personal workspace has no active team. The same
     // rule useThreadInbox applies when it lists the page.
-    markAllThreadsRead: action(function (this: ChatDraft, teamId?: string, kind?: ThreadKind) {
+    // The wire shape is explicit: `kind` is a real kind for a scoped sweep and
+    // the literal "all" for the unscoped one. A missing kind is the LEGACY
+    // one-argument call, which always meant chat only — absence must not
+    // widen a sweep an old bundle asked for.
+    markAllThreadsRead: action(function (this: ChatDraft, teamId?: string | null, kind?: ThreadKind | "all") {
+      const scope: ThreadKind | undefined = kind === "all" ? undefined : (kind ?? "chat");
       for (const id in this.threadInbox) {
         const row = this.threadInbox[id];
-        if (String(row.team_id ?? "") !== String(teamId ?? "")) continue;
-        if (kind && row.kind !== kind) continue;
+        // Page rows follow the owner into every workspace (threadRowInWorkspace).
+        if (row.kind !== "page" && String(row.team_id ?? "") !== String(teamId ?? "")) continue;
+        if (scope && row.kind !== scope) continue;
         if (row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
         row.last_read_at = Math.max(row.last_read_at, row.last_activity_at);
         row.unread = 0;
         row.unread_capped = false;
         row.updated_at = Date.now();
       }
-      if (!kind) this.threadUnread = 0;
+      if (!scope) this.threadUnread = 0;
+    }),
+
+    // Reconciles the local rows with a fresh first page: a row the server no
+    // longer returns inside the page's activity window has been revoked
+    // (left room, lost team, purged root) and must leave the client too —
+    // listMine can only drop rows silently, and a delta overlay never
+    // deletes. Rows older than the page's window are untouched.
+    pruneThreadInbox: sync(function (this: ChatDraft, keepIds: string[], teamId: string | undefined | null, floorActivityAt: number) {
+      const keep = new Set(keepIds);
+      for (const id in this.threadInbox) {
+        const row = this.threadInbox[id];
+        if (String(row.team_id ?? "") !== String(teamId ?? "")) continue;
+        // Carried personal page rows ride the first page on a bounded take,
+        // so their absence is not a revocation.
+        if (row.kind === "page") continue;
+        if (row.last_activity_at < floorActivityAt) continue;
+        if (keep.has(id)) continue;
+        delete this.threadInbox[id];
+      }
+    }),
+
+    // A reply on a published page's discussion, from the Threads page. The
+    // stub lands in the page's embedded comment list immediately; the server
+    // row (artifacts.submitComments via the addPageComment side effect) echoes
+    // the client_id and supersedes it in the next listMine push.
+    addPageComment: action(function (this: ChatDraft, o: { artifactId: string; text: string; parentId?: string; clientId: string }) {
+      const page = this.pageThreads[o.artifactId];
+      const text = o.text.trim();
+      if (!page || !text) return;
+      const me = (this as any).currentUser as { _id?: string; name?: string; github_avatar_url?: string } | undefined;
+      const stub: PageCommentRow = {
+        _id: `pagecmtstub-${o.clientId}`,
+        artifact_id: o.artifactId,
+        author_name: me?.name ?? "You",
+        author_user_id: me?._id ? String(me._id) : undefined,
+        author_avatar: me?.github_avatar_url,
+        parent_comment_id: o.parentId,
+        client_id: o.clientId,
+        text,
+        version: 0,
+        status: "open",
+        created_at: Date.now(),
+      };
+      page.comments = [...page.comments, stub];
+      page.updated_at = stub.created_at;
+      const row = this.threadInbox[threadRowId("page", o.artifactId)];
+      if (row) {
+        row.last_activity_at = stub.created_at;
+        row.last_read_at = stub.created_at;
+        row.updated_at = stub.created_at;
+      }
     }),
 
     updateChatChannel: action(function (this: ChatDraft, channelId: string, fields: { name?: string; topic?: string }) {
@@ -741,6 +808,11 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
 /** Spread into SYNC_REGISTRY. Every collection is a delta overlay so one
  *  channel's page never prunes another's, and the two collections with an
  *  optimistic create carry the altKey that supersedes their stub. */
+/** Client id for an optimistic page comment (the server dedupes on it). */
+export function newPageCommentClientId(): string {
+  return `pagecmt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export const CHAT_SYNC_REGISTRY = {
   // The stub carries client_id === its own stub id; the server row arrives with
   // the same client_id and rekeys the stub onto the real _id.

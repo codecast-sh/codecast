@@ -763,7 +763,7 @@ function BlockedSessionsBanner({
         <div className="min-w-0">
           <button
             onClick={() => setExpanded((v) => !v)}
-            className="flex items-center gap-1 text-xs font-semibold text-sol-text hover:text-amber-500 transition-colors"
+            className="flex items-center gap-1 text-left text-xs font-semibold text-sol-text hover:text-amber-500 transition-colors"
             title={expanded ? "Hide the affected sessions" : "Show which sessions are blocked"}
           >
             <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
@@ -4090,9 +4090,11 @@ export function SessionListPanel({
           >
             <button
               onClick={() => s.toggleCollapsedSection(key)}
-              className={`flex-1 min-w-0 text-left text-[10px] font-semibold uppercase tracking-wider ${color}`}
+              className="flex-1 min-w-0 text-left"
             >
-              {label} ({items.length})
+              <span className={`text-[10px] font-semibold uppercase tracking-wider ${color}`}>
+                {label} ({items.length})
+              </span>
             </button>
             {opts.headerAction}
             <button onClick={() => s.toggleCollapsedSection(key)} className="shrink-0">

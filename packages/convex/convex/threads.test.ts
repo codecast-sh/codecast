@@ -491,7 +491,9 @@ describe("page kind", () => {
     const ctx = await context(ALICE, pageSeed());
     await submitPageComment(ctx, { token: "page-token-bob", text: "first" });
     await call(markRead, ctx, { kind: "page", root_key: String(ARTIFACT) });
-    await submitPageComment(ctx, { name: "drive-by", text: "anonymous take" });
+    // The page is an opaque origin: an anonymous viewer carries no session.
+    const anon = { ...ctx, auth: { async getUserIdentity() { return null; } } };
+    await submitPageComment(anon, { name: "drive-by", text: "anonymous take" });
     // No account, no row: only Alice and Bob follow the page.
     expect(rows(ctx).filter((r) => r.kind === "page").map((r) => r.user_id).sort()).toEqual([ALICE, BOB].sort());
     const alice = await inbox(ctx, {});
@@ -533,6 +535,28 @@ describe("page kind", () => {
     const before = rows(ctx).length;
     await call(backfillThreadReads, ctx, { kind: "page" });
     expect(rows(ctx).length).toBe(before);
+  });
+
+  test("a signed-in web caller needs no identity token, and a client_id retry never double-posts", async () => {
+    const ctx = await context(ALICE, pageSeed());
+    const bob = as(ctx, BOB);
+    const reply = (clientId: string) => call(submitComments, bob, {
+      artifact_id: ARTIFACT,
+      author_name: "",
+      client_id: clientId,
+      comments: [{ text: "from the web" }],
+    });
+    const first = await reply("cl-1");
+    expect(first.count).toBe(1);
+    // Session auth resolved Bob; version defaulted to the artifact's.
+    expect(ctx.db._tables.artifact_comments[0]).toMatchObject({
+      author_user_id: BOB, author_name: "Bob", client_id: "cl-1", version: 1,
+    });
+    // The outbox retries: same row back, no twin, no second touch.
+    const retry = await reply("cl-1");
+    expect(retry.ids).toEqual(first.ids);
+    expect(ctx.db._tables.artifact_comments.length).toBe(1);
+    expect((await inbox(ctx, {})).entries[0].unread).toBe(1);
   });
 
   test("deleting the page purges every follow of its discussion", async () => {

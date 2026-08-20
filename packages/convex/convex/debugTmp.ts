@@ -699,6 +699,7 @@ export const inspectUserByEmail = internalQuery({
       teams.push({
         team_id: m.team_id,
         name: (team as any)?.name,
+        features: (team as any)?.features,
         role: (m as any).role,
         visibility: (m as any).visibility,
         member_count: members.length,

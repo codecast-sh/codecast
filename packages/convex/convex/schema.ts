@@ -3107,11 +3107,16 @@ export default defineSchema({
     // Opaque anchor JSON from the viewer page (selector/snippet/position);
     // the server never interprets it.
     anchor: v.optional(v.string()),
+    // Client-minted idempotency key: a retried submit with the same
+    // (artifact, client_id) returns the existing row instead of a twin.
+    client_id: v.optional(v.string()),
     version: v.number(),
     status: v.string(), // "open" | "resolved"
     delivered: v.boolean(),
     created_at: v.number(),
-  }).index("by_artifact", ["artifact_id", "created_at"]),
+  })
+    .index("by_artifact", ["artifact_id", "created_at"])
+    .index("by_artifact_client_id", ["artifact_id", "client_id"]),
 
   // View counters, isolated from the artifacts row so beacon writes never churn
   // the row that queries/pages watch.

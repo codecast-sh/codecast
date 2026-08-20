@@ -34,11 +34,14 @@ function useTaskRow(taskId: string): TaskDetail | undefined {
   return s.tasks[taskId] as TaskDetail | undefined;
 }
 
+/** Short id AND title: the head label is the one column every kind shares,
+ *  and a bare id is unscannable in a mixed list. */
 export function TaskLabel({ card }: { card: ThreadCardModel }) {
   const task = useTaskRow(taskIdOf(card));
   return (
     <>
-      <span className="font-mono">{task?.short_id ?? "task"}</span>
+      <span className="font-mono th-card-task-id">{task?.short_id ?? "task"}</span>
+      {task?.title && <span className="th-card-task-name">{task.title}</span>}
     </>
   );
 }
@@ -54,7 +57,6 @@ export function TaskRoot({ card, expanded }: { card: ThreadCardModel; expanded: 
     <>
       {task ? (
         <div className="th-card-root th-card-taskrow">
-          <span className="th-card-task-title">{task.title}</span>
           <TaskStatusBadge status={task.status} />
         </div>
       ) : (

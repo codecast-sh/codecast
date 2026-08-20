@@ -61,7 +61,7 @@
   flex: 0 0 auto;
   /* Opening is frequent, so the height never animates — but the border and the
      shadow should arrive rather than pop. */
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  transition: border-color 120ms ease-out, box-shadow 120ms ease-out;
   /* ThreadCard scrolls an opening card to the top of .th-scroll; this keeps the
      head off the very edge. */
   scroll-margin-top: 8px;
@@ -73,13 +73,24 @@
   --ch-gutter: 44px;
 }
 
+/* Unread is a statement, not a hue swap: a solid cyan rule down the left edge
+   plus a solid badge. The rule rides box-shadow so it composes with the
+   expanded state's own shadow. */
 .th-card-unread {
   border-color: color-mix(in srgb, var(--sol-cyan) 38%, transparent);
+  box-shadow: inset 3px 0 0 var(--sol-cyan);
 }
 
 .th-card-expanded {
   border-color: color-mix(in srgb, var(--sol-blue) 40%, transparent);
   box-shadow: 0 3px 14px color-mix(in srgb, var(--sol-text) 8%, transparent);
+}
+
+/* An unread card stays visibly unread while open: the frozen boundary is the
+   page's promise, and the border must not switch stories mid-read. */
+.th-card-expanded.th-card-unread {
+  border-color: color-mix(in srgb, var(--sol-cyan) 38%, transparent);
+  box-shadow: inset 3px 0 0 var(--sol-cyan), 0 3px 14px color-mix(in srgb, var(--sol-text) 8%, transparent);
 }
 
 /* The head is one flat surface while collapsed — head and body read as one
@@ -90,16 +101,23 @@
   display: flex;
   align-items: center;
   padding: 0 10px 0 0;
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--sol-text-muted);
   background: transparent;
   transition: background-color 100ms ease;
 }
 
 /* The same hover weight the page's own tools use (.ch-tool:hover); at 18% the
-   hovered head was hard to tell from its neighbours. */
-.th-card-head:hover {
-  background: color-mix(in srgb, var(--sol-border) 22%, transparent);
+   hovered head was hard to tell from its neighbours. Only the TOGGLE half
+   lights: the Open tool inside the head promises navigation, not expansion. */
+@media (hover: hover) {
+  .th-card-hit:hover {
+    background: color-mix(in srgb, var(--sol-border) 22%, transparent);
+  }
+}
+.th-card-hit:active,
+.th-card-summary:active {
+  background: color-mix(in srgb, var(--sol-border) 30%, transparent);
 }
 
 /* Open, the head stays on screen while the card does, so a reader deep in a
@@ -119,7 +137,7 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 6px 8px 2px 12px;
+  padding: 6px 8px 2px 13px;
   text-align: left;
   cursor: pointer;
 }
@@ -133,7 +151,7 @@
 .th-markall:focus-visible,
 .th-older:focus-visible {
   outline: none;
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--sol-cyan) 55%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--sol-blue) 55%, transparent);
 }
 
 /* The kind glyph: a tinted square so a scan down the page reads kinds by
@@ -153,6 +171,8 @@
 .th-tone-magenta { color: var(--sol-magenta); background: color-mix(in srgb, var(--sol-magenta) 14%, transparent); }
 .th-tone-orange { color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 14%, transparent); }
 .th-tone-green { color: var(--sol-green); background: color-mix(in srgb, var(--sol-green) 14%, transparent); }
+.th-tone-yellow { color: var(--sol-yellow); background: color-mix(in srgb, var(--sol-yellow) 14%, transparent); }
+.th-tone-red { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 14%, transparent); }
 
 /* The rail's grammar: weight plus cyan says unread, a quiet label says read. */
 .th-card-chan {
@@ -178,8 +198,8 @@
   border-radius: 999px;
   font-size: 10px;
   font-weight: 700;
-  background: color-mix(in srgb, var(--sol-cyan) 16%, transparent);
-  color: var(--sol-cyan);
+  background: var(--sol-cyan);
+  color: var(--sol-bg);
 }
 
 .th-card-spacer { flex: 1 1 auto; }
@@ -414,3 +434,252 @@
 }
 
 .th-older:disabled { opacity: 0.6; cursor: default; }
+
+/* ── Task head label: id + title share the one scannable column ── */
+
+.th-card-task-id {
+  flex: 0 0 auto;
+  color: var(--sol-text-muted);
+}
+
+.th-card-task-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Question kind ── */
+
+.th-card-question {
+  padding: 8px 14px 2px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sol-text);
+}
+
+.th-card-open-question {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 14px 12px;
+}
+
+.th-question-context {
+  font-size: 12px;
+  color: var(--sol-text-secondary);
+  border-left: 2px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
+  padding-left: 10px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.th-question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.th-question-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 100ms ease-out, background-color 100ms ease-out;
+}
+
+@media (hover: hover) {
+  .th-question-option:hover {
+    border-color: color-mix(in srgb, var(--sol-blue) 50%, transparent);
+    background: color-mix(in srgb, var(--sol-blue) 8%, transparent);
+  }
+}
+
+.th-question-option:active {
+  background: color-mix(in srgb, var(--sol-blue) 14%, transparent);
+}
+
+.th-question-option-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--sol-text);
+}
+
+.th-question-default {
+  font-weight: 500;
+  color: var(--sol-text-dim);
+}
+
+.th-question-option-desc {
+  font-size: 11.5px;
+  color: var(--sol-text-muted);
+}
+
+.th-question-free {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.th-question-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--sol-card) 70%, var(--sol-bg));
+  color: var(--sol-text);
+}
+
+.th-question-input:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--sol-blue) 55%, transparent);
+}
+
+.th-question-send,
+.th-question-dismiss {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  font-size: 11.5px;
+  border-radius: 8px;
+  color: var(--sol-text-muted);
+  cursor: pointer;
+  transition: background-color 100ms ease-out, color 100ms ease-out;
+}
+
+.th-question-send:disabled { opacity: 0.4; cursor: default; }
+
+@media (hover: hover) {
+  .th-question-send:not(:disabled):hover,
+  .th-question-dismiss:hover {
+    background: color-mix(in srgb, var(--sol-border) 22%, transparent);
+    color: var(--sol-text);
+  }
+}
+
+/* ── Page kind ── */
+
+.th-card-open-page {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 14px 12px;
+}
+
+.th-page-comments {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 55vh;
+  overflow-y: auto;
+}
+
+.th-page-comment {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.th-page-comment-reply { padding-left: 26px; }
+
+.th-page-comment-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.th-page-comment-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.th-page-comment-name { font-weight: 600; color: var(--sol-text-secondary); }
+.th-page-comment-age { color: var(--sol-text-dim); font-variant-numeric: tabular-nums; }
+.th-page-comment-resolved { color: var(--sol-green); }
+
+.th-page-comment-text {
+  font-size: 12.5px;
+  color: var(--sol-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.th-page-composer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.th-page-openlink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--sol-text-muted);
+}
+
+@media (hover: hover) {
+  .th-page-openlink:hover { color: var(--sol-text); }
+}
+
+/* ── Session expanded: content in place, the panel only on the button ── */
+
+.th-card-open-session {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 14px 12px;
+}
+
+.th-session-state {
+  font-size: 12px;
+  color: var(--sol-text-secondary);
+}
+
+.th-session-preview {
+  font-size: 12px;
+  color: var(--sol-text-muted);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.th-session-openpanel {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
+  padding: 5px 9px;
+  font-size: 11.5px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  border-radius: 8px;
+  color: var(--sol-text-secondary);
+  cursor: pointer;
+  transition: background-color 100ms ease-out;
+}
+
+@media (hover: hover) {
+  .th-session-openpanel:hover {
+    background: color-mix(in srgb, var(--sol-border) 22%, transparent);
+  }
+}
+
+/* ch-empty-icon alone is a hollow 34px circle (its chat uses always pair a
+   fill class); this page gives it its own quiet fill. */
+.th-empty-icon {
+  background: color-mix(in srgb, var(--sol-border) 24%, transparent);
+  color: var(--sol-text-muted);
+}

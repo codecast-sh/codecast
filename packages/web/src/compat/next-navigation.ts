@@ -37,6 +37,9 @@ export function usePathname(): string {
 
 export function useRouter() {
   const navigate = useNavigate();
+  // The tab this component renders in, so a background (prewarm) pane's
+  // navigations move its OWN tab instead of the one the user is looking at.
+  const tabId = useTabContext()?.tabId;
   return useMemo(
     () => ({
       // The second arg mirrors Next.js's `NavigateOptions` (e.g. `{ scroll }`).
@@ -52,7 +55,7 @@ export function useRouter() {
           return;
         }
         if (shouldUseTabRouting(path)) {
-          tabNavigate(path, "push");
+          tabNavigate(path, "push", tabId);
         } else {
           navigate(path);
         }
@@ -67,7 +70,7 @@ export function useRouter() {
           return;
         }
         if (shouldUseTabRouting(path)) {
-          tabNavigate(path, "replace");
+          tabNavigate(path, "replace", tabId);
         } else {
           navigate(path, { replace: true });
         }
@@ -77,7 +80,7 @@ export function useRouter() {
       refresh: () => window.location.reload(),
       prefetch: (_path: string) => {},
     }),
-    [navigate],
+    [navigate, tabId],
   );
 }
 

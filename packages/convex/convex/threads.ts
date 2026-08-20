@@ -31,7 +31,7 @@ import {
   threadUnreadFor,
   type ThreadSummary,
 } from "./chat";
-import { commentsForAnchor } from "./comments";
+import { commentsForAnchor, isInCommentThread } from "./comments";
 import { canAccessConversation, canAccessTask } from "./lib/access";
 import { THREAD_BADGE_SCAN, threadKindValidator, type ThreadKind } from "./threadReads";
 
@@ -112,6 +112,7 @@ type PageCache = {
   roots: Map<string, Doc<"chat_messages"> | null>;
   conversations: Map<string, Doc<"conversations"> | null>;
   commentThreads: Map<string, Doc<"comments">[]>;
+  conversationComments: Map<string, Doc<"comments">[]>;
   tasks: Map<string, Doc<"tasks"> | null>;
   taskComments: Map<string, Doc<"task_comments">[]>;
   artifacts: Map<string, Doc<"artifacts"> | null>;
@@ -125,6 +126,7 @@ function newPageCache(): PageCache {
     roots: new Map(),
     conversations: new Map(),
     commentThreads: new Map(),
+    conversationComments: new Map(),
     tasks: new Map(),
     taskComments: new Map(),
     artifacts: new Map(),
@@ -238,12 +240,26 @@ function commentConversationId(row: ThreadRead): Id<"conversations"> {
 }
 
 async function commentThread(ctx: ReadCtx, row: ThreadRead, cache: PageCache): Promise<Doc<"comments">[]> {
-  return await memo(cache.commentThreads, row.root_key, () =>
-    commentsForAnchor(ctx, commentConversationId(row), {
+  return await memo(cache.commentThreads, row.root_key, async () => {
+    const conversationId = commentConversationId(row);
+    const anchor = {
       message_id: row.message_id,
       file_path: row.file_path,
       line_number: row.line_number,
-    }));
+    };
+    // A message anchor has its own index. A file or global anchor needs the
+    // conversation's whole comment set — read it ONCE per conversation and
+    // filter per anchor, so N anchored threads cost one collect, not N.
+    if (anchor.message_id) return await commentsForAnchor(ctx, conversationId, anchor);
+    const all = await memo(cache.conversationComments, String(conversationId), () =>
+      ctx.db
+        .query("comments")
+        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))
+        .collect());
+    return all
+      .filter((c) => isInCommentThread(c, anchor))
+      .sort((a, b) => a.created_at - b.created_at || String(a._id).localeCompare(String(b._id)));
+  });
 }
 
 /** An unfinished agent placeholder is not a reply yet: it neither counts nor
@@ -462,6 +478,18 @@ function scopeQuery(ctx: ReadCtx, userId: Id<"users">, teamId: Id<"teams"> | und
     .order("desc");
 }
 
+/** Published pages have no routing team (artifacts are personal property), so
+ *  their rows live in the personal scope — but a publisher working in a team
+ *  workspace still owns them. A team-scoped read therefore carries the
+ *  viewer's newest personal PAGE rows along; discussions are few, so a
+ *  bounded take instead of a second cursor. */
+const PERSONAL_PAGE_CARRY = 20;
+async function personalPageRows(ctx: ReadCtx, userId: Id<"users">, teamId: Id<"teams"> | undefined): Promise<ThreadRead[]> {
+  if (!teamId) return [];
+  const personal = await scopeQuery(ctx, userId, undefined).take(THREAD_BADGE_SCAN);
+  return personal.filter((r) => r.kind === "page").slice(0, PERSONAL_PAGE_CARRY);
+}
+
 export const listMine = query({
   args: {
     api_token: v.optional(v.string()),
@@ -484,9 +512,13 @@ export const listMine = query({
     const page = await scopeQuery(ctx, userId, args.team_id)
       .paginate({ numItems: limit, cursor: args.cursor ?? null });
 
+    // Personal page rows ride the FIRST team-scoped page only (they have no
+    // cursor of their own), newest first like everything else.
+    const carried = args.cursor ? [] : await personalPageRows(ctx, userId, args.team_id);
+
     const cache = newPageCache();
     const entries: ThreadInboxEntry[] = [];
-    for (const row of page.page) {
+    for (const row of [...carried, ...page.page]) {
       const kind = THREAD_KINDS[row.kind];
       if (!kind || !(await kind.access(ctx, userId, row, cache))) continue;
       const { unread, unread_capped } = await kind.unread(ctx, userId, row, cache);
@@ -534,12 +566,19 @@ export const unreadCount = query({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
     if (!userId) return 0;
-    const rows = await scopeQuery(ctx, userId, args.team_id).take(THREAD_BADGE_SCAN);
+    const rows = [
+      ...(await personalPageRows(ctx, userId, args.team_id)),
+      ...(await scopeQuery(ctx, userId, args.team_id).take(THREAD_BADGE_SCAN)),
+    ];
     const cache = newPageCache();
     let count = 0;
     for (const row of rows) {
+      // A kind this deployment does not know yet (mid-rollout) is skipped,
+      // never a crash that blanks the badge.
+      const kind = THREAD_KINDS[row.kind];
+      if (!kind) continue;
       if (row.last_activity_at <= row.last_read_at) continue;
-      if (await THREAD_KINDS[row.kind].access(ctx, userId, row, cache)) count++;
+      if (await kind.access(ctx, userId, row, cache)) count++;
     }
     return count;
   },
@@ -586,12 +625,17 @@ export const markAllRead = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
-    const rows = await scopeQuery(ctx, userId, args.team_id).take(THREAD_BADGE_SCAN);
+    const rows = [
+      // The carried personal page rows are part of the view being swept.
+      ...(!args.kind || args.kind === "page" ? await personalPageRows(ctx, userId, args.team_id) : []),
+      ...(await scopeQuery(ctx, userId, args.team_id).take(THREAD_BADGE_SCAN)),
+    ];
     const cache = newPageCache();
     const now = Date.now();
     let marked = 0;
     for (const row of rows) {
       if (args.kind && row.kind !== args.kind) continue;
+      if (!THREAD_KINDS[row.kind]) continue;
       const before = row.last_read_at;
       if ((await clampRead(ctx, row, cache, now)) > before) marked++;
     }

@@ -5,6 +5,7 @@ import {
   dmCards,
   frozenReadAtOf,
   serverCards,
+  questionCards,
   sessionCards,
   sessionUnread,
   sortCards,
@@ -61,8 +62,13 @@ describe("chipFromSearch", () => {
   });
 
   it("hides the Chat and DMs chips when chat is off", () => {
-    expect(visibleChips(true).map((c) => c.key)).toEqual(["all", "chat", "dm", "comment", "task"]);
-    expect(visibleChips(false).map((c) => c.key)).toEqual(["all", "comment", "task"]);
+    expect(visibleChips(true).map((c) => c.key)).toEqual(["all", "chat", "dm", "comment", "task", "page", "question"]);
+    expect(visibleChips(false).map((c) => c.key)).toEqual(["all", "comment", "task", "page", "question"]);
+  });
+
+  it("maps the page and question chips regardless of chat", () => {
+    expect(chipFromSearch("page", false)).toBe("page");
+    expect(chipFromSearch("question", false)).toBe("question");
   });
 });
 
@@ -160,6 +166,41 @@ describe("chip filtering and counts", () => {
   });
 
   it("counts unread cards per chip and never counts sessions", () => {
-    expect(unreadByChip(cards)).toEqual({ all: 4, chat: 1, dm: 2, comment: 0, task: 1 });
+    expect(unreadByChip(cards)).toEqual({ all: 4, chat: 1, dm: 2, comment: 0, task: 1, page: 0, question: 0 });
+  });
+});
+
+
+describe("page and question kinds", () => {
+  it("links a page card to its published slug when cached, and skips unknown kinds", () => {
+    const rows = [
+      { _id: "page:a1", kind: "page", root_key: "a1", last_activity_at: 9, last_read_at: 0, updated_at: 9, unread: 1 },
+      { _id: "mystery:x", kind: "mystery", root_key: "x", last_activity_at: 8, last_read_at: 0, updated_at: 8, unread: 1 },
+    ] as any[];
+    const cards = serverCards(rows, () => undefined, () => undefined, (id) => (id === "a1" ? "my-page" : undefined));
+    expect(cards.length).toBe(1);
+    expect(cards[0].kind).toBe("page");
+    expect(cards[0].chip).toBe("page");
+    expect(cards[0].href).toBe("/a/my-page");
+  });
+
+  it("makes cards only from pending decisions, always unread", () => {
+    const cards = questionCards([
+      { _id: "d1", conversation_id: "c1", session_id: "s1", question: "Q?", options: [], blocking: true, status: "pending", created_at: 7 },
+      { _id: "d2", conversation_id: "c1", session_id: "s1", question: "Q2?", options: [], blocking: false, status: "answered", created_at: 8 },
+      { _id: "d3", conversation_id: "c1", session_id: "s1", question: "Q3?", options: [], blocking: false, status: "dismissed", created_at: 9 },
+    ] as any);
+    expect(cards.map((c) => c.id)).toEqual(["question:d1"]);
+    expect(cards[0].unread).toBe(1);
+    expect(cards[0].chip).toBe("question");
+  });
+
+  it("questions count on their chip but never in the default view number", () => {
+    const cards = questionCards([
+      { _id: "d1", conversation_id: "c1", session_id: "s1", question: "Q?", options: [], blocking: true, status: "pending", created_at: 7 },
+    ] as any);
+    const counts = unreadByChip(cards);
+    expect(counts.question).toBe(1);
+    expect(counts.all).toBe(0);
   });
 });

@@ -3,7 +3,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { LayoutList } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useChatMembers, useChatRail } from "../../hooks/useChatSync";
-import { useThreadInbox, useThreadInboxCards, useThreadsInboxSync } from "../../hooks/useThreadsSync";
+import { useCommentThreadMap, useQuestionThreadCards, useThreadInbox, useThreadInboxCards, useThreadsInboxSync } from "../../hooks/useThreadsSync";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useTeamFeature } from "../../lib/teamFeatures";
 import { memberName } from "../../lib/chatViews";
@@ -67,6 +67,8 @@ export function ThreadsView({ present }: { present: boolean }) {
   const chatCards = useMemo(() => new Map(chatCardList.map((c) => [c.entry.root_key, c])), [chatCardList]);
   const { members, byId, viewerId, handles } = useChatMembers();
   const sessionCardList = useSessionThreadCards(includeSessions && chip === "all");
+  const questionCardList = useQuestionThreadCards();
+  const commentThreads = useCommentThreadMap(rows);
   // Task short ids give the canonical /tasks/<short_id> link. One string
   // signature over just the task rows on the page, not the tasks collection.
   const taskShortSig = useInboxStore((s) => {
@@ -74,15 +76,23 @@ export function ThreadsView({ present }: { present: boolean }) {
     for (const r of rows) if (r.kind === "task") sig += `${(s.tasks[String(r.task_id ?? r.root_key)] as any)?.short_id ?? ""}|`;
     return sig;
   });
+  // Page slugs give the published page link; one string over just the page rows.
+  const pageSlugSig = useInboxStore((s) => {
+    let sig = "";
+    for (const r of rows) if (r.kind === "page") sig += `${(s.pageThreads[r.root_key] as any)?.slug ?? ""}|`;
+    return sig;
+  });
 
   const allCards = useMemo(() => {
     const railById = new Map(rail.map((c) => [c.id, c]));
-    const tasks = useInboxStore.getState().tasks as Record<string, { short_id?: string }>;
-    const server = serverCards(rows, (id) => railById.get(id)?.kind, (id) => tasks[id]?.short_id);
-    return [...server, ...dmCards(chatOn ? rail : []), ...sessionCardList];
-    // taskShortSig is the wake for the short id lookup.
+    const st = useInboxStore.getState();
+    const tasks = st.tasks as Record<string, { short_id?: string }>;
+    const pages = st.pageThreads as Record<string, { slug?: string }>;
+    const server = serverCards(rows, (id) => railById.get(id)?.kind, (id) => tasks[id]?.short_id, (id) => pages[id]?.slug);
+    return [...server, ...dmCards(chatOn ? rail : []), ...sessionCardList, ...questionCardList];
+    // taskShortSig / pageSlugSig are the wakes for the id lookups.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, rail, chatOn, sessionCardList, taskShortSig]);
+  }, [rows, rail, chatOn, sessionCardList, questionCardList, taskShortSig, pageSlugSig]);
   const counts = useMemo(() => unreadByChip(allCards), [allCards]);
   const cards = useMemo(
     () => sortCards(cardsForChip(allCards, chip, includeSessions)),
@@ -97,8 +107,8 @@ export function ThreadsView({ present }: { present: boolean }) {
 
   const nameOf = useCallback((userId: string) => memberName(byId.get(String(userId))), [byId]);
   const ctx = useMemo<ThreadsPageContextValue>(
-    () => ({ now, present, teamId, viewerId, members, handles, nameOf, chatCards, toggle }),
-    [now, present, teamId, viewerId, members, handles, nameOf, chatCards, toggle],
+    () => ({ now, present, teamId, viewerId, members, handles, nameOf, chatCards, commentThreads, toggle }),
+    [now, present, teamId, viewerId, members, handles, nameOf, chatCards, commentThreads, toggle],
   );
 
   // ── Header + chips ────────────────────────────────────────────────────────

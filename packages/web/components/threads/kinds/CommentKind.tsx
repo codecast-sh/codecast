@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { CheckCircle2, FileCode2, MessageSquare, Quote } from "lucide-react";
-import { useInboxStore, useTrackedStore, type ThreadInboxRow } from "../../../store/inboxStore";
+import { useInboxStore, type ThreadInboxRow } from "../../../store/inboxStore";
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useCommentActions, useConversationCommentsSync } from "../../../hooks/useConversationComments";
 import {
-  GLOBAL_THREAD_KEY,
   isAgentComment,
   isThreadResolved,
   parseCommentThreadRootKey,
   webThreadKeyFromAnchor,
-  fileThreadKey,
   type Comment,
   type CommentThread as CommentThreadModel,
 } from "../../../lib/commentThread";
@@ -46,38 +44,15 @@ function anchorOf(row: ThreadInboxRow): { conversationId: string; webKey: string
   };
 }
 
-/** The rows of one thread, oldest first. Subscribed through a signature of the
- *  fields the card renders: the comments collection is one map for every
- *  conversation and its ref flips on every push. */
-function threadCommentsSig(comments: Record<string, Comment>, conversationId: string, webKey: string): string {
-  let sig = "";
-  for (const id in comments) {
-    const c = comments[id];
-    if (c.conversation_id !== conversationId) continue;
-    const key = c.message_id ? c.message_id : c.file_path ? fileThreadKey(c.file_path, c.line_number) : GLOBAL_THREAD_KEY;
-    if (key !== webKey) continue;
-    sig += `${c._id}|${c.created_at}|${c.content.length}|${c.resolved_at ?? ""}|${c.agent_status ?? ""};`;
-  }
-  return sig;
+/** The rows of one thread, oldest first — from the page's ONE assembled map
+ *  (threadsContext.commentThreads), never a per-card scan of the whole
+ *  comments collection. */
+function useThreadComments(rootKey: string): Comment[] {
+  const { commentThreads } = useThreadsPage();
+  return commentThreads.get(rootKey) ?? EMPTY_COMMENTS;
 }
 
-function useThreadComments(conversationId: string, webKey: string): Comment[] {
-  const s = useTrackedStore([(s) => threadCommentsSig(s.comments as Record<string, Comment>, conversationId, webKey)]);
-  const sig = threadCommentsSig(s.comments as Record<string, Comment>, conversationId, webKey);
-  return useMemo(() => {
-    const out: Comment[] = [];
-    const all = s.comments as Record<string, Comment>;
-    for (const id in all) {
-      const c = all[id];
-      if (c.conversation_id !== conversationId) continue;
-      const key = c.message_id ? c.message_id : c.file_path ? fileThreadKey(c.file_path, c.line_number) : GLOBAL_THREAD_KEY;
-      if (key === webKey) out.push(c);
-    }
-    return out.sort((a, b) => a.created_at - b.created_at);
-    // The signature is the real dep: the raw map ref flips on every push.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sig, conversationId, webKey]);
-}
+const EMPTY_COMMENTS: Comment[] = [];
 
 function useAgentType(conversationId: string): string {
   return useInboxStore(
@@ -89,13 +64,19 @@ function useAgentType(conversationId: string): string {
  *  The kind tile keeps the kind's own icon, so a scan down the page reads
  *  kinds before it reads which agent. */
 export function CommentLabel({ card }: { card: ThreadCardModel }) {
-  const { conversationId } = anchorOf(rowOf(card));
+  const row = rowOf(card);
+  const { conversationId, filePath, lineNumber } = anchorOf(row);
   const agentType = useAgentType(conversationId);
   const label = useInboxStore((s) => sessionLabel(s.conversations[conversationId] ?? s.sessions[conversationId]));
+  // Never the literal word "Session": when the conversation is not cached,
+  // the anchor still says what this thread is about.
+  const fallback = filePath
+    ? `${filePath.split("/").pop()}${lineNumber ? `:${lineNumber}` : ""}`
+    : row.last_reply?.preview ?? "Comment thread";
   return (
     <>
       <AgentIcon agentType={agentType} className="w-3 h-3" />
-      {label ?? "Session"}
+      {label ?? fallback}
     </>
   );
 }
@@ -136,7 +117,7 @@ function AnchorLine({ conversationId, messageId, filePath, lineNumber }: { conve
 export function CommentRoot({ card, expanded }: { card: ThreadCardModel; expanded: boolean }) {
   const row = rowOf(card);
   const anchor = anchorOf(row);
-  const comments = useThreadComments(anchor.conversationId, anchor.webKey);
+  const comments = useThreadComments(row.root_key);
   const { user } = useCurrentUser();
   const currentUserId = user?._id as string | undefined;
   const agentType = useAgentType(anchor.conversationId);
@@ -196,7 +177,7 @@ export function CommentExpanded({ card, present }: { card: ThreadCardModel; pres
   const anchor = anchorOf(row);
   const { conversationId, webKey, messageId, filePath, lineNumber } = anchor;
   useConversationCommentsSync(conversationId);
-  const comments = useThreadComments(conversationId, webKey);
+  const comments = useThreadComments(row.root_key);
   const { user, isAuthenticated } = useCurrentUser();
   const currentUserId = user?._id as string | undefined;
   const agentType = useAgentType(conversationId);

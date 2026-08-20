@@ -7,6 +7,9 @@ import { createContext, useContext } from "react";
 // Fast Refresh boundary (a context object + hook exported next to a component).
 
 export const TabParamsCtx = createContext<{
+  /** The tab this pane renders in — router calls from the pane navigate THIS
+   *  tab, which matters for background (prewarm) panes mounted hidden. */
+  tabId: string;
   pathname: string;
   params: Record<string, string>;
   searchParams: URLSearchParams;
