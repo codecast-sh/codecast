@@ -72,7 +72,9 @@ export function NewMessageModal({
   // (channel / group thread) still switches: naming a destination is the
   // explicit gesture.
   const liveRoomKey = useInboxStore((s) =>
-    intent === "huddle" && s.call.phase === "connected" ? s.call.roomKey : null,
+    intent === "huddle" && s.call.phase !== "idle" && s.call.phase !== "error"
+      ? s.call.roomKey
+      : null,
   );
   const now = useCoarseNow(30_000);
   const openDm = useOpenDm();
@@ -171,7 +173,7 @@ export function NewMessageModal({
     } else if (huddle) {
       onClose();
       const c = cand.channel;
-      const roomKey = chatViewRoomKey(c, String(viewer));
+      const roomKey = chatViewRoomKey(c, String(viewer), teamMembers);
       if (cand.type === "group") {
         void startHuddle({ roomKey, toUserIds: c.dmMemberIds ?? [] });
       } else {

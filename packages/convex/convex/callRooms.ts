@@ -80,12 +80,15 @@ async function sharedTeam(
 }
 
 // The invite grant: a ring into this room that the user accepted, for a
-// huddle that is still running (someone else holds a fresh lease). joinRoom
-// expires a room's accepted invites when the room restarts from empty, so an
-// accepted row here means the huddle it belongs to never ended. The guest
-// must also still be on the team the invite billed to — removal from the
-// team closes this door like every other. Returns that team so the guest's
-// own membership row lands in the same team as everyone else's.
+// huddle that is still running. "Still running" is anchored to the room's
+// OWN people: some live occupant other than the guest must themselves pass
+// the membership rules — guests cannot keep each other's grants alive, so a
+// room the members have all left winds down instead of persisting as a
+// members-free huddle inside someone's private room. joinRoom additionally
+// expires a room's accepted invites when the room restarts from empty. The
+// guest must also still be on the team the invite billed to — removal from
+// the team closes this door like every other. Returns that team so the
+// guest's own membership row lands in the same team as everyone else's.
 async function acceptedInviteGrant(
   ctx: any,
   userId: Id<"users">,
@@ -111,7 +114,12 @@ async function acceptedInviteGrant(
   const others = liveMembers(rows, Date.now()).filter(
     (m) => String(m.user_id) !== String(userId),
   );
-  return others.length > 0 ? accepted.team_id : null;
+  for (const m of others) {
+    if ((await authorizeRoomMembership(ctx, m.user_id, roomKey)).ok) {
+      return accepted.team_id;
+    }
+  }
+  return null;
 }
 
 /** joinRoom calls this when it finds the room EMPTY (no live rows): the next

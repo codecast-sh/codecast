@@ -60,6 +60,7 @@ export function channelDisplayName(
 export function chatViewRoomKey(
   view: { id: string; kind?: string; dmMemberIds?: string[]; memberIds?: string[] },
   viewerId: string,
+  teammates?: { _id: string }[],
 ): string {
   return chatRoomKey({
     id: view.id,
@@ -67,6 +68,7 @@ export function chatViewRoomKey(
     otherIds: view.dmMemberIds,
     viewerId,
     memberIds: view.kind === "dm" ? undefined : view.memberIds,
+    teammateIds: teammates?.map((m) => String(m._id)),
   });
 }
 
@@ -79,11 +81,18 @@ export function channelRowRoomKey(
   channel: { _id: string; kind?: string; dm_key?: string },
   rail: { member_ids?: string[] } | undefined,
   viewerId: string,
+  teammates?: { _id: string }[],
 ): string {
   const fromKey = channel.dm_key ? dmOtherIds(channel.dm_key, viewerId) : undefined;
   const otherIds =
     fromKey ?? rail?.member_ids?.filter((uid) => String(uid) !== String(viewerId));
-  return chatRoomKey({ id: String(channel._id), kind: channel.kind, otherIds, viewerId });
+  return chatRoomKey({
+    id: String(channel._id),
+    kind: channel.kind,
+    otherIds,
+    viewerId,
+    teammateIds: teammates?.map((m) => String(m._id)),
+  });
 }
 
 /** The avatar-bearing side of a 1:1 DM, for surfaces that show a face. */

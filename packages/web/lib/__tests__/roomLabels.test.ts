@@ -30,6 +30,13 @@ describe("chatViewRoomKey", () => {
   test("a group thread huddles in the room of its members", () => {
     expect(chatViewRoomKey({ id: "dm1", kind: "dm", dmMemberIds: ["bo", "ann"] }, "me")).toBe("dm:ann:bo:me");
   });
+  test("a group thread with a departed member falls back to its channel room", () => {
+    const teammates = [{ _id: "me" }, { _id: "ann" }];
+    // bo left the team: the member-set room would be refused server-side.
+    expect(chatViewRoomKey({ id: "dm1", kind: "dm", dmMemberIds: ["ann", "bo"] }, "me", teammates)).toBe("channel:dm1");
+    // Everyone still present: the member-set room as usual.
+    expect(chatViewRoomKey({ id: "dm1", kind: "dm", dmMemberIds: ["ann"] }, "me", teammates)).toBe("dm:ann:me");
+  });
   test("a channel keeps its own room; a DM with no roster yet does not guess", () => {
     expect(chatViewRoomKey({ id: "ch1", kind: "public" }, "me")).toBe("channel:ch1");
     expect(chatViewRoomKey({ id: "chp", kind: "private", memberIds: ["me", "ann"] }, "me")).toBe("channel:chp");

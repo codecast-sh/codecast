@@ -653,7 +653,9 @@ export async function acceptInvite(inviteId: string, roomKey: string): Promise<v
     if (switching && prior.roomKey) {
       convex.mutation(api.calls.leaveRoom, { room_key: prior.roomKey }).catch(() => {});
     }
-    await joinCall(roomKey);
+    // Join the room the server ACCEPTED: a re-ring can move an invite to a
+    // new room after the toast captured the old key.
+    await joinCall(res?.room_key ?? roomKey);
   } catch (err: any) {
     if (switching) setCall({ ...prior });
     else setCall({ phase: "error", error: humanizeConvexError(err, "Could not join the huddle") });

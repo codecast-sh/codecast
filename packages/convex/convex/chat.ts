@@ -555,7 +555,19 @@ export const listChannels = query({
       });
     }
 
-    return { team_id: teamId, channels, reads, rail };
+    // The Threads inbox's badge: how many followed threads have unseen
+    // replies. A bounded scan of the newest-activity rows — an inbox whose
+    // unread tail is deeper than the scan shows a floor, never a lie.
+    const threadRows = await ctx.db
+      .query("chat_thread_reads")
+      .withIndex("by_user_team_activity", (q: any) =>
+        q.eq("user_id", userId).eq("team_id", teamId))
+      .order("desc")
+      .take(THREAD_BADGE_SCAN);
+    let threadUnread = 0;
+    for (const r of threadRows) if (r.last_activity_at > r.last_read_at) threadUnread++;
+
+    return { team_id: teamId, channels, reads, rail, thread_unread: threadUnread };
   },
 });
 
@@ -1258,6 +1270,19 @@ export const removeChannelMember = mutation({
         q.eq("user_id", args.user_id).eq("channel_id", channel._id))
       .first();
     if (read) await ctx.db.delete(read._id);
+    // Their thread follows in this room go the same way: listMyThreads would
+    // re-check access and hide them anyway, but the badge scan counts rows
+    // without re-reading channels, so a leftover follow would keep a dead
+    // room's thread ticking their Threads badge.
+    const follows = await ctx.db
+      .query("chat_thread_reads")
+      .withIndex("by_user_team_activity", (q: any) =>
+        q.eq("user_id", args.user_id).eq("team_id", channel.team_id))
+      .collect();
+    for (const follow of follows) {
+      if (follow.channel_id.toString() !== channel._id.toString()) continue;
+      await ctx.db.delete(follow._id);
+    }
     await patchChat(ctx, channel._id, {});
     return { channel_id: channel._id, removed: true };
   },
@@ -1372,7 +1397,316 @@ async function upsertRead(
   await patchChat(ctx, existing._id, patch);
 }
 
+// ── Thread read state ───────────────────────────────────────────────────────
+//
+// The rows behind the Threads inbox: one per (participant, thread root). They
+// are written from exactly the two places a VISIBLE reply lands — the shared
+// insert path and the anchor's landed answer — so a thread appears in someone's
+// inbox precisely when a chat_reply notification could have reached them, and
+// a silent listening row or an in-flight placeholder never raises a badge.
+
+/** How many follow rows the listChannels badge scans. Far above any real
+ *  inbox's unread tail; a person with more is shown a floor, not a lie. */
+const THREAD_BADGE_SCAN = 200;
+
+/** Replies to scan when counting one thread's unread. Shares the channel
+ *  badge's cap so "50+" means the same thing on both surfaces. */
+const THREAD_UNREAD_SCAN = UNREAD_CAP + 5;
+
+async function touchThreadReads(
+  ctx: MutationCtx,
+  opts: {
+    channel: Doc<"chat_channels">;
+    root: Doc<"chat_messages">;
+    /** The landing reply's stamp — becomes every participant's activity mark. */
+    activityAt: number;
+    /** The reply's author: their own row reads as read (they have obviously
+     *  seen the thread they just wrote into). A bot author is skipped below
+     *  like every other bot. */
+    actorId?: Id<"users">;
+    /** People this reply mentioned: being named in a thread starts following
+     *  it, even before you have spoken in it. */
+    extraParticipants?: Id<"users">[];
+  },
+): Promise<void> {
+  const ids = new Set((await threadParticipants(ctx, opts.root)).map(String));
+  for (const id of opts.extraParticipants ?? []) ids.add(String(id));
+  if (opts.actorId) ids.add(String(opts.actorId));
+  const now = Date.now();
+  for (const key of ids) {
+    const userId = key as Id<"users">;
+    // No rows for bots: an anchor has no inbox, and threadParticipants counts
+    // its replies like anyone's.
+    const user = await ctx.db.get(userId);
+    if (!user || user.is_bot) continue;
+    const isActor = opts.actorId?.toString() === key;
+    const existing = await ctx.db
+      .query("chat_thread_reads")
+      .withIndex("by_user_root", (q: any) =>
+        q.eq("user_id", userId).eq("root_id", opts.root._id))
+      .first();
+    if (!existing) {
+      await ctx.db.insert("chat_thread_reads", {
+        user_id: userId,
+        root_id: opts.root._id,
+        channel_id: opts.channel._id,
+        team_id: opts.channel.team_id,
+        last_activity_at: opts.activityAt,
+        // A participant pulled in by this reply starts with the whole thread
+        // unread; the author starts read.
+        last_read_at: isActor ? opts.activityAt : 0,
+        updated_at: now,
+      });
+      continue;
+    }
+    const patch: Record<string, unknown> = {};
+    // Forward only, like the channel mark: an out-of-order write must not
+    // resurrect replies already seen.
+    if (opts.activityAt > existing.last_activity_at) patch.last_activity_at = opts.activityAt;
+    if (isActor && opts.activityAt > existing.last_read_at) patch.last_read_at = opts.activityAt;
+    if (Object.keys(patch).length === 0) continue;
+    await ctx.db.patch(existing._id, { ...patch, updated_at: now });
+  }
+}
+
+/** One thread's unread, by the channel badge's own counting rules. */
+async function threadUnreadFor(
+  ctx: ReadCtx,
+  userId: Id<"users">,
+  rootId: Id<"chat_messages">,
+  lastReadAt: number,
+): Promise<{ unread: number; unread_capped: boolean }> {
+  const rows = await ctx.db
+    .query("chat_messages")
+    .withIndex("by_thread_created", (q: any) =>
+      q.eq("thread_root_id", rootId).gt("created_at", lastReadAt))
+    .take(THREAD_UNREAD_SCAN);
+  const counted = rows.filter(
+    (r) => !r.deleted_at && !isSilentAgentRow(r) && r.user_id.toString() !== userId.toString(),
+  ).length;
+  return { unread: Math.min(counted, UNREAD_CAP), unread_capped: counted > UNREAD_CAP };
+}
+
+// The Threads inbox: every thread the caller participates in, newest activity
+// first, with per-thread unread. Root documents ride along so the client can
+// render each card without opening the thread; the summaries are the same
+// rollups the channel affordance uses.
+export const listMyThreads = query({
+  args: {
+    api_token: v.optional(v.string()),
+    team_id: v.optional(v.id("teams")),
+    cursor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const empty = {
+      entries: [] as any[],
+      roots: [] as Doc<"chat_messages">[],
+      threads: [] as ThreadSummary[],
+      authors: [] as Array<{ _id: Id<"users">; name: string; is_bot: boolean }>,
+      has_more: false,
+      next_cursor: null as string | null,
+    };
+    const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
+    if (!userId) return empty;
+    let teamId: Id<"teams">;
+    try {
+      teamId = await resolveTeamForRead(ctx, userId, args.team_id);
+    } catch {
+      return empty;
+    }
+
+    const limit = Math.min(Math.max(args.limit ?? 30, 1), 50);
+    const page = await ctx.db
+      .query("chat_thread_reads")
+      .withIndex("by_user_team_activity", (q: any) =>
+        q.eq("user_id", userId).eq("team_id", teamId))
+      .order("desc")
+      .paginate({ numItems: limit, cursor: args.cursor ?? null });
+
+    const entries: any[] = [];
+    const roots: Doc<"chat_messages">[] = [];
+    const channelCache = new Map<string, Doc<"chat_channels"> | null>();
+    for (const row of page.page) {
+      // A deleted root still heads its thread (the replies remain), so it is
+      // returned and renders as the tombstone it is. Only a missing root — a
+      // hard purge — drops the entry.
+      const root = await ctx.db.get(row.root_id);
+      if (!root) continue;
+      // Access re-checked per channel, not trusted from the row: leaving a
+      // private room or losing team membership must silently remove its
+      // threads from this inbox. Archived rooms leave with it, like the rail.
+      const channelKey = row.channel_id.toString();
+      if (!channelCache.has(channelKey)) {
+        channelCache.set(channelKey, await readChannel(ctx, userId, row.channel_id));
+      }
+      const channel = channelCache.get(channelKey);
+      if (!channel || channel.archived_at) continue;
+
+      const { unread, unread_capped } = await threadUnreadFor(ctx, userId, root._id, row.last_read_at);
+      // The newest visible reply, for the collapsed card's one-line preview.
+      const newest = (await ctx.db
+        .query("chat_messages")
+        .withIndex("by_thread_created", (q: any) => q.eq("thread_root_id", root._id))
+        .order("desc")
+        .take(4)).find((r) => !r.deleted_at && !isSilentAgentRow(r));
+
+      roots.push(root);
+      entries.push({
+        // Keyed by the ROOT, not the read row: it is the id every other
+        // surface (getThread, the store's chatMessages) already speaks.
+        _id: root._id.toString(),
+        root_id: row.root_id,
+        channel_id: row.channel_id,
+        team_id: row.team_id,
+        last_activity_at: row.last_activity_at,
+        last_read_at: row.last_read_at,
+        unread,
+        unread_capped,
+        last_reply: newest
+          ? {
+              _id: newest._id,
+              user_id: newest.user_id,
+              author_kind: newest.author_kind ?? "user",
+              created_at: newest.created_at,
+              preview: plainPreview(newest.content, 160),
+            }
+          : null,
+        updated_at: row.updated_at,
+      });
+    }
+
+    const threads = await threadSummariesFor(ctx, roots);
+    const authors = await authorsFor(ctx, roots);
+    return {
+      entries,
+      roots,
+      threads,
+      authors,
+      has_more: !page.isDone,
+      next_cursor: page.isDone ? null : page.continueCursor,
+    };
+  },
+});
+
+// The caller's own mark on one thread, moved to its newest activity. No channel
+// gate: the row only exists because they participated, and moving one's own
+// mark reveals nothing.
+export const markThreadRead = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    root_id: v.id("chat_messages"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireCaller(ctx, args.api_token);
+    const row = await ctx.db
+      .query("chat_thread_reads")
+      .withIndex("by_user_root", (q: any) =>
+        q.eq("user_id", userId).eq("root_id", args.root_id))
+      .first();
+    if (!row) return { root_id: args.root_id, last_read_at: null };
+    if (row.last_read_at < row.last_activity_at) {
+      await ctx.db.patch(row._id, {
+        last_read_at: row.last_activity_at,
+        updated_at: Date.now(),
+      });
+    }
+    return {
+      root_id: args.root_id,
+      last_read_at: Math.max(row.last_read_at, row.last_activity_at),
+    };
+  },
+});
+
+// One sweep for the "Mark all read" affordance, scoped like the page it sits on.
+export const markAllThreadsRead = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    team_id: v.optional(v.id("teams")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireCaller(ctx, args.api_token);
+    const teamId = await resolveTeamForRead(ctx, userId, args.team_id);
+    const rows = await ctx.db
+      .query("chat_thread_reads")
+      .withIndex("by_user_team_activity", (q: any) =>
+        q.eq("user_id", userId).eq("team_id", teamId))
+      .order("desc")
+      .take(THREAD_BADGE_SCAN);
+    const now = Date.now();
+    let marked = 0;
+    for (const row of rows) {
+      if (row.last_read_at >= row.last_activity_at) continue;
+      await ctx.db.patch(row._id, { last_read_at: row.last_activity_at, updated_at: now });
+      marked++;
+    }
+    return { marked };
+  },
+});
+
+// Seeds chat_thread_reads from existing history, one page of messages at a
+// time, rescheduling itself until done. Every seeded row starts READ
+// (last_read_at = last_activity_at): the feature's arrival must not hand
+// everyone months of phantom unread.
+export const backfillThreadReads = internalMutation({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("chat_messages")
+      .paginate({ numItems: 400, cursor: args.cursor ?? null });
+    const rootCache = new Map<string, Doc<"chat_messages"> | null>();
+    const userCache = new Map<string, boolean>(); // id → is a real (non-bot) user
+    for (const row of page.page) {
+      if (!row.thread_root_id || row.deleted_at || isSilentAgentRow(row)) continue;
+      const rootKey = row.thread_root_id.toString();
+      if (!rootCache.has(rootKey)) rootCache.set(rootKey, await ctx.db.get(row.thread_root_id));
+      const root = rootCache.get(rootKey);
+      if (!root) continue;
+      for (const userId of [row.user_id, root.user_id]) {
+        const key = userId.toString();
+        if (!userCache.has(key)) {
+          const user = await ctx.db.get(userId);
+          userCache.set(key, !!user && !user.is_bot);
+        }
+        if (!userCache.get(key)) continue;
+        const existing = await ctx.db
+          .query("chat_thread_reads")
+          .withIndex("by_user_root", (q: any) =>
+            q.eq("user_id", userId).eq("root_id", root._id))
+          .first();
+        if (!existing) {
+          await ctx.db.insert("chat_thread_reads", {
+            user_id: userId,
+            root_id: root._id,
+            channel_id: row.channel_id,
+            team_id: row.team_id,
+            last_activity_at: row.created_at,
+            last_read_at: row.created_at,
+            updated_at: Date.now(),
+          });
+        } else if (row.created_at > existing.last_activity_at) {
+          await ctx.db.patch(existing._id, {
+            last_activity_at: row.created_at,
+            // Seeded read; a LIVE reply that lands during the backfill has
+            // already moved last_activity_at past this page's stamps, and
+            // this branch never lowers a mark.
+            last_read_at: Math.max(existing.last_read_at, row.created_at),
+            updated_at: Date.now(),
+          });
+        }
+      }
+    }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.chat.backfillThreadReads, {
+        cursor: page.continueCursor,
+      });
+    }
+    return { scanned: page.page.length, done: page.isDone };
+  },
+});
+
 // Reading on one surface silences the other. A chat push waits in `push_outbox`
+// for up to three minutes while the desktop is active, so without this you answer
 // for up to three minutes while the desktop is active, so without this you answer
 // a mention at your desk and your phone buzzes about it three minutes later.
 //
@@ -1469,6 +1803,15 @@ export async function purgeChatMembership(
     await ctx.db.delete(read._id);
     readCount++;
   }
+
+  // Thread follows go with the read rows and for the same reason: the Threads
+  // badge counts them without re-reading their channels.
+  const follows = await ctx.db
+    .query("chat_thread_reads")
+    .withIndex("by_user_team_activity", (q: any) =>
+      q.eq("user_id", userId).eq("team_id", teamId))
+    .collect();
+  for (const follow of follows) await ctx.db.delete(follow._id);
 
   // Private rooms and DMs in this team: the member rows go too, so a former
   // teammate holds no keys. (canAccessChannel would refuse them anyway via the
@@ -1865,6 +2208,20 @@ async function postChatMessage(
         pushBody,
       });
     }
+  }
+
+  // The reply lands in its participants' Threads inbox — the same audience the
+  // chat_reply fan-out above reaches, plus anyone this line mentioned (being
+  // named in a thread starts following it). Independent of notify levels:
+  // muting silences bells, never badges.
+  if (root) {
+    await touchThreadReads(ctx, {
+      channel,
+      root,
+      activityAt: now,
+      actorId: authorId,
+      extraParticipants: mentions,
+    });
   }
 
   let hereCount = 0;
@@ -2951,6 +3308,14 @@ export const replyAsAnchor = mutation({
       }
     }
     if (root && status === "done") {
+      // The landed answer is thread activity like any human reply. The stamp is
+      // the row's FINAL position: a listening row was just re-stamped to the end
+      // of the channel, and the activity mark has to match what readers see.
+      await touchThreadReads(ctx, {
+        channel,
+        root,
+        activityAt: (patch.created_at as number | undefined) ?? message.created_at,
+      });
       const preview = plainPreview(args.content);
       const anchorName = oneLine(displayName(await ctx.db.get(anchor.bot_user_id)), 60);
       for (const recipientId of await threadParticipants(ctx, root)) {

@@ -109,7 +109,7 @@ export default function ChatPage() {
   const now = useCoarseNow(CLOCK_MS);
 
   const rail = useChatRail();
-  const { viewerId, handles } = useChatMembers();
+  const { members: teamMembers, viewerId, handles } = useChatMembers();
 
   // ── Is the reader actually here? ──────────────────────────────────────────
   const tab = useTabContext();
@@ -444,7 +444,7 @@ export default function ChatPage() {
                   chip and the "in a huddle" strip tell the team it's live. */}
               {activeChannel && (
                 <HuddleButton
-                  roomKey={chatViewRoomKey(activeChannel, viewerId)}
+                  roomKey={chatViewRoomKey(activeChannel, viewerId, teamMembers)}
                   ring={activeChannel.kind === "dm" ? activeChannel.dmMemberIds : undefined}
                   anchorTitle={activeChannel.kind === "dm" ? undefined : `#${activeChannel.name}`}
                   className="shrink-0"

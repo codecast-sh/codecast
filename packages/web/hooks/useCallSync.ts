@@ -64,7 +64,7 @@ export function useCallSync(): void {
     for (const r of s.chatRail ?? []) {
       const ch = r?.channel_id && s.chatChannels?.[r.channel_id];
       if (!ch) continue;
-      keys.add(channelRowRoomKey(ch, r, viewer));
+      keys.add(channelRowRoomKey(ch, r, viewer, s.teamMembers));
     }
     // The room I'M in, always — the dock's roster must not depend on a
     // teammate's heartbeat having landed in the strip.

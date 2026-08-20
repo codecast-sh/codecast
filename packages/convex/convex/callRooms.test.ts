@@ -226,6 +226,31 @@ describe("authorizeRoom invite grant", () => {
     expect((await authorizeRoom(after, "ub" as any, key)).ok).toBe(false);
   });
 
+  test("guests cannot keep each other's grants alive: no live MEMBER, no grant", async () => {
+    // ua (the room member) left; ub and ud are both grant guests with fresh
+    // leases. Neither passes the membership rules for dm:ua:uc, so neither
+    // counts as proof the huddle still runs.
+    const ctx = seed({
+      team_memberships: [membership("ua"), membership("ub"), membership("uc"), membership("ud")],
+      call_members: [
+        { _id: "cm-ud", room_key: key, team_id: TEAM, user_id: "ud", joined_at: now - 60_000, last_seen: now - 1000 },
+      ],
+      call_invites: [
+        { _id: "inv1", room_key: key, team_id: TEAM, from_user: "ua", to_user: "ub", status: "accepted", created_at: now - 60_000, responded_at: now - 30_000 },
+        { _id: "inv2", room_key: key, team_id: TEAM, from_user: "ua", to_user: "ud", status: "accepted", created_at: now - 60_000, responded_at: now - 30_000 },
+      ],
+    });
+    expect((await authorizeRoom(ctx, "ub" as any, key)).ok).toBe(false);
+    // A live MEMBER (uc, in the dm set) restores the grant.
+    const withMember = seed({
+      team_memberships: [membership("ua"), membership("ub"), membership("uc")],
+      call_members: [
+        { _id: "cm-uc", room_key: key, team_id: TEAM, user_id: "uc", joined_at: now - 60_000, last_seen: now - 1000 },
+      ],
+    });
+    expect((await authorizeRoom(withMember, "ub" as any, key)).ok).toBe(true);
+  });
+
   test("leaving the team closes the grant door too", async () => {
     const gone = seed({
       team_memberships: [membership("ua"), membership("uc")], // ub removed

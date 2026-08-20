@@ -19,6 +19,7 @@ import {
   CALL_MEMBER_STALE_MS,
   MAX_ROOM_MEMBERS,
   authorizeRoom,
+  authorizeRoomNoGrant,
   expireRoomGrants,
   liveMembers,
   parseRoomKey,
@@ -365,8 +366,7 @@ export const leaveRoom = mutation({
 // everyone in one round trip, and "add people" mid-call is the same call on
 // the room you are already in. Per-recipient outcomes come back keyed by user
 // so the caller's dock can say who rang, who is on quiet hours and who is in
-// a decline cooldown; the top-level `busy`/`cooldown` mirror the first
-// recipient for the single-recipient callers that predate the array.
+// a decline cooldown.
 export const invite = mutation({
   args: {
     room_key: v.string(),
@@ -387,11 +387,13 @@ export const invite = mutation({
     if (recipients.length > MAX_ROOM_MEMBERS) {
       throw new Error(`A huddle rings at most ${MAX_ROOM_MEMBERS} people at once`);
     }
-    // The caller must be able to be in the room now. The recipient need not:
-    // the ring IS their grant (callRooms.acceptedInviteGrant), so a member of
-    // a private channel or a session owner can bring a teammate in — but only
+    // The authority to ADD people is membership, never a grant: a guest who
+    // was rung in may sit in the huddle, but only the room's own people can
+    // widen it (otherwise one invited guest could chain-invite a private
+    // room full of strangers). The recipient needs no membership at all —
+    // the ring IS their grant (callRooms.acceptedInviteGrant) — but must be
     // a teammate: the room's team is the outer wall.
-    const callerAuth = await authorizeRoom(ctx, userId, args.room_key);
+    const callerAuth = await authorizeRoomNoGrant(ctx, userId, args.room_key);
     if (!callerAuth.ok) throw new Error(`Cannot invite: ${callerAuth.reason}`);
 
     const now = Date.now();
@@ -421,8 +423,8 @@ export const invite = mutation({
     if (parsed?.kind === "dm") {
       for (const id of parsed.users) {
         const u = await ctx.db.get(id as Id<"users">);
-        const name = u?.name || u?.email || "a teammate";
-        roomNames.set(id, name.split(/\s+/)[0]);
+        // Split only real names — "a teammate".split would read as "a".
+        roomNames.set(id, u?.name?.trim().split(/\s+/)[0] || u?.email || "a teammate");
       }
     }
     const lineFor = (toUser: Id<"users">): string | undefined => {
@@ -447,9 +449,31 @@ export const invite = mutation({
           .collect(),
       ),
     ).then((lists) => lists.flat());
-    // Stale rings for anyone are swept while we're here.
+    // Stale rings for anyone are swept while we're here — and so are old
+    // SETTLED rows: nothing else ever deletes declined/cancelled/expired
+    // invites, and getMyCalls reads whole status buckets per run, so an
+    // unbounded history would make every ring event dearer forever. Ten
+    // minutes comfortably clears the 30s settle display and the 60s decline
+    // cooldown; accepted rows are grants and are settled (then swept here)
+    // only when their room restarts from empty.
+    const SETTLED_ROW_TTL_MS = 10 * 60_000;
     for (const inv of priorFromMe) {
       if (inv.status === "ringing" && !inviteAlive(inv, now)) await ctx.db.delete(inv._id);
+    }
+    const oldSettled = await Promise.all(
+      (["declined", "cancelled", "expired"] as const).map((status) =>
+        ctx.db
+          .query("call_invites")
+          .withIndex("by_from_status", (q) =>
+            q.eq("from_user", userId).eq("status", status),
+          )
+          .collect(),
+      ),
+    ).then((lists) => lists.flat());
+    for (const inv of oldSettled) {
+      if ((inv.responded_at ?? inv.created_at) < now - SETTLED_ROW_TTL_MS) {
+        await ctx.db.delete(inv._id);
+      }
     }
 
     const results: Array<{
@@ -513,24 +537,25 @@ async function ringOne(
   );
   if (recentlyDeclined) return { to_user: toUser, busy: false, cooldown: true };
 
-  // One active ring per (from, to): re-ringing REFRESHES the existing row in
-  // place (same _id, so the recipient's toast/sound dedupe holds — a
-  // delete+insert would mint a new id and re-fire the ring every call).
+  // One active ring per (from, to). Re-ringing into the SAME room refreshes
+  // the row in place (same _id, so the recipient's toast/sound dedupe holds
+  // — a delete+insert would re-fire the ring every call), and keeps
+  // created_at so hammering invite cannot extend a ring past its TTL. A ring
+  // into a DIFFERENT room is a different call: the old ring settles as
+  // cancelled and a fresh row rings properly — patching the room under a
+  // toast the recipient already saw would land their Join in the wrong room.
   const existing = opts.priorFromMe.find(
     (inv) => inv.status === "ringing" && inviteAlive(inv, now),
   );
   const target = await ctx.db.get(toUser);
-  if (existing) {
-    // Keep created_at: the original ring's TTL clock keeps running, so
-    // hammering invite cannot extend a ring past CALL_INVITE_TTL_MS. The
-    // team follows the room — a refresh into another team's room must not
-    // leave the grant billed to the old team.
+  if (existing && existing.room_key === roomKey) {
     await ctx.db.patch(existing._id, {
-      room_key: roomKey,
-      team_id: opts.teamId,
       anchor_title: opts.anchorTitle,
     });
     return { to_user: toUser, busy: target?.status === "busy", cooldown: false };
+  }
+  if (existing) {
+    await ctx.db.patch(existing._id, { status: "cancelled", responded_at: now });
   }
   const inviteId = await ctx.db.insert("call_invites", {
     room_key: roomKey,
