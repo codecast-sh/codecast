@@ -9,7 +9,7 @@
 
 import { useAction, useMutation } from "convex/react";
 import { useAnchorSpace } from "../../hooks/useSyncAnchorSpace";
-import { useAnchors } from "../../hooks/useSyncAnchors";
+import { deriveAnchorStatus, useAnchors } from "../../hooks/useSyncAnchors";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useEffect, useMemo, useState } from "react";
 import { Repeat, Settings2 } from "lucide-react";
@@ -22,7 +22,7 @@ import { useTriggers } from "../../hooks/useSyncTriggers";
 import { armedInjectTasksFor, taskDisplayTitle } from "../../components/triggerTasks";
 import { describeTaskCadence, taskStateLabel } from "../../components/triggerCadence";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { AnchorAvatar, AnchorGlyph, AnchorScopePill, deriveAnchorStatus } from "../../components/anchor/AnchorIdentity";
+import { AnchorAvatar, AnchorGlyph, AnchorScopePill } from "../../components/anchor/AnchorIdentity";
 import { AnchorConversation, AnchorOnboarding, CenteredNote } from "../../components/anchor/AnchorConversation";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 
