@@ -1890,12 +1890,21 @@ function computeLocalProjectRoots(): string[] {
   const roots = new Set<string>(enumerateProjectRoots());
   // Also include any project_paths we've actually started a session in — covers
   // non-conventional locations the user has used recently.
-  for (const info of startedSessionTmux.values()) {
-    if (info.projectPath) {
-      try {
-        if (fs.statSync(info.projectPath).isDirectory()) roots.add(info.projectPath);
-      } catch {}
-    }
+  // That map only knows sessions this daemon launched; sessions the user
+  // started by hand (e.g. `claude` in ~/.claude) show up only as synced
+  // transcripts, whose cwd is memoized in transcriptProjectPathCache. Without
+  // them the recent-project picker hides every dir outside the conventional
+  // parents scanned by enumerateProjectRoots.
+  const candidates = [
+    ...Array.from(startedSessionTmux.values(), (info) => info.projectPath),
+    ...transcriptProjectPathCache.values(),
+  ];
+  for (const candidate of candidates) {
+    // $HOME itself would be a prefix of everything and neuter the filter.
+    if (!candidate || candidate === process.env.HOME) continue;
+    try {
+      if (fs.statSync(candidate).isDirectory()) roots.add(candidate);
+    } catch {}
   }
   return Array.from(roots).slice(0, MAX_PROJECT_ROOTS);
 }

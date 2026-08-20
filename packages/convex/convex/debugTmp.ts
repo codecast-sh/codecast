@@ -1,6 +1,8 @@
 // TEMPORARY debug query — safe to delete. Inspects why a conversation keeps
 // reappearing after dismiss: dumps dismiss-relevant fields + recent activity.
 import { internalQuery, internalMutation } from "./functions";
+import { scanInboxConversations, computeSessionsLiveness } from "./conversations";
+import { shouldShowInInbox } from "./inboxFilters";
 import { v } from "convex/values";
 import { BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY } from "./buckets";
 import { advanceLocalViewRevision } from "./localFirstCommands";
@@ -667,5 +669,90 @@ export const e2eFindPushUsers = internalQuery({
     return all
       .filter((u: any) => u.push_token && String(u.email ?? "").toLowerCase().includes(args.email_contains))
       .map((u: any) => ({ id: u._id, email: u.email, token: u.push_token, voip: !!u.voip_push_token }));
+  },
+});
+
+// TEMPORARY: census of the per-row db ops behind conversations:sessionsLiveness
+// ("too many system operations" timeout). Runs the shared scan, then COUNTS the
+// reads enrichLivenessFields would issue per row instead of issuing them.
+// Safe to delete.
+export const livenessOpCensus = internalQuery({
+  args: { who: v.string() },
+  handler: async (ctx, args) => {
+    const user =
+      (await ctx.db
+        .query("users")
+        .withIndex("email", (q: any) => q.eq("email", args.who))
+        .first()) ??
+      (await ctx.db
+        .query("users")
+        .withIndex("by_username", (q: any) => q.eq("username", args.who))
+        .first()) ??
+      (await ctx.db
+        .query("users")
+        .withIndex("by_github_username", (q: any) => q.eq("github_username", args.who))
+        .first());
+    if (!user) return { error: "no user" };
+    const now = Date.now();
+    const t0 = Date.now();
+    const { conversations, maps } = await scanInboxConversations(ctx, user._id, now, {
+      includeLiveness: true,
+    });
+    const scanMs = Date.now() - t0;
+    const uid = user._id.toString();
+    const candidateIds = new Set(conversations.map((c: any) => c._id.toString()));
+    let shown = 0;
+    let missingRoleReads = 0; // fallback last-message read per un-backfilled row
+    let foreignRows = 0; // mergeForeignConversationLiveness reads (1 each)
+    let statusRows = 0;
+    let dismissed = 0;
+    let stashed = 0;
+    for (const c of conversations) {
+      if (!shouldShowInInbox(c)) continue;
+      shown++;
+      if (c.inbox_dismissed_at) dismissed++;
+      if (c.inbox_stashed_at) stashed++;
+      if (!c.last_message_role && c.message_count > 0) missingRoleReads++;
+      if (c.user_id.toString() !== uid) foreignRows++;
+      if (maps.agentStatusMap.has(c._id.toString())) statusRows++;
+    }
+    const liveNotInWindow = [...maps.liveConvIds].filter((id) => !candidateIds.has(id)).length;
+    return {
+      user_id: user._id,
+      scan_ms: scanMs,
+      candidates: conversations.length,
+      shown,
+      dismissed,
+      stashed,
+      missing_last_message_role_reads: missingRoleReads,
+      foreign_rows: foreignRows,
+      live_conv_ids: maps.liveConvIds.size,
+      live_not_in_window_gets: liveNotInWindow,
+      agent_status_rows: statusRows,
+    };
+  },
+});
+
+// TEMPORARY: time the REAL sessionsLiveness path for a user (full enrichment,
+// AUQ probes and all) + count owner rows. Safe to delete.
+export const timeSessionsLiveness = internalQuery({
+  args: { who: v.string() },
+  handler: async (ctx, args) => {
+    const user =
+      (await ctx.db.query("users").withIndex("email", (q: any) => q.eq("email", args.who)).first()) ??
+      (await ctx.db.query("users").withIndex("by_username", (q: any) => q.eq("username", args.who)).first()) ??
+      (await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", args.who)).first());
+    if (!user) return { error: "no user" };
+    const ownerRows = await ctx.db
+      .query("session_owners")
+      .withIndex("by_user", (q: any) => q.eq("user_id", user._id))
+      .collect();
+    const t0 = Date.now();
+    const liveness = await computeSessionsLiveness(ctx, user._id);
+    return {
+      ms: Date.now() - t0,
+      rows: Object.keys(liveness).length,
+      owner_rows_total: ownerRows.length,
+    };
   },
 });
