@@ -52,6 +52,7 @@ import {
   useChannelMessagesSync,
   useChatMembers,
   useChatRail,
+  useChatUnread,
   useOpenDm,
   useEnsureChatMessage,
   useChatMessageRow,
@@ -61,6 +62,7 @@ import {
 } from "../../hooks/useChatSync";
 import { useTabContext } from "../../lib/tabParams";
 import { ChatChannelRail } from "../../components/chat/ChatChannelRail";
+import { ChatThreadsView } from "../../components/chat/ChatThreadsView";
 import { ChatMessageList } from "../../components/chat/ChatMessageList";
 import { ChatThreadPanel } from "../../components/chat/ChatThreadPanel";
 import { ChatComposer } from "../../components/chat/ChatComposer";
@@ -110,6 +112,7 @@ export default function ChatPage() {
 
   const rail = useChatRail();
   const { members: teamMembers, viewerId, handles } = useChatMembers();
+  const { threads: threadsUnread } = useChatUnread();
 
   // ── Is the reader actually here? ──────────────────────────────────────────
   const tab = useTabContext();
@@ -122,6 +125,9 @@ export default function ChatPage() {
   // A fallback rather than a redirect: rewriting the URL on arrival would put a
   // channel id in the history stack that the reader never chose.
   const urlChannelId = params.channelId;
+  // /chat/threads is the Threads inbox — a literal segment, never a channel id
+  // (Convex ids can't collide with it). The rail highlights it like a room.
+  const isThreadsView = urlChannelId === "threads";
   // A channel created here is navigated to by its local stub id. When the server
   // row lands the stub is superseded, and a URL still naming it points at a
   // channel that no longer exists — an empty room beside the real one in the
@@ -175,12 +181,13 @@ export default function ChatPage() {
     [outOfScopeRow],
   );
   const activeChannelId = useMemo(() => {
+    if (isThreadsView) return undefined; // the Threads inbox owns the pane
     if (supersededTo) return supersededTo;
     if (outOfScopeChannel) return undefined; // handled by the interstitial
     if (urlChannelId && rail.some((c) => c.id === urlChannelId)) return urlChannelId;
     if (urlChannelId) return urlChannelId; // not loaded yet — trust the URL
     return rail[0]?.id;
-  }, [urlChannelId, supersededTo, rail, outOfScopeChannel]);
+  }, [urlChannelId, supersededTo, rail, outOfScopeChannel, isThreadsView]);
   const activeChannel = rail.find((c) => c.id === activeChannelId);
 
   // ── Data ──────────────────────────────────────────────────────────────────
@@ -216,13 +223,16 @@ export default function ChatPage() {
   // chat tab hidden behind Inbox was silencing its own toasts for a room the
   // reader could not see.
   useEffect(() => {
+    // The Threads inbox owns its own focus claim (only its EXPANDED thread is
+    // being read); the page claiming "no channel" here would overwrite it.
+    if (isThreadsView) return;
     if (!present) {
       clearChatFocus();
       return;
     }
     setChatFocus({ channelId: activeChannelId, threadRootId });
     return () => clearChatFocus();
-  }, [present, activeChannelId, threadRootId]);
+  }, [present, activeChannelId, threadRootId, isThreadsView]);
 
   // ── The unread rule ───────────────────────────────────────────────────────
   // Frozen at channel entry. If it tracked the live read mark, the rule would
@@ -394,7 +404,8 @@ export default function ChatPage() {
     <div className="ch-shell">
       {showInlineRail && <ChatChannelRail
         channels={rail}
-        activeChannelId={activeChannelId}
+        activeChannelId={isThreadsView ? "threads" : activeChannelId}
+        threadsUnread={threadsUnread}
         onChannelContextMenu={(e, c) =>
           channelMenu.open(e, {
             channelId: c.id,
@@ -420,7 +431,9 @@ export default function ChatPage() {
             <div className="ch-drop-card">Drop images to attach</div>
           </div>
         )}
-        {activeChannelId ? (
+        {isThreadsView ? (
+          <ChatThreadsView present={present} />
+        ) : activeChannelId ? (
           <>
             <header ref={headTitlebarRef} className="ch-head">
               {activeChannel?.kind === "dm" ? (

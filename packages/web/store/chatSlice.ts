@@ -172,6 +172,31 @@ export type ChatRailRow = {
   member_ids?: string[];
 };
 
+/** One row of chat.listMyThreads — a thread this viewer is in, with the
+ *  server's unread numbers. A derived snapshot like the rail's rows (the raw
+ *  chat_thread_reads doc plus counts), so it is synced as a delta overlay and
+ *  the local mark-read patch reconciles on the numbers the echo recomputes. */
+export type ChatThreadInboxRow = {
+  /** Equals root_id — the id every other chat surface already speaks. */
+  _id: string;
+  root_id: string;
+  channel_id: string;
+  team_id: string;
+  last_activity_at: number;
+  last_read_at: number;
+  unread: number;
+  unread_capped?: boolean;
+  /** The newest visible reply, for the collapsed card's one-line preview. */
+  last_reply?: {
+    _id: string;
+    user_id: string;
+    author_kind?: "user" | "agent";
+    created_at: number;
+    preview: string;
+  } | null;
+  updated_at: number;
+};
+
 // ── Stub ids ────────────────────────────────────────────────────────────────
 //
 // A local row the server has never seen. Not a Convex id, so the generic patch
@@ -220,6 +245,10 @@ export type ChatSliceData = {
   chatReads: Record<string, ChatReadRow>;
   chatRail: ChatRailRow[];
   chatThreadSummaries: Record<string, ChatThreadSummaryRow>;
+  chatThreadInbox: Record<string, ChatThreadInboxRow>;
+  /** The server's team-wide count of threads with unseen replies — the badge
+   *  for a client that has never opened the Threads page. */
+  chatThreadUnread: number;
 };
 
 export type ChatSendOptions = {
@@ -251,6 +280,11 @@ export type ChatSliceActions = {
   dispatchChatDelete: (messageId: string) => void;
   toggleChatReaction: (messageId: string, emoji: string) => void;
   markChannelRead: (channelId: string, lastMessageId?: string) => void;
+  /** Clears one thread's unread the moment it is opened; the mutation moves the
+   *  server mark to the thread's newest activity. */
+  markThreadRead: (rootId: string) => void;
+  /** The Threads page's one sweep. Team-scoped like the page itself. */
+  markAllThreadsRead: (teamId?: string) => void;
   setChannelNotifyLevel: (channelId: string, level: ChatNotifyLevel) => void;
   /** Rename or re-topic a channel. Optimistic: the rail and header rename the
    *  moment you confirm; the server enforces creator-or-admin and reconciles. */
@@ -369,6 +403,8 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
     chatReads: {},
     chatRail: [],
     chatThreadSummaries: {},
+    chatThreadInbox: {},
+    chatThreadUnread: 0,
 
     // ── Sending ─────────────────────────────────────────────────────────────
 
@@ -554,6 +590,34 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       });
     }),
 
+    // The local paint mirrors what the mutation writes — the mark moves to the
+    // thread's newest activity and the unread numbers drop to zero — so the
+    // echo confirms rather than corrects. Numbers reconcile by value, which is
+    // why this derived row may be patched optimistically where an object field
+    // could not be (see lib/liveEntities' rule).
+    markThreadRead: action(function (this: ChatDraft, rootId: string) {
+      const row = this.chatThreadInbox[rootId];
+      if (!row) return;
+      if (row.unread > 0 && this.chatThreadUnread > 0) this.chatThreadUnread -= 1;
+      row.last_read_at = Math.max(row.last_read_at, row.last_activity_at);
+      row.unread = 0;
+      row.unread_capped = false;
+      row.updated_at = Date.now();
+    }),
+
+    markAllThreadsRead: action(function (this: ChatDraft, teamId?: string) {
+      for (const id in this.chatThreadInbox) {
+        const row = this.chatThreadInbox[id];
+        if (teamId && String(row.team_id) !== String(teamId)) continue;
+        row.last_read_at = Math.max(row.last_read_at, row.last_activity_at);
+        row.unread = 0;
+        row.unread_capped = false;
+        row.updated_at = Date.now();
+      }
+      this.chatThreadUnread = 0;
+      return teamId;
+    }),
+
     updateChatChannel: action(function (this: ChatDraft, channelId: string, fields: { name?: string; topic?: string }) {
       const channel = this.chatChannels[channelId];
       if (!channel) return;
@@ -715,6 +779,10 @@ export const CHAT_SYNC_REGISTRY = {
   // transient — overlaid at render, the local rows winning when fresher.
   // Delta: each page contributes its roots without pruning other channels'.
   chatThreadSummaries: { isDelta: true },
+  // The Threads inbox's entries: derived snapshots keyed by root id, overlaid
+  // as deltas so a page of them never prunes the rest.
+  chatThreadInbox: { isDelta: true },
+  chatThreadUnread: { kind: "scalar" as const },
   // No client_id column server-side: a reaction has no identity beyond
   // (message, user, emoji). chatReactionSyncOpts supersedes on that instead.
   chatReactions: { isDelta: true },

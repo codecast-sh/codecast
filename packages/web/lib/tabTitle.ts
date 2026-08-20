@@ -20,6 +20,8 @@ export function chatTabTitle(
   viewerId?: string,
 ): string | null {
   const m = path.match(/^\/chat\/([^/?#]+)/);
+  // The Threads inbox is a literal segment, not a channel id.
+  if (m && m[1] === "threads") return "Threads";
   const channel = m ? channels?.[m[1]] : undefined;
   if (!channel) return null;
   if (channel.kind === "dm") {

@@ -1605,15 +1605,23 @@ export const markThreadRead = mutation({
         q.eq("user_id", userId).eq("root_id", args.root_id))
       .first();
     if (!row) return { root_id: args.root_id, last_read_at: null };
-    if (row.last_read_at < row.last_activity_at) {
-      await ctx.db.patch(row._id, {
-        last_read_at: row.last_activity_at,
-        updated_at: Date.now(),
-      });
+    // The newest reply's OWN stamp, not last_activity_at. A visible agent
+    // error row is a reply the reader sees and the unread count counts, but it
+    // never moves the activity mark (no notification fans out for it) — a mark
+    // clamped to activity could never clear past it: a badge reading cannot
+    // extinguish, the exact failure listChannels' comment warns about.
+    const newest = await ctx.db
+      .query("chat_messages")
+      .withIndex("by_thread_created", (q: any) => q.eq("thread_root_id", args.root_id))
+      .order("desc")
+      .first();
+    const readAt = Math.max(row.last_activity_at, newest?.created_at ?? 0);
+    if (row.last_read_at < readAt) {
+      await ctx.db.patch(row._id, { last_read_at: readAt, updated_at: Date.now() });
     }
     return {
       root_id: args.root_id,
-      last_read_at: Math.max(row.last_read_at, row.last_activity_at),
+      last_read_at: Math.max(row.last_read_at, readAt),
     };
   },
 });
@@ -1636,8 +1644,18 @@ export const markAllThreadsRead = mutation({
     const now = Date.now();
     let marked = 0;
     for (const row of rows) {
-      if (row.last_read_at >= row.last_activity_at) continue;
-      await ctx.db.patch(row._id, { last_read_at: row.last_activity_at, updated_at: now });
+      // Each thread's newest reply stamp, for the same reason markThreadRead
+      // reads it: a visible error row counts as unread without ever moving
+      // last_activity_at, so clamping to activity would leave it — and
+      // skipping on activity alone would not even look.
+      const newest = await ctx.db
+        .query("chat_messages")
+        .withIndex("by_thread_created", (q: any) => q.eq("thread_root_id", row.root_id))
+        .order("desc")
+        .first();
+      const readAt = Math.max(row.last_activity_at, newest?.created_at ?? 0);
+      if (row.last_read_at >= readAt) continue;
+      await ctx.db.patch(row._id, { last_read_at: readAt, updated_at: now });
       marked++;
     }
     return { marked };

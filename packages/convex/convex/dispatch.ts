@@ -1583,6 +1583,17 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         : {}),
     });
   },
+  markThreadRead: async (ctx, _userId, [rootId]: [string]) => {
+    if (!isServerId(rootId)) return;
+    return await ctx.runMutation!(api.chat.markThreadRead, {
+      root_id: rootId as Id<"chat_messages">,
+    });
+  },
+  markAllThreadsRead: async (ctx, _userId, [teamId]: [string?]) => {
+    return await ctx.runMutation!(api.chat.markAllThreadsRead, {
+      ...(teamId && isServerId(teamId) ? { team_id: teamId as Id<"teams"> } : {}),
+    });
+  },
   setChannelNotifyLevel: async (
     ctx,
     _userId,

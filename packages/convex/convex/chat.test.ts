@@ -12,6 +12,10 @@ import {
   listChannels,
   listMessages,
   markRead,
+  markThreadRead,
+  markAllThreadsRead,
+  listMyThreads,
+  backfillThreadReads,
   openDm,
   listChannelMembers,
   removeChannelMember,
@@ -2102,5 +2106,192 @@ describe("the anchor speaking on its own", () => {
     // Bob replying wakes his personal anchor.
     const reply = await call(sendMessage, ctx, { channel_id: room._id, content: "on it" });
     expect(reply.anchor_thinking_message_id).toBeTruthy();
+  });
+});
+
+describe("the Threads inbox", () => {
+  const reply = (ctx: any, rootId: any, content = "a reply") =>
+    call(sendMessage, ctx, { channel_id: CHANNEL, content, thread_root_id: rootId });
+
+  test("a reply files the thread for every participant; the author's copy is read", async () => {
+    const ctx = context(ALICE);
+    const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "question" });
+    // A root with no replies is not a thread: nobody's inbox holds it yet.
+    expect((await call(listMyThreads, ctx, { team_id: TEAM })).entries).toEqual([]);
+
+    const bob = as(ctx, BOB);
+    await reply(bob, root.message_id);
+
+    const alice = await call(listMyThreads, ctx, { team_id: TEAM });
+    expect(alice.entries.length).toBe(1);
+    expect(alice.entries[0].unread).toBe(1);
+    expect(String(alice.entries[0].root_id)).toBe(String(root.message_id));
+    // The root document rides along so the card renders without opening it.
+    expect(alice.roots[0].content).toBe("question");
+    expect(alice.threads[0].reply_count).toBe(1);
+    expect(alice.entries[0].last_reply.preview).toBe("a reply");
+
+    // Bob wrote the reply: his copy is filed AND read.
+    const bobs = await call(listMyThreads, bob, { team_id: TEAM });
+    expect(bobs.entries.length).toBe(1);
+    expect(bobs.entries[0].unread).toBe(0);
+  });
+
+  test("reading clears the badge; the next reply raises it again", async () => {
+    const ctx = context(ALICE);
+    const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "question" });
+    const bob = as(ctx, BOB);
+    await reply(bob, root.message_id);
+
+    expect((await call(listChannels, ctx, { team_id: TEAM })).thread_unread).toBe(1);
+    await call(markThreadRead, ctx, { root_id: root.message_id });
+    expect((await call(listChannels, ctx, { team_id: TEAM })).thread_unread).toBe(0);
+    expect((await call(listMyThreads, ctx, { team_id: TEAM })).entries[0].unread).toBe(0);
+
+    await reply(bob, root.message_id, "more");
+    expect((await call(listChannels, ctx, { team_id: TEAM })).thread_unread).toBe(1);
+    // One sweep clears everything.
+    await call(markAllThreadsRead, ctx, { team_id: TEAM });
+    expect((await call(listChannels, ctx, { team_id: TEAM })).thread_unread).toBe(0);
+  });
+
+  test("being mentioned in a reply starts following the thread", async () => {
+    const ctx = context(ALICE);
+    const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "question" });
+    const bob = as(ctx, BOB);
+    await reply(bob, root.message_id, "ask @carol");
+
+    const carol = as(ctx, CAROL);
+    const view = await call(listMyThreads, carol, { team_id: TEAM });
+    expect(view.entries.length).toBe(1);
+    // Carol never spoke: the whole thread is news to her.
+    expect(view.entries[0].unread).toBe(1);
+  });
+
+  test("your own replies never count as unread for you", async () => {
+    const ctx = context(ALICE);
+    const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "question" });
+    const bob = as(ctx, BOB);
+    await reply(bob, root.message_id, "one");
+    await reply(ctx, root.message_id, "two (mine)");
+    const view = await call(listMyThreads, ctx, { team_id: TEAM });
+    // Replying marked the thread read; the only rows after the mark are Alice's own.
+    expect(view.entries[0].unread).toBe(0);
+  });
+
+  test("activity orders the inbox, newest thread first", async () => {
+    const ctx = context(ALICE);
+    const bob = as(ctx, BOB);
+    const first = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "first" });
+    const second = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "second" });
+    await reply(bob, first.message_id);
+    await reply(bob, second.message_id);
+    let view = await call(listMyThreads, ctx, { team_id: TEAM });
+    expect(view.entries.map((e: any) => String(e.root_id)))
+      .toEqual([String(second.message_id), String(first.message_id)]);
+    // New activity on the older thread moves it back to the top.
+    await reply(bob, first.message_id, "bump");
+    view = await call(listMyThreads, ctx, { team_id: TEAM });
+    expect(String(view.entries[0].root_id)).toBe(String(first.message_id));
+  });
+
+  test("leaving a private room takes its threads and their badge along", async () => {
+    const ctx = context(ALICE, {
+      chat_channels: [...channels(), {
+        _id: "chat_channels_priv" as any,
+        team_id: TEAM,
+        name: "secrets",
+        kind: "private",
+        created_by: ALICE,
+        created_at: 1_000,
+        updated_at: 1_000,
+      }],
+      chat_channel_members: [
+        { _id: "ccm-1", channel_id: "chat_channels_priv", user_id: ALICE, added_by: ALICE, added_at: 1_000 },
+        { _id: "ccm-2", channel_id: "chat_channels_priv", user_id: BOB, added_by: ALICE, added_at: 1_000 },
+      ],
+    });
+    const PRIV = "chat_channels_priv" as any;
+    const bob = as(ctx, BOB);
+    const root = await call(sendMessage, bob, { channel_id: PRIV, content: "question" });
+    await call(sendMessage, ctx, { channel_id: PRIV, content: "reply", thread_root_id: root.message_id });
+    expect((await call(listMyThreads, bob, { team_id: TEAM })).entries.length).toBe(1);
+    expect((await call(listChannels, bob, { team_id: TEAM })).thread_unread).toBe(1);
+
+    // Bob leaves the room: the follow rows go with the read row.
+    await call(removeChannelMember, bob, { channel_id: PRIV, user_id: BOB });
+    expect((await call(listMyThreads, bob, { team_id: TEAM })).entries).toEqual([]);
+    expect((await call(listChannels, bob, { team_id: TEAM })).thread_unread).toBe(0);
+  });
+
+  test("leaving the team purges every follow row", async () => {
+    const ctx = context(ALICE);
+    const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "question" });
+    const bob = as(ctx, BOB);
+    await reply(bob, root.message_id);
+    await purgeChatMembership(ctx as any, ALICE, TEAM);
+    expect(ctx.db._tables.chat_thread_reads.filter((r: any) => r.user_id === ALICE)).toEqual([]);
+    // Bob's rows survive: the purge is one member's, not the channel's.
+    expect(ctx.db._tables.chat_thread_reads.filter((r: any) => r.user_id === BOB).length).toBe(1);
+  });
+
+  test("a visible agent error reply cannot outlive a read: the mark clears past it", async () => {
+    const ctx = context(ALICE);
+    const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "question" });
+    const bob = as(ctx, BOB);
+    await reply(bob, root.message_id);
+    // A visibleSkip-style error row: a visible agent reply that raises the
+    // unread count but never moves last_activity_at (no notification, no
+    // touch). The mark must still be able to clear past it.
+    const last = messagesIn(ctx)[messagesIn(ctx).length - 1];
+    messagesIn(ctx).push({
+      _id: "chat_messages_err" as any,
+      team_id: TEAM,
+      channel_id: CHANNEL,
+      thread_root_id: root.message_id,
+      user_id: BOT,
+      author_kind: "agent",
+      agent_status: "error",
+      content: "The anchor could not be reached.",
+      created_at: last.created_at + 1,
+      updated_at: last.created_at + 1,
+    });
+    let view = await call(listMyThreads, ctx, { team_id: TEAM });
+    expect(view.entries[0].unread).toBe(2);
+    await call(markThreadRead, ctx, { root_id: root.message_id });
+    view = await call(listMyThreads, ctx, { team_id: TEAM });
+    expect(view.entries[0].unread).toBe(0);
+    // The sweep survives the same shape: a second error row after the mark.
+    messagesIn(ctx).push({
+      _id: "chat_messages_err2" as any,
+      team_id: TEAM,
+      channel_id: CHANNEL,
+      thread_root_id: root.message_id,
+      user_id: BOT,
+      author_kind: "agent",
+      agent_status: "error",
+      content: "Still unreachable.",
+      created_at: last.created_at + 2,
+      updated_at: last.created_at + 2,
+    });
+    expect((await call(listMyThreads, ctx, { team_id: TEAM })).entries[0].unread).toBe(1);
+    await call(markAllThreadsRead, ctx, { team_id: TEAM });
+    expect((await call(listMyThreads, ctx, { team_id: TEAM })).entries[0].unread).toBe(0);
+  });
+
+  test("the backfill seeds existing threads as READ and reschedules until done", async () => {
+    const ctx = context(ALICE);
+    const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "old question" });
+    const bob = as(ctx, BOB);
+    await reply(bob, root.message_id, "old answer");
+    // Wipe the live-written rows to simulate pre-feature history.
+    ctx.db._tables.chat_thread_reads.length = 0;
+
+    await call(backfillThreadReads, ctx, {});
+    const view = await call(listMyThreads, ctx, { team_id: TEAM });
+    expect(view.entries.length).toBe(1);
+    // Months of history must not arrive as phantom unread.
+    expect(view.entries[0].unread).toBe(0);
+    expect((await call(listChannels, ctx, { team_id: TEAM })).thread_unread).toBe(0);
   });
 });
