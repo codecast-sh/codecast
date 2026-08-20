@@ -34,8 +34,15 @@ export function useOutgoingRings(roomKey: string | null): {
     const rows = (s.myCalls.outgoing as any[]).filter((o) => o.room_key === roomKey);
     const shape = (o: any): RingRow => ({ user_id: String(o.to_user), user_name: o.to_name, user_image: o.to_image });
     const ringing = rows.filter((o) => o.status === "ringing").map(shape);
-    const declined = rows.filter((o) => o.status === "declined").map(shape);
-    const noAnswer = rows.filter((o) => o.status === "expired").map(shape);
+    // A fresh re-ring outranks the same person's settled rows: "sam ·
+    // ringing…" and "no answer from sam" must never share a screen.
+    const live = new Set(ringing.map((r) => r.user_id));
+    const declined = rows
+      .filter((o) => o.status === "declined" && !live.has(String(o.to_user)))
+      .map(shape);
+    const noAnswer = rows
+      .filter((o) => o.status === "expired" && !live.has(String(o.to_user)))
+      .map(shape);
     const names = (list: RingRow[]) => list.map((r) => firstName(r.user_name)).join(", ");
     return {
       ringing,

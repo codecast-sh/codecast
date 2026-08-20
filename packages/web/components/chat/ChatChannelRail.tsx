@@ -86,7 +86,7 @@ function RailRow({
         )}
       </span>
       <span className="ch-chan-name">{name}</span>
-      <OccupancyChip roomKey={chatViewRoomKey(c, viewer)} className="shrink-0" />
+      <OccupancyChip roomKey={chatViewRoomKey(c, viewer, members)} className="shrink-0" />
       {c.muted && <BellOff className="w-3 h-3 shrink-0 opacity-70" aria-label="Muted" />}
       {mentions > 0 ? (
         <span className="ch-chan-badge" aria-label={`${mentions} mentions`}>

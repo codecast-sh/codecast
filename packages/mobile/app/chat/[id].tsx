@@ -527,6 +527,7 @@ export default function ChatChannelScreen() {
               kind: channel.kind,
               otherIds: dmOthers,
               viewerId,
+              teammateIds: [...memberById.keys()],
             })}
             teamId={channel.team_id ? String(channel.team_id) : null}
             ring={isDm ? dmOthers : undefined}

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
+import { toast } from "sonner";
 import Link from "next/link";
 import {
   Captions,
@@ -31,7 +32,7 @@ import {
   switchDevice,
   type ParticipantTile,
 } from "../../lib/calls/callManager";
-import { parseRoomKey } from "@codecast/shared/contracts";
+import { humanizeConvexError, parseRoomKey } from "@codecast/shared/contracts";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -821,7 +822,12 @@ function TranscriptRail({
     if (el) el.scrollTop = el.scrollHeight;
   }, [segCount]);
 
-  const onPick = (t: FeedTarget) => void addFeed(t);
+  // addRoute/startScribe can refuse (room authorization, ended transcript);
+  // a silent close-and-nothing is the one wrong outcome.
+  const onPick = (t: FeedTarget) =>
+    void addFeed(t).catch((err: any) =>
+      toast.error(humanizeConvexError(err, "Could not point the words there")),
+    );
   const openPicker = () =>
     openFeedTargetPicker({ title: "Feed the live words to…", gesture: "feed", showSlack: true, onPick });
 

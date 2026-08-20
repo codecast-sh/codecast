@@ -353,7 +353,7 @@ const ChatNavRow = memo(function ChatNavRow({
     // while the room is empty, so quiet rooms cost nothing).
     trailing: (
       <>
-        <OccupancyChip roomKey={chatViewRoomKey(c, String(viewer))} className="flex-shrink-0" />
+        <OccupancyChip roomKey={chatViewRoomKey(c, String(viewer), teamMembers)} className="flex-shrink-0" />
         {(c.mentionCount ?? 0) > 0 ? (
           <span className="min-w-[16px] h-[15px] px-1 flex items-center justify-center text-[9.5px] font-bold bg-sol-orange text-sol-bg rounded-full flex-shrink-0">
             {(c.mentionCount ?? 0) > 99 ? "99+" : c.mentionCount}

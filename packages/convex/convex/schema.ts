@@ -3964,6 +3964,41 @@ export default defineSchema({
     // channel is a read-receipt surface nobody asked for.
     .index("by_user_channel", ["user_id", "channel_id"]),
 
+  // Per (user, thread root): the threads this person is IN, and where they have
+  // read each one to — the Slack "Threads" inbox. A row appears when a thread
+  // gains a reply and this user is one of its participants (root author, any
+  // reply author, or someone a reply mentioned). Written only from the two
+  // places a visible reply lands (postChatMessage, fillAnchorReply), so the
+  // set of rows tracks exactly the audience chat_reply notifications reach.
+  //
+  // Channel reads cannot serve this: the channel mark moves past a reply's
+  // stamp when the reader reaches the bottom of the ROOM, where the reply's
+  // body never renders — which is exactly why listChannels excludes replies
+  // from the channel badge. Per-thread unread needs its own mark.
+  //
+  // Bots never get a row: an anchor has no inbox, and a row per bot per thread
+  // would double the table for nothing.
+  chat_thread_reads: defineTable({
+    user_id: v.id("users"),
+    root_id: v.id("chat_messages"),
+    // Denormalized so the Threads page filters and joins without re-reading
+    // every root: which room the thread lives in, and which team's inbox it
+    // belongs to.
+    channel_id: v.id("chat_channels"),
+    team_id: v.id("teams"),
+    // The newest visible reply's stamp. Unread is one comparison:
+    // last_activity_at > last_read_at.
+    last_activity_at: v.number(),
+    last_read_at: v.number(),
+    updated_at: v.number(),
+  })
+    // The Threads page: one user's threads in one team, newest activity first.
+    .index("by_user_team_activity", ["user_id", "team_id", "last_activity_at"])
+    // The write path's upsert lookup.
+    .index("by_user_root", ["user_id", "root_id"])
+    // Scoped cleanup when a channel is purged.
+    .index("by_channel", ["channel_id"]),
+
   // Who is typing where, right now. ONE row per (channel, user) — a person
   // types in one box at a time, so the row's thread_key just moves with them,
   // and the table stays bounded at members × channels rather than growing a

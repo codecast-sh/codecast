@@ -83,12 +83,20 @@ export function sessionRoomKey(conversationId: string): string {
 // roster (viewer included); `otherIds` + `viewerId` is the "everyone but me"
 // shape the rails carry (dm_key derived). A DM row whose roster is not known
 // yet falls back to the channel room so a chip never points at a wrong key.
+//
+// `teammateIds` (the caller's current team roster) makes the fallback
+// roster-aware: a group thread whose member LEFT the team keeps a stale
+// dm_key naming them, and the member-set room would be refused server-side
+// ("no shared team") on every surface forever. Such a thread huddles in its
+// channel room instead — still one convergent key, and one the remaining
+// members are allowed to open.
 export function chatRoomKey(channel: {
   id: string;
   kind?: string | null;
   memberIds?: string[] | null;
   otherIds?: string[] | null;
   viewerId?: string | null;
+  teammateIds?: string[] | null;
 }): string {
   if (channel.kind === "dm") {
     const roster =
@@ -97,7 +105,16 @@ export function chatRoomKey(channel: {
         : channel.viewerId && channel.otherIds?.length
           ? [channel.viewerId, ...channel.otherIds]
           : null;
-    if (roster) return dmRoomKey(roster);
+    if (roster) {
+      if (channel.teammateIds) {
+        const team = new Set(channel.teammateIds.map(String));
+        team.add(String(channel.viewerId ?? ""));
+        if (roster.some((id) => !team.has(String(id)))) {
+          return channelRoomKey(channel.id);
+        }
+      }
+      return dmRoomKey(roster);
+    }
   }
   return channelRoomKey(channel.id);
 }

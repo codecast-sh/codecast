@@ -434,7 +434,8 @@ export async function acceptInvite(inviteId: string, roomKey: string, opts: Join
     if (switching && prior.roomKey) {
       convex.mutation(api.calls.leaveRoom, { room_key: prior.roomKey }).catch(() => {});
     }
-    await joinCall(roomKey, opts);
+    // Join the room the server ACCEPTED — a re-ring can move an invite.
+    await joinCall(res?.room_key ?? roomKey, opts);
   } catch (err: any) {
     if (switching) emit({ ...prior });
     else emit({ phase: "error", error: humanizeConvexError(err, "Could not join").slice(0, 160) });

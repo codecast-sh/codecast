@@ -250,6 +250,44 @@ describe("invite fan-out", () => {
     await expect((await handler())(ctx, { room_key: "dm:ub:uc", to_users: ["ub"] })).rejects.toThrow(/Cannot invite/);
   });
 
+  test("a grant guest may sit in the huddle but not widen it", async () => {
+    // ua holds an accepted invite into dm:ub:uc and ub is live in the room —
+    // ua may JOIN via the grant, but ringing more people requires membership.
+    const { ctx, rows, now } = fakeCtx();
+    rows.call_invites = [
+      { _id: "g1", room_key: "dm:ub:uc", team_id: "t1", from_user: "ub", to_user: "ua", status: "accepted", created_at: now - 60_000, responded_at: now - 30_000 },
+    ];
+    rows.call_members = [
+      { _id: "cm-ub", room_key: "dm:ub:uc", team_id: "t1", user_id: "ub", joined_at: now - 60_000, last_seen: now - 1000 },
+    ];
+    await expect((await handler())(ctx, { room_key: "dm:ub:uc", to_users: ["uc"] })).rejects.toThrow(/Cannot invite/);
+  });
+
+  test("a re-ring into a DIFFERENT room cancels the old ring and mints a fresh one", async () => {
+    const { ctx, rows } = fakeCtx();
+    rows.chat_channels = [{ _id: "ch1", team_id: "t1", name: "design" }];
+    const h = await handler();
+    await h(ctx, { room_key: "dm:ua:ub", to_users: ["ub"] });
+    const first = rows.call_invites.find((i) => i.to_user === "ub");
+    await h(ctx, { room_key: "channel:ch1", to_users: ["ub"] });
+    const forUb = rows.call_invites.filter((i) => i.to_user === "ub");
+    expect(first.status).toBe("cancelled");
+    const fresh = forUb.find((i) => i.status === "ringing");
+    expect(fresh._id).not.toBe(first._id); // new id → the phone rings again
+    expect(fresh.room_key).toBe("channel:ch1");
+  });
+
+  test("settled rows older than ten minutes are swept on the next invite", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    rows.call_invites = [
+      { _id: "old1", room_key: "dm:ua:ub", team_id: "t1", from_user: "ua", to_user: "ub", status: "declined", created_at: now - 3_600_000, responded_at: now - 3_600_000 },
+      { _id: "new1", room_key: "dm:ua:ub", team_id: "t1", from_user: "ua", to_user: "uc", status: "cancelled", created_at: now - 20_000, responded_at: now - 20_000 },
+    ];
+    await (await handler())(ctx, { room_key: "dm:ua:ub", to_users: ["ub"] });
+    expect(rows.call_invites.find((i) => i._id === "old1")).toBeUndefined();
+    expect(rows.call_invites.find((i) => i._id === "new1")).toBeDefined();
+  });
+
     test("channel/session rooms keep the caller's line, capped at 140 chars", async () => {
     const { ctx, rows } = fakeCtx();
     rows.chat_channels = [{ _id: "ch1", team_id: "t1", name: "design" }];

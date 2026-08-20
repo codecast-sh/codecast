@@ -23,18 +23,22 @@ import {
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { authorizeRoom, authorizeRoomNoGrant, liveMembers } from "./callRooms";
+import { isTeamMember } from "./privacy";
 import { teamHasFeature } from "./teamFeatures";
 import { performSessionSend } from "./pendingMessages";
 import { formatTranscriptChunk as formatChunk } from "@codecast/shared/contracts";
 import { requireAccessibleDoc } from "./lib/access";
 import { verifyApiToken } from "./apiTokens";
 
+// added_by is deliberately NOT accepted from clients: delivery acts AS the
+// route's adder (deliverRoutes), so a client-chosen added_by would let a
+// scribe inject messages as any user into sessions and docs only that user
+// can reach. The server stamps it from the authenticated caller everywhere.
 const ROUTE_VALIDATOR = v.object({
   kind: v.union(v.literal("session"), v.literal("doc"), v.literal("slack")),
   target: v.string(),
   mode: v.union(v.literal("live"), v.literal("after")),
   sent_seq: v.number(),
-  added_by: v.optional(v.id("users")),
 });
 
 // A transcript the caller may write to: they started it and it is live.
@@ -75,7 +79,7 @@ export const start = mutation({
       started_by: userId,
       status: "live",
       started_at: Date.now(),
-      routes: args.routes ?? [],
+      routes: (args.routes ?? []).map((r) => ({ ...r, added_by: userId })),
       last_seq: 0,
     });
     return { transcript_id: id, existing: false };
@@ -98,7 +102,7 @@ export const setRoutes = mutation({
       return {
         ...r,
         sent_seq: prior?.sent_seq ?? 0,
-        added_by: prior?.added_by ?? r.added_by ?? userId,
+        added_by: prior?.added_by ?? userId,
       };
     });
     await ctx.db.patch(t._id, { routes });
@@ -119,7 +123,13 @@ export const addRoute = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
     const t = await ctx.db.get(args.transcript_id);
-    if (!t || !(await canReadCall(ctx, userId, t))) throw new Error("Transcript not found");
+    // A LIVE-huddle action authorizes like the huddle, grant included: a
+    // guest rung into the room may point the words at their agent even
+    // before they have spoken (canReadCall is the HISTORY rule — its
+    // participant door would blink on only once the scribe hears them).
+    if (!t || !(await authorizeRoom(ctx, userId, t.room_key)).ok) {
+      throw new Error("Transcript not found");
+    }
     if (t.status !== "live") throw new Error("Transcript has ended");
     if (t.routes.some((r) => r.kind === args.kind && r.target === args.target)) return;
     await ctx.db.patch(t._id, {
@@ -512,18 +522,24 @@ export const getLive = query({
  *  membership rules (no invite grant — a grant admits its guest to the
  *  running huddle, never to everything the room ever recorded), or having
  *  BEEN in it: the words you sat through stay yours after the huddle ends,
- *  guest or not. participants[] is the scribe's attribution list — built
- *  from speaker ids the scribe client reports (appendSegments), not
- *  server-derived — so this second door trusts the scribe, which already
- *  holds the words. A guest who never spoke leaves no participant row and
- *  loses the record when the huddle ends: accepted. */
+ *  guest or not — while you remain on the call's team. Leaving the team
+ *  closes this door like every other (and keeps list and get agreeing:
+ *  listCallsCore only walks the viewer's current teams). participants[] is
+ *  the scribe's attribution list — built from speaker ids the scribe client
+ *  reports (appendSegments), not server-derived — so this second door
+ *  trusts the scribe, which already holds the words. A guest who never
+ *  spoke leaves no participant row and loses the record when the huddle
+ *  ends: accepted. */
 async function canReadCall(
   ctx: any,
   userId: Id<"users">,
   t: Doc<"transcripts">,
 ): Promise<boolean> {
   if ((t.participants ?? []).some((p) => String(p.id) === String(userId))) {
-    return teamHasFeature(ctx, t.team_id, "calls");
+    return (
+      (await isTeamMember(ctx, userId, t.team_id)) &&
+      (await teamHasFeature(ctx, t.team_id, "calls"))
+    );
   }
   return (await authorizeRoomNoGrant(ctx, userId, t.room_key)).ok;
 }
