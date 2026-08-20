@@ -10,8 +10,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowUpRight, Check, ChevronDown, Plus, X } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
-import { useAnchors, anchorScopeLabel, type AnchorRow } from "../../hooks/useSyncAnchors";
-import { AnchorAvatar, AnchorGlyph, AnchorScopePill, deriveAnchorStatus } from "./AnchorIdentity";
+import { useAnchors, anchorScopeLabel, defaultAnchorKey, deriveAnchorStatus, type AnchorRow } from "../../hooks/useSyncAnchors";
+import { AnchorAvatar, AnchorGlyph, AnchorScopePill } from "./AnchorIdentity";
 import { AnchorConversation, AnchorOnboarding } from "./AnchorConversation";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
@@ -22,19 +22,6 @@ import { TeamIcon } from "../TeamIcon";
 // and the body agree without a second field.
 const NEW_USER = "new:user";
 const newTeamKey = (teamId: string) => `new:team:${teamId}`;
-
-/** Which anchor to show when none was chosen: the active team's, else the
- *  personal one, else the first — and with none at all, personal onboarding. */
-export function defaultAnchorKey(anchors: AnchorRow[], activeTeamId: string | null | undefined): string {
-  if (activeTeamId) {
-    const team = anchors.find((a) => a.scope_type === "team" && a.team_id === activeTeamId);
-    if (team) return team._id;
-  }
-  const personal = anchors.find((a) => a.scope_type === "user");
-  if (personal) return personal._id;
-  if (anchors[0]) return anchors[0]._id;
-  return NEW_USER;
-}
 
 export function AnchorPanel() {
   const s = useTrackedStore([

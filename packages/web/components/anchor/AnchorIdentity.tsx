@@ -74,28 +74,6 @@ export function AnchorScopePill({ anchor, className = "" }: { anchor: Identity |
   );
 }
 
-export type AnchorLiveStatus = { label: string; dot: string; text: string; tone: "off" | "working" | "attention" | "online" | "dormant" };
-
-/** Coarse liveness from the anchor row's session fields. Same rule on every
- *  surface: the drawer's status line, the chip's dot, the /anchor header. */
-export function deriveAnchorStatus(a: Partial<AnchorRow> | null | undefined, now = Date.now()): AnchorLiveStatus {
-  if (!a || a.status === "decommissioned" || a.conv_status === "completed") {
-    return { label: "retired", dot: "bg-sol-text-dim", text: "text-sol-text-dim", tone: "off" };
-  }
-  if (a.status === "paused") {
-    return { label: "paused", dot: "bg-sol-text-dim", text: "text-sol-text-dim", tone: "off" };
-  }
-  if (a.awaiting_input || a.agent_status === "permission_blocked") {
-    return { label: "needs you", dot: "bg-sol-yellow", text: "text-sol-yellow", tone: "attention" };
-  }
-  if (a.has_pending_messages || a.agent_status === "running" || a.agent_status === "working") {
-    return { label: "working", dot: "bg-sol-cyan animate-pulse", text: "text-sol-cyan", tone: "working" };
-  }
-  const fresh = a.conv_updated_at && now - a.conv_updated_at < 3 * 60 * 1000;
-  if (fresh) return { label: "online", dot: "bg-sol-green", text: "text-sol-green", tone: "online" };
-  return { label: "dormant · wakes on an event", dot: "bg-sol-text-dim/60", text: "text-sol-text-dim", tone: "dormant" };
-}
-
 /** Face + name + scope pill in one line. `size` scales the avatar; the pill
  *  and name stay legible at every size. */
 export function AnchorIdentityLine({

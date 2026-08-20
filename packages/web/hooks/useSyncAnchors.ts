@@ -85,6 +85,42 @@ export function useAnchor(anchorId: string | null | undefined): AnchorRow | null
   return useMemo(() => rows.find((a) => a._id === anchorId) ?? null, [rows, anchorId]);
 }
 
+export type AnchorLiveStatus = { label: string; dot: string; text: string; tone: "off" | "working" | "attention" | "online" | "dormant" };
+
+/** Coarse liveness from the anchor row's session fields. Same rule on every
+ *  surface: the drawer's status line, the chip's dot, the /anchor header. */
+export function deriveAnchorStatus(a: Partial<AnchorRow> | null | undefined, now = Date.now()): AnchorLiveStatus {
+  if (!a || a.status === "decommissioned" || a.conv_status === "completed") {
+    return { label: "retired", dot: "bg-sol-text-dim", text: "text-sol-text-dim", tone: "off" };
+  }
+  if (a.status === "paused") {
+    return { label: "paused", dot: "bg-sol-text-dim", text: "text-sol-text-dim", tone: "off" };
+  }
+  if (a.awaiting_input || a.agent_status === "permission_blocked") {
+    return { label: "needs you", dot: "bg-sol-yellow", text: "text-sol-yellow", tone: "attention" };
+  }
+  if (a.has_pending_messages || a.agent_status === "running" || a.agent_status === "working") {
+    return { label: "working", dot: "bg-sol-cyan animate-pulse", text: "text-sol-cyan", tone: "working" };
+  }
+  const fresh = a.conv_updated_at && now - a.conv_updated_at < 3 * 60 * 1000;
+  if (fresh) return { label: "online", dot: "bg-sol-green", text: "text-sol-green", tone: "online" };
+  return { label: "dormant · wakes on an event", dot: "bg-sol-text-dim/60", text: "text-sol-text-dim", tone: "dormant" };
+}
+
+/** Which anchor the slide-over shows when none was chosen: the active team's,
+ *  else the personal one, else the first — with none at all, "new:user" (the
+ *  panel's personal-onboarding key). */
+export function defaultAnchorKey(anchors: AnchorRow[], activeTeamId: string | null | undefined): string {
+  if (activeTeamId) {
+    const team = anchors.find((a) => a.scope_type === "team" && a.team_id === activeTeamId);
+    if (team) return team._id;
+  }
+  const personal = anchors.find((a) => a.scope_type === "user");
+  if (personal) return personal._id;
+  if (anchors[0]) return anchors[0]._id;
+  return "new:user";
+}
+
 /** The label a person reads to know WHICH anchor: "Personal" or the team's name. */
 export function anchorScopeLabel(a: Pick<AnchorRow, "scope_type" | "team_name"> | null | undefined): string {
   if (!a) return "";
