@@ -1,30 +1,15 @@
 "use client";
 
-import { createContext, useContext, useCallback, useRef, ReactNode } from "react";
-import { useMountEffect } from "../hooks/useMountEffect";
-import { useWatchEffect } from "../hooks/useWatchEffect";
-import { ShortcutAction, SHORTCUTS, matchShortcut, inputGuardBypass, hasOpenModal, isEditableTarget } from "./registry";
+// Codecast's binding of the @platform/keys provider. The dispatch mechanics —
+// capture-phase listener, decline semantics, input/modal guards — live in the
+// package; this file supplies what is codecast's: the catalog, the tips
+// milestone callback, and the surfaces with special keyboard ownership.
+
+import { createShortcutProvider } from "@platform/keys";
+import { shortcutCatalog } from "./registry";
 import { onShortcutUsed } from "../tips/useTips";
-import { setShortcutHandler } from "./listener";
 
-type Handler = () => boolean | void;
-
-interface ShortcutContextValue {
-  registerAction: (action: ShortcutAction, handler: Handler) => () => void;
-  setContext: (ctx: string, active: boolean) => void;
-  // Programmatic fire of an action's registered handlers — the command palette
-  // routes its command rows through this so a palette row and its keyboard
-  // chord share ONE handler. Same decline semantics as the key path (a handler
-  // returning false passes to the next); returns whether anyone handled it.
-  dispatchAction: (action: ShortcutAction) => boolean;
-}
-
-const ShortcutContext = createContext<ShortcutContextValue | null>(null);
-
-function isInputTarget(e: KeyboardEvent): boolean {
-  const el = e.target as HTMLElement;
-  if (!el) return false;
-  if (isEditableTarget(el)) return true;
+const kit = createShortcutProvider(shortcutCatalog, {
   // Some regions own their own single-letter keys and must not leak them to the
   // global conversation shortcuts (h/t/d/r, and critically y/n which approve or
   // deny a live permission prompt). A region opts in either with the inline
@@ -32,125 +17,16 @@ function isInputTarget(e: KeyboardEvent): boolean {
   // (e.g. the branch map). Treating a focus inside such a region like an input
   // makes the dispatcher skip those shortcuts; the region's own keydown handler
   // still receives the key.
-  if (typeof el.closest === 'function' &&
-      el.closest('[data-review-region="active"], [data-owns-keys]')) return true;
-  return false;
-}
+  inputLikeSelector: '[data-review-region="active"], [data-owns-keys]',
+  // The integrated terminal owns the keyboard harder than any input: a shell
+  // lives on Ctrl chords (Ctrl+C/L/P/R/K...), and the capture-phase window
+  // listener runs BEFORE xterm — so any match would silently eat the key from
+  // the shell. Only the panel toggle may act; everything else falls through.
+  keyboardOwners: [{ selector: "[data-terminal-panel]", allow: ["terminal.toggle"] }],
+  onShortcutUsed,
+});
 
-export function ShortcutProvider({ children }: { children: ReactNode }) {
-  const handlersRef = useRef(new Map<ShortcutAction, Set<Handler>>());
-  const contextsRef = useRef(new Set<string>());
-
-  const registerAction = useCallback((action: ShortcutAction, handler: Handler) => {
-    const map = handlersRef.current;
-    if (!map.has(action)) map.set(action, new Set());
-    map.get(action)!.add(handler);
-    return () => {
-      const set = map.get(action);
-      if (set) {
-        set.delete(handler);
-        if (set.size === 0) map.delete(action);
-      }
-    };
-  }, []);
-
-  const setContext = useCallback((ctx: string, active: boolean) => {
-    if (active) contextsRef.current.add(ctx);
-    else contextsRef.current.delete(ctx);
-  }, []);
-
-  const dispatchAction = useCallback((action: ShortcutAction): boolean => {
-    const actionHandlers = handlersRef.current.get(action);
-    if (!actionHandlers || actionHandlers.size === 0) return false;
-    let handled = false;
-    for (const handler of actionHandlers) {
-      const result = handler();
-      if (result === false) continue;
-      handled = true;
-      if (result === true) break;
-    }
-    return handled;
-  }, []);
-
-  // Bind the keydown logic to the HMR-stable capture listener in listener.ts.
-  // The listener itself is registered at module-evaluation time (before any
-  // effects), so it always fires first in the capture-phase chain.
-  useMountEffect(() => {
-    setShortcutHandler((e: KeyboardEvent) => {
-      const inInput = isInputTarget(e);
-      // An open modal dialog owns the keyboard: no global shortcut may act on
-      // the surface behind it (session switch/kill chords, compose.focus,
-      // y/n permission answers) — whether the key was pressed inside the
-      // dialog or focus escaped to body. Only worksInModal app-chrome
-      // shortcuts fire.
-      const modalOpen = hasOpenModal();
-
-      // The integrated terminal owns the keyboard harder than any input: a
-      // shell lives on Ctrl chords (Ctrl+C/L/P/R/K...), and this listener runs
-      // capture-phase on window — BEFORE xterm — so any match here silently
-      // eats the key from the shell. skipInputCheck can't help (it exists to
-      // let chords fire IN inputs). Only the panel toggle may act; everything
-      // else falls through to the terminal.
-      const inTerminal = !!(e.target as HTMLElement | null)?.closest?.("[data-terminal-panel]");
-
-      for (const def of SHORTCUTS) {
-        if (inTerminal && def.action !== "terminal.toggle") continue;
-        if (!matchShortcut(e, def)) continue;
-        if (modalOpen && !def.worksInModal) continue;
-        if (def.when && !contextsRef.current.has(def.when)) continue;
-        if (inInput && !inputGuardBypass(def, e.target as HTMLElement | null)) continue;
-
-        if (dispatchAction(def.action)) {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-          onShortcutUsed(def.action);
-          return;
-        }
-      }
-    });
-    return () => setShortcutHandler(null);
-  });
-
-  const value: ShortcutContextValue = { registerAction, setContext, dispatchAction };
-
-  return (
-    <ShortcutContext.Provider value={value}>
-      {children}
-    </ShortcutContext.Provider>
-  );
-}
-
-const NOOP_CONTEXT: ShortcutContextValue = {
-  registerAction: () => () => {},
-  setContext: () => {},
-  dispatchAction: () => false,
-};
-
-export function useShortcuts(): ShortcutContextValue {
-  const ctx = useContext(ShortcutContext);
-  return ctx ?? NOOP_CONTEXT;
-}
-
-export function useShortcutAction(action: ShortcutAction, handler: Handler) {
-  const { registerAction } = useShortcuts();
-  const handlerRef = useRef(handler);
-  handlerRef.current = handler;
-
-  // useWatchEffect (not useMountEffect) so that when ShortcutProvider remounts
-  // during HMR and produces a new registerAction, children re-register their
-  // handlers in the new handlers Map instead of leaving them orphaned in the old one.
-  useWatchEffect(() => {
-    return registerAction(action, () => handlerRef.current());
-  }, [registerAction, action]);
-}
-
-export function useShortcutContext(ctx: string, active: boolean = true) {
-  const { setContext } = useShortcuts();
-
-  useWatchEffect(() => {
-    if (active) {
-      setContext(ctx, true);
-      return () => setContext(ctx, false);
-    }
-  }, [ctx, active, setContext]);
-}
+export const ShortcutProvider = kit.ShortcutProvider;
+export const useShortcuts = kit.useShortcuts;
+export const useShortcutAction = kit.useShortcutAction;
+export const useShortcutContext = kit.useShortcutContext;

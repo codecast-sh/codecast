@@ -27,9 +27,16 @@ export function ThreadsHeader({
         Threads
       </span>
       <span className="ch-head-topic">
-        {unread > 0
-          ? `${summaryCount(unread, "thread")} with new replies`
-          : total > 0 ? summaryCount(total, "thread") : ""}
+        {unread > 0 ? (
+          `${summaryCount(unread, "thread")} with new replies`
+        ) : total > 0 ? (
+          // Every thread in the view is read: say so, quietly, where the
+          // unread count would have been.
+          <span className="th-head-done">
+            <CheckCheck className="w-3 h-3" aria-hidden="true" />
+            All caught up · {summaryCount(total, "thread")}
+          </span>
+        ) : ""}
       </span>
       {unread > 0 && (
         <button type="button" className="th-markall" onClick={onMarkAllRead} title="Mark every thread in this view read">

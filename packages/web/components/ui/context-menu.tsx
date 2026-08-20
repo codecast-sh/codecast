@@ -37,21 +37,25 @@ type MenuAt<T> = { x: number; y: number; payload: T };
 
 export type ContextMenuState<T> = {
   menu: MenuAt<T> | null;
-  open: (e: React.MouseEvent, payload: T) => void;
+  /** `force` skips the stand-down (links, selections): for an element that
+   *  owns its own menu, such as a file link. */
+  open: (e: React.MouseEvent, payload: T, opts?: { force?: boolean }) => void;
   close: () => void;
 };
 
 export function useContextMenu<T = void>(): ContextMenuState<T> {
   const [menu, setMenu] = React.useState<MenuAt<T> | null>(null);
-  const open = React.useCallback((e: React.MouseEvent, payload: T) => {
+  const open = React.useCallback((e: React.MouseEvent, payload: T, opts?: { force?: boolean }) => {
     if (e.shiftKey) return;
     // Stand down where the native menu is the right answer: links (open in
     // new tab), editable fields (spellcheck, paste), and live text selections
     // (copy). The app menu takes everything else.
     const target = e.target as HTMLElement | null;
-    if (target?.closest?.('a[href], input, textarea, [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
-    const sel = typeof window !== "undefined" ? window.getSelection() : null;
-    if (sel && !sel.isCollapsed && target && sel.containsNode?.(target, true)) return;
+    if (!opts?.force) {
+      if (target?.closest?.('a[href], input, textarea, [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
+      const sel = typeof window !== "undefined" ? window.getSelection() : null;
+      if (sel && !sel.isCollapsed && target && sel.containsNode?.(target, true)) return;
+    }
     e.preventDefault();
     e.stopPropagation();
     setMenu({ x: e.clientX, y: e.clientY, payload });

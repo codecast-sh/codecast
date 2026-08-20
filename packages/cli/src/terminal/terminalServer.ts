@@ -235,6 +235,7 @@ export function handleTerminalHttp(
 /** Wire the terminal WebSocket endpoint onto an existing HTTP server. */
 export function attachTerminalServer(server: http.Server, opts: TerminalServerOptions): { close(): void } {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+  const live = new Set<ConnectionHandle>();
 
   const detach = onWsUpgrade(server, WS_PATH, (req, socket, head) => {
     if (!originAllowed(req.headers.origin, opts)) {
@@ -243,19 +244,27 @@ export function attachTerminalServer(server: http.Server, opts: TerminalServerOp
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => handleConnection(ws, opts));
+    wss.handleUpgrade(req, socket, head, (ws) => handleConnection(ws, opts, live));
   });
 
   return {
     close() {
       detach();
+      // Shutdown: the process is about to exit, so each attach must hand its
+      // pane back NOW, from outside the control channel — the socket close
+      // event (and the in-band restore it would trigger) arrives too late.
+      for (const h of live) h.shutdown();
       for (const ws of wss.clients) ws.terminate();
       wss.close();
     },
   };
 }
 
-function handleConnection(ws: WebSocket, opts: TerminalServerOptions): void {
+interface ConnectionHandle {
+  shutdown(): void;
+}
+
+function handleConnection(ws: WebSocket, opts: TerminalServerOptions, live: Set<ConnectionHandle>): void {
   let client: TmuxControlClient | null = null;
   let drainTimer: NodeJS.Timeout | null = null;
   let closed = false;
@@ -268,17 +277,21 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions): void {
     ws.close(4000, message.slice(0, 100));
   };
   let sessionLabel = "?";
-  const cleanup = () => {
+  const cleanup = (sync = false) => {
     if (closed) return;
     closed = true;
+    live.delete(handle);
     if (drainTimer) clearInterval(drainTimer);
     if (client) {
       const back = client.restoresTo;
-      opts.log(`[TERM] detach ${sessionLabel}${back ? ` (window back to ${back})` : ""}`);
-      client.close();
+      opts.log(`[TERM] detach ${sessionLabel}${back ? ` (window back to ${back}${sync ? ", shutdown" : ""})` : ""}`);
+      if (sync) client.closeSync();
+      else client.close();
     }
     client = null;
   };
+  const handle: ConnectionHandle = { shutdown: () => cleanup(true) };
+  live.add(handle);
 
   // The first message must be the hello; nothing is spawned until the token
   // inside it checks out.
@@ -389,7 +402,16 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions): void {
       try {
         const msg = JSON.parse(data.toString("utf8"));
         if (msg.type === "resize") {
-          client.resize(clampDim(msg.cols, 500), clampDim(msg.rows, 200));
+          // An attach reshapes the AGENT's screen, so it has a floor a panel
+          // shell doesn't: below ~80x12 Claude Code's renderer drops and
+          // splices lines, and that lands in the agent's scrollback for
+          // good. Current clients never ask for less (termSessions.ts) and
+          // scroll the pane instead; this is the backstop for older ones.
+          const attach = hello.mode === "attach";
+          client.resize(
+            clampDim(msg.cols, 500, attach ? ATTACH_MIN_COLS : 2),
+            clampDim(msg.rows, 200, attach ? ATTACH_MIN_ROWS : 2),
+          );
         } else if (msg.type === "kill") {
           void client.killSession().then(() => {
             sendJson({ type: "exit", reason: "killed" });
@@ -401,14 +423,18 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions): void {
     });
   });
 
-  ws.on("close", cleanup);
-  ws.on("error", cleanup);
+  ws.on("close", () => cleanup());
+  ws.on("error", () => cleanup());
 }
 
-function clampDim(value: unknown, max: number): number {
+// Same floor as the web client's MIN_FIT_COLS/ROWS (termSessions.ts).
+export const ATTACH_MIN_COLS = 80;
+export const ATTACH_MIN_ROWS = 12;
+
+export function clampDim(value: unknown, max: number, min = 2): number {
   const n = typeof value === "number" ? Math.floor(value) : NaN;
-  if (!Number.isFinite(n)) return 80;
-  return Math.min(Math.max(n, 2), max);
+  if (!Number.isFinite(n)) return Math.max(80, min);
+  return Math.min(Math.max(n, min), max);
 }
 
 export function generateTerminalToken(): string {

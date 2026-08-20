@@ -8,10 +8,25 @@
 // the shortcut is learned from the place you already use. Resolving the selection
 // lives in lib/quoteSelection so the button and the key quote the same thing.
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { resolveQuoteSelection, quoteSelectionIntoReply, type QuoteSelection } from "../lib/quoteSelection";
 import { KeyCap } from "./KeyboardShortcutsHelp";
+import { FilePathContext, filePathHref, filePathMention } from "../lib/filePathLinks";
+import { openFiles } from "../lib/filesPane";
+
+// A selection that names a file the auto-linker left alone (`packages/web`,
+// a bare `page.tsx`, a path in a code block): any single token with a slash
+// or an extension. Selecting it is the intent; the strict grammar that keeps
+// prose clean does not apply here.
+function selectedPath(quote: string): { path: string; line?: number } | null {
+  const text = quote.trim();
+  if (!text || /\s/.test(text)) return null;
+  const mention = filePathMention(text);
+  if (mention) return { path: mention.path, line: mention.line };
+  if (text.includes("/") || /\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(text)) return { path: text.replace(/[.,;:!?)]+$/, "") };
+  return null;
+}
 
 export function SelectionQuoteToolbar({ conversationId }: { conversationId: string }) {
   const [anchor, setAnchor] = useState<QuoteSelection | null>(null);
@@ -50,12 +65,20 @@ export function SelectionQuoteToolbar({ conversationId }: { conversationId: stri
     };
   }, []);
 
+  const fileCtx = useContext(FilePathContext);
   if (!anchor) return null;
 
   // Same single verb as the per-block handle and the `r` key: quote the selection
   // into your reply as a rail card, with an optional note.
   const doQuote = () => {
     quoteSelectionIntoReply(conversationId);
+    setAnchor(null);
+  };
+  const asPath = selectedPath(anchor.quote);
+  const doOpenFile = () => {
+    if (!asPath) return;
+    openFiles(filePathHref(asPath.path, asPath.line, fileCtx));
+    window.getSelection()?.removeAllRanges();
     setAnchor(null);
   };
 
@@ -75,6 +98,11 @@ export function SelectionQuoteToolbar({ conversationId }: { conversationId: stri
         ❝ Quote into reply
         <KeyCap size="xs">R</KeyCap>
       </button>
+      {asPath && (
+        <button type="button" className="cc-sel-btn" onClick={doOpenFile} title={`Open ${asPath.path} in Files`}>
+          Open in Files
+        </button>
+      )}
     </div>,
     document.body,
   );

@@ -162,6 +162,11 @@ interface VaultState {
   /** Quick switcher (Cmd+O) visibility — ephemeral UI state. */
   quickSwitchOpen: boolean;
   setQuickSwitchOpen: (open: boolean) => void;
+  /** Text the switcher opens with (consumed on open). A deep link that named
+   *  a file this vault doesn't have seeds the search with its name, so the
+   *  near-misses are one keystroke away instead of a dead end. */
+  quickSwitchSeed: string | null;
+  openQuickSwitch: (seed?: string) => void;
   /** Left pane tab and the search pane's query, lifted here so a saved-search
    *  bookmark can switch to Search and type its query in for you. */
   leftPaneTab: "files" | "search";
@@ -727,7 +732,9 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   clearOpError: () => set({ opError: null }),
   clearRenameReport: () => set({ lastRenameReport: null }),
 
-  setQuickSwitchOpen: (open) => set({ quickSwitchOpen: open }),
+  setQuickSwitchOpen: (open) => set({ quickSwitchOpen: open, ...(open ? {} : { quickSwitchSeed: null }) }),
+  quickSwitchSeed: null,
+  openQuickSwitch: (seed) => set({ quickSwitchOpen: true, quickSwitchSeed: seed ?? null }),
 
   setLeftPaneTab: (tab) => set({ leftPaneTab: tab }),
   setSearchQuery: (query) => set({ searchQuery: query }),

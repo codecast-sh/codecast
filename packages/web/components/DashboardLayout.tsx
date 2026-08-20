@@ -51,6 +51,8 @@ import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron, isDetachedTabWindow } from "../lib/desktop";
 import { SessionListPanel } from "./GlobalSessionPanel";
 import { StageCompanion } from "./StageCompanion";
+import { StageFilesPane } from "./StageFilesPane";
+import { FilePathMenuHost } from "./FilePathMenuHost";
 import { companionId, autoAllowed as wsAutoAllowed, surfaceForPath, slotPolicyFor } from "../store/workspace";
 import { EdgePeek } from "./EdgePeek";
 import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
@@ -297,6 +299,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.workspace.context.size,
     s => s.workspace.context.pane?.kind,
     s => s.workspace.secondary.size,
+    s => s.workspace.secondary.pane?.kind,
+    s => (s.workspace.secondary.pane as { ref?: string } | null)?.ref,
     s => s.currentConversation?.source,
     s => selectSessionRailOpen(s),
     s => s.sidePanelSessionId,
@@ -503,6 +507,16 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       }
     }
   }, [isOnWorkingPage, s.workspace.secondary.presentation, isMobile, companionId(s.workspace), s.currentSessionId, s.viewingDismissedId]);
+
+  // A Files pane left over from a conversation surface: pure bookkeeping hide
+  // when the stage moves somewhere that can't host it (a working page's slot
+  // belongs to its companion; plain pages have no second pane).
+  useWatchEffect(() => {
+    const ws = useInboxStore.getState().workspace;
+    if (ws.secondary.pane?.kind === "files" && !slotPolicy.files) {
+      useInboxStore.getState().wsHide("secondary", { remember: false });
+    }
+  }, [slotPolicy.files, s.workspace.secondary.pane?.kind]);
 
   const handleInboxSessionSelect = useCallback((id: string) => {
     const store = useInboxStore.getState();
@@ -975,16 +989,19 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // (there is a single companionSessionId), so panes cannot accumulate.
   // Only working surfaces host a companion; elsewhere the page owns the stage.
   const showCompanion = !!companionId(s.workspace) && isOnWorkingPage && !isMobile;
+  // The Files pane shares the slot: a conversation on stage may have the
+  // project's files beside it (slotPolicyFor(...).files).
+  const showFilesPane = !showCompanion && s.workspace.secondary.pane?.kind === "files" && s.workspace.secondary.presentation === "split" && slotPolicy.files && !isMobile;
   // The secondary slot owns the companion's share of the stage, so a workbench
   // restores it. Group remounts with showCompanion, which re-reads this.
   const rawCompanionSize = s.workspace.secondary.size;
   const companionSize = rawCompanionSize !== undefined && rawCompanionSize >= 20 && rawCompanionSize <= 65 ? rawCompanionSize : 42;
-  const pageContent = showCompanion ? (
+  const pageContent = showCompanion || showFilesPane ? (
     <Group orientation="horizontal" className="h-full" defaultLayout={{ "stage-page": 100 - companionSize, "stage-companion": companionSize }} onLayoutChange={handleStageLayoutChange}>
       <Panel id="stage-page" minSize={320}>{pageContentInner}</Panel>
       <Separator className={separatorClass} />
       <Panel id="stage-companion" minSize={320} maxSize="65%">
-        <StageCompanion />
+        {showCompanion ? <StageCompanion /> : <StageFilesPane />}
       </Panel>
     </Group>
   ) : pageContentInner;
@@ -1283,6 +1300,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       {!isMobile && (
         <ErrorBoundary name="VaultQuickSwitcher" level="panel">
           <VaultQuickSwitcherDock />
+          <FilePathMenuHost />
         </ErrorBoundary>
       )}
 

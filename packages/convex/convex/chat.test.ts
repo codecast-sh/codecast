@@ -1989,6 +1989,57 @@ describe("direct messages", () => {
     expect(row.unread_mentions).toBe(2);
   });
 
+  test("a DM rail row stamps the other person's newest line, never the viewer's", async () => {
+    const ctx = context(ALICE);
+    const dm = await call(openDm, ctx, { team_id: TEAM, member_ids: [BOB] });
+    const railRow = async (who: any) =>
+      (await call(listChannels, who, { team_id: TEAM })).rail
+        .find((r: any) => String(r.channel_id) === String(dm.channel_id));
+
+    // Only Alice has spoken: her own rail has no inbound; Bob's does.
+    const first = await call(sendMessage, ctx, { channel_id: dm.channel_id, content: "anyone?" });
+    expect((await railRow(ctx)).last_inbound).toBeNull();
+    expect((await railRow(as(ctx, BOB))).last_inbound).toEqual({
+      _id: first.message_id, created_at: expect.any(Number),
+    });
+
+    // Bob answers, then Alice sends a run of follow-ups: Alice's stamp stays on
+    // Bob's line, and sort_at moves past it on her own sends.
+    const reply = await call(sendMessage, as(ctx, BOB), { channel_id: dm.channel_id, content: "here" });
+    for (let i = 0; i < 6; i++) {
+      await call(sendMessage, ctx, { channel_id: dm.channel_id, content: `more ${i}` });
+    }
+    messagesIn(ctx).forEach((row: any, i: number) => { row.created_at = 2_000 + i; });
+    const row = await railRow(ctx);
+    expect(row.last_inbound._id).toBe(reply.message_id);
+    expect(row.last_inbound.created_at).toBe(2_001);
+    expect(row.sort_at).toBe(2_007);
+  });
+
+  test("a DM inbound stamp skips tombstones and silent agent rows", async () => {
+    const ctx = context(ALICE);
+    const dm = await call(openDm, ctx, { team_id: TEAM, member_ids: [BOB] });
+    const bob = as(ctx, BOB);
+    const kept = await call(sendMessage, bob, { channel_id: dm.channel_id, content: "kept" });
+    const gone = await call(sendMessage, bob, { channel_id: dm.channel_id, content: "retracted" });
+    await call(deleteMessage, bob, { message_id: gone.message_id });
+    messagesIn(ctx).forEach((row: any, i: number) => { row.created_at = 2_000 + i; });
+    // An anchor that listened and passed leaves a row nobody sees.
+    messagesIn(ctx).push({
+      _id: "silent-pass", team_id: TEAM, channel_id: dm.channel_id, user_id: BOT,
+      author_kind: "agent", agent_status: "passed", content: "",
+      created_at: 3_000, updated_at: 3_000,
+    });
+
+    const row = (await call(listChannels, ctx, { team_id: TEAM })).rail
+      .find((r: any) => String(r.channel_id) === String(dm.channel_id));
+    expect(row.last_inbound).toEqual({ _id: kept.message_id, created_at: 2_000 });
+    // A channel row carries no stamp at all.
+    const channelRow = (await call(listChannels, ctx, { team_id: TEAM })).rail
+      .find((r: any) => String(r.channel_id) === String(CHANNEL));
+    expect(channelRow.last_inbound).toBeNull();
+  });
+
   test("a muted DM is silent; the mentions default still lets DM lines through", async () => {
     const ctx = context(ALICE);
     const dm = await call(openDm, ctx, { team_id: TEAM, member_ids: [BOB] });

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { openBackgroundTaskIds, openBackgroundTasks, reconciledStatusWithTasks, scanOpenBackgroundTasks, declaredSettleVerdict, verifyOpenTasks, parseProcessTable, taskProcessNeedle, toOpenTaskReports, paneReconcileTarget, type OpenTaskInfo } from "./daemon.js";
+import { openBackgroundTaskIds, openBackgroundTasks, reconciledStatusWithTasks, scanOpenBackgroundTasks, declaredSettleVerdict, latestTurnStartTs, markTurnStarted, statusFlipStartsTurn, verifyOpenTasks, parseProcessTable, taskProcessNeedle, toOpenTaskReports, paneReconcileTarget, type OpenTaskInfo } from "./daemon.js";
 
 // Regression tests for the "settled turn with live background work reads as
 // needs_input" bug (session jx7e6ex, 2026-08-03). A turn that ends while a
@@ -203,6 +203,80 @@ describe("declaredSettleVerdict", () => {
     expect(declaredSettleVerdict(SID, Date.now(), undefined, { at: Date.now() - 24 * 3_600_000, status: "dormant" })).toBeNull();
     // …a stamp written just now is.
     expect(declaredSettleVerdict(SID, Date.now() + 5, undefined, { at: Date.now() + 1, status: "dormant" })).toBe("dormant");
+  });
+});
+
+// Turn-boundary regressions (session jx71a1g, 2026-08-20): the agent declared
+// `cast state --status dormant`, a workflow subagent's activity hook flipped the
+// status to working 2s later, and the settle then read the stamp as an older
+// turn's — filing the parked session under needs-input. A turn starts on
+// DELIVERED INPUT (a synced user turn), never on hook noise the session's own
+// background machinery generates.
+
+describe("statusFlipStartsTurn", () => {
+  test("settled → active is a turn start", () => {
+    expect(statusFlipStartsTurn(undefined, "working")).toBe(true);
+    expect(statusFlipStartsTurn("idle", "working")).toBe(true);
+    expect(statusFlipStartsTurn("waiting", "thinking")).toBe(true);
+    expect(statusFlipStartsTurn("stopped", "working")).toBe(true);
+  });
+  test("active → active is the same turn", () => {
+    expect(statusFlipStartsTurn("working", "working")).toBe(false);
+    expect(statusFlipStartsTurn("thinking", "working")).toBe(false);
+    expect(statusFlipStartsTurn("resuming", "working")).toBe(false);
+  });
+  test("a flip off a declared dormant/done is NOT a turn start — subagent hooks and Stop continuations must not spend the declaration", () => {
+    expect(statusFlipStartsTurn("dormant", "working")).toBe(false);
+    expect(statusFlipStartsTurn("dormant", "thinking")).toBe(false);
+    expect(statusFlipStartsTurn("done", "working")).toBe(false);
+  });
+  test("settling is never a turn start", () => {
+    expect(statusFlipStartsTurn("working", "idle")).toBe(false);
+    expect(statusFlipStartsTurn("working", "waiting")).toBe(false);
+    expect(statusFlipStartsTurn("working", "dormant")).toBe(false);
+  });
+});
+
+describe("latestTurnStartTs", () => {
+  const T = 1_700_000_000_000;
+  test("picks the newest real user turn in the batch", () => {
+    expect(latestTurnStartTs([
+      { role: "user", timestamp: T },
+      { role: "assistant", timestamp: T + 1_000 },
+      { role: "user", timestamp: T + 2_000 },
+    ])).toBe(T + 2_000);
+  });
+  test("tool_result replies ride inside a turn and don't count", () => {
+    expect(latestTurnStartTs([
+      { role: "user", timestamp: T, toolResults: [{ toolUseId: "t1", content: "ok" }] },
+      { role: "assistant", timestamp: T + 1_000 },
+    ])).toBeNull();
+  });
+  test("assistant-only batches carry no turn start", () => {
+    expect(latestTurnStartTs([{ role: "assistant", timestamp: T }])).toBeNull();
+    expect(latestTurnStartTs([])).toBeNull();
+  });
+});
+
+describe("markTurnStarted + declaredSettleVerdict", () => {
+  test("a dormant stamp survives status noise after it — only a delivered turn spends it", () => {
+    const sid = "turn-mark-noise-survival";
+    const T = Date.now();
+    markTurnStarted(sid, T - 120_000); // the user's message began the turn
+    const stamp = { at: T - 60_000, status: "dormant" as const };
+    // Subagent hook flips never call markTurnStarted (statusFlipStartsTurn
+    // rejects dormant→working), so at settle the stamp still covers this turn:
+    expect(declaredSettleVerdict(sid, T, undefined, stamp)).toBe("dormant");
+    // A genuine wake is a delivered user turn — it spends the declaration:
+    markTurnStarted(sid, T - 30_000);
+    expect(declaredSettleVerdict(sid, T, undefined, stamp)).toBeNull();
+  });
+  test("the mark is monotonic — a replayed old batch cannot resurrect a spent stamp", () => {
+    const sid = "turn-mark-monotonic";
+    const T = Date.now();
+    markTurnStarted(sid, T - 10_000); // the real, current turn
+    markTurnStarted(sid, T - 120_000); // stale backlog replay must not rewind
+    expect(declaredSettleVerdict(sid, T, undefined, { at: T - 60_000, status: "dormant" })).toBeNull();
   });
 });
 
