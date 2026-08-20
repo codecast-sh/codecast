@@ -32,10 +32,15 @@ interface MockCalls {
   failed: Array<{ taskId: string; error: string }>;
   injected: string[];
   completed: string[];
+  /** The exact prompt each injection carried. */
+  prompts: string[];
 }
 
-function makeScheduler(dueTasks: any[], opts: { claimResult?: (task: any) => any } = {}) {
-  const calls: MockCalls = { claimed: [], failed: [], injected: [], completed: [] };
+function makeScheduler(
+  dueTasks: any[],
+  opts: { claimResult?: (task: any) => any; filing?: "stashed" | "killed" | null } = {},
+) {
+  const calls: MockCalls = { claimed: [], failed: [], injected: [], completed: [], prompts: [] };
   const byId = new Map(dueTasks.map((t) => [t._id, t]));
   const syncService = {
     getDueTasks: async () => dueTasks,
@@ -49,13 +54,19 @@ function makeScheduler(dueTasks: any[], opts: { claimResult?: (task: any) => any
     failTaskRun: async (taskId: string, _daemonId: string, error: string) => {
       calls.failed.push({ taskId, error });
     },
-    sendMessageToSession: async (conversationId: string) => {
+    sendMessageToSession: async (conversationId: string, prompt: string) => {
       calls.injected.push(conversationId);
+      calls.prompts.push(prompt);
     },
     completeTaskRun: async (taskId: string) => {
       calls.completed.push(taskId);
     },
     renewTaskLease: async () => true,
+    // The injection path reads the session's inbox filing to decide whether to
+    // append the stashed preamble. The real one fails open (null on any error);
+    // the fake must exist at all, or the read throws and the whole injection is
+    // reported as a failed run.
+    getSessionFiling: async () => opts.filing ?? null,
   };
   const scheduler = new TaskScheduler({
     syncService: syncService as any,
@@ -112,6 +123,8 @@ describe("TaskScheduler device affinity", () => {
     await scheduler.poll();
     expect(calls.claimed).toEqual(["t1"]);
     expect(calls.injected).toEqual(["conv123"]);
+    // Nothing about the inbox filing when the session is plainly visible.
+    expect(calls.prompts[0]).not.toContain("STASHED");
     expect(calls.completed).toEqual(["t1"]);
   });
 
@@ -148,5 +161,32 @@ describe("TaskScheduler device affinity", () => {
     expect(calls.failed.length).toBe(1);
     expect(calls.failed[0].taskId).toBe("t1");
     expect(calls.failed[0].error).toContain("not found on this device");
+  });
+});
+
+describe("wake-time self-knowledge", () => {
+  const injectTask = () => ({
+    ...spawnTask("t1"),
+    originating_conversation_id: "conv123",
+  });
+
+  it("tells a stashed session nobody is watching", async () => {
+    const { scheduler, calls } = makeScheduler([injectTask()], {
+      claimResult: (t) => t,
+      filing: "stashed",
+    });
+    await scheduler.poll();
+    expect(calls.prompts[0]).toContain("This session is STASHED");
+    expect(calls.failed).toEqual([]);
+  });
+
+  it("says nothing when the filing cannot be read", async () => {
+    const { scheduler, calls } = makeScheduler([injectTask()], {
+      claimResult: (t) => t,
+      filing: null,
+    });
+    await scheduler.poll();
+    expect(calls.injected).toEqual(["conv123"]);
+    expect(calls.prompts[0]).not.toContain("STASHED");
   });
 });
