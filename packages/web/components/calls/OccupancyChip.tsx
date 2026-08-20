@@ -13,9 +13,12 @@ import { AvatarImg } from "../../lib/avatarCache";
 export function OccupancyChip({
   roomKey,
   className = "",
+  compact = false,
 }: {
   roomKey: string;
   className?: string;
+  /** Header-chip scale — see HuddleButton. */
+  compact?: boolean;
 }) {
   const s = useTrackedStore([
     (st: any) => st.callOccupancy[roomKey],
@@ -31,7 +34,7 @@ export function OccupancyChip({
         e.stopPropagation();
         if (!inThisRoom) void joinCall(roomKey);
       }}
-      className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs transition-colors ${
+      className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 transition-colors ${compact ? "text-[10px] font-medium" : "text-xs"} ${
         inThisRoom
           ? "cursor-default border-sol-violet/50 bg-sol-violet/20 text-sol-violet"
           : "border-sol-violet/30 bg-sol-violet/10 text-sol-violet hover:bg-sol-violet/20"
@@ -78,16 +81,20 @@ export function HuddleButton({
   ring,
   anchorTitle,
   className = "",
+  compact = false,
 }: {
   roomKey: string;
   ring?: string[];
   anchorTitle?: string;
   className?: string;
+  /** Header-chip scale (10px, soft border) to sit flush with the other
+   *  conversation-header pills; the chat page keeps the larger default. */
+  compact?: boolean;
 }) {
   const enabled = useCallsAvailable();
   const occupied = useInboxStore((st) => (st.callOccupancy[roomKey]?.length ?? 0) > 0);
   if (!enabled) return null;
-  if (occupied) return <OccupancyChip roomKey={roomKey} className={className} />;
+  if (occupied) return <OccupancyChip roomKey={roomKey} className={className} compact={compact} />;
   const start = () =>
     ring?.length
       ? void startHuddle({ roomKey, toUserIds: ring, anchorTitle })
@@ -98,7 +105,7 @@ export function HuddleButton({
         e.stopPropagation();
         start();
       }}
-      className={`flex items-center gap-1 rounded-full border border-sol-border px-2 py-0.5 text-xs text-sol-text-dim transition-colors hover:border-sol-violet/40 hover:text-sol-violet ${className}`}
+      className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-sol-text-dim transition-colors hover:border-sol-violet/40 hover:text-sol-violet ${compact ? "border-sol-border/40 text-[10px] font-medium" : "border-sol-border text-xs"} ${className}`}
       title={
         ring?.length
           ? `Start a huddle and ring ${ring.length === 1 ? "them" : "everyone here"}`
@@ -113,5 +120,5 @@ export function HuddleButton({
 
 // Session headers: the room of one conversation.
 export function SessionHuddleButton({ conversationId }: { conversationId: string }) {
-  return <HuddleButton roomKey={sessionRoomKey(conversationId)} />;
+  return <HuddleButton roomKey={sessionRoomKey(conversationId)} compact />;
 }

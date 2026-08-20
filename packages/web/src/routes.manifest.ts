@@ -115,6 +115,7 @@ const Chat = lazy(() => import("@/app/chat/page"));
 const Search = lazy(() => import("@/app/search/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
 const Questions = lazy(() => import("@/app/questions/page"));
+const Threads = lazy(() => import("@/app/threads/page"));
 const Conversation = lazy(() => import("@/app/conversation/[id]/page"));
 const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"));
 const Docs = lazy(() => import("@/app/docs/page"));
@@ -234,6 +235,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "notifications", component: cast(Notifications), layout: "dashboardShell", tab: "/notifications" },
   // Full-bleed via lib/pageLayout FULL_WIDTH_PATTERNS, so no `fullWidth` flag here.
   { path: "questions", component: cast(Questions), layout: "dashboardShell", tab: "/questions" },
+  // Full-bleed via lib/pageLayout FULL_WIDTH_PATTERNS, so no `fullWidth` flag here.
+  { path: "threads", component: cast(Threads), layout: "dashboardShell", tab: "/threads" },
   { path: "conversation/:id", component: cast(Conversation), layout: "dashboardShell", tab: "/conversation/:id", fullWidth: true, guestOk: true, guestKind: "shell" },
   { path: "conversation/:id/diff", component: cast(ConversationDiff), layout: "dashboardShell", tab: "/conversation/:id/diff", fullWidth: true, guestOk: true, guestKind: "shell" },
   { path: "docs", component: cast(Docs), layout: "dashboardShell", tab: "/docs", fullWidth: true },

@@ -21,6 +21,7 @@ import { listLiveManagedSessions } from "./lib/liveSessions";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
+import { taskThreadParticipants, touchThread } from "./threadReads";
 import { resolveTeamForPath, teamVisibleConvTeam } from "./privacy";
 // Owner-or-team access check for a task. Moved to lib/access.ts (Wave-1
 // auth/access seam). Imported for local use here and re-exported so existing
@@ -1598,6 +1599,12 @@ export const update = mutation({
 // Bumping updated_at stamps the change log; the feed then re-fetches the row
 // through webGetByIds, which carries comments, so every client's cached
 // activity stays fresh without opening the task.
+//
+// The comment also files the task in the Threads inbox of everyone following
+// it (subscribers, creator, assignee). `actorId` is the PERSON who wrote it:
+// their copy reads as read and the row carries author_user_id. An agent or
+// system row has no actor, so the owner sees it unread — that is the point.
+// Every task_comments insert with a task row goes through here.
 async function insertTaskComment(
   ctx: any,
   taskId: Id<"tasks">,
@@ -1608,15 +1615,29 @@ async function insertTaskComment(
     conversation_id?: Id<"conversations">;
     image_storage_ids?: string[];
   },
+  actorId?: Id<"users">,
 ) {
   const now = Date.now();
   const id = await ctx.db.insert("task_comments", {
     task_id: taskId,
     ...fields,
+    author_user_id: actorId,
     comment_type: fields.comment_type as any,
     created_at: now,
   });
   await ctx.db.patch(taskId, { updated_at: now });
+  const task = await ctx.db.get(taskId);
+  if (task) {
+    await touchThread(ctx, {
+      kind: "task",
+      rootKey: String(taskId),
+      teamId: task.team_id,
+      refs: { task_id: taskId },
+      participants: await taskThreadParticipants(ctx, task),
+      actorId,
+      activityAt: now,
+    });
+  }
   return id;
 }
 
@@ -1657,12 +1678,14 @@ export const addComment = mutation({
       }
     }
 
+    // A post from inside a session is an agent's: no actor, so the owner's
+    // thread lights up. A person running the CLI by hand is the actor.
     const id = await insertTaskComment(ctx, task._id, {
       author: args.author || user?.name || "unknown",
       text: args.text,
       conversation_id,
       comment_type: args.comment_type || "note",
-    });
+    }, args.conversation_id ? undefined : auth.userId);
 
     await subscribeUser(ctx, auth.userId, task._id, "commenter");
     await notifySubscribers(ctx, "task_commented", auth.userId, task as any, `commented on ${task.short_id}: ${args.text.slice(0, 100)}`, conversation_id);
@@ -2798,7 +2821,7 @@ export const webAddComment = mutation({
       text: args.text,
       comment_type: args.comment_type || "note",
       image_storage_ids: args.image_storage_ids,
-    });
+    }, userId);
 
     await subscribeUser(ctx, userId, task._id, "commenter");
     await notifySubscribers(ctx, "task_commented", userId, task as any, `commented on ${task.short_id}: ${args.text.slice(0, 100)}`);
@@ -3220,12 +3243,10 @@ export const incrementRetryCount = mutation({
       updates.execution_status = "blocked";
 
       const user = await ctx.db.get(auth.userId);
-      await ctx.db.insert("task_comments", {
-        task_id: task._id,
+      await insertTaskComment(ctx, task._id, {
         author: user?.name || "system",
         text: `Retry count (${newRetryCount}) exceeded max retries (${maxRetries}). Task automatically blocked.`,
-        comment_type: "blocker" as any,
-        created_at: now,
+        comment_type: "blocker",
       });
     }
 
@@ -3262,12 +3283,10 @@ export const updateExecutionStatus = mutation({
 
     if (args.execution_comment) {
       const user = await ctx.db.get(auth.userId);
-      await ctx.db.insert("task_comments", {
-        task_id: task._id,
+      await insertTaskComment(ctx, task._id, {
         author: user?.name || "unknown",
         text: args.execution_comment,
-        comment_type: "progress" as any,
-        created_at: now,
+        comment_type: "progress",
       });
     }
 
@@ -3493,12 +3512,10 @@ export const scheduleRetry = mutation({
     });
 
     const user = await ctx.db.get(auth.userId);
-    await ctx.db.insert("task_comments", {
-      task_id: task._id,
+    await insertTaskComment(ctx, task._id, {
       author: user?.name || "system",
       text: `Scheduled for retry (attempt ${newAttemptCount})`,
-      comment_type: "progress" as any,
-      created_at: now,
+      comment_type: "progress",
     });
 
     if (task.plan_id && task.status !== "open") {

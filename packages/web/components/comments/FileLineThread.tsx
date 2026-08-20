@@ -24,11 +24,14 @@ function FileLineThreadImpl({
   filePath,
   lineNumber,
   comments,
+  composerClassName,
 }: {
   conversationId: string;
   filePath: string;
   lineNumber?: number;
   comments: Comment[];
+  /** Frame class for the composer — see CommentComposer's `className`. */
+  composerClassName?: string;
 }) {
   const { user, isAuthenticated } = useCurrentUser();
   const currentUserId = user?._id as string | undefined;
@@ -73,6 +76,7 @@ function FileLineThreadImpl({
           onPingAgent={agentBusy ? undefined : pingAgent}
           agentType={agentType}
           autoFocus
+          className={composerClassName}
           placeholder={replyTo ? "Reply…" : "Comment…"}
           onSubmit={(content) =>
             addComment({ content, filePath, lineNumber, parentCommentId: replyTo?._id })}

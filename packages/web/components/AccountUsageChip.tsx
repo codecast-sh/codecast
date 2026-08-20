@@ -385,10 +385,10 @@ export function AccountUsageChip() {
           <div className="flex items-center gap-2">
             <Zap className={`h-3.5 w-3.5 ${autoOn ? "text-sol-cyan" : "text-sol-text-dim"}`} />
             <div className="min-w-0 flex-1">
-              <div className="text-xs font-medium text-sol-text">Auto-switch on limits</div>
+              <div className="text-xs font-medium text-sol-text">Auto-switch accounts</div>
               <div className="text-[10px] leading-snug text-sol-text-dim">
-                Hop to the freshest account and continue limit-parked sessions until everything is
-                unblocked or every account is spent.
+                When sessions park on a usage limit or an expired login, hop to the freshest
+                account and continue them until everything is unblocked or every account is spent.
               </div>
             </div>
             <Switch

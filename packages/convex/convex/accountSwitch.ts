@@ -350,15 +350,16 @@ const BLOCKED_NOTIFY_COOLDOWN_MS = 30 * 60 * 1000;
 
 /** The single hook the message paths call when a conversation freshly parks on
  * a blocked-kind banner (auth/limit/connection/fatal — never self-retrying "error").
- * Fans out to both reactions: the auto-switch check (limit only) and the
- * debounced incident notification (all blocked kinds). Both are idempotent
- * and self-gating, so over-scheduling is harmless. */
+ * Fans out to both reactions: the auto-switch check (limit and auth parks —
+ * the check itself gates auth on the opt-in flag) and the debounced incident
+ * notification (all blocked kinds). Both are idempotent and self-gating, so
+ * over-scheduling is harmless. */
 export async function onFreshApiErrorPark(
   ctx: { scheduler: { runAfter: (ms: number, fn: any, args: any) => Promise<any> } },
   userId: Id<"users">,
   kind: string,
 ): Promise<void> {
-  if (kind === "limit") await scheduleAutoSwitchCheck(ctx, userId);
+  if (kind === "limit" || kind === "auth") await scheduleAutoSwitchCheck(ctx, userId);
   await ctx.scheduler.runAfter(BLOCKED_NOTIFY_DEBOUNCE_MS, internal.accountSwitch.blockedNotifyCheck, {
     user_id: userId,
   });
@@ -829,8 +830,6 @@ export const autoSwitchCheck = internalMutation({
 
     const state = primary.cc_auto_switch_state ?? {};
     const { blocked } = await listBlockedConversations(ctx, args.user_id, false);
-    // Limit-kind only: an auth park means a login expired — switching accounts
-    // behind the user's back is an identity change, not a recovery.
     // Continue-only mode acts on the current incident alone: a park older than
     // a full session window has already sat through a reset the user could
     // have used — resuming it now spends the fresh window on abandoned work.
@@ -840,7 +839,15 @@ export const autoSwitchCheck = internalMutation({
         c.pending_api_error_kind === "limit" &&
         (allowSwitch || (c.updated_at ?? 0) >= now - AUTO_CONTINUE_WINDOW_MS),
     );
-    if (limitBlocked.length === 0) {
+    // Auth parks ("Login expired") mean the active login is dead — waiting
+    // can't heal them, so they ride ONLY the opt-in switch path: rotating the
+    // machine's login is exactly what the cc_auto_switch flag consents to.
+    // Without the flag they keep the manual path (incident notification).
+    const authBlocked = allowSwitch
+      ? blocked.filter((c) => c.pending_api_error_kind === "auth")
+      : [];
+    const targets = [...limitBlocked, ...authBlocked];
+    if (targets.length === 0) {
       if (state.exhausted_at) {
         await ctx.db.patch(primary._id, {
           cc_auto_switch_state: { ...state, exhausted_at: undefined },
@@ -881,11 +888,14 @@ export const autoSwitchCheck = internalMutation({
 
     const decision = decideAutoSwitch({
       now,
-      parkedAt: Math.max(...limitBlocked.map((c) => c.updated_at ?? 0)),
+      parkedAt: Math.max(...targets.map((c) => c.updated_at ?? 0)),
       activeEmail: primary.cc_accounts?.active_email,
       profiles: primary.cc_accounts?.profiles ?? [],
       attempts,
       allowSwitch,
+      // An auth park is proof the active login is dead — "continue" can't help
+      // even the limit-parked sessions until the machine has a live account.
+      activeDead: authBlocked.length > 0,
     });
 
     if (decision.action === "continue") {
@@ -903,7 +913,7 @@ export const autoSwitchCheck = internalMutation({
     if (decision.action === "switch") {
       await insertSwitchCommands(ctx, args.user_id, {
         profile: decision.profile,
-        blocked: limitBlocked,
+        blocked: targets,
         online,
         primary,
         continueBlocked: true,
@@ -911,9 +921,9 @@ export const autoSwitchCheck = internalMutation({
       });
       await recordAction(`switch:${decision.profile}`, decision.profile);
       console.log(
-        `autoSwitchCheck: switching to "${decision.profile}" for ${limitBlocked.length} limit-parked conversation(s)`,
+        `autoSwitchCheck: switching to "${decision.profile}" for ${limitBlocked.length} limit-parked + ${authBlocked.length} auth-parked conversation(s)`,
       );
-      return { acted: "switch", profile: decision.profile, conversations: limitBlocked.length };
+      return { acted: "switch", profile: decision.profile, conversations: targets.length };
     }
 
     // Every account is spent. Mark it for the UI and wake up at the earliest

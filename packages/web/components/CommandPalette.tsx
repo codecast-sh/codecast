@@ -146,6 +146,7 @@ const NAV_PAGES: ReadonlyArray<{
 }> = [
   { label: "Dashboard", path: "/team/activity", icon: "grid", keywords: "home sessions main activity feed team" },
   { label: "Inbox", path: "/inbox", icon: "inbox", keywords: "idle queue waiting" },
+  { label: "Threads", path: "/threads", icon: "message", keywords: "threads replies comments conversations unread mentions dms" },
   { label: "Chat", path: "/chat", icon: "message", keywords: "channels team talk messages rooms", feature: "chat" },
   { label: "Tasks", path: "/tasks", icon: "check", keywords: "todo work items" },
   { label: "Plans", path: "/plans", icon: "map", keywords: "roadmap goals milestones planning" },

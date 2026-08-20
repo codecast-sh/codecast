@@ -146,7 +146,7 @@ export function PlanBadge({
           onClick={handleClick}
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
-          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors max-w-[180px] ${className || ""}`}
+          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors max-w-[180px] ${className || ""}`}
         >
           <Target className="w-2.5 h-2.5 flex-shrink-0" />
           <span className="truncate">{plan.title}</span>
@@ -180,7 +180,7 @@ export function TaskBadge({
   return (
     <button
       onClick={() => router.push(`/tasks/${task._id}`)}
-      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-yellow/10 text-sol-yellow border border-sol-yellow/20 hover:bg-sol-yellow/20 transition-colors max-w-[200px] ${className || ""}`}
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-yellow/10 text-sol-yellow border border-sol-yellow/20 hover:bg-sol-yellow/20 transition-colors max-w-[200px] ${className || ""}`}
     >
       <Icon className={`w-2.5 h-2.5 flex-shrink-0 ${color}`} />
       <span className="truncate">{task.title}</span>

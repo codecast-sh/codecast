@@ -142,6 +142,8 @@ import { THREAD_STATE_STATUS_META } from "../lib/threadState";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import remarkBreaks from "remark-breaks";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK, renderMarkdownPre } from "./messageMarkdown";
+import { FilePathLink } from "./FilePathLink";
+import { FilePathContext } from "../lib/filePathLinks";
 import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, type ChatWakePrompt } from "./sessionMessage";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand } from "./castCommand";
@@ -194,7 +196,7 @@ import { defaultMachineId, dedupeProjectsByRepoName, pathOnMyMachines, repoName,
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore, mentionItemMatches } from "../hooks/useMentionQuery";
-import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
+import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../lib/pendingBanner";
 import { PendingDeliveryNote } from "./PendingDeliveryNote";
 import { sessionStartupState, SESSION_STARTING_GRACE_MS } from "../lib/sessionLifecycle";
 import { messageRowKey, uniqueRowKeys } from "../lib/messageRowKey";
@@ -550,12 +552,12 @@ function SessionGalleryButton({ srcs }: { srcs: string[] }) {
     <ShortcutTooltip label={`View ${srcs.length === 1 ? "image" : `${srcs.length} images`}`} side="bottom">
       <button
         onClick={() => gallery?.openList(srcs, srcs.length - 1)}
-        className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors flex items-center gap-1"
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium flex-shrink-0 bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/30 hover:bg-sol-magenta/20 transition-colors"
       >
-        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
-        <span className="text-[10px] tabular-nums leading-none">{srcs.length}</span>
+        <span className="tabular-nums">{srcs.length}</span>
       </button>
     </ShortcutTooltip>
   );
@@ -4067,7 +4069,13 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
       >
         <span className={`font-mono flex-shrink-0 group-hover:underline ${toolColor}`}>{displayToolName}</span>
         {summary && (
-          <span className="text-sol-text-muted font-mono truncate min-w-0">{summary}</span>
+          <span className="text-sol-text-muted font-mono truncate min-w-0">
+            {(isStandardEdit || isRead) && filePath ? (
+              // The file a Read/Edit touched, linked into Files. Stop the click
+              // so it opens the file rather than toggling the row.
+              <FilePathLink path={filePath} onClick={(e) => e.stopPropagation()}>{summary}</FilePathLink>
+            ) : summary}
+          </span>
         )}
         {executedTabId && (
           <a
@@ -7385,6 +7393,9 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   // offer "kill & restart" there: it would interrupt and discard live work.
   const agentActive = isActiveAgentStatus(agentStatus);
   const agentBooting = isBootingAgentStatus(agentStatus);
+  // Alive-but-parked (dormant/waiting/done) sessions share the booting budget:
+  // the pane heartbeats, so a pending message is one daemon pass from landing.
+  const agentAliveIdle = isAliveIdleStatus(agentStatus);
   // Short grace after the agent flips busy→idle before escalating: the daemon
   // injects the deferred message within its next poll, so we avoid a false
   // "hasn't reached the agent" flash in the gap between idle and that inject.
@@ -7401,13 +7412,13 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   // "Message hasn't reached the agent" false alarm that flashes during a normal boot.
   const [bootGraceElapsed, setBootGraceElapsed] = useState(false);
   useWatchEffect(() => {
-    if (!isPending || !agentBooting) { setBootGraceElapsed(false); return; }
+    if (!isPending || !(agentBooting || agentAliveIdle)) { setBootGraceElapsed(false); return; }
     const budget = agentStatus === "resuming" ? PENDING_RESUME_GRACE_MS : PENDING_BOOT_GRACE_MS;
     const remaining = budget - (Date.now() - timestamp);
     if (remaining <= 0) { setBootGraceElapsed(true); return; }
     const t = setTimeout(() => setBootGraceElapsed(true), remaining);
     return () => clearTimeout(t);
-  }, [isPending, agentBooting, agentStatus, timestamp]);
+  }, [isPending, agentBooting, agentAliveIdle, agentStatus, timestamp]);
   // Durable, server-persisted delivery proof for this conversation's pending message —
   // the same signal the composer banner trusts (messageReachedSession). The daemon marks
   // the row "injected" the instant it lands in the tmux pane and resets it to "pending" if
@@ -7725,7 +7736,11 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       {bannerState === "queued" && (
         <div className="flex items-center gap-2 mt-2 pl-8 text-xs text-sol-text-muted" data-testid="pending-message-queued">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-400/70 animate-pulse flex-shrink-0" />
-          <span>Starting up — your message will send once the session is ready</span>
+          {/* Cold launch/resume genuinely "starts up"; an alive-but-parked session
+              (or one the daemon has claimed: "connected") is just being delivered to. */}
+          <span>{agentStatus === "starting" || agentStatus === "resuming"
+            ? "Starting up — your message will send once the session is ready"
+            : "Queued — delivering your message to the agent"}</span>
         </div>
       )}
       {bannerState === "stuck" && (
@@ -9818,7 +9833,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const isAgentStarting = agentStatus === "starting" || agentStatus === "resuming" || deliveryStatus === "starting";
   const isAgentDelivering = agentStatus === "connected" || deliveryStatus === "connected";
   const isAgentResuming = agentStatus === "resuming";
-  const stuckThresholdMs = isAgentResuming ? 120_000 : isSessionStarting || isAgentStarting ? 60_000 : isSessionReady ? 30_000 : 15_000;
+  // Alive-but-parked (dormant/waiting/done): the pane heartbeats and the daemon
+  // delivers on its next pass. These — and "connected", which means the daemon
+  // has CLAIMED the message and is mid-delivery — get the same 60s budget as a
+  // cold start. The old 15-30s threshold fired the stuck banner (and its
+  // auto-resume) while a delivery was already in flight, which is exactly what
+  // made slow deliveries look like lost messages.
+  const isAgentAliveIdle = isAliveIdleStatus(agentStatus as LiveAgentStatus | undefined);
+  const stuckThresholdMs = isAgentResuming ? 120_000 : isSessionStarting || isAgentStarting || isAgentDelivering || isAgentAliveIdle ? 60_000 : isSessionReady ? 30_000 : 15_000;
 
   const isExistingMessageDead = existingPending?.status === "failed" || existingPending?.status === "undeliverable";
 
@@ -10120,6 +10142,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (!showStuckBanner || !sessionId || isResuming || autoResumeTriggeredRef.current) return;
     // Agent already processing, or the message already reached tmux — nothing to resume.
     if (isAgentActive || messageReachedSession) return;
+    // The daemon is already on it: booting the session ("starting"/"resuming") or
+    // holding the claimed message mid-delivery ("connected"). Firing a resume here
+    // interrupts that delivery (resume clears the conversation's delivery state and
+    // re-pends its messages) and made slow deliveries slower. When the daemon
+    // genuinely stalls, the status goes stale/idle and this effect re-runs then.
+    if (isAgentStarting || isAgentDelivering) return;
     // Confirmed-undeliverable is the restart effect's job, not a gentle resume's.
     if (messageStatus?.status === "undeliverable") return;
     // User cancelled this message — don't fight the cancellation by resuming.
@@ -10127,7 +10155,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (!existingPending && !pendingMessageId) return;
     autoResumeTriggeredRef.current = true;
     handleForceResume({ auto: true });
-  }, [showStuckBanner, sessionId, isResuming, isAgentActive, messageReachedSession, messageStatus?.status, existingPending, pendingMessageId, handleForceResume]);
+  }, [showStuckBanner, sessionId, isResuming, isAgentActive, isAgentStarting, isAgentDelivering, messageReachedSession, messageStatus?.status, existingPending, pendingMessageId, handleForceResume]);
 
   // The one allowed automatic kill+restart. Trigger is a CONFIRMED delivery failure, never
   // idleness: the daemon marks a message "undeliverable" only after ~10 failed injects over
@@ -14890,6 +14918,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // kept stable across recomputes with identical content (the common case: a
   // message sync that added no browser rows), so the CastBrowserRowContext
   // consumers — every cast row — don't re-render on unrelated syncs.
+  // Where relative file mentions in this conversation resolve (FilePathLink):
+  // the session's working directory, and the home it implies for `~/…`.
+  const filePathBase = conversation?.project_path || conversation?.git_root || undefined;
+  const filePathCtx = useMemo(() => ({ base: filePathBase, home: inferHomeDir([filePathBase]) }), [filePathBase]);
   const browserRowMapRef = useRef<Record<string, BrowserRowState>>({});
   const browserRowMap = useMemo(() => {
     const rows: BrowserRowInput[] = [];
@@ -15432,6 +15464,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   return (
     <HighlightContext.Provider value={highlightQuery}>
+    <FilePathContext.Provider value={filePathCtx}>
     <CastBrowserRowContext.Provider value={browserRowMap}>
     <ChatWakeContext.Provider value={chatWakeMap}>
     <ImageGalleryProvider>
@@ -15490,13 +15523,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             {conversation && <AnchorHeaderPill conversationId={conversation._id.toString()} />}
 
             {isSessionDisconnected && (managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || managedSession?.agent_status === "connected") ? (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30">
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan animate-pulse" />
                 <span className="hidden sm:inline">{managedSession?.agent_status === "starting" ? "Starting" : managedSession?.agent_status === "resuming" ? "Resuming" : "Delivering"}</span>
                 <span className="sm:hidden">{managedSession?.agent_status === "starting" ? "Start" : managedSession?.agent_status === "resuming" ? "Rsum" : "Dlvr"}</span>
               </span>
             ) : isSessionDisconnected ? (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-text-dim/5 text-sol-text-dim/50 border border-sol-text-dim/10">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-text-dim/5 text-sol-text-dim/50 border border-sol-text-dim/10">
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/30" />
                 <span className="hidden sm:inline">Disconnected</span>
                 <span className="sm:hidden">Disc</span>
@@ -15504,7 +15537,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             ) : null}
 
             {!isSessionDisconnected && (managedSession?.agent_status === "working" || managedSession?.agent_status === "thinking" || managedSession?.agent_status === "compacting" || managedSession?.agent_status === "waiting" || managedSession?.agent_status === "permission_blocked" || managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || (!managedSession?.agent_status && isConversationLive)) && (
-              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 ${
+              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 ${
                 managedSession?.agent_status === "thinking" ? "bg-sol-violet/10 text-sol-violet border border-sol-violet/30" :
                 managedSession?.agent_status === "compacting" ? "bg-amber-500/10 text-amber-400 border border-amber-500/30" :
                 managedSession?.agent_status === "waiting" ? "bg-sol-blue/10 text-sol-blue border border-sol-blue/30" :
@@ -15576,7 +15609,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               <span data-simple-hide className="cq-header-collapse contents">
                 <Link
                   href={`/workflows/runs/${(conversation as any).workflow_run_id}`}
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors max-w-[180px]"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors max-w-[180px]"
                   title={`Workflow ${(conversation as any).workflow_run_status}${(conversation as any).workflow_run_name ? `: ${(conversation as any).workflow_run_name}` : ""} — open the live run`}
                 >
                   <span className="w-1 h-1 rounded-full bg-sol-cyan animate-pulse motion-reduce:animate-none" />
@@ -15609,7 +15642,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       e.preventDefault();
                       navigateToSession(parentLinkId);
                     }}
-                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
                     title="View parent conversation"
                   >
                     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -15631,7 +15664,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     <button
                       ref={treeChipRef}
                       onClick={toggleMap}
-                      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border transition-colors ${
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] border transition-colors ${
                         treePopoverOpen
                           ? "bg-sol-cyan/20 text-sol-cyan border-sol-cyan/40"
                           : "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30 hover:bg-sol-cyan/20"
@@ -15649,7 +15682,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 {conversation.git_branch && (
                   <span
                     data-simple-hide
-                    className="cq-header-collapse hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/5 text-emerald-400/80 border border-emerald-500/20 max-w-[150px] cursor-default"
+                    className="cq-header-collapse hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/5 text-emerald-400/80 border border-emerald-500/20 max-w-[150px] cursor-default"
                     title={conversation.git_branch}
                     onClick={() => {
                       if (conversation.git_remote_url) {
@@ -15668,13 +15701,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </span>
                 )}
 
+                {/* Simple view keeps the assignment pill but drops the names —
+                    device icon + dot + avatar still say where it runs and whose
+                    it is; the popover carries the detail. */}
                 {isOwner && (
-                  <span data-simple-hide className="contents">
-                    <AssignmentBadge
-                      conversationId={conversation._id}
-                      ownerDeviceId={(conversation as any).owner_device_id}
-                    />
-                  </span>
+                  <AssignmentBadge
+                    conversationId={conversation._id}
+                    ownerDeviceId={(conversation as any).owner_device_id}
+                    compact={simpleViewPref}
+                  />
                 )}
 
                 {!isOwner && conversation.user && (
@@ -15693,14 +15728,25 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </span>
                 )}
 
-                {headerExtra}
-
                 {/* Huddle about this session: a live chip when occupied, a
                     quiet start affordance otherwise (hidden when calling is
                     unconfigured — SessionHuddleButton gates itself). */}
                 {conversation._id && !guest && (
                   <SessionHuddleButton conversationId={String(conversation._id)} />
                 )}
+
+                {/* Kept in simple view (dimmed, copy sub-button hidden inside
+                    the pill): the live tmux badge is how you reach the
+                    terminal split, which simple view users still want. */}
+                <span data-simple-dim className="contents [.simple-view_&]:inline-flex [.simple-view_&]:items-center">
+                  <TmuxAttachPill tmuxSession={managedSession?.tmux_session} isLive={isSessionLive} conversationKey={conversation?._id.toString()} />
+                </span>
+
+                {sessionGallerySrcs.length > 0 && <SessionGalleryButton srcs={sessionGallerySrcs} />}
+
+                {/* Hairline between the identity/status pills and the plain
+                    icon actions — the two families read as one soup without it. */}
+                <span aria-hidden className="w-px h-3.5 bg-sol-border/60 mx-0.5 flex-shrink-0" />
 
                 {(highlightQuery || isLocalSearchOpen) && (
                   <div className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-amber-200/50 dark:bg-amber-800/30 text-amber-800 dark:text-amber-200">
@@ -15764,8 +15810,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </div>
                 )}
 
-                {sessionGallerySrcs.length > 0 && <SessionGalleryButton srcs={sessionGallerySrcs} />}
-
                 <ShortcutTooltip label="Search in conversation" side="bottom">
                   <button
                     onClick={() => {
@@ -15810,12 +15854,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </button>
                 </ShortcutTooltip>
 
-                {/* Kept in simple view (dimmed, copy sub-button hidden inside
-                    the pill): the live tmux badge is how you reach the
-                    terminal split, which simple view users still want. */}
-                <span data-simple-dim className="contents [.simple-view_&]:inline-flex [.simple-view_&]:items-center">
-                  <TmuxAttachPill tmuxSession={managedSession?.tmux_session} isLive={isSessionLive} conversationKey={conversation?._id.toString()} />
-                </span>
+                {headerExtra}
 
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -16679,6 +16718,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     </ImageGalleryProvider>
     </ChatWakeContext.Provider>
     </CastBrowserRowContext.Provider>
+    </FilePathContext.Provider>
     </HighlightContext.Provider>
   );
 });

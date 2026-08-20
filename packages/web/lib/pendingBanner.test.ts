@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type LiveAgentStatus } from "./pendingBanner";
+import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "./pendingBanner";
 
 const opts = (o: Partial<{ retryEligible: boolean; restartInFlight: boolean; idleGraceElapsed: boolean; bootGraceElapsed: boolean; messageReachedSession: boolean }> = {}) => ({
   retryEligible: true,
@@ -33,6 +33,20 @@ describe("isBootingAgentStatus", () => {
     for (const s of ["working", "thinking", "idle", undefined] as (LiveAgentStatus | undefined)[]) {
       expect(isBootingAgentStatus(s)).toBe(false);
     }
+  });
+});
+
+describe("isAliveIdleStatus", () => {
+  test("dormant / waiting / done prove a live, parked pane", () => {
+    for (const s of ["dormant", "waiting", "done"] as LiveAgentStatus[]) {
+      expect(isAliveIdleStatus(s)).toBe(true);
+      expect(isActiveAgentStatus(s)).toBe(false);
+      expect(isBootingAgentStatus(s)).toBe(false);
+    }
+  });
+  test("idle / undefined are NOT alive-idle (no liveness verdict behind them)", () => {
+    expect(isAliveIdleStatus("idle")).toBe(false);
+    expect(isAliveIdleStatus(undefined)).toBe(false);
   });
 });
 
@@ -81,6 +95,19 @@ describe("pendingBannerState", () => {
   test("a session still not processing past the generous boot budget → escalate to stuck", () => {
     for (const s of ["starting", "resuming", "connected"] as LiveAgentStatus[]) {
       expect(pendingBannerState(s, opts({ bootGraceElapsed: true }))).toBe("stuck");
+    }
+  });
+
+  test("an alive-but-parked session (dormant/waiting/done) reassures on the boot budget, never the 8s idle grace", () => {
+    // 2026-08-20: a message sent to a dormant-but-live session fell through to
+    // the idle branch, went "stuck" ~20s after send, and the web auto-fired a
+    // resume that interrupted the delivery already in flight — the false
+    // "Message hasn't reached the agent" loop. A parked pane heartbeats; the
+    // daemon delivers on its next pass; only the generous budget may escalate.
+    for (const s of ["dormant", "waiting", "done"] as LiveAgentStatus[]) {
+      expect(pendingBannerState(s, opts({ bootGraceElapsed: false }))).toBe("queued");
+      expect(pendingBannerState(s, opts({ bootGraceElapsed: true }))).toBe("stuck");
+      expect(pendingBannerState(s, opts({ messageReachedSession: true }))).toBe("none");
     }
   });
 

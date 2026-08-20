@@ -10,6 +10,8 @@ import {
   canAccessPullRequest,
 } from "./lib/access";
 import { requireUser } from "./lib/auth";
+import { commentAnchorKey, commentThreadRootKey } from "@codecast/shared/comments";
+import { touchThread } from "./threadReads";
 import {
   echoedCommandIdsForView,
   readLocalViewRevision,
@@ -64,10 +66,56 @@ export function isInCommentThread(
   return !comment.message_id && !comment.file_path;
 }
 
-function commentThreadKey(c: { message_id?: unknown; file_path?: string; line_number?: number }): string {
-  if (c.message_id) return `msg:${c.message_id}`;
-  if (c.file_path) return `file:${c.file_path}:${c.line_number ?? ""}`;
-  return "global";
+/** Every comment of one thread in one conversation, oldest first. A message
+ *  anchor reads its own index; the other anchors filter the conversation. */
+export async function commentsForAnchor(
+  ctx: CommentReadCtx,
+  conversationId: Id<"conversations">,
+  anchor: CommentThreadAnchor,
+): Promise<Doc<"comments">[]> {
+  const rows = anchor.message_id
+    ? await ctx.db
+      .query("comments")
+      .withIndex("by_message_id", (q) => q.eq("message_id", anchor.message_id as Id<"messages">))
+      .collect()
+    : await ctx.db
+      .query("comments")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversationId))
+      .collect();
+  return rows
+    .filter((c) => String(c.conversation_id) === String(conversationId) && isInCommentThread(c, anchor))
+    .sort((a, b) => a.created_at - b.created_at || String(a._id).localeCompare(String(b._id)));
+}
+
+// A landed comment files its thread in the Threads inbox of everyone in it:
+// prior authors of the thread, the conversation's owner, and anyone named.
+// The writer's own copy reads as read; an agent answer has no writer, so the
+// asker sees it unread. Shared by the create path and the agent mirror.
+async function touchCommentThread(
+  ctx: MutationCtx,
+  conversation: Doc<"conversations">,
+  anchor: CommentThreadAnchor,
+  opts: { actorId?: Id<"users">; extraParticipants?: Id<"users">[]; activityAt: number },
+): Promise<void> {
+  const thread = await commentsForAnchor(ctx, conversation._id, anchor);
+  await touchThread(ctx, {
+    kind: "comment",
+    rootKey: commentThreadRootKey(String(conversation._id), anchor),
+    teamId: conversation.team_id,
+    refs: {
+      conversation_id: conversation._id,
+      message_id: anchor.message_id as Id<"messages"> | undefined,
+      file_path: anchor.file_path,
+      line_number: anchor.line_number,
+    },
+    participants: [
+      ...thread.map((c) => c.user_id),
+      conversation.user_id,
+      ...(opts.extraParticipants ?? []),
+    ],
+    actorId: opts.actorId,
+    activityAt: opts.activityAt,
+  });
 }
 
 // How many threads still have an unresolved comment. Resolution stamps every
@@ -78,7 +126,7 @@ export function countOpenCommentThreads(
 ): number {
   const open = new Set<string>();
   for (const c of comments) {
-    if (!c.resolved_at) open.add(commentThreadKey(c));
+    if (!c.resolved_at) open.add(commentAnchorKey(c));
   }
   return open.size;
 }
@@ -398,6 +446,7 @@ async function executeCreateComment(
     }
   }
 
+  const createdAt = Date.now();
   const transition = await runCommentViewTransition(
     ctx,
     validated.conversation,
@@ -408,7 +457,7 @@ async function executeCreateComment(
       user_id: userId,
       content: args.content,
       parent_comment_id: args.parent_comment_id,
-      created_at: Date.now(),
+      created_at: createdAt,
       pr_id: args.pr_id,
       file_path: args.file_path,
       line_number: args.line_number,
@@ -429,6 +478,7 @@ async function executeCreateComment(
   });
 
   const mentions = Array.from(args.content.matchAll(/@(\w+)/g)).map((match) => match[1]);
+  const mentionedIds: Id<"users">[] = [];
   if (validated.conversation.team_id && mentions.length > 0) {
     const memberships = await ctx.db
       .query("team_memberships")
@@ -443,6 +493,7 @@ async function executeCreateComment(
       const mentionedUser = validMembers.find((user) =>
         user.github_username === mention || user.name === mention);
       if (mentionedUser && String(mentionedUser._id) !== String(userId)) {
+        mentionedIds.push(mentionedUser._id);
         await ctx.runMutation(internal.notificationRouter.ensureSubscribed, {
           user_id: mentionedUser._id,
           entity_type: "conversation",
@@ -538,6 +589,11 @@ async function executeCreateComment(
   }
 
   await refreshCommentSignal(ctx, args.conversation_id);
+  await touchCommentThread(ctx, validated.conversation, args, {
+    actorId: userId,
+    extraParticipants: mentionedIds,
+    activityAt: createdAt,
+  });
   return { ok: true, commentId, coverageTarget: transition.coverageTarget };
 }
 
@@ -1322,8 +1378,16 @@ export const mirrorAgentReply = internalMutation({
 
     const content = reply.content || "";
     if (comment.content === content && comment.agent_status === "done") return;
-    await patchCommentWithRevision(ctx, comment, { content, agent_status: "done" });
+    // The answer lands NOW, not when the placeholder was dropped: its stamp is
+    // the row's final position, and the thread's activity mark has to match
+    // what readers see (the rule chat applies to a listening row).
+    const landingAt = Date.now();
+    await patchCommentWithRevision(ctx, comment, { content, agent_status: "done", created_at: landingAt });
     await refreshCommentSignal(ctx, comment.conversation_id);
+    const conversation = await ctx.db.get(comment.conversation_id);
+    if (conversation) {
+      await touchCommentThread(ctx, conversation, comment, { activityAt: landingAt });
+    }
   },
 });
 

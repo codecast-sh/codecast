@@ -17,6 +17,7 @@ export function CommentThread({
   canWrite,
   currentUserId,
   composerAutoFocus,
+  composerClassName,
   emptyHint,
   collapsible,
   onAdd,
@@ -34,6 +35,8 @@ export function CommentThread({
   canWrite: boolean;
   currentUserId?: string;
   composerAutoFocus?: boolean;
+  /** Frame class for the composer — see CommentComposer's `className`. */
+  composerClassName?: string;
   emptyHint?: string;
   collapsible?: boolean;
   onAdd: (input: { content: string; messageId?: string; parentCommentId?: string }) => void | Promise<void>;
@@ -97,6 +100,7 @@ export function CommentThread({
           onPingAgent={onAskAgent && !agentBusy ? () => onAskAgent(thread.messageId) : undefined}
           agentType={agentType}
           autoFocus={composerAutoFocus}
+          className={composerClassName}
           placeholder={variant === "anchored" ? "Reply…" : "Comment on this conversation…"}
           onSubmit={(content) =>
             onAdd({ content, messageId: thread.messageId, parentCommentId: replyTo?._id })

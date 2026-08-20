@@ -12,7 +12,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { acquireStartLock, probeLiveness, readState, writeState, type InstanceState } from "./instance.js";
+import { acquireStartLock, probeLiveness, readState, writeState, type InstanceState, chromeLaunchArgs} from "./instance.js";
 import { browserHome } from "./profile.js";
 
 const cleanups: Array<() => void> = [];
@@ -221,5 +221,20 @@ describe("writeState", () => {
     // No temp file left behind by the atomic rename.
     const leftovers = fs.readdirSync(browserHome()).filter((f) => f.includes(".tmp-"));
     expect(leftovers).toEqual([]);
+  });
+});
+
+describe("chromeLaunchArgs", () => {
+  const base = { userDataDir: "/tmp/x", port: 9222 };
+
+  test("fake media adds both Chrome flags: fake devices AND auto-accepted prompt", () => {
+    const args = chromeLaunchArgs({ ...base, fakeMedia: true });
+    expect(args).toContain("--use-fake-device-for-media-stream");
+    expect(args).toContain("--use-fake-ui-for-media-stream");
+  });
+
+  test("a normal launch carries neither", () => {
+    const args = chromeLaunchArgs(base);
+    expect(args.some((a) => a.includes("fake"))).toBe(false);
   });
 });

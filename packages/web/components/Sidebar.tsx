@@ -16,7 +16,8 @@ import { useInboxStore } from "../store/inboxStore";
 import { useCollectionRows } from "../hooks/useCollectionRows";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { useDecisionQueue } from "../hooks/useDecisionQueue";
-import { useChatUnread, useChatRail, useChatMembers, useOpenDm } from "../hooks/useChatSync";
+import { useChatUnread, useChatRail, useChatMembers, useOpenDm, supersededChannelId } from "../hooks/useChatSync";
+import { useThreadUnread } from "../hooks/useThreadsSync";
 import { ChannelContextMenu } from "./chat/ChannelMenu";
 import { useChannelMenu } from "../hooks/useChannelMenu";
 import { channelDisplayName, chatViewRoomKey, dmCounterpart, memberName, suggestedDmMembers } from "../lib/chatViews";
@@ -24,7 +25,7 @@ import { OccupancyChip } from "./calls/OccupancyChip";
 import { memberAvatarUrl } from "../lib/liveEntities";
 import { dmOtherIds } from "@codecast/shared/chat";
 import { CommentAvatar } from "./comments/CommentAvatar";
-import { readPins, isPinned, togglePin, type SidebarPin } from "../lib/sidebarPins";
+import { readPins, isPinned, isThreadsPin, togglePin, type SidebarPin } from "../lib/sidebarPins";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useSyncProjects } from "../hooks/useSyncProjects";
 import { useSyncSavedViews } from "../hooks/useSyncSavedViews";
@@ -283,6 +284,52 @@ const QuestionsNavRow = memo(function QuestionsNavRow({
   );
 });
 
+// The Threads inbox's row: every conversation you are in, across chat, session
+// comments and tasks. Always rendered — it is not chat UI, so no feature gate.
+// Isolated like the rows around it: the count moves whenever anyone replies
+// anywhere, and that must re-render one row, not the rail. The count is CYAN
+// (replies in your threads are addressed to you, but nobody typed your name);
+// the narrow rail keeps only a dot.
+const ThreadsNavRow = memo(function ThreadsNavRow({
+  isActive,
+  isNarrow,
+  onMobileClose,
+}: {
+  isActive: boolean;
+  isNarrow: boolean;
+  onMobileClose?: () => void;
+}) {
+  const unread = useThreadUnread();
+  return (
+    <Link
+      href="/threads"
+      onClick={onMobileClose}
+      className={`relative w-full flex items-center ${isNarrow ? "justify-center" : "gap-3"} px-4 py-2.5 border-l-2 transition-colors motion-reduce:transition-none text-left ${
+        isActive
+          ? "bg-sol-bg-highlight text-sol-text border-sol-cyan"
+          : "text-sol-text-muted border-transparent hover:text-sol-text hover:bg-sol-bg-highlight/60"
+      }`}
+      title="Threads — every conversation you're in"
+    >
+      <MessagesSquare className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />
+      {isNarrow ? (
+        unread > 0 && !isActive ? (
+          <span className="absolute top-2 right-3 w-1.5 h-1.5 rounded-full bg-sol-cyan" aria-label={`${unread} threads with new replies`} />
+        ) : null
+      ) : (
+        <>
+          <span>Threads</span>
+          {unread > 0 && (
+            <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-sol-cyan text-sol-bg rounded-full">
+              {unread > 99 ? "99+" : unread}
+            </span>
+          )}
+        </>
+      )}
+    </Link>
+  );
+});
+
 // Chat's sidebar row. Isolated for the same reason NeedsInputCountBadge is: the
 // unread numbers move whenever anyone on the team says anything, and that must
 // re-render one row rather than the whole rail.
@@ -290,6 +337,32 @@ const QuestionsNavRow = memo(function QuestionsNavRow({
 // The rule the rail already follows, applied one level up: unread is WEIGHT plus
 // a dot, and only a mention gets a number. A count of ordinary chatter teaches
 // people to ignore counts, and then the one that matters is invisible inside it.
+/** The live signals a chat row wears wherever it lives — the Chat sublist and
+ *  the pinned rail render this same component, so the rules can't drift: a
+ *  huddle you can walk into first, then a mention count, then the unread dot. */
+function ChannelSignals({
+  channel,
+  viewer,
+  teamMembers,
+}: {
+  channel: import("../store/chatSlice").ChatRailChannel;
+  viewer: string;
+  teamMembers: import("../lib/chatViews").ChatMember[];
+}) {
+  return (
+    <>
+      <OccupancyChip roomKey={chatViewRoomKey(channel, viewer, teamMembers)} className="flex-shrink-0" />
+      {(channel.mentionCount ?? 0) > 0 ? (
+        <span className="min-w-[16px] h-[15px] px-1 flex items-center justify-center text-[9.5px] font-bold bg-sol-orange text-sol-bg rounded-full flex-shrink-0">
+          {(channel.mentionCount ?? 0) > 99 ? "99+" : channel.mentionCount}
+        </span>
+      ) : (channel.unreadCount ?? 0) > 0 ? (
+        <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan flex-shrink-0" aria-label="Unread" />
+      ) : null}
+    </>
+  );
+}
+
 const ChatNavRow = memo(function ChatNavRow({
   isActive,
   isNarrow,
@@ -305,7 +378,7 @@ const ChatNavRow = memo(function ChatNavRow({
   onToggle: () => void;
   onMobileClose?: () => void;
 }) {
-  const { channels, mentions, threads } = useChatUnread();
+  const { channels, mentions } = useChatUnread();
   const rail = useChatRail();
   const router = useRouter();
   // Signature-gated roster (useChatMembers), not the raw array: this row is
@@ -320,40 +393,25 @@ const ChatNavRow = memo(function ChatNavRow({
   // would change, so a pinned channel offers "Unpin" right where it was pinned.
   const pinnedKeys = useInboxStore((s) => readPins(s).map((x) => `${x.kind}:${x.id}`).join(","));
   const isChannelPinned = (id: string) => pinnedKeys.split(",").includes(`channel:${id}`);
-
-  // Slack's pinned entry above the rooms: the Threads inbox — a view, not a
-  // room. Its count is cyan (replies in your threads are addressed to you,
-  // but nobody typed your name). It pins like a channel — same kind, the
-  // literal id the route uses — so the one pin mechanism covers it.
-  const threadsItem = {
-    id: "threads",
-    name: "Threads",
-    icon: <MessagesSquare className="w-3 h-3 flex-shrink-0 opacity-60" />,
-    active: pathname === "/chat/threads",
-    trailing:
-      threads > 0 ? (
-        <span className="min-w-[16px] h-[15px] px-1 flex items-center justify-center text-[9.5px] font-bold bg-sol-cyan text-sol-bg rounded-full flex-shrink-0">
-          {threads > 99 ? "99+" : threads}
-        </span>
-      ) : null,
-    actions: [
-      {
-        key: "pin",
-        title: isChannelPinned("threads") ? "Unpin from top" : "Pin to top of sidebar",
-        icon: isChannelPinned("threads") ? <PinOff className="w-3 h-3" /> : <Pin className="w-3 h-3" />,
-        onClick: () => togglePin("channel", "threads", "Threads"),
-      },
-    ],
-    onSelect: () => {
-      router.push("/chat/threads");
-      onMobileClose?.();
-    },
-  };
+  // Pin ids resolved to LIVE channel ids: a channel pinned while it was an
+  // optimistic stub keeps the stub id in the pin, and the rail rows carry the
+  // server id — the client_id forwarding (same as useSupersededChannelId)
+  // reconnects them so the pinned row still dedupes out of this sublist.
+  const pinnedLiveIds = useInboxStore((s) =>
+    readPins(s)
+      .filter((p) => p.kind === "channel" && !isThreadsPin(p))
+      .map((p) => supersededChannelId(s.chatChannels as any, p.id) ?? p.id)
+      .join(","),
+  );
+  const pinnedLiveIdSet = pinnedLiveIds.split(",");
 
   // Channels first, then direct messages — each half keeps its own activity
   // order. The icon carries the distinction: a hash is a room, a face is a
-  // person, so the rail needs no group headers to read at a glance.
-  const ordered = [...rail.filter((c) => c.kind !== "dm"), ...rail.filter((c) => c.kind === "dm")];
+  // person, so the rail needs no group headers to read at a glance. A pinned
+  // channel already has a row in the Pinned rail up top; listing it here too
+  // would duplicate it, so the sublist skips it.
+  const ordered = [...rail.filter((c) => c.kind !== "dm"), ...rail.filter((c) => c.kind === "dm")]
+    .filter((c) => !pinnedLiveIdSet.includes(c.id));
   const items = ordered.map((c) => {
     const counterpart = dmCounterpart(c, teamMembers);
     const dmIcon = counterpart ? (
@@ -375,23 +433,7 @@ const ChatNavRow = memo(function ChatNavRow({
       : c.isPrivate ? <Lock className="w-3 h-3 flex-shrink-0 opacity-60" />
       : <Hash className="w-3 h-3 flex-shrink-0 opacity-60" />,
     active: pathname === `/chat/${c.id}`,
-    // The rail's own signal rules, unchanged: only a mention gets a number;
-    // plain unread is a dot; a muted channel keeps only the dot. A live
-    // huddle in the room outranks both — a room you can walk into is the
-    // one thing worth seeing from every page (OccupancyChip renders nothing
-    // while the room is empty, so quiet rooms cost nothing).
-    trailing: (
-      <>
-        <OccupancyChip roomKey={chatViewRoomKey(c, String(viewer), teamMembers)} className="flex-shrink-0" />
-        {(c.mentionCount ?? 0) > 0 ? (
-          <span className="min-w-[16px] h-[15px] px-1 flex items-center justify-center text-[9.5px] font-bold bg-sol-orange text-sol-bg rounded-full flex-shrink-0">
-            {(c.mentionCount ?? 0) > 99 ? "99+" : c.mentionCount}
-          </span>
-        ) : (c.unreadCount ?? 0) > 0 ? (
-          <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan flex-shrink-0" aria-label="Unread" />
-        ) : null}
-      </>
-    ),
+    trailing: <ChannelSignals channel={c} viewer={String(viewer)} teamMembers={teamMembers} />,
     actions: [
       {
         key: "pin",
@@ -464,7 +506,7 @@ const ChatNavRow = memo(function ChatNavRow({
           ) : null
         }
         icon={<MessageSquare className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-        items={[threadsItem, ...items, ...suggestedItems]}
+        items={[...items, ...suggestedItems]}
         expanded={expanded}
         onToggle={onToggle}
       />
@@ -565,16 +607,20 @@ function PinnedRail({
 }) {
   const pathname = usePathname();
   const pins = useInboxStore((s) => readPins(s));
-  const { threads: threadsUnread } = useChatUnread();
+  const threadsUnread = useThreadUnread();
+  // The counted rail: a pinned channel is that channel's ONLY row (the Chat
+  // sublist skips pinned ids), so its unread signals must ride the pin.
+  const chatRail = useChatRail();
   const projects = useInboxStore((s) => s.projects);
   const savedViews = useInboxStore((s) => (s as any).savedViews);
   const chatChannels = useInboxStore((s) => s.chatChannels);
   const teamMembers = useInboxStore((s) => s.teamMembers);
   const viewer = useInboxStore((s) => (s as any).currentUser?._id ?? "");
   // A pinned channel is chat UI: gone with the feature (the pin itself is
-  // kept, so turning chat back on restores it).
+  // kept, so turning chat back on restores it). The Threads pin is a VIEW even
+  // in its legacy channel-kind form (isThreadsPin), so it survives chat off.
   const chatOn = useTeamFeature("chat");
-  const visiblePins = chatOn ? pins : pins.filter((p) => p.kind !== "channel");
+  const visiblePins = chatOn ? pins : pins.filter((p) => isThreadsPin(p) || p.kind !== "channel");
   if (visiblePins.length === 0) return null;
 
   // The icon already names the kind (a hash IS the channel marker), so the
@@ -589,6 +635,23 @@ function PinnedRail({
         onClick: () => togglePin(pin.kind, pin.id, pin.label),
       }],
     };
+    // The Threads page, whichever kind the pin was stored under: its own
+    // icon, and the same cyan count the rail's Threads row wears.
+    if (isThreadsPin(pin)) {
+      return {
+        ...base,
+        name: "Threads",
+        icon: <MessagesSquare className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
+        trailing:
+          threadsUnread > 0 ? (
+            <span className="min-w-[16px] h-[15px] px-1 flex items-center justify-center text-[9.5px] font-bold bg-sol-cyan text-sol-bg rounded-full flex-shrink-0">
+              {threadsUnread > 99 ? "99+" : threadsUnread}
+            </span>
+          ) : null,
+        active: pathname === "/threads",
+        onSelect: () => onNavigate("/threads"),
+      };
+    }
     if (pin.kind === "project") {
       const p = (projects as any)?.[pin.id];
       return {
@@ -600,27 +663,16 @@ function PinnedRail({
       };
     }
     if (pin.kind === "channel") {
-      // The Threads inbox pins under the channel kind (its id IS the route
-      // segment), but it is a view: its own icon, and the same cyan count the
-      // chat section's Threads row wears.
-      if (pin.id === "threads") {
-        return {
-          ...base,
-          name: "Threads",
-          icon: <MessagesSquare className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
-          trailing:
-            threadsUnread > 0 ? (
-              <span className="min-w-[16px] h-[15px] px-1 flex items-center justify-center text-[9.5px] font-bold bg-sol-cyan text-sol-bg rounded-full flex-shrink-0">
-                {threadsUnread > 99 ? "99+" : threadsUnread}
-              </span>
-            ) : null,
-          active: pathname === "/chat/threads",
-          onSelect: () => onNavigate("/chat/threads"),
-        };
-      }
-      const c = (chatChannels as any)?.[pin.id];
-      const isDm = c?.kind === "dm";
-      const dmName = isDm
+      // A pin taken while the channel was an optimistic stub holds the stub id;
+      // the server row keeps it as client_id, which forwards to the real id.
+      const id = supersededChannelId(chatChannels as any, pin.id) ?? pin.id;
+      // The rail entry carries what the Chat sublist row would have shown —
+      // name, mute state, unread counts — so the pin wears the same signals.
+      const live = chatRail.find((r) => r.id === id);
+      const c = (chatChannels as any)?.[id];
+      const isDm = (live?.kind ?? c?.kind) === "dm";
+      const counterpart = live && isDm ? dmCounterpart(live, teamMembers) : undefined;
+      const dmName = isDm && !live
         ? channelDisplayName(
             { name: "", kind: "dm", dmMemberIds: dmOtherIds(c?.dm_key, viewer) },
             teamMembers,
@@ -628,12 +680,30 @@ function PinnedRail({
         : undefined;
       return {
         ...base,
-        name: dmName ?? (c?.name || pin.label.replace(/^#/, "")),
-        icon: isDm
+        name: live
+          ? channelDisplayName(live, teamMembers)
+          : dmName ?? (c?.name || pin.label.replace(/^#/, "")),
+        icon: live?.muted
+          ? <BellOff className="w-3 h-3 flex-shrink-0 text-sol-text-dim" aria-label="Muted" />
+          : counterpart
+          ? <CommentAvatar
+              name={memberName(counterpart)}
+              image={counterpart.image || counterpart.github_avatar_url}
+              size={14}
+              letters={1}
+            />
+          : isDm
           ? <Users className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />
+          : live?.isPrivate
+          ? <Lock className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />
           : <Hash className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
-        active: pathname === `/chat/${pin.id}`,
-        onSelect: () => onNavigate(`/chat/${pin.id}`),
+        trailing: live
+          ? <ChannelSignals channel={live} viewer={String(viewer)} teamMembers={teamMembers} />
+          : null,
+        // The URL can hold either id — the stub from an old link, the real one
+        // from a fresh navigation — and both mean this row.
+        active: pathname === `/chat/${id}` || pathname === `/chat/${pin.id}`,
+        onSelect: () => onNavigate(`/chat/${id}`),
       };
     }
     const rows: any[] = Array.isArray(savedViews) ? savedViews : Object.values(savedViews ?? {});
@@ -1037,6 +1107,11 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               </>
             )}
           </button>
+          <ThreadsNavRow
+            isActive={pathname === "/threads"}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+          />
           {activeTeam && (
             <Link
               href="/team/activity"

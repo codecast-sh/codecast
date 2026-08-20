@@ -28,6 +28,13 @@ describe("pathLabel — query strings never leak into labels", () => {
     expect(pathLabel("/inbox")).toBe("Inbox");
     expect(pathLabel("/plans")).toBe("Plans");
   });
+
+  it("labels the Threads page and its pre-move /chat/threads alias alike", () => {
+    expect(pathLabel("/threads")).toBe("Threads");
+    expect(pathLabel("/threads?type=chat")).toBe("Threads");
+    expect(pathLabel("/chat/threads")).toBe("Threads");
+    expect(pathLabel("/chat/threads?m=abc")).toBe("Threads");
+  });
 });
 
 describe("tabTitle — a stamped inbox tab is titled by its session", () => {

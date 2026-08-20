@@ -669,3 +669,55 @@ export const e2eFindPushUsers = internalQuery({
       .map((u: any) => ({ id: u._id, email: u.email, token: u.push_token, voip: !!u.voip_push_token }));
   },
 });
+
+// TEMPORARY: App Review demo-account inspector — user + auth accounts +
+// team memberships (with member counts) so we can verify the reviewer's
+// sign-in will land in a populated workspace.
+export const inspectUserByEmail = internalQuery({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("email", (q: any) => q.eq("email", args.email))
+      .first();
+    if (!user) return { error: "no user" };
+    const accounts = await ctx.db
+      .query("authAccounts")
+      .withIndex("userIdAndProvider", (q: any) => q.eq("userId", user._id))
+      .collect();
+    const memberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
+      .collect();
+    const teams = [] as any[];
+    for (const m of memberships) {
+      const team = await ctx.db.get(m.team_id);
+      const members = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_team_id", (q: any) => q.eq("team_id", m.team_id))
+        .collect();
+      teams.push({
+        team_id: m.team_id,
+        name: (team as any)?.name,
+        role: (m as any).role,
+        visibility: (m as any).visibility,
+        member_count: members.length,
+        member_user_ids: members.map((x: any) => x.user_id),
+      });
+    }
+    const convs = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
+      .collect();
+    return {
+      user_id: user._id,
+      name: user.name,
+      email: user.email,
+      team_id: (user as any).team_id,
+      active_team_id: (user as any).active_team_id,
+      providers: accounts.map((a: any) => a.provider),
+      teams,
+      own_conversations: convs.length,
+    };
+  },
+});

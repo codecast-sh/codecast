@@ -61,8 +61,26 @@ export function encryptTokenWithSecret(token: string, secret: Buffer | string): 
   return ENC_PREFIX + blob;
 }
 
+// scrypt is a deliberately expensive KDF (~50-100ms of blocking CPU per call),
+// and decryptToken sits inside readConfig, which hot daemon paths call in
+// loops. Uncached, every config read re-derived the key and the daemon's event
+// loop froze for seconds under load (46-67% of the 2026-08-20 [LOOP-FREEZE]
+// samples were scryptSync via readConfig). The blob embeds its salt, so the
+// same blob always decrypts to the same plaintext: memoize by blob. Bounded so
+// a stream of distinct blobs (token rotations) can't grow it unbounded.
+const decryptCache = new Map<string, string>();
+const DECRYPT_CACHE_MAX = 32;
+
 export function decryptToken(value: string): string {
-  return decryptTokenWithSecrets(value, machineSecrets());
+  const hit = decryptCache.get(value);
+  if (hit !== undefined) return hit;
+  const plain = decryptTokenWithSecrets(value, machineSecrets());
+  if (decryptCache.size >= DECRYPT_CACHE_MAX) {
+    const oldest = decryptCache.keys().next().value;
+    if (oldest !== undefined) decryptCache.delete(oldest);
+  }
+  decryptCache.set(value, plain);
+  return plain;
 }
 
 /** decryptToken with an explicit secret chain — exported for tests. */

@@ -1,5 +1,6 @@
-import { memo } from "react";
+import { memo, useCallback, useRef, useState } from "react";
 import { X } from "lucide-react";
+import type { ChatAttachment } from "../../store/chatSlice";
 import { ChatMessage } from "./ChatMessage";
 import { ChatMessageList } from "./ChatMessageList";
 import { ChatComposer } from "./ChatComposer";
@@ -24,6 +25,23 @@ import "./chat.css";
 // identity. Keyed off the loaded root, a reply typed while the thread was
 // opening went into the CHANNEL's draft — same key, byte for byte — and was left
 // behind there when the root landed and the composer remounted.
+//
+// The width is the reader's, not the layout's: a drag on the left edge resizes
+// the panel and the choice persists per client (same pattern as the comment
+// rail, components/comments/CommentDock.tsx). The CSS max-width (34%) still
+// caps it, so a wide saved width can never starve the transcript on a small
+// window.
+
+const MIN_W = 300;
+const MAX_W = 720;
+const DEFAULT_W = 384;
+const WIDTH_KEY = "ch-thread-width";
+
+function loadWidth(): number {
+  if (typeof window === "undefined") return DEFAULT_W;
+  const v = Number(window.localStorage.getItem(WIDTH_KEY));
+  return v >= MIN_W && v <= MAX_W ? v : DEFAULT_W;
+}
 
 export const ChatThreadPanel = memo(function ChatThreadPanel({
   channelName,
@@ -62,15 +80,48 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
    *  the link lands nowhere unless the panel scrolls to it. */
   targetMessageId?: string;
   onClose: () => void;
-  onSend: (content: string) => void;
+  onSend: (content: string, attachments?: ChatAttachment[], opts?: { broadcast?: boolean }) => void;
   onReact?: (messageId: string, emoji: string) => void;
   onEdit?: (messageId: string, content: string) => void;
   onDelete?: (messageId: string) => void;
   onRetrySend?: (messageId: string) => void;
   onRetryAgent?: (messageId: string) => void;
 }) {
+  const [width, setWidth] = useState(loadWidth);
+  const dragRef = useRef<{ x: number; w: number } | null>(null);
+
+  const onResizeDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragRef.current = { x: e.clientX, w: width };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    const move = (ev: MouseEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      setWidth(Math.min(MAX_W, Math.max(MIN_W, d.w + (d.x - ev.clientX))));
+    };
+    const up = () => {
+      dragRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      setWidth((w) => {
+        window.localStorage.setItem(WIDTH_KEY, String(w));
+        return w;
+      });
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }, [width]);
+
   return (
-    <aside className="ch-thread" aria-label="Thread">
+    <aside
+      className="ch-thread"
+      aria-label="Thread"
+      style={{ width, flex: `0 0 ${width}px` }}
+    >
+      <div className="ch-thread-resize" onMouseDown={onResizeDown} title="Drag to resize" />
       <div className="ch-thread-head">
         <div>
           <div className="ch-thread-title">Thread</div>
@@ -132,6 +183,7 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
         threadRootId={rootId}
         teamId={teamId}
         placeholder="Reply…"
+        channelName={channelName}
         onSend={onSend}
         compact
       />

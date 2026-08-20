@@ -36,6 +36,9 @@ export interface InstanceState {
   sourceProfile: string | null;
   channel: ChromeChannel;
   startedAt: number;
+  /** Launched with Chrome's fake camera/mic (a test pattern and a tone), so
+   *  getUserMedia works on machines with no devices. Launch-time only. */
+  fakeMedia?: boolean;
   /**
    * Set when the browser runs on another machine, reached through an SSH port
    * forward. Its presence is what turns on credential provisioning: a local
@@ -174,15 +177,16 @@ export interface LaunchOptions {
   channel?: ChromeChannel;
   /** Window size for the headed window; also the headless viewport. */
   windowSize?: { width: number; height: number };
+  /** Fake camera/mic devices, for machines without real ones. Per-origin
+   *  permission is separate: `cast browser grant camera microphone`. */
+  fakeMedia?: boolean;
 }
 
-export async function launchManagedChrome(opts: LaunchOptions): Promise<number> {
-  const channel = opts.channel ?? "chrome";
-  const bin = chromeBinaryFor(channel);
-  fs.mkdirSync(opts.userDataDir, { recursive: true, mode: 0o700 });
-
+/** The Chrome command line for a managed launch. Pure, so the flag set is
+ *  testable without spawning a browser. */
+export function chromeLaunchArgs(opts: LaunchOptions): string[] {
   const size = opts.windowSize ?? { width: 1440, height: 900 };
-  const args = [
+  return [
     `--remote-debugging-port=${opts.port}`,
     "--remote-debugging-address=127.0.0.1",
     `--user-data-dir=${opts.userDataDir}`,
@@ -206,9 +210,21 @@ export async function launchManagedChrome(opts: LaunchOptions): Promise<number> 
     "--disable-backgrounding-occluded-windows",
     "--disable-renderer-backgrounding",
     "--disable-background-timer-throttling",
+    // A moving test pattern as the camera and a tone as the mic — getUserMedia
+    // succeeds without hardware. The permission prompt is still real; the
+    // second flag auto-accepts it browser-wide (fake-media launches are for
+    // agent verification work, never a human's browsing).
+    ...(opts.fakeMedia ? ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] : []),
     ...(opts.headless ? ["--headless=new"] : []),
     "about:blank",
   ];
+}
+
+export async function launchManagedChrome(opts: LaunchOptions): Promise<number> {
+  const channel = opts.channel ?? "chrome";
+  const bin = chromeBinaryFor(channel);
+  fs.mkdirSync(opts.userDataDir, { recursive: true, mode: 0o700 });
+  const args = chromeLaunchArgs(opts);
 
   // On macOS, spawning an app bundle's binary makes the OS activate it, so a
   // launch yanks the screen away from whatever the human is doing. `open -g`

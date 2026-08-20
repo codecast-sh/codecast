@@ -16,7 +16,10 @@ export type LiveAgentStatus =
   | "thinking"
   | "connected"
   | "starting"
-  | "resuming";
+  | "resuming"
+  | "waiting"
+  | "dormant"
+  | "done";
 
 // Agent states that prove the session is alive and processing — a message queued
 // behind any of these will deliver when the turn ends. Mirrors MessageInput's
@@ -34,6 +37,19 @@ export const isActiveAgentStatus = (s?: LiveAgentStatus): boolean =>
 // born-dead / dropped-delivery case that warrants a kill & restart.
 export const isBootingAgentStatus = (s?: LiveAgentStatus): boolean =>
   s === "starting" || s === "resuming" || s === "connected";
+
+// Settle verdicts from the daemon's classifier: the session's pane is alive and
+// heartbeating, just parked between turns ("dormant" = a machine wakes it,
+// "waiting" = open background tasks, "done" = declared delivered). A pending
+// message to such a session is the ORDINARY case — the daemon injects it within
+// seconds — so these must never be read as "idle/gone" and escalated on the
+// short idle grace. They get the same calm "queued" treatment (and the same
+// generous budget) as a booting session. This was the root of the false
+// "Message hasn't reached the agent" alarms: a dormant-but-live session fell
+// through to the idle branch, the web auto-fired a resume ~20s after send, and
+// that resume interrupted the delivery already in flight.
+export const isAliveIdleStatus = (s?: LiveAgentStatus): boolean =>
+  s === "waiting" || s === "dormant" || s === "done";
 
 export type PendingBannerState = "none" | "queued" | "stuck";
 
@@ -69,6 +85,9 @@ export function pendingBannerState(
   // the pending message and flips to "working" once the pane is ready. Only a session
   // still not processing well past a generous boot budget is genuinely stuck.
   if (isBootingAgentStatus(agentStatus)) return opts.bootGraceElapsed ? "stuck" : "queued";
+  // Alive-but-parked (dormant/waiting/done): the pane heartbeats, delivery is a
+  // normal daemon pass away. Reassure, and only alarm past the boot budget.
+  if (isAliveIdleStatus(agentStatus)) return opts.bootGraceElapsed ? "stuck" : "queued";
   return opts.idleGraceElapsed ? "stuck" : "none";
 }
 

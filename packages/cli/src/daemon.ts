@@ -14684,6 +14684,47 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     logDelivery(`Skipping auto-resume for ${sessionId.slice(0, 8)}: prior fatal reason=${priorFatalReason}`);
     return false;
   }
+
+  // Reuse an already-live, identity-verified agent pane: cache it, inject the
+  // pending content, and make sure heartbeat/registration exist. Shared by the
+  // cheap probe below and the full pre-recreate probe further down.
+  const reuseLiveSession = async (live: ResolvedLiveSession, liveAgentType: AgentClientId): Promise<boolean> => {
+    if (!live.tmuxTarget) return false;
+    const bareName = live.tmuxTarget.split(":")[0];
+    logDelivery(`Session ${resumeShortId(sessionId)} already alive in tmux=${live.tmuxTarget} (${live.source}), reusing`);
+    resumeSessionCache.set(sessionId, bareName);
+    if (content) {
+      await injectViaTmux(live.tmuxTarget.includes(":") ? live.tmuxTarget : live.tmuxTarget + ":0.0", content, liveAgentType);
+    }
+    // Ensure heartbeat + sync registration exist (may be missing after daemon restart)
+    if (syncServiceRef && conversationId && !managedHeartbeatSessions.has(sessionId)) {
+      syncServiceRef.registerManagedSession(sessionId, process.pid, bareName, conversationId).catch(logConvexFailure);
+      syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
+      ensureManagedSessionHeartbeat(sessionId);
+    }
+    return true;
+  };
+
+  // FAST PATH: probe for a live pane BEFORE any Convex lookups, JSONL scans or
+  // reconstitution. A resume aimed at an already-alive session (the web's
+  // stuck-message auto-resume routinely fires while a delivery is in flight)
+  // must cost tmux-probe milliseconds, not the full resume preamble — under
+  // daemon load that preamble ran ~60s and pushed delivery past the UI's alarm
+  // budget, turning a delivered message into a false "hasn't reached the agent".
+  // The probe is identity-verified (isTmuxAgentAlive checks the pane's agent
+  // declares THIS session), so reuse is safe without the ownership preamble —
+  // resume commands are runner-addressed, and a verified-local live agent is
+  // this daemon's to feed either way. Only runs with an agent-type hint; the
+  // hintless case falls through to the full probe after type detection.
+  if (agentTypeHint) {
+    try {
+      const fastLive = await resolveLiveTmuxTarget(conversationId, sessionId, agentTypeHint, resumeTmuxName(agentTypeHint, sessionId));
+      if (await reuseLiveSession(fastLive, agentTypeHint)) return true;
+    } catch (err) {
+      logDelivery(`Live-session fast probe failed for ${sessionId.slice(0, 8)}, continuing with full resume: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   let sessionFile = findSessionFile(sessionId);
   const config = readConfig();
   // cursor-agent and opencode each own their session store (SQLite: ~/.cursor,
@@ -14894,21 +14935,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   // an already-live started session from spawning a parallel cc-resume- tmux and splitting
   // delivery across two panes.
   const live = await resolveLiveTmuxTarget(conversationId, sessionId, agentType, tmuxSession);
-  if (live.tmuxTarget) {
-    const bareName = live.tmuxTarget.split(":")[0];
-    logDelivery(`Session ${shortId} already alive in tmux=${live.tmuxTarget} (${live.source}), reusing`);
-    resumeSessionCache.set(sessionId, bareName);
-    if (content) {
-      await injectViaTmux(live.tmuxTarget.includes(":") ? live.tmuxTarget : live.tmuxTarget + ":0.0", content, agentType);
-    }
-    // Ensure heartbeat + sync registration exist (may be missing after daemon restart)
-    if (syncServiceRef && conversationId && !managedHeartbeatSessions.has(sessionId)) {
-      syncServiceRef.registerManagedSession(sessionId, process.pid, bareName, conversationId).catch(logConvexFailure);
-      syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
-      ensureManagedSessionHeartbeat(sessionId);
-    }
-    return true;
-  }
+  if (await reuseLiveSession(live, agentType)) return true;
 
   try {
     await relocateForeignOccupant(tmuxSession, sessionId, agentType);
@@ -20094,6 +20121,21 @@ async function main(): Promise<void> {
                 ]);
                 if (delivered) {
                   logDelivery(`SUCCESS: msg=${msg._id.slice(0, 8)} injected${isCompactionRecovery ? " (compaction recovery)" : ""}`);
+                  // The daemon just put a prompt in front of the agent — report the
+                  // turn start itself instead of waiting for the session's
+                  // UserPromptSubmit hook, which is lossy under load (5s timeout,
+                  // discarded output). A lost hook left the session looking
+                  // dormant/idle for minutes after a successful injection, which is
+                  // what kept the false "message hasn't reached the agent" banner
+                  // up. sendAgentStatus updates lastSentAgentStatus so heartbeats
+                  // carry the new status instead of stomping it; the pane
+                  // reconcile corrects the rare case where the submit didn't take.
+                  const injectedSessionId = buildReverseConversationCache(conversationCache)[msg.conversation_id];
+                  if (injectedSessionId) {
+                    sendAgentStatus(syncService, msg.conversation_id, injectedSessionId, "thinking");
+                  } else {
+                    syncService.updateSessionAgentStatus(msg.conversation_id, "thinking").catch(logConvexFailure);
+                  }
                   // Restamp ts but keep the confirmed flag: markInjectedBestEffort registered the
                   // entry pre-paste and may have already confirmed the status write.
                   injectedMessageTs.set(msg._id, {

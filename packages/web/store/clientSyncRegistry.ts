@@ -261,18 +261,36 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "meta", key: "chatRail" },
     hydration: { phase: "deferred" },
   },
-  // The Threads inbox (chat.listMyThreads' entries): derived snapshot rows keyed
-  // by thread root. Persisted so the page opens on its cached threads.
-  chatThreadInbox: {
-    persistence: { kind: "collection", key: "chatThreadInbox" },
+  // The Threads inbox (threads.listMine): one derived row per thread the
+  // viewer is in, every kind (chat, comment, task), keyed `${kind}:${root_key}`.
+  // Persisted so the page opens on its cached threads; a delta overlay so a
+  // page of entries never prunes the rest.
+  threadInbox: {
+    persistence: { kind: "collection", key: "threadInbox" },
     hydration: { phase: "deferred" },
-    indexes: "_id, channel_id",
+    sync: { isDelta: true },
+    indexes: "_id, kind, team_id, channel_id, conversation_id, task_id",
+    feeds: ["threads.listMine"],
   },
-  // The Threads badge (chat.listChannels' thread_unread): a scalar, live-synced
-  // app-wide with the rail; a stale cached count must not clobber a fresh one.
-  chatThreadUnread: {
-    persistence: { kind: "meta", key: "chatThreadUnread" },
+  // The Threads badge (threads.unreadCount): a scalar, live-synced app-wide
+  // next to the chat rail; a stale cached count must not clobber a fresh one.
+  threadUnread: {
+    persistence: { kind: "meta", key: "threadUnread" },
     hydration: { phase: "deferred", merge: "fill" },
+    sync: { kind: "scalar" },
+    feeds: ["threads.unreadCount"],
+  },
+  // A published page's Threads slice (threads.listMine payload.pages): title,
+  // slug and the newest comments of each page discussion, keyed by artifact
+  // id (the page kind's root_key). A delta overlay so one page of entries
+  // never prunes the rest. Not localFirst: the optimistic reply is a stub row
+  // appended in the action and superseded by client_id when the server's
+  // entity syncs back (see addPageComment).
+  pageThreads: {
+    persistence: { kind: "collection", key: "pageThreads" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    feeds: ["threads.listMine"],
   },
 
   // ── Tier-2 collections: surfaces that used to render from a live query ──

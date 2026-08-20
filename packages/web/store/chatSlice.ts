@@ -37,6 +37,7 @@
 // chat.sendMessage dedupes on — so a message that actually landed can never
 // double-post, however many times the user presses retry.
 
+import { threadRowId, type ThreadInboxRow, type ThreadKind } from "./threadTypes";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { dmKeyFor, dmOtherIds } from "@codecast/shared/chat";
 import { normalizeChannelName } from "@codecast/convex/convex/chatText";
@@ -90,6 +91,7 @@ export type ChatMessageRow = {
   team_id?: string;
   channel_id: string;
   thread_root_id?: string;
+  broadcast?: boolean;
   user_id: string;
   author_kind?: "user" | "agent";
   content: string;
@@ -172,31 +174,6 @@ export type ChatRailRow = {
   member_ids?: string[];
 };
 
-/** One row of chat.listMyThreads — a thread this viewer is in, with the
- *  server's unread numbers. A derived snapshot like the rail's rows (the raw
- *  chat_thread_reads doc plus counts), so it is synced as a delta overlay and
- *  the local mark-read patch reconciles on the numbers the echo recomputes. */
-export type ChatThreadInboxRow = {
-  /** Equals root_id — the id every other chat surface already speaks. */
-  _id: string;
-  root_id: string;
-  channel_id: string;
-  team_id: string;
-  last_activity_at: number;
-  last_read_at: number;
-  unread: number;
-  unread_capped?: boolean;
-  /** The newest visible reply, for the collapsed card's one-line preview. */
-  last_reply?: {
-    _id: string;
-    user_id: string;
-    author_kind?: "user" | "agent";
-    created_at: number;
-    preview: string;
-  } | null;
-  updated_at: number;
-};
-
 // ── Stub ids ────────────────────────────────────────────────────────────────
 //
 // A local row the server has never seen. Not a Convex id, so the generic patch
@@ -245,14 +222,19 @@ export type ChatSliceData = {
   chatReads: Record<string, ChatReadRow>;
   chatRail: ChatRailRow[];
   chatThreadSummaries: Record<string, ChatThreadSummaryRow>;
-  chatThreadInbox: Record<string, ChatThreadInboxRow>;
-  /** The server's team-wide count of threads with unseen replies — the badge
-   *  for a client that has never opened the Threads page. */
-  chatThreadUnread: number;
+  /** The Threads inbox (threads.listMine): one row per thread the viewer is
+   *  in, every kind. Keyed by threadRowId. */
+  threadInbox: Record<string, ThreadInboxRow>;
+  /** The server's workspace-wide count of threads with unseen replies — the
+   *  badge for a client that has never opened the Threads page. */
+  threadUnread: number;
 };
 
 export type ChatSendOptions = {
   threadRootId?: string;
+  /** Slack's "also send to #channel": the reply stays in its thread and shows
+   *  in the channel timeline too. Only meaningful with threadRootId. */
+  broadcast?: boolean;
   attachments?: ChatAttachment[];
   /** Set by an agent session posting through the web client. Only ever takes
    *  privilege away (chat.ts refuses to wake an anchor for a machine's line). */
@@ -282,9 +264,10 @@ export type ChatSliceActions = {
   markChannelRead: (channelId: string, lastMessageId?: string) => void;
   /** Clears one thread's unread the moment it is opened; the mutation moves the
    *  server mark to the thread's newest activity. */
-  markThreadRead: (rootId: string) => void;
-  /** The Threads page's one sweep. Team-scoped like the page itself. */
-  markAllThreadsRead: (teamId?: string) => void;
+  markThreadRead: (kind: ThreadKind, rootKey: string) => void;
+  /** The Threads page's one sweep. Scoped to the workspace like the page
+   *  itself; `kind` narrows it to one chip. */
+  markAllThreadsRead: (teamId?: string, kind?: ThreadKind) => void;
   setChannelNotifyLevel: (channelId: string, level: ChatNotifyLevel) => void;
   /** Rename or re-topic a channel. Optimistic: the rail and header rename the
    *  moment you confirm; the server enforces creator-or-admin and reconciles. */
@@ -403,8 +386,8 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
     chatReads: {},
     chatRail: [],
     chatThreadSummaries: {},
-    chatThreadInbox: {},
-    chatThreadUnread: 0,
+    threadInbox: {},
+    threadUnread: 0,
 
     // ── Sending ─────────────────────────────────────────────────────────────
 
@@ -442,6 +425,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
         client_id: clientId,
         channel_id: channelId,
         thread_root_id: opts?.threadRootId,
+        broadcast: opts?.threadRootId && opts?.broadcast ? true : undefined,
         user_id: viewerId(this),
         author_kind: "user",
         content,
@@ -459,6 +443,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       if (!row || isConvexId(row._id)) return;
       get().dispatchChatSend(row.channel_id, row.content, rowId, {
         threadRootId: row.thread_root_id,
+        broadcast: row.broadcast,
         attachments: row.attachments,
         origin: row.origin,
       });
@@ -504,6 +489,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       else {
         get().dispatchChatSend(row.channel_id, content, messageId, {
           threadRootId: row.thread_root_id,
+          broadcast: row.broadcast,
           attachments: row.attachments,
           origin: row.origin,
         });
@@ -595,27 +581,31 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
     // echo confirms rather than corrects. Numbers reconcile by value, which is
     // why this derived row may be patched optimistically where an object field
     // could not be (see lib/liveEntities' rule).
-    markThreadRead: action(function (this: ChatDraft, rootId: string) {
-      const row = this.chatThreadInbox[rootId];
+    markThreadRead: action(function (this: ChatDraft, kind: ThreadKind, rootKey: string) {
+      const row = this.threadInbox[threadRowId(kind, rootKey)];
       if (!row) return;
-      if (row.unread > 0 && this.chatThreadUnread > 0) this.chatThreadUnread -= 1;
+      if (row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
       row.last_read_at = Math.max(row.last_read_at, row.last_activity_at);
       row.unread = 0;
       row.unread_capped = false;
       row.updated_at = Date.now();
     }),
 
-    markAllThreadsRead: action(function (this: ChatDraft, teamId?: string) {
-      for (const id in this.chatThreadInbox) {
-        const row = this.chatThreadInbox[id];
-        if (teamId && String(row.team_id) !== String(teamId)) continue;
+    // Workspace match is by VALUE with absence normalized: a personal row has
+    // no team_id, and the personal workspace has no active team. The same
+    // rule useThreadInbox applies when it lists the page.
+    markAllThreadsRead: action(function (this: ChatDraft, teamId?: string, kind?: ThreadKind) {
+      for (const id in this.threadInbox) {
+        const row = this.threadInbox[id];
+        if (String(row.team_id ?? "") !== String(teamId ?? "")) continue;
+        if (kind && row.kind !== kind) continue;
+        if (row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
         row.last_read_at = Math.max(row.last_read_at, row.last_activity_at);
         row.unread = 0;
         row.unread_capped = false;
         row.updated_at = Date.now();
       }
-      this.chatThreadUnread = 0;
-      return teamId;
+      if (!kind) this.threadUnread = 0;
     }),
 
     updateChatChannel: action(function (this: ChatDraft, channelId: string, fields: { name?: string; topic?: string }) {
@@ -779,10 +769,6 @@ export const CHAT_SYNC_REGISTRY = {
   // transient — overlaid at render, the local rows winning when fresher.
   // Delta: each page contributes its roots without pruning other channels'.
   chatThreadSummaries: { isDelta: true },
-  // The Threads inbox's entries: derived snapshots keyed by root id, overlaid
-  // as deltas so a page of them never prunes the rest.
-  chatThreadInbox: { isDelta: true },
-  chatThreadUnread: { kind: "scalar" as const },
   // No client_id column server-side: a reaction has no identity beyond
   // (message, user, emoji). chatReactionSyncOpts supersedes on that instead.
   chatReactions: { isDelta: true },
@@ -857,7 +843,10 @@ export function selectChannelMessages(
   const out: ChatMessageRow[] = [];
   for (const id in state.chatMessages) {
     const row = state.chatMessages[id];
-    if (row.channel_id !== channelId || row.thread_root_id) continue;
+    if (row.channel_id !== channelId) continue;
+    // A reply stays in its thread panel — unless it was also sent to the
+    // channel (Slack's broadcast), in which case it appears in both.
+    if (row.thread_root_id && !row.broadcast) continue;
     out.push(row);
   }
   return out.sort(byCreatedAsc);

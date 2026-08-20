@@ -206,6 +206,9 @@ export function decideAutoSwitch(input: {
   profiles: AutoSwitchProfile[];
   attempts: Array<{ profile: string; at: number }>;
   allowSwitch?: boolean; // default true
+  // An auth park proves the active login is DEAD (refresh token revoked, not a
+  // spent window), so "continue" can never un-park — a switch is the only cure.
+  activeDead?: boolean;
 }): AutoSwitchDecision {
   const { now, parkedAt, activeEmail, profiles, attempts } = input;
   const allowSwitch = input.allowSwitch !== false;
@@ -222,6 +225,7 @@ export function decideAutoSwitch(input: {
   const settledProbeShowsHeadroom =
     (active?.usage?.fetched_at ?? 0) >= parkedAt + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS;
   if (
+    !input.activeDead &&
     (windowRolledSincePark || settledProbeShowsHeadroom) &&
     !isUsageExhausted(active?.usage, now) &&
     (!lastContinue || lastContinue < parkedAt)

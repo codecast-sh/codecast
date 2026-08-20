@@ -25,6 +25,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { performSessionSend } from "./pendingMessages";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { isVisibilityShareable } from "./privacy";
+import { pageThreadParticipants, purgeThread, touchThread } from "./threadReads";
 
 export const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
 
@@ -1052,7 +1053,8 @@ async function emitCommentNotifications(
     parentAuthorId: Id<"users"> | null;
     actedAsOwner: boolean;
   },
-): Promise<void> {
+): Promise<Id<"users">[]> {
+  const mentioned: Id<"users">[] = [];
   const link = `${artifactUrl(artifact.slug)}?c=${o.firstCommentId}`;
   const title = artifact.title;
   const actorId = o.actor?._id.toString();
@@ -1091,6 +1093,7 @@ async function emitCommentNotifications(
           const handles = [u.github_username, u.name].filter(Boolean).map((s) => String(s).toLowerCase());
           if (handles.some((h) => mentions.has(h))) {
             await emit("mention", u._id, `${o.actorName} mentioned you on "${title}"`);
+            mentioned.push(u._id);
           }
         }
       }
@@ -1102,6 +1105,7 @@ async function emitCommentNotifications(
   if (!o.actedAsOwner && !notified.has(artifact.user_id.toString())) {
     await emit("artifact_commented", artifact.user_id, `${o.actorName} commented on "${title}"`);
   }
+  return mentioned;
 }
 
 // One viewer's batch of comments → stored as the page's discussion, visible
@@ -1189,13 +1193,25 @@ export const submitComments = mutation({
         }),
       );
     }
-    await emitCommentNotifications(ctx, artifact, {
+    const mentioned = await emitCommentNotifications(ctx, artifact, {
       firstCommentId: parent?._id ?? insertedIds[0],
       texts: list.map((c) => c.text),
       actor: identity?.user ?? null,
       actorName: author,
       parentAuthorId: parent?.author_user_id ?? null,
       actedAsOwner: isOwner || identity?.user._id === artifact.user_id,
+    });
+    // File the page's discussion in every participant's Threads inbox. An
+    // anonymous commenter has no account: no actor, so the whole roster —
+    // owner included — sees the batch unread. Pages route to the personal
+    // inbox: an artifact has no team.
+    await touchThread(ctx, {
+      kind: "page",
+      rootKey: String(artifact._id),
+      refs: { artifact_id: artifact._id },
+      participants: [...(await pageThreadParticipants(ctx, artifact)), ...mentioned],
+      actorId: identity?.user._id,
+      activityAt: now,
     });
     return {
       delivered,
@@ -1354,6 +1370,7 @@ async function deleteArtifactCascade(ctx: MutationCtx, artifact: Doc<"artifacts"
     .withIndex("by_artifact_email", (q) => q.eq("artifact_id", artifact._id))
     .collect();
   for (const row of viewers) await ctx.db.delete(row._id);
+  await purgeThread(ctx, "page", String(artifact._id));
   await ctx.storage.delete(artifact.storage_id).catch(() => {});
   if (artifact.source_storage_id) await ctx.storage.delete(artifact.source_storage_id).catch(() => {});
   if (artifact.thumb_storage_id) await ctx.storage.delete(artifact.thumb_storage_id).catch(() => {});

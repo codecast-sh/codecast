@@ -42,6 +42,8 @@ export interface StartOptions {
   size: string;
   /** Say less: for the implicit start inside `open`. */
   quiet?: boolean;
+  /** Launch Chrome with fake camera/mic devices (test pattern + tone). */
+  fakeMedia?: boolean;
   /** Run the browser on a remote host (see `cast browser hosts`). */
   remote?: string | boolean;
 }
@@ -94,6 +96,13 @@ export async function startLocalBrowser(o: StartOptions): Promise<InstanceState>
       if (!o.quiet) {
         console.log(`${OK} already running on port ${existing!.port} (pid ${existing!.pid})`);
         console.log(fmt.muted("  `cast browser stop` first if you want a different profile"));
+      }
+      if (o.fakeMedia && !existing!.fakeMedia) {
+        console.log(
+          `${WARN} it was launched WITHOUT fake media devices. \`cast browser grant camera microphone\` covers ` +
+            `permission prompts without a restart; fake DEVICES need \`stop --all && start --fake-media\` ` +
+            fmt.muted("(closes every session's tabs — coordinate first)"),
+        );
       }
       return existing!;
     }
@@ -163,6 +172,7 @@ export async function startLocalBrowser(o: StartOptions): Promise<InstanceState>
         headless: o.headless,
         channel: o.channel,
         windowSize: { width: w || 1440, height: h || 900 },
+        fakeMedia: o.fakeMedia,
       });
     } catch (err) {
       die((err as Error).message);
@@ -175,6 +185,7 @@ export async function startLocalBrowser(o: StartOptions): Promise<InstanceState>
       sourceProfile,
       channel: o.channel,
       startedAt: Date.now(),
+      fakeMedia: !!o.fakeMedia,
       activeTargetId: null,
     };
     writeState(state);

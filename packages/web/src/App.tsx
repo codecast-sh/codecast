@@ -46,6 +46,7 @@ const Explore = lazy(() => import("@/app/explore/page"));
 const Timeline = lazy(() => import("@/app/timeline/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
 const Questions = lazy(() => import("@/app/questions/page"));
+const Threads = lazy(() => import("@/app/threads/page"));
 
 const Conversation = lazy(() => import("@/app/conversation/[id]/page"));
 const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"));
@@ -178,6 +179,7 @@ export function App() {
               <Route path="search" element={<E name="Search"><Search /></E>} />
               <Route path="notifications" element={<E name="Notifications"><Notifications /></E>} />
               <Route path="questions" element={<E name="Questions"><Questions /></E>} />
+              <Route path="threads" element={<E name="Threads"><Threads /></E>} />
               <Route path="conversation/:id" element={<E name="Conversation"><Conversation /></E>} />
               <Route path="conversation/:id/diff" element={<E name="ConversationDiff"><ConversationDiff /></E>} />
               <Route path="docs" element={<E name="Docs"><Docs /></E>} />

@@ -49,9 +49,13 @@ function deviceTint(
 export function AssignmentBadge({
   conversationId,
   ownerDeviceId,
+  compact = false,
 }: {
   conversationId: string;
   ownerDeviceId?: string | null;
+  /** Icon-only pill (device icon + dot, avatar — no names) for dense headers
+   *  like simple view. The popover keeps the full detail. */
+  compact?: boolean;
 }) {
   const { byId, loaded } = useDevices();
   const owners = useOwnersFromStore(conversationId);
@@ -93,23 +97,23 @@ export function AssignmentBadge({
           className="inline-flex items-stretch rounded-full border border-sol-border/40 overflow-hidden text-[10px] font-medium outline-none transition-colors hover:border-sol-border/80"
         >
           {loaded && (
-            <span className={`inline-flex items-center gap-1 pl-2 pr-1.5 py-0.5 max-w-[150px] ${deviceTint(d, !own && !!foreign)}`}>
+            <span className={`inline-flex items-center gap-1 py-0.5 ${compact ? "pl-1.5 pr-1" : "pl-2 pr-1.5 max-w-[150px]"} ${deviceTint(d, !own && !!foreign)}`}>
               {d ? (
                 <>
                   <DeviceIcon d={d} />
-                  <span className="truncate">{deviceDisplayName(d)}</span>
+                  {!compact && <span className="truncate">{deviceDisplayName(d)}</span>}
                   <DeviceDot online={d.online} />
                 </>
               ) : (
                 <>
                   <DeviceDot online={false} />
-                  <span>Unassigned</span>
+                  {!compact && <span>Unassigned</span>}
                 </>
               )}
             </span>
           )}
           <span
-            className={`inline-flex items-center gap-1.5 pl-1.5 pr-2 py-0.5 max-w-[150px] ${
+            className={`inline-flex items-center gap-1.5 py-0.5 ${compact ? "pl-1 pr-1.5" : "pl-1.5 pr-2 max-w-[150px]"} ${
               selfOnly ? "text-sol-text-dim hover:text-sol-text" : "bg-sol-cyan/10 text-sol-cyan"
             }`}
             title={selfOnly ? `Assigned to you${ownerList.length === 0 ? " (default)" : ""} — click to reassign` : undefined}
@@ -124,9 +128,11 @@ export function AssignmentBadge({
                     return <OwnerAvatar key={id} name={disp.name} image={disp.image} />;
                   })}
                 </span>
-                <span className="truncate">
-                  {ownerList.length === 1 ? displayFor(ownerList[0]).name : `${ownerList.length} owners`}
-                </span>
+                {!compact && (
+                  <span className="truncate">
+                    {ownerList.length === 1 ? displayFor(ownerList[0]).name : `${ownerList.length} owners`}
+                  </span>
+                )}
               </>
             )}
           </span>

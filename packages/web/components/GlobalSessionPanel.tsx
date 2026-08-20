@@ -24,7 +24,7 @@ import { sessionsWakeSig, resolveShowOld, showsBlockedBadge } from "../store/inb
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
-import { isBlockedConversation, isSubagentConversation, isUsageExhausted, nestParentIdOf, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { isBlockedConversation, isSubagentConversation, isUsageExhausted, nestParentIdOf, worstUsagePercent, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { isLivenessStale, blockedContinueClientId, rankByHeadroom, CONTINUE_BANNER_KINDS } from "@codecast/shared/contracts";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
@@ -529,14 +529,12 @@ export function SignInCta({
 
 // When several sessions are parked on an API-error banner at once (the classic
 // "the whole fleet hit the Max usage limit together"), surface ONE fleet-level
-// action instead of N per-card errors: nudge them all with "continue" (right
-// after the limit window resets), or switch the machine to another saved CC
-// account and revive them on it. The daemon does the heavy lifting — swaps the
-// keychain credential, recycles the blocked processes (they hold the old
-// account's token in memory), then queues the continues; see
-// convex/accountSwitch.ts. Profiles come from the daemon heartbeat
-// (cast accounts save <name> to create them). Own component so its account
-// query stays out of the hot panel render.
+// action instead of N per-card errors: send "continue" to them all. Signed-out
+// sessions are the exception — their processes hold a dead token, so the
+// restart path (requestAccountSwitch with no profile, which degrades to
+// kill + continue; see convex/accountSwitch.ts) reaches them. Account
+// switching itself lives in settings/auto-switch, not in this banner. Own
+// component so its account query stays out of the hot panel render.
 function BlockedSessionsBanner({
   blocked,
   onOpen,
@@ -558,17 +556,17 @@ function BlockedSessionsBanner({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [includeSubs, setIncludeSubs] = useState(false);
-  const [showMore, setShowMore] = useState(false);
+  // Which account the continue runs on: "" = the account the machine is signed
+  // into now (the default — no switch, no restart unless a session needs one).
+  const [onAccount, setOnAccount] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
   const acknowledgeMutation = useMutation(api.accountSwitch.acknowledgeBlocked);
-  const router = useRouter();
   // The X is a durable, cross-device snooze (24h) — a banner that resurrects
   // on every reload isn't dismissible. Permanent removal is per-session:
   // acknowledge clears the flag itself.
   const clientStateInitialized = useInboxStore((st) => st.clientStateInitialized);
   const snoozedTs = useInboxStore((st) => st.clientState.dismissed?.blocked_sessions_banner ?? 0);
-  const promoDismissed = useInboxStore((st) => st.clientState.dismissed?.cc_accounts_promo ?? false);
   const updateDismissed = useInboxStore((st) => st.updateClientDismissed);
   const accountData = useQuery(api.accountSwitch.listAccountProfiles, blocked.length >= (forced ? 1 : 2) ? {} : "skip");
 
@@ -591,37 +589,9 @@ function BlockedSessionsBanner({
   const connCount = acted.filter((sess) => sess.pending_api_error_kind === "connection").length;
   const fatalCount = acted.filter((sess) => sess.pending_api_error_kind === "fatal").length;
   const limitCount = acted.length - authCount - connCount - fatalCount;
-  // limit + connection + fatal all un-park with a plain "continue" (matches
-  // the server's default kinds in continueAllBlocked); only auth needs more.
-  const nudgeCount = limitCount + connCount + fatalCount;
   // Newest-flagged first — the same order the revive acts on (and the order
   // that answers "which sessions?" most usefully: fresh casualties on top).
   const blockedSorted = [...blocked].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
-
-  // Switch targets: saved profiles that aren't the active account on their
-  // device, deduped by name (the same profile may exist on several machines —
-  // keep whichever copy carries a usage snapshot, so ranking has data). Ranked
-  // best-headroom-first with the same brain auto-switch trusts, so the first
-  // chip is the one auto-switch itself would pick.
-  const now = Date.now();
-  const switchTargets: { name: string; email?: string; usage?: CcUsage }[] = [];
-  for (const device of accountData?.devices ?? []) {
-    for (const p of device.profiles) {
-      if (p.email && device.active_email && p.email === device.active_email) continue;
-      const existing = switchTargets.find((t) => t.name === p.name);
-      if (!existing) switchTargets.push({ name: p.name, email: p.email, usage: p.usage });
-      else if (!existing.usage && p.usage) existing.usage = p.usage;
-    }
-  }
-  const rankedTargets = rankByHeadroom(switchTargets, now);
-  // The one account the banner recommends: best headroom, not already spent.
-  // Only when the incident is about THIS account's capacity (limits/auth) —
-  // a dropped connection or api error is not an account problem, so switching
-  // is never the recommended fix for those.
-  const bestTarget =
-    connCount === 0 && fatalCount === 0
-      ? rankedTargets.find((t) => !isUsageExhausted(t.usage, now))
-      : undefined;
 
   // The sign-in CTA's executor: the online primary (non-remote) machine — the
   // one whose keychain holds the login and whose browser the OAuth flow opens
@@ -630,6 +600,34 @@ function BlockedSessionsBanner({
   const actedAuthIds = acted
     .filter((sess) => sess.pending_api_error_kind === "auth")
     .map((sess) => sess._id);
+
+  // The account picker's inventory. The whole banner asks ONE question — which
+  // account does the fleet continue on? — so accounts render as a single
+  // select, not a button per profile. Ranked by live headroom (the same brain
+  // auto-switch trusts) and annotated with usage, so the choice is informed
+  // without demanding one: the default is the current account, and the select
+  // is furniture until the user has a reason to open it.
+  const now = Date.now();
+  const activeEmail = loginDevice?.active_email ?? (accountData?.devices ?? []).find((d) => d.active_email)?.active_email;
+  const accountOptions: { name: string; email?: string; usage?: CcUsage }[] = [];
+  for (const device of accountData?.devices ?? []) {
+    for (const p of device.profiles) {
+      if (p.email && p.email === activeEmail) continue;
+      const existing = accountOptions.find((t) => t.name === p.name);
+      if (!existing) accountOptions.push({ name: p.name, email: p.email, usage: p.usage });
+      else if (!existing.usage && p.usage) existing.usage = p.usage;
+    }
+  }
+  const rankedAccounts = rankByHeadroom(accountOptions, now);
+  const activeUsage = (accountData?.devices ?? [])
+    .flatMap((d) => d.profiles)
+    .find((p) => p.email && p.email === activeEmail)?.usage;
+  // "82% used" / "at limit" — enough to steer the pick, nothing more.
+  const usageNote = (usage?: CcUsage): string => {
+    if (isUsageExhausted(usage, now)) return " — at limit";
+    const pct = usage ? worstUsagePercent(usage, now) : null;
+    return pct != null ? ` — ${Math.round(pct)}% used` : "";
+  };
 
   // Every way the banner closes goes through here: snooze 24h AND drop the
   // forced-open flag, so the header pill (which never hides while sessions
@@ -689,12 +687,7 @@ function BlockedSessionsBanner({
   // and the snooze — so the banner resurfaces for a retry. If a daemon is merely
   // unreachable, the stamps age out (BLOCKED_REVIVE_TTL_MS) and those sessions
   // honestly return to blocked.
-  const runRevive = async (
-    profile: string | undefined,
-    busyKey: string,
-    successToast: (res: { conversations: number; unreachable: number }) => string,
-    failToast: string,
-  ) => {
+  const runRevive = async (profile: string | undefined) => {
     const ids = acted.map((sess) => sess._id);
     const store = useInboxStore.getState();
     const nonce = Math.random().toString(36).slice(2, 10);
@@ -705,7 +698,7 @@ function BlockedSessionsBanner({
     }
     store.markBlockedReviveRequested(ids);
     closeBanner();
-    setBusy(busyKey);
+    setBusy(profile ?? "revive");
     try {
       const res = await requestSwitch({
         profile,
@@ -713,162 +706,43 @@ function BlockedSessionsBanner({
         continue_client_ids: clientIds,
       });
       toast.success(
-        successToast(res) + (res.unreachable > 0 ? ` (${res.unreachable} unreachable: daemon offline)` : ""),
+        (profile
+          ? `Switching to "${profile}" — ${res.conversations} blocked session${res.conversations === 1 ? "" : "s"} will continue on it`
+          : `Restarting ${res.conversations} blocked session${res.conversations === 1 ? "" : "s"} on the current account`) +
+          (res.unreachable > 0 ? ` (${res.unreachable} unreachable: daemon offline)` : ""),
       );
     } catch (err) {
       for (const id of ids) store.removeOptimisticMessage(id, clientIds[id]);
       store.clearBlockedReviveRequested(ids);
       updateDismissed("blocked_sessions_banner", 0);
-      toast.error(err instanceof Error ? err.message : failToast);
+      toast.error(err instanceof Error ? err.message : profile ? "Account switch failed" : "Failed to restart blocked sessions");
     } finally {
       setBusy(null);
     }
   };
 
-  const handleReviveCurrent = () =>
-    runRevive(
-      undefined,
-      "revive",
-      (res) => `Restarting ${res.conversations} blocked session${res.conversations === 1 ? "" : "s"} on the current account`,
-      "Failed to restart blocked sessions",
-    );
-
-  const handleSwitch = (profile: string) =>
-    runRevive(
-      profile,
-      profile,
-      (res) => `Switching to "${profile}" — ${res.conversations} blocked session${res.conversations === 1 ? "" : "s"} will restart on it`,
-      "Account switch failed",
-    );
-
-  // Plain "continue" — no restart, no account change, so it can only reach
-  // the limit/connection/fatal slice (signed-out sessions need a restart or a
-  // sign-in). The label says "N of M" whenever that slice is smaller than
-  // the acted set, so its count visibly differs from the other buttons for
-  // a stated reason instead of looking like a duplicate action. For dropped
-  // connections and fatal api errors this is THE right action (the turn just
-  // retries), so it renders amber; for limit-only sets it dims (the limit may
-  // not have reset yet, so switching accounts is usually the faster path).
-  const plainContinue = nudgeCount > 0 && (
-    <button
-      onClick={handleContinueAll}
-      disabled={busy !== null}
-      title={
-        nudgeCount < acted.length
-          ? `Send "continue" (no restart, no account change) to the ${nudgeCount} that hit a limit, dropped, or failed — the ${authCount} signed out need a restart or a sign-in, so this skips them`
-          : `Send "continue" to each blocked session — no restart, no account change${limitCount > 0 ? "; they resume once the limit resets" : ""}`
-      }
-      className={`rounded px-2.5 py-1 text-[11px] font-semibold transition-colors disabled:opacity-60 ${
-        connCount === 0 && fatalCount === 0 && switchTargets.length > 0
-          ? "text-sol-text-dim hover:text-sol-text"
-          : "bg-amber-500/15 text-amber-500 hover:bg-amber-500/25"
-      }`}
-    >
-      {nudgeCount === acted.length
-        ? nudgeCount === 1
-          ? 'Send "continue"'
-          : `Send "continue" to all ${nudgeCount}`
-        : `Send "continue" to ${nudgeCount} of ${acted.length}`}
-    </button>
-  );
-
-  // Actions grouped by strategy, one labeled row each, so the strategy is
-  // stated once instead of repeated in every button: the switch row carries
-  // the shared verb and the buttons shrink to account names, and the two
-  // same-account actions (restart the processes vs just send "continue")
-  // stop reading as duplicates of each other.
-  const switchRow = acted.length > 0 && switchTargets.length > 0 && (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <span className="text-[11px] text-sol-text-dim">
-        Switch account &amp; continue {acted.length === 1 ? "it" : `all ${acted.length}`}:
-      </span>
-      {rankedTargets.map((target) => {
-        const spent = isUsageExhausted(target.usage, now);
-        return (
-          <button
-            key={target.name}
-            onClick={() => handleSwitch(target.name)}
-            disabled={busy !== null}
-            title={
-              spent
-                ? `${target.email ?? target.name} is already at its usage limit — switching to it won't help until its window resets`
-                : `Switch this machine to ${target.email ?? target.name} and restart ${acted.length === 1 ? "the blocked session" : `all ${acted.length}`} on it`
-            }
-            className={`rounded px-2.5 py-1 text-[11px] font-semibold transition-colors disabled:opacity-60 ${
-              spent
-                ? "bg-sol-bg-alt text-sol-text-dim hover:text-sol-text"
-                : "bg-amber-500/15 text-amber-500 hover:bg-amber-500/25"
-            }`}
-          >
-            {busy === target.name ? "Switching…" : target.name}
-          </button>
-        );
-      })}
-    </div>
-  );
-
-  const currentAccountRow = acted.length > 0 && (authCount > 0 || nudgeCount > 0) && (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {switchTargets.length > 0 && (
-        <span className="text-[11px] text-sol-text-dim">On this account:</span>
-      )}
-      {authCount > 0 && (
-        <button
-          onClick={handleReviveCurrent}
-          disabled={busy !== null}
-          title="Restart the blocked processes on the account this machine is signed into now, then send 'continue' — no account change"
-          className="rounded bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-500 transition-colors hover:bg-amber-500/25 disabled:opacity-60"
-        >
-          {busy === "revive"
-            ? "Restarting…"
-            : acted.length === 1
-              ? "Restart & continue it"
-              : `Restart & continue all ${acted.length}`}
-        </button>
-      )}
-      {plainContinue}
-    </div>
-  );
-
-  // ONE recommended action up front. The banner used to show every strategy
-  // at once — a chip per saved account plus restart plus plain continue read
-  // as a dozen competing choices, and the honest-but-cryptic "39 of 46" count
-  // split made the same-account pair look inconsistent. The primary is what
-  // auto-switch itself would do: switch to the saved account with the most
-  // headroom when the incident is about this account (limits/auth); otherwise
-  // recover in place — restart when some sessions are signed out (their
-  // processes hold the dead token, so a message alone can't reach them), plain
-  // "continue" when a nudge is all it takes. The full menu stays one click
-  // away behind "More options".
-  const countLabel = acted.length === 1 ? "it" : `all ${acted.length}`;
-  const primaryAction = bestTarget ? (
-    <button
-      onClick={() => handleSwitch(bestTarget.name)}
-      disabled={busy !== null}
-      title={`${bestTarget.email ?? bestTarget.name} has the most usage headroom of your ${switchTargets.length} saved account${switchTargets.length === 1 ? "" : "s"} — switch this machine to it and restart ${countLabel === "it" ? "the blocked session" : countLabel} on it`}
-      className="rounded bg-amber-500 px-3 py-1 text-[11px] font-bold text-sol-bg shadow-sm transition-colors hover:bg-amber-400 disabled:opacity-60"
-    >
-      {busy === bestTarget.name ? "Switching…" : `Switch to ${bestTarget.name} & continue ${countLabel}`}
-    </button>
-  ) : authCount > 0 ? (
-    <button
-      onClick={handleReviveCurrent}
-      disabled={busy !== null}
-      title={`Restart the blocked processes on the current account and send "continue" — ${authCount === acted.length ? "signed-out sessions" : `the ${authCount} signed out`} can't be reached by a message alone`}
-      className="rounded bg-amber-500 px-3 py-1 text-[11px] font-bold text-sol-bg shadow-sm transition-colors hover:bg-amber-400 disabled:opacity-60"
-    >
-      {busy === "revive" ? "Restarting…" : `Restart & continue ${countLabel}`}
-    </button>
-  ) : nudgeCount > 0 ? (
-    <button
-      onClick={handleContinueAll}
-      disabled={busy !== null}
-      title={`Send "continue" to each blocked session — no restart, no account change${limitCount > 0 ? "; they resume once the limit resets" : ""}`}
-      className="rounded bg-amber-500 px-3 py-1 text-[11px] font-bold text-sol-bg shadow-sm transition-colors hover:bg-amber-400 disabled:opacity-60"
-    >
-      {`Send "continue" to ${countLabel}`}
-    </button>
-  ) : null;
+  // ONE verb, one decision. Every blocked session needs the same thing — a
+  // "continue" — so the banner offers exactly that, on a choice of account.
+  // Which DELIVERY each session needs (a plain message, or a restart first
+  // because its process holds a dead token, or a credential swap) is the
+  // machinery's problem, resolved here per click, never a menu the user picks
+  // from. The button therefore always acts on the whole acted set and always
+  // says the full count.
+  const handleContinue = () => {
+    if (onAccount) return void runRevive(onAccount);
+    if (authCount > 0) return void runRevive(undefined);
+    handleContinueAll();
+  };
+  // "all" only when the button truly covers the headline count — when
+  // subagents are skipped the label drops to a plain number and the breakdown
+  // line right above accounts for the difference.
+  const countLabel =
+    acted.length === 1 ? "it" : acted.length === blocked.length ? `all ${acted.length}` : `${acted.length}`;
+  const continueTitle = onAccount
+    ? `Switch this machine to ${rankedAccounts.find((t) => t.name === onAccount)?.email ?? onAccount}, restart the blocked sessions, and continue them on it`
+    : authCount > 0
+      ? `Send "continue" to each blocked session — ${authCount === acted.length ? "they are" : `the ${authCount} signed out are`} restarted first (their processes hold an expired login), no account change`
+      : `Send "continue" to each blocked session — no restart, no account change${limitCount > 0 ? "; they resume once the limit resets" : ""}`;
 
   // The permanent decision: clear the banner flag on these sessions so they
   // leave the blocked set for good (only a NEW banner re-flags them). Local
@@ -893,8 +767,16 @@ function BlockedSessionsBanner({
             title={expanded ? "Hide the affected sessions" : "Show which sessions are blocked"}
           >
             <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
+            {/* Headline names the LARGEST slice — a fleet that is mostly
+                signed out shouldn't read "blocked on usage limits" because a
+                couple of stragglers also hit a limit. */}
             {blocked.length} session{blocked.length === 1 ? "" : "s"} blocked on{" "}
-            {limitCount > 0 ? "usage limits" : connCount > 0 ? "dropped connections" : fatalCount > 0 ? "api errors" : "login"}
+            {([
+              [limitCount, "usage limits"],
+              [authCount, "login"],
+              [connCount, "dropped connections"],
+              [fatalCount, "api errors"],
+            ] as const).reduce((best, cur) => (cur[0] > best[0] ? cur : best))[1]}
           </button>
           {/* The breakdown items always sum to the headline count: when the
               checkbox excludes subagents from the acted set, the excluded
@@ -921,19 +803,17 @@ function BlockedSessionsBanner({
                 : `All ${subagents.length} are subagent workers — nothing else is blocked, so the actions include them.`}
             </div>
           ) : subagents.length > 0 && (
-            <label className="mt-1 flex w-fit cursor-pointer items-start gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text">
+            <label
+              className="mt-1 flex w-fit cursor-pointer items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text"
+              title="Subagent workers are skipped by default — their parent session has usually moved on, so reviving them spends the account on work nobody is waiting for"
+            >
               <input
                 type="checkbox"
                 checked={includeSubs}
                 onChange={(e) => setIncludeSubs(e.target.checked)}
-                className="mt-0.5 h-3 w-3 shrink-0 accent-amber-500"
+                className="h-3 w-3 shrink-0 accent-amber-500"
               />
-              {/* One span so long text wraps as prose — separate flex items
-                  shrink into side-by-side columns when the row overflows. */}
-              <span>
-                include {subagents.length} subagent worker{subagents.length === 1 ? "" : "s"}{" "}
-                <span className="text-sol-text-dim/70">— skipped by default; their parent has likely moved on</span>
-              </span>
+              include the {subagents.length} skipped worker{subagents.length === 1 ? "" : "s"}
             </label>
           )}
         </div>
@@ -992,66 +872,53 @@ function BlockedSessionsBanner({
           ))}
         </div>
       )}
-      {switchTargets.length === 0 && !promoDismissed && accountData !== undefined && (
-        <div className="mt-2 rounded border border-sol-cyan/20 bg-sol-cyan/[0.05] px-2.5 py-2 text-[11px] leading-snug text-sol-text-muted">
-          <span className="font-medium text-sol-text">Tip:</span> save a second Claude account once and
-          next time the limit hits you can switch the whole fleet and revive everything instantly — no
-          waiting for the reset.
-          <div className="mt-1.5 flex items-center gap-2">
-            <button
-              onClick={() => router.push("/settings/claude-accounts")}
-              className="rounded bg-sol-cyan/15 px-2 py-0.5 font-semibold text-sol-cyan hover:bg-sol-cyan/25 transition-colors"
-            >
-              Set up account switching
-            </button>
-            <button
-              onClick={() => updateDismissed("cc_accounts_promo", true)}
-              className="text-sol-text-dim hover:text-sol-text transition-colors"
-            >
-              No thanks
-            </button>
-          </div>
-        </div>
-      )}
-      <div className="mt-2 flex flex-col gap-1.5">
-        <div className="flex flex-wrap items-center gap-2">
-          {primaryAction}
-          <button
-            onClick={() => setShowMore((v) => !v)}
-            className="rounded px-1.5 py-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
-            title="Every recovery option: other saved accounts, restart vs a plain continue, permanent dismiss"
+      {/* The whole action surface: [Continue all N] on [account ▾] … dismiss.
+          One solid button, one quiet select, one quiet escape hatch — nothing
+          folded away, nothing competing. */}
+      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+        <button
+          onClick={handleContinue}
+          disabled={busy !== null}
+          title={continueTitle}
+          className="rounded bg-amber-500 px-3 py-1 text-[11px] font-bold text-sol-bg shadow-sm transition-colors hover:bg-amber-400 disabled:opacity-60"
+        >
+          {busy !== null
+            ? onAccount
+              ? "Switching…"
+              : "Continuing…"
+            : onAccount
+              ? `Switch & continue ${countLabel}`
+              : `Continue ${countLabel}`}
+        </button>
+        {rankedAccounts.length > 0 && (
+          <label
+            className="flex min-w-0 items-center gap-1.5 text-[11px] text-sol-text-dim"
+            title={`Which Claude account the sessions continue on${activeEmail ? ` — currently ${activeEmail}` : ""}; switching restarts them on the chosen account`}
           >
-            {showMore ? "Fewer options" : "More options"}
-          </button>
-        </div>
-        {showMore && (
-          <>
-            {/* Dropped connections and fatal api errors retry with a plain
-                "continue", so that row leads; otherwise switching accounts is
-                the faster remedy and its row leads. */}
-            {connCount > 0 || fatalCount > 0 ? (
-              <>
-                {currentAccountRow}
-                {switchRow}
-              </>
-            ) : (
-              <>
-                {switchRow}
-                {currentAccountRow}
-              </>
-            )}
-            <div className="flex justify-end">
-              <button
-                onClick={() => handleAcknowledge(blocked.map((sess) => sess._id))}
-                disabled={busy !== null}
-                title="Never restart these — clear all of them from the blocked set permanently"
-                className="rounded px-2 py-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors disabled:opacity-60"
-              >
-                {blocked.length === 1 ? "Dismiss it permanently" : `Dismiss all ${blocked.length} permanently`}
-              </button>
-            </div>
-          </>
+            on
+            <select
+              value={onAccount}
+              onChange={(e) => setOnAccount(e.target.value)}
+              disabled={busy !== null}
+              className="max-w-[220px] rounded border border-amber-500/25 bg-sol-bg px-1.5 py-0.5 text-[11px] text-sol-text outline-none hover:border-amber-500/50 focus:border-amber-500 disabled:opacity-60"
+            >
+              <option value="">this account{usageNote(activeUsage)}</option>
+              {rankedAccounts.map((t) => (
+                <option key={t.name} value={t.name}>
+                  {t.name}{usageNote(t.usage)}
+                </option>
+              ))}
+            </select>
+          </label>
         )}
+        <button
+          onClick={() => handleAcknowledge(blocked.map((sess) => sess._id))}
+          disabled={busy !== null}
+          title="Never restart these — clear all of them from the blocked set permanently"
+          className="ml-auto rounded px-2 py-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors disabled:opacity-60"
+        >
+          {blocked.length === 1 ? "Dismiss it" : `Dismiss all ${blocked.length}`}
+        </button>
       </div>
     </div>
   );
@@ -3005,22 +2872,6 @@ const needsAttentionRowSig = (t: any) =>
 const decisionsSectionSig = makeCollectionSig((d: any) =>
   d.status === "pending" ? `${d._id}|${d.conversation_id}` : "");
 
-// The Questions section's own affordance: the whole point of collecting these
-// is being able to clear them in one pass, so the header offers the queue.
-function QuestionsSectionHeader({ count }: { count: number }) {
-  const router = useRouter();
-  return (
-    <button
-      onClick={() => router.push("/questions")}
-      className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] text-sol-violet hover:bg-sol-violet/10 transition-colors border-l-2 border-sol-violet/40"
-      title="Answer them one at a time, full width"
-    >
-      <span>{count} {count === 1 ? "decision" : "decisions"} waiting on you</span>
-      <span className="text-sol-text-dim">clear the queue →</span>
-    </button>
-  );
-}
-
 function NeedsAttentionSection() {
   // Workspace-scoped rows, with a field signature so this always-mounted
   // section wakes on the blocked/needs-context fields it renders — and on
@@ -4189,6 +4040,10 @@ export function SessionListPanel({
       // of the uppercased status caption. For long mixed-case identifiers like a
       // plan heading ("pl-114 · Union Outreach — …") where uppercasing reads badly.
       monoLabel?: boolean;
+      // A single action rendered inside the header row (Questions puts its
+      // "answer all" there). One header, one action — never a second banner
+      // above the section competing with the cards below it.
+      headerAction?: React.ReactNode;
     },
   ) => {
     if (items.length === 0) return null;
@@ -4224,8 +4079,29 @@ export function SessionListPanel({
         {...dropProps}
         className={isDragOverSection ? "ring-1 ring-inset ring-sol-cyan/70 bg-sol-cyan/[0.04] transition-colors" : isDropTarget ? "transition-colors" : undefined}
       >
-        {/* The section color rides on the button itself so simple view can
-            tint the divider rule with currentColor; children set their own. */}
+        {/* The section color rides on the header element itself so simple view
+            can tint the divider rule with currentColor; children set their own.
+            With a headerAction the header becomes a row of sibling buttons
+            (same shape as renderHiddenBucket) — a button can't nest a button. */}
+        {opts?.headerAction ? (
+          <div
+            data-sv-sec
+            className={`w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center gap-2 ${color}`}
+          >
+            <button
+              onClick={() => s.toggleCollapsedSection(key)}
+              className={`flex-1 min-w-0 text-left text-[10px] font-semibold uppercase tracking-wider ${color}`}
+            >
+              {label} ({items.length})
+            </button>
+            {opts.headerAction}
+            <button onClick={() => s.toggleCollapsedSection(key)} className="shrink-0">
+              <svg className={`w-3 h-3 transition-transform ${color} ${collapsed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+          </div>
+        ) : (
         <button
           data-sv-sec
           onClick={() => s.toggleCollapsedSection(key)}
@@ -4245,6 +4121,7 @@ export function SessionListPanel({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
           </svg>
         </button>
+        )}
         {!collapsed && (() => {
           const sectionCap = sectionLimits[key] ?? SECTION_RENDER_CAP;
           // Take from the shared global budget (consumed in render order, so the
@@ -4729,8 +4606,21 @@ export function SessionListPanel({
         {(s.chipFilterExclude || (!s.activeProjectFilter && !s.activeBucketFilter)) && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {renderSection("New", filteredNew, "text-sol-blue")}
-        {statusQuestions.length > 0 && <QuestionsSectionHeader count={statusQuestions.length} />}
-        {renderSection("Questions", statusQuestions, "text-sol-violet")}
+        {/* One header, two clear moves: the header action answers them all in
+            one full-width pass; a card below opens that session, same as any
+            other section. */}
+        {renderSection("Questions", statusQuestions, "text-sol-violet", undefined, undefined, {
+          key: "questions",
+          headerAction: (
+            <button
+              onClick={() => router.push("/questions")}
+              className="shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5 -my-0.5 text-[10px] font-semibold text-sol-violet hover:bg-sol-violet/15 transition-colors"
+              title="Answer them one at a time, full width"
+            >
+              answer all →
+            </button>
+          ),
+        })}
         {renderSection("Needs Input", statusNeedsInputRest, "text-sol-yellow")}
         {/* Sections read top-down as "who acts next": you (Questions, Needs
             Input, Done to review), the agent right now (Working), then a

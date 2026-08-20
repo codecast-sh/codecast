@@ -53,6 +53,10 @@ export type ChatMessageView = {
   mentionsMe?: boolean;
   reactions?: ChatReaction[];
   agentStatus?: ChatAgentStatus;
+  /** Set on a thread REPLY. In the channel timeline it only ever appears on a
+   *  broadcast reply ("also send to #channel"), where it drives the small
+   *  "replied to a thread" context line that opens the thread. */
+  threadRootId?: string;
   /** Thread rollup, present only on a root message that has replies. */
   replyCount?: number;
   lastReplyAt?: number;

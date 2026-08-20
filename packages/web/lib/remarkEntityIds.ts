@@ -2,6 +2,8 @@ import { findAndReplace } from "mdast-util-find-and-replace";
 import remarkGfm from "remark-gfm";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
 import { isConvexId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId, parsePublishedPageUrl } from "./entityLinks";
+import { FILE_PATH_SCAN_RE, mentionFromMatch } from "./filePathLinks";
+import { filesHref } from "./vault/vaultHref";
 
 // Both shapes come from the shared mention vocabulary (@codecast/shared/
 // entities), so registering a new object type there lights it up in prose
@@ -136,7 +138,24 @@ export function remarkEntityIds() {
           };
         },
       ],
-    ], { ignore: ['link'] });
+      [
+        // Local file/directory mentions → the Files surface. The href carries
+        // the path as written (`?path=`), which is a real in-app URL: it works
+        // on surfaces that render links plainly, and EntityAwareLink upgrades
+        // it with the session's working directory when it has one.
+        FILE_PATH_SCAN_RE,
+        (full: string, rawPath: string, line?: string) => {
+          const mention = mentionFromMatch(full, rawPath, line);
+          if (!mention) return false;
+          const link = {
+            type: "link" as const,
+            url: filesHref({ localPath: mention.path, line: mention.line }),
+            children: [{ type: "text" as const, value: mention.text }],
+          };
+          return mention.rest ? [link, { type: "text" as const, value: mention.rest }] : link;
+        },
+      ],
+    ], { ignore: ['link', 'inlineCode'] });
     hoistEmbeds(tree);
   };
 }

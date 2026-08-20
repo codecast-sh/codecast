@@ -380,6 +380,35 @@ describe("decideAutoSwitch", () => {
     expect(d).toEqual({ action: "continue" });
   });
 
+  test("activeDead (auth park) suppresses continue and forces a switch", () => {
+    const d = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      profiles: [
+        // Would qualify for a free continue — but the login is dead, so a
+        // continue would just re-park on the auth banner.
+        { name: "a", email: "a@x.com", usage: mkUsage(100, { sessionResetAt: parkedAt + 60_000 }) },
+        { name: "b", email: "b@x.com", usage: mkUsage(10) },
+      ],
+      attempts: [],
+      activeDead: true,
+    });
+    expect(d).toEqual({ action: "switch", profile: "b" });
+  });
+
+  test("activeDead with no other account is exhausted, not continue", () => {
+    const d = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      profiles: [{ name: "a", email: "a@x.com", usage: mkUsage(10) }],
+      attempts: [],
+      activeDead: true,
+    });
+    expect(d.action).toBe("exhausted");
+  });
+
   test("does not re-try a continue that already failed for this park", () => {
     const d = decideAutoSwitch({
       now,

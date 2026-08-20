@@ -17,6 +17,8 @@ export interface SegmentedItem {
   label?: string;
   icon?: any;
   title?: string;
+  /** A small count after the label (unread, matches, …). Hidden when absent or 0. */
+  count?: number;
 }
 
 export function SegmentedToggle({
@@ -49,6 +51,9 @@ export function SegmentedToggle({
           >
             {Icon && <Icon className="w-3.5 h-3.5" />}
             {it.label && <span>{it.label}</span>}
+            {it.count != null && it.count > 0 && (
+              <span className="text-[10px] tabular-nums text-sol-cyan">{it.count}</span>
+            )}
           </button>
         );
         // JS tooltip instead of a native title attr (matches the app's other
@@ -122,6 +127,9 @@ function SegmentedDropdown({
               >
                 {Icon && <Icon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />}
                 <span className="flex-1">{it.label || it.title}</span>
+                {it.count != null && it.count > 0 && (
+                  <span className="text-[10px] tabular-nums text-sol-cyan">{it.count}</span>
+                )}
                 {it.key === value && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
               </button>
             );

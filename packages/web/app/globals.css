@@ -2696,3 +2696,19 @@ pre[class*="language-"] {
 .cc-panel--overlay {
   border-left: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
 }
+
+/* A local file/directory mention linked into the Files surface
+   (components/FilePathLink). Quiet by default — paths are dense in agent
+   prose — and unmistakably a link on hover. */
+.fs-link {
+  color: inherit;
+  text-decoration: underline dotted;
+  text-decoration-color: color-mix(in srgb, var(--sol-cyan) 45%, transparent);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.fs-link:hover {
+  text-decoration-style: solid;
+  text-decoration-color: var(--sol-cyan);
+}
+.fs-link:hover > code { color: var(--sol-cyan); }

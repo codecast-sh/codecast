@@ -5,6 +5,15 @@
 // A thread is the set of comments sharing the same anchor — that's the unit a
 // teammate (or the agent) chats in.
 
+// The server's thread identity (thread_reads root keys) and the one normalizer
+// from its anchor key to this file's thread key, shared with the Threads page.
+export {
+  commentAnchorKey,
+  commentThreadRootKey,
+  parseCommentThreadRootKey,
+  webThreadKeyFromAnchor,
+} from "@codecast/shared/comments";
+
 export type CommentUser = {
   _id?: string;
   name?: string | null;

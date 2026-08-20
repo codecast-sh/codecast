@@ -1,10 +1,9 @@
 "use client";
 import { useState, useCallback, useMemo, useRef, type ReactNode } from "react";
-import { copyToClipboard, canonicalUrl } from "../../../lib/utils";
-import { compressImage } from "../../../lib/compressImage";
+import { copyToClipboard, canonicalUrl, formatDateFull } from "../../../lib/utils";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useParams, useRouter } from "next/navigation";
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskDetail, TaskItem, resolveAssigneeInfo } from "../../../store/inboxStore";
 import { useSyncTasks, useSyncTaskDetail } from "../../../hooks/useSyncTasks";
@@ -16,7 +15,6 @@ import { useMentionQuery, useActiveMentionScope } from "../../../hooks/useMentio
 import { useImageUpload } from "../../../hooks/useImageUpload";
 // TaskCommandPalette replaced by unified CommandPalette
 import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
-import { MarkdownRenderer } from "../../../components/tools/MarkdownRenderer";
 import { DocEditor } from "../../../components/editor/DocEditor";
 import "../../../components/editor/editor.css";
 import { toast } from "sonner";
@@ -26,6 +24,7 @@ import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { ContextChatInput } from "../../../components/ContextChatInput";
 import { FeedCard } from "../../../components/ActivityFeed";
 import { AgentIcon } from "../../../components/ConversationList";
+import { Avatar, TaskCommentComposer, TaskCommentItem, TimeAgo, UserBadge } from "../../../components/tasks/TaskCommentStream";
 import { WatchButton } from "../../../components/WatchButton";
 
 const api = _api as any;
@@ -53,7 +52,6 @@ import {
   FileCode,
   ListChecks,
   ShieldCheck,
-  ImagePlus,
   MessageSquare,
   X,
   ExternalLink,
@@ -90,28 +88,6 @@ function formatDate(ts: number) {
   });
 }
 
-function formatRelative(ts: number) {
-  const ago = Date.now() - ts;
-  if (ago < 3600000) return `${Math.round(ago / 60000)}m ago`;
-  if (ago < 86400000) return `${Math.round(ago / 3600000)}h ago`;
-  return `${Math.round(ago / 86400000)}d ago`;
-}
-
-function formatDateFull(ts: number) {
-  return new Date(ts).toLocaleDateString("en-US", {
-    weekday: "long", month: "long", day: "numeric", year: "numeric",
-    hour: "2-digit", minute: "2-digit",
-  });
-}
-
-function TimeAgo({ ts, className }: { ts: number; className?: string }) {
-  return (
-    <span className={className} title={formatDateFull(ts)}>
-      {formatRelative(ts)}
-    </span>
-  );
-}
-
 function ConfidenceBar({ value }: { value: number }) {
   const pct = Math.round(value * 100);
   const color = pct >= 80 ? "bg-sol-green" : pct >= 50 ? "bg-sol-yellow" : "bg-sol-orange";
@@ -121,33 +97,6 @@ function ConfidenceBar({ value }: { value: number }) {
         <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${pct}%` }} />
       </div>
       <span className="text-sol-text-muted text-xs tabular-nums">{pct}%</span>
-    </div>
-  );
-}
-
-function ClaudeIcon({ size = "sm" }: { size?: "sm" | "md" }) {
-  const px = size === "md" ? "w-7 h-7" : "w-5 h-5";
-  const svg = size === "md" ? "w-4 h-4" : "w-3 h-3";
-  return (
-    <span className={`${px} rounded bg-sol-orange flex items-center justify-center shrink-0`}>
-      <svg className={`${svg} text-sol-bg`} viewBox="0 0 24 24" fill="currentColor">
-        <path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" />
-      </svg>
-    </span>
-  );
-}
-
-function Avatar({ name, image, size = "sm" }: { name: string; image?: string; size?: "sm" | "md" }) {
-  if (name.toLowerCase() === "claude") return <ClaudeIcon size={size} />;
-  const px = size === "md" ? "w-7 h-7" : "w-5 h-5";
-  const textSize = size === "md" ? "text-[10px]" : "text-[8px]";
-  if (image) {
-    return <img src={image} alt={name} className={`${px} rounded-full flex-shrink-0`} />;
-  }
-  const initials = name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
-  return (
-    <div className={`${px} rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center ${textSize} font-medium text-sol-text-muted`}>
-      {initials}
     </div>
   );
 }
@@ -259,19 +208,6 @@ function OverflowMenu({ children }: { children: ReactNode }) {
       )}
     </div>
   );
-}
-
-function UserBadge({ name, image, username }: { name: string; image?: string; username?: string }) {
-  const content = (
-    <span className={`inline-flex items-center gap-1.5 flex-shrink-0 ${username ? "hover:opacity-80 cursor-pointer" : ""}`}>
-      <Avatar name={name} image={image} />
-      <span className="text-xs text-sol-text font-medium">{name.split(" ")[0]}</span>
-    </span>
-  );
-  if (username) {
-    return <Link href={`/team/${username}`}>{content}</Link>;
-  }
-  return content;
 }
 
 function HistoryItem({ entry }: { entry: any }) {
@@ -591,7 +527,6 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
   const handleMentionQuery = useMentionQuery(useActiveMentionScope());
   const handleImageUpload = useImageUpload();
   const updateTask = useInboxStore((s) => s.updateTask);
-  const addTaskComment = useInboxStore((s) => s.addTaskComment);
   const currentUser = useQuery(api.users.getCurrentUser);
   const teamMembers = useQuery(api.teams.getTeamMembers, taskTeamId ? { team_id: taskTeamId as any } : "skip");
   const teamInfo = useQuery(api.teams.getTeam, taskTeamId ? { team_id: taskTeamId as any } : "skip");
@@ -605,19 +540,14 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
   }, [allProjects, data, params?.id]);
   // Derived so an optimistic re-assignment shows instantly (see resolveAssigneeInfo).
   const assigneeInfo = resolveAssigneeInfo((data as any)?.assignee, (data as any)?.assignee_info, teamMembers as any[], currentUser);
-  const [comment, setComment] = useState("");
-  const [commentImages, setCommentImages] = useState<Array<{ file: File; previewUrl: string; storageId?: string; uploading: boolean }>>([]);
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
-  const generateUploadUrl = useMutation(api.images.generateUploadUrl);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const titleRef = useRef<HTMLInputElement>(null);
-  const commentRef = useRef<HTMLTextAreaElement>(null);
   const openPalette = useInboxStore((s) => s.openPalette);
   const paletteOpen = useInboxStore((s) => s.palette.open);
   const shortcutsPanelOpen = useInboxStore(s => s.shortcutsPanelOpen);
-  const [commentOpen, setCommentOpen] = useState(false);
 
   const handleUpdate = useCallback((fields: Record<string, any>) => {
     if (!data?.short_id) return;
@@ -651,60 +581,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     return (allTasks[String(pid)] as TaskItem | undefined) ?? null;
   }, [allTasks, (data as any)?.parent_id]);
 
-  const uploadCommentImage = useCallback(async (file: File) => {
-    const previewUrl = URL.createObjectURL(file);
-    setCommentImages(prev => [...prev, { file, previewUrl, uploading: true }]);
-    try {
-      const uploaded = await compressImage(file);
-      const uploadUrl = await generateUploadUrl({});
-      const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": uploaded.type }, body: uploaded });
-      if (!result.ok) throw new Error(`Upload failed: ${result.status} ${result.statusText}`);
-      const { storageId } = await result.json();
-      setCommentImages(prev => prev.map(img => img.previewUrl === previewUrl ? { ...img, storageId, uploading: false } : img));
-    } catch (err: any) {
-      console.error("[uploadCommentImage] failed:", err);
-      toast.error(`Failed to upload image: ${err?.message || "unknown error"}`);
-      URL.revokeObjectURL(previewUrl);
-      setCommentImages(prev => prev.filter(img => img.previewUrl !== previewUrl));
-    }
-  }, [generateUploadUrl]);
-
-  const clearCommentImage = useCallback((idx: number) => {
-    setCommentImages(prev => {
-      const img = prev[idx];
-      if (img) URL.revokeObjectURL(img.previewUrl);
-      return prev.filter((_, i) => i !== idx);
-    });
-  }, []);
-
-  const handleCommentPaste = useCallback((e: React.ClipboardEvent) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].type.startsWith("image/")) {
-        e.preventDefault();
-        const file = items[i].getAsFile();
-        if (file) uploadCommentImage(file);
-      }
-    }
-  }, [uploadCommentImage]);
-
-  const handleAddComment = useCallback(async () => {
-    const hasText = comment.trim().length > 0;
-    const hasImages = commentImages.some(i => i.storageId);
-    if ((!hasText && !hasImages) || !data?.short_id) return;
-    const anyUploading = commentImages.some(i => i.uploading);
-    if (anyUploading) { toast.error("Wait for images to finish uploading"); return; }
-    const text = comment.trim() || "(image)";
-    const imageIds = commentImages.filter(i => i.storageId).map(i => i.storageId!);
-    setComment("");
-    setCommentImages([]);
-    // Local-first: the optimistic comment renders instantly and the dispatch
-    // (which delegates to tasks.webAddComment for notifications + images)
-    // retries on its own, so no submit spinner or error rollback is needed.
-    addTaskComment(data.short_id, text, "note", imageIds.length > 0 ? imageIds : undefined);
-    setCommentOpen(false);
-  }, [comment, commentImages, data?.short_id, addTaskComment]);
+  // The comment composer owns its draft and uploads (components/tasks/TaskCommentStream);
+  // the page's drop zone hands dropped files to it through this ref.
+  const commentDropRef = useRef<((files: File[]) => void) | null>(null);
 
   const getTaskContextBody = useCallback(() => {
     if (!data) return "";
@@ -811,7 +690,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           onDragEnter={(e) => { e.preventDefault(); dragCounterRef.current++; setIsDragging(true); }}
           onDragOver={(e) => { e.preventDefault(); }}
           onDragLeave={(e) => { e.preventDefault(); dragCounterRef.current--; if (dragCounterRef.current <= 0) { dragCounterRef.current = 0; setIsDragging(false); } }}
-          onDrop={(e) => { e.preventDefault(); dragCounterRef.current = 0; setIsDragging(false); const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/")); files.forEach(f => uploadCommentImage(f)); }}
+          onDrop={(e) => { e.preventDefault(); dragCounterRef.current = 0; setIsDragging(false); const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/")); commentDropRef.current?.(files); }}
         >
         {isDragging && (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 border-2 border-dashed border-sol-cyan rounded-xl pointer-events-none">
@@ -1164,32 +1043,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
                     item.type === "history" ? (
                       <HistoryItem key={item.data._id} entry={item.data} />
                     ) : (
-                      <div key={item.data._id} className="py-2.5 relative">
-                        <div className="flex items-center gap-2 mb-1.5">
-                          {item.data.session_info ? (
-                            <button
-                              type="button"
-                              onClick={() => openLinkedSession(item.data.session_info)}
-                              className="inline-flex items-center gap-1.5 flex-shrink-0 min-w-0 hover:opacity-80 cursor-pointer"
-                              title={item.data.author}
-                            >
-                              <AgentIcon agentType={item.data.session_info.agent_type || "claude_code"} className="w-5 h-5" />
-                              <span className="text-xs text-sol-text font-medium truncate max-w-[260px]">
-                                {item.data.session_info.title || item.data.author}
-                              </span>
-                            </button>
-                          ) : (
-                            <UserBadge name={item.data.author} image={item.data.author_image} />
-                          )}
-                          {item.data.comment_type !== "note" && (
-                            <Badge variant="outline" className="text-[10px] px-1">{item.data.comment_type}</Badge>
-                          )}
-                          <TimeAgo ts={item.data.created_at} className="text-[11px] text-gray-400" />
-                        </div>
-                        <div className="ml-[26px] border-l-2 border-sol-border/30 pl-3">
-                          <MarkdownRenderer content={item.data.text} className="text-sm text-sol-text prose-sm prose-invert max-w-none" />
-                        </div>
-                      </div>
+                      <TaskCommentItem key={item.data._id} comment={item.data} openLinkedSession={openLinkedSession} />
                     )
                   )}
               </div>
@@ -1197,81 +1051,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           </div>
 
           {/* Comment input */}
-          <div className="mb-2">
-            {!commentOpen ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setCommentOpen(true);
-                  setTimeout(() => commentRef.current?.focus(), 0);
-                }}
-                className="flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-lg border border-sol-border text-sol-text-muted bg-sol-bg-alt/50 hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
-              >
-                <MessageSquare className="w-3.5 h-3.5" />
-                Add comment
-              </button>
-            ) : (
-              <div className="flex flex-col border px-3 py-2 rounded-xl bg-sol-bg-alt border-sol-border/50">
-                {commentImages.length > 0 && (
-                  <div className="flex items-center gap-2 pb-2 mb-2 border-b border-sol-border/50 flex-wrap">
-                    {commentImages.map((img, idx) => (
-                      <div key={idx} className="relative group cursor-pointer">
-                        <div className="relative h-16 w-16 rounded-lg overflow-hidden bg-sol-bg shrink-0">
-                          <img src={img.previewUrl} alt="Attached" className="h-full w-full object-cover" />
-                          {img.uploading && (
-                            <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                              <svg className="w-5 h-5 animate-spin text-white" fill="none" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                              </svg>
-                            </div>
-                          )}
-                        </div>
-                        <button type="button" onClick={() => clearCommentImage(idx)} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-sol-bg-alt border border-sol-border flex items-center justify-center text-sol-text-dim hover:text-sol-text transition-colors opacity-0 group-hover:opacity-100">
-                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div className="flex items-end gap-2">
-                  <label className="shrink-0 cursor-pointer text-sol-text-dim hover:text-sol-text transition-colors py-1 flex items-center">
-                    <ImagePlus className="w-4 h-4" />
-                    <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => { Array.from(e.target.files || []).forEach(f => uploadCommentImage(f)); e.target.value = ""; }} />
-                  </label>
-                  <textarea
-                    ref={commentRef}
-                    value={comment}
-                    onChange={(e) => setComment(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        handleAddComment();
-                      }
-                      if (e.key === "Escape") {
-                        if (!comment.trim() && commentImages.length === 0) setCommentOpen(false);
-                      }
-                    }}
-                    onPaste={handleCommentPaste}
-                    placeholder="Leave a comment..."
-                    rows={1}
-                    className="flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none resize-none overflow-hidden leading-relaxed py-1 text-sol-text"
-                  />
-                  <div className="shrink-0">
-                    <button
-                      onClick={handleAddComment}
-                      disabled={!comment.trim() && !commentImages.some(i => i.storageId)}
-                      className={`w-7 h-7 rounded-full transition-colors flex items-center justify-center border ${(!comment.trim() && !commentImages.some(i => i.storageId)) ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue"}`}
-                    >
-                      <ArrowUp className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+          <TaskCommentComposer shortId={data.short_id} dropFilesRef={commentDropRef} />
 
         </div>
         {!isInline && data.linked_conversations && data.linked_conversations.length > 0 && (
