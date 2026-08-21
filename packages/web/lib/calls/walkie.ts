@@ -198,6 +198,9 @@ type Burst = {
   pushed: string;
   pushedAt: number;
   mime: string;
+  /** When the recorder actually started, which is after the mic and the room
+   *  were acquired. Null until then, and for a browser that gave no recorder. */
+  captureAt: number | null;
   recorder: MediaRecorder | null;
   chunks: Blob[];
   pipe: AsrPipe | null;
@@ -255,6 +258,7 @@ function startRecording(b: Burst, track: MediaStreamTrack) {
     b.recorder = rec;
     // One timeslice, so a burst cut short by a closing tab still has bytes.
     rec.start(1_000);
+    b.captureAt = Date.now();
   } catch {
     // No recorder (an old browser, a blocked codec): the burst is still live
     // audio and a live transcript, it just leaves no recording behind.
@@ -331,6 +335,7 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
     // The row is as fresh as the burst is old until the first push lands.
     pushedAt: Date.now(),
     mime: recorderMime(),
+    captureAt: null,
     recorder: null,
     chunks: [],
     pipe: null,
@@ -407,7 +412,10 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
 export async function endBurst(): Promise<void> {
   const b = burst;
   if (!b) return;
-  await finishBurst(b);
+  // Stamped HERE, not inside finishBurst: that function's first act is to wait
+  // for the setup this release may have beaten, and reading the clock after the
+  // wait would charge the setup to the person's thumb.
+  await finishBurst(b, Date.now());
 }
 
 /** Setup failed: tear down what exists and take the bubble back. Nothing was
@@ -436,15 +444,43 @@ function teardownBurst(b: Burst) {
   b.pipe = null;
 }
 
-async function finishBurst(b: Burst): Promise<void> {
+/**
+ * How long the burst was, and whether it was anything at all.
+ *
+ * Two spans, because the two questions are different. The HOLD is press to
+ * release, and it is the only honest test of "did somebody mean this": mic
+ * acquisition, the room join and the start round trip all sit between the two,
+ * and charging them to the hold made a 60ms brush measure 1.3s — so MIN_BURST_MS
+ * could never fire and every brushed key posted a wordless voice note. The
+ * DURATION is the recording's own span, capture to stop, which is what the
+ * bubble displays and what the audio actually contains. A burst with no
+ * recorder to run (an old browser, a blocked codec) has only its hold to report.
+ */
+export function measureBurst(input: {
+  startedAt: number;
+  captureAt: number | null;
+  releasedAt: number;
+  stoppedAt: number;
+  transcript: string;
+  hasAudio: boolean;
+}): { durationMs: number; discard: boolean } {
+  const holdMs = Math.max(0, input.releasedAt - input.startedAt);
+  const durationMs = input.captureAt ? Math.max(0, input.stoppedAt - input.captureAt) : holdMs;
+  // Brushed, or a burst carrying neither words nor audio: the same nothing by
+  // two routes, and the caller throws both away the same way.
+  const discard = holdMs < MIN_BURST_MS || (!input.transcript.trim() && !input.hasAudio);
+  return { durationMs, discard };
+}
+
+async function finishBurst(b: Burst, releasedAt: number): Promise<void> {
   if (b.done) return;
   // A press shorter than its own setup: let the setup finish so there is a
   // server row to land or cancel, then land it.
   await b.ready;
   if (b.done) return;
   teardownBurst(b);
-  const durationMs = Date.now() - b.startedAt;
   const blob = await stopRecording(b);
+  const stoppedAt = Date.now();
   await setMuted(true);
   if (burst === b) {
     burst = null;
@@ -452,11 +488,17 @@ async function finishBurst(b: Burst): Promise<void> {
   }
 
   const transcript = b.transcript.trim();
-  const tooShort = durationMs < MIN_BURST_MS;
-  const empty = !transcript && !blob;
-  if (tooShort || empty) {
-    // Sub-second, or a burst with neither words nor audio: a key somebody
-    // brushed. The row never notified and never counted, so it simply goes.
+  const { durationMs, discard } = measureBurst({
+    startedAt: b.startedAt,
+    captureAt: b.captureAt,
+    releasedAt,
+    stoppedAt,
+    transcript,
+    hasAudio: !!blob,
+  });
+  if (discard) {
+    // Held too briefly to be speech, or carrying neither words nor audio: a key
+    // somebody brushed. The row never notified and never counted, so it goes.
     if (b.messageId && convex) {
       await convex.mutation(api.chat.cancelVoiceBurst, { message_id: b.messageId }).catch(() => {});
     }

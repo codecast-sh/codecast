@@ -6,15 +6,23 @@ import { joinCall, knockRoom } from "../../lib/calls/callManager";
 import { useLiveRooms, type LiveRoomRow } from "../../hooks/useLiveRooms";
 
 // Live now — the huddles running right now anywhere in your teams, made
-// visible where you'd walk past them. A room is a door: an open one you step
-// into with one click (no ring, muted, like walking up to an occupied table),
-// a locked one you knock at. The cluster renders NOTHING when no huddle is
-// live: rooms are keys, not entities, and an empty room does not exist.
+// visible where you'd walk past them. A room is a door: you step through the
+// ones open to you with one click (no ring, muted, like walking up to an
+// occupied table), and knock at the rest. The cluster renders NOTHING when no
+// huddle is live: rooms are keys, not entities, and an empty room does not
+// exist.
 
-/** What you may do about a room, as one button. Join for an open door, Knock
- *  for a locked one, and a quiet "knocked" state while you wait to be let in
- *  — the admit ring answers itself (useCallRing), so this is the last thing
- *  the knocker has to do. */
+/** What you may do about a room, as one button. Join when you may walk in,
+ *  Knock when you may not, and a quiet "knocked" state while you wait to be
+ *  let in — the admit ring answers itself (useCallRing), so this is the last
+ *  thing the knocker has to do.
+ *
+ *  The lock does NOT decide that: it shuts the open door and nothing else, so
+ *  the room's own people and a guest holding a live grant walk straight into a
+ *  locked room — and calls.knock refuses exactly them ("this huddle is open —
+ *  just join it"). Branching on the capability the server sent, rather than on
+ *  the room's state, is what keeps the button from offering a gesture the
+ *  server will reject. */
 export function LiveRoomAction({
   row,
   className = "",
@@ -27,7 +35,7 @@ export function LiveRoomAction({
       <span className={`shrink-0 text-[11px] text-sol-violet ${className}`}>you're in</span>
     );
   }
-  if (!row.locked) {
+  if (row.canJoin) {
     return (
       <button
         onClick={(e) => {
@@ -65,8 +73,9 @@ export function LiveRoomAction({
   );
 }
 
-/** The room's name plus the lock glyph that explains why the action says
- *  Knock. Shared by the rail and the /calls rows so the two read alike. */
+/** The room's name plus the lock glyph. The glyph reports the door's state
+ *  honestly, including on a locked room this viewer may still walk into.
+ *  Shared by the rail and the /calls rows so the two read alike. */
 export function LiveRoomLabel({ row, className = "" }: { row: LiveRoomRow; className?: string }) {
   return (
     <span className={`flex min-w-0 items-center gap-1 ${className}`}>
@@ -100,17 +109,17 @@ export function LiveNowRail({
             key={row.roomKey}
             onClick={() => {
               if (row.mine) return;
-              if (row.locked) void knockRoom(row.roomKey);
-              else void joinCall(row.roomKey);
+              if (row.canJoin) void joinCall(row.roomKey);
+              else void knockRoom(row.roomKey);
               onNavigate?.();
             }}
             className="relative rounded-full p-0.5 transition-colors hover:bg-sol-bg-highlight"
             title={
               row.mine
                 ? `${row.label} — you're in`
-                : row.locked
-                  ? `${row.label} — locked, knock to ask in`
-                  : `${row.label} — join`
+                : row.canJoin
+                  ? `${row.label} — join`
+                  : `${row.label} — locked, knock to ask in`
             }
           >
             <Facepile members={row.members} max={2} size={16} />
@@ -136,13 +145,13 @@ export function LiveNowRail({
         <div
           key={row.roomKey}
           onClick={() => {
-            if (row.mine || row.locked) return;
+            if (row.mine || !row.canJoin) return;
             void joinCall(row.roomKey);
             onNavigate?.();
           }}
-          role={row.mine || row.locked ? undefined : "button"}
+          role={row.mine || !row.canJoin ? undefined : "button"}
           className={`group/room flex items-center gap-2 px-4 py-1 text-[12px] text-sol-text-muted ${
-            row.mine || row.locked ? "" : "cursor-pointer hover:bg-sol-bg-highlight/60 hover:text-sol-text"
+            row.mine || !row.canJoin ? "" : "cursor-pointer hover:bg-sol-bg-highlight/60 hover:text-sol-text"
           }`}
         >
           <Facepile members={row.members} max={3} size={18} />
