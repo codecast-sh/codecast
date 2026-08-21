@@ -18,7 +18,7 @@
     },
     "packages/cli": {
       "name": "@codecast/cli",
-      "version": "1.1.105",
+      "version": "1.1.109",
       "bin": {
         "codecast": "./dist/index.js",
         "cast": "./dist/index.js",
@@ -67,7 +67,7 @@
     },
     "packages/electron": {
       "name": "@codecast/electron",
-      "version": "1.1.92",
+      "version": "1.1.94",
       "dependencies": {
         "electron-updater": "^6.3.0",
       },
@@ -172,6 +172,8 @@
         "@hono/node-server": "^1.19.11",
         "@lezer/highlight": "^1.2.3",
         "@observablehq/plot": "^0.6.17",
+        "@platform/engine": "file:../../platform/packages/engine",
+        "@platform/keys": "file:../../platform/packages/keys",
         "@radix-ui/react-accordion": "^1.2.12",
         "@radix-ui/react-avatar": "^1.1.11",
         "@radix-ui/react-dialog": "^1.1.15",
@@ -4206,6 +4208,10 @@
     "@babel/preset-modules/@babel/helper-plugin-utils": ["@babel/helper-plugin-utils@7.29.7", "", {}, "sha512-G7sHYigPY17oO5SYWnfD/0MTBwVR781S/JI643e/JhUYgVgWE/61SoW3NH9KWUKyKq5LVh3npif99Wkt6j86Jw=="],
 
     "@codecast/cli/convex": ["convex@1.31.2", "", { "dependencies": { "esbuild": "0.25.4", "prettier": "^3.0.0" }, "peerDependencies": { "@auth0/auth0-react": "^2.0.1", "@clerk/clerk-react": "^4.12.8 || ^5.0.0", "react": "^18.0.0 || ^19.0.0-0 || ^19.0.0" }, "optionalPeers": ["@auth0/auth0-react", "@clerk/clerk-react", "react"], "bin": { "convex": "bin/main.js" } }, "sha512-RFuJOwlL2bM5X63egvBI5ZZZH6wESREpAbHsLjODxzDeJuewTLKrEnbvHV/NWp1uJYpgEFJziuGHmZ0tnAmmJg=="],
+
+    "@codecast/web/@platform/engine": ["@platform/engine@file:platform/packages/engine", { "dependencies": { "dexie": "^4.3.0", "mutative": "^1.3.0", "zustand": "^5.0.9" }, "devDependencies": { "@types/react": "^19.0.0", "typescript": "^5.7.2" }, "peerDependencies": { "react": "^19.0.0" } }],
+
+    "@codecast/web/@platform/keys": ["@platform/keys@file:platform/packages/keys", { "devDependencies": { "@types/react": "^19.0.0", "typescript": "^5.7.2" }, "peerDependencies": { "react": "^19.0.0" } }],
 
     "@codecast/web/@tanstack/react-virtual": ["@tanstack/react-virtual@3.14.2", "", { "dependencies": { "@tanstack/virtual-core": "3.17.0" }, "peerDependencies": { "react": "^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0", "react-dom": "^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0" } }, "sha512-IpWnmCLvuymRfeeLNVXIzNEYBFLpd3drVIS91sqV78VTZFyldlChkOocZRCPp1B+Wnk09bcLNme8WaMU/9/9bQ=="],
 
