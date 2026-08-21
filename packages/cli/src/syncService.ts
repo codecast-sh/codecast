@@ -1666,6 +1666,17 @@ export class SyncService {
     });
   }
 
+  // Terminal: "cancelled" is the one status the server's stuck-message cron
+  // never re-pends. For a message that no delivery path can ever land.
+  async cancelPendingMessage(messageId: string): Promise<void> {
+    return this.guarded(async () => {
+      await this.mutate("pendingMessages:cancelPendingMessage" as any, {
+        message_id: messageId,
+        api_token: this.apiToken,
+      });
+    });
+  }
+
   async retryMessage(messageId: string): Promise<void> {
     return this.guarded(async () => {
       await this.mutate("pendingMessages:retryMessage" as any, {

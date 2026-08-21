@@ -70,7 +70,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     )
     .option("--context <text>", "Markdown context: the reasoning, the tradeoff, what happens under each choice. Pass - to read stdin")
     .option("--report <file>", "HTML/markdown report published as the decision's body (reuses cast publish)")
-    .option("--advisory", "Don't block: you proceed with --default and the answer can override you later")
+    .option("--advisory", "Don't block: proceed with --default. Only when the default is cheap to undo — the answer often lands an hour later and may override you")
     .option("--default <n>", "1-based option you proceed with when --advisory (required with it)")
     .option("--session <id>", "Session to attribute the decision to (default: detect current)")
     .option("--json", "Machine-readable output")

@@ -51,6 +51,32 @@ describe("TmuxControlClient interactive attach", () => {
       try { tmuxExecSync(["kill-session", "-t", name]); } catch {}
     }
   });
+
+  // Regression: on daemon shutdown close()'s restore rides a stdin write the
+  // process never lives to see drained, and verifyRestore (on child exit)
+  // never runs — a pane stayed at 165x6 across a restart (2026-08-21).
+  // closeSync must leave the window restored the moment it RETURNS.
+  it.skipIf(!hasTmux())("closeSync restores the window synchronously", async () => {
+    const name = `cast-term-test-closesync-${process.pid}`;
+    const size = () => tmuxExecSync(["display-message", "-p", "-t", name, "#{window_width}x#{window_height}"], { encoding: "utf-8" }).trim();
+    tmuxExecSync(["new-session", "-d", "-s", name, "-x", "100", "-y", "30", "sleep 30"]);
+    const client = new TmuxControlClient(
+      { kind: "attach", target: name, readOnly: false },
+      { onOutput() {}, onExit() {} },
+    );
+    try {
+      await client.start(80, 24);
+      client.resize(60, 6);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(size()).toBe("60x6");
+      client.closeSync();
+      expect(size()).toBe("100x30");
+      expect(tmuxExecSync(["show-options", "-w", "-t", name, "window-size"], { encoding: "utf-8" }).trim()).toBe("");
+    } finally {
+      try { client.closeSync(); } catch {}
+      try { tmuxExecSync(["kill-session", "-t", name]); } catch {}
+    }
+  });
 });
 
 describe("seed state", () => {

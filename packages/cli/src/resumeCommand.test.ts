@@ -12,6 +12,7 @@ import {
   isManagedTmuxName,
   isReconstitutionTarget,
   isValidResumeSessionId,
+  isWorkflowAgentTranscriptPath,
   OPENCODE_SESSION_ID_RE,
   resolveResumeAgentType,
   resumeTmuxPrefix,
@@ -437,5 +438,22 @@ describe("isValidResumeSessionId — shell-injection ids are refused before comm
     const good = "ses_08f9926d3ffelzGS3Q3CteaeUk";
     expect(isValidResumeSessionId("opencode", good)).toBe(true);
     expect(buildNonClaudeResumeCommand("opencode", good)).toBe(`opencode -s ${good}`);
+  });
+});
+
+describe("isWorkflowAgentTranscriptPath", () => {
+  const host = "/Users/x/.claude/projects/-Users-x-src-app/25bfc496-56e9-468f-bd51-cdd59bc6b9d3";
+
+  test("a Workflow-tool agent transcript, by agent id or by uuid copy", () => {
+    expect(isWorkflowAgentTranscriptPath(`${host}/subagents/workflows/wf_46053253-162/agent-a9b83caedab77a376.jsonl`)).toBe(true);
+    expect(isWorkflowAgentTranscriptPath(`${host}/subagents/workflows/wf_46053253-162/89b2bd61-7fdc-4491-89fc-7e64dbe39844.jsonl`)).toBe(true);
+  });
+
+  test("an Agent-tool subagent or a top-level transcript is not", () => {
+    expect(isWorkflowAgentTranscriptPath(`${host}/subagents/agent-a9b83caedab77a376.jsonl`)).toBe(false);
+    expect(isWorkflowAgentTranscriptPath(`${host}/subagents/4abdf051-4c98-40f0-ad26-666ba8a229c5.jsonl`)).toBe(false);
+    expect(isWorkflowAgentTranscriptPath(`/Users/x/.claude/projects/-Users-x-src-app/25bfc496-56e9-468f-bd51-cdd59bc6b9d3.jsonl`)).toBe(false);
+    // the run directory itself, or a journal beside the agents, is not an agent transcript path shape we resume
+    expect(isWorkflowAgentTranscriptPath(`${host}/subagents/workflows/wf_46053253-162`)).toBe(false);
   });
 });

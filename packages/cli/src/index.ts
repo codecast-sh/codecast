@@ -8,6 +8,7 @@ import { registerCapabilityCommand } from "./capabilities/cli.js";
 import { registerDecideCommand } from "./decideCommand.js";
 import { registerImageCommand } from "./imageCommand.js";
 import { registerStateCommand, warnIfThreadStateStale } from "./stateCommand.js";
+import { buildTaskStartBody } from "./taskClaim.js";
 import { registerBrowserCommand } from "./browser/cli.js";
 import open from "open";
 import * as fs from "fs";
@@ -5153,6 +5154,7 @@ program
   .option("--json", "Machine-readable report")
   .option("--keep", "Keep the test tmux session, transcript, and server conversation for debugging")
   .option("--project-dir <path>", "Scratch project dir for the test transcript (must be syncable)")
+  .option("--reap-tmux", "Kill stale tmux server generations (old servers that lost the default socket, with their whole process tree)")
   .action(async (options: any) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -5176,6 +5178,7 @@ program
         json: options.json === true,
         keep: options.keep === true,
         projectDir: options.projectDir,
+        reapTmux: options.reapTmux === true,
       },
     );
     if (options.json) console.log(JSON.stringify(report, null, 2));
@@ -13403,9 +13406,7 @@ work
   .argument("<short_id>", "Task short ID")
   .action(async (shortId: string) => {
     const sessionId = detectCurrentSessionId();
-    const body: Record<string, any> = { short_id: shortId, status: "in_progress", assignee: "me" };
-    if (sessionId) body.conversation_id = sessionId;
-    const result = await cliPost("/cli/work/update", body);
+    const result = await cliPost("/cli/work/update", buildTaskStartBody(shortId, sessionId));
     console.log(`${c.green}ok${c.reset} Started ${c.cyan}${shortId}${c.reset}`);
 
     if (sessionId) writeTaskPulse(sessionId, shortId, result.plan_id);

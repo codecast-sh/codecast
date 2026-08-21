@@ -451,3 +451,19 @@ complete:13: command not found: compdef
     expect(paneContentAfterLaunchEcho(pane)).toBe("");
   });
 });
+
+// 2026-08-21: the workspace trust prompt ends in "Enter to confirm · Esc to cancel",
+// which the Rewind rule matched; the Escape we then sent is this dialog's "No,
+// exit", so the agent quit and the resume looped. Trust must classify first.
+test("workspace trust prompt classifies as trust, not rewind", () => {
+  const region = [
+    " Accessing workspace:",
+    " /Users/ashot/src/products/web",
+    " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's in this folder first.",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    " ❯ 1. Yes, I trust this folder",
+    "   2. No, exit",
+    " Enter to confirm · Esc to cancel",
+  ].join("\n");
+  expect(classifyTmuxLiveState(region)).toBe("trust");
+});
