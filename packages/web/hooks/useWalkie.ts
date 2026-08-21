@@ -26,6 +26,7 @@ import {
   walkieBlockedFor,
   type WalkieStatus,
 } from "../lib/calls/walkie";
+import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { useShortcutAction, useShortcutContext } from "../shortcuts";
 import { useEventListener } from "./useEventListener";
 import { useMountEffect } from "./useMountEffect";
@@ -35,7 +36,7 @@ export function useWalkieStatus(): WalkieStatus {
   return useSyncExternalStore(subscribeWalkie, getWalkieStatus, getWalkieStatus);
 }
 
-// One subscription to the engine, for the two facts no single component owns.
+// One subscription to the engine, for the three facts no single component owns.
 //
 // THE CONVERSATION THE WALKIE LAST USED. `lingerUntil` says a room is being held
 // open in case somebody answers, but not WHICH room, and the engine does not
@@ -44,6 +45,14 @@ export function useWalkieStatus(): WalkieStatus {
 // mic, no hang-up, somebody else's name on it. The strip also has to keep
 // offering the answer through the linger, which means still knowing whose DM to
 // send it to.
+//
+// WHETHER THE WALKIE IS A GUEST. A burst joins a room, but the room may already
+// have been a live huddle with this person's mic open in it — the dm: room of a
+// 1:1 call is the very room a burst to that person is spoken into. The walkie
+// must not take the dock away from a call in progress, so it records, at the
+// moment a burst begins, whether it opened that mic or merely walked in. The
+// engine publishes `sending` synchronously BEFORE it unmutes, so the call state
+// read here is still the pre-burst world, which is exactly the question.
 //
 // A BURST THAT FAILED TO SEND, below.
 //
@@ -55,10 +64,30 @@ export type WalkieTarget = { roomKey: string; channelId: string };
 
 let lastTarget: WalkieTarget | null = null;
 let reportedError: string | null = null;
+/** The burst currently being tracked, so a guest ruling is made once per burst
+ *  rather than re-read after the engine has changed the world. */
+let engagedBurst: string | null = null;
+let guest = false;
+
 subscribeWalkie(() => {
   const s = getWalkieStatus();
   const live = s.sending ?? s.incoming;
-  if (live) lastTarget = { roomKey: live.roomKey, channelId: live.channelId };
+  const burstKey = s.sending ? s.sending.clientId : (s.incoming?.messageId ?? null);
+  if (live) {
+    lastTarget = { roomKey: live.roomKey, channelId: live.channelId };
+    if (burstKey !== engagedBurst) {
+      engagedBurst = burstKey;
+      const call = useInboxStore.getState().call;
+      guest =
+        call.roomKey === live.roomKey &&
+        !call.muted &&
+        (call.phase === "connected" || call.phase === "connecting");
+    }
+  } else {
+    // The ruling outlives the burst: the linger that follows a guest burst is
+    // still happening inside somebody's huddle.
+    engagedBurst = null;
+  }
 
   // A burst that did not send has to SAY so. The engine reports the failure and
   // stops there, and both ways it fails are silent lies otherwise: a row that
@@ -78,13 +107,53 @@ export function lastWalkieTarget(): WalkieTarget | null {
   return lastTarget;
 }
 
-/** Why the key cannot be held right now, in the words the tooltip says, or null
- *  when it can. */
-export function walkieBlockedReason(roomKey: string | undefined): string | null {
-  if (!roomKey) return "There is nobody to talk to here yet";
+/**
+ * Why this room cannot be entered right now, or null when it can. A live call
+ * somewhere else is the only thing that keeps you out of a room — walking into
+ * the one you are already in is a no-op, not an error.
+ *
+ * This is the question a LIVE BUBBLE asks, where the gesture is to walk in and
+ * listen. Push-to-talk asks a stricter one, below.
+ */
+export function walkieJoinReason(roomKey: string | undefined): string | null {
+  if (!roomKey) return "This one cannot be joined";
   const blocked = walkieBlockedFor(roomKey);
   if (blocked === "another-call") return "You are in another call";
   if (blocked === "not-ready") return "Calls are not ready yet";
+  return null;
+}
+
+/**
+ * Why the key cannot be held right now, in the words the tooltip says, or null
+ * when it can. Everything that keeps you out of the room, plus one more.
+ *
+ * The engine answers most of this. The one question it does not ask is about
+ * the room you are ALREADY in: it blocks a call in some other room, and lets
+ * this one through so that a burst can join, or reply inside, the room it
+ * belongs to. That is right for a muted room — being in one is how you hear a
+ * teammate, and hold-to-reply is the whole point of the receiving side. It is
+ * wrong for a room where your own mic is already open, because there push to
+ * talk has nothing left to do: you are talking. Holding it would take the
+ * call's controls away for the length of a sentence and then mute the call on
+ * release, which is the engine tidying up after a burst doing real damage to a
+ * conversation.
+ */
+export function walkieBlockedReason(roomKey: string | undefined): string | null {
+  if (!roomKey) return "There is nobody to talk to here yet";
+  const engine = walkieJoinReason(roomKey);
+  if (engine) return engine;
+  const status = getWalkieStatus();
+  // Not when the open mic is the walkie's own doing — that is a burst in
+  // flight, and the surface holding it must not disable itself mid-hold.
+  if (status.sending?.roomKey === roomKey) return null;
+  const call = useInboxStore.getState().call;
+  if (
+    call.roomKey === roomKey &&
+    !call.muted &&
+    (call.phase === "connected" || call.phase === "connecting")
+  ) {
+    return "Your mic is already open here — just talk";
+  }
   return null;
 }
 
@@ -110,6 +179,16 @@ export function usePushToTalk(
   resolveChannelId: () => string | null,
 ): PushToTalk {
   const status = useWalkieStatus();
+  // The engine wakes this hook when the WALKIE moves, but the answer below also
+  // depends on where the call plane is — and a mute the person toggled in the
+  // dock moves that without moving the walkie. A signature of the three scalars
+  // the answer reads, so the button's disabled state stays honest rather than
+  // waiting for the next unrelated burst to refresh it.
+  useTrackedStore([
+    (st: any) => st.call?.roomKey ?? "",
+    (st: any) => st.call?.phase ?? "idle",
+    (st: any) => st.call?.muted !== false,
+  ]);
   const held = useRef(false);
 
   const release = useCallback(() => {
@@ -222,14 +301,26 @@ export function pttPointerProps(ptt: PushToTalk) {
  * never both be: a burst joins a room the same way a huddle does, so without
  * this the call dock's floating window would open for every sentence anybody
  * says.
+ *
+ * Owning the dock means REPLACING the call's own controls — no hang-up, no
+ * mute, no camera, no lock — so every branch below has to be sure the room is
+ * a burst and not a conversation. Matching room keys is not enough: a 1:1 call
+ * lives in the same dm: room a burst to that person is spoken into, so the keys
+ * match exactly when the answer must be no.
  */
 export function walkieOwnsCall(
   status: WalkieStatus,
   call: { roomKey: string | null; phase: string; muted: boolean },
-  lingerRoom: string | null = lastTarget?.roomKey ?? null,
+  opts: { lingerRoom?: string | null; guest?: boolean } = {},
 ): boolean {
+  const lingerRoom = opts.lingerRoom !== undefined ? opts.lingerRoom : (lastTarget?.roomKey ?? null);
+  // The walkie walked into a call that was already running with this person's
+  // mic open. It is a guest there, and a guest does not take the room's controls
+  // away from it — not while talking, not while listening, and not through the
+  // linger afterwards, which is still happening inside that same huddle.
+  if (opts.guest !== undefined ? opts.guest : guest) return false;
   if (status.sending) return status.sending.roomKey === call.roomKey;
-  if (status.incoming) return status.incoming.roomKey === call.roomKey;
+  if (status.incoming) return status.incoming.roomKey === call.roomKey && call.muted;
   // Lingering: THIS room is being held open in case anybody answers. An open
   // mic means somebody did, and a room people are talking in is a huddle rather
   // than a burst, so the ordinary dock takes it back.

@@ -25,7 +25,7 @@ import { useSyncExternalStore } from "react";
 import { Play, Pause, Radio } from "lucide-react";
 import { useStorageImageUrl } from "../../hooks/useStorageImageUrl";
 import { joinCall } from "../../lib/calls/callManager";
-import { useWalkieStatus, walkieBlockedReason } from "../../hooks/useWalkie";
+import { useWalkieStatus, walkieJoinReason } from "../../hooks/useWalkie";
 import {
   getVoicePlayback,
   getVoicePlaybackServer,
@@ -100,11 +100,13 @@ function VoiceLiveBubble({ message }: { message: ChatMessageView }) {
   const roomKey = message.voice?.roomKey;
   const transcript = message.content.trim();
   // The snapshot is the wake, not the answer: it moves whenever the call plane
-  // does, and the per-room answer is asked fresh below. Walking into the room
-  // you are already in needs no guard of its own — joinCall is idempotent
-  // there — so the honest disabled states are the two real ones.
+  // does, and the per-room answer is asked fresh below.
   useWalkieStatus();
-  const reason = roomKey ? walkieBlockedReason(roomKey) : "This one cannot be joined";
+  // The JOIN question, not the push-to-talk one. Clicking a live bubble walks
+  // into the room to listen, and being already in it is no reason to refuse —
+  // joinCall is idempotent there. A room you cannot talk into can still be one
+  // you are welcome to stand in.
+  const reason = walkieJoinReason(roomKey);
 
   return (
     <div className="ch-msg-body">
