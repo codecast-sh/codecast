@@ -20,12 +20,28 @@ import {
 } from "./_generated/server";
 import { makeChangeTrackedDb } from "./changeLog";
 import { makePrincipalViewTrackedDb } from "./principalViewRevisions";
+import { makeSyncAckCollector, type SyncAckPosition } from "./syncLog";
+
+const SYNC_ACK = Symbol.for("codecast.syncAckCollector");
 
 function withChangeLog(ctx: any): any {
   // Compose both infrastructural write boundaries. The principal-view wrapper
   // is outermost so it observes the final domain transition; its local head
   // writes flow through the change-feed wrapper but are intentionally untracked.
-  return { ...ctx, db: makePrincipalViewTrackedDb(makeChangeTrackedDb(ctx.db)) };
+  //
+  // The collector accumulates the sync-log positions this transaction appends;
+  // dispatch returns them to an opting-in client as its write acknowledgement
+  // (syncAckPositions below).
+  const collector = makeSyncAckCollector();
+  const wrapped = { ...ctx, db: makePrincipalViewTrackedDb(makeChangeTrackedDb(ctx.db, collector)) };
+  wrapped[SYNC_ACK] = collector;
+  return wrapped;
+}
+
+// The sync-log positions appended so far in this mutation's transaction. Empty
+// for a ctx that did not come through the wrapped builders (e.g. raw tests).
+export function syncAckPositions(ctx: any): SyncAckPosition[] {
+  return ctx?.[SYNC_ACK]?.positions ?? [];
 }
 
 function wrapDefinition(def: any): any {

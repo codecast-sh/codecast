@@ -182,7 +182,7 @@ describe("comments complete-view write choke", () => {
 describe("small principal-view write chokes", () => {
   test("principal metadata and team writes pass through the central interceptor", () => {
     const functions = readFileSync(join(DIR, "functions.ts"), "utf8");
-    expect(functions).toContain("makePrincipalViewTrackedDb(makeChangeTrackedDb(ctx.db))");
+    expect(functions).toContain("makePrincipalViewTrackedDb(makeChangeTrackedDb(ctx.db, collector))");
 
     const auth = readFileSync(join(DIR, "auth.ts"), "utf8");
     expect(auth).toContain("advanceCurrentUserViewRevision");

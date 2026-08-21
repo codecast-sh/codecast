@@ -45,14 +45,27 @@ function makeFakeDb() {
       let rows = [...ensure(table).values()];
       const api: any = {
         withIndex(_name: string, fn: (q: any) => any) {
-          const preds: Array<[string, any]> = [];
-          const q: any = { eq: (f: string, v: any) => { preds.push([f, v]); return q; } };
+          const preds: Array<[string, (v: any) => boolean]> = [];
+          const q: any = {
+            eq: (f: string, v: any) => { preds.push([f, (x) => x === v]); return q; },
+            gt: (f: string, v: any) => { preds.push([f, (x) => x > v]); return q; },
+            lt: (f: string, v: any) => { preds.push([f, (x) => x < v]); return q; },
+          };
           fn(q);
-          rows = rows.filter((r) => preds.every(([f, v]) => r[f] === v));
+          rows = rows.filter((r) => preds.every(([f, ok]) => ok(r[f])));
           return api;
         },
-        order() { return api; },
+        order(dir?: string) {
+          if (rows.length && typeof rows[0]?.position === "number") {
+            rows = [...rows].sort((a, b) => (dir === "desc" ? b.position - a.position : a.position - b.position));
+          }
+          return api;
+        },
         async first() { return rows[0] ?? null; },
+        async unique() {
+          if (rows.length > 1) throw new Error("unique() found more than one row");
+          return rows[0] ?? null;
+        },
         async take(n: number) { return rows.slice(0, n); },
         async collect() { return rows; },
       };

@@ -176,4 +176,18 @@ crons.interval(
   {}
 );
 
+crons.cron(
+  // Sync-log retention: delete actions past the 30d window and advance
+  // per-scope floors (syncLogPrune.ts; the mutation self-continues in bounded
+  // batches). Fixed cron, NOT interval: interval phase anchors to deploy time
+  // and drifts, and this job's bulk deletes must stay clear of the nightly
+  // backup window (~23:30–01:15 UTC — the documented backup IO collision
+  // class). Hourly at :45 from 02:00–22:45 UTC; the 30d window easily absorbs
+  // the nightly gap.
+  "prune sync log actions",
+  "45 2-22 * * *",
+  internal.syncLogPrune.pruneSyncActions,
+  {}
+);
+
 export default crons;
