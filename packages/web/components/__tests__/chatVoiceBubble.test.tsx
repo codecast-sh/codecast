@@ -1,7 +1,8 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { bindWalkie } from "../../lib/calls/walkie";
-import { walkieOwnsCall } from "../../hooks/useWalkie";
+import { walkieBlockedReason, walkieJoinReason, walkieOwnsCall } from "../../hooks/useWalkie";
+import { useInboxStore } from "../../store/inboxStore";
 import { voiceDuration } from "../../lib/voicePlayer";
 import { ChatMessage } from "../chat/ChatMessage";
 import type { ChatMessageView } from "../chat/chatTypes";
@@ -131,7 +132,7 @@ describe("who owns the dock", () => {
       ...base,
       incoming: { channelId: "c", messageId: "m", roomKey: ROOM, fromUserId: "u", fromName: "Ada" },
     };
-    expect(walkieOwnsCall(status as any, inRoom)).toBe(true);
+    expect(walkieOwnsCall(status as any, inRoom, { guest: false })).toBe(true);
   });
 
   test("a burst into some OTHER room leaves this call's dock alone", () => {
@@ -139,13 +140,15 @@ describe("who owns the dock", () => {
       ...base,
       incoming: { channelId: "c", messageId: "m", roomKey: "dm:x:y", fromUserId: "u", fromName: "Ada" },
     };
-    expect(walkieOwnsCall(status as any, inRoom)).toBe(false);
+    expect(walkieOwnsCall(status as any, inRoom, { guest: false })).toBe(false);
   });
 
   test("an open mic hands the room back: a room somebody talks in is a huddle", () => {
     const lingering = { ...base, lingerUntil: Date.now() + 30_000 };
-    expect(walkieOwnsCall(lingering as any, inRoom, ROOM)).toBe(true);
-    expect(walkieOwnsCall(lingering as any, { ...inRoom, muted: false }, ROOM)).toBe(false);
+    expect(walkieOwnsCall(lingering as any, inRoom, { lingerRoom: ROOM, guest: false })).toBe(true);
+    expect(
+      walkieOwnsCall(lingering as any, { ...inRoom, muted: false }, { lingerRoom: ROOM, guest: false }),
+    ).toBe(false);
   });
 
   test("walking into a huddle during the linger gets the CALL dock, not the strip", () => {
@@ -155,12 +158,51 @@ describe("who owns the dock", () => {
     // wrong name — over a real call for up to 30 seconds.
     const lingering = { ...base, lingerUntil: Date.now() + 30_000 };
     const huddle = { roomKey: "channel:elsewhere", phase: "connected", muted: true };
-    expect(walkieOwnsCall(lingering as any, huddle, ROOM)).toBe(false);
+    expect(walkieOwnsCall(lingering as any, huddle, { lingerRoom: ROOM, guest: false })).toBe(false);
   });
 
   test("an ordinary huddle is never the walkie's", () => {
-    expect(walkieOwnsCall(base as any, inRoom, null)).toBe(false);
-    expect(walkieOwnsCall(base as any, idle, null)).toBe(false);
+    expect(walkieOwnsCall(base as any, inRoom, { lingerRoom: null })).toBe(false);
+    expect(walkieOwnsCall(base as any, idle, { lingerRoom: null })).toBe(false);
+  });
+
+  test("a burst inside a LIVE UNMUTED call leaves that call its own dock", () => {
+    // The room keys match exactly when the answer must be no: a 1:1 call lives
+    // in the same dm: room a burst to that person is spoken into. Taking the
+    // dock here would strip a call in progress of its hang-up, mute, camera and
+    // lock for the length of a sentence.
+    const live = { roomKey: ROOM, phase: "connected", muted: false };
+    const sending = {
+      ...base,
+      sending: { channelId: "c", roomKey: ROOM, clientId: "cid", messageId: null, startedAt: 0, transcript: "" },
+    };
+    expect(walkieOwnsCall(sending as any, live, { guest: true })).toBe(false);
+
+    const hearing = {
+      ...base,
+      incoming: { channelId: "c", messageId: "m", roomKey: ROOM, fromUserId: "u", fromName: "Ada" },
+    };
+    // Two guards, either of which is enough on its own: the room was already a
+    // conversation, and the mic in it is open.
+    expect(walkieOwnsCall(hearing as any, live, { guest: true })).toBe(false);
+    expect(walkieOwnsCall(hearing as any, live, { guest: false })).toBe(false);
+
+    // And the linger afterwards is still inside that same huddle.
+    const lingering = { ...base, lingerUntil: Date.now() + 30_000 };
+    expect(walkieOwnsCall(lingering as any, { ...live, muted: true }, { lingerRoom: ROOM, guest: true })).toBe(
+      false,
+    );
+  });
+
+  test("a burst that OPENED its room still owns the dock while it is spoken", () => {
+    // The engine unmutes to publish the mic, so an unmuted room is not by itself
+    // a huddle — what matters is whether it was one before the key went down.
+    const sending = {
+      ...base,
+      sending: { channelId: "c", roomKey: ROOM, clientId: "cid", messageId: null, startedAt: 0, transcript: "" },
+    };
+    const opened = { roomKey: ROOM, phase: "connected", muted: false };
+    expect(walkieOwnsCall(sending as any, opened, { guest: false })).toBe(true);
   });
 });
 
@@ -170,5 +212,38 @@ describe("voiceDuration", () => {
     expect(voiceDuration(7_400)).toBe("0:07");
     expect(voiceDuration(64_000)).toBe("1:04");
     expect(voiceDuration(undefined)).toBe("0:00");
+  });
+});
+
+describe("when push to talk refuses", () => {
+  function callPlane(patch: Record<string, unknown>) {
+    useInboxStore.setState({
+      call: { phase: "idle", roomKey: null, muted: true, camera: false, sharing: false, speaking: [], error: null, ...patch },
+    } as any);
+  }
+
+  test("a mic already open in this room: talking IS the walkie", () => {
+    // The engine lets push-to-talk through for the room you are in, because
+    // that is how the receiving side replies from inside it. But when your own
+    // mic is already open there, holding the key would take the call's controls
+    // away for a sentence and then MUTE the call on release — the engine
+    // tidying up after a burst, doing real damage to a conversation.
+    callPlane({ phase: "connected", roomKey: ROOM, muted: false });
+    expect(walkieBlockedReason(ROOM)).toBe("Your mic is already open here — just talk");
+    // Standing in the room is still allowed; only talking into it twice is not.
+    expect(walkieJoinReason(ROOM)).toBe(null);
+  });
+
+  test("but a MUTED room is exactly where hold-to-reply lives", () => {
+    // The receiver auto-joins muted to hear a burst. Blocking the key here
+    // would take away the answer, which is the whole receiving half.
+    callPlane({ phase: "connected", roomKey: ROOM, muted: true });
+    expect(walkieBlockedReason(ROOM)).toBe(null);
+  });
+
+  test("a room nobody is in is open for business", () => {
+    callPlane({});
+    expect(walkieBlockedReason(ROOM)).toBe(null);
+    expect(walkieBlockedReason(undefined)).toBe("There is nobody to talk to here yet");
   });
 });
