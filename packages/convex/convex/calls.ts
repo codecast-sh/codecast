@@ -852,8 +852,9 @@ export const getRoomKnocks = query({
 
 // Every huddle running right now in one of my teams — the list that makes
 // open rooms a product rather than a permission. A LOCKED room still lists:
-// seeing it and knocking is the whole point, so membership widens the door
-// and `locked` only tells the client Join versus Knock.
+// seeing it and knocking is the whole point, so membership widens the door.
+// `locked` is a fact about the ROOM and never the client's Join-versus-Knock
+// input — `can_join` is (see below).
 //
 // This is a team-wide subscription that every client holds while a huddle
 // runs, so its result must be byte-identical between heartbeats: rooms sorted
@@ -909,10 +910,20 @@ export const getLiveRooms = query({
         const channel = await ctx.db.get(parsed.channelId as Id<"chat_channels">);
         title = channel?.name;
       }
+      // Join or Knock is a question about the VIEWER, not about the room.
+      // The lock shuts the OPEN DOOR and nothing else, so a member of the
+      // room and a guest holding a live grant both still walk into a locked
+      // one. Answer it with the very authorizer `knock` guards on — knock
+      // refuses anyone authorizeRoom admits, with "just join it" — so the
+      // button a client renders can never disagree with the mutation behind
+      // it. Byte-stable like `locked`: it moves only when a lock, a
+      // membership or the room's occupancy does, never with the clock.
+      const canJoin = (await authorizeRoom(ctx, userId, roomKey)).ok;
       out.push({
         room_key: roomKey,
         team_id: live[0].team_id,
         locked: await isRoomLocked(ctx, roomKey),
+        can_join: canJoin,
         redacted,
         title,
         members: live

@@ -7,6 +7,7 @@ import { hasTmux, tmuxExecSync } from "./tmux.js";
 import { clientAcceptsBracketedPaste, pasteTextIntoPane } from "./tmuxPaste.js";
 import { decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 import type { Config } from "./config/types.js";
+import { stableClaudeBinary } from "./stableClaudeBinary.js";
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
@@ -548,6 +549,8 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
 }
 
 function findClaudeBinary(): string | null {
+  const stable = stableClaudeBinary({ warn: (m) => log(m) });
+  if (stable) return stable;
   const pathEnv = process.env.PATH || "";
   const paths = pathEnv.split(path.delimiter);
 

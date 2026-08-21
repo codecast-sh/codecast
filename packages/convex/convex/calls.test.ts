@@ -670,6 +670,62 @@ describe("lock, knock and the live-room list", () => {
     await expect((await fn("knock"))(ctx, { room_key: groupKey })).rejects.toThrow(/Cannot knock/);
   });
 
+  // ct-44995: the lock is a fact about the ROOM; Join versus Knock is a fact
+  // about the VIEWER, and the two are not the same question. calls.knock
+  // refuses anyone authorizeRoom admits ("this huddle is open — just join
+  // it"), so a row that reported only `locked` handed the room's own people a
+  // button the server was guaranteed to reject.
+  test("a locked room reports can_join for the people its lock does not shut out", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    // ua's own 1:1 with ub: ub is sitting in it and locks the door. The lock
+    // was never meant to exclude ua — it is their DM.
+    seat(rows, "ub", "dm:ua:ub", now);
+    // A room ua is a third party to, joinable only through the open door.
+    seat(rows, "ub", "dm:ub:uc", now);
+    seat(rows, "uc", "dm:ub:uc", now);
+
+    const read = await fn("getLiveRooms");
+    const open = Object.fromEntries((await read(ctx, {})).map((r: any) => [r.room_key, r]));
+    expect(open["dm:ua:ub"]).toMatchObject({ locked: false, can_join: true });
+    expect(open["dm:ub:uc"]).toMatchObject({ locked: false, can_join: true });
+
+    rows.call_room_state = [
+      { _id: "rs1", room_key: "dm:ua:ub", team_id: "t1", locked: true, locked_by: "ub", updated_at: now },
+      { _id: "rs2", room_key: "dm:ub:uc", team_id: "t1", locked: true, locked_by: "ub", updated_at: now },
+    ];
+    const shut = Object.fromEntries((await read(ctx, {})).map((r: any) => [r.room_key, r]));
+    // The member walks in through a locked door; the walk-in no longer can.
+    expect(shut["dm:ua:ub"]).toMatchObject({ locked: true, can_join: true });
+    expect(shut["dm:ub:uc"]).toMatchObject({ locked: true, can_join: false });
+    // And the row agrees with the mutation behind each button, which is the
+    // whole point: knocking is refused exactly where can_join is true.
+    await expect((await fn("knock"))(ctx, { room_key: "dm:ua:ub" }))
+      .rejects.toThrow(/just join it/);
+    await (await fn("knock"))(ctx, { room_key: "dm:ub:uc" });
+    expect(rows.call_knocks.map((k: any) => k.from_user)).toEqual(["ua"]);
+  });
+
+  test("a guest holding a live grant may still join a room that locked behind them", async () => {
+    // The grant survives a lock — whoever was rung in was let in deliberately
+    // — so their row must offer Join, not a knock the server refuses.
+    const { ctx, rows, now } = fakeCtx();
+    seat(rows, "ub", "dm:ub:uc", now);
+    seat(rows, "uc", "dm:ub:uc", now);
+    rows.call_room_state = [
+      { _id: "rs1", room_key: "dm:ub:uc", team_id: "t1", locked: true, locked_by: "ub", updated_at: now },
+    ];
+    const read = await fn("getLiveRooms");
+    expect((await read(ctx, {}))[0]).toMatchObject({ locked: true, can_join: false });
+
+    rows.call_invites = [
+      { _id: "i1", room_key: "dm:ub:uc", team_id: "t1", from_user: "ub", to_user: "ua",
+        status: "accepted", created_at: now - 5_000, responded_at: now - 4_000 },
+    ];
+    expect((await read(ctx, {}))[0]).toMatchObject({ locked: true, can_join: true });
+    await expect((await fn("knock"))(ctx, { room_key: "dm:ub:uc" }))
+      .rejects.toThrow(/just join it/);
+  });
+
   test("a private channel huddle stays off a non-member's list", async () => {
     const { ctx, rows, now } = fakeCtx();
     rows.chat_channels = [{ _id: "chp", team_id: "t1", name: "founders", kind: "private" }];

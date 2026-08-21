@@ -95,6 +95,7 @@ const BlogIndex = lazy(() => import("@/app/(marketing)/blog/page"));
 const BlogGitBlame = lazy(() => import("@/app/(marketing)/blog/git-blame-for-ai-agents/page"));
 const BlogAgentInbox = lazy(() => import("@/app/(marketing)/blog/an-inbox-for-your-agents/page"));
 const BlogTeamMemory = lazy(() => import("@/app/(marketing)/blog/your-agents-forget-your-team-does-not/page"));
+const BlogTriggers = lazy(() => import("@/app/(marketing)/blog/this-post-wrote-itself/page"));
 const CompareIndex = lazy(() => import("@/app/(marketing)/compare/page"));
 const Compare = lazy(() => import("@/app/(marketing)/compare/ComparePage"));
 
@@ -210,6 +211,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "blog/git-blame-for-ai-agents", component: cast(BlogGitBlame), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/an-inbox-for-your-agents", component: cast(BlogAgentInbox), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/your-agents-forget-your-team-does-not", component: cast(BlogTeamMemory), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/this-post-wrote-itself", component: cast(BlogTriggers), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "compare", component: cast(CompareIndex), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "compare/:slug", component: cast(Compare), layout: "marketing", guestOk: true, guestKind: "public" },
 

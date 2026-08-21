@@ -73,10 +73,13 @@ class FakeCdp {
   handlers = new Set<(ev: CdpEvent) => void>();
   closed = false;
   nextSession = 1;
+  /** When set, Page.captureScreenshot answers with this JPEG (base64). */
+  screenshotData: string | null = null;
 
   send(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> {
     this.calls.push({ method, params, sessionId });
     if (method === "Target.attachToTarget") return Promise.resolve({ sessionId: `cdp-${this.nextSession++}` });
+    if (method === "Page.captureScreenshot" && this.screenshotData) return Promise.resolve({ data: this.screenshotData });
     return Promise.resolve({});
   }
 
@@ -274,6 +277,26 @@ describe("watch socket", () => {
     } finally {
       h.close();
       srv.close();
+    }
+  });
+
+  test("a tab that never paints still streams via the captureScreenshot fallback", async () => {
+    // A hidden tab (background tab, occluded window) starts the screencast
+    // fine but Chrome never emits a frame. The watchdog must notice the
+    // silence and deliver polled screenshots instead.
+    cdp.screenshotData = "c2hvdA==";
+    try {
+      const c = connect({ session_uuid: "u1" });
+      await c.waitFor("ready");
+      const frame = await c.waitFor("frame", 5000);
+      expect(frame.data).toBe("c2hvdA==");
+      // A static hidden page produces identical JPEGs; those are not resent.
+      await new Promise((r) => setTimeout(r, 900));
+      expect(c.messages.filter((m) => m.type === "frame").length).toBe(1);
+      c.ws.close();
+      await c.closed;
+    } finally {
+      cdp.screenshotData = null;
     }
   });
 
