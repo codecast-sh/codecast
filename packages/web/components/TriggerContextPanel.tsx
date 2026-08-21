@@ -1,5 +1,6 @@
 "use client";
 
+import { copyToClipboard } from "../lib/utils";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -231,7 +232,7 @@ export function TriggerContextPanel({
   };
 
   const copyPrompt = () => {
-    navigator.clipboard.writeText(primary.prompt).then(() => {
+    copyToClipboard(primary.prompt).then(() => {
       setPromptCopied(true);
       setTimeout(() => setPromptCopied(false), 1500);
     });

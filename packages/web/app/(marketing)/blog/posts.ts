@@ -18,6 +18,15 @@ export type BlogPost = {
 
 export const POSTS: BlogPost[] = [
   {
+    slug: "this-post-wrote-itself",
+    title: "This post wrote itself (on a schedule)",
+    dek: "Codecast triggers run full agent sessions on a timer. The proof is this blog: last week's post and this one were both written, unattended, by runs of the same weekly trigger.",
+    author: "the codecast team",
+    date: "2026-08-22",
+    dateLabel: "August 22, 2026",
+    readingMinutes: 5,
+  },
+  {
     slug: "your-agents-forget-your-team-does-not",
     title: "Your agents forget. Your team doesn't have to.",
     dek: "Every agent session is a problem being solved out loud, and then the terminal closes. Codecast keeps the record searchable — so the next agent, or the next person, starts from the answer.",

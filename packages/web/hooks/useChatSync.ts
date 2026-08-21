@@ -71,13 +71,22 @@ function hash(s: string): number {
 }
 
 /** Everything a TRANSCRIPT renders, message text included. Only the chat page's
- *  own readers subscribe to this. */
+ *  own readers subscribe to this.
+ *
+ *  `voice` and `attachments` are in here because a walkie burst finalizes by
+ *  changing ONLY those: status live -> done, the duration, and the recording
+ *  arriving as an attachment. The words stream into `content` while the key is
+ *  still down, so at release the content hash usually does not move — leaving
+ *  them out hashed a finished burst identically to a live one and left the
+ *  sender's own bubble pulsing "talking…" until a reload. */
 export const messagesSig = makeCollectionSig<ChatMessageRow>(
   (m) =>
     `${m._id}|${m.channel_id}|${m.thread_root_id ?? ""}|${m.user_id}|${m.author_kind ?? ""}` +
     `|${m.created_at}|${m.edited_at ?? 0}|${m.deleted_at ?? 0}|${m.agent_status ?? ""}` +
     `|${m._failedAt ?? 0}|${m.mention_scope ?? ""}|${(m.mentions ?? []).join(",")}` +
-    `|${m.content.length}:${hash(m.content)}`,
+    `|${m.content.length}:${hash(m.content)}` +
+    `|${m.voice ? `${m.voice.status}:${m.voice.duration_ms ?? 0}:${m.voice.room_key ?? ""}` : ""}` +
+    `|${(m.attachments ?? []).map((a) => a.storage_id).join(",")}`,
 );
 
 /** What the RAIL counts, and nothing else.

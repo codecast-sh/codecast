@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { landBurst, pickLiveBurst, type LiveBurstRow } from "../calls/walkie";
+import { landBurst, measureBurst, pickLiveBurst, type LiveBurstRow } from "../calls/walkie";
 
 // Which live burst a client should open its ears for. The rules are small and
 // the consequences are loud — this is the function that decides whether a
@@ -90,5 +90,68 @@ describe("walkie: landing a burst", () => {
     const c = fakeConvex({ finalize: "throw", cancel: "throw" });
     expect(await landBurst(c.handle, ARGS)).toBe("unresolved");
     expect(c.calls).toEqual(["finalize", "cancel"]);
+  });
+});
+
+// The brushed key. MIN_BURST_MS throws away a hold too short to be speech, and
+// it only works if the hold is measured from the hand, not from the clock the
+// setup happens to be on. Measuring the burst from press to "setup finished"
+// charged mic acquisition, the room join and the start round trip to the
+// person's thumb: a real 60ms tap reported 1274ms, so the guard never fired
+// once and every brushed key posted a wordless voice note.
+describe("walkie: measuring a burst", () => {
+  const PRESS = 1_000_000;
+  // What setup actually cost on a warm room in the browser: about 1.2 seconds.
+  const SETUP_MS = 1_200;
+
+  const measure = (holdMs: number, over: Partial<Parameters<typeof measureBurst>[0]> = {}) =>
+    measureBurst({
+      startedAt: PRESS,
+      captureAt: PRESS + SETUP_MS,
+      releasedAt: PRESS + holdMs,
+      stoppedAt: PRESS + Math.max(holdMs, SETUP_MS),
+      transcript: "",
+      hasAudio: true,
+      ...over,
+    });
+
+  it("throws away a brushed key even when the setup it raced took a second", () => {
+    expect(measure(60).discard).toBe(true);
+    expect(measure(300).discard).toBe(true);
+    expect(measure(699).discard).toBe(true);
+  });
+
+  it("keeps a hold that reached the threshold", () => {
+    expect(measure(700).discard).toBe(false);
+    expect(measure(25_000).discard).toBe(false);
+  });
+
+  it("reports the recording's own span, not the setup that preceded it", () => {
+    // 25s of hold on a room that took 1.2s to open is 23.8s of audio.
+    expect(measure(25_000).durationMs).toBe(23_800);
+  });
+
+  it("falls back to the hold when there was no recorder to run", () => {
+    // An old browser or a blocked codec: live audio and a transcript, no
+    // recording. The hold is then the only span there is.
+    const m = measure(4_000, { captureAt: null, transcript: "on my way" });
+    expect(m.durationMs).toBe(4_000);
+    expect(m.discard).toBe(false);
+  });
+
+  it("never reports a negative span when the release beat the setup", () => {
+    const m = measure(200, { stoppedAt: PRESS + SETUP_MS - 100 });
+    expect(m.durationMs).toBe(0);
+    expect(m.discard).toBe(true);
+  });
+
+  it("throws away a real hold that carried neither words nor audio", () => {
+    expect(measure(5_000, { hasAudio: false }).discard).toBe(true);
+    // Audio with nothing recognized is still a voice note.
+    expect(measure(5_000, { hasAudio: true }).discard).toBe(false);
+    // As is a transcript with no recording behind it.
+    expect(measure(5_000, { hasAudio: false, transcript: "on my way" }).discard).toBe(false);
+    // Whitespace is not words.
+    expect(measure(5_000, { hasAudio: false, transcript: "   " }).discard).toBe(true);
   });
 });
