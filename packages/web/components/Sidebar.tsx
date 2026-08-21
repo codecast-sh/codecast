@@ -40,6 +40,7 @@ import { CreateDocModal } from "./CreateDocModal";
 import { CreateChannelModal } from "./CreateChannelModal";
 import { NewMessageModal } from "./chat/NewMessageModal";
 import { Globe, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Blocks, Lock, SquarePen, Phone, PhoneCall } from "lucide-react";
+import { LiveNowRail } from "./calls/LiveNow";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
@@ -534,6 +535,11 @@ const CallsNavRow = memo(function CallsNavRow({
   // return, so presence churn that changes nothing re-renders nobody.
   const liveRooms = useInboxStore((s) => {
     const keys = new Set<string>();
+    // The authoritative list (calls.getLiveRooms) plus the strip's view of it:
+    // the union keeps the dot honest before the query has landed, and adds the
+    // rooms only the server list knows about (a teammate outside my strip, a
+    // huddle whose occupants hide their room key).
+    for (const r of (s as any).liveRooms ?? []) keys.add(r.room_key);
     for (const m of s.teamMembers ?? []) if (m?.in_room_key) keys.add(m.in_room_key);
     if (s.call?.roomKey) keys.add(s.call.roomKey);
     return keys.size;
@@ -1153,6 +1159,10 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
           />}
+          {/* The huddles running right now, one row each — an occupied room
+              is a door you can walk through from here. Renders nothing when
+              none is live. */}
+          {callsOn && <LiveNowRail isNarrow={isNarrow} onNavigate={onMobileClose} />}
         </div>
 
         {/* What you are working on. Projects leads: it is the container the rest

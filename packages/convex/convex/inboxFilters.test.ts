@@ -623,6 +623,22 @@ describe("classifyWorkState", () => {
     expect(classifyWorkState(wsi({ isIdle: false, hasPending: true, armedTriggerHome: true }))).toBe("working");
   });
 
+  test("armed ONCE inject trigger: demotes only a done rest to dormant", () => {
+    // Delivered + a named wake = parked, through every door done arrives by:
+    // the daemon-carried declaration, the row's own pinned declaration with no
+    // daemon status, and the settle classifier's verdict.
+    expect(classifyWorkState(wsi({ agentStatus: "done", isIdle: true, armedOnceTriggerHome: true }))).toBe("dormant");
+    expect(classifyWorkState(wsi({ isIdle: true, declaredStatus: "done", armedOnceTriggerHome: true }))).toBe("dormant");
+    expect(classifyWorkState(wsi({ agentStatus: "idle", isIdle: true, settleVerdict: "done", armedOnceTriggerHome: true }))).toBe("dormant");
+    // A reminder never hides an open ask: unclassified settles, blocked pins,
+    // and hard blocks all keep the human's claim.
+    expect(classifyWorkState(wsi({ isIdle: true, armedOnceTriggerHome: true }))).toBe("needs_input");
+    expect(classifyWorkState(wsi({ isIdle: true, declaredStatus: "blocked", armedOnceTriggerHome: true }))).toBe("needs_input");
+    expect(classifyWorkState(wsi({ agentStatus: "done", isIdle: true, isUnresponsive: true, armedOnceTriggerHome: true }))).toBe("needs_input");
+    // …and a wake in flight is working, same as standing homes.
+    expect(classifyWorkState(wsi({ isIdle: false, hasPending: true, armedOnceTriggerHome: true }))).toBe("working");
+  });
+
   test("a blocked pin outranks the classifier's soft verdict", () => {
     // The pin is the agent's explicit claim on the human (it un-stashes, see
     // setThreadState); a model reading prose never softens it to done.

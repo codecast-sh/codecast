@@ -4,6 +4,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useEventListener } from "../hooks/useEventListener";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { KeyCap } from "./KeyboardShortcutsHelp";
+import { useInboxStore } from "../store/inboxStore";
 
 // Tools whose "permission" row is really a UI affordance, not a request to run
 // something: the agent is asking a question or moving a task, and the prompt is
@@ -22,6 +23,7 @@ export const PERMISSION_SKIP_TOOLS: ReadonlySet<string> = new Set([
 
 type Permission = {
   _id: Id<"pending_permissions">;
+  conversation_id?: string;
   tool_name: string;
   arguments_preview?: string;
   status: "pending" | "approved" | "denied" | "cancelled";
@@ -94,51 +96,68 @@ export function PermissionStack({
   onAllowAll?: () => void;
 }) {
   const updatePermissionStatus = useMutation(api.permissions.updatePermissionStatus);
+  const resolveSessionQuestion = useInboxStore((s) => s.resolveSessionQuestion);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [inflight, setInflight] = useState<Set<string>>(new Set());
 
   const pending = permissions.filter((p) => p.status === "pending");
 
+  // Resolving the LAST pending permission unblocks the session — mark its
+  // question resolved in the store so the rail's QUESTIONS section and the
+  // queue drop it in the same commit, instead of waiting for the daemon's
+  // agent_status heartbeat. Stamped before the mutation: local-first.
+  const markUnblockedIfLast = useCallback((resolvedIds: Array<Id<"pending_permissions">>) => {
+    const remaining = pending.filter((p) => !resolvedIds.includes(p._id));
+    if (remaining.length > 0) return;
+    const convId = pending[0]?.conversation_id;
+    if (convId) resolveSessionQuestion(convId);
+  }, [pending, resolveSessionQuestion]);
+
   const handleApprove = useCallback(async (id: Id<"pending_permissions">) => {
     if (inflight.has(id)) return;
     setInflight((s) => new Set(s).add(id));
+    markUnblockedIfLast([id]);
     await updatePermissionStatus({ permission_id: id, status: "approved" }).catch(() => {});
     setInflight((s) => { const n = new Set(s); n.delete(id); return n; });
-  }, [updatePermissionStatus, inflight]);
+  }, [updatePermissionStatus, inflight, markUnblockedIfLast]);
 
   const handleDeny = useCallback(async (id: Id<"pending_permissions">) => {
     if (inflight.has(id)) return;
     setInflight((s) => new Set(s).add(id));
+    markUnblockedIfLast([id]);
     await updatePermissionStatus({ permission_id: id, status: "denied" }).catch(() => {});
     setInflight((s) => { const n = new Set(s); n.delete(id); return n; });
-  }, [updatePermissionStatus, inflight]);
+  }, [updatePermissionStatus, inflight, markUnblockedIfLast]);
 
   const handleApproveAll = useCallback(async () => {
+    markUnblockedIfLast(pending.map((p) => p._id));
     await Promise.all(
       pending.map((p) =>
         updatePermissionStatus({ permission_id: p._id, status: "approved" }).catch(() => {})
       )
     );
-  }, [pending, updatePermissionStatus]);
+  }, [pending, updatePermissionStatus, markUnblockedIfLast]);
 
   const handleDenyAll = useCallback(async () => {
+    markUnblockedIfLast(pending.map((p) => p._id));
     await Promise.all(
       pending.map((p) =>
         updatePermissionStatus({ permission_id: p._id, status: "denied" }).catch(() => {})
       )
     );
-  }, [pending, updatePermissionStatus]);
+  }, [pending, updatePermissionStatus, markUnblockedIfLast]);
 
   const handleAllowAll = useCallback(async () => {
     if (!onAllowAll) return;
+    markUnblockedIfLast(pending.map((p) => p._id));
     await Promise.all(
       pending.map((p) =>
         updatePermissionStatus({ permission_id: p._id, status: "approved" }).catch(() => {})
       )
     );
     onAllowAll();
-  }, [pending, updatePermissionStatus, onAllowAll]);
+  }, [pending, updatePermissionStatus, onAllowAll, markUnblockedIfLast]);
 
   useEventListener("keydown", useCallback((e: KeyboardEvent) => {
     const tag = (e.target as HTMLElement)?.tagName;

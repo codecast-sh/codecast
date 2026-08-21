@@ -13,6 +13,7 @@ import {
   samePane,
   surfaceForPath,
   slotPolicyFor,
+  filesPaneHref,
   serializeWorkspace,
   hydrateWorkspace,
   setSize,
@@ -177,6 +178,24 @@ describe("route → slot defaults", () => {
     expect(slotPolicyFor("inbox").secondary).toBe("overlay");
     expect(slotPolicyFor("conversation").secondary).toBe(false);
     expect(slotPolicyFor("settings").secondary).toBe(false);
+  });
+
+  // Files beside a conversation: the stage that shows a session may have the
+  // files it names alongside. Working pages keep the slot for the companion,
+  // so the two never fight over it.
+  it("lets the Files pane split beside a conversation, not beside working pages", () => {
+    expect(slotPolicyFor("inbox").files).toBe(true);
+    expect(slotPolicyFor("conversation").files).toBe(true);
+    expect(slotPolicyFor("working").files).toBe(false);
+    expect(slotPolicyFor("settings").files).toBe(false);
+    expect(slotPolicyFor("plain").files).toBe(false);
+  });
+
+  it("a files pane is a subject, never persisted", () => {
+    const ws = showPane(createWorkspace(), "secondary", { kind: "files", ref: "/files?path=%2Ftmp" }, { presentation: "split" });
+    expect(filesPaneHref(ws)).toBe("/files?path=%2Ftmp");
+    expect(serializeWorkspace(ws).secondary?.kind).toBeUndefined();
+    expect(filesPaneHref(hydrateWorkspace(serializeWorkspace(ws)))).toBeNull();
   });
 
   it("keeps the session rail available everywhere", () => {
