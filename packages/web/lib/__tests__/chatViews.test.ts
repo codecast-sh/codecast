@@ -8,6 +8,7 @@ import {
   mentionsViewer,
   threadRollups,
   toMessageView,
+  toMessageViews,
   type ChatMember,
 } from "../chatViews";
 import type { ChatMessageRow, ChatReactionRow } from "../../store/chatSlice";
@@ -193,5 +194,36 @@ describe("toMessageView", () => {
 
   it("leaves reactions undefined rather than empty, so the row renders no pill strip", () => {
     expect(toMessageView(row({ _id: "m2" }), ctx).reactions).toBeUndefined();
+  });
+
+  it("carries a walkie burst's lifecycle through, renamed to the view's shape", () => {
+    const live = toMessageView(
+      row({ _id: "m3", voice: { status: "live", room_key: "dm:a:b" } } as any),
+      ctx,
+    );
+    expect(live.voice).toEqual({ status: "live", durationMs: undefined, roomKey: "dm:a:b" });
+    const done = toMessageView(
+      row({ _id: "m4", voice: { status: "done", duration_ms: 4200 } } as any),
+      ctx,
+    );
+    expect(done.voice).toMatchObject({ status: "done", durationMs: 4200 });
+    // An ordinary typed message must stay free of it, or every row in the
+    // timeline would take the voice branch.
+    expect(toMessageView(row({ _id: "m5" }), ctx).voice).toBeUndefined();
+  });
+
+  it("drops a brushed key from the timeline, but keeps one somebody replied to", () => {
+    // The server tombstones a canceled burst rather than deleting it, so that
+    // watchers holding the live row stop pulsing. That tombstone is a message to
+    // the client, not a line in the DM — showing it would put "This message was
+    // deleted" on screen every time a hand brushed the key.
+    const brushed = row({ _id: "m6", voice: { status: "canceled" }, deleted_at: 5 } as any);
+    expect(toMessageViews([brushed], ctx)).toHaveLength(0);
+    // "m1" is the root the context's rollups give a reply to: with something
+    // hanging off it, the tombstone does an ordinary deleted message's job.
+    const answered = row({ _id: "m1", voice: { status: "canceled" }, deleted_at: 5 } as any);
+    expect(toMessageViews([answered], ctx)).toHaveLength(1);
+    // And an ordinary burst is never dropped.
+    expect(toMessageViews([row({ _id: "m7", voice: { status: "done" } } as any)], ctx)).toHaveLength(1);
   });
 });
