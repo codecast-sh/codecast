@@ -21,6 +21,8 @@ import {
   FolderPlus,
   FileCode2,
   FolderTree,
+  PanelLeft,
+  PanelLeftClose,
   PanelRight,
   RefreshCw,
   Search,
@@ -301,6 +303,74 @@ function VaultContent() {
     // `connection` is a dep because the panel group only mounts once the vault
     // is reachable; before that the ref is empty and the effect must retry.
   }, [rightPanelOpen, showGraph, connection]);
+  // The explorer column costs ~200px that a narrow pane can't spare — Files
+  // opened beside a conversation, mostly. Local state, decided by the pane's
+  // own width at first layout: a narrow split starts with the tree hidden, a
+  // full tab shows it. The toggles live in the tree titlebar (hide) and the
+  // content pane's top-left corner (show).
+  const treePanelRef = usePanelRef();
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  // Below this width the explorer column and the content can no longer share
+  // the pane (their pixel minimums do not fit), so the tree renders as an
+  // overlay drawer instead of a split — and starts hidden. Typical case:
+  // Files opened beside a conversation.
+  // null until the first measure: the split panel only mounts once the pane
+  // is known to be wide enough — mounting it into a pane that cannot satisfy
+  // its pixel minimums livelocks the panel library.
+  const [paneNarrow, setPaneNarrow] = useState<boolean | null>(null);
+  const [treeOpen, setTreeOpen] = useState(true);
+  const treeAppliedRef = useRef<boolean | null>(null);
+  const treeExpandingRef = useRef(false);
+  const firstMeasureRef = useRef(true);
+  useWatchEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const measure = () => {
+      const narrow = el.offsetWidth < 640;
+      if (firstMeasureRef.current) {
+        firstMeasureRef.current = false;
+        if (narrow) setTreeOpen(false);
+      }
+      setPaneNarrow((prev) => {
+        if (prev !== narrow) treeAppliedRef.current = null;
+        return narrow;
+      });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [connection]);
+  // Mirror treeOpen onto the split panel (wide layout only; the overlay
+  // renders from state directly).
+  useWatchEffect(() => {
+    if (paneNarrow !== false) return;
+    const ref = treePanelRef.current;
+    if (!ref) return;
+    if (treeAppliedRef.current === treeOpen) return;
+    const firstSync = treeAppliedRef.current === null;
+    treeAppliedRef.current = treeOpen;
+    if (!treeOpen) {
+      ref.collapse();
+      return;
+    }
+    if (firstSync) return; // the panel mounts expanded already
+    treeExpandingRef.current = true;
+    ref.resize("20%");
+    // 20% of a modest pane can fall under the pixel minimum and the library
+    // collapses instead of resizing; ask for the minimum itself on the retry.
+    requestAnimationFrame(() => {
+      if (treePanelRef.current?.isCollapsed()) treePanelRef.current.resize("180px");
+      requestAnimationFrame(() => {
+        treeExpandingRef.current = false;
+      });
+    });
+  }, [treeOpen, paneNarrow, connection]);
+  // Picking a file from the overlay closes it — on a narrow pane the reader
+  // is the point, and the drawer covers most of it.
+  useWatchEffect(() => {
+    if (paneNarrow) setTreeOpen(false);
+  }, [activePath, paneNarrow]);
   const leftTab = useVaultStore((s) => s.leftPaneTab);
   const setLeftTab = useVaultStore((s) => s.setLeftPaneTab);
 
@@ -363,10 +433,13 @@ function VaultContent() {
       router.replace(filesHref());
       return;
     }
-    // Nothing by that name: open the nearest directory that does exist and say so.
+    // Nothing by that name: open the nearest directory that does exist, say
+    // so, and put the name into the quick switcher — the near-misses (a moved
+    // file, a typo in the transcript) are then one keystroke away.
     const existing = ancestorDirs(rel).filter((d) => files[d]?.dir || Object.keys(files).some((p) => p.startsWith(`${d}/`)));
     if (existing.length) store.setDirsExpanded(existing, true);
     useVaultStore.setState({ opError: `${target.abs} isn't in this vault.` });
+    store.openQuickSwitch(rel.slice(rel.lastIndexOf("/") + 1));
     router.replace(filesHref());
   }, [localPath, connection, vaults, activeVaultId, scannedAtForPath, selectVault, router, targetLine]);
 
@@ -531,59 +604,9 @@ function VaultContent() {
     );
   }
 
-  return (
-    <div className="h-full flex flex-col">
-      {isRemote && (
-        <div className="flex items-center gap-2 px-3 py-1 text-[11px] bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
-          <Cloud className="w-3 h-3" />
-          Read-only mirror from another machine — edits happen where the files live.
-        </div>
-      )}
-      {connection === "cached" && (
-        <div className="flex items-center gap-2 px-3 py-1 text-[11px] bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
-          <WifiOff className="w-3 h-3" />
-          Showing cached copy — reconnecting to the local daemon…
-        </div>
-      )}
-      {opError && (
-        <div className="flex items-center gap-2 px-3 py-1 text-[11px] bg-sol-red/10 text-sol-red border-b border-sol-red/30">
-          <span className="flex-1 truncate" title={opError}>
-            {opError}
-          </span>
-          <button type="button" onClick={clearOpError} title="Dismiss" className="hover:opacity-70">
-            <X className="w-3 h-3" />
-          </button>
-        </div>
-      )}
-      {renameReport && renameReport.linksRewritten + renameReport.skipped > 0 && (
-        <div className="flex items-center gap-2 px-3 py-1 text-[11px] bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
-          <span className="flex-1 truncate">
-            {renameReport.linksRewritten > 0 && (
-              <>
-                Updated {renameReport.linksRewritten}{" "}
-                {renameReport.linksRewritten === 1 ? "link" : "links"} in {renameReport.filesChanged}{" "}
-                {renameReport.filesChanged === 1 ? "note" : "notes"}
-              </>
-            )}
-            {renameReport.skipped > 0 && (
-              <span className="text-sol-yellow">
-                {renameReport.linksRewritten > 0 ? " · " : ""}
-                {renameReport.skipped} {renameReport.skipped === 1 ? "link" : "links"} left alone —
-                those notes changed under the rename
-              </span>
-            )}
-          </span>
-          <button type="button" onClick={clearRenameReport} title="Dismiss" className="hover:opacity-70">
-            <X className="w-3 h-3" />
-          </button>
-        </div>
-      )}
-      <Group
-        orientation="horizontal"
-        className="flex-1 min-h-0"
-        defaultLayout={{ "vault-tree": 20, "vault-content": rightPanelOpen ? 58 : 80, "vault-side": rightPanelOpen ? 22 : 0 }}
-      >
-        <Panel id="vault-tree" minSize={180} maxSize="42%" className="min-w-0">
+  // The explorer column, rendered either as a split panel (wide pane) or an
+  // overlay drawer (narrow pane).
+  const treePane = (
           <div className="h-full flex flex-col border-r-0 bg-sol-bg-alt/40">
             <div ref={titlebarRef} className="flex items-center gap-2 px-3 py-2 border-b border-sol-border/30">
               <VaultPicker
@@ -676,6 +699,14 @@ function VaultContent() {
               >
                 <Waypoints className="w-3.5 h-3.5" />
               </button>
+              <button
+                type="button"
+                title="Hide file tree"
+                onClick={() => setTreeOpen(false)}
+                className={headerButtonClass}
+              >
+                <PanelLeftClose className="w-3.5 h-3.5" />
+              </button>
             </div>
             {scope && <VaultScopeLine {...scope} docTwin={docTwin} />}
             <div className="flex items-center border-b border-sol-border/30">
@@ -708,11 +739,105 @@ function VaultContent() {
               )}
             </div>
           </div>
+  );
+
+  return (
+    <div ref={rootRef} className="h-full flex flex-col">
+      {isRemote && (
+        <div className="flex items-center gap-2 px-3 py-1 text-[11px] bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
+          <Cloud className="w-3 h-3" />
+          Read-only mirror from another machine — edits happen where the files live.
+        </div>
+      )}
+      {connection === "cached" && (
+        <div className="flex items-center gap-2 px-3 py-1 text-[11px] bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
+          <WifiOff className="w-3 h-3" />
+          Showing cached copy — reconnecting to the local daemon…
+        </div>
+      )}
+      {opError && (
+        <div className="flex items-center gap-2 px-3 py-1 text-[11px] bg-sol-red/10 text-sol-red border-b border-sol-red/30">
+          <span className="flex-1 truncate" title={opError}>
+            {opError}
+          </span>
+          <button type="button" onClick={clearOpError} title="Dismiss" className="hover:opacity-70">
+            <X className="w-3 h-3" />
+          </button>
+        </div>
+      )}
+      {renameReport && renameReport.linksRewritten + renameReport.skipped > 0 && (
+        <div className="flex items-center gap-2 px-3 py-1 text-[11px] bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
+          <span className="flex-1 truncate">
+            {renameReport.linksRewritten > 0 && (
+              <>
+                Updated {renameReport.linksRewritten}{" "}
+                {renameReport.linksRewritten === 1 ? "link" : "links"} in {renameReport.filesChanged}{" "}
+                {renameReport.filesChanged === 1 ? "note" : "notes"}
+              </>
+            )}
+            {renameReport.skipped > 0 && (
+              <span className="text-sol-yellow">
+                {renameReport.linksRewritten > 0 ? " · " : ""}
+                {renameReport.skipped} {renameReport.skipped === 1 ? "link" : "links"} left alone —
+                those notes changed under the rename
+              </span>
+            )}
+          </span>
+          <button type="button" onClick={clearRenameReport} title="Dismiss" className="hover:opacity-70">
+            <X className="w-3 h-3" />
+          </button>
+        </div>
+      )}
+      <Group
+        orientation="horizontal"
+        className="flex-1 min-h-0"
+        defaultLayout={{ "vault-tree": 20, "vault-content": rightPanelOpen ? 58 : 80, "vault-side": rightPanelOpen ? 22 : 0 }}
+      >
+        {paneNarrow === false && (
+          <>
+        <Panel
+          id="vault-tree"
+          panelRef={treePanelRef}
+          minSize={180}
+          maxSize="42%"
+          collapsible
+          collapsedSize={0}
+          className="min-w-0"
+          onResize={(size) => {
+            // A drag all the way shut is a close; keep the state honest so
+            // the corner button reopens it instead of doing nothing.
+            if (size.asPercentage === 0 && treeAppliedRef.current && !treeExpandingRef.current) {
+              treeAppliedRef.current = false;
+              setTreeOpen(false);
+            }
+          }}
+        >
+          {treePane}
         </Panel>
-        <Separator className={separatorClass} />
+        <Separator className={`${separatorClass} ${treeOpen ? "" : "invisible"}`} />
+          </>
+        )}
         {/* The graph owns everything right of the explorer: the backlinks pane
             is a list of the same edges it already draws. */}
         <Panel id="vault-content" minSize={320} className="min-w-0 relative">
+          {paneNarrow === true && treeOpen && (
+            <>
+              <div className="absolute inset-0 z-20 bg-black/20" onClick={() => setTreeOpen(false)} />
+              <div className="absolute inset-y-0 left-0 z-30 w-72 max-w-[85%] bg-sol-bg border-r border-sol-border shadow-xl">
+                {treePane}
+              </div>
+            </>
+          )}
+          {!treeOpen && !findOpen && (
+            <button
+              type="button"
+              onClick={() => setTreeOpen(true)}
+              title="Show file tree"
+              className="absolute top-2 left-2 z-10 p-1 rounded transition-colors hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text"
+            >
+              <PanelLeft className="w-4 h-4" />
+            </button>
+          )}
           {!showGraph && !findOpen && (
             <button
               type="button"

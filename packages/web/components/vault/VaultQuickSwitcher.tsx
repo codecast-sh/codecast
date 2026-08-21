@@ -130,7 +130,8 @@ export const VaultQuickSwitcher = memo(function VaultQuickSwitcher() {
 
   useWatchEffect(() => {
     if (open) {
-      setQuery("");
+      const seed = useVaultStore.getState().quickSwitchSeed;
+      setQuery(seed ?? "");
       setSelected(0);
       // Focus after the portal paints.
       requestAnimationFrame(() => inputRef.current?.focus());
