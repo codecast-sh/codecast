@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { describeRoom } from "../calls/roomLabels";
+import { describeRoom, describeRoomLive } from "../calls/roomLabels";
 import { chatViewRoomKey } from "../chatViews";
 
 // One room, one name, everywhere: the dock pill, the stage header, the ring
@@ -81,5 +81,58 @@ describe("describeRoom", () => {
   test("unknown or absent keys fall back honestly", () => {
     expect(describeRoom(null, store as any).label).toBe("Huddle");
     expect(describeRoom("room:x", store as any).label).toBe("Huddle");
+  });
+
+  // Open rooms: a live huddle lists for the whole team, but a session room
+  // whose conversation the viewer cannot see must not carry its title into
+  // that list. The room stays joinable; only the NAME redacts.
+  test("a redacted room is 'a huddle', and nothing about it is looked up", () => {
+    const leaky = {
+      ...store,
+      conversations: { conv1: { _id: "conv1", title: "Acquisition terms" } },
+    };
+    const d = describeRoom("session:conv1", leaky as any, { redacted: true });
+    expect(d).toEqual({ label: "a huddle", otherIds: [] });
+    expect(d.anchorTitle).toBeUndefined();
+  });
+
+  // The live-rooms list names rooms this client never pulled into its store
+  // (another team's channel, a session it has not opened). The server sends
+  // the title; the store still wins when it has one.
+  // The in-room path. Under the open door a teammate can SIT in a session room
+  // whose conversation they cannot see, and the dock and the stage header name
+  // the room they are in — so the listing's redaction has to govern that name
+  // too, or walking in would reveal what the list withheld.
+  test("a redacted room keeps its name hidden from the people inside it", () => {
+    const leaky = {
+      ...store,
+      // The viewer's cache happens to hold the conversation (stale IDB, an
+      // earlier membership, an incidental sync).
+      conversations: { conv1: { _id: "conv1", title: "Acquisition terms" } },
+      liveRooms: [{ room_key: "session:conv1", redacted: true }],
+    };
+    expect(describeRoomLive("session:conv1", leaky as any).label).toBe("a huddle");
+    // Same store, same room, membership restored: the name comes back.
+    const visible = { ...leaky, liveRooms: [{ room_key: "session:conv1", redacted: false }] };
+    expect(describeRoomLive("session:conv1", visible as any).label).toBe("Acquisition terms");
+  });
+
+  test("a room the live list does not know is named the ordinary way", () => {
+    // A ring toast names a room nobody has joined yet: no live row, no ruling.
+    expect(describeRoomLive("session:conv1", store as any).label).toBe("Fix the auth race");
+    expect(describeRoomLive("channel:unknown", { ...store, liveRooms: [
+      { room_key: "channel:unknown", title: "ops" },
+    ] } as any).label).toBe("#ops");
+  });
+
+  test("the server's title names a room the store has never seen", () => {
+    expect(describeRoom("channel:unknown", store as any, { serverTitle: "ops" })).toEqual({
+      label: "#ops",
+      anchorTitle: "#ops",
+      otherIds: [],
+    });
+    expect(describeRoom("session:nope", store as any, { serverTitle: "Ship it" }).label).toBe("Ship it");
+    expect(describeRoom("channel:ch1", store as any, { serverTitle: "stale" }).label).toBe("#design");
+    expect(describeRoom("session:conv1", store as any, { serverTitle: "stale" }).label).toBe("Fix the auth race");
   });
 });

@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ExternalLink,
   LayoutGrid,
+  Lock,
   MessageSquare,
   MicOff,
   MonitorUp,
@@ -14,6 +15,7 @@ import {
   Radio,
   Settings2,
   Sparkles,
+  Unlock,
   User,
   Video,
   VideoOff,
@@ -39,12 +41,14 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { getScribeStatus, stopScribe, subscribeScribe } from "../../lib/calls/transcription";
 import { TranscribeControls } from "./TranscribePanel";
 import { AddPeopleButton } from "./AddPeople";
+import { RoomKnocks } from "./RoomDoor";
 import { HangUpButton, MicButton } from "./CallControls";
 import { CallChatPanel } from "./CallChatPanel";
 import { FeedChip } from "./FeedChip";
 import { openFeedTargetPicker, useAddLiveFeed, useRemoveLiveFeed, type FeedTarget } from "./useCallFeed";
 import { firstName, fmtClock, speakerColor } from "./speakers";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
+import { useRoomLock } from "../../hooks/useLiveRooms";
 import type { DesktopDisplaySource } from "../../lib/desktop";
 
 // The call stage: the full surface a huddle opens into when video or a screen
@@ -130,6 +134,7 @@ export function CallStage({ onCollapse }: { onCollapse: () => void }) {
   const parsed = call.roomKey ? parseRoomKey(call.roomKey) : null;
   const { label } = useRoomDescription(call.roomKey);
   const { ringing, settledLine } = useOutgoingRings(call.roomKey);
+  const lock = useRoomLock(call.roomKey);
 
   const toggleRail = (tab: RailTab) => setRail((r) => (r === tab ? null : tab));
 
@@ -178,6 +183,19 @@ export function CallStage({ onCollapse }: { onCollapse: () => void }) {
             call page
           </Link>
         )}
+        {/* The door. An open huddle is the default — any teammate can walk in
+            — so the lock is the exception, and it reads as one: lit violet
+            while the room is closed, quiet chrome while it is open. */}
+        <StageChromeButton
+          onClick={lock.toggle}
+          active={lock.locked}
+          accent="violet"
+          title={lock.title}
+          className="ml-1"
+        >
+          {lock.locked ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
+          {lock.locked ? "locked" : "open"}
+        </StageChromeButton>
         <div className="flex-1" />
 
         {/* View switcher: three words, the live one lit. */}
@@ -229,6 +247,16 @@ export function CallStage({ onCollapse }: { onCollapse: () => void }) {
           collapse
         </StageChromeButton>
       </div>
+
+      {/* Who is at the door, over the stage's top-right corner — visible
+          without taking a lane from the people already in the room. */}
+      {call.roomKey && call.phase === "connected" && (
+        <div className="pointer-events-none absolute right-3 top-12 z-10 w-64">
+          <div className="pointer-events-auto rounded-lg bg-sol-base03/80 backdrop-blur">
+            <RoomKnocks roomKey={call.roomKey} />
+          </div>
+        </div>
+      )}
 
       {/* The stage itself. */}
       <div className="flex min-h-0 flex-1 gap-2 px-3 pb-1">
@@ -297,7 +325,7 @@ function StageChromeButton({
   ...rest
 }: {
   active?: boolean;
-  accent?: "green" | "cyan";
+  accent?: "green" | "cyan" | "violet";
   className?: string;
   children: React.ReactNode;
 } & Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "className" | "children">) {
@@ -306,7 +334,9 @@ function StageChromeButton({
       ? "bg-sol-green/10 text-sol-green"
       : accent === "cyan"
         ? "bg-sol-cyan/10 text-sol-cyan"
-        : "bg-white/10 text-sol-text"
+        : accent === "violet"
+          ? "bg-sol-violet/10 text-sol-violet"
+          : "bg-white/10 text-sol-text"
     : "text-sol-text-muted hover:bg-white/[0.06] hover:text-sol-text";
   return (
     <button className={`${CHROME_BTN} ${tone} ${className}`} {...rest}>

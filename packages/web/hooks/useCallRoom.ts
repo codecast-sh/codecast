@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useTrackedStore } from "../store/inboxStore";
-import { describeRoom } from "../lib/calls/roomLabels";
+import { describeRoomLive } from "../lib/calls/roomLabels";
 
 type RingRow = { user_id: string; user_name: string; user_image?: string };
 
@@ -88,8 +88,16 @@ export function useRoomDescription(roomKey: string | null) {
       return (conv as any)?.title ?? (conv as any)?.name ?? "";
     },
     (st: any) => st.currentUser?._id,
+    // Whether this viewer may read the room's NAME at all. The open door lets
+    // a teammate sit in a session room whose conversation they cannot see, and
+    // the server marks that room redacted; without this the dock and the stage
+    // would name it from whatever the local cache happens to hold.
+    (st: any) => {
+      const r = (st.liveRooms ?? []).find((x: any) => x.room_key === roomKey);
+      return r ? `${r.redacted ? 1 : 0}:${r.title ?? ""}` : "";
+    },
   ]);
   // Re-renders are already gated by the signatures above, so deriving on
   // each render is the cheap and honest choice.
-  return describeRoom(roomKey, s as any);
+  return describeRoomLive(roomKey, s as any);
 }

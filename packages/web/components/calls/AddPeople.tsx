@@ -4,7 +4,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { MemberPicker } from "../chat/ChannelPeople";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { ringInto } from "../../lib/calls/callManager";
-import { describeRoom } from "../../lib/calls/roomLabels";
+import { describeRoomLive } from "../../lib/calls/roomLabels";
 
 // "Add people" for a live huddle: the chat member picker in a popover, on
 // the room you are in. Picking rings everyone chosen into THIS room — the
@@ -54,7 +54,12 @@ export function AddPeopleButton({
     // caller's line only matters for channel and session rooms. Outcome
     // toasts (cooldown, refused, errors) live in ringInto, shared with
     // every other entry point.
-    const { anchorTitle } = describeRoom(roomKey, useInboxStore.getState() as any);
+    //
+    // describeRoomLive, not describeRoom: a caller sitting in a redacted
+    // session room may not read its name, so they must not be the one to
+    // publish it — the ring goes out with no context line instead of
+    // forwarding a title out of their local cache.
+    const { anchorTitle } = describeRoomLive(roomKey, useInboxStore.getState() as any);
     void ringInto(roomKey, ids, anchorTitle);
   };
 
