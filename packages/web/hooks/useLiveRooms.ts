@@ -20,7 +20,14 @@ export type LiveRoomRow = {
   roomKey: string;
   /** "#design", "Ann, Bo", the session's title, or "a huddle" when redacted. */
   label: string;
+  /** The room's door is shut. Paints the lock glyph, and nothing else: a
+   *  locked room is still joinable by everyone the lock does not exclude. */
   locked: boolean;
+  /** I may walk into this room right now (the server's own authorizeRoom
+   *  answer). Join versus Knock branches on THIS: calls.knock refuses anyone
+   *  who could just join, so a button that read `locked` handed a member of a
+   *  locked room a knock that always failed. */
+  canJoin: boolean;
   /** A session huddle whose conversation this viewer cannot see: joinable,
    *  but unnamed — the room list must not leak titles. */
   redacted: boolean;
@@ -34,7 +41,7 @@ export type LiveRoomRow = {
 function roomsSig(rooms: LiveRoom[]): string {
   let sig = "";
   for (const r of rooms) {
-    sig += `${r.room_key}|${r.locked ? 1 : 0}|${r.redacted ? 1 : 0}|${r.title ?? ""}|`;
+    sig += `${r.room_key}|${r.locked ? 1 : 0}|${r.can_join ? 1 : 0}|${r.redacted ? 1 : 0}|${r.title ?? ""}|`;
     for (const m of r.members) sig += `${m.user_id},`;
     sig += "\n";
   }
@@ -87,6 +94,7 @@ export function useLiveRooms(): LiveRoomRow[] {
         roomKey: room.room_key,
         label,
         locked: room.locked,
+        canJoin: room.can_join,
         redacted: room.redacted,
         members: room.members,
         mine:

@@ -1,5 +1,6 @@
 "use client";
 
+import { copyToClipboard } from "../../lib/utils";
 import { useState, useCallback, useMemo, useEffect, useRef, type MouseEvent } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useEventListener } from "../../hooks/useEventListener";
@@ -231,7 +232,7 @@ export default function PlansPage() {
     const qs = params.toString();
     const origin = typeof window !== "undefined" ? window.location.origin : "";
     try {
-      await navigator.clipboard.writeText(`${origin}/plans${qs ? `?${qs}` : ""}`);
+      await copyToClipboard(`${origin}/plans${qs ? `?${qs}` : ""}`);
       toast.success("Link to this view copied");
     } catch {
       toast.error("Couldn't copy link");
