@@ -2,10 +2,17 @@ import * as Sentry from "@sentry/react";
 import posthog from "posthog-js";
 import { showErrorToast } from "./errorToast";
 
-const SENTRY_DSN = import.meta.env.VITE_SENTRY_DSN;
-const POSTHOG_KEY = import.meta.env.VITE_POSTHOG_KEY;
-const POSTHOG_HOST = import.meta.env.VITE_POSTHOG_HOST || "https://us.i.posthog.com";
-const IS_DEV = import.meta.env.DEV;
+// Indirect access so this file also TYPECHECKS inside the mobile program (its
+// tsconfig has no vite/client ImportMeta.env). The cast erases at compile time,
+// leaving a bare `import.meta.env` access, which Vite replaces with its env
+// object in builds (destructuring/indirect access is supported since Vite 5);
+// mobile never RUNS this file (analytics.native.ts is the Metro-resolved twin —
+// Hermes cannot even parse `import.meta`).
+const META_ENV = (import.meta as any).env ?? {};
+const SENTRY_DSN = META_ENV.VITE_SENTRY_DSN;
+const POSTHOG_KEY = META_ENV.VITE_POSTHOG_KEY;
+const POSTHOG_HOST = META_ENV.VITE_POSTHOG_HOST || "https://us.i.posthog.com";
+const IS_DEV = META_ENV.DEV;
 
 function getPlatform(): "desktop" | "web" {
   return typeof window !== "undefined" && !!(window as any).__CODECAST_ELECTRON__

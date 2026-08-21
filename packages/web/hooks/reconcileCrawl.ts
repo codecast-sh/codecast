@@ -151,6 +151,25 @@ export function syncMetaKey(namespace: string, wsKey: string): string {
   return `${namespace}:v2:${wsKey}`;
 }
 
+// Removal-condition metric for the demoted safety-net crawls (design D11/D12,
+// docs/architecture/sync-log-migration.md): on an INCREMENTAL crawl, a returned
+// row the store doesn't already hold at the same updated_at is a row the sync
+// log failed to deliver (modulo benign races inside the crawl window). The
+// hooks sum this per crawl and log it; two weeks of zeros in prod is the
+// condition for deleting the periodic schedule. Pure — unit-testable.
+export function countLogMissedRows(
+  current: Record<string, any> | undefined,
+  rows: any[],
+): number {
+  if (!current) return rows.length;
+  let n = 0;
+  for (const r of rows) {
+    const cur = current[String(r?._id)];
+    if (!cur || (typeof r?.updated_at === "number" && cur.updated_at !== r.updated_at)) n++;
+  }
+  return n;
+}
+
 export function runReconcileCrawl(opts: CrawlOptions): void {
   const { namespace, wsKey, throttleMs, pageDelayMs, maxPages } = opts;
   if (wsKey === "skip") {

@@ -6,6 +6,10 @@ import { isPermanentDispatchError } from "../store/mutativeMiddleware";
 import { useWatchEffect } from "./useWatchEffect";
 import { installBrowserDispatchSelfHeal } from "./dispatchRecovery";
 
+// Sync-log ack opt-in latch: flips false (for the session) the first time the
+// server rejects the ack_positions arg — see the fallback in bindDispatch.
+let ackFlagSupported = true;
+
 function deepMerge(target: any, source: any): any {
   const result = { ...target };
   for (const key of Object.keys(source)) {
@@ -99,7 +103,48 @@ export function useEnsureDispatch() {
     });
     const bindDispatch = () => {
       _setDispatch(
-        (action, args, patches, result) => dispatchRef.current({ action, args, patches, result }),
+        (action, args, patches, result) => {
+          // Sync-log write acks (docs/architecture/sync-log-migration.md D8).
+          // The flag is a binding concern added at call time, so outbox rows
+          // persisted by older bundles get it on redrive too. The envelope is
+          // unwrapped HERE and the store owns the protocol (stampSyncAck);
+          // the engine sees the same inner result shape as before.
+          const sentAt = Date.now();
+          const unwrap = (res: any) => {
+            if (res && typeof res === "object" && "__syncAckV1" in res) {
+              const ack = res.__syncAckV1;
+              if (Array.isArray(ack) && ack.length && patches) {
+                useInboxStore.getState().stampSyncAck(patches, ack, sentAt);
+              }
+              return res.result;
+            }
+            return res;
+          };
+          if (!ackFlagSupported) {
+            return dispatchRef.current({ action, args, patches, result } as any);
+          }
+          return dispatchRef.current({ action, args, patches, result, ack_positions: true } as any)
+            .then(unwrap)
+            .catch((error: any) => {
+              // Version-skew self-heal: a deployed convex without the optional
+              // ack_positions field rejects EVERY flagged dispatch with an
+              // ArgumentValidationError naming the extra field — and dispatch
+              // is the sole write chokepoint, so without this fallback that
+              // skew (a convex revert after web shipped) is a total write
+              // outage. Latch off and re-issue the identical call unflagged:
+              // one extra round-trip for the whole session, and convergence
+              // falls back to value-echo retirement (a permanent invariant).
+              // Scoped tightly — retrying on any validation error would
+              // double-fire genuinely malformed dispatches.
+              const msg = String(error?.message ?? error);
+              if (/ArgumentValidationError/i.test(msg) && /ack_positions/.test(msg)) {
+                ackFlagSupported = false;
+                console.warn("[sync] server lacks ack_positions — falling back to unflagged dispatch");
+                return dispatchRef.current({ action, args, patches, result } as any);
+              }
+              throw error;
+            });
+        },
         { owner: ownerRef.current },
       );
       return true;
