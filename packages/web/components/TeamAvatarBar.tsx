@@ -21,7 +21,9 @@ import {
   memberPresenceState,
   presenceLine,
 } from "./presence/memberPresence";
-import { joinCall, startHuddle } from "../lib/calls/callManager";
+import { joinCall, knockRoom, startHuddle } from "../lib/calls/callManager";
+import { useLiveRoomOfMember } from "../hooks/useLiveRooms";
+import { WalkiePttButton } from "./calls/WalkiePtt";
 import { AvatarImg } from "../lib/avatarCache";
 import { useOpenDm } from "../hooks/useChatSync";
 import { dmRoomKey } from "@codecast/shared/contracts";
@@ -324,10 +326,23 @@ function MemberHoverCard({
 
   // In a huddle the viewer may join (in_room_key is only sent when they may):
   // the button becomes "join them" — ringing someone out of the room they are
-  // sitting in is the one wrong gesture. Otherwise, one click rings them.
+  // sitting in is the one wrong gesture. A LOCKED huddle sends no room key at
+  // all, so the live-rooms list is what finds it, and the button knocks: the
+  // same gesture, one door further out. Otherwise, one click rings them.
+  const liveRoom = useLiveRoomOfMember(String(member._id));
+  const lockedRoom = !member.in_room_key && liveRoom?.locked ? liveRoom : null;
+  const huddleLabel = member.in_room_key
+    ? "Join huddle"
+    : !lockedRoom
+      ? "Huddle"
+      : lockedRoom.knocked
+        ? "Knocked"
+        : "Knock";
   const huddle = () => {
     if (member.in_room_key) void joinCall(member.in_room_key);
-    else
+    else if (lockedRoom) {
+      if (!lockedRoom.knocked) void knockRoom(lockedRoom.roomKey);
+    } else
       void startHuddle({
         roomKey: dmRoomKey(currentUserId, String(member._id)),
         toUserIds: [String(member._id)],
@@ -399,7 +414,7 @@ function MemberHoverCard({
         {member.in_huddle && !isSelf && (
           <div className="mt-2 flex items-center gap-1.5 text-[11px] text-sol-violet">
             <Headphones className="h-3 w-3" />
-            in a huddle now
+            {lockedRoom ? "in a locked huddle" : "in a huddle now"}
           </div>
         )}
 
@@ -456,7 +471,7 @@ function MemberHoverCard({
                   className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-sol-violet/15 px-2 py-1.5 text-[12px] font-medium text-sol-violet transition-colors hover:bg-sol-violet/25"
                 >
                   <Headphones className="h-3.5 w-3.5" />
-                  {member.in_room_key ? "Join huddle" : "Huddle"}
+                  {huddleLabel}
                 </button>
               )}
               <button
@@ -466,6 +481,23 @@ function MemberHoverCard({
                 <MessageSquare className="h-3.5 w-3.5" />
                 Message
               </button>
+              {/* Hold, say it, let go: the sentence lands in the DM with this
+                  person and plays out loud on their machine if they are at it.
+                  Icon only — a third full-width button would crowd the row, and
+                  the mic is the one glyph nobody has to be taught. */}
+              {callsEnabled && (
+                <WalkiePttButton
+                  roomKey={dmRoomKey(currentUserId, String(member._id))}
+                  // Only when the key actually goes down: this OPENS the DM if
+                  // there is not one yet, and hovering a face must not create
+                  // conversations.
+                  resolveChannelId={() =>
+                    useInboxStore.getState().openDmChannel([String(member._id)])
+                  }
+                  className="flex items-center justify-center rounded-md bg-sol-bg-highlight px-2 py-1.5 text-sol-text-muted transition-colors hover:text-sol-text"
+                  title={`Hold to talk to ${displayName}`}
+                />
+              )}
             </>
           )}
         </div>

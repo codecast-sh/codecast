@@ -17,6 +17,7 @@ import { internal } from "./_generated/api";
 import { getAuthenticatedUserId, enqueuePendingMessage } from "./pendingMessages";
 import { classifyApiErrorBanner, blockedContinueClientId, CONTINUE_BANNER_KINDS } from "./inboxFilters";
 import {
+  actedBlockedConversations,
   ccAccountsValidator,
   decideAutoSwitch,
   AUTO_SWITCH_CONTINUE_KEY,
@@ -80,10 +81,10 @@ async function listBlockedConversations(
     .withIndex("by_user_updated", (q: any) => q.eq("user_id", userId).gt("updated_at", since))
     .order("desc")
     .take(1000);
-  const all = recent.filter(isBlockedConversation);
+  const all: Doc<"conversations">[] = recent.filter(isBlockedConversation);
   const topLevel = all.filter((c: Doc<"conversations">) => !isSubagentConversation(c));
   const subagents = all.filter(isSubagentConversation);
-  const acted = (includeSubagents ? [...topLevel, ...subagents] : topLevel).slice(0, MAX_REVIVE);
+  const acted = actedBlockedConversations(all, includeSubagents).slice(0, MAX_REVIVE);
   return {
     blocked: acted,
     topLevelCount: topLevel.length,
@@ -572,7 +573,7 @@ export const acknowledgeBlocked = mutation({
       const conv = await ctx.db.get(convId);
       if (!conv || conv.user_id.toString() !== userId.toString()) continue;
       if (conv.pending_api_error !== true) continue;
-      await ctx.db.patch(convId, { pending_api_error: false, pending_api_error_kind: undefined });
+      await ctx.db.patch(convId, { pending_api_error: false, pending_api_error_kind: undefined, pending_api_error_at: undefined });
       acknowledged++;
     }
     return { acknowledged };
@@ -975,6 +976,7 @@ export const sweepStaleApiErrorFlags = internalMutation({
       await ctx.db.patch(conv._id, {
         pending_api_error: false,
         pending_api_error_kind: undefined,
+        pending_api_error_at: undefined,
       });
       swept++;
     }
@@ -1014,8 +1016,8 @@ export const restampApiErrorFlags = internalMutation({
       if (!newest || newest.role !== "assistant") continue;
       const kind = classifyApiErrorBanner(newest.content);
       if (!kind) continue;
-      if (conv.pending_api_error === true && conv.pending_api_error_kind === kind) continue;
-      await ctx.db.patch(conv._id, { pending_api_error: true, pending_api_error_kind: kind });
+      if (conv.pending_api_error === true && conv.pending_api_error_kind === kind && conv.pending_api_error_at != null) continue;
+      await ctx.db.patch(conv._id, { pending_api_error: true, pending_api_error_kind: kind, pending_api_error_at: newest.timestamp });
       stamped++;
     }
     if (stamped > 0) console.log(`restampApiErrorFlags: stamped ${stamped} conversation(s)`);

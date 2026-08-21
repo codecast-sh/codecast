@@ -83,6 +83,10 @@ function isNotificationEnabled(
   return val !== false;
 }
 
+// Who performed the act behind a subscription. See schema entity_subscriptions.via.
+export const SUBSCRIPTION_VIA = v.union(v.literal("human"), v.literal("agent"));
+export type SubscriptionVia = "human" | "agent";
+
 export const ensureSubscribed = internalMutation({
   args: {
     user_id: v.id("users"),
@@ -95,6 +99,7 @@ export const ensureSubscribed = internalMutation({
       v.literal("commenter"),
       v.literal("watching")
     ),
+    via: v.optional(SUBSCRIPTION_VIA),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -107,14 +112,70 @@ export const ensureSubscribed = internalMutation({
       )
       .first();
 
-    if (existing) return existing._id;
+    if (existing) {
+      const patch: Record<string, unknown> = {};
+      // A human act on a row an agent (or legacy write) enrolled upgrades it:
+      // the person has now shown attention. Never downgrade human to agent.
+      if (args.via === "human" && existing.via !== "human") patch.via = "human";
+      // Re-engagement clears a mute (a handoff or an explicit unwatch): the
+      // person's own human act, or attention directed AT them — an assignment
+      // or a mention — whoever typed it. Agent acts never unmute.
+      if (
+        existing.muted &&
+        (args.via === "human" || args.reason === "assignee" || args.reason === "mentioned")
+      ) {
+        patch.muted = false;
+      }
+      if (Object.keys(patch).length > 0) await ctx.db.patch(existing._id, patch);
+      return existing._id;
+    }
 
     return await ctx.db.insert("entity_subscriptions", {
       user_id: args.user_id,
       entity_type: args.entity_type,
       entity_id: args.entity_id,
       reason: args.reason,
+      ...(args.via ? { via: args.via } : {}),
       muted: false,
+      created_at: Date.now(),
+    });
+  },
+});
+
+// The durable "handed off / not following" marker on one (user, entity). A
+// muted row grants no thread membership and no fan-out, whatever its reason,
+// and it survives agent acts; only re-engagement (ensureSubscribed above) or
+// an explicit unwatch clears it. Muting a person with no subscription row
+// files one, so the marker exists to deny the identity legs (owner, assignee)
+// that never read subscriptions to enroll.
+export const setSubscriptionMuted = internalMutation({
+  args: {
+    user_id: v.id("users"),
+    entity_type: ENTITY_TYPE,
+    entity_id: v.string(),
+    muted: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("entity_subscriptions")
+      .withIndex("by_user_entity", (q: any) =>
+        q
+          .eq("user_id", args.user_id)
+          .eq("entity_type", args.entity_type)
+          .eq("entity_id", args.entity_id)
+      )
+      .first();
+    if (existing) {
+      if (existing.muted !== args.muted) await ctx.db.patch(existing._id, { muted: args.muted });
+      return existing._id;
+    }
+    if (!args.muted) return null;
+    return await ctx.db.insert("entity_subscriptions", {
+      user_id: args.user_id,
+      entity_type: args.entity_type,
+      entity_id: args.entity_id,
+      reason: "watching",
+      muted: true,
       created_at: Date.now(),
     });
   },

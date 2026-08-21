@@ -940,8 +940,10 @@ async function enrichPage(
 // extractPlanTitleForWeb, author + plan badges) but DELIBERATELY skips
 // enrichPage's presentation filters: catch-up must deliver an archived doc WITH
 // archived_at set (so the client hides it) and plan-docs too, rather than
-// dropping them. Inaccessible / gone ids are omitted; the feed drives the prune.
-// See changeFeed.ts.
+// dropping them. Inaccessible / gone ids are omitted; callers prune ids the
+// response omits (authorized absence). Consumers: the sync-log applier
+// (syncLog.ts / web useSyncChangeFeed.ts) and, for deployed old bundles,
+// changeFeed.ts.
 export const webGetByIds = query({
   args: { ids: v.array(v.string()) },
   handler: async (ctx, args) => {

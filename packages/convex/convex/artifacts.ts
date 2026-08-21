@@ -1116,29 +1116,60 @@ async function emitCommentNotifications(
 // a live agent session directly.
 export const submitComments = mutation({
   args: {
-    slug: v.string(),
+    // The page, by slug or (web reply path) by id. One of the two.
+    slug: v.optional(v.string()),
+    artifact_id: v.optional(v.id("artifacts")),
     author_name: v.string(),
     author_email: v.optional(v.string()),
-    version: v.number(),
+    // Defaults to the artifact's current version (web replies don't track it).
+    version: v.optional(v.number()),
     deliver: v.optional(v.boolean()),
     owner_key: v.optional(v.string()),
     // Signed-in identity (artifact_identities token). When valid, the stored
     // author is the ACCOUNT's name/avatar — the viewer-typed name is ignored.
+    // Without a token, a signed-in web caller resolves through their session.
     identity_token: v.optional(v.string()),
     // Reply target: an artifact_comments id string. Replies thread one level
     // deep — replying to a reply attaches to its top-level comment.
     parent_id: v.optional(v.string()),
+    // Idempotency key for the web outbox: a retry with the same client_id
+    // returns the row already inserted.
+    client_id: v.optional(v.string()),
     comments: v.array(v.object({ text: v.string(), anchor: v.optional(v.string()) })),
   },
   handler: async (ctx, args) => {
-    const artifact = await ctx.db
-      .query("artifacts")
-      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
-      .first();
+    const artifact = args.slug
+      ? await ctx.db
+        .query("artifacts")
+        .withIndex("by_slug", (q) => q.eq("slug", args.slug!))
+        .first()
+      : args.artifact_id
+        ? await ctx.db.get(args.artifact_id)
+        : null;
     if (!artifact) return { error: "Not found" };
     if (artifact.comments_disabled) return { error: "Comments are off on this page" };
     const isOwner = !!artifact.owner_key && args.owner_key === artifact.owner_key;
-    const identity = await resolveCommentIdentity(ctx, artifact._id, args.identity_token);
+    let identity = await resolveCommentIdentity(ctx, artifact._id, args.identity_token);
+    if (!identity && !args.identity_token) {
+      const userId = await getAuthUserId(ctx).catch(() => null);
+      const user = userId ? await ctx.db.get(userId) : null;
+      if (user) identity = { user, name: commenterDisplayName(user), avatar: commenterAvatar(user) };
+    }
+    if (args.client_id) {
+      const dupe = await ctx.db
+        .query("artifact_comments")
+        .withIndex("by_artifact_client_id", (q) =>
+          q.eq("artifact_id", artifact._id).eq("client_id", args.client_id))
+        .first();
+      if (dupe) {
+        return {
+          delivered: dupe.delivered,
+          count: 1,
+          ids: [dupe._id],
+          as: identity ? { name: identity.name, avatar: identity.avatar ?? null } : null,
+        };
+      }
+    }
     let parent: Doc<"artifact_comments"> | null = null;
     if (args.parent_id) {
       const pid = ctx.db.normalizeId("artifact_comments", args.parent_id);
@@ -1160,6 +1191,7 @@ export const submitComments = mutation({
       : args.author_email?.trim().toLowerCase().slice(0, 254);
     const now = Date.now();
     const batchId = newSlug(10);
+    const version = args.version ?? artifact.version;
 
     // Deliver first (as one message), then store rows stamped with the
     // outcome. A failed delivery still stores the comments — the owner sees
@@ -1186,7 +1218,10 @@ export const submitComments = mutation({
           parent_comment_id: parent?._id,
           text: c.text,
           anchor: c.anchor,
-          version: args.version,
+          // The idempotency key marks the batch's first row: the web reply
+          // path submits one comment at a time.
+          client_id: insertedIds.length === 0 ? args.client_id : undefined,
+          version,
           status: "open",
           delivered,
           created_at: now,

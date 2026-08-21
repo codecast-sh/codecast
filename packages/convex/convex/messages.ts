@@ -1363,6 +1363,10 @@ export const addMessage = mutation({
     if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
       convPatch.pending_api_error_kind = nextBannerKind;
     }
+    const nextBannerAt = msgIsBanner ? msgTimestamp : undefined;
+    if ((conversation.pending_api_error_at ?? undefined) !== nextBannerAt) {
+      convPatch.pending_api_error_at = nextBannerAt;
+    }
     // A fresh park on a blocked-kind banner triggers the debounced reactions:
     // the auto-switch check (limit only) and the aggregated incident
     // notification (any blocked kind). Statusful "error" banners self-retry
@@ -1889,6 +1893,10 @@ export const addMessages = mutation({
         : undefined;
       if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
         convPatch.pending_api_error_kind = nextBannerKind;
+      }
+      const nextBannerAt = nextPendingApiError ? newestMsg.timestamp || Date.now() : undefined;
+      if ((conversation.pending_api_error_at ?? undefined) !== nextBannerAt) {
+        convPatch.pending_api_error_at = nextBannerAt;
       }
       // A fresh blocked-kind park triggers the debounced reactions (see
       // addMessage): auto-switch check + aggregated incident notification.

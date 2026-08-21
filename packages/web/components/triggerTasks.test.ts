@@ -165,20 +165,26 @@ describe("partitionTriggerInbox rows", () => {
 });
 
 describe("absorption (behind-the-row) rules", () => {
-  it("a resting loop home is absorbed; a once follow-up never absorbs its conversation", () => {
+  it("a resting loop home is absorbed; a once follow-up absorbs only a home settled in Done", () => {
     const sessions = {
       home: session("home", { last_user_message: MACHINE_TURN }),
+      // Unclassified settle — the ball is still the human's, so the reminder
+      // must not hide the card.
       conv: session("conv", { last_user_message: MACHINE_TURN }),
+      // Delivered (declared done, no daemon status) + a named wake = parked.
+      doneHome: session("doneHome", { last_user_message: MACHINE_TURN, thread_state_status: "done" }),
     };
     const p = partitionTriggerInbox(
       [
         task("loop", { originating_conversation_id: "home" }),
         task("once", { originating_conversation_id: "conv", schedule_type: "once" }),
+        task("onceDone", { originating_conversation_id: "doneHome", schedule_type: "once" }),
       ],
       sessions,
     );
     expect(p.absorbedIds.has("home")).toBe(true);
     expect(p.absorbedIds.has("conv")).toBe(false);
+    expect(p.absorbedIds.has("doneHome")).toBe(true);
   });
 
   it("human-typed last turn, pinned, or hard-blocked homes are never absorbed", () => {

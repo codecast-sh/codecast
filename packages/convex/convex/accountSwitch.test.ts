@@ -3,6 +3,7 @@ import {
   isBlockedConversation,
   isRemoteAuthBlocked,
   isSubagentConversation,
+  actedBlockedConversations,
   isDeviceOnline,
   isValidProfileName,
   shouldSweepStaleFlag,
@@ -523,5 +524,23 @@ describe("decideAutoSwitch", () => {
     const d = decideAutoSwitch({ now, parkedAt, activeEmail: undefined, profiles: [], attempts: [] });
     expect(d.action).toBe("exhausted");
     if (d.action === "exhausted") expect(d.retry_at).toBe(now + 60 * 60_000 + 2 * 60_000);
+  });
+});
+
+describe("actedBlockedConversations", () => {
+  const top = { _id: "top", is_subagent: false };
+  const worker = { _id: "worker", parent_conversation_id: "top" };
+  const flagged = { _id: "flagged", is_subagent: true };
+
+  test("skips subagent workers by default, top-level rows first on opt-in", () => {
+    expect(actedBlockedConversations([worker, top, flagged], false)).toEqual([top]);
+    expect(actedBlockedConversations([worker, top, flagged], true)).toEqual([top, worker, flagged]);
+  });
+
+  test("a blocked set made only of workers yields nothing without the opt-in", () => {
+    // The 2026-08-20 incident: after one revive round the only blocked rows
+    // were in-process workflow agents; auto-including them resumed 53 copies.
+    expect(actedBlockedConversations([worker, flagged], false)).toEqual([]);
+    expect(actedBlockedConversations([], true)).toEqual([]);
   });
 });

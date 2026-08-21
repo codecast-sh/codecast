@@ -18,6 +18,7 @@ import { isDraft, original } from "mutative";
 import { soundDismiss, soundKill } from "../lib/sounds";
 import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox, salvageLocalFirstV2Data, PERSISTENCE_AVAILABLE } from "./idbCache";
 import {
+  DISPATCH_TABLE_MAP,
   HYDRATION_CRITICAL_KEYS,
   HYDRATION_DEFERRED_KEYS,
   REGISTRY_SYNC_OPTS,
@@ -25,11 +26,29 @@ import {
   hydrationMergeStrategy,
   type RegisteredCollectionSlots,
 } from "./clientSyncRegistry";
+
+// Sync-log cursor key (docs/architecture/sync-log-migration.md D7). ONE
+// definition — the applier (useSyncChangeFeed) persists cursors under it and
+// stampSyncAck's immediate-retire branch reads it; a second spelling would
+// silently break the retire race it exists for.
+export function syncLogScopeMetaKey(scopeKey: string): string {
+  return `synclog:v1:${scopeKey}`;
+}
+
+// Reverse of the registry's storeKey→server-table dispatch map, for stamping
+// sync-log acks onto the pending entries a dispatched patch created (one server
+// table can back several store keys — conversations backs both `sessions` and
+// `conversations`).
+const TABLE_TO_STORE_KEYS: Record<string, string[]> = {};
+for (const [storeKey, cfg] of Object.entries(DISPATCH_TABLE_MAP)) {
+  (TABLE_TO_STORE_KEYS[cfg.table] ??= []).push(storeKey);
+}
 import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { type AgentStatus, ACTIVE_AGENT_STATUSES, isLivenessStale, modelOptionKey } from "@codecast/shared/contracts";
+import { liftQuestions, type QuestionResolutions } from "../lib/decisionQueue";
 import type { OpenTaskReport } from "@codecast/shared/contracts";
 import { isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
@@ -128,6 +147,8 @@ export type {
 } from "./chatSlice";
 export type { ThreadInboxRow, ThreadKind, ThreadLastReply } from "./threadTypes";
 export { threadRowId } from "./threadTypes";
+import type { ThreadCardOpenEntry } from "./threadTypes";
+export type { ThreadCardOpenEntry } from "./threadTypes";
 
 // Critical UI prefs mirrored to localStorage so they're available
 // synchronously at module load — avoids a layout flash between first paint
@@ -454,6 +475,9 @@ export type InboxSession = {
   // parked the session; picks the badge label ("login" / "limit" / "dropped" /
   // "failed"; self-retrying "error" gets none).
   pending_api_error_kind?: string | null;
+  // When the block landed (the newest banner message's timestamp) — renders
+  // the ticking "Xm ago" on the blocked-sessions banner and its rows.
+  pending_api_error_at?: number | null;
   implementation_session?: { _id: string; title?: string };
   is_subagent?: boolean;
   parent_conversation_id?: string;
@@ -1064,7 +1088,15 @@ export type ClientUI = {
   // last report, countdown, verbs) or folded to a one-line strip that only says
   // the card has triggers and when the next one fires. Absent = folded: the
   // strip is the resting state; the pill toggle opens the detail.
+  // LEGACY — superseded by card_bars; still read as the default when card_bars
+  // is unset so an existing "expanded" choice survives the upgrade.
   show_triggers?: boolean;
+  // The bars under inbox cards — triggers, workflow runs, monitors and
+  // background commands — as one family with one control: "strip" folds each
+  // card's bars to a one-line summary (the resting state), "full" shows every
+  // bar as its own row, "hidden" removes them entirely (the same gesture the
+  // subagent toggle offers). Absent = show_triggers legacy, then "strip".
+  card_bars?: "strip" | "full" | "hidden";
   // The machine you last chose by hand in the new-session picker — the default
   // the picker opens on for NEW work (defaultMachineId rung 2). Deliberately
   // UNSTAMPED, i.e. per-device: "where should this run" is answered differently
@@ -2210,11 +2242,21 @@ export function visualOrderSessions(
     absorbedIds?: ReadonlySet<string>;
     // See categorizeSessions — forwarded through.
     reviveRequestedAt?: Record<string, number>;
+    // Status view only: the QUESTIONS section's inputs (lib/decisionQueue
+    // liftQuestions) — pending `cast decide` rows and the viewer's own
+    // sessions, unscoped, so a question hidden by scope still walks.
+    questions?: { decisions: Record<string, SessionDecisionItem>; mine: Record<string, InboxSession>; resolutions?: QuestionResolutions };
   } = {},
 ): InboxSession[] {
   const { pinned, newSessions, needsInput, done, dormant, working } =
     categorizeSessions(sessions, sessionsWithQueuedMessages, pendingSendIds, opts);
   const collapsed = opts.collapsedSections;
+  // Questions lift out of every other section (the ask outranks placement),
+  // exactly as the panel renders; without the inputs nothing lifts.
+  const { questions, isQuestion } = opts.questions
+    ? liftQuestions([pinned, newSessions, needsInput, done, dormant, working], opts.questions.decisions, opts.questions.mine, opts.questions.resolutions)
+    : { questions: [] as InboxSession[], isQuestion: () => false };
+  const rest = (arr: InboxSession[]) => (opts.questions ? arr.filter((s) => !isQuestion(s)) : arr);
   const absorbed = opts.absorbedIds?.size ? opts.absorbedIds : null;
   const stripAbsorbed = (arr: InboxSession[]) =>
     absorbed ? arr.filter((s) => !absorbed.has(s._id)) : arr;
@@ -2222,12 +2264,12 @@ export function visualOrderSessions(
     ? [...needsInput, ...done].filter((s) => absorbed.has(s._id))
     : [];
   const result: InboxSession[] = [];
-  // Same order the status view renders: pinned, new, needs input, done,
-  // working, dormant (declared/inferred parks first, then absorbed rests).
+  // Same order the status view renders: questions, pinned, new, needs input,
+  // done, working, dormant (declared/inferred parks first, then absorbed rests).
   const sections: Array<[InboxSession[], string]> = [
-    [pinned, "pinned"], [newSessions, "new"],
-    [stripAbsorbed(needsInput), "needs_input"], [stripAbsorbed(done), "done"],
-    [working, "working"], [[...dormant, ...absorbedSettled], "dormant"],
+    [questions, "questions"], [rest(pinned), "pinned"], [rest(newSessions), "new"],
+    [rest(stripAbsorbed(needsInput)), "needs_input"], [rest(stripAbsorbed(done)), "done"],
+    [rest(working), "working"], [rest([...dormant, ...absorbedSettled]), "dormant"],
   ];
   for (const [section, key] of sections) {
     if (collapsed?.[key]) continue;
@@ -2771,6 +2813,13 @@ export function computeVisualOrder(state: {
   // order (trigger data lives in a component Convex subscription, never the
   // store). Null until the panel has schedule data.
   scheduleNavSets?: ScheduleNavSets | null;
+  // Pending `cast decide` rows — with the viewer's own sessions they define the
+  // status view's QUESTIONS section (liftQuestions). Optional for callers
+  // (tests) that model no questions.
+  sessionDecisions?: Record<string, SessionDecisionItem>;
+  // Local answered/dismissed marks — same map the panel renders with, so nav
+  // walks exactly the QUESTIONS section on screen.
+  questionResolutions?: QuestionResolutions;
   clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean } };
 }): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
@@ -2834,7 +2883,20 @@ export function computeVisualOrder(state: {
   // Grouped/bucket: the categorized status buckets over the SAME visible set, so
   // old sessions hidden from the render are skipped by nav too. The bucket branch
   // below splits pinned out and regroups the rest by label/project.
-  const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, filterExclude: state.chipFilterExclude, bucketByConv, collapsedSections: mode === "grouped" ? collapsed : undefined, absorbedIds: mode === "grouped" || mode === "bucket" || mode === "plan" ? state.scheduleNavSets?.absorbed : undefined, reviveRequestedAt: state.blockedReviveRequestedAt });
+  const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), {
+    currentSessionId: state.currentSessionId,
+    pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)),
+    bucketFilter: state.activeBucketFilter,
+    filterExclude: state.chipFilterExclude,
+    bucketByConv,
+    collapsedSections: mode === "grouped" ? collapsed : undefined,
+    absorbedIds: mode === "grouped" || mode === "bucket" || mode === "plan" ? state.scheduleNavSets?.absorbed : undefined,
+    reviveRequestedAt: state.blockedReviveRequestedAt,
+    // Only the status view renders QUESTIONS; the lenses dissolve it.
+    questions: mode === "grouped"
+      ? { decisions: state.sessionDecisions ?? {}, mine: filterInboxScope(state.sessions, "mine", state.currentUser?._id?.toString?.() ?? null), resolutions: state.questionResolutions }
+      : undefined,
+  });
   if (mode === "bucket") {
     const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
     const rest = base.filter((s) => !s.is_pinned);
@@ -2949,6 +3011,26 @@ export function findReusableBlankSession(
 }
 
 // -- Store interface --
+
+/** One live huddle as calls.getLiveRooms projects it. A room the viewer may
+ *  not see the anchor of arrives `redacted` with no title — the room is still
+ *  joinable (the team wall holds), only its name is withheld. */
+export type LiveRoom = {
+  room_key: string;
+  team_id: string;
+  locked: boolean;
+  redacted: boolean;
+  title?: string;
+  members: { user_id: string; user_name?: string; user_image?: string; muted?: boolean }[];
+};
+
+/** Someone waiting at the door of the room I'm in (calls.getRoomKnocks). */
+export type RoomKnock = {
+  from_user: string;
+  from_name: string;
+  from_image?: string;
+  created_at: number;
+};
 
 // RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
 // typed `Record<string, any>` slot here by registration alone; the explicit
@@ -3124,6 +3206,13 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   closeCommentRail: () => void;
   setCommentRailWidth: (conversationId: string, w: number) => void;
 
+  // ── Threads page: per-card open state (ephemeral UI, raw set — the same
+  // class as the palette toggle). Keyed by card id; the resolution rules
+  // (default-open on unread, a user collapse holding until newer unread)
+  // live in lib/threadCards. ──
+  threadCardOpen: Record<string, ThreadCardOpenEntry>;
+  patchThreadCardOpen: (patch: Record<string, ThreadCardOpenEntry>) => void;
+
   currentConversation: CurrentConversationContext;
   isolatedWorktreeMode: boolean;
   setIsolatedWorktreeMode: (val: boolean) => void;
@@ -3224,6 +3313,7 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   setTeamVisibility: (id: string, visibility: "summary" | "full" | null) => void;
   toggleBookmark: (conversationId: string, messageId: string) => void;
   setMyStatus: (status: "available" | "busy" | "away") => void;
+  setWalkiePref: (pref: "team" | "off") => void;
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
   sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
@@ -3262,6 +3352,14 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   pruneFeedEntities: (collection: FeedCollection, ids: string[]) => void;
   clearFeedExcludes: (collection: FeedCollection, ids: string[]) => void;
   markServerDeleted: (convId: string) => void;
+  // -- Sync-log write acks (docs/architecture/sync-log-migration.md D8) --
+  stampSyncAck: (patches: any, ack: Array<{ scope_key: string; position: number }>, sentAt: number) => void;
+  retireAckedPending: (scopeKey: string, upTo: number) => void;
+  // Scope lifecycle (D5): purge a revoked team's rows from the workspace-scoped
+  // collections and drop its log cursor.
+  purgeTeamScopeRows: (teamId: string) => void;
+  clearSyncMeta: (key: string) => void;
+  clearCrawlMetaForScope: (scopeKey: string) => void;
 
   // -- Generic sync --
   syncTable: (field: string, incoming: any, opts?: SyncOpts) => void;
@@ -3480,8 +3578,8 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   activeProjectFilter: string | null;
   setActiveProjectFilter: (name: string | null, path?: string | null, exclude?: boolean) => void;
   // Whether the ONE active chip (project or bucket) is in exclude mode —
-  // "everything but this" instead of "only this". Chips cycle
-  // off → include → exclude → off.
+  // "everything but this" instead of "only this". Click toggles include;
+  // exclude is entered only via ⌥/Alt-click or the chip's context menu.
   chipFilterExclude: boolean;
 
   // -- Capability library --
@@ -3506,6 +3604,15 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // outbox) and, for answers, send the chosen option into the session as a
   // normal user message. `text` is the free-form escape hatch.
   answerDecision: (decisionId: string, answer: { index?: number; text?: string } | { dismiss: true }) => void;
+  // Local marks that a session's open AskUserQuestion / permission ask was
+  // handled here (answered, dismissed, or evicted). Ephemeral by design — not
+  // persisted, so a reload re-reads server truth. Every question surface reads
+  // it through sessionHasOpenQuestion so none can disagree (lib/decisionQueue).
+  questionResolutions: QuestionResolutions;
+  // `sends` = how many messages the resolving gesture itself puts into the
+  // conversation (1 for an answer, 0 for a dismissal/eviction), so the mark
+  // doesn't expire on its own echo.
+  resolveSessionQuestion: (convId: string, opts?: { sends?: number }) => void;
 
   // -- Manual session buckets --
   buckets: Record<string, BucketItem>;
@@ -3688,6 +3795,27 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   myCalls: { incoming: any[]; outgoing: any[]; membership: any | null };
   callOccupancy: Record<string, any[]>;
   callConfig: { enabled: boolean; url?: string } | null;
+  // Every huddle running right now in one of my teams (calls.getLiveRooms) —
+  // what makes an occupied room visible from anywhere: the sidebar's Live now
+  // cluster, /calls' Happening now, the lock state of the room I'm in. Live
+  // occupancy is ephemeral by nature, so like myCalls it never persists: a
+  // reload re-derives it, and a room replayed from IDB would be a ghost.
+  liveRooms: LiveRoom[];
+  // People waiting at MY door (calls.getRoomKnocks) — only ever the room I am
+  // seated in, since a knock is a gesture at one door.
+  roomKnocks: RoomKnock[];
+  // Rooms I have knocked at, key → when. Two jobs: the "knocked" confirmation
+  // on the row I clicked, and the auto-accept in useCallRing — the admit ring
+  // for a door I knocked on must not ask me to answer it.
+  callKnocked: Record<string, number>;
+  // In-flight lock toggles, room_key → desired state. Local-first: the lock
+  // glyph flips on click and this protects it through getLiveRooms pushes
+  // computed before setRoomLocked committed (same shape as myStatusPending).
+  callLockPending: Record<string, { locked: boolean; at: number }>;
+  noteKnock: (roomKey: string) => void;
+  clearKnock: (roomKey: string) => void;
+  noteLockPending: (roomKey: string, locked: boolean) => void;
+  revertLockPending: (roomKey: string, locked: boolean) => void;
   // Ephemeral media-plane state, written only by lib/calls/callManager. The
   // dock renders from THIS synchronously (local-first: joining paints
   // "connecting" before any server or SFU round-trip).
@@ -3981,7 +4109,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 // (sidebar, zen mode, theme, active team) are naturally per-device, and
 // silently globalizing them would yank screens out from under people.
 export const STAMPED_UI_KEYS = new Set([
-  "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "show_triggers", "inbox_show_old",
+  "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "show_triggers", "card_bars", "inbox_show_old",
   "simple_view", "inbox_image_thumbs", "composer_suggestions", "inbox_home", "threads_include_sessions",
 ]);
 
@@ -4237,6 +4365,32 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   myCalls: { kind: "singleton" },
   callOccupancy: { kind: "singleton" },
   callConfig: { kind: "singleton" },
+  // Live huddles, wholesale-replaced on every push (the server sorts rooms
+  // and rosters and buckets timestamps, so a heartbeat that changed nothing
+  // bails on the JSON compare). The one local edit to protect is an in-flight
+  // lock toggle: a push computed before setRoomLocked committed would flap the
+  // glyph back for a beat. Protection lives in normalize, like teamMembers, so
+  // the no-change bail still swallows heartbeat pushes.
+  liveRooms: {
+    kind: "list",
+    normalize: (list: any, draft?: any) => {
+      if (!Array.isArray(list)) return list;
+      const pending = draft?.callLockPending as Record<string, { locked: boolean; at: number }> | undefined;
+      if (!pending || Object.keys(pending).length === 0) return list;
+      return list.map((room: any) => {
+        const p = room && pending[room.room_key];
+        if (!p) return room;
+        // The TTL keeps a failed mutation from pinning a lock the server never
+        // accepted; agreement clears the entry and stops the protection.
+        if (Date.now() - p.at > 30_000 || room.locked === p.locked) {
+          delete pending[room.room_key];
+          return room;
+        }
+        return { ...room, locked: p.locked };
+      });
+    },
+  },
+  roomKnocks: { kind: "list" },
   teams: { kind: "list" },
   teamMembers: {
     kind: "list",
@@ -5281,6 +5435,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // open the global dock — anchored threads live inline at their message.
   openCommentThread: (messageId: string | null = null) =>
     set((s: any) => ({ commentRailAnchor: messageId, commentRailNonce: s.commentRailNonce + 1 })),
+  threadCardOpen: {},
+  patchThreadCardOpen: (patch: Record<string, ThreadCardOpenEntry>) =>
+    set((s: any) => ({ threadCardOpen: { ...s.threadCardOpen, ...patch } })),
   closeCommentRail: () => get().setCommentRailOpen(false),
   setCommentRailWidth: (conversationId: string, w: number) =>
     set((s: any) => {
@@ -5507,6 +5664,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   // -- Decision queue (cast decide) --
   sessionDecisions: {},
+  questionResolutions: {},
+  // sync(): local-only bookkeeping — the mark never dispatches; server truth
+  // arrives on its own rail (awaiting_input / agent_status) and expires it.
+  resolveSessionQuestion: sync(function (this: Draft, convId: string, opts?: { sends?: number }) {
+    const row = this.sessions[convId];
+    this.questionResolutions[convId] = {
+      at: Date.now(),
+      message_count: (row?.message_count ?? 0) + (opts?.sends ?? 0),
+    };
+  }),
   answerDecision: action(function (this: Draft, decisionId: string, answer: { index?: number; text?: string } | { dismiss: true }) {
     const row = this.sessionDecisions[decisionId];
     if (!row || row.status !== "pending") return;
@@ -5693,11 +5860,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
       if (sess) {
         sess.pending_api_error = false;
         sess.pending_api_error_kind = null;
+        sess.pending_api_error_at = null;
       }
       const conv = this.conversations[id] as any;
       if (conv) {
         conv.pending_api_error = false;
         conv.pending_api_error_kind = null;
+        conv.pending_api_error_at = null;
       }
     }
   }),
@@ -5838,6 +6007,121 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (sess) sess.server_deleted = true;
     const conv = this.conversations[convId] as any;
     if (conv) conv.server_deleted = true;
+  }),
+
+  // ── Sync-log write acks (design D8) ─────────────────────────────────────────
+  // Stamp the sync-log positions a dispatch landed at onto the pending entries
+  // that dispatch created. Keys derive from the dispatched (table-grouped)
+  // patches through the registry's table→storeKey mapping — the same rows the
+  // engine's auto-pending derived its entries from. Guard: only entries whose
+  // `ts` predates the dispatch send get the ack; a newer local write replaced
+  // the entry object (auto-pending makes fresh objects), so an older write's
+  // ack can never retire it. If the scope cursor already passed the position,
+  // retire immediately (the ack raced the applier). sync() — local bookkeeping.
+  stampSyncAck: sync(function (
+    this: Draft,
+    patches: any,
+    ack: Array<{ scope_key: string; position: number }>,
+    sentAt: number,
+  ) {
+    if (!patches || typeof patches !== "object" || !Array.isArray(ack) || ack.length === 0) return;
+    const compact = ack.map((a) => ({ s: a.scope_key, p: a.position }));
+    for (const [table, byId] of Object.entries(patches)) {
+      const storeKeys = TABLE_TO_STORE_KEYS[table];
+      if (!storeKeys || !byId || typeof byId !== "object") continue;
+      for (const [docId, fields] of Object.entries(byId as Record<string, any>)) {
+        if (docId === "_" || !fields || typeof fields !== "object") continue;
+        for (const storeKey of storeKeys) {
+          for (const [field, sentValue] of Object.entries(fields as Record<string, any>)) {
+            const key = `${storeKey}:${docId}:${field}`;
+            const entry = this.pending[key] as any;
+            if (!entry) continue;
+            // Guard by VALUE, not send-time ordering: an outbox redrive or
+            // retry invokes the binding long after the write was drafted, so a
+            // time guard lets an old write's ack stamp (and retire) the entry
+            // protecting a NEWER local write. The entry corresponds to THIS
+            // dispatch iff it still protects the dispatched value; if a newer
+            // write changed it, values differ and we skip — value-echo
+            // retirement owns that entry. Objects compare by JSON because both
+            // sides may have crossed an IDB structured-clone boundary.
+            const v = entry.value;
+            const same = v === sentValue ||
+              (v !== null && sentValue !== null &&
+               typeof v === "object" && typeof sentValue === "object" &&
+               JSON.stringify(v) === JSON.stringify(sentValue));
+            if (!same || (entry.ts ?? 0) > sentAt) continue;
+            if (compact.some((a) => (this.syncMeta[syncLogScopeMetaKey(a.s)]?.cursor ?? 0) >= a.p)) {
+              delete this.pending[key];
+            } else {
+              entry.ack = compact;
+            }
+          }
+        }
+      }
+    }
+  }),
+
+  // Retire every pending entry whose ack says its write landed at or below the
+  // position this scope has now applied through. Called by the log applier
+  // BEFORE it overlays the range's stage-two rows, so the authoritative
+  // post-write state lands unblocked (review: retiring after the apply strands
+  // a diverged field with no lock and no re-fetch). sync() — local bookkeeping.
+  retireAckedPending: sync(function (this: Draft, scopeKey: string, upTo: number) {
+    for (const [key, entry] of Object.entries(this.pending)) {
+      const ackList = (entry as any)?.ack as Array<{ s: string; p: number }> | undefined;
+      if (ackList?.some((a) => a.s === scopeKey && a.p <= upTo)) {
+        delete this.pending[key];
+      }
+    }
+  }),
+
+  // Scope revocation (design D5): the log said this user left a team. Purge the
+  // workspace-scoped collections' rows for that team (access is gone; keeping
+  // them renders data the server would no longer serve) and plant excludes so
+  // the durable IDB rows delete too. Conversations are owner-scoped and
+  // untouched. The caller drops the scope's log cursor separately.
+  purgeTeamScopeRows: sync(function (this: Draft, teamId: string) {
+    const wsKey = `team:${teamId}`;
+    const now = Date.now();
+    for (const coll of ["tasks", "docs", "plans", "projects"] as const) {
+      const rows = (this as any)[coll] as Record<string, any> | undefined;
+      if (!rows) continue;
+      for (const [id, row] of Object.entries(rows)) {
+        if (row?.workspace === wsKey) {
+          delete rows[id];
+          this.pending[`${coll}:${id}`] = { type: "exclude", ts: now };
+        }
+      }
+    }
+  }),
+
+  // Drop a syncMeta key outright (recordSyncMeta only advances). Used for log
+  // cursor resets: scope revocation and retention resync.
+  clearSyncMeta: sync(function (this: Draft, key: string) {
+    delete this.syncMeta[key];
+  }),
+
+  // Clear every tasks/docs crawl watermark belonging to one sync-log scope, so
+  // the next crawl runs as a FULL backfill (design D7 resync / D5 scope_added).
+  // Crawl keys are `${ns}:v2:${JSON.stringify(wsArgs)}` — several per scope
+  // (project_path variants) and never byte-reconstructable from a scope key
+  // (object key order), so this parses and matches instead of concatenating.
+  clearCrawlMetaForScope: sync(function (this: Draft, scopeKey: string) {
+    const teamId = scopeKey.startsWith("team:") ? scopeKey.slice(5) : null;
+    const personal = scopeKey.startsWith("user:");
+    for (const key of Object.keys(this.syncMeta)) {
+      const m = /^(tasks|docs):v2:(.*)$/.exec(key);
+      if (!m) continue;
+      try {
+        const ws = JSON.parse(m[2]);
+        const matches = teamId
+          ? ws?.workspace === "team" && String(ws.team_id) === teamId
+          : personal && ws?.workspace === "personal";
+        if (matches) delete this.syncMeta[key];
+      } catch {
+        // not a JSON wsKey (e.g. "skip") — nothing to clear
+      }
+    }
   }),
 
   switchAgent: action(function (this: Draft, currentId: string, targetAgentType: string) {
@@ -6140,6 +6424,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.myStatusPending = { userId: meId, status, at: Date.now() };
   }),
 
+  // The walkie door. Local-first for the same reason as the status above, and
+  // one more: useWalkieSync reads walkie_pref straight off currentUser to
+  // decide whether a teammate's burst may play here, so a pref that waited on a
+  // round trip would leave the door in its old state for a beat after somebody
+  // deliberately shut it. No pending guard — unlike the roster row, currentUser
+  // re-pushes only when the doc itself changes, by which time this IS the value.
+  setWalkiePref: action(function (this: Draft, pref: "team" | "off") {
+    if (this.currentUser) (this.currentUser as any).walkie_pref = pref;
+  }),
+
   // Notifications are a protected collection: the optimistic `read` flip is
   // field-protected so the next list sync can't revert it (the badge + bold
   // state clear instantly). The named side-effects delegate to the existing
@@ -6167,9 +6461,21 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // handler: [conversation_id, content, image_storage_ids, client_id].
   sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string) {
     notePendingMessageSendRequested(_clientId);
-    // No local mutation here: durability for the visible message comes from the
-    // persisted pendingMessages map. This body exists only so the middleware
-    // dispatches the args to the server and queues them in the outbox.
+    // A message into a session that is asking you something IS the answer —
+    // a poll payload always, free text when the row says awaiting_input. Mark
+    // the question resolved locally in the same commit so every question
+    // surface (queue, rail section, badge) drops it before the server's
+    // awaiting_input/permission_blocked truth round-trips. The mark expires
+    // once the agent speaks again (lib/decisionQueue.questionResolvedLocally);
+    // +1 covers this message's own echo.
+    const row = this.sessions[_convId];
+    const isPollAnswer = _content.startsWith("{") && _content.includes("__cc_poll");
+    if (row && (isPollAnswer || row.awaiting_input)) {
+      this.questionResolutions[_convId] = { at: Date.now(), message_count: (row.message_count ?? 0) + 1 };
+    }
+    // No other local mutation: durability for the visible message comes from
+    // the persisted pendingMessages map. The middleware dispatches the args to
+    // the server and queues them in the outbox.
   }),
 
   resumeSession: action(function (_convId: string) {}),
@@ -6547,7 +6853,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   recordSyncMeta: sync(function (this: Draft, key: string, patch: { cursor?: number; backfilledAt?: number; resumeCursor?: string | null; resumeAt?: number }) {
     const prev = this.syncMeta[key] ?? {};
     const next = { ...prev };
-    if (typeof patch.cursor === "number" && patch.cursor > (prev.cursor ?? 0)) next.cursor = patch.cursor;
+    if (typeof patch.cursor === "number" && (prev.cursor === undefined ? patch.cursor >= 0 : patch.cursor > prev.cursor)) next.cursor = patch.cursor;
     if (typeof patch.backfilledAt === "number") next.backfilledAt = patch.backfilledAt;
     // Mid-crawl checkpoint (reconcileCrawl): the continuation cursor of an
     // interrupted backfill, so a reload resumes instead of re-walking from page
@@ -7821,6 +8127,22 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if ((fields.status === "done" || fields.status === "dropped") && subtask_resolution === "cascade") {
       for (const id of new Set(copies.map((t) => String(t._id)))) cascadeCloseDraft(this, id, fields.status);
     }
+    // Assigning to another PERSON is a handoff (the server mutes the assigner
+    // and drops their thread_reads row): mirror it so the task's card leaves
+    // this Threads inbox now, not on the next sync. Agent labels hand the
+    // stream to nobody, so the follow stays. The exclude tombstone stops a
+    // racing listMine push from re-adding the row.
+    const me = this.currentUser?._id ? String(this.currentUser._id) : undefined;
+    if (rest.assignee && me && String(rest.assignee) !== me && !String(rest.assignee).startsWith("agent:")) {
+      for (const id of new Set(copies.map((t) => String(t._id)))) {
+        const rowId = `task:${id}`;
+        const row = this.threadInbox[rowId];
+        if (!row) continue;
+        if (row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
+        delete this.threadInbox[rowId];
+        this.pending[`threadInbox:${rowId}`] = { type: "exclude", ts: Date.now() };
+      }
+    }
   }),
 
   // Plans are a protected store collection with no serverTable, so the local
@@ -8699,6 +9021,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   myCalls: { incoming: [], outgoing: [], membership: null },
   callOccupancy: {},
   callConfig: null,
+  liveRooms: [],
+  roomKnocks: [],
+  callKnocked: {},
+  callLockPending: {},
   call: {
     phase: "idle" as const,
     roomKey: null,
@@ -8712,6 +9038,44 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // persisted (same class as modal toggles).
   setCallState: (patch: Partial<InboxStoreState["call"]>) =>
     set((s: any) => ({ call: { ...s.call, ...patch } })),
+
+  // Raw set() by the same convention as the call slice: ephemeral media-plane
+  // bookkeeping, never persisted and never dispatched. A knock and a lock
+  // toggle are both server gestures whose durable state comes back through
+  // liveRooms/roomKnocks; these hold only what the client must render before
+  // that echo lands.
+  noteKnock: (roomKey: string) =>
+    set((s: any) => ({ callKnocked: { ...s.callKnocked, [roomKey]: Date.now() } })),
+  clearKnock: (roomKey: string) =>
+    set((s: any) => {
+      if (!(roomKey in s.callKnocked)) return {};
+      const next = { ...s.callKnocked };
+      delete next[roomKey];
+      return { callKnocked: next };
+    }),
+  noteLockPending: (roomKey: string, locked: boolean) =>
+    set((s: any) => ({
+      callLockPending: { ...s.callLockPending, [roomKey]: { locked, at: Date.now() } },
+      // Paint the flip now — the liveRooms echo reconciles, and the pending
+      // entry above keeps an in-flight push from reverting it meanwhile.
+      liveRooms: (s.liveRooms as any[]).map((r) =>
+        r.room_key === roomKey ? { ...r, locked } : r,
+      ),
+    })),
+  // The mutation was refused: paint the state it never left and stop
+  // protecting it. Without this the optimistic glyph would stand until some
+  // unrelated change happened to re-push getLiveRooms.
+  revertLockPending: (roomKey: string, locked: boolean) =>
+    set((s: any) => {
+      const next = { ...s.callLockPending };
+      delete next[roomKey];
+      return {
+        callLockPending: next,
+        liveRooms: (s.liveRooms as any[]).map((r) =>
+          r.room_key === roomKey ? { ...r, locked } : r,
+        ),
+      };
+    }),
 
   // =====================
   // SELECTORS

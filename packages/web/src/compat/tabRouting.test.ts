@@ -111,4 +111,23 @@ describe("tabNavigate", () => {
     const tab = useInboxStore.getState().tabs.find((t) => t.id === "tab_1");
     expect(tab?.path).toBe("/tasks/ct-1");
   });
+
+  // A hidden background pane (a Cmd-click prewarm tab) canonicalizing its own
+  // deep link must move only ITS tab — never the browser URL or the tab the
+  // user is looking at. Regression: /files?path=… resolved in a background tab
+  // used to router.replace the ACTIVE tab into the Files page.
+  it("scopes a background pane's navigation to its own tab, leaving the URL alone", () => {
+    const bgTab = { id: "tab_2", title: "Files", path: "/files?path=/x/y.ts", createdAt: 2 };
+    useInboxStore.setState({ tabs: [inboxTab, bgTab], activeTabId: inboxTab.id });
+    tabNavigate("/files?f=y.ts", "replace", "tab_2");
+    expect(calls).toEqual([]);
+    const tabs = useInboxStore.getState().tabs;
+    expect(tabs.find((t) => t.id === "tab_2")?.path).toBe("/files?f=y.ts");
+    expect(tabs.find((t) => t.id === "tab_1")?.path).toBe("/inbox");
+  });
+
+  it("navigates normally when the pane's tab IS the active tab", () => {
+    tabNavigate("/tasks", "push", "tab_1");
+    expect(calls).toEqual([{ op: "push", url: "/tasks", state: { tabNav: true, tabId: "tab_1" } }]);
+  });
 });

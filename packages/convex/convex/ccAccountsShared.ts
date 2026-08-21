@@ -330,6 +330,20 @@ export function isSubagentConversation(conv: {
   return conv.is_subagent === true || !!conv.parent_conversation_id;
 }
 
+// The rows a fleet revive acts on, top-level first. Subagent workers join
+// ONLY on an explicit opt-in — never because they happen to be all that is
+// blocked. A worker runs inside its parent's process, so a "continue" cannot
+// reach it; the delivery rail resumes it as a standalone copy that runs its
+// brief again with nobody collecting the result. Shared by the server
+// selection and the web banner so the acted count is one number.
+export function actedBlockedConversations<T extends {
+  is_subagent?: boolean;
+  parent_conversation_id?: string | null;
+}>(blocked: T[], includeSubagents: boolean): T[] {
+  const topLevel = blocked.filter((c) => !isSubagentConversation(c));
+  return includeSubagents ? [...topLevel, ...blocked.filter(isSubagentConversation)] : topLevel;
+}
+
 // The parent-link fields every inbox session row MUST carry so the client can
 // tell a subagent from a top-level session and nest it under its parent. The
 // client reads exactly these via isSubagentConversation; without them a row

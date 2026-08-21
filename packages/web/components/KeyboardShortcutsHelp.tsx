@@ -146,12 +146,21 @@ function ShortcutRow({ description, parts }: { description: string; parts: strin
   );
 }
 
-export function MenuKeyCaps({ action }: { action: ShortcutAction }) {
+/** An action's binding, as caps. `className` exists because the same caps read
+ *  as a menu's right-hand accelerator in one place and as an inline hint in
+ *  another; the default is the menu. */
+export function MenuKeyCaps({
+  action,
+  className = "ml-auto flex items-center gap-[2px]",
+}: {
+  action: ShortcutAction;
+  className?: string;
+}) {
   const defs = getShortcutsForAction(action);
   if (defs.length === 0) return null;
   const parts = formatShortcutParts(defs[0]);
   return (
-    <span className="ml-auto flex items-center gap-[2px]">
+    <span className={className}>
       {parts.map((part, i) => (
         <KeyCap key={i} size="xs">{part}</KeyCap>
       ))}

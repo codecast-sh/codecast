@@ -48,6 +48,11 @@ const CURRENT_USER_METADATA_FIELDS = [
   "bio",
   "title",
   "status",
+  // The walkie door. It has to survive the projection: useWalkieSync reads it
+  // off currentUser to decide whether a teammate's burst plays out loud here,
+  // and a field dropped in projection reads as the default — which would quietly
+  // reopen a door somebody deliberately shut.
+  "walkie_pref",
   "timezone",
   "hide_activity",
   "username",

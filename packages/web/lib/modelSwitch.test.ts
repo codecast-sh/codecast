@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "../store/inboxStore";
 import { commitModelChange, modelSwitchMessages } from "./modelSwitch";
 
@@ -24,6 +24,13 @@ describe("modelSwitchMessages", () => {
 
 describe("commitModelChange on a live session", () => {
   const sent: Array<{ convId: string; content: string; clientId?: string }> = [];
+  // The stub below replaces the store's real sendMessage ACTION on the shared
+  // singleton store — restore it, or every later test file in the same run
+  // sends through a stub that skips the action's real local-first writes.
+  const realSendMessage = useInboxStore.getState().sendMessage;
+  afterEach(() => {
+    useInboxStore.setState({ sendMessage: realSendMessage } as any);
+  });
   beforeEach(() => {
     sent.length = 0;
     useInboxStore.setState({

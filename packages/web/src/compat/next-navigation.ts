@@ -37,6 +37,12 @@ export function usePathname(): string {
 
 export function useRouter() {
   const navigate = useNavigate();
+  // The tab this component renders in, so a background (prewarm) pane's
+  // navigations move its OWN tab instead of the one the user is looking at.
+  const tabCtx = useTabContext();
+  const tabId = tabCtx?.tabId;
+  // A pane-hosted page (lib/tabParams `navigate`) routes within its pane.
+  const paneNavigate = tabCtx?.navigate;
   return useMemo(
     () => ({
       // The second arg mirrors Next.js's `NavigateOptions` (e.g. `{ scroll }`).
@@ -46,13 +52,14 @@ export function useRouter() {
         // A Cmd-click's push opens the path in a background tab / detached
         // window instead (lib/openIntent) — the current view stays put.
         if (divertNavigation(path)) return;
+        if (paneNavigate) { paneNavigate(path, "push"); return; }
         const settings = interceptSettingsNav(path);
         if (settings) {
           if (settings.carryUrl) navigate(settings.carryUrl, { replace: true });
           return;
         }
         if (shouldUseTabRouting(path)) {
-          tabNavigate(path, "push");
+          tabNavigate(path, "push", tabId);
         } else {
           navigate(path);
         }
@@ -61,13 +68,14 @@ export function useRouter() {
         // A replace canonicalizes the current URL; it never claims a Cmd-click
         // on its own, but stands down when a sibling push in the same click did.
         if (divertNavigation(path, { openable: false })) return;
+        if (paneNavigate) { paneNavigate(path, "replace"); return; }
         const settings = interceptSettingsNav(path);
         if (settings) {
           if (settings.carryUrl) navigate(settings.carryUrl, { replace: true });
           return;
         }
         if (shouldUseTabRouting(path)) {
-          tabNavigate(path, "replace");
+          tabNavigate(path, "replace", tabId);
         } else {
           navigate(path, { replace: true });
         }
@@ -77,7 +85,7 @@ export function useRouter() {
       refresh: () => window.location.reload(),
       prefetch: (_path: string) => {},
     }),
-    [navigate],
+    [navigate, tabId, paneNavigate],
   );
 }
 

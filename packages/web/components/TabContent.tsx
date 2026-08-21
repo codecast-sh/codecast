@@ -156,12 +156,13 @@ function TabPane({ tab, isActive, children }: { tab: AppTab; isActive: boolean; 
     const [pathAndHash, queryString] = tab.path.split("?");
     const pathname = pathAndHash.split("#")[0];
     return {
+      tabId: tab.id,
       pathname,
       params: matched?.params ?? {},
       searchParams: new URLSearchParams(queryString ?? ""),
       isActive,
     };
-  }, [tab.path, matched, isActive]);
+  }, [tab.id, tab.path, matched, isActive]);
 
   // Sync browser URL when this tab is active
   useEffect(() => {

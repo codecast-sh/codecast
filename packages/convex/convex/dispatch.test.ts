@@ -1025,6 +1025,47 @@ describe("thread read side effects: both arg shapes", () => {
       { name: "threads:markAllRead", args: {} },
     ]);
   });
+
+  test("a legacy one-argument call is chat's sweep; \"all\" is the explicit unscoped one", async () => {
+    const { ctx, calls } = makeCtx();
+    await run(ctx, "markAllThreadsRead", [TEAM]); // old bundle: chat only
+    await run(ctx, "markAllThreadsRead", [TEAM, "all"]);
+    await run(ctx, "markAllThreadsRead", [null, "page"]);
+    expect(calls).toEqual([
+      { name: "threads:markAllRead", args: { team_id: TEAM, kind: "chat" } },
+      { name: "threads:markAllRead", args: { team_id: TEAM } },
+      { name: "threads:markAllRead", args: { kind: "page" } },
+    ]);
+  });
+
+  test("markThreadRead forwards the page kind", async () => {
+    const { ctx, calls } = makeCtx();
+    const ART = "a".repeat(32);
+    await run(ctx, "markThreadRead", ["page", ART]);
+    await run(ctx, "markThreadRead", ["page", "pagestub-1"]); // stub dropped
+    expect(calls).toEqual([{ name: "threads:markRead", args: { kind: "page", root_key: ART } }]);
+  });
+
+  test("addPageComment forwards slug or artifact id with the client_id; stubs are dropped", async () => {
+    const { ctx, calls } = makeCtx();
+    const ART = "a".repeat(32);
+    await run(ctx, "addPageComment", [{ slug: "report", text: "hi", clientId: "cl-1" }]);
+    await run(ctx, "addPageComment", [{ artifactId: ART, text: "yo", parentId: "b".repeat(32), clientId: "cl-2" }]);
+    await run(ctx, "addPageComment", [{ artifactId: "pagestub-1", text: "nope", clientId: "cl-3" }]);
+    expect(calls).toEqual([
+      {
+        name: "artifacts:submitComments",
+        args: { slug: "report", author_name: "", deliver: false, client_id: "cl-1", comments: [{ text: "hi" }] },
+      },
+      {
+        name: "artifacts:submitComments",
+        args: {
+          artifact_id: ART, author_name: "", deliver: false,
+          parent_id: "b".repeat(32), client_id: "cl-2", comments: [{ text: "yo" }],
+        },
+      },
+    ]);
+  });
 });
 
 describe("legacy comment action bridge", () => {

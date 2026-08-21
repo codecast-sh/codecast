@@ -6,17 +6,18 @@
 // Every ARMED schedule (recurring, once, event; inject or spawn — no user-facing
 // distinction) gets exactly one schedule-first row. Conversations never change
 // section because of a schedule; instead, work that is purely the schedule's —
-// a resting loop's home conversation after a machine wake, or an uneventful
-// spawned run — is ABSORBED behind its row (dropped from the triage buckets and
-// keyboard nav, reachable by clicking the row). Anything that needs a human
-// (hard blocker, failed/flagged run, or a turn the human initiated) is never
-// absorbed: it triages as an ordinary card.
+// a resting loop's home conversation after a machine wake, a once follow-up's
+// home that settled in Done, or an uneventful spawned run — is ABSORBED behind
+// its row (dropped from the triage buckets and keyboard nav, reachable by
+// clicking the row). Anything that needs a human (hard blocker, failed/flagged
+// run, or a turn the human initiated) is never absorbed: it triages as an
+// ordinary card.
 //
 // Data source is the per-user agentTasks.webList subscription (deduped by
 // Convex across the badge, the strip, and /schedules) — never the store.
 
 import type { InboxSession } from "../store/inboxStore";
-import { isSessionHardBlocked, isSessionHidden } from "../store/inboxStore";
+import { classifySession, isSessionHardBlocked, isSessionHidden } from "../store/inboxStore";
 import { isMachineDeliveredMessage } from "./sessionMessage";
 
 export const ARMED_STATUSES = new Set(["scheduled", "running", "paused"]);
@@ -296,17 +297,24 @@ export function partitionTriggerInbox(
       if (armed) armed.push(task);
       else armedInjectByConv.set(convId, [task]);
 
-      // Absorption requires a LOOP: a once follow-up is a reminder on an
-      // ordinary conversation, never a reason to hide it. A loop's home rests
-      // behind the row only while the machine is driving — pinned, blocked,
-      // blank, hidden, or human-engaged conversations triage normally. A
-      // flagged latest run (failed / --needs-attention) escapes too, same as
-      // spawn runs below: the flag is a claim on the user until the next clean
-      // run overwrites it.
-      if (task.schedule_type === "recurring" || task.schedule_type === "event") {
+      // Absorption parks the home behind the row only while the machine is
+      // driving — pinned, blocked, blank, hidden, or human-engaged
+      // conversations triage normally. A flagged latest run (failed /
+      // --needs-attention) escapes too, same as spawn runs below: the flag is
+      // a claim on the user until the next clean run overwrites it. A LOOP
+      // (recurring / event) absorbs whatever the home's rest verdict; a once
+      // follow-up absorbs only a home SETTLED IN DONE — delivered plus a named
+      // wake is parked, but a reminder must never hide an open ask or a live
+      // run (mirrors the armedOnceTriggerHome demotion in
+      // convex/inboxFilters.ts).
+      {
         const home = sessions[convId];
+        const parks =
+          task.schedule_type === "recurring" ||
+          task.schedule_type === "event" ||
+          (!!home && classifySession(home).waiting && classifySession(home).rest === "done");
         if (
-          home &&
+          home && parks &&
           convId !== opts.focusedId &&
           !home.is_pinned &&
           home.message_count > 0 &&

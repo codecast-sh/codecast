@@ -716,6 +716,7 @@ export async function performNeedsInputCheck(
     }
   }
 
+  const armedHomes = await loadArmedTriggerHomes(ctx, conv.user_id);
   const state = classifyWorkState({
     agentStatus,
     isIdle,
@@ -725,7 +726,8 @@ export async function performNeedsInputCheck(
     messageCount: conv.message_count || 0,
     killed: !!conv.inbox_killed_at,
     userDormant: isUserDormant(conv),
-    armedTriggerHome: isArmedTriggerHome(conv, await loadArmedTriggerHomes(ctx, conv.user_id)),
+    armedTriggerHome: isArmedTriggerHome(conv, armedHomes.standing),
+    armedOnceTriggerHome: isArmedTriggerHome(conv, armedHomes.once),
     settleVerdict: isSettleVerdictCurrent(conv) ? conv.settle_verdict : null,
     declaredStatus: conv.thread_state_status ?? null,
   });

@@ -134,6 +134,12 @@ export const updateProfile = mutation({
     title: v.optional(v.string()),
     status: v.optional(v.union(v.literal("available"), v.literal("busy"), v.literal("away"))),
     timezone: v.optional(v.string()),
+    // The walkie door. "team" (the absent default) lets a teammate's push-to-talk
+    // burst play live here; "off" closes it. It gates LIVE PLAYBACK on this
+    // person's own client and nothing else — the burst still arrives as a chat
+    // voice message either way, so closing the door mutes a speaker, never
+    // silences them.
+    walkie_pref: v.optional(v.union(v.literal("team"), v.literal("off"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -146,6 +152,7 @@ export const updateProfile = mutation({
     if (args.title !== undefined) updateData.title = args.title;
     if (args.status !== undefined) updateData.status = args.status;
     if (args.timezone !== undefined) updateData.timezone = args.timezone;
+    if (args.walkie_pref !== undefined) updateData.walkie_pref = args.walkie_pref;
     await ctx.db.patch(userId, updateData);
     return userId;
   },

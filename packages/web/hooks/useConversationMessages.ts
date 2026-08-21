@@ -55,7 +55,7 @@ function conversationRenderEqual(a: Record<string, any>, b: Record<string, any>)
 const metaWakeSig = (row: Record<string, any> | undefined | null): string =>
   rowSigExcluding(row, LIVENESS_ONLY_CONV_FIELDS);
 
-type Message = {
+export type Message = {
   _id: string;
   message_uuid?: string;
   role: string;

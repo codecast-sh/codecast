@@ -1561,7 +1561,9 @@ export const webList = query({
 // enrichPlansWithLiveness), so the client merges via syncTable("plans"). No
 // status filter — an abandoned/done plan comes back with its status and the
 // client's read-time filter hides it. Inaccessible / gone ids are omitted; the
-// feed drives the prune. See changeFeed.ts.
+// callers prune ids the response omits (authorized absence). Consumers: the
+// sync-log applier (syncLog.ts / web useSyncChangeFeed.ts) and, for deployed
+// old bundles, changeFeed.ts.
 export const webGetByIds = query({
   args: { ids: v.array(v.string()) },
   handler: async (ctx, args) => {

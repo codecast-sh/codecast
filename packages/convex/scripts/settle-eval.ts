@@ -142,6 +142,25 @@ const SYNTHETIC: Case[] = [
       ["assistant", "Refactor landed: 9 files, all typechecks green, screenshots attached. Wrapping up."],
     ]),
   },
+  // The done/needs_input line for deliveries that START work rather than finish
+  // it: a diagnosis or design with the build still ahead is the human's
+  // go-ahead moment, not a delivery — even when the message asks nothing.
+  {
+    name: "root cause found and fix proposed, nothing changed yet, no question",
+    expected: "needs_input",
+    messages: tail([
+      ["user", "the inbox sometimes jumps to a random session — figure out what's going on"],
+      ["assistant", "Root cause found: the tab URL's ?s= param re-asserts after the nav guard runs, so the stale param wins and moves the view. The fix is to gate the re-assert on a user-initiated source and drop the param echo on machine navs — about 30 lines in viewNav.ts plus a regression test. Nothing is changed yet."],
+    ]),
+  },
+  {
+    name: "design spec delivered for a feature, implementation still ahead",
+    expected: "needs_input",
+    messages: tail([
+      ["user", "add multi-account switching to the CLI"],
+      ["assistant", "Design written to docs/account-switch.md: token storage per account, proactive refresh, daemon handshake changes, and a two-step migration. Implementation touches auth.ts, daemon.ts and the keychain wrapper."],
+    ]),
+  },
 ];
 
 function fetchTail(conversationId: string): SettleTailMessage[] {

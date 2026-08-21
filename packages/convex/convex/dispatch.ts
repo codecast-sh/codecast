@@ -1,4 +1,4 @@
-import { mutation } from "./functions";
+import { mutation, syncAckPositions } from "./functions";
 import type { ThreadKind } from "./threadReads";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -108,8 +108,18 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
 };
 
 export const dispatch = mutation({
-  args: { action: v.string(), args: v.any(), patches: v.optional(v.any()), result: v.optional(v.any()) },
-  handler: async (ctx, { action, args: actionArgs, patches, result }) => {
+  args: {
+    action: v.string(),
+    args: v.any(),
+    patches: v.optional(v.any()),
+    result: v.optional(v.any()),
+    // Opt-in write acknowledgement (docs/architecture/sync-log-migration.md D8):
+    // when set, the return value is wrapped as { __syncAckV1, result } carrying
+    // the sync-log positions this transaction appended. Only new clients send
+    // it, so the unwrapped shape old bundles rely on never changes.
+    ack_positions: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { action, args: actionArgs, patches, result, ack_positions }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
@@ -125,9 +135,11 @@ export const dispatch = mutation({
     }
 
     const sideEffect = SIDE_EFFECTS[action];
-    if (sideEffect) {
-      return sideEffect(ctx, userId, actionArgs, result);
+    const out = sideEffect ? await sideEffect(ctx, userId, actionArgs, result) : undefined;
+    if (ack_positions) {
+      return { __syncAckV1: syncAckPositions(ctx), result: out };
     }
+    return out;
   },
 });
 
@@ -1153,6 +1165,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await (ctx as any).runMutation(api.users.updateProfile, { status });
   },
 
+  // The walkie door, from settings (store setWalkiePref). Same shape as the
+  // status above: the client already closed or opened its own door, this is the
+  // authoritative write.
+  setWalkiePref: async (ctx, userId, [pref]: ["team" | "off"]) => {
+    await (ctx as any).runMutation(api.users.updateProfile, { walkie_pref: pref });
+  },
+
   // Trigger verbs (store triggerAction / deleteTrigger). The client flipped
   // the agent_tasks row on its draft; these run the real mutations, which own
   // leases, rescheduling and the run-now kick.
@@ -1599,10 +1618,44 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!isServerId(idPart)) return;
     return await ctx.runMutation!(api.threads.markRead, { kind, root_key: rootKey });
   },
-  markAllThreadsRead: async (ctx, _userId, [teamId, kind]: [string?, ThreadKind?]) => {
+  // One thread card's "done": archive the caller's own follow (threads.dismiss
+  // deletes their thread_reads row). Same key rules as markThreadRead.
+  dismissThread: async (ctx, _userId, args: [ThreadKind, string]) => {
+    const [kind, rootKey] = [args[0] as ThreadKind, String(args[1])];
+    if (!["chat", "comment", "task", "page"].includes(kind)) return;
+    const idPart = kind === "comment" ? rootKey.split(":")[0] : rootKey;
+    if (!isServerId(idPart)) return;
+    return await ctx.runMutation!(api.threads.dismiss, { kind, root_key: rootKey });
+  },
+  markAllThreadsRead: async (ctx, _userId, args: [string?] | [string | null | undefined, (ThreadKind | "all")?]) => {
+    const teamId = args[0] ?? undefined;
+    // A one-argument call is the legacy chat-only sweep (old bundles and
+    // persisted outbox entries). The unscoped every-kind sweep is opt-in: the
+    // new client sends the explicit "all" sentinel.
+    const kind = args.length === 1 ? "chat" : args[1];
     return await ctx.runMutation!(api.threads.markAllRead, {
       ...(teamId && isServerId(teamId) ? { team_id: teamId as Id<"teams"> } : {}),
-      ...(kind && ["chat", "comment", "task", "page"].includes(kind) ? { kind } : {}),
+      ...(kind && kind !== "all" && ["chat", "comment", "task", "page"].includes(kind)
+        ? { kind: kind as ThreadKind }
+        : {}),
+    });
+  },
+  // The web's optimistic page reply: one comment onto a published page's
+  // discussion, deduped server-side on (artifact, client_id) so an outbox
+  // retry cannot double-post. Identity resolves from the caller's session.
+  addPageComment: async (
+    ctx,
+    _userId,
+    [o]: [{ slug?: string; artifactId?: string; text: string; parentId?: string; clientId: string }],
+  ) => {
+    if (!o?.text || (!o.slug && !(o.artifactId && isServerId(o.artifactId)))) return;
+    return await ctx.runMutation!(api.artifacts.submitComments, {
+      ...(o.slug ? { slug: o.slug } : { artifact_id: o.artifactId as Id<"artifacts"> }),
+      author_name: "",
+      deliver: false,
+      ...(o.parentId && isServerId(o.parentId) ? { parent_id: o.parentId } : {}),
+      client_id: o.clientId,
+      comments: [{ text: o.text }],
     });
   },
   setChannelNotifyLevel: async (
