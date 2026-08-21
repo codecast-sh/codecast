@@ -1,7 +1,8 @@
-import { memo, useRef, useState } from "react";
+import { memo, useCallback, useRef, useState } from "react";
 import { ImagePlus } from "lucide-react";
+import { WalkiePttButton } from "../calls/WalkiePtt";
 import { MessageInput } from "../ConversationView";
-import { KeyCap } from "../KeyboardShortcutsHelp";
+import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { useTypingMembers, useTypingReporter } from "../../hooks/useChatTyping";
 import { TypingIndicator } from "./TypingIndicator";
 import { pendingImageUploads } from "../../lib/draftImages";
@@ -48,6 +49,7 @@ export const ChatComposer = memo(function ChatComposer({
   autoFocus,
   compact,
   dropFilesRef,
+  walkieRoomKey,
 }: {
   channelId: string;
   threadRootId?: string;
@@ -66,8 +68,17 @@ export const ChatComposer = memo(function ChatComposer({
   /** Handed to the page so the whole transcript is a drop target: files dropped
    *  anywhere on the channel land in this composer's thumbnail strip. */
   dropFilesRef?: React.MutableRefObject<((files: File[]) => void) | null>;
+  /** The DM's call room, which turns the foot row's mic into push-to-talk.
+   *  Absent in a channel and in a thread: v1 walkie is a DM conversation, and
+   *  a burst spoken into a thread would land where nobody is listening. */
+  walkieRoomKey?: string;
 }) {
   const draftKey = chatDraftKey(channelId, threadRootId);
+  // The channel is already open, so keying the mic needs no lookup — but the
+  // walkie asks at press time, the same way the hover card does.
+  const resolveChannelId = useCallback(() => channelId, [channelId]);
+  // A burst is a line in the conversation, and a thread is somewhere else.
+  const offerWalkie = !!walkieRoomKey && !threadRootId;
   const typing = useTypingReporter(channelId, threadRootId);
   const typists = useTypingMembers(channelId, threadRootId);
   const ownDropRef = useRef<((files: File[]) => void) | null>(null);
@@ -131,6 +142,13 @@ export const ChatComposer = memo(function ChatComposer({
         >
           <ImagePlus className="w-3.5 h-3.5" />
         </button>
+        {offerWalkie && (
+          <WalkiePttButton
+            roomKey={walkieRoomKey}
+            resolveChannelId={resolveChannelId}
+            title="Hold to talk — they hear you now, and the words land here"
+          />
+        )}
         <input
           ref={pickerRef}
           type="file"
@@ -161,6 +179,15 @@ export const ChatComposer = memo(function ChatComposer({
             question: is there room? (see .ch-composer-hint-wide in chat.css) */}
         <span className="ch-composer-hint">
           <span className="ch-composer-hint-wide">
+            {offerWalkie && (
+              <>
+                <MenuKeyCaps
+                  action="chat.pushToTalk"
+                  className="inline-flex items-center gap-[2px]"
+                />{" "}
+                to talk ·{" "}
+              </>
+            )}
             <KeyCap size="xs">@</KeyCap> to mention ·{" "}
           </span>
           <KeyCap size="xs">Enter</KeyCap> to send · <KeyCap size="xs">Shift</KeyCap>

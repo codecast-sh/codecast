@@ -23,6 +23,10 @@ export { MAX_DM_MEMBERS } from "@codecast/shared/chat";
 // aggregate, so an uncapped count would pull a channel's whole backlog for a
 // number nobody reads past two digits.
 export const UNREAD_CAP = 50;
+// How far back a DM rail row looks for the newest line from the other person.
+// Bounded for the same reason as the unread cap: a long run of the viewer's own
+// sends must not turn one rail read into a full backlog scan.
+export const DM_INBOUND_SCAN = 50;
 // How recently someone must have typed to count as "here".
 export const HERE_PRESENCE_MS = 10 * 60_000;
 

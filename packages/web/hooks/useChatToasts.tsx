@@ -10,7 +10,7 @@ import {
 } from "../store/inboxStore";
 import { chatToastTier, type ChatToastTier } from "../lib/chatTimeline";
 import { ChatToast, toastPreview, type ChatToastData } from "../components/chat/ChatToast";
-import { getChatFocus } from "../lib/chatFocus";
+import { isChatContextOnScreen } from "../lib/chatFocus";
 import { isChatRailLive, subscribeChatRailLive } from "../lib/chatLive";
 import { knownAgentMember, memberName, type ChatMember } from "../lib/chatViews";
 import { soundChatMessage } from "../lib/sounds";
@@ -122,7 +122,6 @@ export function useChatToasts(): void {
     const byId = new Map<string, ChatMember>();
     for (const m of members) if (m?._id) byId.set(String(m._id), m);
     const snoozedUntil: number = state.clientState?.ui?.chat_snooze_until ?? 0;
-    const focus = getChatFocus();
     const windowFocused = typeof document === "undefined" ? true : document.hasFocus();
 
     for (const row of rail) {
@@ -157,14 +156,18 @@ export function useChatToasts(): void {
       );
       const channelRow = channels[channelId];
       const isDm = channelRow?.kind === "dm";
+      // Any registered surface showing this exact channel+thread context
+      // counts as "already on screen" — the tier's compare stays byte-for-byte
+      // the same, it just answers against every hold instead of one slot.
+      const onScreen = isChatContextOnScreen(channelId, threadRootId ?? undefined);
       const tier: ChatToastTier = chatToastTier({
         authorId: String(last.user_id),
         viewerId,
         mentionsViewer,
         isDm,
         channelId,
-        activeChannelId: focus.channelId,
-        activeThreadRootId: focus.threadRootId,
+        activeChannelId: onScreen ? channelId : undefined,
+        activeThreadRootId: onScreen ? threadRootId ?? undefined : undefined,
         threadRootId,
         viewerInThread,
         answersViewer: last.author_kind === "agent" && !!viewerInThread,

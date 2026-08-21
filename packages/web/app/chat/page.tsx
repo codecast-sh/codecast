@@ -59,6 +59,7 @@ import {
   useThreadMessages,
   useThreadSync,
 } from "../../hooks/useChatSync";
+import { useHoldToTalk } from "../../hooks/useWalkie";
 import { usePagePresence, useTabActive } from "../../hooks/usePagePresence";
 import { ChatChannelRail } from "../../components/chat/ChatChannelRail";
 import { ChatMessageList } from "../../components/chat/ChatMessageList";
@@ -175,6 +176,15 @@ export default function ChatPage() {
   const feed = useChannelMessagesSync(activeChannelId);
   const messages = useChannelMessages(activeChannelId);
 
+  // ── Push to talk ──────────────────────────────────────────────────────────
+  // DMs only in v1: a burst is spoken into the DM's own room, and a channel-wide
+  // walkie is a different product decision nobody has made.
+  const walkieRoomKey =
+    activeChannel?.kind === "dm"
+      ? chatViewRoomKey(activeChannel, viewerId, teamMembers)
+      : undefined;
+  const resolveWalkieChannel = useCallback(() => activeChannelId ?? null, [activeChannelId]);
+
   // ── Permalink target ──────────────────────────────────────────────────────
   const targetId = search.get("m") || undefined;
   useEnsureChatMessage(targetId);
@@ -198,6 +208,11 @@ export default function ChatPage() {
   }
   useThreadSync(threadRootId);
   const thread = useThreadMessages(threadRootId);
+  // The keyboard hold. What this page knows is whether the key has anywhere to
+  // talk: a DM, with no thread covering it. Whether the page is the one on
+  // screen is the hook's own question, asked there so no surface can arm a live
+  // mic by forgetting to ask it.
+  useHoldToTalk(walkieRoomKey, resolveWalkieChannel, !!walkieRoomKey && !threadRootId);
 
   // What the toast layer needs to know: a message in the room ON SCREEN must not
   // interrupt the person already reading it. On screen, not merely mounted — a
@@ -537,6 +552,7 @@ export default function ChatPage() {
               dropFilesRef={dropFilesRef}
               channelId={activeChannelId}
               teamId={activeChannel?.teamId}
+              walkieRoomKey={walkieRoomKey}
               placeholder={
                 activeChannel?.kind === "dm"
                   ? `Message ${channelDisplayName(activeChannel, useInboxStore.getState().teamMembers)}`

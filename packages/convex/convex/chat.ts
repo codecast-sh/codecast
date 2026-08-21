@@ -29,7 +29,7 @@ import { getAuthenticatedUserId } from "./pendingMessages";
 import { isTeamAdmin, isTeamMember } from "./privacy";
 import { requireTeamFeature, teamHasFeature } from "./teamFeatures";
 import { canAccessChannel, channelMemberIds, isChannelMember, isRestricted } from "./chatAccess";
-import { dmKeyFor, isAgentTurnInFlight, isSilentAgentRow, isVisibleAgentPending } from "@codecast/shared/chat";
+import { dmKeyFor, isAgentTurnInFlight, isLiveVoiceRow, isSilentAgentRow, isVisibleAgentPending } from "@codecast/shared/chat";
 import { RateLimitError, checkRateLimit } from "./rateLimit";
 import { purgeUserTeam, touchThread } from "./threadReads";
 // `userCanAccessAnchor` is the WAKE permission (any member of a team anchor's
@@ -48,6 +48,7 @@ import {
   MAX_DISTINCT_EMOJI,
   MAX_MENTIONS,
   UNREAD_CAP,
+  DM_INBOUND_SCAN,
   botHandle,
   chatPermalink,
   extractMentionHandles,
@@ -120,6 +121,26 @@ const ANCHOR_WAKE_LIMIT = 6;
 // collectively hammer one host.
 const ANCHOR_HOST_WAKE_LIMIT = 30;
 const ANCHOR_REPLY_LIMIT = 60;
+
+// A push-to-talk burst costs what a send costs, so it is capped like one — the
+// start is the send. The transcript patch that follows fires every few seconds
+// while the key is held, so its cap sits far above a send: it is there to stop a
+// hot loop rewriting one row, not to cut a long sentence short.
+const VOICE_PATCH_LIMIT = 240;
+// A burst still "live" this long after its last sign of life is an orphan — the
+// sender's tab died mid-word and no release is coming. Long enough to cover a
+// slow upload, short enough that nobody watches a bubble that will never
+// finish. Measured from `updated_at`, never `created_at`: see the sweep.
+const VOICE_STALE_MS = 2 * 60_000;
+// How many of a channel's newest rows a sweep reads looking for orphans. An
+// orphan is minutes old at most, so the head of the channel is where it is —
+// and in a room busy enough to bury it, the burst is already scrolled past.
+const VOICE_SWEEP_SCAN = 25;
+// The walkie watcher's bounds: how many of the caller's DM rooms one
+// subscription may watch, and how deep into each it looks for a live burst.
+// A burst is by construction among the newest messages in its room.
+const VOICE_WATCH_CHANNELS = 40;
+const VOICE_WATCH_SCAN = 5;
 
 // How many thread messages the anchor's wake prompt may carry. The excerpt is
 // always confined to ONE thread — never the channel — so mentioning the anchor
@@ -487,13 +508,29 @@ export const listChannels = query({
       const read = readByChannel.get(channel._id.toString());
       const lastReadAt = read?.last_read_at ?? 0;
 
+      const mine = (row: Doc<"chat_messages">) =>
+        row.user_id.toString() === userId.toString();
       // Newest few, so a tombstone at the head doesn't blank the rail preview.
+      // A DM reads deeper on the same index: the rail also needs the newest
+      // line the OTHER person wrote, and the viewer's own run of sends can push
+      // it well past the head. One read serves both — the first rows are the
+      // same rows the preview would have seen.
       const newest = await ctx.db
         .query("chat_messages")
         .withIndex("by_channel_created", (q: any) => q.eq("channel_id", channel._id))
         .order("desc")
-        .take(4);
-      const lastMessage = newest.find((m) => !m.deleted_at && !isSilentAgentRow(m)) ?? null;
+        .take(channel.kind === "dm" ? DM_INBOUND_SCAN : 4);
+      // A burst still being spoken is not yet a line in this room: it has not
+      // notified, so it neither becomes the rail's last message nor bumps the
+      // room's sort. Finalize does both, once.
+      const visible = (m: Doc<"chat_messages">) =>
+        !m.deleted_at && !isSilentAgentRow(m) && !isLiveVoiceRow(m);
+      const lastMessage = newest.find(visible) ?? null;
+      // The newest line from the other side, or null when the viewer has only
+      // ever spoken (or the other side's last word is beyond the scan).
+      const lastInbound = channel.kind === "dm"
+        ? newest.find((m) => visible(m) && !mine(m)) ?? null
+        : null;
 
       // Read MORE rows than the cap before filtering. Tombstones and the
       // caller's own lines are dropped after the read, so taking exactly the cap
@@ -504,8 +541,6 @@ export const listChannels = query({
         .withIndex("by_channel_created", (q: any) =>
           q.eq("channel_id", channel._id).gt("created_at", lastReadAt))
         .take(UNREAD_CAP * 2 + 1);
-      const mine = (row: Doc<"chat_messages">) =>
-        row.user_id.toString() === userId.toString();
       // Channel-LEVEL rows only. A thread reply does not tick the channel's
       // number: the reader cannot clear it from the channel view (the reply's
       // body never appears there), so counting it makes a badge that reading
@@ -514,7 +549,7 @@ export const listChannels = query({
       // being named must never be invisible. A BROADCAST reply is the
       // exception: it does appear in the channel, so reading clears it.
       const counted = unreadRows.filter(
-        (row) => !row.deleted_at && !isSilentAgentRow(row) && !mine(row)
+        (row) => !row.deleted_at && !isSilentAgentRow(row) && !isLiveVoiceRow(row) && !mine(row)
           && (row.thread_root_id === undefined || row.broadcast === true),
       );
       // Two numbers, never one. A single count that includes ordinary chatter
@@ -522,7 +557,7 @@ export const listChannels = query({
       // said your name — is invisible inside the noise. In a DM every line is
       // addressed to you, so every unread row counts as a mention.
       const unreadMentions = unreadRows.filter((row) =>
-        !row.deleted_at && !isSilentAgentRow(row) && !mine(row) && (
+        !row.deleted_at && !isSilentAgentRow(row) && !isLiveVoiceRow(row) && !mine(row) && (
           channel.kind === "dm"
           || row.mention_scope === "here"
           || (row.mentions ?? []).some((id) => id.toString() === userId.toString())
@@ -545,6 +580,11 @@ export const listChannels = query({
               created_at: lastMessage.created_at,
               preview: plainPreview(lastMessage.content, 120),
             }
+          : null,
+        // DM rooms only: what the other person last said, so a surface can key
+        // presence and rank to THEIR activity and ignore the viewer's sends.
+        last_inbound: lastInbound
+          ? { _id: lastInbound._id, created_at: lastInbound.created_at }
           : null,
         // Sorts the rail by recency without any denormalized field.
         sort_at: lastMessage?.created_at ?? channel.created_at,
@@ -1437,7 +1477,8 @@ export async function threadUnreadFor(
       q.eq("thread_root_id", rootId).gt("created_at", lastReadAt))
     .take(THREAD_UNREAD_SCAN);
   const counted = rows.filter(
-    (r) => !r.deleted_at && !isSilentAgentRow(r) && r.user_id.toString() !== userId.toString(),
+    (r) => !r.deleted_at && !isSilentAgentRow(r) && !isLiveVoiceRow(r)
+      && r.user_id.toString() !== userId.toString(),
   ).length;
   return { unread: Math.min(counted, UNREAD_CAP), unread_capped: counted > UNREAD_CAP };
 }
@@ -1925,6 +1966,23 @@ export const sendMessage = mutation({
 });
 
 
+// Strictly monotonic per channel. created_at is load-bearing three ways —
+// pagination order, the unread scan's `gt(lastReadAt)`, and the read mark
+// itself — and two rows in the same millisecond break all three at once:
+// a message landing in the read mark's millisecond is unread yet invisible
+// to the badge forever. One indexed read per insert buys the invariant.
+async function nextChatStamp(
+  ctx: MutationCtx,
+  channelId: Id<"chat_channels">,
+): Promise<number> {
+  const newestRow = await ctx.db
+    .query("chat_messages")
+    .withIndex("by_channel_created", (q: any) => q.eq("channel_id", channelId))
+    .order("desc")
+    .first();
+  return Math.max(Date.now(), (newestRow?.created_at ?? 0) + 1);
+}
+
 // The one insert-and-notify path for a chat line, whether a person or the
 // anchor wrote it. Everything that makes a message a message lives here — the
 // per-channel monotonic stamp, mention resolution, the read mark, and the
@@ -1954,17 +2012,7 @@ async function postChatMessage(
   createdAt: number;
 }> {
   const { channel, root, authorId, content, attachments } = opts;
-  // Strictly monotonic per channel. created_at is load-bearing three ways —
-  // pagination order, the unread scan's `gt(lastReadAt)`, and the read mark
-  // itself — and two rows in the same millisecond break all three at once:
-  // a message landing in the read mark's millisecond is unread yet invisible
-  // to the badge forever. One indexed read per send buys the invariant.
-  const newestRow = await ctx.db
-    .query("chat_messages")
-    .withIndex("by_channel_created", (q: any) => q.eq("channel_id", channel._id))
-    .order("desc")
-    .first();
-  const now = Math.max(Date.now(), (newestRow?.created_at ?? 0) + 1);
+  const now = await nextChatStamp(ctx, channel._id);
   const mentions = await resolveMentions(ctx, channel.team_id, content, authorId);
   const here = mentionsHere(content);
   if (here) await chatRateLimit(ctx, authorId, "chat.here", HERE_LIMIT);
@@ -1987,6 +2035,51 @@ async function postChatMessage(
     updated_at: now,
   });
 
+  const { hereCount, actorName } = await announceChatMessage(ctx, {
+    channel,
+    root,
+    messageId,
+    authorId,
+    content,
+    attachments,
+    mentions,
+    here,
+    createdAt: now,
+    agent: !!opts.agent,
+  });
+
+  return { messageId, mentions, hereCount, actorName, createdAt: now };
+}
+
+// Everything that turns a stored row into a message people are TOLD about: the
+// author's own read mark, mention/thread/@here/DM notification fan-out, and the
+// thread inbox. Split from the insert because a walkie burst announces itself
+// minutes after its row appeared — the row is created while the sender is still
+// talking, and only `finalizeVoiceBurst` is the moment it became a message.
+async function announceChatMessage(
+  ctx: MutationCtx,
+  opts: {
+    channel: Doc<"chat_channels">;
+    root: Doc<"chat_messages"> | null;
+    messageId: Id<"chat_messages">;
+    authorId: Id<"users">;
+    content: string;
+    attachments: Array<any>;
+    mentions: Id<"users">[];
+    /** The row carries an @here: page the members who are present. */
+    here: boolean;
+    /** The row's own stamp — the author's read mark and the thread activity. */
+    createdAt: number;
+    /** An anchor's post: no read mark and no bell of its own. */
+    agent?: boolean;
+    /** Push body when the words are empty: an image send says what it carries,
+     *  a burst whose transcript came back blank says "Voice note". */
+    pushFallback?: string;
+  },
+): Promise<{ hereCount: number; actorName: string }> {
+  const { channel, root, messageId, authorId, content, attachments, mentions } = opts;
+  const here = opts.here;
+  const now = opts.createdAt;
   // Posting is reading: you have obviously seen everything above your own line.
   // It is NOT un-muting: the level is left alone, because the person changed
   // where they are reading, not how loudly they want to be interrupted. Passing
@@ -2007,8 +2100,8 @@ async function postChatMessage(
   // the person, and "Direct message" under their name is noise.
   const inThread = !!root;
   const channelWhere = inThread ? `thread · #${channel.name}` : `#${channel.name}`;
-  // The words alone; an image-only message says what it carries.
-  const pushBody = preview || (attachments.length > 0
+  // The words alone; a wordless message says what it carries instead.
+  const pushBody = preview || opts.pushFallback || (attachments.length > 0
     ? (attachments.length === 1 ? "📷 Photo" : `📷 ${attachments.length} photos`)
     : preview);
   const notified = new Set<string>([authorId.toString()]);
@@ -2108,8 +2201,334 @@ async function postChatMessage(
     }
   }
 
-  return { messageId, mentions, hereCount, actorName, createdAt: now };
+  return { hereCount, actorName };
 }
+
+// ── Voice bursts: the walkie talkie ─────────────────────────────────────────
+//
+// Holding push-to-talk writes ONE chat message in three steps. `start` creates
+// it empty and "live" while the key is down, `append` streams the transcript
+// into its content as the words are recognized, and `finalize` lands it: final
+// text, the recording as an ordinary attachment, and how long it ran. A burst
+// too short to mean anything is `cancel`ed instead.
+//
+// Two rules make the split safe. Every step re-enters `loadChannel`, so a burst
+// obeys exactly the access a typed line obeys — there is no second door here.
+// And only `finalize` announces: a live burst is HEARD, through the call room
+// the sender is publishing into, so pushing a banner mid-sentence would buzz a
+// pocket for a voice note that is seconds from buzzing it again, and counting it
+// unread would badge a message that does not exist yet. Both happen once, at the
+// end, exactly as they do for a send.
+//
+// Nothing here wakes the anchor. A burst is speech aimed at a person, and a
+// recognizer that mishears a name is not a reason to spend a billed agent turn
+// on somebody's laptop — addressing the anchor stays something you type.
+
+type VoiceBurst = { message: Doc<"chat_messages">; channel: Doc<"chat_channels"> };
+
+// Author AND live, checked in one place so no step can forget one. Author,
+// because a transcript is the speaker's own words and nobody may put words
+// under their face — the send path needs no equivalent check only because an
+// insert names its own author. Live, because a finished burst is a landed
+// message: patching it afterwards rewrites something that has already notified,
+// which is the same reason `editMessage` never notifies again.
+async function loadLiveBurst(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  messageId: Id<"chat_messages">,
+): Promise<VoiceBurst> {
+  const message = await ctx.db.get(messageId);
+  if (!message) chatFail("NOT_FOUND", "Message not found");
+  const channel = await loadChannel(ctx, userId, message.channel_id);
+  if (message.user_id.toString() !== userId.toString()) {
+    chatFail("FORBIDDEN", "Only the speaker can write this voice message");
+  }
+  if (message.voice?.status !== "live") {
+    chatFail("INVALID", "That voice message is no longer live");
+  }
+  return { message, channel };
+}
+
+// The burst became a message. Everything a send does after its insert happens
+// here and only here: the final text, the audio, the duration, then the read
+// mark, the mentions, the unread badge and the one push.
+async function landVoiceBurst(
+  ctx: MutationCtx,
+  opts: {
+    channel: Doc<"chat_channels">;
+    message: Doc<"chat_messages">;
+    content: string;
+    durationMs?: number;
+    attachments: Array<any>;
+  },
+): Promise<Id<"users">[]> {
+  const { channel, message, content, attachments } = opts;
+  const mentions = await resolveMentions(ctx, channel.team_id, content, message.user_id);
+  await patchChat(ctx, message._id, {
+    content,
+    mentions: mentions.length > 0 ? mentions : undefined,
+    attachments: attachments.length > 0 ? attachments : undefined,
+    voice: {
+      status: "done" as const,
+      duration_ms: opts.durationMs,
+      room_key: message.voice?.room_key,
+    },
+  });
+  await announceChatMessage(ctx, {
+    channel,
+    // Bursts are spoken into the room, never into a thread.
+    root: null,
+    messageId: message._id,
+    authorId: message.user_id,
+    content,
+    attachments,
+    mentions,
+    // A spoken "at here" is a transcription artifact, not a decision to page a
+    // whole team. @here stays a thing you type.
+    here: false,
+    createdAt: message.created_at,
+    // A recognizer that heard nothing still leaves a playable recording.
+    pushFallback: "Voice note",
+  });
+  return mentions;
+}
+
+// A burst nobody will ever hear: a brushed key, or a hold that said nothing.
+// It tombstones, exactly like a deleted message, and is never removed from the
+// table — because a hard delete does not travel. A channel's messages sync as a
+// delta overlay that only ever GROWS (useChannelMessagesSync), so a row that
+// simply stops being returned is a row every other client keeps forever: anyone
+// who had the DM open while the burst was live would be left with a bubble
+// pulsing at them that nothing can clear. A `deleted_at` patch is an ordinary
+// field update, so it reaches exactly the clients that already have the row.
+async function discardVoiceBurst(
+  ctx: MutationCtx,
+  message: Doc<"chat_messages">,
+): Promise<void> {
+  await patchChat(ctx, message._id, {
+    voice: { status: "canceled" as const, room_key: message.voice?.room_key },
+    deleted_at: Date.now(),
+    content: "",
+    attachments: undefined,
+  });
+}
+
+// Orphan recovery without a cron: the next person to hold the key in a channel
+// clears the bursts that died in it. A tab that closes mid-word leaves a row
+// stuck "live" — pulsing on every client, counted by nothing — and the room it
+// died in is exactly where someone comes back to talk.
+async function sweepStaleVoiceBursts(
+  ctx: MutationCtx,
+  channel: Doc<"chat_channels">,
+): Promise<void> {
+  const cutoff = Date.now() - VOICE_STALE_MS;
+  const recent = await ctx.db
+    .query("chat_messages")
+    .withIndex("by_channel_created", (q: any) => q.eq("channel_id", channel._id))
+    .order("desc")
+    .take(VOICE_SWEEP_SCAN);
+  for (const row of recent) {
+    // Silence, not age. `created_at` is frozen at the moment the key went down,
+    // so judging by it declares anyone who talks for longer than the window
+    // dead: the sweep would finalize their row mid-sentence with a partial
+    // transcript and no audio, and their real release would then be refused as
+    // "no longer live" — the words and the whole recording gone. Every
+    // transcript patch moves `updated_at`, so a burst being spoken into keeps
+    // proving it is alive and only a tab that stopped talking is swept.
+    if (row.voice?.status !== "live" || row.updated_at > cutoff) continue;
+    // Words but no upload: the transcript is what was said, so it lands as the
+    // message it already is — without audio, which died with the tab. Silence:
+    // nothing was said, so nothing happened.
+    if (row.content.trim()) {
+      await landVoiceBurst(ctx, {
+        channel,
+        message: row,
+        content: row.content,
+        durationMs: row.voice.duration_ms,
+        attachments: [],
+      });
+    } else {
+      await discardVoiceBurst(ctx, row);
+    }
+  }
+}
+
+export const startVoiceBurst = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    channel_id: v.id("chat_channels"),
+    client_id: v.optional(v.string()),
+    // The call room the sender is publishing the audio into, so a teammate who
+    // sees the live bubble can walk in and answer out loud. Recorded, never
+    // trusted: joining that room still runs through authorizeRoom.
+    room_key: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireCaller(ctx, args.api_token);
+    const channel = await loadChannel(ctx, userId, args.channel_id);
+    if (channel.archived_at) chatFail("FORBIDDEN", "This channel is archived");
+
+    // Idempotent like a send, and for a sharper reason: the key is already down
+    // and the words are already being spoken, so a retried start must return the
+    // burst in flight rather than open a second one to talk into.
+    if (args.client_id) {
+      const duplicate = await findByClientId(ctx, channel._id, args.client_id);
+      if (duplicate) {
+        const matches = duplicate.user_id.toString() === userId.toString() && !!duplicate.voice;
+        if (!matches) {
+          chatFail("CONFLICT", "This client id is already bound to a different message");
+        }
+        return { message_id: duplicate._id, client_id: args.client_id, created: false };
+      }
+    }
+
+    await chatRateLimit(ctx, userId, "chat.voice", SEND_LIMIT);
+    await sweepStaleVoiceBursts(ctx, channel);
+
+    const now = await nextChatStamp(ctx, channel._id);
+    const messageId = await ctx.db.insert("chat_messages", {
+      team_id: channel.team_id,
+      channel_id: channel._id,
+      user_id: userId,
+      author_kind: "user" as const,
+      content: "",
+      client_id: args.client_id,
+      voice: { status: "live" as const, room_key: args.room_key },
+      created_at: now,
+      updated_at: now,
+    });
+    return { message_id: messageId, client_id: args.client_id, created: true };
+  },
+});
+
+export const appendVoiceTranscript = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    message_id: v.id("chat_messages"),
+    // The whole transcript so far, not a delta: a recognizer revises what it
+    // already heard as a sentence closes, so appending fragments would freeze
+    // its first guesses into the text. One field write, a few times a burst.
+    content: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireCaller(ctx, args.api_token);
+    const { message } = await loadLiveBurst(ctx, userId, args.message_id);
+    if (args.content.length > MAX_CHAT_CONTENT) {
+      chatFail("INVALID", `Message is longer than ${MAX_CHAT_CONTENT} characters`);
+    }
+    await chatRateLimit(ctx, userId, "chat.voice.transcript", VOICE_PATCH_LIMIT);
+    // Mentions are resolved when the burst lands, never here: a name half-heard
+    // mid-sentence would notify the wrong person, and then the right one.
+    await patchChat(ctx, message._id, { content: args.content });
+    return { message_id: message._id };
+  },
+});
+
+export const finalizeVoiceBurst = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    message_id: v.id("chat_messages"),
+    content: v.string(),
+    duration_ms: v.number(),
+    attachments: v.optional(v.array(attachmentValidator)),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireCaller(ctx, args.api_token);
+    // Deliberately no archived check: an archive that lands mid-burst does not
+    // swallow what was already being said, and refusing here would strand the
+    // row "live" until a sweep. Starting a NEW burst is refused, like a send.
+    const { message, channel } = await loadLiveBurst(ctx, userId, args.message_id);
+    const attachments = args.attachments ?? [];
+    if (!Number.isFinite(args.duration_ms)) chatFail("INVALID", "A voice message needs a duration");
+    if (args.content.length > MAX_CHAT_CONTENT) {
+      chatFail("INVALID", `Message is longer than ${MAX_CHAT_CONTENT} characters`);
+    }
+    if (attachments.length > MAX_ATTACHMENTS) {
+      chatFail("INVALID", `At most ${MAX_ATTACHMENTS} attachments per message`);
+    }
+    // Audio or words — a burst with neither is a key someone brushed, and
+    // `cancelVoiceBurst` is what that is for.
+    if (!args.content.trim() && attachments.length === 0) {
+      chatFail("INVALID", "A voice message needs audio or a transcript");
+    }
+    const mentions = await landVoiceBurst(ctx, {
+      channel,
+      message,
+      content: args.content,
+      durationMs: Math.max(0, Math.round(args.duration_ms)),
+      attachments,
+    });
+    return { message_id: message._id, mentioned: mentions.length };
+  },
+});
+
+export const cancelVoiceBurst = mutation({
+  args: { api_token: v.optional(v.string()), message_id: v.id("chat_messages") },
+  handler: async (ctx, args) => {
+    const userId = await requireCaller(ctx, args.api_token);
+    const { message } = await loadLiveBurst(ctx, userId, args.message_id);
+    await discardVoiceBurst(ctx, message);
+    return { message_id: message._id, deleted: true };
+  },
+});
+
+// The receiver's ear: which of the caller's DM rooms someone is talking into
+// RIGHT NOW. A client watches this app-wide (hooks/useWalkieSync) so a burst
+// can start playing while its channel is closed — chat messages only sync for
+// the channel on screen, and a walkie burst is heard before it is read.
+//
+// The caller passes the rooms it cares about, exactly as `calls.getRoomOccupancy`
+// does, and every one is re-authorized here: the argument narrows the scan, it
+// never grants anything. DM channels only — walkie is a person-to-person
+// gesture, and letting a caller point this at a busy public channel would scan
+// it on every message.
+//
+// BYTE STABILITY MATTERS HERE. This is a standing subscription, and the
+// transcript of a live burst is patched every couple of seconds; returning the
+// text would re-push the whole answer to every watcher on every word. What the
+// watcher needs is WHO is talking and WHERE — the words arrive with the message
+// itself once the channel is open. Nothing here reads the clock either: a
+// stale-but-live row is filtered by the client against the same window the
+// server sweep uses, so a passing minute cannot invalidate the query.
+export const listLiveVoiceBursts = query({
+  args: {
+    api_token: v.optional(v.string()),
+    channel_ids: v.array(v.id("chat_channels")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireCaller(ctx, args.api_token);
+    const bursts: Array<{
+      message_id: Id<"chat_messages">;
+      channel_id: Id<"chat_channels">;
+      user_id: Id<"users">;
+      room_key?: string;
+      created_at: number;
+    }> = [];
+    for (const channelId of args.channel_ids.slice(0, VOICE_WATCH_CHANNELS)) {
+      const channel = await readChannel(ctx, userId, channelId);
+      if (!channel || channel.kind !== "dm" || channel.archived_at) continue;
+      const recent = await ctx.db
+        .query("chat_messages")
+        .withIndex("by_channel_created", (q: any) => q.eq("channel_id", channel._id))
+        .order("desc")
+        .take(VOICE_WATCH_SCAN);
+      for (const row of recent) {
+        if (row.voice?.status !== "live" || row.deleted_at) continue;
+        // My own burst is not something to play back at me.
+        if (row.user_id.toString() === userId.toString()) continue;
+        bursts.push({
+          message_id: row._id,
+          channel_id: row.channel_id,
+          user_id: row.user_id,
+          room_key: row.voice.room_key,
+          created_at: row.created_at,
+        });
+      }
+    }
+    bursts.sort((a, b) => a.created_at - b.created_at);
+    return bursts;
+  },
+});
 
 // Which anchor a caller is speaking AS. Three ways to name it, strictest first:
 // an explicit anchor id, the calling session (an anchor's own session names its

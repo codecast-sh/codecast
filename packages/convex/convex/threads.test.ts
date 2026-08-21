@@ -8,9 +8,10 @@ import { hashToken } from "./apiTokens";
 import {
   backfillThreadReads,
   purgeUserTeam,
+  taskThreadParticipants,
   touchThread,
 } from "./threadReads";
-import { listMine, markAllRead, markRead, unreadCount } from "./threads";
+import { dismiss, listMine, markAllRead, markRead, unreadCount } from "./threads";
 
 const ALICE = "user-alice" as any;
 const BOB = "user-bob" as any;
@@ -261,6 +262,152 @@ describe("touch per kind", () => {
   });
 });
 
+describe("task thread membership: earned by a human act, never by identity", () => {
+  const AGENT_TASK = "tasks_agent" as any;
+  const HUMAN_TASK = "tasks_human" as any;
+  const sub = (_id: string, user_id: any, entity_id: any, reason: string, via?: string) =>
+    ({ _id, user_id, entity_type: "task", entity_id: String(entity_id), reason, muted: false, created_at: 1, ...(via ? { via } : {}) });
+  const task = (_id: any, extra: Record<string, unknown>) => ({
+    _id, short_id: String(_id), title: "t", status: "open", user_id: ALICE, team_id: TEAM,
+    workspace: `team:${TEAM}`, created_at: 1, updated_at: 1, ...extra,
+  });
+  const members = async (ctx: any, id: any) =>
+    (await taskThreadParticipants(ctx, ctx.db._tables.tasks.find((t: any) => t._id === id))).sort();
+
+  test("an agent's self-claim for its owner enrolls nobody; the same task filed by a person enrolls the owner", async () => {
+    const ctx = await context(ALICE, {
+      tasks: [
+        task(AGENT_TASK, { source: "agent", assignee: ALICE }),
+        task(HUMAN_TASK, { source: "human", assignee: ALICE }),
+      ],
+      entity_subscriptions: [
+        sub("s1", ALICE, AGENT_TASK, "creator", "agent"),
+        sub("s2", ALICE, AGENT_TASK, "assignee", "agent"),
+        sub("s3", ALICE, HUMAN_TASK, "creator", "human"),
+      ],
+    });
+    expect(await members(ctx, AGENT_TASK)).toEqual([]);
+    expect(await members(ctx, HUMAN_TASK)).toEqual([ALICE]);
+  });
+
+  test("the owner earns membership through a human act: a creator or assignee row via human on an agent task", async () => {
+    const ctx = await context(ALICE, {
+      tasks: [task(AGENT_TASK, { source: "plan_mode", assignee: ALICE }), task(HUMAN_TASK, { source: "agent", assignee: ALICE })],
+      entity_subscriptions: [
+        sub("s1", ALICE, AGENT_TASK, "creator", "human"),
+        sub("s2", ALICE, HUMAN_TASK, "creator", "agent"),
+        sub("s3", ALICE, HUMAN_TASK, "assignee", "human"),
+      ],
+    });
+    expect(await members(ctx, AGENT_TASK)).toEqual([ALICE]);
+    expect(await members(ctx, HUMAN_TASK)).toEqual([ALICE]);
+  });
+
+  test("a promoted agent task is a human task: identity enrolls", async () => {
+    const ctx = await context(ALICE, {
+      tasks: [task(AGENT_TASK, { source: "agent", promoted: true, assignee: ALICE })],
+      entity_subscriptions: [sub("s1", ALICE, AGENT_TASK, "creator", "agent")],
+    });
+    expect(await members(ctx, AGENT_TASK)).toEqual([ALICE]);
+  });
+
+  test("an agent task assigned to a different person enrolls that person, not the owner", async () => {
+    const ctx = await context(ALICE, {
+      tasks: [task(AGENT_TASK, { source: "agent", assignee: BOB })],
+      entity_subscriptions: [
+        sub("s1", ALICE, AGENT_TASK, "creator", "agent"),
+        sub("s2", BOB, AGENT_TASK, "assignee", "agent"),
+      ],
+    });
+    expect(await members(ctx, AGENT_TASK)).toEqual([BOB]);
+  });
+
+  test("commenters: via human enrolls, via agent never, a legacy row only on a human task; mentioned always", async () => {
+    const ctx = await context(ALICE, {
+      tasks: [task(AGENT_TASK, { source: "agent" }), task(HUMAN_TASK, { source: "human" })],
+      entity_subscriptions: [
+        sub("s1", ALICE, AGENT_TASK, "creator", "agent"),
+        sub("s2", BOB, AGENT_TASK, "commenter", "agent"),
+        sub("s3", CAROL, AGENT_TASK, "commenter"),
+        sub("s4", BOB, HUMAN_TASK, "commenter", "agent"),
+        sub("s5", CAROL, HUMAN_TASK, "commenter"),
+      ],
+    });
+    expect(await members(ctx, AGENT_TASK)).toEqual([]);
+    expect(await members(ctx, HUMAN_TASK)).toEqual([ALICE, CAROL].sort());
+
+    ctx.db._tables.entity_subscriptions.push(sub("s6", BOB, AGENT_TASK, "commenter", "human"));
+    ctx.db._tables.entity_subscriptions.push(sub("s7", CAROL, AGENT_TASK, "mentioned", "agent"));
+    expect(await members(ctx, AGENT_TASK)).toEqual([BOB, CAROL].sort());
+  });
+
+  test("the inbox drops a row the rule no longer earns, but never the viewer's own touched row", async () => {
+    const ctx = await context(ALICE, {
+      tasks: [task(AGENT_TASK, { source: "agent", assignee: ALICE })],
+      entity_subscriptions: [sub("s1", ALICE, AGENT_TASK, "creator", "agent")],
+      task_comments: [
+        { _id: "tc-1", task_id: AGENT_TASK, author: "Claude", text: "claimed", comment_type: "note", created_at: 100 },
+      ],
+    });
+    // Filed under the old identity rule: owner of an agent task.
+    await touchThread(ctx, {
+      kind: "task", rootKey: String(AGENT_TASK), teamId: TEAM, refs: { task_id: AGENT_TASK },
+      participants: [ALICE], activityAt: 100,
+    });
+    expect(rowOf(ctx, ALICE, "task")).toMatchObject({ last_read_at: 0 });
+    expect((await inbox(ctx)).entries).toEqual([]);
+    expect(await call(unreadCount, ctx, { team_id: TEAM })).toBe(0);
+
+    // Alice writes in the thread by hand: her row is hers to keep. An agent
+    // reply after that reaches her as unread.
+    await call(webAddComment, ctx, { short_id: String(AGENT_TASK), text: "looks right" });
+    expect((await inbox(ctx)).entries.map((e: any) => e._id)).toEqual([`task:${AGENT_TASK}`]);
+    ctx.db._tables.entity_subscriptions = ctx.db._tables.entity_subscriptions.filter((s: any) => s.via !== "human");
+    expect((await inbox(ctx)).entries.map((e: any) => e._id)).toEqual([`task:${AGENT_TASK}`]);
+    expect((await inbox(ctx)).entries[0].unread).toBe(0);
+  });
+
+  test("a mute denies every leg: the owner of a human task, the assignee field, and the wrote-in-thread backstop", async () => {
+    const mutedSub = (_id: string, user_id: any, entity_id: any) =>
+      ({ ...sub(_id, user_id, entity_id, "watching"), muted: true });
+    const ctx = await context(ALICE, {
+      tasks: [task(HUMAN_TASK, { source: "human", assignee: BOB })],
+      entity_subscriptions: [
+        mutedSub("s1", ALICE, HUMAN_TASK),
+        mutedSub("s2", BOB, HUMAN_TASK),
+      ],
+      task_comments: [
+        // Alice wrote in the thread herself — the backstop that normally keeps
+        // a row hers. A handoff mute beats it.
+        { _id: "tc-1", task_id: HUMAN_TASK, author: "Alice", author_user_id: ALICE, text: "handing off", comment_type: "note", created_at: 100 },
+      ],
+    });
+    expect(await members(ctx, HUMAN_TASK)).toEqual([]);
+    await touchThread(ctx, {
+      kind: "task", rootKey: String(HUMAN_TASK), teamId: TEAM, refs: { task_id: HUMAN_TASK },
+      participants: [ALICE], activityAt: 100,
+    });
+    expect((await inbox(ctx)).entries).toEqual([]);
+    expect(await call(unreadCount, ctx, { team_id: TEAM })).toBe(0);
+  });
+});
+
+describe("dismiss", () => {
+  test("dismiss archives the caller's row; the next reply files a fresh one", async () => {
+    const ctx = await context(ALICE);
+    await call(cliAddTaskComment, ctx, { api_token: TOKEN, short_id: "ct-1", text: "status", conversation_id: "sess-personal" });
+    expect(rowOf(ctx, ALICE, "task")).toBeTruthy();
+
+    await call(dismiss, ctx, { kind: "task", root_key: String(TASK) });
+    expect(rowOf(ctx, ALICE, "task")).toBeUndefined();
+    // Bob's follow is untouched: a dismiss is one person's triage.
+    expect(rowOf(ctx, BOB, "task")).toBeTruthy();
+
+    await call(cliAddTaskComment, ctx, { api_token: TOKEN, short_id: "ct-1", text: "more", conversation_id: "sess-personal" });
+    expect(rowOf(ctx, ALICE, "task")).toMatchObject({ last_read_at: 0 });
+  });
+});
+
 describe("listMine and unreadCount", () => {
   test("a row whose entity the viewer can no longer see is dropped and not counted", async () => {
     const ctx = await context(ALICE);
@@ -491,7 +638,9 @@ describe("page kind", () => {
     const ctx = await context(ALICE, pageSeed());
     await submitPageComment(ctx, { token: "page-token-bob", text: "first" });
     await call(markRead, ctx, { kind: "page", root_key: String(ARTIFACT) });
-    await submitPageComment(ctx, { name: "drive-by", text: "anonymous take" });
+    // The page is an opaque origin: an anonymous viewer carries no session.
+    const anon = { ...ctx, auth: { async getUserIdentity() { return null; } } };
+    await submitPageComment(anon, { name: "drive-by", text: "anonymous take" });
     // No account, no row: only Alice and Bob follow the page.
     expect(rows(ctx).filter((r) => r.kind === "page").map((r) => r.user_id).sort()).toEqual([ALICE, BOB].sort());
     const alice = await inbox(ctx, {});
@@ -533,6 +682,28 @@ describe("page kind", () => {
     const before = rows(ctx).length;
     await call(backfillThreadReads, ctx, { kind: "page" });
     expect(rows(ctx).length).toBe(before);
+  });
+
+  test("a signed-in web caller needs no identity token, and a client_id retry never double-posts", async () => {
+    const ctx = await context(ALICE, pageSeed());
+    const bob = as(ctx, BOB);
+    const reply = (clientId: string) => call(submitComments, bob, {
+      artifact_id: ARTIFACT,
+      author_name: "",
+      client_id: clientId,
+      comments: [{ text: "from the web" }],
+    });
+    const first = await reply("cl-1");
+    expect(first.count).toBe(1);
+    // Session auth resolved Bob; version defaulted to the artifact's.
+    expect(ctx.db._tables.artifact_comments[0]).toMatchObject({
+      author_user_id: BOB, author_name: "Bob", client_id: "cl-1", version: 1,
+    });
+    // The outbox retries: same row back, no twin, no second touch.
+    const retry = await reply("cl-1");
+    expect(retry.ids).toEqual(first.ids);
+    expect(ctx.db._tables.artifact_comments.length).toBe(1);
+    expect((await inbox(ctx, {})).entries[0].unread).toBe(1);
   });
 
   test("deleting the page purges every follow of its discussion", async () => {

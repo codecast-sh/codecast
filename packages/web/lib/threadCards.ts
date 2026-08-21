@@ -5,15 +5,15 @@
 // rules are testable without the React tree behind them.
 
 import type { LucideIcon } from "lucide-react";
-import { Hash, ListChecks, MessageSquare, Terminal, Users } from "lucide-react";
-import type { ThreadInboxRow, ThreadKind } from "../store/threadTypes";
+import { CircleHelp, Globe, Hash, ListChecks, MessageSquare, Terminal, Users } from "lucide-react";
+import type { ThreadCardOpenEntry, ThreadInboxRow, ThreadKind } from "../store/threadTypes";
 import type { ChatRailChannel } from "../store/chatSlice";
-import type { InboxSession } from "../store/inboxStore";
+import type { InboxSession, SessionDecisionItem } from "../store/inboxStore";
 
-export type ThreadCardKind = ThreadKind | "dm" | "session";
+export type ThreadCardKind = ThreadKind | "dm" | "session" | "question";
 
 /** The single-select chips. `all` is the default view and carries no ?type=. */
-export type ChipKey = "all" | "chat" | "dm" | "comment" | "task";
+export type ChipKey = "all" | "chat" | "dm" | "comment" | "task" | "page" | "question";
 
 export const CHIPS: Array<{ key: ChipKey; label: string }> = [
   { key: "all", label: "All" },
@@ -21,10 +21,18 @@ export const CHIPS: Array<{ key: ChipKey; label: string }> = [
   { key: "dm", label: "DMs" },
   { key: "comment", label: "Comments" },
   { key: "task", label: "Tasks" },
+  { key: "page", label: "Pages" },
+  { key: "question", label: "Questions" },
 ];
 
 /** Chips that exist only when the team has chat on. */
 const CHAT_CHIPS: ReadonlySet<ChipKey> = new Set(["chat", "dm"]);
+
+/** Chips whose cards the server mark-all-read sweep may clear. Chat is NOT
+ *  here: a chat thread can live in a DM room and file under the DMs chip, so
+ *  a kind-scoped server sweep would erase threads the reader never saw —
+ *  those chips mark their visible cards one by one instead. */
+export const SWEEPABLE_CHIPS: ReadonlySet<ChipKey> = new Set(["comment", "task", "page"]);
 
 /** ?type= → chip. Unknown values, and chat chips on a team with chat off,
  *  fall back to the default view. */
@@ -49,22 +57,31 @@ export type ThreadCardModel = {
   /** Which chip lists the card. A chat thread in a DM room files under DMs so
    *  one conversation never splits across chips; the card keeps its chat kind. */
   chip: Exclude<ChipKey, "all"> | "session";
-  /** Server: last_activity_at. dm: the rail's sortAt. session: updated_at. */
+  /** Server: last_activity_at. dm: the counterpart's last message — the
+   *  viewer's own sends never move it. session: updated_at. Drives the All
+   *  view's rank, the shown age, and the open map's expiry. */
   activityAt: number;
+  /** dm only: the rail's own stamp (sortAt, either direction). The DMs chip —
+   *  a browsing surface — ranks by this; everything else reads activityAt. */
+  browseAt?: number;
+  /** dm only: the counterpart has never spoken (viewer-only sends, or an
+   *  empty room). Listed under the DMs chip, absent from the All view. */
+  browseOnly?: boolean;
   /** Server: row.unread. dm: the rail count (0 when muted). session: 0 or 1. */
   unread: number;
   unreadCapped?: boolean;
   /** Open-in-place link. */
   href: string;
-  /** Kind-specific source: row | rail channel | session row. Renderers narrow on kind. */
-  source: ThreadInboxRow | ChatRailChannel | InboxSession;
+  /** Kind-specific source: row | rail channel | session row | decision row.
+   *  Renderers narrow on kind. */
+  source: ThreadInboxRow | ChatRailChannel | InboxSession | SessionDecisionItem;
   teamId?: string;
 };
 
 /* One tone per kind, and no tone is cyan: cyan is the page's unread accent
  * (border, badge, chip count, sidebar pill), so a kind tile in cyan would say
  * "new" on a thread that has nothing new. */
-export type ThreadKindTone = "blue" | "violet" | "magenta" | "orange" | "green";
+export type ThreadKindTone = "blue" | "violet" | "magenta" | "orange" | "green" | "yellow" | "red";
 
 /** The React-free half of a kind's spec. */
 export type ThreadKindMeta = {
@@ -126,10 +143,30 @@ export const THREAD_KIND_META: Record<ThreadCardKind, ThreadKindMeta> = {
     countsTowardBadge: false,
     emptyCopy: "Start one from the CLI or the composer and it shows here.",
   },
+  page: {
+    key: "page",
+    label: "Pages",
+    icon: Globe,
+    tone: "yellow",
+    chip: "page",
+    countsTowardBadge: true,
+    emptyCopy: "Comments on pages you published land here.",
+  },
+  question: {
+    key: "question",
+    label: "Questions",
+    icon: CircleHelp,
+    tone: "red",
+    chip: "question",
+    // Pending questions already badge the sidebar's Questions row; counting
+    // them here too would say the same thing twice.
+    countsTowardBadge: false,
+    emptyCopy: "When an agent queues a decision for you, it lands here.",
+  },
 };
 
 /** The default view's empty copy: the three ways a thread reaches this page. */
-export const ALL_EMPTY_COPY = "Chat replies, session comments and task comments all land here.";
+export const ALL_EMPTY_COPY = "Chat replies, session comments, task comments and page comments all land here.";
 
 /** The collapsed card's count line, one shape for every kind: "3 replies",
  *  "1 comment", or "No messages yet" when there are none. */
@@ -147,10 +184,15 @@ export function serverCards(
   rows: ThreadInboxRow[],
   channelKindOf: (channelId: string) => string | undefined,
   taskShortIdOf: (taskId: string) => string | undefined,
+  pageSlugOf: (artifactId: string) => string | undefined = () => undefined,
 ): ThreadCardModel[] {
   const out: ThreadCardModel[] = [];
   for (const row of rows) {
-    let chip: ThreadCardModel["chip"] = THREAD_KIND_META[row.kind].chip;
+    // A kind this bundle does not know (a newer server, or a rollback) is
+    // skipped, never a crash: one unknown row must not take down the page.
+    const meta = THREAD_KIND_META[row.kind] as ThreadKindMeta | undefined;
+    if (!meta) continue;
+    let chip: ThreadCardModel["chip"] = meta.chip;
     let href: string;
     if (row.kind === "chat") {
       const channelId = String(row.channel_id ?? "");
@@ -158,6 +200,9 @@ export function serverCards(
       href = `/chat/${channelId}?m=${row.root_key}`;
     } else if (row.kind === "comment") {
       href = `/conversation/${row.conversation_id ?? row.root_key.split(":")[0]}`;
+    } else if (row.kind === "page") {
+      const slug = pageSlugOf(row.root_key);
+      href = slug ? `/a/${slug}` : `/a`;
     } else {
       const taskId = String(row.task_id ?? row.root_key);
       href = `/tasks/${taskShortIdOf(taskId) ?? taskId}`;
@@ -178,16 +223,23 @@ export function serverCards(
 }
 
 /** DM rooms from the synced rail. Multi-person DMs are `dm` too. A muted room
- *  shows no unread, the same rule the rail applies. */
+ *  shows no unread, the same rule the rail applies. Presence and rank key to
+ *  the counterpart's last message: your own send never creates, removes, or
+ *  re-ranks a card in the All view — replying leaves the card in place, read,
+ *  until the other person speaks again. A room they have never spoken in is
+ *  browse-only: on the DMs chip (the full rail), never in All. */
 export function dmCards(rail: ChatRailChannel[]): ThreadCardModel[] {
   const out: ThreadCardModel[] = [];
   for (const c of rail) {
     if (c.kind !== "dm") continue;
+    const inboundAt = c.lastInboundAt;
     out.push({
       id: `dm:${c.id}`,
       kind: "dm",
       chip: "dm",
-      activityAt: c.sortAt,
+      activityAt: inboundAt ?? c.sortAt,
+      browseAt: c.sortAt,
+      browseOnly: inboundAt === undefined,
       unread: c.muted ? 0 : (c.unreadCount ?? 0),
       unreadCapped: !!c.unreadCapped,
       href: `/chat/${c.id}`,
@@ -225,28 +277,62 @@ export function sessionCards(
   }));
 }
 
+/** Pending decisions (cast decide / AskUserQuestion) as cards. Answered and
+ *  dismissed rows drop off — their history stays on the Questions page. The
+ *  status IS the read mark, so a pending card always shows as unread. */
+export function questionCards(decisions: SessionDecisionItem[]): ThreadCardModel[] {
+  const out: ThreadCardModel[] = [];
+  for (const d of decisions) {
+    if (d.status !== "pending") continue;
+    out.push({
+      id: `question:${d._id}`,
+      kind: "question",
+      chip: "question",
+      activityAt: d.created_at,
+      unread: 1,
+      href: `/questions`,
+      source: d,
+      teamId: undefined,
+    });
+  }
+  return out;
+}
+
 // ── Views ───────────────────────────────────────────────────────────────────
 
 /** The cards one chip shows. Sessions appear only under All, and only when
- *  the toggle is on; every other chip is exact. */
+ *  the toggle is on; browse-only DM rooms appear only under their own chip;
+ *  every other chip is exact. */
 export function cardsForChip(cards: ThreadCardModel[], chip: ChipKey, includeSessions: boolean): ThreadCardModel[] {
-  if (chip === "all") return includeSessions ? cards : cards.filter((c) => c.chip !== "session");
+  if (chip === "all") return cards.filter((c) => !c.browseOnly && (includeSessions || c.chip !== "session"));
   return cards.filter((c) => c.chip === chip);
 }
 
-/** Newest activity first. One merge sort across every source. */
-export function sortCards(cards: ThreadCardModel[]): ThreadCardModel[] {
-  return [...cards].sort((a, b) => b.activityAt - a.activityAt);
+/** Newest activity first. One merge sort across every source. The DMs chip is
+ *  the browsing exception: it ranks by the rail's own stamp (browseAt), so a
+ *  room the viewer just wrote to floats there — and only there. */
+export function sortCards(cards: ThreadCardModel[], chip: ChipKey = "all"): ThreadCardModel[] {
+  const at = chip === "dm"
+    ? (c: ThreadCardModel) => c.browseAt ?? c.activityAt
+    : (c: ThreadCardModel) => c.activityAt;
+  return [...cards].sort((a, b) => at(b) - at(a));
 }
 
 /** How many cards carry unread, per chip and for the default view. Sessions
  *  never count: `all` equals the sidebar badge. */
 export function unreadByChip(cards: ThreadCardModel[]): Record<ChipKey, number> {
-  const out: Record<ChipKey, number> = { all: 0, chat: 0, dm: 0, comment: 0, task: 0 };
+  const out: Record<ChipKey, number> = { all: 0, chat: 0, dm: 0, comment: 0, task: 0, page: 0, question: 0 };
   for (const c of cards) {
-    if (c.unread <= 0 || !THREAD_KIND_META[c.kind].countsTowardBadge) continue;
-    out.all++;
+    const meta = THREAD_KIND_META[c.kind] as ThreadKindMeta | undefined;
+    if (!meta) continue;
+    // A chip's own count includes every unread card it lists; only
+    // badge-counting kinds roll up into the default view's number (which is
+    // what the sidebar shows).
+    if (c.unread <= 0) continue;
     if (c.chip !== "session") out[c.chip]++;
+    // A browse-only card is not in the All view, so it must not tick the
+    // default view's number either.
+    if (meta.countsTowardBadge && !c.browseOnly) out.all++;
   }
   return out;
 }
@@ -255,6 +341,44 @@ export function unreadByChip(cards: ThreadCardModel[]): Record<ChipKey, number> 
  *  page so marking read cannot erase it mid-read. */
 export function frozenReadAtOf(card: ThreadCardModel): number {
   if (card.kind === "dm") return (card.source as ChatRailChannel).lastReadAt ?? 0;
-  if (card.kind === "session") return 0;
+  if (card.kind === "session" || card.kind === "question") return 0;
   return (card.source as ThreadInboxRow).last_read_at ?? 0;
+}
+
+// ── Open by default ─────────────────────────────────────────────────────────
+
+/** The default: unread cards render already expanded, read cards collapsed. */
+export function defaultOpenEntry(card: ThreadCardModel): ThreadCardOpenEntry {
+  return { expanded: card.unread > 0, by: "auto", at: card.activityAt, frozenReadAt: frozenReadAtOf(card) };
+}
+
+/** A collapsed entry expires when NEWER unread lands: the reader closed the
+ *  card on what it held then, not on what arrived since. Reading nothing new
+ *  (unread from the same activity) keeps the collapse. */
+export function openEntryExpired(card: ThreadCardModel, entry: ThreadCardOpenEntry): boolean {
+  return !entry.expanded && card.unread > 0 && card.activityAt > entry.at;
+}
+
+/** What a card's open state IS, given its stored entry. `firstSight` is true
+ *  the first time this page visit renders the card: a fresh visit re-derives
+ *  `auto` entries (so a card read last visit collapses again) but honors the
+ *  user's own choices. Expanded entries are never re-derived mid-visit — a
+ *  card marking itself read under the reader must not collapse under them. */
+export function resolveOpenEntry(
+  card: ThreadCardModel,
+  entry: ThreadCardOpenEntry | undefined,
+  firstSight: boolean,
+): ThreadCardOpenEntry {
+  if (!entry) return defaultOpenEntry(card);
+  if (firstSight && entry.by === "auto") return defaultOpenEntry(card);
+  if (openEntryExpired(card, entry)) return defaultOpenEntry(card);
+  return entry;
+}
+
+/** The user's toggle. Collapsing stamps the card's current activity so only
+ *  newer unread reopens it; expanding freezes the unread boundary now. */
+export function toggledOpenEntry(card: ThreadCardModel, current: ThreadCardOpenEntry): ThreadCardOpenEntry {
+  return current.expanded
+    ? { expanded: false, by: "user", at: card.activityAt, frozenReadAt: current.frozenReadAt }
+    : { expanded: true, by: "user", at: card.activityAt, frozenReadAt: frozenReadAtOf(card) };
 }

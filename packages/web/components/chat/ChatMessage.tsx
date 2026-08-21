@@ -10,6 +10,7 @@ import { copyToClipboard } from "../../lib/utils";
 import type { ChatAttachmentView, ChatMessageView } from "./chatTypes";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { useStorageImageUrl } from "../../hooks/useStorageImageUrl";
+import { ChatVoiceBubble } from "./ChatVoiceBubble";
 import { ImageLightbox } from "../ImageGallery";
 import "./chat.css";
 import "../editor/editor.css";
@@ -205,7 +206,10 @@ export const ChatMessage = memo(function ChatMessage({
   }, [menuOpen, pickerOpen]);
 
   const permalink = channelId ? `/chat/${channelId}?m=${message.id}` : undefined;
-  const canEdit = !!mine && !!onEdit && !message.deletedAt && !author.isAgent;
+  // A voice burst has no typed text to correct: its content is a transcript of
+  // something already said out loud, and editing it would put words in the
+  // speaker's mouth. Delete stays — you can take a voice note back.
+  const canEdit = !!mine && !!onEdit && !message.deletedAt && !author.isAgent && !message.voice;
   const canDelete = !!mine && !!onDelete && !message.deletedAt;
 
   const react = (emoji: string) => {
@@ -280,6 +284,11 @@ export const ChatMessage = memo(function ChatMessage({
 
         {message.deletedAt ? (
           <div className="ch-msg-deleted">This message was deleted</div>
+        ) : message.voice ? (
+          // Below the deleted branch on purpose: a canceled burst carries
+          // `deleted_at`, so "this was deleted" answers first and a brushed key
+          // never pulses at anybody.
+          <ChatVoiceBubble message={message} />
         ) : thinking ? (
           // The placeholder the server writes the moment an anchor is mentioned,
           // so the thread exists before the agent has said anything.

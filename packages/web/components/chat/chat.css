@@ -2285,3 +2285,125 @@ button.ch-search-chip:hover { color: var(--sol-text); }
 }
 
 
+
+/* ── Walkie: voice messages ──────────────────────────────────────────────────
+ *
+ * A voice message is a message, so the transcript keeps the timeline's own type
+ * and colour and the audio control sits beside it as a small, quiet affordance.
+ * No waveform, no player chrome, no second visual language: the row should read
+ * as one more line in the conversation that happens to be playable.
+ */
+
+.ch-voice {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  max-width: 78ch;
+  padding: 3px 9px 3px 6px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--sol-text) 3%, transparent);
+  font: inherit;
+  text-align: left;
+}
+
+.ch-voice-text {
+  font-size: 13px;
+  line-height: 1.58;
+  color: var(--sol-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* "talking…" before the first word, "no words" for a burst the recognizer never
+ * heard. Dimmer than the transcript, because it is a state and not speech. */
+.ch-voice-waiting {
+  color: var(--sol-text-dim);
+  font-style: italic;
+}
+
+.ch-voice-clock {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sol-text-dim);
+}
+
+.ch-voice-play,
+.ch-voice-noaudio {
+  align-self: center;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: var(--sol-violet);
+  background: color-mix(in srgb, var(--sol-violet) 14%, transparent);
+  transition: background 120ms, color 120ms;
+}
+
+.ch-voice-play:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--sol-violet) 26%, transparent);
+}
+
+.ch-voice-play:disabled {
+  color: var(--sol-text-dim);
+  background: color-mix(in srgb, var(--sol-text) 8%, transparent);
+  cursor: default;
+}
+
+.ch-voice-play-on {
+  background: color-mix(in srgb, var(--sol-violet) 26%, transparent);
+}
+
+.ch-voice-noaudio {
+  color: var(--sol-text-dim);
+  background: color-mix(in srgb, var(--sol-text) 8%, transparent);
+}
+
+/* Live: the violet edge marks the one bubble that is still being spoken, and
+ * the whole thing is a button because walking into the room is the point. */
+.ch-voice-live {
+  border-color: color-mix(in srgb, var(--sol-violet) 45%, transparent);
+  background: color-mix(in srgb, var(--sol-violet) 8%, transparent);
+  transition: background 120ms, border-color 120ms;
+}
+
+.ch-voice-live:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--sol-violet) 16%, transparent);
+}
+
+.ch-voice-live:disabled {
+  cursor: default;
+}
+
+.ch-voice-pulse {
+  align-self: center;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+}
+
+/* The same breathing the anchor's "thinking" dots use, and for the same reason:
+ * it means words are still arriving. Reduced motion keeps the dot — it just
+ * stops moving, and the word beside it already carries the state. */
+.ch-voice-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sol-violet);
+  animation: ch-voice-breathe 1.4s ease-in-out infinite;
+}
+
+@keyframes ch-voice-breathe {
+  0%, 100% { opacity: 0.35; transform: scale(0.82); }
+  45%      { opacity: 1;    transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ch-voice-dot { animation: none; opacity: 1; }
+}

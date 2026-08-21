@@ -9,3 +9,4 @@ export * from "./timeline";
 export * from "./handles";
 export * from "./dm";
 export * from "./agent";
+export * from "./voice";

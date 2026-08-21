@@ -4,7 +4,7 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { selectChannelReadMarker, type ChatAttachment, type ChatRailChannel } from "../../../store/chatSlice";
 import { useChannelMessages, useChannelMessagesSync } from "../../../hooks/useChatSync";
 import { channelDisplayName, dmCounterpart, memberName } from "../../../lib/chatViews";
-import { setChatFocus, clearChatFocus } from "../../../lib/chatFocus";
+import { holdChatFocus } from "../../../lib/chatFocus";
 import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
 import { CommentAvatar } from "../../comments/CommentAvatar";
 import { ChatComposer } from "../../chat/ChatComposer";
@@ -60,12 +60,15 @@ export function DmRoot({ card, expanded }: { card: ThreadCardModel; expanded: bo
 
 export function DmExpanded({
   card,
-  present,
+  seen,
   frozenReadAt,
+  focusComposer,
 }: {
   card: ThreadCardModel;
   present: boolean;
+  seen: boolean;
   frozenReadAt: number;
+  focusComposer: boolean;
 }) {
   const channel = channelOf(card);
   const channelId = channel.id;
@@ -75,21 +78,23 @@ export function DmExpanded({
   const messages = useMemo(() => (all.length > DM_WINDOW ? all.slice(-DM_WINDOW) : all), [all]);
   const newestId = messages.length ? messages[messages.length - 1].id : undefined;
 
-  // The channel page's own rule: present + newest on screen = read. The marker
-  // is the newest message in the ROOM, replies included, so a badge a thread
+  // The channel page's own rule: present + newest on screen = read — `seen`
+  // is that statement, witnessed by the shell's tail sentinel. The marker is
+  // the newest message in the ROOM, replies included, so a badge a thread
   // reply raised clears too. Re-marks as messages land (newestId moves).
   useEffect(() => {
-    if (!present || feed.loading) return;
+    if (!seen || feed.loading) return;
     const state = useInboxStore.getState();
     const marker = selectChannelReadMarker(state as any, channelId);
     state.markChannelRead(channelId, marker?._id);
-  }, [present, channelId, newestId, feed.loading, channel.unreadCount]);
+  }, [seen, channelId, newestId, feed.loading, channel.unreadCount]);
 
+  // A hold, not the page's single slot: several cards can be on screen at
+  // once, and releasing this one must not erase another's.
   useEffect(() => {
-    if (!present) return;
-    setChatFocus({ channelId });
-    return () => clearChatFocus();
-  }, [present, channelId]);
+    if (!seen) return;
+    return holdChatFocus({ channelId });
+  }, [seen, channelId]);
 
   const send = useCallback(
     (content: string, attachments?: ChatAttachment[]) => {
@@ -111,7 +116,7 @@ export function DmExpanded({
         placeholder={`Message ${channelDisplayName(channel, members)}`}
         onSend={send}
         compact
-        autoFocus
+        autoFocus={focusComposer}
       />
     </div>
   );

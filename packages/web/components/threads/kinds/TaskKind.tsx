@@ -5,6 +5,7 @@ import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
 import { TaskStatusBadge } from "../../TaskStatusBadge";
 import { Badge } from "../../ui/badge";
 import { TaskCommentStream } from "../../tasks/TaskCommentStream";
+import { useTailPin } from "../cardWindow";
 import { useThreadsPage } from "../threadsContext";
 
 // The task kind: a task's comment stream. The collapsed card is the short id,
@@ -34,11 +35,14 @@ function useTaskRow(taskId: string): TaskDetail | undefined {
   return s.tasks[taskId] as TaskDetail | undefined;
 }
 
+/** Short id AND title: the head label is the one column every kind shares,
+ *  and a bare id is unscannable in a mixed list. */
 export function TaskLabel({ card }: { card: ThreadCardModel }) {
   const task = useTaskRow(taskIdOf(card));
   return (
     <>
-      <span className="font-mono">{task?.short_id ?? "task"}</span>
+      <span className="font-mono th-card-task-id">{task?.short_id ?? "task"}</span>
+      {task?.title && <span className="th-card-task-name">{task.title}</span>}
     </>
   );
 }
@@ -54,7 +58,6 @@ export function TaskRoot({ card, expanded }: { card: ThreadCardModel; expanded: 
     <>
       {task ? (
         <div className="th-card-root th-card-taskrow">
-          <span className="th-card-task-title">{task.title}</span>
           <TaskStatusBadge status={task.status} />
         </div>
       ) : (
@@ -80,7 +83,7 @@ export function TaskRoot({ card, expanded }: { card: ThreadCardModel; expanded: 
   );
 }
 
-export function TaskExpanded({ card, present }: { card: ThreadCardModel; present: boolean; frozenReadAt: number }) {
+export function TaskExpanded({ card, seen, focusComposer }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
   const row = rowOf(card);
   const taskId = taskIdOf(card);
   // The detail feeder fills tasks[id].comments with the full server set; the
@@ -88,15 +91,33 @@ export function TaskExpanded({ card, present }: { card: ThreadCardModel; present
   useSyncTaskDetail(taskId);
   const task = useTaskRow(taskId);
 
+  const commentCount = task?.comments?.length ?? 0;
+
+  // The read law: mark read only while the card's newest content has actually
+  // been in the viewport (`seen`, the shell's tail sentinel), never on mount —
+  // and never while the store holds nothing for an unread stream: on a cold
+  // cache the body renders empty and short, so the sentinel is trivially in
+  // view with the newest comment never rendered. The count dep fires the mark
+  // once the detail feeder answers.
   useEffect(() => {
-    if (!present) return;
+    if (!seen) return;
+    if (row.unread > 0 && commentCount === 0) return;
     if (row.last_read_at >= row.last_activity_at && row.unread === 0) return;
     useInboxStore.getState().markThreadRead("task", row.root_key);
-  }, [present, row.root_key, row.last_activity_at, row.last_read_at, row.unread]);
+  }, [seen, row.root_key, row.last_activity_at, row.last_read_at, row.unread, commentCount]);
+
+  // The wrapper IS the capped scroller (65vh); pinned to the tail so the
+  // newest comment is what shows — the read sentinel below assumes it.
+  const comments = task?.comments ?? EMPTY_COMMENTS;
+  const pinRef = useTailPin(comments.length ? `${comments[comments.length - 1]._id}|${comments.length}` : "");
 
   return (
-    <div className="th-card-open th-card-open-task">
-      <TaskCommentStream shortId={task?.short_id} comments={task?.comments ?? []} composerAutoOpen />
+    <div ref={pinRef} className="th-card-open th-card-open-task">
+      {/* Auto-open (and its focus grab) only on the user's own expand: fifty
+          default-open cards each opening a composer would fight over focus. */}
+      <TaskCommentStream shortId={task?.short_id} comments={comments} composerAutoOpen={focusComposer} />
     </div>
   );
 }
+
+const EMPTY_COMMENTS: NonNullable<TaskDetail["comments"]> = [];

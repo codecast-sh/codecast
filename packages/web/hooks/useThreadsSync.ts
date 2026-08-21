@@ -25,6 +25,8 @@ import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { isConvexId } from "../lib/entityLinks";
 import { ingestTaskDetail } from "./useSyncTasks";
+import { questionCards } from "../lib/threadCards";
+import { GLOBAL_THREAD_KEY, fileThreadKey, parseCommentThreadRootKey, webThreadKeyFromAnchor, type Comment } from "../lib/commentThread";
 import { messagesSig, reactionsSig, useChatMembers, useChatRail, useMessageViews } from "./useChatSync";
 import type { ChatMessageView } from "../components/chat/chatTypes";
 
@@ -53,8 +55,12 @@ function useThreadScope(): { teamId: string | undefined; args: { team_id?: strin
 }
 
 /** A row belongs to the workspace on screen. Absence normalized on both sides:
- *  a personal row has no team_id and the personal workspace has no team. */
-export function threadRowInWorkspace(row: { team_id?: string }, teamId: string | undefined): boolean {
+ *  a personal row has no team_id and the personal workspace has no team.
+ *  PAGE rows are the exception: a published page is personal property with no
+ *  routing team, and its discussion follows the owner into every workspace
+ *  (the server carries them into team-scoped reads the same way). */
+export function threadRowInWorkspace(row: { team_id?: string; kind?: string }, teamId: string | undefined): boolean {
+  if (row.kind === "page") return true;
   return String(row.team_id ?? "") === String(teamId ?? "");
 }
 
@@ -91,9 +97,19 @@ export function useThreadsInboxSync(): {
   }
 
   const ingest = useCallback(
-    (data: any) => {
+    (data: any, opts?: { firstPage?: boolean }) => {
       if (!data) return;
       syncTable("threadInbox", data.entries ?? []);
+      // A fresh FIRST page is authoritative for its activity window: a local
+      // row inside the window that the server no longer returns has been
+      // revoked (left room, lost team) and must leave the client too.
+      if (opts?.firstPage && Array.isArray(data.entries)) {
+        const floor = data.has_more && data.entries.length > 0
+          ? data.entries[data.entries.length - 1].last_activity_at
+          : 0;
+        const st = useInboxStore.getState();
+        st.pruneThreadInbox(data.entries.map((e: any) => String(e._id)), teamRef.current, floor);
+      }
       const chat = data.payload?.chat;
       if (chat?.roots?.length) syncTable("chatMessages", chat.roots);
       if (chat?.threads?.length) {
@@ -103,7 +119,24 @@ export function useThreadsInboxSync(): {
         );
       }
       if (data.payload?.comments?.length) syncTable("comments", data.payload.comments);
-      for (const task of data.payload?.tasks ?? []) ingestTaskDetail(task);
+      for (const task of data.payload?.tasks ?? []) ingestTaskDetail(task, { partialComments: true });
+      if (data.payload?.pages?.length) {
+        // Carry local optimistic reply stubs forward: a push racing the
+        // server's write would otherwise clobber the reply for a beat. A stub
+        // retires when the echoed row carries its client_id, or after a
+        // minute (the send failed or the outbox is retrying).
+        const local = useInboxStore.getState().pageThreads as Record<string, any>;
+        const merged = data.payload.pages.map((p: any) => {
+          const prev = local[String(p._id)];
+          if (!prev) return p;
+          const echoed = new Set((p.comments ?? []).map((c: any) => c.client_id).filter(Boolean));
+          const stubs = (prev.comments ?? []).filter(
+            (c: any) => c._id.startsWith("pagecmtstub-") && !echoed.has(c.client_id) && c.created_at > Date.now() - 60_000,
+          );
+          return stubs.length ? { ...p, comments: [...(p.comments ?? []), ...stubs] } : p;
+        });
+        syncTable("pageThreads", merged);
+      }
     },
     [syncTable],
   );
@@ -112,7 +145,7 @@ export function useThreadsInboxSync(): {
     result,
     useCallback(
       (data: any) => {
-        ingest(data);
+        ingest(data, { firstPage: true });
         if (data) setOlderCursor((prev) => (prev === null ? (data.next_cursor ?? null) : prev));
       },
       [ingest],
@@ -197,28 +230,108 @@ export function useThreadInbox(): ThreadInboxRow[] {
 export function useThreadUnread(): number {
   const rail = useChatRail();
   const s = useTrackedStore([
-    (s: any) => threadInboxSig(s.threadInbox),
     (s: any) => s.threadUnread,
     (s: any) => s.clientState?.ui?.active_team_id,
   ]);
-  const teamId = s.clientState?.ui?.active_team_id;
-  const sig = threadInboxSig(s.threadInbox);
+  // The SCALAR is the server-kind number, never the local rows: the page
+  // feeder mounts only on /threads, so after one visit the local rows would
+  // freeze while new activity moves the scalar — a badge that ignores every
+  // reply that lands while you sit on the Inbox. The scalar stays honest
+  // app-wide (useThreadUnreadSync), and mark-read stays instant because the
+  // mark actions decrement it on the draft.
   const scalar = (s as any).threadUnread ?? 0;
   return useMemo(() => {
-    let local = 0;
-    let haveLocal = false;
-    for (const id in s.threadInbox) {
-      const row = s.threadInbox[id] as ThreadInboxRow;
-      if (!threadRowInWorkspace(row, teamId)) continue;
-      haveLocal = true;
-      if ((row.unread ?? 0) > 0) local++;
-    }
     let dms = 0;
     for (const c of rail) if (c.kind === "dm" && (c.unreadCount ?? 0) > 0 && !c.muted) dms++;
-    return (haveLocal ? local : scalar) + dms;
-    // The signature gates the wake; the body reads the raw collection.
+    return scalar + dms;
+  }, [rail, scalar]);
+}
+
+/** The web thread key of one comment row (which anchor it hangs on). */
+function commentWebKey(c: Comment): string {
+  return c.message_id ? String(c.message_id) : c.file_path ? fileThreadKey(c.file_path, c.line_number) : GLOBAL_THREAD_KEY;
+}
+
+/** Every comment thread the page's rows point at, assembled ONCE: a map of
+ *  `${conversationId}:${webKey}` → comments oldest first. A per-card reader
+ *  would rescan the whole comments map per card per push (the exact cost the
+ *  chat cards avoid via useThreadInboxCards). */
+export function useCommentThreadMap(rows: ThreadInboxRow[]): Map<string, Comment[]> {
+  const anchors = useMemo(() => {
+    const out = new Map<string, { conversationId: string; webKey: string }>();
+    for (const r of rows) {
+      if (r.kind !== "comment") continue;
+      const parsed = parseCommentThreadRootKey(r.root_key);
+      const conversationId = String(r.conversation_id ?? parsed.conversationId);
+      out.set(r.root_key, { conversationId, webKey: webThreadKeyFromAnchor(parsed.anchorKey) });
+    }
+    return out;
+  }, [rows]);
+  const conversations = useMemo(() => new Set([...anchors.values()].map((a) => a.conversationId)), [anchors]);
+  const s = useTrackedStore([
+    (s: any) => {
+      let sig = "";
+      for (const id in s.comments) {
+        const c = s.comments[id] as Comment;
+        if (!conversations.has(String(c.conversation_id))) continue;
+        sig += `${c._id}|${c.created_at}|${c.content.length}|${c.resolved_at ?? ""}|${c.agent_status ?? ""};`;
+      }
+      return sig;
+    },
+  ]);
+  const all = (s as any).comments as Record<string, Comment>;
+  const sig = (() => {
+    let out = "";
+    for (const id in all) {
+      const c = all[id];
+      if (!conversations.has(String(c.conversation_id))) continue;
+      out += `${c._id}|${c.created_at}|${c.content.length}|${c.resolved_at ?? ""}|${c.agent_status ?? ""};`;
+    }
+    return out;
+  })();
+  return useMemo(() => {
+    const map = new Map<string, Comment[]>();
+    for (const [rootKey, a] of anchors) map.set(rootKey, []);
+    const byConvKey = new Map<string, string>();
+    for (const [rootKey, a] of anchors) byConvKey.set(`${a.conversationId}:${a.webKey}`, rootKey);
+    for (const id in all) {
+      const c = all[id];
+      const rootKey = byConvKey.get(`${String(c.conversation_id)}:${commentWebKey(c)}`);
+      if (rootKey) map.get(rootKey)!.push(c);
+    }
+    for (const list of map.values()) list.sort((a, b) => a.created_at - b.created_at);
+    return map;
+    // The signature is the real dep: the raw map ref flips on every push.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rail, sig, scalar, teamId]);
+  }, [anchors, sig]);
+}
+
+/** Pending decisions as Threads cards. Woken only by the pending set. */
+export function useQuestionThreadCards(): import("../lib/threadCards").ThreadCardModel[] {
+  const s = useTrackedStore([
+    (s: any) => {
+      let sig = "";
+      for (const id in s.sessionDecisions) {
+        const d = s.sessionDecisions[id];
+        if (d?.status === "pending") sig += `${d._id}|${d.created_at};`;
+      }
+      return sig;
+    },
+  ]);
+  const sig = (() => {
+    let out = "";
+    for (const id in (s as any).sessionDecisions) {
+      const d = (s as any).sessionDecisions[id];
+      if (d?.status === "pending") out += `${d._id}|${d.created_at};`;
+    }
+    return out;
+  })();
+  return useMemo(
+    () => questionCards(Object.values((s as any).sessionDecisions ?? {})),
+    // The signature is the real dep: the raw map ref flips on every push.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sig],
+  );
 }
 
 export type ThreadInboxCard = {
