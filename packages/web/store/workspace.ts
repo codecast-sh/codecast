@@ -24,6 +24,9 @@ export type Pane =
   | { kind: "comments"; ref: string }
   | { kind: "detail"; ref: string }
   | { kind: "diff"; ref?: string }
+  // The Files surface beside a conversation. `ref` is its URL (/files?…), so
+  // in-pane navigation is one field changing, not a second router.
+  | { kind: "files"; ref?: string }
   | { kind: "terminal" };
 
 export type PaneKind = Pane["kind"];
@@ -309,7 +312,7 @@ export function surfaceForPath(pathname: string): SurfaceKind {
   if (pathname.startsWith("/settings")) return "settings";
   if (pathname.startsWith("/inbox")) return "inbox";
   if (pathname.startsWith("/conversation/")) return "conversation";
-  if (/^\/(tasks|docs|plans)(\/|$)/.test(pathname)) return "working";
+  if (/^\/(tasks|docs|plans|threads)(\/|$)/.test(pathname)) return "working";
   return "plain";
 }
 
@@ -323,15 +326,25 @@ export function surfaceForPath(pathname: string): SurfaceKind {
 export function slotPolicyFor(surface: SurfaceKind): {
   context: boolean;
   secondary: false | "split" | "overlay";
+  /** May the Files surface open as a split beside this stage? Only where a
+   *  conversation is what's on stage: reading a session and glancing at the
+   *  files it names. Working pages keep the slot for their companion. */
+  files: boolean;
 } {
   switch (surface) {
     // The inbox stage can be the fleet board; a tile click drills in as an
     // overlay that returns to the board. Never a split — the board is the home.
-    case "inbox": return { context: true, secondary: "overlay" };
-    case "conversation": return { context: true, secondary: false };
+    case "inbox": return { context: true, secondary: "overlay", files: true };
+    case "conversation": return { context: true, secondary: false, files: true };
     // A task/doc on the stage can run one conversation beside it.
-    case "working": return { context: true, secondary: "split" };
-    case "settings": return { context: true, secondary: false };
-    default: return { context: true, secondary: false };
+    case "working": return { context: true, secondary: "split", files: false };
+    case "settings": return { context: true, secondary: false, files: false };
+    default: return { context: true, secondary: false, files: false };
   }
+}
+
+/** The Files pane's URL when the secondary slot shows one, else null. */
+export function filesPaneHref(ws: WorkspaceState): string | null {
+  const p = ws.secondary.pane;
+  return p && p.kind === "files" ? p.ref ?? "/files" : null;
 }
