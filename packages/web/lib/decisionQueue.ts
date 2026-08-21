@@ -38,6 +38,7 @@
 // wrong once, the founder stops trusting the order, and an untrusted queue is
 // worse than a list, because a list at least admits it is unsorted.
 import { BLOCKED_BANNER_KINDS } from "@codecast/shared/contracts";
+import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import type { InboxSession, SessionDecisionItem } from "../store/inboxStore";
 
 export type QueueItemSource = "decide" | "ask" | "permission";
@@ -191,6 +192,33 @@ export function decisionQueueItems(
 }
 
 /**
+ * Local marks that a session's open question was handled HERE — answered,
+ * dismissed, or evicted (an infra dialog, a permission resolved elsewhere).
+ * The server's `awaiting_input` / permission_blocked truth takes a round-trip
+ * to flip, and every question surface (the queue, the rail's QUESTIONS
+ * section, the nav order, the badge) must drop the card in the same render
+ * the user acted in — so they all consult this map through the ONE predicate
+ * below, and none can disagree with another.
+ *
+ * `message_count` is the expiry: the entry covers the ask as it stood when
+ * the user acted. Answering sends one message (the answer itself must not
+ * expire its own mark — hence the +sends slack recorded by the store action);
+ * anything the AGENT says after that means the world moved — either the ask
+ * resolved server-side too, or there is a genuinely new ask that deserves to
+ * surface. Either way the mark expires and server truth takes over.
+ */
+export type QuestionResolutions = Record<string, { at: number; message_count: number }>;
+
+export function questionResolvedLocally(
+  s: Pick<InboxSession, "_id" | "message_count">,
+  resolutions: QuestionResolutions | undefined,
+): boolean {
+  const r = resolutions?.[s._id];
+  if (!r) return false;
+  return (s.message_count ?? 0) <= r.message_count;
+}
+
+/**
  * Sessions carrying an unanswered AskUserQuestion or permission prompt, with
  * no authored payload. The caller supplies the parsed question; this only
  * decides WHICH sessions qualify, so the same predicate drives the inbox
@@ -202,7 +230,10 @@ export function decisionQueueItems(
  * permission_blocked status, which is what the AUQ-as-permission-row path
  * sets and which survives the idle transition.
  */
-export function sessionHasOpenQuestion(s: InboxSession): boolean {
+export function sessionHasOpenQuestion(
+  s: InboxSession,
+  resolutions?: QuestionResolutions,
+): boolean {
   if (s.inbox_killed_at) return false;
   // An infrastructure park is not a decision. A session sitting on a usage
   // limit, an expired login, a dropped connection or a dead API request is
@@ -212,5 +243,81 @@ export function sessionHasOpenQuestion(s: InboxSession): boolean {
   // BLOCKED_BANNER_KINDS is the same set that drives those badges, so the two
   // surfaces can never disagree about what counts as parked.
   if (s.pending_api_error_kind && BLOCKED_BANNER_KINDS.has(s.pending_api_error_kind)) return false;
+  if (questionResolvedLocally(s, resolutions)) return false;
   return !!s.awaiting_input || s.agent_status === "permission_blocked";
+}
+
+/** Conversation ids with a pending `cast decide` row. */
+export function pendingDecisionConvIds(decisions: Record<string, SessionDecisionItem>): Set<string> {
+  const ids = new Set<string>();
+  for (const d of Object.values(decisions)) if (d.status === "pending") ids.add(d.conversation_id);
+  return ids;
+}
+
+/**
+ * The inbox rail's QUESTIONS section — ONE rule for what it holds, shared by
+ * the render (GlobalSessionPanel) and the keyboard order (visualOrderSessions),
+ * so Ctrl+J/K walks exactly what is on screen.
+ *
+ * A session that has asked you something files under Questions whatever its
+ * pin or rest verdict: a pending `cast decide` row, or an open AskUserQuestion
+ * / permission prompt (sessionHasOpenQuestion). The ask outranks placement —
+ * "who acts next" is you, explicitly — so every row lifted here must leave the
+ * section it would otherwise sit in (callers filter with `isQuestion`).
+ *
+ * `sections` are the rail's rows as scoped for display (mine/team, workspace,
+ * the old-session window, chip filter). The decision queue is user-scoped and
+ * workspace-blind, so a question on a session that scope hides is still your
+ * question: `mine` (the viewer's own sessions, unscoped) supplies those rows,
+ * which keeps the section's count equal to the queue badge. Killed rows are
+ * the exception — they render in the hidden Killed bucket, and a question on
+ * a dead session is the queue's tier-2 case, not a rail row.
+ *
+ * Nested subagents ride their parent and are never lifted loose — a question
+ * on one lifts the PARENT instead, whose card renders the asking child row.
+ * Without this a permission prompt on a subagent of a settled parent sits
+ * buried in Done while the queue badge counts it.
+ */
+export function liftQuestions(
+  sections: InboxSession[][],
+  decisions: Record<string, SessionDecisionItem>,
+  mine: Record<string, InboxSession>,
+  resolutions?: QuestionResolutions,
+): { questions: InboxSession[]; isQuestion: (s: InboxSession) => boolean } {
+  const pending = pendingDecisionConvIds(decisions);
+  const asks = (s: InboxSession) => pending.has(s._id) || sessionHasOpenQuestion(s, resolutions);
+  const askingChildParents = new Set<string>();
+  for (const s of Object.values(mine)) {
+    if (s.inbox_killed_at) continue;
+    const parent = nestParentIdOf(s);
+    if (!parent || !asks(s)) continue;
+    // A nested child's ask bits are only truthful while the feed maintains the
+    // row, and the feed stops emitting children the moment their parent is
+    // stashed or dismissed (never for a killed one) — the liveness overlay
+    // skips subagent rows entirely. A locally-held child past that point is a
+    // frozen snapshot that can claim permission_blocked forever, which lifted
+    // its parent into QUESTIONS as a phantom card with no answerable question
+    // behind it. Only lift parents the feed still stands behind.
+    const parentRow = mine[parent];
+    if (!parentRow || parentRow.inbox_stashed_at || parentRow.inbox_dismissed_at || parentRow.inbox_killed_at) continue;
+    askingChildParents.add(parent);
+  }
+  const isQuestion = (s: InboxSession) => asks(s) || askingChildParents.has(s._id);
+  const questions: InboxSession[] = [];
+  const seen = new Set<string>();
+  for (const section of sections) {
+    for (const s of section) {
+      if (seen.has(s._id) || !isQuestion(s)) continue;
+      seen.add(s._id);
+      questions.push(s);
+    }
+  }
+  for (const s of Object.values(mine)) {
+    if (seen.has(s._id) || !isQuestion(s)) continue;
+    if (s.inbox_killed_at || s.inbox_dismissed_at) continue;
+    if (nestParentIdOf(s)) continue;
+    seen.add(s._id);
+    questions.push(s);
+  }
+  return { questions, isQuestion };
 }
