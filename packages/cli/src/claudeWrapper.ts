@@ -7,6 +7,7 @@ import { hasTmux, tmuxExecSync } from "./tmux.js";
 import { clientAcceptsBracketedPaste, pasteTextIntoPane } from "./tmuxPaste.js";
 import { decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 import type { Config } from "./config/types.js";
+import { resolveClaudeInstall, stableClaudeBinary } from "./stableClaudeBinary.js";
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
@@ -547,36 +548,9 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
   });
 }
 
+/** Same binary the daemon launches: the fixed-path copy on macOS, else the install. */
 function findClaudeBinary(): string | null {
-  const pathEnv = process.env.PATH || "";
-  const paths = pathEnv.split(path.delimiter);
-
-  for (const p of paths) {
-    const candidate = path.join(p, "claude");
-    if (fs.existsSync(candidate)) {
-      try {
-        fs.accessSync(candidate, fs.constants.X_OK);
-        return candidate;
-      } catch {
-        continue;
-      }
-    }
-  }
-
-  const commonPaths = [
-    "/usr/local/bin/claude",
-    "/opt/homebrew/bin/claude",
-    path.join(os.homedir(), ".local/bin/claude"),
-    path.join(os.homedir(), ".npm/bin/claude"),
-  ];
-
-  for (const candidate of commonPaths) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return null;
+  return stableClaudeBinary({ warn: (m) => log(m) }) ?? resolveClaudeInstall();
 }
 
 function extractSessionIdFromArgs(args: string[]): string | null {

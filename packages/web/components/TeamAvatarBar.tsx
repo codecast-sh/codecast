@@ -338,6 +338,21 @@ function MemberHoverCard({
       : lockedRoom.knocked
         ? "Knocked"
         : "Knock";
+  // "Knocked" is a state, not a gesture: the knock is already at the door and
+  // there is nothing left to do but wait for it to open. The button used to
+  // stay fully enabled and hover-lit in that state while its handler returned
+  // immediately, so a click on a perfectly ordinary-looking button did nothing
+  // at all and said nothing about why. LiveNow answers this same state by
+  // rendering no control; here the button sits in a row of equal-width
+  // siblings, so it keeps its place and stops pretending instead.
+  const huddleWaiting = !!lockedRoom?.knocked;
+  const huddleTitle = member.in_room_key
+    ? "Join the huddle — you arrive muted"
+    : !lockedRoom
+      ? `Ring ${displayName} into a huddle`
+      : huddleWaiting
+        ? "They can see you at the door"
+        : "This huddle is locked — knock to ask in";
   const huddle = () => {
     if (member.in_room_key) void joinCall(member.in_room_key);
     else if (lockedRoom) {
@@ -467,8 +482,15 @@ function MemberHoverCard({
             <>
               {callsEnabled && (
                 <button
+                  type="button"
                   onClick={huddle}
-                  className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-sol-violet/15 px-2 py-1.5 text-[12px] font-medium text-sol-violet transition-colors hover:bg-sol-violet/25"
+                  disabled={huddleWaiting}
+                  title={huddleTitle}
+                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] font-medium transition-colors ${
+                    huddleWaiting
+                      ? "cursor-default border border-sol-border/50 text-sol-text-dim"
+                      : "bg-sol-violet/15 text-sol-violet hover:bg-sol-violet/25"
+                  }`}
                 >
                   <Headphones className="h-3.5 w-3.5" />
                   {huddleLabel}

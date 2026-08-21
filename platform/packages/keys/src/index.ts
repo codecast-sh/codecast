@@ -29,6 +29,7 @@ export {
   altChordDirection,
   type ShortcutDef,
   type ShortcutCatalog,
+  type ShortcutConflict,
 } from "./catalog";
 
 export {

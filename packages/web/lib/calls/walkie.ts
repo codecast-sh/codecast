@@ -66,6 +66,12 @@ export type WalkieSending = {
   /** Null until chat.startVoiceBurst answers; the bubble exists either way. */
   messageId: string | null;
   startedAt: number;
+  /** When the mic actually went live in the room — after acquiring it, joining
+   *  and unmuting. Null until then, and that gap is not small: measured at
+   *  1.0s into a warm room and 12.7s into a cold one. Everything said before it
+   *  reaches nobody and lands in no recording, so no surface may call this
+   *  burst "talking" until it is set. */
+  openAt: number | null;
   transcript: string;
 };
 
@@ -198,6 +204,11 @@ type Burst = {
   pushed: string;
   pushedAt: number;
   mime: string;
+  /** When the mic went live in the room. Null through setup. */
+  openAt: number | null;
+  /** When the recorder actually started, which is after the mic and the room
+   *  were acquired. Null until then, and for a browser that gave no recorder. */
+  captureAt: number | null;
   recorder: MediaRecorder | null;
   chunks: Blob[];
   pipe: AsrPipe | null;
@@ -221,6 +232,7 @@ function publishSending(b: Burst | null) {
           clientId: b.clientId,
           messageId: b.messageId,
           startedAt: b.startedAt,
+          openAt: b.openAt,
           transcript: b.transcript,
         }
       : null,
@@ -255,6 +267,7 @@ function startRecording(b: Burst, track: MediaStreamTrack) {
     b.recorder = rec;
     // One timeslice, so a burst cut short by a closing tab still has bytes.
     rec.start(1_000);
+    b.captureAt = Date.now();
   } catch {
     // No recorder (an old browser, a blocked codec): the burst is still live
     // audio and a live transcript, it just leaves no recording behind.
@@ -331,6 +344,8 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
     // The row is as fresh as the burst is old until the first push lands.
     pushedAt: Date.now(),
     mime: recorderMime(),
+    openAt: null,
+    captureAt: null,
     recorder: null,
     chunks: [],
     pipe: null,
@@ -350,6 +365,7 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
     try {
       // Hold the mic OPEN for as long as the key is down. joinCall publishes in
       // whatever mute state the store carries, so the intent is written first.
+      claimRoom(roomKey);
       if (inRoom(roomKey)) await setMuted(false);
       else {
         useInboxStore.getState().setCallState({ muted: false });
@@ -362,6 +378,10 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
         await abortBurst(b);
         return;
       }
+      // The mic is in the room now. Say so: every surface holding this burst
+      // has been claiming it since the key went down.
+      b.openAt = Date.now();
+      publishSending(b);
       startRecording(b, track);
       b.pipe = openAsrPipe({
         convex: convex!,
@@ -407,7 +427,10 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
 export async function endBurst(): Promise<void> {
   const b = burst;
   if (!b) return;
-  await finishBurst(b);
+  // Stamped HERE, not inside finishBurst: that function's first act is to wait
+  // for the setup this release may have beaten, and reading the clock after the
+  // wait would charge the setup to the person's thumb.
+  await finishBurst(b, Date.now());
 }
 
 /** Setup failed: tear down what exists and take the bubble back. Nothing was
@@ -436,15 +459,43 @@ function teardownBurst(b: Burst) {
   b.pipe = null;
 }
 
-async function finishBurst(b: Burst): Promise<void> {
+/**
+ * How long the burst was, and whether it was anything at all.
+ *
+ * Two spans, because the two questions are different. The HOLD is press to
+ * release, and it is the only honest test of "did somebody mean this": mic
+ * acquisition, the room join and the start round trip all sit between the two,
+ * and charging them to the hold made a 60ms brush measure 1.3s — so MIN_BURST_MS
+ * could never fire and every brushed key posted a wordless voice note. The
+ * DURATION is the recording's own span, capture to stop, which is what the
+ * bubble displays and what the audio actually contains. A burst with no
+ * recorder to run (an old browser, a blocked codec) has only its hold to report.
+ */
+export function measureBurst(input: {
+  startedAt: number;
+  captureAt: number | null;
+  releasedAt: number;
+  stoppedAt: number;
+  transcript: string;
+  hasAudio: boolean;
+}): { durationMs: number; discard: boolean } {
+  const holdMs = Math.max(0, input.releasedAt - input.startedAt);
+  const durationMs = input.captureAt ? Math.max(0, input.stoppedAt - input.captureAt) : holdMs;
+  // Brushed, or a burst carrying neither words nor audio: the same nothing by
+  // two routes, and the caller throws both away the same way.
+  const discard = holdMs < MIN_BURST_MS || (!input.transcript.trim() && !input.hasAudio);
+  return { durationMs, discard };
+}
+
+async function finishBurst(b: Burst, releasedAt: number): Promise<void> {
   if (b.done) return;
   // A press shorter than its own setup: let the setup finish so there is a
   // server row to land or cancel, then land it.
   await b.ready;
   if (b.done) return;
   teardownBurst(b);
-  const durationMs = Date.now() - b.startedAt;
   const blob = await stopRecording(b);
+  const stoppedAt = Date.now();
   await setMuted(true);
   if (burst === b) {
     burst = null;
@@ -452,16 +503,22 @@ async function finishBurst(b: Burst): Promise<void> {
   }
 
   const transcript = b.transcript.trim();
-  const tooShort = durationMs < MIN_BURST_MS;
-  const empty = !transcript && !blob;
-  if (tooShort || empty) {
-    // Sub-second, or a burst with neither words nor audio: a key somebody
-    // brushed. The row never notified and never counted, so it simply goes.
+  const { durationMs, discard } = measureBurst({
+    startedAt: b.startedAt,
+    captureAt: b.captureAt,
+    releasedAt,
+    stoppedAt,
+    transcript,
+    hasAudio: !!blob,
+  });
+  if (discard) {
+    // Held too briefly to be speech, or carrying neither words nor audio: a key
+    // somebody brushed. The row never notified and never counted, so it goes.
     if (b.messageId && convex) {
       await convex.mutation(api.chat.cancelVoiceBurst, { message_id: b.messageId }).catch(() => {});
     }
     useInboxStore.getState().dropVoiceBurstRow({ clientId: b.clientId, messageId: b.messageId });
-    beginLinger(b.roomKey);
+    abandonRoom(b.roomKey);
     refresh();
     return;
   }
@@ -503,18 +560,35 @@ async function finishBurst(b: Burst): Promise<void> {
         attachments: attachments.length ? attachments : undefined,
       },
     );
-  } else {
+  } else if (outcome === "cancelled") {
+    // The server confirmed it threw the burst away, so the row may go. This is
+    // the ONLY outcome that earns that: erasing a row the server might still
+    // hold would be gone from the sender's screen, present on everyone else's.
     emit({ error: "Could not send the voice message" });
-    // Only a burst the server confirmed it threw away may be taken off this
-    // screen. "unresolved" means the network answered nothing, and the row is
-    // still live over there: the orphan sweep will land it (with the words
-    // already streamed into it) or discard it, and the channel's own sync is
-    // what tells this client which. Erasing it here would be the one outcome
-    // the codebase refuses — gone from the sender's screen, present on
-    // everyone else's.
-    if (outcome === "cancelled") {
-      useInboxStore.getState().dropVoiceBurstRow({ clientId: b.clientId, messageId: b.messageId });
-    }
+    useInboxStore.getState().dropVoiceBurstRow({ clientId: b.clientId, messageId: b.messageId });
+  } else {
+    // Unresolved: the network answered nothing, so the row is still LIVE over
+    // there and the orphan sweep will land it — with the words already streamed
+    // into it — the next time anybody talks in that room. The recording is what
+    // is lost, because the upload had nowhere to go.
+    //
+    // The row stayed exactly as it was, which meant it kept pulsing "talking…"
+    // on the sender's own screen with their hand off the key, for as long as the
+    // tab lived, while a toast beside it said the message had failed. Two
+    // contradictory claims, and both wrong: nobody was talking, and the words
+    // had not failed.
+    //
+    // So it lands the outcome it most likely already has — a finished voice
+    // message carrying the transcript and no recording, a state the bubble
+    // already renders honestly ("Said out loud; the recording did not survive").
+    // If the sweep discards it instead, the channel's own sync corrects this,
+    // which is the ordinary local-first bargain: paint the expected result and
+    // let the echo reconcile.
+    emit({ error: "The recording did not send — the words are on their way" });
+    useInboxStore.getState().updateVoiceBurstRow(
+      { clientId: b.clientId, messageId: b.messageId },
+      { content: transcript, status: "done", durationMs },
+    );
   }
   beginLinger(b.roomKey);
   refresh();
@@ -569,12 +643,66 @@ export async function landBurst(
 // else is still in the room" is true of every burst and would hold the pair in
 // an open room forever, each waiting for the other to leave. Engagement is the
 // honest signal: talking, being talked to, or a mic the person opened.
+//
+// AND THE WALKIE ONLY EVER CLOSES A ROOM IT OPENED. A burst can be spoken into
+// a huddle the person walked into by hand and has been sitting in, muted, for
+// an hour — hold-to-reply is exactly that gesture. Closing that room half a
+// minute later would throw them out of a meeting because they said one word in
+// it. `openedRoom` is the whole difference between a seat the walkie took and a
+// seat that was already the person's.
+
+/** The room the walkie itself joined, while the person is still in it. Null
+ *  the moment it is handed back, so a room they later walk into by hand is
+ *  never mistaken for one of ours. */
+let openedRoom: string | null = null;
+
+function walkieOpened(roomKey: string): boolean {
+  return openedRoom === roomKey && inRoom(roomKey);
+}
+
+/** Remember whose seat this is, at the two places the walkie can take one.
+ *  Called with the room the walkie is about to occupy, BEFORE it joins. */
+function claimRoom(roomKey: string) {
+  // Already seated: theirs unless a previous burst of ours is what put them
+  // here (a second burst into the same room keeps the first one's claim).
+  openedRoom = inRoom(roomKey) ? (openedRoom === roomKey ? roomKey : null) : roomKey;
+}
 
 function clearLinger() {
   if (lingerTimer) clearTimeout(lingerTimer);
   lingerTimer = null;
   lingerRoomKey = null;
   emit({ lingerUntil: null });
+}
+
+/**
+ * Hand a room back, if it is ours to hand back and nothing is happening in it.
+ *
+ * This is the linger's own decision, pulled out so it can also be taken
+ * immediately. Engaged means the room became a conversation: still talking,
+ * still being talked to, or a mic the person opened in the dock.
+ */
+export function shouldReleaseRoom(input: {
+  opened: boolean;
+  bursting: boolean;
+  incoming: boolean;
+  muted: boolean;
+}): boolean {
+  if (!input.opened) return false;
+  if (input.bursting || input.incoming) return false;
+  return input.muted;
+}
+
+function releaseRoom(roomKey: string) {
+  const release = shouldReleaseRoom({
+    opened: walkieOpened(roomKey),
+    bursting: !!burst,
+    incoming: !!status.incoming,
+    muted: callState().muted,
+  });
+  if (!release) return;
+  openedRoom = null;
+  void leaveCall();
 }
 
 function beginLinger(roomKey: string) {
@@ -587,14 +715,27 @@ function beginLinger(roomKey: string) {
     const key = lingerRoomKey;
     lingerRoomKey = null;
     emit({ lingerUntil: null });
-    if (!key || !inRoom(key)) return;
-    // Engaged: still talking, still being talked to, or the user opened their
-    // own mic in the dock. An engaged room is a huddle now, and a huddle is
-    // left by hand.
-    if (burst || status.incoming) return;
-    if (!callState().muted) return;
-    void leaveCall();
+    if (key) releaseRoom(key);
   }, LINGER_MS);
+}
+
+/**
+ * A burst that came to nothing: brushed, or carrying neither words nor audio.
+ *
+ * There is no half-conversation to hold a room open for — nobody heard
+ * anything, and no message exists to answer. Lingering here put BOTH people in
+ * a call room for thirty seconds off one accidental key: the sender by joining
+ * to speak, the receiver by auto-joining the live row in the second before it
+ * was cancelled. Both then watched a floating strip claim "Still open with
+ * <the other person>", and to the rest of the team both showed as seated in a
+ * live huddle. Measured, not theorised: a 102ms brush did exactly that.
+ *
+ * So the room goes back now. A seat the person already had is left alone —
+ * that is releaseRoom's first question.
+ */
+function abandonRoom(roomKey: string) {
+  clearLinger();
+  releaseRoom(roomKey);
 }
 
 // ── the receiving half ──────────────────────────────────────────────────────
@@ -650,10 +791,25 @@ export function refreshWalkie(): void {
 }
 
 let lastReport: { bursts: LiveBurstRow[]; doorOpen: boolean } = { bursts: [], doorOpen: false };
+/** When this client started hearing the burst it is hearing now. The listening
+ *  side's only measure of whether anything was actually said. */
+let incomingSince = 0;
 
 function applyReport(): void {
   const { bursts: rows, doorOpen } = lastReport;
   const current = pickLiveBurst(rows, Date.now());
+
+  // The person left the room we were holding open. A linger is a room we are
+  // SITTING in, kept open in case an answer comes; once they have walked out
+  // of it there is nothing left to hold, and the timer must not outlive them.
+  //
+  // It used to. The timer only ever cleared itself, so leaving a lingering room
+  // and walking back into it inside the same half minute — perfectly ordinary:
+  // dismiss the strip, change your mind, join the huddle properly — armed a
+  // countdown that then threw the person straight back out of a room they had
+  // deliberately joined. This runs on every move of the call plane
+  // (useWalkieSync refreshes on roomKey:phase), so it catches the leave itself.
+  if (lingerRoomKey && !inRoom(lingerRoomKey)) clearLinger();
 
   // Our own key is down: we are already in a room and hearing whoever is in it.
   if (burst) {
@@ -671,8 +827,10 @@ function applyReport(): void {
         fromName: current.fromName,
       };
       clearLinger();
+      incomingSince = Date.now();
       emit({ incoming });
       soundWalkieOpen();
+      claimRoom(incoming.roomKey);
       if (!inRoom(incoming.roomKey)) {
         // Muted: hearing someone is not answering them.
         useInboxStore.getState().setCallState({ muted: true });
@@ -683,9 +841,21 @@ function applyReport(): void {
     // Their key came up (the row is no longer live) or the door closed while
     // they were talking. Hold the room briefly either way — an answer is the
     // most likely next thing to happen.
+    //
+    // Unless there was nothing to answer. A burst the sender threw away leaves
+    // exactly the same trace here as one that landed: the live row simply
+    // stops being live, and this side cannot read the outcome (the message
+    // itself only syncs for a channel somebody has open, and a burst arrives
+    // wherever you happen to be). What this side CAN measure is how long it
+    // heard, and that is the same question MIN_BURST_MS already asks of the
+    // hand on the key: under it, nobody said anything. Without this a brushed
+    // key seated the LISTENER in a call room for half a minute too, under a
+    // strip claiming a conversation was still open.
     const was = status.incoming;
+    const heardMs = Date.now() - incomingSince;
     emit({ incoming: null });
-    beginLinger(was.roomKey);
+    if (heardMs < MIN_BURST_MS) abandonRoom(was.roomKey);
+    else beginLinger(was.roomKey);
   }
   refresh();
 }
