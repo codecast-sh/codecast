@@ -1,3 +1,17 @@
+// Codecast's binding of the @platform/keys action catalog. The mechanics —
+// chord matching (incl. the mac Option dead-key fallback), input/modal guards,
+// keycap formatting — live in the package; this file owns what is codecast's:
+// the action ids, the default bindings, and the reasoning behind each one.
+
+import {
+  createShortcutCatalog,
+  hasOpenModal,
+  isEditableTarget,
+  inputGuardBypass,
+  altChordDirection,
+  type ShortcutDef as PlatformShortcutDef,
+} from '@platform/keys';
+
 export type ShortcutAction =
   | 'session.next'
   | 'session.prev'
@@ -27,6 +41,7 @@ export type ShortcutAction =
   | 'nav.inbox'
   | 'search.open'
   | 'chat.search'
+  | 'chat.pushToTalk'
   | 'palette.toggle'
   | 'zoom.in'
   | 'zoom.out'
@@ -79,98 +94,14 @@ export type ShortcutAction =
   | 'vault.toggleEdit'
   | 'vault.sourceMode';
 
-export interface ShortcutDef {
-  key: string;
-  action: ShortcutAction;
-  when?: string;
-  mac?: string;
-  // true = fire even while an input is focused; 'whenEmpty' = fire in a focused
-  // input only when it has no content (see inputGuardBypass); absent = never
-  // fire while an input is focused.
-  skipInputCheck?: boolean | 'whenEmpty';
-  // Fire even while a modal dialog is open. Reserved for app-chrome shortcuts
-  // that cannot act on the surface behind the modal (zoom, and the settings
-  // toggle — which closes the modal itself). Everything else stands down while
-  // a modal is up; see hasOpenModal.
-  worksInModal?: boolean;
-  description: string;
-}
+export type ShortcutDef = PlatformShortcutDef<ShortcutAction>;
 
-// True while a modal layer is up. Radix Dialog/AlertDialog/Sheet content and
-// the custom settings modal all render with aria-modal="true"; non-modal
-// popovers and the command palette don't. :not([data-state="closed"]) keeps a
-// force-mounted dialog's exit animation from counting as open. While a modal
-// is open it owns keyboard and focus: the shortcut dispatcher stands down and
-// background focus-stealers (composer refocus, mode-cycle chords) must not run.
-//
-// `host`: for a keyboard handler that itself lives INSIDE a modal (e.g. the
-// new-session pickers hosted by the compose dialog). A modal that contains the
-// host doesn't block it — only a modal stacked elsewhere (a confirm dialog, the
-// settings modal) does. Without `host`, any open modal counts.
-export function hasOpenModal(host?: Element | null): boolean {
-  if (typeof document === 'undefined') return false;
-  const modals = document.querySelectorAll('[aria-modal="true"]:not([data-state="closed"])');
-  if (!host) return modals.length > 0;
-  for (const m of modals) if (!m.contains(host)) return true;
-  return false;
-}
-
-// True when the element holds a text caret (input, textarea, contenteditable).
-// Narrower than the dispatcher's in-input guard: no key-owning-region check —
-// use it where the question is "would this key edit or move a caret?".
-export function isEditableTarget(el: EventTarget | null): boolean {
-  const t = el as { tagName?: string; isContentEditable?: boolean } | null;
-  if (!t) return false;
-  return t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable === true;
-}
-
-// Resolves a keydown into a spatial ⌥-chord direction for the new-session
-// surface (NewSessionView's window-capture router), or null when the event
-// must be left alone. e.code, not e.key — mac Option+letter composes special
-// characters into e.key. Arrow-key horizontals from a text caret return null:
-// ⌥←/⌥→ inside an input is word jump on macOS and must never be stolen.
-// ⌥H/⌥L still cycle from anywhere, and arrows work once focus is on a picker.
-// ⌥↑/⌥↓ stay intercepted even from the caret — climbing out of the textarea
-// is their whole purpose.
-export function altChordDirection(e: {
-  altKey: boolean; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean;
-  code: string; target: EventTarget | null;
-}): 'up' | 'down' | 'left' | 'right' | null {
-  if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return null;
-  const horizontalArrow = e.code === 'ArrowLeft' || e.code === 'ArrowRight';
-  if (horizontalArrow && isEditableTarget(e.target)) return null;
-  if (e.code === 'KeyK' || e.code === 'ArrowUp') return 'up';
-  if (e.code === 'KeyJ' || e.code === 'ArrowDown') return 'down';
-  if (e.code === 'KeyH' || e.code === 'ArrowLeft') return 'left';
-  if (e.code === 'KeyL' || e.code === 'ArrowRight') return 'right';
-  return null;
-}
-
-// Decides whether a binding bypasses the in-input guard for the focused element.
-// 'whenEmpty' exists for the destructive backspace chords: while the user has
-// text in the composer, backspace+modifier is almost certainly delete-word
-// muscle memory and must reach the editor; with an empty input delete-word is
-// meaningless, so the chord is unambiguous triage intent. Pseudo-inputs (e.g.
-// the review region) have no value/content notion — keep them suppressed.
-export function inputGuardBypass(
-  def: ShortcutDef,
-  el: { tagName?: string; isContentEditable?: boolean; value?: string; textContent?: string | null } | null,
-): boolean {
-  if (def.skipInputCheck === true) return true;
-  if (def.skipInputCheck !== 'whenEmpty' || !el) return false;
-  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return (el.value ?? '') === '';
-  if (el.isContentEditable) return !(el.textContent ?? '').trim();
-  return false;
-}
-
-const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.userAgent);
-
-const SHIFTED_KEYS = new Set(['?', '+', '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '{', '}', '|', ':', '"', '<', '>', '~']);
+export { hasOpenModal, isEditableTarget, inputGuardBypass, altChordDirection };
 
 export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+j', action: 'session.next', skipInputCheck: true, description: 'Next session' },
   { key: 'ctrl+k', action: 'session.prev', skipInputCheck: true, description: 'Previous session' },
-  { key: 'ctrl+i', action: 'session.jumpIdle', skipInputCheck: true, description: 'Jump to idle session' },
+  { key: 'ctrl+i', action: 'session.jumpIdle', skipInputCheck: true, description: 'Jump to top needs-input session' },
   { key: 'alt+p', mac: 'ctrl+p', action: 'session.jumpPinned', skipInputCheck: true, description: 'Jump to pinned session' },
   { key: 'ctrl+shift+p', action: 'session.pin', skipInputCheck: true, description: 'Pin/unpin session' },
   // Ctrl+L = Label. Free in-app and in the browser on mac (address bar is
@@ -231,6 +162,16 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+/', action: 'search.open', skipInputCheck: true, description: 'Open search' },
   { key: 'meta+shift+f', action: 'chat.search', skipInputCheck: true, description: 'Search chat messages' },
   { key: 'ctrl+shift+f', action: 'chat.search', skipInputCheck: true, description: 'Search chat messages' },
+  // Hold to talk, in an open DM. The registry fires the PRESS; the release is a
+  // keyup, which this dispatcher does not have a channel for (see
+  // hooks/useHoldToTalk). It is here rather than hand-rolled whole so the key is
+  // listed in the shortcuts help, guarded against modals the same way every
+  // other binding is, and rebindable when bindings become rebindable.
+  //
+  // A modifier chord, and skipInputCheck, because the hand that wants to talk is
+  // resting in the composer: the binding has to survive a focused text box, and
+  // anything that survives a text box must be impossible to type.
+  { key: 'ctrl+shift+space', action: 'chat.pushToTalk', when: 'chat.dm', skipInputCheck: true, description: 'Hold to talk in this DM' },
   { key: 'meta+k', action: 'palette.toggle', skipInputCheck: true, description: 'Toggle command palette' },
 
   { key: 'meta+=', action: 'zoom.in', when: 'desktop', skipInputCheck: true, worksInModal: true, description: 'Zoom in' },
@@ -318,111 +259,12 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'd', action: 'list.actions', when: 'list', description: 'Actions menu' },
 ];
 
-interface ParsedKey {
-  ctrl: boolean;
-  meta: boolean;
-  alt: boolean;
-  shift: boolean;
-  key: string;
-}
+export const shortcutCatalog = createShortcutCatalog(SHORTCUTS);
 
-function parseKeyCombo(combo: string): ParsedKey {
-  const parts = combo.toLowerCase().split('+');
-  const result: ParsedKey = { ctrl: false, meta: false, alt: false, shift: false, key: '' };
-  for (const part of parts) {
-    switch (part) {
-      case 'ctrl': result.ctrl = true; break;
-      case 'meta': result.meta = true; break;
-      case 'alt': result.alt = true; break;
-      case 'shift': result.shift = true; break;
-      default: result.key = part;
-    }
-  }
-  return result;
-}
-
-function normalizeEventKey(e: KeyboardEvent): string {
-  if (!e.key) return '';
-  const key = e.key.toLowerCase();
-  if (key === ' ') return 'space';
-  return key;
-}
-
-export function matchShortcut(e: KeyboardEvent, def: ShortcutDef): boolean {
-  const combo = (isMac && def.mac) ? def.mac : def.key;
-  const parsed = parseKeyCombo(combo);
-  const eventKey = normalizeEventKey(e);
-
-  // macOS composes Option+<letter> into a special character or dead key (⌥N is the
-  // tilde dead key → e.key is "Dead"/"˜", never "n"), so an Alt chord can't be
-  // matched on e.key alone. e.code reports the physical key regardless of the
-  // composed glyph, so fall back to it for plain alphanumeric Alt chords.
-  let keyMatches = parsed.key === eventKey;
-  if (!keyMatches && parsed.alt && /^[a-z0-9]$/.test(parsed.key)) {
-    keyMatches = e.code === `Key${parsed.key.toUpperCase()}` || e.code === `Digit${parsed.key}`;
-  }
-  if (!keyMatches) return false;
-  if (parsed.ctrl !== e.ctrlKey) return false;
-  if (parsed.meta !== e.metaKey) return false;
-  if (parsed.alt !== e.altKey) return false;
-  if (SHIFTED_KEYS.has(e.key)) return true;
-  if (parsed.shift !== e.shiftKey) return false;
-
-  return true;
-}
-
-export function getShortcutsForAction(action: ShortcutAction): ShortcutDef[] {
-  return SHORTCUTS.filter(s => s.action === action);
-}
-
-function formatPart(part: string): string {
-  switch (part.toLowerCase()) {
-    case 'ctrl': return isMac ? '\u2303' : 'Ctrl';
-    case 'meta': return isMac ? '\u2318' : 'Ctrl';
-    case 'alt': return isMac ? '\u2325' : 'Alt';
-    case 'shift': return isMac ? '\u21e7' : 'Shift';
-    case 'backspace': return isMac ? '\u232b' : 'Bksp';
-    case 'escape': return 'Esc';
-    case 'enter': return isMac ? '\u21a9' : 'Enter';
-    case 'tab': return isMac ? '\u21e5' : 'Tab';
-    case 'arrowup': return '\u2191';
-    case 'arrowdown': return '\u2193';
-    case 'arrowleft': return '\u2190';
-    case 'arrowright': return '\u2192';
-    case 'space': return '\u2423';
-    case 'delete': return isMac ? '\u2326' : 'Del';
-    default: return part.toUpperCase();
-  }
-}
-
-export function formatShortcutParts(def: ShortcutDef): string[] {
-  const combo = (isMac && def.mac) ? def.mac : def.key;
-  return combo.split('+').map(formatPart);
-}
-
-// Electron accelerator ("CommandOrControl+Shift+N") \u2192 the same display parts as
-// formatShortcutParts, so OS-global desktop shortcuts render identically to
-// in-app ones. CommandOrControl resolves per platform, like Electron does.
-export function formatAcceleratorParts(accelerator: string): string[] {
-  return accelerator.split('+').map(p => {
-    const norm = p === 'CommandOrControl' || p === 'CmdOrCtrl' ? (isMac ? 'meta' : 'ctrl')
-      : p === 'Command' || p === 'Cmd' || p === 'Super' ? 'meta'
-      : p === 'Control' ? 'ctrl'
-      : p;
-    return formatPart(norm);
-  });
-}
-
-export function formatShortcutLabel(action: ShortcutAction): string | null {
-  const defs = getShortcutsForAction(action);
-  if (defs.length === 0) return null;
-  // Mac glyphs (⌘⇧P) read as one unit; word modifiers need separators (Ctrl+Shift+P).
-  return formatShortcutParts(defs[0]).join(isMac ? '' : '+');
-}
-
-export function getShortcutsByContext(when?: string): ShortcutDef[] {
-  if (when === undefined) return SHORTCUTS.filter(s => !s.when);
-  return SHORTCUTS.filter(s => s.when === when);
-}
-
-export { isMac };
+export const isMac = shortcutCatalog.isMac;
+export const matchShortcut = shortcutCatalog.matchShortcut;
+export const getShortcutsForAction = shortcutCatalog.getShortcutsForAction;
+export const getShortcutsByContext = shortcutCatalog.getShortcutsByContext;
+export const formatShortcutParts = shortcutCatalog.formatShortcutParts;
+export const formatAcceleratorParts = shortcutCatalog.formatAcceleratorParts;
+export const formatShortcutLabel = shortcutCatalog.formatShortcutLabel;
