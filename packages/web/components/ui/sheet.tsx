@@ -59,6 +59,9 @@ const SheetContent = React.forwardRef<
     <SheetOverlay />
     <SheetPrimitive.Content
       ref={ref}
+      // Radix does not render aria-modal itself; the shortcut dispatcher's
+      // modal guard (hasOpenModal) keys on it.
+      aria-modal="true"
       className={cn(sheetVariants({ side }), className)}
       {...props}
     >

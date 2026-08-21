@@ -9,7 +9,9 @@ interface ErrorBoundaryProps {
   name?: string;
   level?: "panel" | "inline";
   onReset?: () => void;
-  fallback?: ReactNode;
+  /** A node, or a render prop when the fallback needs the boundary's retry
+   *  (e.g. a floating surface offering both "retry" and a destructive exit). */
+  fallback?: ReactNode | ((ctx: { error: Error; retry: () => void }) => ReactNode);
 }
 
 interface ErrorBoundaryState {
@@ -98,7 +100,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   render() {
     if (!this.state.error) return this.props.children;
 
-    if (this.props.fallback) return this.props.fallback;
+    if (this.props.fallback) {
+      return typeof this.props.fallback === "function"
+        ? this.props.fallback({ error: this.state.error, retry: this.retry })
+        : this.props.fallback;
+    }
 
     const level = this.props.level ?? "panel";
     const name = this.props.name;

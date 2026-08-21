@@ -21,7 +21,7 @@ import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { PermissionCard } from '@/components/PermissionCard';
 import { SuggestionPills } from '@/components/SuggestionPills';
 import { PulsingDot } from '@/components/SessionItem';
-import { AssignmentChip } from '@/components/AssignmentChip';
+import { AssignmentChip, AssignedToYouBanner } from '@/components/AssignmentChip';
 import { SessionHuddleButton } from '@/components/calls/SessionHuddleButton';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { agentSupportsFork, ACTIVE_AGENT_STATUSES } from '@codecast/shared/contracts';
@@ -4519,6 +4519,10 @@ export default function SessionDetailScreen() {
             )}
           </RNView>
         </Animated.View>
+        {/* Unacked handoff strip — pinned above the message list (not inside
+            it) so it stays visible without scrolling, like the web banner
+            living inside the conversation header. */}
+        <AssignedToYouBanner conversationId={isConvexId(conversation._id) ? conversation._id : null} />
         <FlatList
           ref={flatListRef}
           style={{ flex: 1 }}

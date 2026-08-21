@@ -17,6 +17,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useOwners } from '@codecast/web/hooks/useOwners';
+import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { Theme, Spacing, chipText, CHROME_FONT_CAP, CHIP_HEIGHT } from '@/constants/Theme';
 import {
   useDevices,
@@ -262,6 +263,87 @@ export function AssignmentChip({
     </>
   );
 }
+
+/**
+ * The can't-miss handoff strip pinned above the message list when the current
+ * user was assigned this session by someone ELSE and hasn't acknowledged.
+ * Mobile twin of the web AssignedToYouBanner: shows the assigner + their
+ * optional note; "Got it" acks (server) and clears the inbox row's assigned
+ * ping (local-first), so both surfaces retire together. Replying in the
+ * thread also acks server-side (ackAssignmentOnEngage), which retires this
+ * banner through the live listOwners query.
+ */
+export function AssignedToYouBanner({ conversationId }: { conversationId: string | null | undefined }) {
+  // The banner only reads the viewer's own row off listOwners, so the roster
+  // isn't needed — skip the team members query the chip pays for.
+  const currentUser = useQuery(api.users.getCurrentUser);
+  const owners = useOwners(conversationId ?? '', { teamMembers: undefined, currentUser });
+  const a = owners.myAssignment;
+  if (!a || !conversationId) return null;
+  const by = a.added_by_name || 'A teammate';
+  return (
+    <View style={bannerStyles.wrap}>
+      <FontAwesome name="user-plus" size={12} color={Theme.cyan} style={{ marginTop: 2 }} />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={bannerStyles.title}>{by} assigned this thread to you</Text>
+        {a.note ? <Text style={bannerStyles.note}>“{a.note}”</Text> : null}
+      </View>
+      <Pressable
+        onPress={() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          owners.ack();
+          useInboxStore.getState().clearAssignedPing(conversationId);
+        }}
+        hitSlop={8}
+        style={bannerStyles.ack}
+      >
+        <Text style={bannerStyles.ackText}>Got it</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+const bannerStyles = StyleSheet.create({
+  wrap: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginHorizontal: Spacing.md,
+    marginTop: 6,
+    marginBottom: 2,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: Theme.cyan + '22',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.cyan + '66',
+  },
+  title: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Theme.text,
+    lineHeight: 17,
+  },
+  note: {
+    fontSize: 12,
+    color: Theme.textMuted,
+    lineHeight: 16,
+    marginTop: 1,
+  },
+  ack: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: Theme.cyan + '33',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.cyan + '66',
+  },
+  ackText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Theme.cyan,
+  },
+});
 
 const styles = StyleSheet.create({
   // Segmented twin of the shared chipShell: same height/radius/border, but the

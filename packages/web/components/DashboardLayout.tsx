@@ -67,6 +67,7 @@ import { useCallSync } from "../hooks/useCallSync";
 import { useWalkieSync } from "../hooks/useWalkieSync";
 import { useCallRing } from "../hooks/useCallRing";
 import { CallDock } from "./calls/CallDock";
+import { leaveCall } from "../lib/calls/callManager";
 import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
 import { useSyncMentionPlans } from "../hooks/useSyncPlans";
 import { useSyncMentionTasks } from "../hooks/useSyncTasks";
@@ -1347,9 +1348,37 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       <ErrorBoundary name="CommandPalette" level="inline">
         <CommandPalette />
       </ErrorBoundary>
-      <ErrorBoundary name="CallDock" level="inline">
-        <CallDock />
-      </ErrorBoundary>
+      {/* The dock portals to <body>, so this wrapper is empty (and hidden)
+          until the boundary trips. A dock crash used to degrade into the
+          default inline fallback rendered here in normal flow — the bottom of
+          the shell, effectively invisible — so the call window "just
+          vanished" with no way back (Jason, 2026-08-24). The fallback is a
+          floating chip where the dock lived: retry re-renders, hang up also
+          frees the seat, and the ErrorBoundary toast still carries the trace. */}
+      <div className="fixed bottom-20 right-4 z-[160] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt/95 shadow-xl">
+        <ErrorBoundary
+          name="Call window"
+          fallback={({ retry }) => (
+            <div className="flex items-center gap-2 px-3 py-2 text-xs">
+              <span className="text-sol-red">The call window crashed</span>
+              <button onClick={retry} className="text-sol-cyan hover:underline">
+                retry
+              </button>
+              <button
+                onClick={() => {
+                  void leaveCall();
+                  retry();
+                }}
+                className="text-sol-text-muted hover:text-sol-red hover:underline"
+              >
+                hang up
+              </button>
+            </div>
+          )}
+        >
+          <CallDock />
+        </ErrorBoundary>
+      </div>
       <GlobalCloseGuardDialog />
       {s.compose.open && (
         <div

@@ -470,7 +470,7 @@ function CallDetail({ id }: { id: string }) {
 // disagree. A transcribed live call already pulses in the Live section below;
 // this covers the huddles nobody toggled Transcribe on, which under open rooms
 // is most of them. Locked rooms list too — seeing one is what makes knocking
-// possible — with Knock in place of Join.
+// possible — with Knock in place of Join for the people the lock shuts out.
 function LiveNowSection({ transcribedRoomKeys }: { transcribedRoomKeys: Set<string> }) {
   const rooms = useLiveRooms().filter((r) => !transcribedRoomKeys.has(r.roomKey));
   if (rooms.length === 0) return null;

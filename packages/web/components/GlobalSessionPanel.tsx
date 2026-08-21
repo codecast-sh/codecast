@@ -58,6 +58,7 @@ import { useTipActions, checkMilestone } from "../tips";
 import { RESTART_GIVE_UP_AFTER_MS } from "../hooks/useSessionRestart";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
+import { useAckAssignment } from "../hooks/useAckAssignment";
 
 function formatIdleDuration(updatedAt: number): string {
   const diff = Date.now() - updatedAt;
@@ -2221,9 +2222,12 @@ export const SessionCard = memo(function SessionCard({
       ? "group-hover:-translate-x-[14px]"
       : "";
   const [isDragOver, setIsDragOver] = useState(false);
+  // Handoff note starts clamped; tapping the pill body reveals the full reason.
+  const [pingExpanded, setPingExpanded] = useState(false);
   const dragCounter = useRef(0);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
+  const ackAssignment = useAckAssignment();
 
   // Session-card drags must pass THROUGH cards untouched — stopping them here
   // would shadow the label-section drop targets behind the card under the
@@ -2534,14 +2538,30 @@ export const SessionCard = memo(function SessionCard({
         {session.assigned_ping && (
           <div className="flex items-start gap-1.5 mt-1 px-1.5 py-1 rounded-md bg-sol-cyan/15 border border-sol-cyan/30">
             <UserCheck className="w-3 h-3 text-sol-cyan flex-shrink-0 mt-0.5" />
-            <div className="min-w-0 text-[11px] leading-snug">
+            {/* The note is the REASON for the handoff — clamped for the list,
+                tap the body to read all of it without opening the session. */}
+            <div
+              className={`min-w-0 flex-1 text-[11px] leading-snug ${session.assigned_ping.note ? "cursor-pointer" : ""}`}
+              onClick={session.assigned_ping.note ? (e) => { e.stopPropagation(); setPingExpanded((v) => !v); } : undefined}
+            >
               <span className="font-semibold text-sol-cyan">
                 {session.assigned_ping.by_name} assigned this to you
               </span>
               {session.assigned_ping.note && (
-                <div className="text-sol-text-muted truncate">“{session.assigned_ping.note}”</div>
+                <div className={`text-sol-text-muted whitespace-pre-wrap break-words ${pingExpanded ? "" : "line-clamp-2"}`}>
+                  “{session.assigned_ping.note}”
+                </div>
               )}
             </div>
+            {/* Accept right here — the handoff shouldn't require opening the
+                conversation and finding the banner to retire. */}
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); ackAssignment(session._id); }}
+              className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sol-cyan/20 text-sol-cyan border border-sol-cyan/40 hover:bg-sol-cyan/30 transition-colors"
+            >
+              Got it
+            </button>
           </div>
         )}
         {stateView && !session.implementation_session && (

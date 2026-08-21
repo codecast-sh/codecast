@@ -30,8 +30,38 @@
   55%      { box-shadow: 0 0 0 4px color-mix(in srgb, var(--sol-violet) 0%, transparent); }
 }
 
+/* Opening. The key is down but the mic is not in the room yet — acquiring it,
+ * joining, unmuting. That gap measured 1.0s warm and 12.7s cold, and anything
+ * said inside it reaches nobody, so this state must NOT read as "go". It takes
+ * the accent at a fraction of its weight and pulses slowly, the way a thing
+ * that is still arriving looks, rather than the confident breathe of a mic that
+ * is genuinely open. */
+.walkie-ptt-opening {
+  color: color-mix(in srgb, var(--sol-violet) 60%, var(--sol-text-dim)) !important;
+  background: color-mix(in srgb, var(--sol-violet) 8%, transparent) !important;
+  animation: walkie-opening 1.1s ease-in-out infinite;
+}
+
+@keyframes walkie-opening {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+
+/* The room went away under an open mic. Amber, not violet: the accent means
+ * "your voice is going out", and it is not. Not red either — nothing failed,
+ * the recording is still running and the burst still lands as a message. This
+ * is the one state that has to be legible out of the corner of an eye, because
+ * the person is mid-sentence. */
+.walkie-ptt-dropped {
+  color: var(--sol-orange) !important;
+  background: color-mix(in srgb, var(--sol-orange) 16%, transparent) !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .walkie-ptt-on { animation: none; }
+  /* Rest fully visible: the word beside it already carries the state, and the
+     blanket rule in globals.css would otherwise leave it parked at 0.55. */
+  .walkie-ptt-opening { animation: none; opacity: 1; }
 }
 
 /* ── The walkie strip ────────────────────────────────────────────────────────
@@ -161,6 +191,11 @@
   padding: 5px 8px;
   border-radius: 7px;
   font-size: 12px;
+  /* Two short labels sharing 340px still managed to wrap "Hold to reply" onto
+     two lines, which made the strip taller than the call pill it stands in for
+     — the one thing this surface must not do, since it swaps in and out while
+     a room turns from a burst into a huddle. */
+  white-space: nowrap;
   transition: color 120ms, background 120ms;
 }
 
