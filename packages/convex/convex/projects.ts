@@ -318,7 +318,8 @@ export const webCreate = mutation({
 
     const id = await ctx.db.insert("projects", doc);
 
-    return { id, short_id };
+    // Row rides back with the receipt: the client seeds its store before navigating.
+    return { id, short_id, row: await ctx.db.get(id) };
   },
 });
 

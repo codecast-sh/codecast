@@ -1,4 +1,5 @@
-import { useQuery } from "convex/react";
+import { useEffect } from "react";
+import { useMutation, useQuery } from "convex/react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { ActivityFeed } from "../../../components/ActivityFeed";
@@ -23,6 +24,17 @@ export default function TeamActivityPage() {
   const mode: "personal" | "team" =
     searchParams.get("filter") === "my" || !teamId ? "personal" : "team";
   const directoryFilter = searchParams.get("dir");
+
+  // Reading the team feed is what clears the sidebar Feed badge
+  // (getTeamUnreadCount counts teammate activity past this mark). Stamp it on
+  // entry and again on exit so activity that landed while the feed was open is
+  // not re-counted.
+  const markTeamSeen = useMutation(api.conversations.markTeamConversationsSeen);
+  useEffect(() => {
+    if (mode !== "team") return;
+    void markTeamSeen({});
+    return () => { void markTeamSeen({}); };
+  }, [mode, teamId, markTeamSeen]);
 
   if (!user) {
     return (

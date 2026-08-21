@@ -24,6 +24,7 @@ import {
   type ViewGuard,
   type ViewGuardChange,
 } from "@platform/engine";
+import { noteFreshDoc } from "../lib/docSyncCache";
 import type { Patch } from "mutative";
 import {
   CLIENT_SYNC_REGISTRY,
@@ -252,20 +253,50 @@ const RECEIPT_CONTINUATIONS: ReceiptContinuations = {
         `Acknowledged ${actionName} receipt is missing its navigation id`,
       );
     }
-    if (
-      typeof window === "undefined" ||
-      typeof window.location?.assign !== "function"
-    ) {
+    if (typeof window === "undefined" || !window.location) {
       throw new Error("Create navigation runtime is unavailable");
     }
     if (window.location.pathname === href) return true;
 
-    // This app is Vite + React Router (with tab-routing state), so bare
-    // history.pushState changes the address bar without notifying the
-    // rendered router. A full navigation is hook-free and works during boot
-    // replay. Deliberately leave the row in place: the next runtime observes
-    // the target pathname, then retires the intent. That also makes a crash
-    // after navigation-before-cleanup exactly idempotent.
+    // Seed local state BEFORE moving the view, so the target page paints from
+    // the store on its first frame instead of waiting for the list feed to
+    // echo the create. A doc created empty also gets its collab cache seeded:
+    // the editor then mounts live with no snapshot round trip.
+    const handler = getState()?._handleReceiptAcknowledgement;
+    if (typeof handler === "function") {
+      handler(actionName, resolved, serverResult, commandId);
+    }
+    if (actionName === "createDoc") {
+      const row = (serverResult as { row?: { content?: string } }).row;
+      noteFreshDoc((serverResult as { id: string }).id, {
+        empty: !!row && !(row.content ?? "").trim(),
+      });
+    }
+
+    // Navigate in-app: push the history entry the way tabNavigate does and
+    // fire popstate, which is exactly what browser back/forward does —
+    // DashboardLayout mirrors the URL into the active tab and React Router
+    // re-matches outside the tab shell. Hook-free, so it also works during a
+    // boot replay; the pathname then proves completion and the row retires.
+    if (
+      typeof window.history?.pushState === "function" &&
+      typeof window.dispatchEvent === "function"
+    ) {
+      const state = { tabNav: true, tabId: getState()?.activeTabId };
+      window.history.pushState(state, "", href);
+      window.dispatchEvent(
+        typeof PopStateEvent === "function"
+          ? new PopStateEvent("popstate", { state })
+          : new Event("popstate"),
+      );
+      return true;
+    }
+    if (typeof window.location.assign !== "function") {
+      throw new Error("Create navigation runtime is unavailable");
+    }
+    // Last resort (no History API): a full navigation. Deliberately leave the
+    // row in place: the next runtime observes the target pathname, then
+    // retires the intent — a crash after navigation stays idempotent.
     window.location.assign(href);
     return false;
   },

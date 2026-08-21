@@ -9,10 +9,13 @@
  * reactive listOwners query, so the chip never flickers back mid-round-trip.
  */
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
+import { useMutation } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 import { X, UserCheck } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
+import { isConvexId } from "../lib/entityLinks";
 import { useOwners, type OwnersApi } from "../hooks/useOwners";
 import { AvatarImg } from "../lib/avatarCache";
 import {
@@ -116,6 +119,23 @@ export function OwnerMenuItems({ owners }: { owners: OwnersApi }) {
         </>
       )}
     </>
+  );
+}
+
+/**
+ * Ack a handoff from any surface WITHOUT a listOwners subscription — the inbox
+ * card uses this so hundreds of rows don't each open a live query. Clears the
+ * row's assigned ping local-first, then stamps seen_at on the server (the
+ * mutation is idempotent and a no-op for non-owners).
+ */
+export function useAckAssignment() {
+  const ackAssignment = useMutation(api.sessionOwnership.ackSessionAssignment);
+  return useCallback(
+    (conversationId: string) => {
+      useInboxStore.getState().clearAssignedPing(conversationId);
+      if (isConvexId(conversationId)) ackAssignment({ session_id: conversationId }).catch(() => {});
+    },
+    [ackAssignment],
   );
 }
 

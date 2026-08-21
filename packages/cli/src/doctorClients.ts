@@ -31,7 +31,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import { spawnSync } from "./proc.js";
+import { whichBin } from "./proc.js";
 import { AGENT_CLIENTS, type AgentClientId, type AgentClientDescriptor } from "@codecast/shared/contracts";
 import { parseTranscriptFor } from "./parser.js";
 import { SessionWatcher } from "./sessionWatcher.js";
@@ -144,8 +144,7 @@ export interface ClientProbeResult {
 
 /** True if `name` resolves on PATH. Shared with doctor.ts (its tmux/node probes). */
 export function hasBin(name: string): boolean {
-  const r = spawnSync("which", [name], { encoding: "utf-8" });
-  return r.status === 0 && !!r.stdout.trim();
+  return whichBin(name) !== null;
 }
 
 /** The transcript root resolves to a directory that exists or could be created

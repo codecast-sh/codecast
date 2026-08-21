@@ -320,155 +320,6 @@
   line-height: 1.3;
 }
 
-/* Card mentions (task, doc, plan, session) */
-.mention-card {
-  display: flex;
-  flex-direction: column;
-  padding: 8px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--sol-border);
-  border-left: 3px solid;
-  text-decoration: none;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  max-width: 440px;
-  min-width: 200px;
-}
-
-.mention-card:hover {
-  border-color: var(--sol-border);
-  filter: brightness(1.02);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-}
-
-.mention-card-task {
-  border-left-color: #b58900;
-  background: rgba(181, 137, 0, 0.03);
-}
-
-.mention-card-task:hover {
-  background: rgba(181, 137, 0, 0.06);
-  border-left-color: #b58900;
-}
-
-.mention-card-doc {
-  border-left-color: #2aa198;
-  background: rgba(42, 161, 152, 0.03);
-}
-
-.mention-card-doc:hover {
-  background: rgba(42, 161, 152, 0.06);
-  border-left-color: #2aa198;
-}
-
-.mention-card-plan {
-  border-left-color: #6c71c4;
-  background: rgba(108, 113, 196, 0.03);
-}
-
-.mention-card-plan:hover {
-  background: rgba(108, 113, 196, 0.06);
-  border-left-color: #6c71c4;
-}
-
-.mention-card-session {
-  border-left-color: #268bd2;
-  background: rgba(38, 139, 210, 0.03);
-}
-
-.mention-card-session:hover {
-  background: rgba(38, 139, 210, 0.06);
-  border-left-color: #268bd2;
-}
-
-.mention-card-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.mention-card-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--sol-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-  line-height: 1.4;
-}
-
-.mention-card-id {
-  font-size: 10px;
-  font-family: var(--font-mono), monospace;
-  color: var(--sol-text-dim);
-  flex-shrink: 0;
-  opacity: 0.7;
-}
-
-.mention-card-badge {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  flex-shrink: 0;
-  font-weight: 500;
-}
-
-.mention-card-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 3px;
-  padding-left: 22px;
-  font-size: 11px;
-  color: var(--sol-text-dim);
-  line-height: 1.3;
-}
-
-.mention-card-goal {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 200px;
-  opacity: 0.7;
-}
-
-.mention-card-project {
-  gap: 4px;
-  opacity: 0.75;
-}
-
-.mention-card-summary {
-  margin-top: 4px;
-  padding-left: 22px;
-  font-size: 11px;
-  color: var(--sol-text-dim);
-  font-style: italic;
-  line-height: 1.4;
-  opacity: 0.8;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.mention-session-live-dot {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #859900;
-  animation: mention-live-pulse 2s ease-in-out infinite;
-}
-
-@keyframes mention-live-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.5; transform: scale(0.85); }
-}
-
 /* Date mention inline pill */
 .mention-inline-date {
   padding: 2px 10px 2px 6px;
@@ -665,4 +516,51 @@
 .wiki-link-typing {
   background: color-mix(in srgb, var(--sol-cyan) 8%, transparent);
   border-radius: 2px;
+}
+
+/* ── Read-mode body parity ──────────────────────────────────────────────────
+   The doc reading view (DocumentDetailLayout) shares the editor's visual
+   language so toggling edit mode restyles nothing: same body color and
+   rhythm, same inline-code chip, same blockquote/hr treatment. Heading sizes
+   are matched in DOC_MD_COMPONENTS (they're Tailwind utilities there). */
+.doc-read-body {
+  color: var(--sol-text-muted);
+  line-height: 1.8;
+}
+
+.doc-read-body :not(pre) > code {
+  background: var(--sol-bg-highlight);
+  color: #2aa198;
+  padding: 0.15em 0.4em;
+  border-radius: 3px;
+  font-size: 0.9em;
+  font-weight: normal;
+}
+
+.doc-read-body :not(pre) > code::before,
+.doc-read-body :not(pre) > code::after {
+  content: none; /* the prose plugin's backtick pseudo-quotes */
+}
+
+.doc-read-body blockquote {
+  border-left: 3px solid var(--sol-border);
+  color: var(--sol-text-dim);
+}
+
+.doc-read-body blockquote p::before,
+.doc-read-body blockquote p::after {
+  content: none; /* the prose plugin's decorative curly quotes */
+}
+
+.doc-read-body hr {
+  border: none;
+  border-top: 1px solid var(--sol-border);
+  margin: 2em 0;
+  opacity: 0.4;
+}
+
+.doc-read-body a:not(.not-prose) {
+  color: #268bd2;
+  text-decoration-color: rgba(38, 139, 210, 0.3);
+  text-underline-offset: 2px;
 }

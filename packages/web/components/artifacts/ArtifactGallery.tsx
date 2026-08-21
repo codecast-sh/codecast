@@ -2,6 +2,7 @@
 // /pages — gallery of the signed-in user's published pages
 // (cast publish). Data: store.artifacts, fed by artifacts.listForWeb (hooks/useSyncArtifacts).
 
+import { copyToClipboard } from "../../lib/utils";
 import { useState } from "react";
 import { useArtifacts } from "../../hooks/useSyncArtifacts";
 import { toast } from "sonner";
@@ -14,7 +15,7 @@ const EXAMPLE_CMD = "cast publish report.html";
 function EmptyState() {
   const copyExample = async () => {
     try {
-      await navigator.clipboard.writeText(EXAMPLE_CMD);
+      await copyToClipboard(EXAMPLE_CMD);
       toast.success("Command copied");
     } catch {
       toast.error("Couldn't copy");
