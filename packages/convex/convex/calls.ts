@@ -16,17 +16,23 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   CALL_INVITE_TTL_MS,
+  CALL_KNOCK_TTL_MS,
   CALL_MEMBER_STALE_MS,
   MAX_ROOM_MEMBERS,
   authorizeRoom,
-  authorizeRoomNoGrant,
+  authorizeRoomInviter,
+  authorizeRoomMembership,
+  clearRoomState,
   expireRoomGrants,
+  isRoomLocked,
   liveMembers,
+  liveSeat,
+  openRoomDoor,
   parseRoomKey,
 } from "./callRooms";
 import { isTeamMember } from "./privacy";
 import { bucketTs } from "./presenceState";
-import { teamHasFeature } from "./teamFeatures";
+import { teamFeatureOffMessage, teamHasFeature } from "./teamFeatures";
 import { endLiveTranscriptsForRoom } from "./transcripts";
 import {
   CALL_PUSH_CATEGORY,
@@ -35,7 +41,12 @@ import {
   CALL_PUSH_TYPE_RING,
 } from "@codecast/shared/contracts";
 
-export { CALL_HEARTBEAT_MS, CALL_INVITE_TTL_MS, CALL_MEMBER_STALE_MS } from "./callRooms";
+export {
+  CALL_HEARTBEAT_MS,
+  CALL_INVITE_TTL_MS,
+  CALL_KNOCK_TTL_MS,
+  CALL_MEMBER_STALE_MS,
+} from "./callRooms";
 
 function inviteAlive(inv: Doc<"call_invites">, now: number): boolean {
   return inv.status === "ringing" && now - inv.created_at < CALL_INVITE_TTL_MS;
@@ -238,6 +249,9 @@ export const joinRoom = mutation({
       .collect();
     if (liveMembers(seated, now).length === 0) {
       await expireRoomGrants(ctx, args.room_key);
+      // A lock belongs to the huddle that set it, and so do the knocks at its
+      // door: the next huddle in this room starts open, with nobody waiting.
+      await clearRoomState(ctx, args.room_key);
       // Same reason: a transcript left "live" by the previous huddle (its
       // scribe's tab died without stop) must not swallow this new one.
       await endLiveTranscriptsForRoom(ctx, args.room_key);
@@ -387,13 +401,20 @@ export const invite = mutation({
     if (recipients.length > MAX_ROOM_MEMBERS) {
       throw new Error(`A huddle rings at most ${MAX_ROOM_MEMBERS} people at once`);
     }
-    // The authority to ADD people is membership, never a grant: a guest who
-    // was rung in may sit in the huddle, but only the room's own people can
-    // widen it (otherwise one invited guest could chain-invite a private
-    // room full of strangers). The recipient needs no membership at all —
-    // the ring IS their grant (callRooms.acceptedInviteGrant) — but must be
-    // a teammate: the room's team is the outer wall.
-    const callerAuth = await authorizeRoomNoGrant(ctx, userId, args.room_key);
+    // The authority to ADD people is being IN the room, or being one of its
+    // own people. A live occupant may ring: they are the person a knocker is
+    // asking to be let in by, and they can already lock the door — a walk-in
+    // who could shut the room but not open it was the inconsistency this
+    // rule removes. Chain-invite stays contained by the two walls that were
+    // always doing the work: a CHANNEL room keeps membership authority
+    // (authorizeRoomInviter excludes it), so nobody walks into a channel's
+    // room and fills it with people the channel excludes; and every
+    // recipient must be a teammate, checked per row below. An unused grant
+    // is not a seat: holding one lets you join, not widen.
+    //
+    // The recipient needs no membership at all — the ring IS their grant
+    // (callRooms.acceptedInviteGrant) — but the team wall holds for them too.
+    const callerAuth = await authorizeRoomInviter(ctx, userId, args.room_key);
     if (!callerAuth.ok) throw new Error(`Cannot invite: ${callerAuth.reason}`);
 
     const now = Date.now();
@@ -676,6 +697,231 @@ export const cancelInvite = mutation({
     const inv = await ctx.db.get(args.invite_id);
     if (!inv || String(inv.from_user) !== String(userId)) return;
     await ctx.db.patch(inv._id, { status: "cancelled", responded_at: Date.now() });
+  },
+});
+
+// ── The door: lock, knock, live rooms ─────────────────────────────────────
+// Huddles are open by default (callRooms.openRoomDoor). What follows is the
+// exception and the way back in from it: a lock, a knock at a locked door,
+// and the list that makes an occupied room visible in the first place.
+
+// Whoever is INSIDE right now owns the door — not the room's members and not
+// whoever started the huddle, both of whom may have left. Returns the seat so
+// callers reuse its billing team.
+async function requireSeated(
+  ctx: any,
+  userId: Id<"users">,
+  roomKey: string,
+  now: number,
+): Promise<Doc<"call_members">> {
+  const seat = await liveSeat(ctx, userId, roomKey, now);
+  if (!seat) throw new Error("Only someone in the huddle can do that");
+  return seat;
+}
+
+// Knocks expire like rings and nothing sweeps them on a timer: every mutation
+// that touches the door clears the dead ones and returns the rest.
+async function sweepKnocks(
+  ctx: any,
+  roomKey: string,
+  now: number,
+): Promise<Doc<"call_knocks">[]> {
+  const rows: Doc<"call_knocks">[] = await ctx.db
+    .query("call_knocks")
+    .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
+    .collect();
+  const alive: Doc<"call_knocks">[] = [];
+  for (const k of rows) {
+    if (now - k.created_at >= CALL_KNOCK_TTL_MS) await ctx.db.delete(k._id);
+    else alive.push(k);
+  }
+  return alive;
+}
+
+export const setRoomLocked = mutation({
+  args: { room_key: v.string(), locked: v.boolean() },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    const now = Date.now();
+    const seat = await requireSeated(ctx, userId, args.room_key, now);
+    const existing = await ctx.db
+      .query("call_room_state")
+      .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        locked: args.locked,
+        locked_by: userId,
+        updated_at: now,
+      });
+    } else {
+      await ctx.db.insert("call_room_state", {
+        room_key: args.room_key,
+        team_id: seat.team_id,
+        locked: args.locked,
+        locked_by: userId,
+        updated_at: now,
+      });
+    }
+    // Unlocking answers every knock at once: the door is simply open now, and
+    // a leftover knock would ask the room to admit someone already inside it.
+    const waiting = await sweepKnocks(ctx, args.room_key, now);
+    if (!args.locked) {
+      for (const k of waiting) await ctx.db.delete(k._id);
+    }
+    return { locked: args.locked };
+  },
+});
+
+// A knock at a locked door. Two conditions, and together they say exactly
+// "somebody who WOULD have walked in, had it not been locked": the open door
+// admits them but for the lock, and no other door does either. Admitting is
+// not new machinery — someone inside rings the knocker with `invite` and the
+// accepted-invite grant lets them in.
+export const knock = mutation({
+  args: { room_key: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    const now = Date.now();
+    const teamId = await openRoomDoor(ctx, userId, args.room_key, {
+      ignoreLock: true,
+    });
+    if (!teamId) throw new Error("Cannot knock at this huddle");
+    if (!(await teamHasFeature(ctx, teamId, "calls"))) {
+      throw new Error(teamFeatureOffMessage("calls"));
+    }
+    if ((await authorizeRoom(ctx, userId, args.room_key)).ok) {
+      throw new Error("This huddle is open — just join it");
+    }
+    const waiting = await sweepKnocks(ctx, args.room_key, now);
+    const mine = waiting.find((k) => String(k.from_user) === String(userId));
+    // Refresh, never duplicate — one person at the door is one knock, and
+    // hammering it cannot flood the room's toasts (same rule as re-ringing).
+    if (mine) {
+      await ctx.db.patch(mine._id, { created_at: now });
+      return { ok: true };
+    }
+    await ctx.db.insert("call_knocks", {
+      room_key: args.room_key,
+      team_id: teamId,
+      from_user: userId,
+      created_at: now,
+    });
+    return { ok: true };
+  },
+});
+
+// Who is waiting outside MY room. Only the people inside can read it: a knock
+// is a gesture at one door, not a team-wide event. Bucketed and sorted like
+// every other room subscription so heartbeats do not re-push it.
+export const getRoomKnocks = query({
+  args: { room_key: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const now = Date.now();
+    if (!(await liveSeat(ctx, userId, args.room_key, now))) return [];
+    const rows = await ctx.db
+      .query("call_knocks")
+      .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
+      .collect();
+    const waiting = await Promise.all(
+      rows
+        .filter((k) => now - k.created_at < CALL_KNOCK_TTL_MS)
+        .map(async (k) => {
+          const u = await ctx.db.get(k.from_user);
+          return {
+            from_user: k.from_user,
+            from_name: u?.name ?? u?.email ?? "Teammate",
+            from_image: u?.image ?? u?.github_avatar_url ?? undefined,
+            // NOT bucketed, unlike every other timestamp on a room
+            // subscription. Bucketing exists to keep a result byte-identical
+            // across heartbeats, and this result already is: it derives only
+            // from call_knocks rows, which change only when somebody knocks.
+            // A re-knock PATCHES its row (above), so created_at is the ONLY
+            // field that moves — and the 60s bucket would round the second
+            // knock onto the first, leaving the room with no way to tell that
+            // someone tried again.
+            created_at: k.created_at,
+          };
+        }),
+    );
+    return waiting.sort((a, b) => String(a.from_user).localeCompare(String(b.from_user)));
+  },
+});
+
+// Every huddle running right now in one of my teams — the list that makes
+// open rooms a product rather than a permission. A LOCKED room still lists:
+// seeing it and knocking is the whole point, so membership widens the door
+// and `locked` only tells the client Join versus Knock.
+//
+// This is a team-wide subscription that every client holds while a huddle
+// runs, so its result must be byte-identical between heartbeats: rooms sorted
+// by key, rosters sorted by user, every timestamp bucketed (projectMember
+// already drops last_seen). See the wakeSig discipline on call_members.
+export const getLiveRooms = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const now = Date.now();
+    const memberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    const byRoom = new Map<string, Doc<"call_members">[]>();
+    for (const m of memberships) {
+      if (!(await teamHasFeature(ctx, m.team_id, "calls"))) continue;
+      const rows = await ctx.db
+        .query("call_members")
+        .withIndex("by_team", (q) => q.eq("team_id", m.team_id))
+        .collect();
+      // Stale rows are not a huddle: nothing sweeps a room nobody is writing
+      // to, so the reader filters rather than trusting the table.
+      for (const row of liveMembers(rows, now)) {
+        const list = byRoom.get(row.room_key);
+        if (list) list.push(row);
+        else byRoom.set(row.room_key, [row]);
+      }
+    }
+
+    const out = [];
+    for (const roomKey of [...byRoom.keys()].sort()) {
+      const live = byRoom.get(roomKey)!;
+      const seated = live.some((m) => String(m.user_id) === String(userId));
+      const membership = await authorizeRoomMembership(ctx, userId, roomKey);
+      const listed =
+        seated ||
+        membership.ok ||
+        !!(await openRoomDoor(ctx, userId, roomKey, { ignoreLock: true }));
+      if (!listed) continue;
+      // The room is joinable either way — the team wall holds and the people
+      // inside are audible. Its LABEL is a different question: a session room
+      // whose conversation this viewer cannot see lists as "a huddle", so no
+      // title-bearing field leaves the server for it.
+      const parsed = parseRoomKey(roomKey);
+      const redacted = parsed?.kind === "session" && !membership.ok;
+      let title: string | undefined;
+      if (parsed?.kind === "session" && !redacted) {
+        const conv = await ctx.db.get(parsed.conversationId as Id<"conversations">);
+        title = conv?.title;
+      } else if (parsed?.kind === "channel") {
+        const channel = await ctx.db.get(parsed.channelId as Id<"chat_channels">);
+        title = channel?.name;
+      }
+      out.push({
+        room_key: roomKey,
+        team_id: live[0].team_id,
+        locked: await isRoomLocked(ctx, roomKey),
+        redacted,
+        title,
+        members: live
+          .slice()
+          .sort((a, b) => String(a.user_id).localeCompare(String(b.user_id)))
+          .map(projectMember),
+      });
+    }
+    return out;
   },
 });
 

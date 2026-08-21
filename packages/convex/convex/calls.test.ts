@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import {
   CALL_INVITE_TTL_MS,
+  CALL_KNOCK_TTL_MS,
   CALL_MEMBER_STALE_MS,
   signLivekitJwt,
 } from "./calls";
@@ -250,9 +251,12 @@ describe("invite fan-out", () => {
     await expect((await handler())(ctx, { room_key: "dm:ub:uc", to_users: ["ub"] })).rejects.toThrow(/Cannot invite/);
   });
 
-  test("a grant guest may sit in the huddle but not widen it", async () => {
-    // ua holds an accepted invite into dm:ub:uc and ub is live in the room —
-    // ua may JOIN via the grant, but ringing more people requires membership.
+  test("an unused grant is not a seat: holding one lets you join, not widen", async () => {
+    // ua holds an accepted invite into dm:ub:uc and ub is live in the room.
+    // ua may JOIN through that grant, but has not — and the authority to ring
+    // more people in is being IN the room (or being one of its own people),
+    // which an unclaimed grant is not. Once ua actually sits down they may
+    // ring, as the walk-in test below shows.
     const { ctx, rows, now } = fakeCtx();
     rows.call_invites = [
       { _id: "g1", room_key: "dm:ub:uc", team_id: "t1", from_user: "ub", to_user: "ua", status: "accepted", created_at: now - 60_000, responded_at: now - 30_000 },
@@ -261,6 +265,67 @@ describe("invite fan-out", () => {
       { _id: "cm-ub", room_key: "dm:ub:uc", team_id: "t1", user_id: "ub", joined_at: now - 60_000, last_seen: now - 1000 },
     ];
     await expect((await handler())(ctx, { room_key: "dm:ub:uc", to_users: ["uc"] })).rejects.toThrow(/Cannot invite/);
+  });
+
+  test("a live occupant may ring teammates in, membership or not", async () => {
+    // The walk-in rule (ct-44940). ua is a third party to dm:ub:uc who walked
+    // in through the open door and is sitting there; the room is LOCKED,
+    // which is precisely when a knocker needs somebody inside to admit them.
+    const { ctx, rows, now } = fakeCtx();
+    rows.users.push({ _id: "ue", name: "Eve" });
+    rows.team_memberships.push({ _id: "m5", user_id: "ue", team_id: "t1" });
+    rows.call_members = [
+      { _id: "cm-ua", room_key: "dm:ub:uc", team_id: "t1", user_id: "ua", joined_at: now - 30_000, last_seen: now },
+    ];
+    rows.call_room_state = [{ _id: "rs1", room_key: "dm:ub:uc", team_id: "t1", locked: true, locked_by: "ua", updated_at: now }];
+    const res = await (await handler())(ctx, { room_key: "dm:ub:uc", to_users: ["ue", "ud"] });
+    const ringing = rows.call_invites.filter((i) => i.status === "ringing");
+    expect(ringing.map((i) => i.to_user)).toEqual(["ue"]);
+    // The ring bills to the room's own team, taken from the caller's seat.
+    expect(ringing[0].team_id).toBe("t1");
+    // The outer wall is untouched: ud is on another team and is refused per
+    // row, exactly as for a member caller.
+    const byUser = Object.fromEntries(res.results.map((r: any) => [r.to_user, r]));
+    expect(byUser.ud.refused).toBeTruthy();
+  });
+
+  test("a session huddle's walk-in may ring too", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    // ub owns a private conversation; ua walked into the live huddle about it.
+    rows.conversations = [{ _id: "cv1", user_id: "ub", team_id: "t1", is_private: true }];
+    rows.call_members = [
+      { _id: "cm-ua", room_key: "session:cv1", team_id: "t1", user_id: "ua", joined_at: now - 30_000, last_seen: now },
+    ];
+    await (await handler())(ctx, { room_key: "session:cv1", to_users: ["uc"] });
+    expect(rows.call_invites.map((i) => i.to_user)).toEqual(["uc"]);
+  });
+
+  test("a walk-in cannot widen a CHANNEL room the channel excludes them from", async () => {
+    // The chain-invite wall, and the reason channel rooms keep membership
+    // authority: ua was rung into a private channel's room and is sitting in
+    // it, but the channel is still the authority on who belongs there.
+    const { ctx, rows, now } = fakeCtx();
+    rows.chat_channels = [{ _id: "chp", team_id: "t1", name: "founders", kind: "private" }];
+    rows.chat_channel_members = [{ _id: "cmb1", channel_id: "chp", user_id: "ub" }];
+    rows.call_members = [
+      { _id: "cm-ua", room_key: "channel:chp", team_id: "t1", user_id: "ua", joined_at: now - 30_000, last_seen: now },
+      { _id: "cm-ub", room_key: "channel:chp", team_id: "t1", user_id: "ub", joined_at: now - 60_000, last_seen: now },
+    ];
+    await expect((await handler())(ctx, { room_key: "channel:chp", to_users: ["uc"] }))
+      .rejects.toThrow(/Cannot invite/);
+    // The channel's own member, sitting in the same room, still may.
+    ctx.auth = { getUserIdentity: async () => ({ subject: "ub|sess", tokenIdentifier: "x" }) };
+    await (await handler())(ctx, { room_key: "channel:chp", to_users: ["uc"] });
+    expect(rows.call_invites.map((i) => i.to_user)).toEqual(["uc"]);
+  });
+
+  test("a stale seat is no seat: the lease governs who may ring", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    rows.call_members = [
+      { _id: "cm-ua", room_key: "dm:ub:uc", team_id: "t1", user_id: "ua", joined_at: now - 300_000, last_seen: now - STALE - 1000 },
+    ];
+    await expect((await handler())(ctx, { room_key: "dm:ub:uc", to_users: ["ub"] }))
+      .rejects.toThrow(/Cannot invite/);
   });
 
   test("a re-ring into a DIFFERENT room cancels the old ring and mints a fresh one", async () => {
@@ -397,5 +462,305 @@ describe("transcript ends with the room", () => {
     rows.chat_channels = [{ _id: "ch1", team_id: "t1", name: "design" }];
     await (await fn("joinRoom"))(ctx, { room_key: "channel:ch1", muted: true });
     expect(rows.transcripts[0].status).toBe("ended");
+  });
+});
+
+// The door. Huddles are open by default (callRooms.openRoomDoor is covered in
+// callRooms.test.ts); these are the exception and the way back in from it.
+describe("lock, knock and the live-room list", () => {
+  async function fn(name: string) {
+    const mod: any = await import("./calls");
+    return mod[name]._handler ?? mod[name].handler;
+  }
+  const as = (ctx: any, user: string) => {
+    ctx.auth = { getUserIdentity: async () => ({ subject: `${user}|sess`, tokenIdentifier: "x" }) };
+  };
+  function seat(rows: Record<string, any[]>, user: string, roomKey: string, lastSeen: number, team = "t1") {
+    (rows.call_members ??= []).push({
+      _id: `cm-${user}-${roomKey}`, room_key: roomKey, team_id: team, user_id: user,
+      user_name: user, joined_at: lastSeen, last_seen: lastSeen,
+      muted: true, camera: false, sharing: false,
+    });
+  }
+
+  test("only someone in the huddle may lock its door", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    // ua is a member of dm:ua:ub but is not sitting in it.
+    await expect((await fn("setRoomLocked"))(ctx, { room_key: "dm:ua:ub", locked: true }))
+      .rejects.toThrow(/in the huddle/);
+    seat(rows, "ua", "dm:ua:ub", now);
+    await (await fn("setRoomLocked"))(ctx, { room_key: "dm:ua:ub", locked: true });
+    expect(rows.call_room_state).toHaveLength(1);
+    expect(rows.call_room_state[0]).toMatchObject({ locked: true, locked_by: "ua", team_id: "t1" });
+    // A teammate who was walking in is now refused; the pair still get in.
+    const { authorizeRoom } = await import("./callRooms");
+    expect((await authorizeRoom(ctx, "uc" as any, "dm:ua:ub")).ok).toBe(false);
+    expect((await authorizeRoom(ctx, "ub" as any, "dm:ua:ub")).ok).toBe(true);
+  });
+
+  test("toggling reuses the room's one row and reopens the door", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    seat(rows, "ua", "dm:ua:ub", now);
+    const h = await fn("setRoomLocked");
+    await h(ctx, { room_key: "dm:ua:ub", locked: true });
+    await h(ctx, { room_key: "dm:ua:ub", locked: false });
+    expect(rows.call_room_state).toHaveLength(1);
+    expect(rows.call_room_state[0].locked).toBe(false);
+    const { authorizeRoom } = await import("./callRooms");
+    expect((await authorizeRoom(ctx, "uc" as any, "dm:ua:ub")).ok).toBe(true);
+  });
+
+  test("unlocking answers every knock at once", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    seat(rows, "ua", "dm:ua:ub", now);
+    rows.call_knocks = [
+      { _id: "k1", room_key: "dm:ua:ub", team_id: "t1", from_user: "uc", created_at: now },
+      { _id: "k2", room_key: "channel:ch1", team_id: "t1", from_user: "uc", created_at: now },
+    ];
+    const h = await fn("setRoomLocked");
+    await h(ctx, { room_key: "dm:ua:ub", locked: true });
+    expect(rows.call_knocks.map((k) => k._id)).toEqual(["k1", "k2"]);
+    await h(ctx, { room_key: "dm:ua:ub", locked: false });
+    expect(rows.call_knocks.map((k) => k._id)).toEqual(["k2"]);
+  });
+
+  test("a room restarting from empty starts open, with nobody at the door", async () => {
+    // The same joinRoom branch that expires the previous huddle's grants.
+    const { ctx, rows, now } = fakeCtx();
+    rows.chat_channels = [{ _id: "ch1", team_id: "t1", name: "design" }];
+    seat(rows, "ub", "channel:ch1", now - STALE - 1000);
+    rows.call_room_state = [{ _id: "rs1", room_key: "channel:ch1", team_id: "t1", locked: true, locked_by: "ub", updated_at: now - 60_000 }];
+    rows.call_knocks = [{ _id: "k1", room_key: "channel:ch1", team_id: "t1", from_user: "uc", created_at: now }];
+    await (await fn("joinRoom"))(ctx, { room_key: "channel:ch1", muted: true });
+    expect(rows.call_room_state).toEqual([]);
+    expect(rows.call_knocks).toEqual([]);
+  });
+
+  test("a knock needs a locked door and a teammate behind it", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    seat(rows, "ua", "dm:ua:ub", now);
+    const h = await fn("knock");
+    // Open room: there is nothing to knock at.
+    as(ctx, "uc");
+    await expect(h(ctx, { room_key: "dm:ua:ub" })).rejects.toThrow(/just join it/);
+    rows.call_room_state = [{ _id: "rs1", room_key: "dm:ua:ub", team_id: "t1", locked: true, locked_by: "ua", updated_at: now }];
+    // Outside the billing team: refused with the lock ignored too.
+    as(ctx, "ud");
+    await expect(h(ctx, { room_key: "dm:ua:ub" })).rejects.toThrow(/Cannot knock/);
+    // An empty room is not a huddle to knock at.
+    as(ctx, "uc");
+    await expect(h(ctx, { room_key: "dm:ub:uc" })).rejects.toThrow(/Cannot knock/);
+    // The room's own people never knock — they walk in.
+    as(ctx, "ub");
+    await expect(h(ctx, { room_key: "dm:ua:ub" })).rejects.toThrow(/just join it/);
+    as(ctx, "uc");
+    await h(ctx, { room_key: "dm:ua:ub" });
+    expect(rows.call_knocks).toHaveLength(1);
+    expect(rows.call_knocks[0]).toMatchObject({ from_user: "uc", team_id: "t1" });
+  });
+
+  test("knocking again refreshes one row; dead knocks are swept", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    seat(rows, "ua", "dm:ua:ub", now);
+    rows.call_room_state = [{ _id: "rs1", room_key: "dm:ua:ub", team_id: "t1", locked: true, locked_by: "ua", updated_at: now }];
+    rows.call_knocks = [
+      { _id: "old", room_key: "dm:ua:ub", team_id: "t1", from_user: "ub", created_at: now - CALL_KNOCK_TTL_MS - 1 },
+    ];
+    as(ctx, "uc");
+    const h = await fn("knock");
+    await h(ctx, { room_key: "dm:ua:ub" });
+    await h(ctx, { room_key: "dm:ua:ub" });
+    // ub's expired knock swept, uc's single row refreshed rather than twinned.
+    expect(rows.call_knocks).toHaveLength(1);
+    expect(rows.call_knocks[0].from_user).toBe("uc");
+  });
+
+  test("only the people inside see who is waiting", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    seat(rows, "ua", "dm:ua:ub", now);
+    rows.call_knocks = [
+      { _id: "k1", room_key: "dm:ua:ub", team_id: "t1", from_user: "uc", created_at: now },
+      { _id: "k2", room_key: "dm:ua:ub", team_id: "t1", from_user: "ub", created_at: now - CALL_KNOCK_TTL_MS - 1 },
+    ];
+    const h = await fn("getRoomKnocks");
+    const inside = await h(ctx, { room_key: "dm:ua:ub" });
+    expect(inside).toHaveLength(1); // the expired one is filtered, never shown
+    expect(inside[0]).toMatchObject({ from_user: "uc", from_name: "Cy" });
+    // uc is knocking, not sitting: they learn nothing about the room.
+    as(ctx, "uc");
+    expect(await h(ctx, { room_key: "dm:ua:ub" })).toEqual([]);
+  });
+
+  // The room must be able to tell a second knock from the first, and the only
+  // thing that distinguishes them is created_at: knocking again refreshes one
+  // row rather than adding a second. Rounding that timestamp (as every other
+  // room subscription does, for byte-stability across heartbeats) would round
+  // the second knock onto the first and the room would never hear it.
+  test("a second knock is visible: the waiting row carries its exact time", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    seat(rows, "ua", "dm:ua:ub", now);
+    rows.call_knocks = [
+      { _id: "k1", room_key: "dm:ua:ub", team_id: "t1", from_user: "uc", created_at: now - 12_345 },
+    ];
+    const read = await fn("getRoomKnocks");
+    const first = await read(ctx, { room_key: "dm:ua:ub" });
+    expect(first[0].created_at).toBe(now - 12_345);
+    // uc knocks again, 12s later — the same minute, the same row, a new time.
+    rows.call_knocks[0].created_at = now;
+    const second = await read(ctx, { room_key: "dm:ua:ub" });
+    expect(second[0].created_at).toBe(now);
+    expect(second[0].created_at).not.toBe(first[0].created_at);
+  });
+
+  test("getLiveRooms lists every live huddle across my teams", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    rows.teams.push({ _id: "t2", name: "T2", features: { calls: true, chat: true } });
+    rows.teams.push({ _id: "t3", name: "T3", features: { calls: true, chat: true } });
+    rows.team_memberships.push({ _id: "m5", user_id: "ua", team_id: "t2" });
+    rows.team_memberships.push({ _id: "m6", user_id: "ub", team_id: "t2" });
+    rows.team_memberships.push({ _id: "m7", user_id: "uc", team_id: "t3" });
+    rows.chat_channels = [{ _id: "ch1", team_id: "t1", name: "design" }];
+    // A room I am a third party to, in each of my teams; one locked.
+    seat(rows, "ub", "dm:ub:uc", now);
+    seat(rows, "ub", "channel:ch1", now);
+    rows.call_room_state = [{ _id: "rs1", room_key: "channel:ch1", team_id: "t1", locked: true, locked_by: "ub", updated_at: now }];
+    // A stale room: nobody is in it, so it is not a huddle.
+    seat(rows, "uc", "dm:ua:uc", now - STALE - 1000);
+    // A huddle in a team I am not on.
+    seat(rows, "uc", "dm:uc:ud", now, "t3");
+
+    const live = await (await fn("getLiveRooms"))(ctx, {});
+    expect(live.map((r: any) => r.room_key)).toEqual(["channel:ch1", "dm:ub:uc"]);
+    const byKey = Object.fromEntries(live.map((r: any) => [r.room_key, r]));
+    // Locked rooms still LIST — seeing the room is what makes knocking possible.
+    expect(byKey["channel:ch1"]).toMatchObject({ locked: true, redacted: false, title: "design" });
+    expect(byKey["dm:ub:uc"]).toMatchObject({ locked: false, redacted: false, team_id: "t1" });
+    expect(byKey["dm:ub:uc"].members.map((m: any) => m.user_id)).toEqual(["ub"]);
+  });
+
+  test("a group huddle lists for a teammate outside it, and locking turns Join into Knock", async () => {
+    // The caller (ua) is named nowhere in a three-person room. The decided
+    // product lists it with its roster and lets ua walk in; locking it leaves
+    // the room listed — that is what makes knocking possible — and the same
+    // teammate may then knock.
+    const { ctx, rows, now } = fakeCtx();
+    rows.users.push({ _id: "ue", name: "Eve" });
+    rows.team_memberships.push({ _id: "m5", user_id: "ue", team_id: "t1" });
+    const groupKey = "dm:ub:uc:ue";
+    for (const u of ["ub", "uc", "ue"]) seat(rows, u, groupKey, now);
+
+    const open = await (await fn("getLiveRooms"))(ctx, {});
+    expect(open.map((r: any) => r.room_key)).toEqual([groupKey]);
+    expect(open[0].members.map((m: any) => m.user_id)).toEqual(["ub", "uc", "ue"]);
+    expect(open[0].locked).toBe(false);
+    const { authorizeRoom } = await import("./callRooms");
+    expect((await authorizeRoom(ctx, "ua" as any, groupKey)).ok).toBe(true);
+
+    rows.call_room_state = [{ _id: "rs1", room_key: groupKey, team_id: "t1", locked: true, locked_by: "ub", updated_at: now }];
+    const shut = await (await fn("getLiveRooms"))(ctx, {});
+    expect(shut[0]).toMatchObject({ room_key: groupKey, locked: true });
+    expect(shut[0].members).toHaveLength(3);
+    expect((await authorizeRoom(ctx, "ua" as any, groupKey)).ok).toBe(false);
+    await (await fn("knock"))(ctx, { room_key: groupKey });
+    expect(rows.call_knocks.map((k: any) => k.from_user)).toEqual(["ua"]);
+
+    // ud is on another team: the outer wall refuses them at every step.
+    as(ctx, "ud");
+    expect(await (await fn("getLiveRooms"))(ctx, {})).toEqual([]);
+    await expect((await fn("knock"))(ctx, { room_key: groupKey })).rejects.toThrow(/Cannot knock/);
+  });
+
+  test("a private channel huddle stays off a non-member's list", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    rows.chat_channels = [{ _id: "chp", team_id: "t1", name: "founders", kind: "private" }];
+    rows.chat_channel_members = [{ _id: "cmb1", channel_id: "chp", user_id: "ub" }];
+    seat(rows, "ub", "channel:chp", now);
+    // ua is on the team and not in the channel: neither the room nor its
+    // roster nor its name reaches them.
+    expect(await (await fn("getLiveRooms"))(ctx, {})).toEqual([]);
+  });
+
+  test("a session huddle I cannot see lists without its title", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    rows.conversations = [
+      { _id: "cvp", user_id: "ub", team_id: "t1", is_private: true, title: "Secret refactor" },
+      { _id: "cvs", user_id: "ub", team_id: "t1", is_private: false, title: "Shared work" },
+    ];
+    seat(rows, "ub", "session:cvp", now);
+    seat(rows, "uc", "session:cvs", now);
+    const live = await (await fn("getLiveRooms"))(ctx, {});
+    const byKey = Object.fromEntries(live.map((r: any) => [r.room_key, r]));
+    // Joinable either way — the team wall holds and the voices are audible.
+    expect(byKey["session:cvp"]).toMatchObject({ redacted: true, title: undefined });
+    expect(JSON.stringify(byKey["session:cvp"])).not.toContain("Secret refactor");
+    expect(byKey["session:cvs"]).toMatchObject({ redacted: false, title: "Shared work" });
+  });
+
+  test("a heartbeat does not re-push the team-wide list", async () => {
+    // Byte-stability is the contract: every client on the team holds this
+    // subscription while any huddle runs.
+    const { ctx, rows, now } = fakeCtx();
+    seat(rows, "ub", "dm:ub:uc", now - 30_000);
+    const h = await fn("getLiveRooms");
+    const before = await h(ctx, {});
+    rows.call_members[0].last_seen = now; // the 15s heartbeat, and nothing else
+    expect(await h(ctx, {})).toEqual(before);
+  });
+});
+
+// Requirement 5 of the open-rooms design, verified rather than assumed: the
+// team strip (teams.getTeamMembers) hands the viewer a member's room KEY only
+// when authorizeRoom says they could join it, so the open door reaches the
+// strip with no code change there.
+describe("team strip inherits the open door", () => {
+  const now = Date.now();
+  const tables = () => ({
+    teams: [{ _id: "t1", name: "T", features: { calls: true, chat: true } }],
+    team_memberships: [
+      { _id: "m1", user_id: "ua", team_id: "t1" },
+      { _id: "m2", user_id: "ub", team_id: "t1" },
+      { _id: "m3", user_id: "uc", team_id: "t1" },
+    ],
+    users: [
+      { _id: "ua", name: "Ann" },
+      { _id: "ub", name: "Bob" },
+      { _id: "uc", name: "Cy" },
+    ],
+    // ua and ub are huddling in their own 1:1 room; uc is a third party.
+    call_members: [
+      { _id: "cm-ua", room_key: "dm:ua:ub", team_id: "t1", user_id: "ua", user_name: "Ann", joined_at: now - 60_000, last_seen: now, muted: true, camera: false, sharing: false },
+    ],
+    call_room_state: [] as any[],
+    user_presence: [] as any[],
+    devices: [] as any[],
+    conversations: [] as any[],
+  });
+
+  async function stripFor(rows: ReturnType<typeof tables>) {
+    const { makeFakeDb } = await import("./testDb");
+    const { getTeamMembers } = await import("./teams");
+    const ctx: any = {
+      db: makeFakeDb(rows as any),
+      auth: { getUserIdentity: async () => ({ subject: "uc|sess", tokenIdentifier: "x" }) },
+    };
+    const h = (getTeamMembers as any)._handler ?? (getTeamMembers as any).handler;
+    const members = await h(ctx, { team_id: "t1" });
+    return members.find((m: any) => String(m._id) === "ua");
+  }
+
+  test("an unlocked huddle names its room to the whole team", async () => {
+    const ann = await stripFor(tables());
+    expect(ann.in_huddle).toBe(true);
+    expect(ann.in_room_key).toBe("dm:ua:ub");
+  });
+
+  test("a locked huddle falls back to the bare 'in a huddle' signal", async () => {
+    const rows = tables();
+    rows.call_room_state = [
+      { _id: "rs1", room_key: "dm:ua:ub", team_id: "t1", locked: true, locked_by: "ua", updated_at: now },
+    ];
+    const ann = await stripFor(rows);
+    expect(ann.in_huddle).toBe(true);
+    expect(ann.in_room_key).toBeUndefined();
   });
 });

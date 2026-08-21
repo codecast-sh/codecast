@@ -7,6 +7,7 @@ import { useConvexSync } from "./useConvexSync";
 import { bindConvex } from "../lib/calls/callManager";
 import { channelRoomKey, sessionRoomKey } from "@codecast/shared/contracts";
 import { channelRowRoomKey } from "../lib/chatViews";
+import { soundRoomKnock } from "../lib/sounds";
 
 // The huddles data pump, mounted once app-wide (DashboardLayout, beside
 // useChatToasts). Renders nothing; binds the Convex client into callManager
@@ -14,7 +15,9 @@ import { channelRowRoomKey } from "../lib/chatViews";
 //   callConfig     is calling even configured (gates every affordance)
 //   myCalls        invites ringing at/from me + my room membership
 //   callOccupancy  live rosters for the rooms currently on screen
-// All three queries ENRICH surfaces that render fine without them, so they go
+//   liveRooms      every huddle running in my teams (open rooms + lock state)
+//   roomKnocks     who is waiting at the door of the room I'm seated in
+// All of these queries ENRICH surfaces that render fine without them, so they go
 // through useQueryNoThrow — a deploy gap must never ErrorBoundary the shell.
 export function useCallSync(): void {
   const convex = useConvex();
@@ -41,6 +44,7 @@ export function useCallSync(): void {
     (st: any) => st.teamMembers.map((m: any) => m.in_room_key).filter(Boolean).sort().join("|"),
     (st: any) => st.currentSessionId,
     (st: any) => st.call.roomKey,
+    (st: any) => st.call.phase,
     (st: any) =>
       (st.chatRail ?? [])
         .map((r: any) => {
@@ -80,6 +84,43 @@ export function useCallSync(): void {
   useConvexSync(occupancy, useCallback((d: any) => {
     useInboxStore.getState().syncTable("callOccupancy", d);
   }, []));
+
+  // Every huddle running anywhere in my teams — occupancy above answers "who
+  // is in THESE rooms", this answers "which rooms exist at all", which is what
+  // makes an open room findable (sidebar Live now, /calls Happening now) and
+  // carries the lock state the dock renders. Ephemeral like the rest of the
+  // call slice: never persisted, re-derived on every load.
+  const { data: liveRooms } = useQueryNoThrow(api.calls.getLiveRooms, enabled ? {} : "skip");
+  useConvexSync(liveRooms, useCallback((d: any) => {
+    useInboxStore.getState().syncTable("liveRooms", d);
+  }, []));
+
+  // Who is waiting at MY door. Readable only from inside the room, so it is
+  // subscribed only while seated; leaving the room falls back to the stable
+  // empty list, which clears the knocks the dock was showing.
+  const seatedRoomKey = s.call.phase === "connected" ? s.call.roomKey : null;
+  const { data: knocks } = useQueryNoThrow(
+    api.calls.getRoomKnocks,
+    enabled && seatedRoomKey ? { room_key: seatedRoomKey } : "skip",
+  );
+  useConvexSync(seatedRoomKey ? knocks : NO_KNOCKS, useCallback((d: any) => {
+    // The sound belongs to the knock ARRIVING, not to a surface being
+    // mounted: someone at the door must be audible whether or not the dock
+    // is on screen.
+    // Keyed by person AND time: a re-knock refreshes one row rather than
+    // adding a second, so a knocker's second attempt differs from their first
+    // only in created_at. The person alone would announce them once, ever.
+    const key = (k: any) => `${k.from_user}:${k.created_at}`;
+    const fresh = (d as any[]).some((k) => !heardKnocks.has(key(k)));
+    heardKnocks = new Set((d as any[]).map(key));
+    if (fresh) soundRoomKnock();
+    useInboxStore.getState().syncTable("roomKnocks", d);
+  }, []));
 }
+
+// Stable empty list: passing a fresh [] would re-apply on every render.
+const NO_KNOCKS: any[] = [];
+// Knockers already announced, so a heartbeat re-push doesn't knock twice.
+let heardKnocks = new Set<string>();
 
 export { channelRoomKey, sessionRoomKey };

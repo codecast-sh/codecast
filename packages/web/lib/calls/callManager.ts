@@ -596,6 +596,7 @@ export async function ringInto(
   roomKey: string,
   toUserIds: string[],
   anchorTitle?: string,
+  opts?: { failMessage?: string },
 ): Promise<RingOutcome[]> {
   if (!convex || toUserIds.length === 0) return [];
   try {
@@ -608,7 +609,7 @@ export async function ringInto(
     reportRingOutcomes(results);
     return results;
   } catch (err: any) {
-    toast.error(humanizeConvexError(err, "Could not ring them"));
+    toast.error(humanizeConvexError(err, opts?.failMessage ?? "Could not ring them"));
     return [];
   }
 }
@@ -672,6 +673,54 @@ export async function declineInvite(inviteId: string): Promise<void> {
 export async function cancelOutgoing(inviteId: string): Promise<void> {
   if (!convex) return;
   await convex.mutation(api.calls.cancelInvite, { invite_id: inviteId }).catch(() => {});
+}
+
+// ── The locked door ───────────────────────────────────────────────────────
+// A huddle is an open room by default; a lock is the exception, and knocking
+// is how someone outside asks for it to be lifted for them. Admitting is not
+// new machinery — someone inside rings the knocker with the ordinary invite,
+// and the accepted ring is their grant (see ringInto).
+
+// Lock or unlock the room I'm in. Local-first: the glyph flips in this tick
+// and callLockPending protects it until getLiveRooms echoes the same state.
+export async function setRoomLock(roomKey: string, locked: boolean): Promise<void> {
+  if (!convex) return;
+  const store = useInboxStore.getState();
+  store.noteLockPending(roomKey, locked);
+  try {
+    await convex.mutation(api.calls.setRoomLocked, { room_key: roomKey, locked });
+  } catch (err: any) {
+    store.revertLockPending(roomKey, !locked);
+    toast.error(humanizeConvexError(err, "Could not change the lock"));
+  }
+}
+
+// Knock at a locked room. The row paints "knocked" immediately; when someone
+// inside admits, their ring arrives and useCallRing answers it for us — a
+// door you knocked on does not ask you to answer it.
+export async function knockRoom(roomKey: string): Promise<void> {
+  if (!convex) return;
+  const store = useInboxStore.getState();
+  store.noteKnock(roomKey);
+  try {
+    await convex.mutation(api.calls.knock, { room_key: roomKey });
+  } catch (err: any) {
+    store.clearKnock(roomKey);
+    toast.error(humanizeConvexError(err, "Could not knock"));
+  }
+}
+
+// Let a knocker in: ring them into the room. The ring IS the grant, so this
+// works while the door stays locked to everyone else — and their client
+// answers it by itself, since they asked for this door.
+//
+// The authority to widen a room is MEMBERSHIP, not a seat (calls.invite): a
+// teammate who walked in through the open door can lock the room but cannot
+// admit into it. That refusal gets its own words rather than the ring's.
+export async function admitKnock(roomKey: string, userId: string): Promise<void> {
+  await ringInto(roomKey, [userId], undefined, {
+    failMessage: "Could not let them in — only this room's own people can admit",
+  });
 }
 
 // Best-effort row cleanup when the tab dies mid-call; the 45s lease is the

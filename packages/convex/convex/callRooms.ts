@@ -19,12 +19,50 @@
 // empty, so a guest cannot come back later to an empty private room or slip
 // into the NEXT huddle held in the same room.
 //
+// There are two LAYERS of access here and reading one as the other is the
+// mistake this comment exists to prevent.
+//
+// MEMBERSHIP (authorizeRoomMembership) is what a room's KEY grants. It governs
+// everything that is not the huddle running right now: the call record and its
+// transcript, and the authority to ring more people in. A people room admits
+// the users its key names, whether that is two or nine. A channel room admits
+// whoever may access the channel (canAccessChannel — a private channel and a
+// group thread admit their members only). A session room admits the
+// conversation's owner, and a teammate when the row is team-visible.
+//
+// The OPEN DOOR (openRoomDoor) is what an OCCUPIED room grants, and it governs
+// LIVE ENTRY only. A huddle running right now admits any member of the team it
+// bills to, the way an occupied meeting room in an office admits whoever walks
+// up to it: walking in is not an interruption. This holds for a people room of
+// ANY SIZE — there is no principled line at two, so a group thread's huddle is
+// as open as a 1:1 — and for a session room whose conversation the viewer
+// cannot even see (they hear voices; getLiveRooms redacts the title, never the
+// room). The single exception is a CHANNEL room, which is that channel's own
+// standing space rather than a huddle held in public: its door stays the
+// channel's own, so a private channel or group thread admits its members only,
+// live or not.
+//
+// The LOCK (call_room_state) is how a huddle opts out. It shuts the open door
+// and leaves membership and the grant working, so a group that wants privacy
+// locks the room exactly like a pair does. The team is the outer wall and
+// nothing on either layer moves it: no door ever admits a non-teammate.
+//
+// Who may WIDEN a room is a third question and it turns on neither layer: the
+// answer is being INSIDE it. Any live occupant may ring a teammate in
+// (authorizeRoomInviter), which is the same gesture as admitting a knocker —
+// whoever is in a meeting room can open its door, and a walk-in who may lock
+// the door must be able to open it too. Two things keep that from chaining
+// into a leak: a CHANNEL room still takes membership authority, so nobody
+// walks into a channel's room and fills it with people the channel excludes;
+// and every recipient must be a teammate, which is the outer wall again. A
+// grant you have not used is not a seat — you must actually be in the room.
+//
 // Authorization answers "may THIS user join/ring THIS room" and is enforced by
 // every calls.* mutation and the token mint — the media server trusts our JWT,
 // so this module is the entire security boundary for who can listen in.
 import type { Doc, Id } from "./_generated/dataModel";
 import { createTeamFeedFilter, isTeamMember } from "./privacy";
-import { canAccessChannel } from "./chatAccess";
+import { canAccessChannel, isRestricted } from "./chatAccess";
 import { teamFeatureOffMessage, teamHasFeature } from "./teamFeatures";
 // Key shapes, builders and lease timings are the shared contract
 // (@codecast/shared/contracts/callRoomKeys) so the web client can build keys
@@ -39,6 +77,7 @@ import {
 export {
   CALL_HEARTBEAT_MS,
   CALL_INVITE_TTL_MS,
+  CALL_KNOCK_TTL_MS,
   CALL_MEMBER_STALE_MS,
   MAX_ROOM_MEMBERS,
   channelRoomKey,
@@ -141,13 +180,103 @@ export async function expireRoomGrants(ctx: any, roomKey: string): Promise<void>
   }
 }
 
+/** Is this room's door shut? One row per room, absent for the ordinary open
+ *  case, so the common path costs one empty index read. */
+export async function isRoomLocked(ctx: any, roomKey: string): Promise<boolean> {
+  const row = await ctx.db
+    .query("call_room_state")
+    .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
+    .first();
+  return !!row?.locked;
+}
+
+// The open door: a live huddle admits any member of the team it bills to.
+// "Live" is the room's own lease (liveMembers) — an empty room is not a
+// huddle, so this never opens a room that merely used to hold one. The billing
+// team comes from the live rows themselves rather than from the key, which is
+// what lets a session room admit a teammate who cannot see its conversation
+// (the title redacts in getLiveRooms; the room does not).
+//
+// A people room is DELIBERATELY not checked against its key's users, at any
+// size: a live `dm:` huddle of three admits a fourth teammate exactly as a
+// 1:1 admits a third. That is the decided product — there is no principled
+// line at two people, and a group wanting privacy locks the room. Do not
+// "fix" this by requiring parsed.users.includes(userId); that rule lives one
+// layer down, in authorizeRoomMembership, where it still governs history and
+// the authority to ring people in.
+//
+// `ignoreLock` answers a different question than authorization does: "would
+// this room admit me if I knocked?" — getLiveRooms lists locked rooms so the
+// caller can knock at them, and knock itself checks the same wall.
+export async function openRoomDoor(
+  ctx: any,
+  userId: Id<"users">,
+  roomKey: string,
+  opts: { ignoreLock?: boolean } = {},
+): Promise<Id<"teams"> | null> {
+  const parsed = parseRoomKey(roomKey);
+  if (!parsed) return null;
+  if (parsed.kind === "channel") {
+    // The one room the open door does not touch: a channel's standing room is
+    // that channel's own space, so a private channel or group thread keeps its
+    // membership wall even while occupied. (A public channel's room was
+    // already open to the team, so this branch only ever subtracts.)
+    const channel = await ctx.db.get(parsed.channelId as Id<"chat_channels">);
+    if (!channel || channel.archived_at || isRestricted(channel)) return null;
+  }
+  const rows: Doc<"call_members">[] = await ctx.db
+    .query("call_members")
+    .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
+    .collect();
+  const live = liveMembers(rows, Date.now());
+  if (live.length === 0) return null;
+  const teamId = live[0].team_id;
+  if (!(await isTeamMember(ctx, userId, teamId))) return null;
+  if (!opts.ignoreLock && (await isRoomLocked(ctx, roomKey))) return null;
+  return teamId;
+}
+
+/** Everything a huddle left on its room: the lock it set and the knocks at
+ *  its door. Called from the same joinRoom branch as expireRoomGrants — a
+ *  room restarting from empty is a NEW huddle, which starts unlocked with
+ *  nobody waiting outside. */
+export async function clearRoomState(ctx: any, roomKey: string): Promise<void> {
+  for (const table of ["call_room_state", "call_knocks"] as const) {
+    const rows = await ctx.db
+      .query(table)
+      .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
+      .collect();
+    for (const row of rows) await ctx.db.delete(row._id);
+  }
+}
+
+/** The caller's own live row in a room, or null. One definition of "I am in
+ *  this room right now" for every rule that turns on it: locking the door,
+ *  ringing someone in, and reading who is knocking. */
+export async function liveSeat(
+  ctx: any,
+  userId: Id<"users">,
+  roomKey: string,
+  now: number = Date.now(),
+): Promise<Doc<"call_members"> | null> {
+  const row = await ctx.db
+    .query("call_members")
+    .withIndex("by_user_room", (q: any) =>
+      q.eq("user_id", userId).eq("room_key", roomKey),
+    )
+    .unique();
+  return row && liveMembers([row], now).length > 0 ? row : null;
+}
+
 export type RoomAuthorization =
   | { ok: true; teamId: Id<"teams">; parsed: ParsedRoomKey }
   | { ok: false; reason: string };
 
-/** Room access WITHOUT the invite grant: membership rules + the feature
- *  gate. Call history reads use this — a grant admits its guest to the
- *  running huddle, never to everything the room ever recorded. */
+/** Room access by MEMBERSHIP alone: neither the invite grant nor the open
+ *  door, plus the feature gate. Call history reads use this — walking into a
+ *  running huddle, whether rung in or through the open door, is entry to that
+ *  huddle and never to everything the room ever recorded. Ringing more people
+ *  in gates on this too: only the room's own people may widen it. */
 export async function authorizeRoomNoGrant(
   ctx: any,
   userId: Id<"users">,
@@ -159,6 +288,30 @@ export async function authorizeRoomNoGrant(
     return { ok: false, reason: teamFeatureOffMessage("calls") };
   }
   return auth;
+}
+
+/** May this user ring MORE people into the room? Membership answers yes as it
+ *  always did, and so now does a live seat in a people or session room: the
+ *  walk-in sitting in the huddle is exactly the person a knocker is asking to
+ *  be let in by, and they can already lock the door. A CHANNEL room is
+ *  excluded on purpose — its authority stays canAccessChannel's, so a guest
+ *  rung into a private channel's room cannot chain-invite the team into it.
+ *  The recipient's own wall (a teammate of this team) is checked by `invite`. */
+export async function authorizeRoomInviter(
+  ctx: any,
+  userId: Id<"users">,
+  roomKey: string,
+): Promise<RoomAuthorization> {
+  const auth = await authorizeRoomNoGrant(ctx, userId, roomKey);
+  if (auth.ok) return auth;
+  const parsed = parseRoomKey(roomKey);
+  if (!parsed || parsed.kind === "channel") return auth;
+  const seat = await liveSeat(ctx, userId, roomKey);
+  if (!seat) return auth;
+  if (!(await teamHasFeature(ctx, seat.team_id, "calls"))) {
+    return { ok: false, reason: teamFeatureOffMessage("calls") };
+  }
+  return { ok: true, teamId: seat.team_id, parsed };
 }
 
 // May `userId` participate in `roomKey`? Returns the team the room bills its
@@ -177,7 +330,12 @@ export async function authorizeRoom(
   if (!auth.ok) {
     const parsed = parseRoomKey(roomKey);
     if (!parsed) return auth;
-    const granted = await acceptedInviteGrant(ctx, userId, roomKey);
+    // The open door first: it is the common case now and the cheaper read.
+    // The grant is tried regardless because it survives a lock — whoever was
+    // rung in was let in deliberately.
+    const granted =
+      (await openRoomDoor(ctx, userId, roomKey)) ??
+      (await acceptedInviteGrant(ctx, userId, roomKey));
     if (!granted) return auth;
     auth = { ok: true, teamId: granted, parsed };
   }
@@ -187,7 +345,10 @@ export async function authorizeRoom(
   return auth;
 }
 
-async function authorizeRoomMembership(
+/** The membership rules alone, without the feature gate. Exported for
+ *  getLiveRooms, whose label redaction asks exactly this question: may this
+ *  user SEE what the room is about, as opposed to walk into it? */
+export async function authorizeRoomMembership(
   ctx: any,
   userId: Id<"users">,
   roomKey: string,

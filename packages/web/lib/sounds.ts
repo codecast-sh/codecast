@@ -155,6 +155,19 @@ export function soundKill() {
 // can land mid-sentence in another window without startling.
 export function soundChatMessage() {
   if (!isChatEnabled() || !isSupported() || !isAnnouncer()) return;
+  playKnockMotif();
+}
+
+// Someone knocking at the locked huddle you are in. The SAME two-tap wooden
+// motif — it is literally a knock, and it can't be mistaken for a ring — but
+// gated as a call event rather than a chat one: muting chat must not mute the
+// door. One motif, two gates, so the two can never drift apart.
+export function soundRoomKnock() {
+  if (!isEnabled() || !isSupported() || !isAnnouncer()) return;
+  playKnockMotif();
+}
+
+function playKnockMotif() {
   try {
     const ac = getCtx();
     const master = ac.createGain();
@@ -258,6 +271,18 @@ export function soundCallLeave() {
     { freq: 659.25, start: 0.08, dur: 0.18, gain: 0.3, type: "sine" },
     { freq: 523.25, start: 0.16, dur: 0.25, gain: 0.25, type: "sine" },
   ], 0.045);
+}
+
+// The walkie door opened: a teammate's push-to-talk burst is about to play
+// through this machine's speakers. Deliberately NOT a ring — nobody is being
+// summoned, the voice is already coming — so it is the two-click squelch of a
+// radio keying up: short, dry, and over before the first word.
+export function soundWalkieOpen() {
+  if (!isEnabled() || !isAnnouncer()) return;
+  play([
+    { freq: 1046.5, start: 0, dur: 0.05, gain: 0.35, type: "square" },
+    { freq: 698.46, start: 0.06, dur: 0.09, gain: 0.3, type: "sine" },
+  ], 0.03);
 }
 
 // Your ring was declined or timed out — one low, brief, apologetic note.

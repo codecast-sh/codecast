@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
   authorizeRoom,
+  authorizeRoomNoGrant,
+  clearRoomState,
   expireRoomGrants,
   channelRoomKey,
   chatRoomKey,
   dmRoomKey,
+  isRoomLocked,
+  openRoomDoor,
   parseRoomKey,
   sessionRoomKey,
 } from "./callRooms";
@@ -24,6 +28,8 @@ function fakeCtx(seed: Record<string, any[]> = {}) {
     chat_channel_members: [],
     call_invites: [],
     call_members: [],
+    call_room_state: [],
+    call_knocks: [],
     conversations: [],
     ...seed,
   };
@@ -60,7 +66,14 @@ function fakeCtx(seed: Record<string, any[]> = {}) {
         }
         return null;
       },
+      async delete(id: string) {
+        for (const rows of Object.values(tables)) {
+          const i = rows.findIndex((r) => String(r._id) === String(id));
+          if (i >= 0) return void rows.splice(i, 1);
+        }
+      },
     },
+    tables,
   };
 }
 
@@ -138,7 +151,9 @@ describe("authorizeRoom dm", () => {
     } as any);
   });
 
-  test("rejects a third party even in the same team", async () => {
+  test("rejects a third party at an idle room, teammate or not", async () => {
+    // Membership is what a room's KEY grants. An occupied room grants more
+    // (see "authorizeRoom open door"), but nobody is in this one.
     const ctx = fakeCtx({
       team_memberships: [membership("ua"), membership("ub"), membership("uc")],
     });
@@ -160,7 +175,7 @@ describe("authorizeRoom dm", () => {
     });
     const key = dmRoomKey(["ua", "ub", "uc"]);
     expect((await authorizeRoom(all, "ub" as any, key)).ok).toBe(true);
-    // Not in the set: refused even as a teammate.
+    // Not in the set: refused even as a teammate, the room being idle.
     const ctxD = fakeCtx({
       team_memberships: [membership("ua"), membership("ub"), membership("uc"), membership("ud")],
     });
@@ -175,9 +190,16 @@ describe("authorizeRoom dm", () => {
 
 describe("authorizeRoom invite grant", () => {
   // ub is not in dm:ua:uc, but ua rang ub into it while ua was inside.
+  //
+  // The room is LOCKED throughout, which is what isolates the grant: an
+  // unlocked live huddle admits any teammate through the open door, so a
+  // grant test on an open room would pass for the wrong reason. A locked
+  // room is also the case that matters — the grant is what keeps "add
+  // people" working after somebody shuts the door.
   const key = dmRoomKey("ua", "uc");
   const now = Date.now();
   const seed = (overrides: Record<string, any[]> = {}) => fakeCtx({
+    call_room_state: [{ _id: "rs1", room_key: key, team_id: TEAM, locked: true, locked_by: "ua", updated_at: now }],
     team_memberships: [membership("ua"), membership("ub"), membership("uc")],
     call_members: [
       { _id: "cm-ua", room_key: key, team_id: TEAM, user_id: "ua", joined_at: now - 120_000, last_seen: now - 1000 },
@@ -380,5 +402,174 @@ describe("authorizeRoom feature gate", () => {
     if (!dm.ok) expect(dm.reason).toContain("not enabled for this team");
     const ch = await authorizeRoom(ctx, "ua" as any, channelRoomKey("ch-off"));
     expect(ch.ok).toBe(false);
+  });
+});
+
+// The third door: an occupied room. Everything here is new behaviour — before
+// open rooms, every one of these cases was a refusal.
+describe("authorizeRoom open door", () => {
+  const now = Date.now();
+  const key = dmRoomKey("ua", "ub");
+  const seat = (user: string, roomKey = key, lastSeen = now - 1000, team = TEAM) => ({
+    _id: `cm-${user}`, room_key: roomKey, team_id: team, user_id: user,
+    joined_at: now - 60_000, last_seen: lastSeen,
+  });
+  const locked = (roomKey = key) => ({
+    _id: "rs1", room_key: roomKey, team_id: TEAM, locked: true, locked_by: "ua", updated_at: now,
+  });
+  const everyone = [membership("ua"), membership("ub"), membership("uc"), membership("ud", "team2")];
+
+  test("a teammate walks into a live unlocked dm huddle", async () => {
+    // The headline change: uc is a third party to dm:ua:ub and holds no ring.
+    const ctx = fakeCtx({ team_memberships: everyone, call_members: [seat("ua")] });
+    const res = await authorizeRoom(ctx, "uc" as any, key);
+    expect(res.ok).toBe(true);
+    // The room's own billing team, taken from the live rows — the guest's
+    // membership row lands beside everyone else's.
+    expect((res as any).teamId).toBe(TEAM);
+  });
+
+  test("a people room is open at ANY size: a group huddle admits teammates too", async () => {
+    // The decided product, and the case a reader is most likely to assume
+    // otherwise: a group thread huddles in a `dm:` room of three or more
+    // (chatRoomKey), and the open door draws no line at two people. A group
+    // that wants privacy locks the room, exactly like a pair does.
+    const groupKey = dmRoomKey(["ua", "ub", "uc"]);
+    const roster = [...everyone, membership("ue")];
+    const ctx = fakeCtx({ team_memberships: roster, call_members: [seat("ua", groupKey)] });
+    // ue is on the billing team and named nowhere in the key.
+    expect((await authorizeRoom(ctx, "ue" as any, groupKey)).ok).toBe(true);
+    // The outer wall is untouched: ud is on another team.
+    expect((await authorizeRoom(ctx, "ud" as any, groupKey)).ok).toBe(false);
+    // Locked, the group is as private as a locked pair — and ue may knock,
+    // which is the same question openRoomDoor answers with the lock ignored.
+    const shut = fakeCtx({
+      team_memberships: roster,
+      call_members: [seat("ua", groupKey)],
+      call_room_state: [locked(groupKey)],
+    });
+    expect((await authorizeRoom(shut, "ue" as any, groupKey)).ok).toBe(false);
+    expect(await openRoomDoor(shut, "ue" as any, groupKey, { ignoreLock: true })).toBe(TEAM as any);
+    expect(await openRoomDoor(shut, "ud" as any, groupKey, { ignoreLock: true })).toBeNull();
+    // Membership still means what it always did one layer down: history and
+    // the authority to ring people in read authorizeRoomNoGrant, which never
+    // sees the open door.
+    expect((await authorizeRoomNoGrant(ctx, "ue" as any, groupKey)).ok).toBe(false);
+    expect((await authorizeRoomNoGrant(ctx, "ub" as any, groupKey)).ok).toBe(true);
+  });
+
+  test("the team wall holds: a stranger to the billing team is refused", async () => {
+    const ctx = fakeCtx({ team_memberships: everyone, call_members: [seat("ua")] });
+    expect((await authorizeRoom(ctx, "ud" as any, key)).ok).toBe(false);
+  });
+
+  test("a locked room shuts the open door", async () => {
+    const ctx = fakeCtx({
+      team_memberships: everyone,
+      call_members: [seat("ua")],
+      call_room_state: [locked()],
+    });
+    expect((await authorizeRoom(ctx, "uc" as any, key)).ok).toBe(false);
+    // The room's own people are unaffected — a lock is not a wall against
+    // the people whose room it is.
+    expect((await authorizeRoom(ctx, "ub" as any, key)).ok).toBe(true);
+    // An unlocked row is not a lock.
+    const unlocked = fakeCtx({
+      team_memberships: everyone,
+      call_members: [seat("ua")],
+      call_room_state: [{ ...locked(), locked: false }],
+    });
+    expect((await authorizeRoom(unlocked, "uc" as any, key)).ok).toBe(true);
+  });
+
+  test("an empty room is not a huddle", async () => {
+    const stale = fakeCtx({
+      team_memberships: everyone,
+      call_members: [seat("ua", key, now - CALL_MEMBER_STALE_MS - 1)],
+    });
+    expect((await authorizeRoom(stale, "uc" as any, key)).ok).toBe(false);
+    const never = fakeCtx({ team_memberships: everyone });
+    expect((await authorizeRoom(never, "uc" as any, key)).ok).toBe(false);
+  });
+
+  test("a CHANNEL room keeps its wall even while live", async () => {
+    // The open door's one exception. Both restricted kinds are covered: a
+    // named private channel, and the channel-row form a group thread falls
+    // back to when its roster is unavailable (chatRoomKey). The group
+    // thread's ORDINARY room is a `dm:` key and is open — see the
+    // any-size test above; these two layers are not the same rule.
+    for (const kind of ["private", "dm"]) {
+      const ctx = fakeCtx({
+        chat_channels: [{ _id: "chp", team_id: TEAM, name: "", kind }],
+        chat_channel_members: [{ _id: "cmb1", channel_id: "chp", user_id: "ua" }],
+        team_memberships: everyone,
+        call_members: [seat("ua", "channel:chp")],
+      });
+      expect((await authorizeRoom(ctx, "ub" as any, "channel:chp")).ok).toBe(false);
+    }
+  });
+
+  test("a live session huddle admits a teammate who cannot see the conversation", async () => {
+    // The room is joinable (they hear voices); the TITLE is what redacts, and
+    // that is getLiveRooms' job, not the authorizer's.
+    const ctx = fakeCtx({
+      conversations: [{ _id: "cv1", user_id: "ua", team_id: TEAM, is_private: true }],
+      team_memberships: everyone,
+      call_members: [seat("ua", "session:cv1")],
+    });
+    expect((await authorizeRoom(ctx, "uc" as any, "session:cv1")).ok).toBe(true);
+    // Still nobody outside the team.
+    expect((await authorizeRoom(ctx, "ud" as any, "session:cv1")).ok).toBe(false);
+  });
+
+  test("the feature gate still runs after the open door", async () => {
+    const ctx = fakeCtx({
+      team_memberships: [membership("ua", "team-off"), membership("ub", "team-off"), membership("uc", "team-off")],
+      call_members: [seat("ua", key, now - 1000, "team-off")],
+    });
+    const res = await authorizeRoom(ctx, "uc" as any, key);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain("not enabled for this team");
+  });
+
+  test("call history keeps the old rules: authorizeRoomNoGrant has no open door", async () => {
+    const ctx = fakeCtx({ team_memberships: everyone, call_members: [seat("ua")] });
+    expect((await authorizeRoomNoGrant(ctx, "uc" as any, key)).ok).toBe(false);
+    // …and it is still membership for the room's own people.
+    expect((await authorizeRoomNoGrant(ctx, "ub" as any, key)).ok).toBe(true);
+  });
+
+  test("ignoreLock answers 'would this room admit me if I knocked'", async () => {
+    // getLiveRooms lists locked rooms and calls.knock guards on the same
+    // question — both go through this one flag.
+    const ctx = fakeCtx({
+      team_memberships: everyone,
+      call_members: [seat("ua")],
+      call_room_state: [locked()],
+    });
+    expect(await openRoomDoor(ctx, "uc" as any, key)).toBeNull();
+    expect(await openRoomDoor(ctx, "uc" as any, key, { ignoreLock: true })).toBe(TEAM as any);
+    // A stranger to the team is refused with the lock ignored too.
+    expect(await openRoomDoor(ctx, "ud" as any, key, { ignoreLock: true })).toBeNull();
+    expect(await isRoomLocked(ctx, key)).toBe(true);
+  });
+});
+
+describe("clearRoomState", () => {
+  test("a room restarting from empty starts open with nobody waiting", async () => {
+    const now = Date.now();
+    const key = dmRoomKey("ua", "ub");
+    const ctx = fakeCtx({
+      team_memberships: [membership("ua"), membership("ub"), membership("uc")],
+      call_room_state: [{ _id: "rs1", room_key: key, team_id: TEAM, locked: true, locked_by: "ua", updated_at: now }],
+      call_knocks: [
+        { _id: "k1", room_key: key, team_id: TEAM, from_user: "uc", created_at: now },
+        { _id: "k2", room_key: "dm:ua:uc", team_id: TEAM, from_user: "ub", created_at: now },
+      ],
+    });
+    await clearRoomState(ctx, key);
+    expect((ctx as any).tables.call_room_state).toEqual([]);
+    // Another room's knocks are untouched.
+    expect((ctx as any).tables.call_knocks.map((k: any) => k._id)).toEqual(["k2"]);
   });
 });
