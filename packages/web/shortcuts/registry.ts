@@ -77,6 +77,11 @@ export type ShortcutAction =
   | 'workbench.2'
   | 'workbench.3'
   | 'workbench.4'
+  | 'workbench.5'
+  | 'workbench.6'
+  | 'workbench.7'
+  | 'workbench.8'
+  | 'workbench.9'
   | 'diff.prevChange'
   | 'diff.nextChange'
   | 'diff.toggleFileTree'
@@ -239,6 +244,11 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'alt+2', action: 'workbench.2', skipInputCheck: true, description: 'Switch to saved layout 2' },
   { key: 'alt+3', action: 'workbench.3', skipInputCheck: true, description: 'Switch to saved layout 3' },
   { key: 'alt+4', action: 'workbench.4', skipInputCheck: true, description: 'Switch to saved layout 4' },
+  { key: 'alt+5', action: 'workbench.5', skipInputCheck: true, description: 'Switch to saved layout 5' },
+  { key: 'alt+6', action: 'workbench.6', skipInputCheck: true, description: 'Switch to saved layout 6' },
+  { key: 'alt+7', action: 'workbench.7', skipInputCheck: true, description: 'Switch to saved layout 7' },
+  { key: 'alt+8', action: 'workbench.8', skipInputCheck: true, description: 'Switch to saved layout 8' },
+  { key: 'alt+9', action: 'workbench.9', skipInputCheck: true, description: 'Switch to saved layout 9' },
 
   { key: 'j', action: 'review.nextFile', when: 'review', description: 'Next file' },
   { key: 'k', action: 'review.prevFile', when: 'review', description: 'Previous file' },

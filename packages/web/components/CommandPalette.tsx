@@ -31,6 +31,8 @@ import { useCollectionRows } from "../hooks/useCollectionRows";
 import { useSyncTriggers } from "../hooks/useSyncTriggers";
 import { isElectron } from "../lib/desktop";
 import { isInboxRoute } from "../lib/inboxRouting";
+import { sortedWorkbenches, switchToWorkbench } from "../lib/workbenchSwitch";
+import type { WorkbenchSnapshot } from "../store/workbench";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
@@ -93,6 +95,9 @@ import {
   CornerDownRight,
   Headphones,
   Sparkles,
+  LayoutDashboard,
+  Plus,
+  RefreshCw,
 } from "lucide-react";
 import { AnchorGlyph } from "./anchor/AnchorIdentity";
 import { setTaskParent, closeTaskWithGuard } from "../lib/taskActions";
@@ -100,7 +105,14 @@ import type { PalettePickKind, PalettePickTarget } from "../lib/palettePick";
 
 const api = _api as any;
 
-type ActionMode = "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "bucket" | "model" | "view" | "parent";
+type ActionMode = "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "bucket" | "model" | "view" | "parent" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
+
+// Modes that act on the WORKSPACE rather than on selected rows: they open with
+// no target and show no entity header. Everything else needs something picked.
+const TARGETLESS_MODES = new Set<ActionMode>(["view", "layout_save", "layout_update", "layout_rename", "layout_delete"]);
+
+// The layout modes all pick from (or name) a saved workbench.
+const isLayoutMode = (m: ActionMode) => m.startsWith("layout_");
 
 const DEFAULT_AGENT_RUN_MESSAGE = "lets do this task";
 
@@ -289,6 +301,11 @@ function ActionSubmenu({
   const [agentMessage, setAgentMessage] = useState(DEFAULT_AGENT_RUN_MESSAGE);
   const messageRef = useRef<HTMLTextAreaElement>(null);
 
+  // Rename is the other two-step mode: once a layout is picked the SAME search
+  // input becomes the name field, so the row list collapses to one create-shaped
+  // row. No second render block — the bucket mode's __create__ row does the work.
+  const [renameId, setRenameId] = useState<string | null>(null);
+
   const updatePlan = useInboxStore((s) => s.updatePlan);
   const assignToAgent = useMutation(api.tasks.assignToAgent);
   const updateTask = useInboxStore((s) => s.updateTask);
@@ -306,6 +323,11 @@ function ActionSubmenu({
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const archiveDoc = useInboxStore((s) => s.archiveDoc);
   const router = useRouter();
+  const pathname = usePathname();
+  // Saved layouts, in the same rail order the ⌥N chords index into.
+  const savedViews = useInboxStore((s) => s.savedViews);
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
+  const activeWorkbenchId = useInboxStore((s) => s.activeWorkbenchId);
 
   const target = targets[0];
   const currentLabels = target?.labels || [];
@@ -326,6 +348,7 @@ function ActionSubmenu({
     setAgentStep("pick");
     setSelectedAgentKey(null);
     setAgentMessage(DEFAULT_AGENT_RUN_MESSAGE);
+    setRenameId(null);
     setTimeout(() => inputRef.current?.focus(), 0);
   }, [mode]);
 
@@ -394,8 +417,36 @@ function ActionSubmenu({
     };
   }, [mode]);
 
+  const layouts = useMemo(
+    () => sortedWorkbenches({ savedViews: savedViews ?? {}, clientState: { ui: { active_team_id: activeTeamId } } }),
+    [savedViews, activeTeamId],
+  );
+  // Update / rename / delete only ever act on your OWN layouts; a teammate's
+  // shared one is read-only here exactly as it is in the rail.
+  const myLayouts = useMemo(() => layouts.filter((v) => v.is_mine !== false), [layouts]);
+
   const items = useMemo(() => {
     const q = search.toLowerCase();
+
+    if (isLayoutMode(mode)) {
+      const trimmed = search.trim();
+      // Save, and rename's second step, are pure naming: one create-shaped row
+      // carrying the typed name, and nothing at all until something is typed.
+      if (mode === "layout_save") {
+        return trimmed ? [{ key: "__name__", label: `Save as "${trimmed}"`, active: false, icon: Plus }] : [];
+      }
+      if (mode === "layout_rename" && renameId) {
+        return trimmed ? [{ key: "__name__", label: `Rename to "${trimmed}"`, active: false, icon: Pencil }] : [];
+      }
+      // Otherwise: pick a layout. Rail order is kept deliberately — it is the
+      // order the ⌥N chords index into, so re-sorting would desync the keycap
+      // the user just learned from the row it names. The active one is marked
+      // with the usual check instead of being floated to the top.
+      const icon = mode === "layout_update" ? RefreshCw : mode === "layout_delete" ? Trash2 : Pencil;
+      return myLayouts
+        .filter((v) => (v.name || "").toLowerCase().includes(q))
+        .map((v) => ({ key: v._id, label: v.name || "Untitled layout", active: v._id === activeWorkbenchId, icon }));
+    }
 
     if (mode === "view") {
       if (!viewChipData) return [];
@@ -568,13 +619,44 @@ function ActionSubmenu({
       return filtered;
     }
     return [];
-  }, [mode, search, target, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses]);
+  }, [mode, search, target, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId]);
 
   useWatchEffect(() => { setHighlightIndex(0); }, [search]);
 
   const selectItem = useCallback((index: number) => {
     const item = items[index] as any;
     if (!item) return;
+
+    // Layout CRUD is global too — the workspace arrangement, not a row. Same
+    // gestures the rail's Layouts section offers, for when the rail is closed.
+    if (isLayoutMode(mode)) {
+      const store = useInboxStore.getState();
+      const trimmed = search.trim();
+      if (mode === "layout_save") {
+        if (!trimmed) return;
+        store.saveWorkbench(trimmed, pathname ?? undefined);
+        toast.success(`Saved the current layout as "${trimmed}"`);
+      } else if (mode === "layout_update") {
+        store.updateWorkbench(item.key, pathname ?? undefined);
+        toast.success(`"${item.label}" now matches the current layout`);
+      } else if (mode === "layout_rename") {
+        // First press picks the layout and hands the input over to the new name.
+        if (!renameId) {
+          setRenameId(item.key);
+          setSearch("");
+          return;
+        }
+        if (!trimmed) return;
+        store.updateSavedView(renameId, { name: trimmed });
+        toast.success(`Renamed to "${trimmed}"`);
+      } else {
+        // No confirm, matching the rail's ✕ — a saved layout is cheap to remake.
+        store.deleteSavedView(item.key);
+        toast.success(`Removed "${item.label}"`);
+      }
+      onClose();
+      return;
+    }
 
     // View switching is global — no target entity involved. Picking the
     // already-active view toggles back to All, mirroring the chips.
@@ -741,7 +823,7 @@ function ActionSubmenu({
       }
     }
     onClose();
-  }, [items, target, targets, targetType, mode, currentLabels, onClose, updateTask, updatePlan, assignToAgent, updateDoc, teamMembers, router, search, taskStatuses]);
+  }, [items, target, targets, targetType, mode, currentLabels, onClose, updateTask, updatePlan, assignToAgent, updateDoc, teamMembers, router, search, taskStatuses, pathname, renameId]);
 
   // Launch a session per selected task with the chosen agent + initial message.
   const launchAgentRun = useCallback(() => {
@@ -775,14 +857,19 @@ function ActionSubmenu({
     // Esc from a deep view escapes to GLOBAL (closes the palette), never just
     // one level — climbing back up is ↑ past the top / Backspace-on-empty,
     // and only exists when the user came down from the root palette.
+    // Rename's second step climbs back to the layout picker before it leaves —
+    // the same one-step-back Esc the agent_run message step offers.
+    const backOutOfRename = () => { setRenameId(null); setSearch(""); };
     if (e.key === "Escape") {
       e.preventDefault();
-      onClose();
+      if (renameId) backOutOfRename(); else onClose();
       return;
     }
     if (e.key === "Backspace" && search === "") {
       e.preventDefault();
-      if (enteredViaRoot) onBack(); else onClose();
+      if (renameId) backOutOfRename();
+      else if (enteredViaRoot) onBack();
+      else onClose();
       return;
     }
     if (e.key === "ArrowDown" || (e.key === "j" && e.ctrlKey)) {
@@ -825,7 +912,7 @@ function ActionSubmenu({
         selectItem(items.indexOf(numbered[num - 1]));
       }
     }
-  }, [items, highlightIndex, selectItem, onBack, onClose, enteredViaRoot, search]);
+  }, [items, highlightIndex, selectItem, onBack, onClose, enteredViaRoot, search, renameId]);
 
   useWatchEffect(() => {
     const el = listRef.current;
@@ -845,6 +932,10 @@ function ActionSubmenu({
     mode === "model" ? "Change model & effort..." :
     mode === "view" ? "Switch view — filter by label or project..." :
     mode === "parent" ? "Set parent — search tasks..." :
+    mode === "layout_save" ? "Save current layout — type a name..." :
+    mode === "layout_update" ? "Update layout to the current arrangement..." :
+    mode === "layout_rename" ? (renameId ? "Rename layout — type the new name..." : "Rename layout — pick one...") :
+    mode === "layout_delete" ? "Delete layout..." :
     "Select...";
 
   const itemClass = (i: number) =>
@@ -1194,6 +1285,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // the personal workspace, so falling back to the user's default team here
   // would make personal rows unreachable from the palette.
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
+  const savedViewRows = useInboxStore((s) => s.savedViews);
   // Opt-in team features: an off feature has no palette entry, no channel
   // rows and no "search chat" — the same "no UI at all" rule the sidebar uses.
   const chatOn = useTeamFeature("chat");
@@ -1864,18 +1956,31 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const showFavorites = favorites && favorites.length > 0;
   const showBookmarks = bookmarks && bookmarks.length > 0;
   const showWorkspaces = projects.length > 0;
+  // Rail order (yours first, then teammates'), the same order ⌥1-⌥9 index into.
+  const layouts = useMemo(
+    () => sortedWorkbenches({ savedViews: savedViewRows ?? {}, clientState: { ui: { active_team_id: activeTeamId } } }),
+    [savedViewRows, activeTeamId],
+  );
+  const myLayouts = useMemo(() => layouts.filter((v) => v.is_mine !== false), [layouts]);
+  // The layout you switched to last, if it is yours: one row updates it in
+  // place without picking — the rail's inline "update" for a closed rail.
+  const activeWorkbenchId = useInboxStore((s) => s.activeWorkbenchId);
+  const currentLayout = useMemo(
+    () => myLayouts.find((v) => v._id === activeWorkbenchId) ?? null,
+    [myLayouts, activeWorkbenchId],
+  );
 
   const groupClass = "px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70";
   const itemClass = "flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer transition-colors data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text";
 
-  // Action submenu mode. "view" is global (switches the session-panel filter),
-  // so it needs no target entity — and shows no entity header. The `open` check
-  // matters for target-less view mode: actionMode survives closePalette (it
-  // only resets on the next open), so without it the overlay would stick.
-  if (open && actionMode && (hasTargets || actionMode === "view")) {
+  // Action submenu mode. The workspace modes ("view", layout CRUD) are global,
+  // so they need no target entity — and show no entity header. The `open` check
+  // matters for those: actionMode survives closePalette (it only resets on the
+  // next open), so without it the overlay would stick.
+  if (open && actionMode && (hasTargets || TARGETLESS_MODES.has(actionMode))) {
     const paletteContent = (
       <div className="w-[580px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150">
-        {contextLabel && actionMode !== "view" && (
+        {contextLabel && !TARGETLESS_MODES.has(actionMode) && (
           <div className="px-4 pt-3 pb-0">
             <div className="text-xs font-mono text-sol-text-dim truncate">{contextLabel}</div>
           </div>
@@ -2051,6 +2156,83 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               <span className="truncate flex-1">Switch view (label / project)...</span>
               <MenuKeyCaps action="view.switch" />
             </CommandPrimitive.Item>
+          </CommandPrimitive.Group>
+        )}
+
+        {/* Saved layouts. The rail's Layouts section is the other way in — this
+            is the one that still works with the left sidebar closed, so every
+            gesture there (switch, save, update, rename, delete) has a row here.
+            Switch rows carry the ⌥N keycap, and the list is in rail order so the
+            hint matches the chord. */}
+        {!standalone && !picking && (
+          <CommandPrimitive.Group heading="Layouts" className={groupClass}>
+            {layouts.map((v, i) => (
+              <CommandPrimitive.Item
+                key={`wb-${v._id}`}
+                value={`switch to layout ${v.name} layout workbench arrangement`}
+                onSelect={() => { closePalette(); switchToWorkbench(v.prefs as WorkbenchSnapshot, router, pathname, v._id); }}
+                className={itemClass}
+              >
+                <LayoutDashboard className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                <span className="truncate flex-1">Switch to layout: {v.name}</span>
+                {i < 9 && <MenuKeyCaps action={`workbench.${i + 1}` as ShortcutAction} />}
+              </CommandPrimitive.Item>
+            ))}
+            {currentLayout && (
+              <CommandPrimitive.Item
+                key="wb-update-current"
+                value={`update current layout ${currentLayout.name} workbench arrangement`}
+                onSelect={() => {
+                  closePalette();
+                  useInboxStore.getState().updateWorkbench(currentLayout._id, pathname ?? undefined);
+                  toast.success(`"${currentLayout.name}" now matches the current layout`);
+                }}
+                className={itemClass}
+              >
+                <RefreshCw className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                <span className="truncate flex-1">Update current layout: {currentLayout.name}</span>
+              </CommandPrimitive.Item>
+            )}
+            <CommandPrimitive.Item
+              key="wb-save"
+              value="save current layout as new layout workbench arrangement"
+              onSelect={() => { setEnteredViaRoot(true); setActionMode("layout_save"); }}
+              className={itemClass}
+            >
+              <Plus className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+              <span className="truncate flex-1">Save current layout as...</span>
+            </CommandPrimitive.Item>
+            {myLayouts.length > 0 && (
+              <>
+                <CommandPrimitive.Item
+                  key="wb-update"
+                  value="update layout to current arrangement workbench"
+                  onSelect={() => { setEnteredViaRoot(true); setActionMode("layout_update"); }}
+                  className={itemClass}
+                >
+                  <RefreshCw className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                  <span className="truncate flex-1">Update layout...</span>
+                </CommandPrimitive.Item>
+                <CommandPrimitive.Item
+                  key="wb-rename"
+                  value="rename layout workbench arrangement"
+                  onSelect={() => { setEnteredViaRoot(true); setActionMode("layout_rename"); }}
+                  className={itemClass}
+                >
+                  <Pencil className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                  <span className="truncate flex-1">Rename layout...</span>
+                </CommandPrimitive.Item>
+                <CommandPrimitive.Item
+                  key="wb-delete"
+                  value="delete remove layout workbench arrangement"
+                  onSelect={() => { setEnteredViaRoot(true); setActionMode("layout_delete"); }}
+                  className={itemClass}
+                >
+                  <Trash2 className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                  <span className="truncate flex-1">Delete layout...</span>
+                </CommandPrimitive.Item>
+              </>
+            )}
           </CommandPrimitive.Group>
         )}
 
