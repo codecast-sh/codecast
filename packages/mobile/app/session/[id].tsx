@@ -21,7 +21,7 @@ import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { PermissionCard } from '@/components/PermissionCard';
 import { SuggestionPills } from '@/components/SuggestionPills';
 import { PulsingDot } from '@/components/SessionItem';
-import { AssignmentChip } from '@/components/AssignmentChip';
+import { AssignmentChip, AssignedToYouBanner } from '@/components/AssignmentChip';
 import { SessionHuddleButton } from '@/components/calls/SessionHuddleButton';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { agentSupportsFork, ACTIVE_AGENT_STATUSES } from '@codecast/shared/contracts';
@@ -4519,6 +4519,16 @@ export default function SessionDetailScreen() {
             )}
           </RNView>
         </Animated.View>
+        {/* Unacked handoff strip — an absolute overlay pinned just below the
+            floating metadata strip (both headers are absolute, so in-flow
+            content would render UNDER them). Same anchor as the message nav
+            pill; box-none so the empty width doesn't eat list scrolls. */}
+        <RNView
+          pointerEvents="box-none"
+          style={{ position: 'absolute', top: insets.top + HEADER_BAR_HEIGHT + floatingHeaderHeight, left: 0, right: 0, zIndex: 55 }}
+        >
+          <AssignedToYouBanner conversationId={isConvexId(conversation._id) ? conversation._id : null} />
+        </RNView>
         <FlatList
           ref={flatListRef}
           style={{ flex: 1 }}

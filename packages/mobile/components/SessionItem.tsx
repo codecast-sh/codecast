@@ -3,6 +3,7 @@ import { Text as RNText } from '@/components/Themed';
 import { useRef, useCallback, useEffect, useMemo, useState } from 'react';
 import { cleanUserMessage } from '@codecast/web/components/sessionMessage';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { useAckAssignment } from '@codecast/web/hooks/useAckAssignment';
 import { threadStateView } from '@codecast/web/lib/threadState';
 import { gestureHandler } from '@/lib/gestureHandler';
 import * as Haptics from 'expo-haptics';
@@ -48,6 +49,9 @@ export type SessionData = {
   // Newest image in the session (server-denormalized) — the row thumbnail
   // when the inbox_image_thumbs pref is on.
   image_preview_url?: string | null;
+  // Unacknowledged handoff: a teammate assigned this session to the current
+  // user (see listInboxSessions enrichment). "Got it" acks it in place.
+  assigned_ping?: { by_name: string; note?: string | null; at: number } | null;
 };
 
 /** "claude-opus-4-8" → "opus-4-8"; unknowns pass through. */
@@ -193,6 +197,9 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
   // Broken preview image → drop the slot, otherwise it reserves row width.
   const [thumbBroken, setThumbBroken] = useState(false);
   const thumbUrl = showImageThumb && !thumbBroken ? session.image_preview_url : null;
+  const ackAssignment = useAckAssignment();
+  // Handoff note starts clamped; tapping the pill body reveals the full reason.
+  const [pingExpanded, setPingExpanded] = useState(false);
 
   return (
     <TouchableOpacity
@@ -223,6 +230,40 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
           )}
         </RNView>
       </RNView>
+
+      {session.assigned_ping && (
+        // Mirror of the web card's handoff pill: who handed this over, their
+        // note, and "Got it" to accept without opening the session. The nested
+        // Pressable wins the touch over the row's TouchableOpacity.
+        <RNView style={styles.assignedPingRow}>
+          <FontAwesome name="user-plus" size={10} color={Theme.cyan} style={{ marginTop: 3 }} />
+          {/* The note is the REASON for the handoff — clamped for the list,
+              tap the body to read all of it without opening the session. */}
+          <Pressable
+            style={{ flex: 1, minWidth: 0 }}
+            onPress={session.assigned_ping.note ? () => setPingExpanded((v) => !v) : onPress}
+          >
+            <RNText style={styles.assignedPingTitle} numberOfLines={1}>
+              {session.assigned_ping.by_name} assigned this to you
+            </RNText>
+            {session.assigned_ping.note ? (
+              <RNText style={styles.assignedPingNote} numberOfLines={pingExpanded ? undefined : 2}>
+                “{session.assigned_ping.note}”
+              </RNText>
+            ) : null}
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              ackAssignment(session._id);
+            }}
+            hitSlop={8}
+            style={styles.assignedPingAck}
+          >
+            <RNText style={styles.assignedPingAckText}>Got it</RNText>
+          </Pressable>
+        </RNView>
+      )}
 
       {stateView ? (
         // The agent's pinned "where this stands" line (cast state) replaces the
@@ -595,6 +636,43 @@ export const styles = StyleSheet.create({
     marginLeft: 14,
     marginBottom: 2,
     gap: 5,
+  },
+  assignedPingRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    marginLeft: 14,
+    marginBottom: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: Theme.cyan + '22',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.cyan + '55',
+  },
+  assignedPingTitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Theme.cyan,
+    lineHeight: 16,
+  },
+  assignedPingNote: {
+    fontSize: 11,
+    color: Theme.textMuted,
+    lineHeight: 15,
+  },
+  assignedPingAck: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    backgroundColor: Theme.cyan + '33',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.cyan + '66',
+  },
+  assignedPingAckText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Theme.cyan,
   },
   statePin: {
     marginTop: 3,
