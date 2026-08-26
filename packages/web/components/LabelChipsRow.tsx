@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
-import { Plus, X, Tag, Filter, FilterX, EyeOff, Trash2 } from "lucide-react";
+import { Plus, X, Tag, Filter, FilterX, EyeOff, Trash2, ChevronRight } from "lucide-react";
 import {
   useInboxStore,
   useTrackedStore,
@@ -317,6 +317,14 @@ export function LabelChipsRow({
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const popRowEls = useRef<Map<string, HTMLElement>>(new Map());
   const POPOVER_WIDTH = 256; // w-64
+  // Empty labels (not in rowBucketIds) are tucked behind a collapsed "N empty"
+  // row in the popover — the list defaults to labels that hold something.
+  // Expanding restores the FULL sortLabels order, so the index-based reorder
+  // gap math is untouched. Collapses again on every close.
+  const [emptyOpen, setEmptyOpen] = useState(false);
+  useEffect(() => {
+    if (!popoverOpen) setEmptyOpen(false);
+  }, [popoverOpen]);
   const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
   useLayoutEffect(() => {
     if (!popoverOpen) { setPopoverPos(null); return; }
@@ -365,7 +373,10 @@ export function LabelChipsRow({
       const el = popRowEls.current.get(labels[index]._id);
       y = el ? el.offsetTop + REORDER_GAP / 2 - 4 : 0;
     } else {
-      const last = popRowEls.current.get(labels[labels.length - 1]?._id);
+      // Trailing labels can be tucked away (collapsed empties) — anchor the
+      // end-of-list line on the last row that is actually rendered.
+      let last: HTMLElement | undefined;
+      for (let i = labels.length - 1; i >= 0 && !last; i--) last = popRowEls.current.get(labels[i]._id);
       y = last ? last.offsetTop + last.offsetHeight + 3 : 0;
     }
     setPopHint((cur) => (cur?.index === index && cur.y === y ? cur : { index, y }));
@@ -630,6 +641,8 @@ export function LabelChipsRow({
             ) {
               e.preventDefault();
               setPopoverOpen(true);
+              // The drag may be headed for an empty label — untuck them.
+              setEmptyOpen(true);
             }
           }}
           title={`${hiddenCount + zeroHiddenCount} more — view all labels & projects`}
@@ -666,6 +679,9 @@ export function LabelChipsRow({
             onDrop={popDrop}
           >
             {visibleBuckets.map((bucket, i) => {
+              // Tucked-away empty label: keep i (full-list index) for the rows
+              // that do render so the reorder shift math stays aligned.
+              if (!emptyOpen && !rowBucketIds.has(bucket._id)) return null;
               const bc = getLabelColor(bucket.name);
               const active = s.activeBucketFilter === bucket._id;
               const excluded = active && s.chipFilterExclude;
@@ -750,6 +766,24 @@ export function LabelChipsRow({
               />
             )}
           </div>
+          {zeroHiddenCount > 0 && (
+            <button
+              onClick={() => setEmptyOpen((v) => !v)}
+              onDragOver={(e) => {
+                // A dragged session may be headed for an empty label — this
+                // popover is its only drop target, so reveal them mid-drag.
+                if (e.dataTransfer.types.includes("codecast/session-id")) {
+                  e.preventDefault();
+                  setEmptyOpen(true);
+                }
+              }}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-[10px] text-sol-text-dim/70 hover:text-sol-text hover:bg-sol-bg-alt/60"
+              title={emptyOpen ? "Tuck empty labels away" : "Show labels with no sessions"}
+            >
+              <ChevronRight className={`w-3 h-3 transition-transform ${emptyOpen ? "rotate-90" : ""}`} />
+              <span className="tabular-nums">{zeroHiddenCount} empty</span>
+            </button>
+          )}
           <div className="px-3 py-1.5">
             <input
               value={newLabelName}
