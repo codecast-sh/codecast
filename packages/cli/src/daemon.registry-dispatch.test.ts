@@ -12,8 +12,9 @@ import {
   parseGeminiSessionFile,
   parseCursorTranscriptFile,
   parseOpencodeSessionFile,
+  parseGrokSessionFile,
 } from "./parser.js";
-import { classifyTranscriptTailFor, sessionProcessGrepToken } from "./daemon.js";
+import { classifyGlyphlessClientPaneState, classifyTranscriptTailFor, sessionProcessGrepToken } from "./daemon.js";
 
 // ── Cluster 3: fresh-launch prompt-readiness pattern ────────────────────────
 // The old ternary (daemon.ts fresh-launch site) was:
@@ -47,6 +48,26 @@ describe("promptReadyPattern reproduces the fresh-launch ternary", () => {
       expect(AGENT_CLIENTS[id].promptReadyPattern.test("❯ ")).toBe(true);
       expect(AGENT_CLIENTS[id].promptReadyPattern.test("⏵ ")).toBe(true);
     }
+  });
+
+  // grok renders a real ❯ composer, but the glyph stays visible for the WHOLE
+  // turn (live pane capture, v1.0.5) — so grok classifies through the busy-first
+  // whole-pane path, never the glyph whitelist. These samples pin that order.
+  test("grok: busy chrome wins over the always-visible ❯ composer", () => {
+    const p = AGENT_CLIENTS.grok.promptReadyPattern;
+    // Settled composer (real capture shape): ready.
+    const settled = "│ ❯ \nShift+Tab:mode  │  Ctrl+x:shortcuts";
+    expect(p.test(settled)).toBe(true);
+    expect(classifyGlyphlessClientPaneState(settled, p)).toBe("idle");
+    // Mid-turn: ❯ still on screen + busy chrome — must be busy, not idle. Each
+    // marker alone must trip it (the header spinner can be cropped out of a
+    // short capture window).
+    for (const busyLine of ["⠼ MCP (0/1) │ 7.4K / 500K", "Waiting for response… 4s", "[stop]", "Esc:cancel"]) {
+      expect(classifyGlyphlessClientPaneState(`${busyLine}\n│ ❯ `, p)).toBe("busy");
+    }
+    // grok's IDLE hint text contains the word "interrupt" — it must NOT read
+    // busy (the reason a generic /interrupt/ heuristic is banned for grok).
+    expect(classifyGlyphlessClientPaneState("send a message to interrupt\n│ ❯ ", p)).toBe("idle");
   });
 
   // opencode is a NEW client (no old-ternary equivalent): its TUI shows no ❯/›, so
@@ -98,6 +119,38 @@ describe("classifyTranscriptTailFor reproduces the reconcile gate", () => {
     expect(classify('{"type":"event_msg","payload":{"type":"task_complete"}}')).toBe("idle");
     expect(classify('{"type":"event_msg","payload":{"type":"task_started"}}')).toBe("active");
   });
+
+  // grok's updates.jsonl envelope: {timestamp, method, params:{update:{sessionUpdate}}}.
+  const grokLine = (update: Record<string, unknown>) =>
+    JSON.stringify({ timestamp: 1772550000, method: "_x.ai/session/update", params: { sessionId: "s", update } });
+
+  test("grok resolves to a classifier and reads the xAI turn markers", () => {
+    const classify = classifyTranscriptTailFor("grok")!;
+    // turn_completed is the durable turn-end signal -> idle, whatever stop_reason.
+    expect(classify(grokLine({ sessionUpdate: "turn_completed", prompt_id: "p0", stop_reason: "end_turn" }))).toBe("idle");
+    expect(classify(grokLine({ sessionUpdate: "turn_completed", prompt_id: "p0", stop_reason: "cancelled" }))).toBe("idle");
+    // Post-turn housekeeping after the marker is scanned past.
+    expect(classify([
+      grokLine({ sessionUpdate: "turn_completed", prompt_id: "p0", stop_reason: "end_turn" }),
+      grokLine({ sessionUpdate: "session_summary_generated" }),
+    ].join("\n"))).toBe("idle");
+    // Mid-turn shapes.
+    expect(classify(grokLine({ sessionUpdate: "tool_call", toolCallId: "t1", title: "bash" }))).toBe("active");
+    expect(classify(grokLine({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "hi" } }))).toBe("active");
+    // A streaming chunk with no terminal marker defers (a crashed stream must
+    // never read as active forever — claude convention).
+    expect(classify(grokLine({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "…" } }))).toBe("unknown");
+    // An unresolved pending_interaction = parked on a question/permission.
+    expect(classify(grokLine({ sessionUpdate: "pending_interaction", interaction_id: "i1" }))).toBe("active");
+    expect(classify([
+      grokLine({ sessionUpdate: "turn_completed", prompt_id: "p0", stop_reason: "end_turn" }),
+      grokLine({ sessionUpdate: "pending_interaction", interaction_id: "i1" }),
+      grokLine({ sessionUpdate: "interaction_resolved", interaction_id: "i1" }),
+    ].join("\n"))).toBe("idle");
+    // Torn tail (mid-write) is skipped, never a failure.
+    expect(classify(grokLine({ sessionUpdate: "turn_completed", prompt_id: "p0" }) + '\n{"timestamp":177')).toBe("idle");
+    expect(classify("half-written{")).toBe("unknown");
+  });
 });
 
 // ── Cluster 8: parseTranscriptFor dispatch ──────────────────────────────────
@@ -131,6 +184,15 @@ describe("parseTranscriptFor dispatches to the per-client parser", () => {
   test("opencode -> parseOpencodeSessionFile", () => {
     expect(parseTranscriptFor("opencode", opencodeSnapshot)).toEqual(parseOpencodeSessionFile(opencodeSnapshot));
   });
+  const grokUpdates = [
+    '{"timestamp":1772550001,"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hi"},"_meta":{"modelId":"grok-4.6","promptIndex":0}}}}',
+    '{"timestamp":1772550002,"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}}}',
+    '{"timestamp":1772550003,"method":"_x.ai/session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","prompt_id":"p0","stop_reason":"end_turn"}}}',
+  ].join("\n");
+  test("grok -> parseGrokSessionFile", () => {
+    expect(parseTranscriptFor("grok", grokUpdates)).toEqual(parseGrokSessionFile(grokUpdates));
+    expect(parseGrokSessionFile(grokUpdates).length).toBeGreaterThan(0);
+  });
 });
 
 // ── Cluster 5: process-table grep token ─────────────────────────────────────
@@ -147,8 +209,11 @@ describe("sessionProcessGrepToken reproduces both per-client grep ternaries", ()
       expect(sessionProcessGrepToken(id, "/claude\\b|claude-code")).toBe(oldTernary2(id));
     });
   }
-  test("codex and gemini tokens are sourced from the registry binary", () => {
+  test("codex, gemini and grok tokens are sourced from the registry binary", () => {
     expect(sessionProcessGrepToken("codex", "claude")).toBe(AGENT_CLIENTS.codex.binary);
     expect(sessionProcessGrepToken("gemini", "claude")).toBe(AGENT_CLIENTS.gemini.binary);
+    // grok is a compiled Rust binary (ps comm "grok") — it must never fall
+    // through to the claude pattern.
+    expect(sessionProcessGrepToken("grok", "/claude\\b|claude-code")).toBe("grok");
   });
 });

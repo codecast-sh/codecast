@@ -254,6 +254,18 @@ describe("buildNonClaudeResumeCommand", () => {
       buildNonClaudeResumeCommand("codex", "sess1", { codexPermFlags: "--full-auto" }),
     ).toBe("codex resume sess1 --full-auto");
   });
+
+  test("grok resumes by UUID via the registry resumeCmd (never claude, never a title)", () => {
+    const id = "01a04000-4d49-70f3-88b4-316e8f48a5fb";
+    const cmd = buildNonClaudeResumeCommand("grok", id, {
+      // codex-only options must be ignored for grok.
+      codexArgs: "--full-auto",
+      codexPermFlags: "--dangerously-bypass-approvals-and-sandbox",
+    });
+    expect(cmd).toBe(`grok --resume ${id}`);
+    expect(cmd).not.toContain("claude");
+    expect(cmd).not.toContain("--full-auto");
+  });
 });
 
 // Both `cast resume --as` and `cast fork --resume --as` reconstitute into a fresh
@@ -269,7 +281,7 @@ describe("isReconstitutionTarget", () => {
   });
 
   test("rejects clients with no local reconstitution generator", () => {
-    for (const a of ["gemini", "cursor", "opencode", "pi", "claude_code", "bogus"]) {
+    for (const a of ["gemini", "cursor", "opencode", "pi", "grok", "claude_code", "bogus"]) {
       expect(isReconstitutionTarget(a)).toBe(false);
     }
   });
@@ -296,15 +308,17 @@ describe("resumeTmuxPrefix", () => {
 // keeps a 7th client covered automatically.
 describe("MANAGED_TMUX_PREFIXES / isManagedTmuxName", () => {
   test("covers every client prefix plus the non-client task prefix ct-", () => {
-    for (const p of ["cc-", "cx-", "cu-", "gm-", "oc-", "pi-", "ct-"]) {
+    for (const p of ["cc-", "cx-", "cu-", "gm-", "oc-", "pi-", "gk-", "ct-"]) {
       expect(MANAGED_TMUX_PREFIXES).toContain(p);
     }
   });
 
-  test("matches the previously-dropped cursor/opencode/pi resume panes", () => {
+  test("matches the previously-dropped cursor/opencode/pi resume panes (and grok's gk-)", () => {
     expect(isManagedTmuxName("cu-resume-abc123")).toBe(true);
     expect(isManagedTmuxName("oc-resume-abc123")).toBe(true);
     expect(isManagedTmuxName("pi-resume-abc123")).toBe(true);
+    expect(isManagedTmuxName("gk-resume-abc123")).toBe(true);
+    expect(resumeTmuxPrefix("grok")).toBe("gk");
   });
 
   test("still matches the original four and rejects unrelated names", () => {
@@ -342,6 +356,15 @@ describe("resolveResumeAgentType (dispatch trusts the cursor/pi hint over the fi
     // claude reconstitution — trust the hint so it routes to pi's own resume.
     expect(resolveResumeAgentType("pi", "claude")).toBe("pi");
     expect(resolveResumeAgentType("pi", undefined)).toBe("pi");
+  });
+
+  test("an explicit grok hint wins even when the local file is missing (cross-device)", () => {
+    // Same shape as pi: a grok session whose ~/.grok tree isn't on this machine
+    // must never fall to `claude --resume` + repair.
+    expect(resolveResumeAgentType("grok", "claude")).toBe("grok");
+    expect(resolveResumeAgentType("grok", undefined)).toBe("grok");
+    // And findSessionFile detecting grok resolves it with no hint at all.
+    expect(resolveResumeAgentType(undefined, "grok")).toBe("grok");
   });
 
   test("without a store-owned hint the local file (or the claude default) decides", () => {
@@ -394,8 +417,8 @@ describe("isValidResumeSessionId — shell-injection ids are refused before comm
     "id with spaces",
   ];
 
-  test("claude / codex / cursor / pi refuse every injection payload (id is interpolated)", () => {
-    for (const agent of ["claude", "codex", "cursor", "pi"] as const) {
+  test("claude / codex / cursor / pi / grok refuse every injection payload (id is interpolated)", () => {
+    for (const agent of ["claude", "codex", "cursor", "pi", "grok"] as const) {
       for (const bad of INJECTION_IDS) {
         expect(isValidResumeSessionId(agent, bad)).toBe(false);
       }
@@ -420,6 +443,8 @@ describe("isValidResumeSessionId — shell-injection ids are refused before comm
     expect(isValidResumeSessionId("codex", "12345678-1234-1234-1234-123456789abc")).toBe(true);
     expect(isValidResumeSessionId("cursor", "chat-abc123")).toBe(true);
     expect(isValidResumeSessionId("pi", "a7c9c0e2-1d82-4d42-b342-f59fefc7b9f5")).toBe(true);
+    // grok ids are UUIDs (v7-style observed live) — shell-safe branch.
+    expect(isValidResumeSessionId("grok", "01a04000-4d49-70f3-88b4-316e8f48a5fb")).toBe(true);
   });
 
   test("gemini is exempt — its resume ignores the id (`gemini --resume latest`)", () => {

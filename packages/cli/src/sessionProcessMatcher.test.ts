@@ -36,6 +36,11 @@ describe("isRecognizedAgentComm", () => {
     expect(isRecognizedAgentComm("pi")).toBe(true);
   });
 
+  test("recognizes grok (compiled Rust binary at ~/.grok/bin/grok, comm 'grok')", () => {
+    // Registry-derived: AGENT_CLIENTS.grok.binary is "grok" (verified live, v1.0.5).
+    expect(isRecognizedAgentComm("grok")).toBe(true);
+  });
+
   test("still recognizes codex via its node interpreter (comm 'node')", () => {
     // codex is a node script that does NOT rename itself: comm 'node',
     // args 'node /Users/ashot/.bun/bin/codex'.
@@ -90,6 +95,13 @@ describe("isResumeInvocation", () => {
     const withSubcommand = "ashot 123 0.0 0.0 ... gemini resume session-abc";
     expect(isResumeInvocation("gemini", withFlag)).toBe(true);
     expect(isResumeInvocation("gemini", withSubcommand)).toBe(true);
+  });
+
+  test("matches grok --resume <uuid> (the registry resumeCmd shape) and not a fresh launch", () => {
+    const withFlag = "ashot 123 0.0 0.0 ... grok --resume 01a04000-4d49-70f3-88b4-316e8f48a5fb";
+    const fresh = "ashot 123 0.0 0.0 ... grok --permission-mode bypassPermissions -m grok-4.6";
+    expect(isResumeInvocation("grok", withFlag)).toBe(true);
+    expect(isResumeInvocation("grok", fresh)).toBe(false);
   });
 
   test("detects codex session file from lsof output", () => {

@@ -17,6 +17,7 @@ import {
 const CLAUDE_EFFORTS = AGENT_CLIENTS.claude.modelConfig!.efforts;
 const CODEX_EFFORTS = AGENT_CLIENTS.codex.modelConfig!.efforts;
 const PI_EFFORTS = AGENT_CLIENTS.pi.modelConfig!.efforts;
+const GROK_EFFORTS = AGENT_CLIENTS.grok.modelConfig!.efforts;
 
 function oracle(input: LaunchArgsInput): { binaryArgs: string[]; notifyCodexBypass: boolean } {
   const { agentType, configuredArgs, permFlags, defaultFlags } = input;
@@ -40,6 +41,12 @@ function oracle(input: LaunchArgsInput): { binaryArgs: string[]; notifyCodexBypa
   } else if (agentType === "pi") {
     const extraArgs = configuredArgs;
     if (extraArgs) args.push(...extraArgs.split(/\s+/).filter(Boolean));
+  } else if (agentType === "grok") {
+    // grok: configured args + perm flags (codex shape; getPermissionFlags owns
+    // the no-double-up rule, so the oracle appends unconditionally like codex).
+    const extraArgs = configuredArgs;
+    if (extraArgs) args.push(...extraArgs.split(/\s+/).filter(Boolean));
+    if (permFlags) args.push(...permFlags.split(/\s+/).filter(Boolean));
   } else {
     const extraArgs = configuredArgs;
     if (extraArgs) args.push(...extraArgs.split(/\s+/).filter(Boolean));
@@ -62,6 +69,9 @@ function oracle(input: LaunchArgsInput): { binaryArgs: string[]; notifyCodexBypa
   } else if (agentType === "pi") {
     if (input.modelAlias) args.push("--model", input.modelAlias);
     if (input.requestedEffort && (PI_EFFORTS as readonly string[]).includes(input.requestedEffort)) args.push("--thinking", input.requestedEffort);
+  } else if (agentType === "grok") {
+    if (input.modelAlias) args.push("-m", input.modelAlias);
+    if (input.requestedEffort && (GROK_EFFORTS as readonly string[]).includes(input.requestedEffort)) args.push("--reasoning-effort", input.requestedEffort);
   }
   return { binaryArgs: args, notifyCodexBypass };
 }
@@ -92,7 +102,7 @@ describe("getConfiguredAgentArgs reads the legacy per-client named fields", () =
 });
 
 describe("buildLaunchArgs matches the oracle across a matrix", () => {
-  const agentTypes: AgentClientId[] = ["claude", "codex", "cursor", "gemini", "opencode", "pi"];
+  const agentTypes: AgentClientId[] = ["claude", "codex", "cursor", "gemini", "opencode", "pi", "grok"];
   const configuredArgsCases = ["", "--chrome", "--permission-mode acceptEdits", "--dangerously-skip-permissions", "--session-id fixed"];
   const permFlagsCases = [null, "--permission-mode bypassPermissions", "--dangerously-bypass-approvals-and-sandbox"];
   const defaultFlagsCases = [null, "--verbose", "--foo bar"];
@@ -190,5 +200,17 @@ describe("buildLaunchArgs — targeted per-client behavior", () => {
       .toEqual(["--model", "openrouter/anthropic/claude-sonnet-5", "--thinking", "xhigh"]);
     expect(buildLaunchArgs({ agentType: "pi", configuredArgs: "", permFlags: null, defaultFlags: null, requestedEffort: "bogus" }).binaryArgs)
       .toEqual([]);
+  });
+
+  test("grok: configured args + perm flags, -m model id, --reasoning-effort gated on grok's levels", () => {
+    // Bypass perm flags flow through (grok uses claude's --permission-mode spelling).
+    expect(buildLaunchArgs({ agentType: "grok", configuredArgs: "--verbose", permFlags: "--permission-mode bypassPermissions", defaultFlags: null }).binaryArgs)
+      .toEqual(["--verbose", "--permission-mode", "bypassPermissions"]);
+    // Model is the bare id (-m grok-4.6); effort is a launch flag.
+    expect(buildLaunchArgs({ agentType: "grok", configuredArgs: "", permFlags: null, defaultFlags: null, modelAlias: "grok-4.6", requestedEffort: "xhigh" }).binaryArgs)
+      .toEqual(["-m", "grok-4.6", "--reasoning-effort", "xhigh"]);
+    // An effort outside GROK_EFFORT_LEVELS is dropped, never passed through.
+    expect(buildLaunchArgs({ agentType: "grok", configuredArgs: "", permFlags: null, defaultFlags: null, modelAlias: "grok-4.5", requestedEffort: "bogus" }).binaryArgs)
+      .toEqual(["-m", "grok-4.5"]);
   });
 });

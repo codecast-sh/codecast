@@ -59,4 +59,20 @@ describe("buildBlankLaunchArgs", () => {
     // user-pinned --auto is not doubled
     expect(buildBlankLaunchArgs("opencode", { agent_args: { opencode: "--auto --pure" } } as unknown as Config)).toEqual(["--auto", "--pure"]);
   });
+
+  test("grok defaults to bypass (claude's flag spelling; managed grok can't answer TUI prompts)", () => {
+    expect(buildBlankLaunchArgs("grok", null)).toEqual(["--permission-mode", "bypassPermissions"]);
+  });
+
+  test("grok: a user-pinned permission mode in agent_args.grok is not double-stacked", () => {
+    const cfg = { agent_args: { grok: "--permission-mode acceptEdits" } } as unknown as Config;
+    expect(buildBlankLaunchArgs("grok", cfg)).toEqual(["--permission-mode", "acceptEdits"]);
+    const approveCfg = { agent_args: { grok: "--always-approve" } } as unknown as Config;
+    expect(buildBlankLaunchArgs("grok", approveCfg)).toEqual(["--always-approve"]);
+  });
+
+  test("grok: configured args without a permission flag still get bypass appended", () => {
+    const cfg = { agent_args: { grok: "--verbose" } } as unknown as Config;
+    expect(buildBlankLaunchArgs("grok", cfg)).toEqual(["--verbose", "--permission-mode", "bypassPermissions"]);
+  });
 });

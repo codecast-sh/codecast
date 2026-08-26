@@ -5275,7 +5275,7 @@ program
         return;
       }
 
-  const validAgents = ["claude", "codex", "gemini", "cursor", "opencode", "pi"];
+  const validAgents = ["claude", "codex", "gemini", "cursor", "opencode", "pi", "grok"];
       if (!validAgents.includes(agentArg)) {
         console.error(`Unknown agent: ${agentArg}`);
         console.log(`Valid agents: ${validAgents.join(", ")}`);
@@ -10666,7 +10666,7 @@ program
   )
   .argument("<prompts...>", "One task per session; '-' reads a prompt from stdin (several '-' split stdin on lines containing only ---)")
   .option("-C, --dir <path>", "Working directory (default: current project)")
-    .option("--agent <type>", "Agent: claude (default), codex, cursor, gemini, opencode, pi", "claude")
+    .option("--agent <type>", "Agent: claude (default), codex, cursor, gemini, opencode, pi, grok", "claude")
   .option("--subagent [parent]", "Nest under a parent session as a subagent row (default parent: the session running this command)")
   .option("--model <model>", "Model override (e.g. opus, sonnet)")
   .option("--isolated", "Give each session its own git worktree")

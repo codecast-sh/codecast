@@ -1,0 +1,3 @@
+{"timestamp":1772550030,"method":"session/update","params":{"sessionId":"0f0e0d0c-0b0a-4009-8807-060504030201","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"fix the auth bug"},"_meta":{"modelId":"grok-4.6","promptIndex":0}}}}
+{"timestamp":1772550031,"method":"session/update","params":{"sessionId":"0f0e0d0c-0b0a-4009-8807-060504030201","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Start from the auth module."}}}}
+{"timestamp":1772550032,"method":"session/update","params":{"sessionId":"0f0e0d0c-0b0a-4009-8807-060504030201","update":{"sessionUpdate":"tool_call","toolCallId":"call_synthread01","title":"read_file","kind":"read","status":"pending","rawInput":{"path":"src/auth.ts"}}}}

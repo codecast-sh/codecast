@@ -1,0 +1,12 @@
+{
+  "info": { "id": "b7a6c5d4-e3f2-4110-a099-887766554433", "cwd": "/tmp/grok-demo" },
+  "session_summary": "explore the auth module",
+  "created_at": "2026-03-03T14:05:00Z",
+  "updated_at": "2026-03-03T14:05:30Z",
+  "num_messages": 6,
+  "current_model_id": "grok-4.6",
+  "chat_format_version": 1,
+  "parent_session_id": "c3f8a1b2-4d5e-4f60-8a9b-0c1d2e3f4a5b",
+  "session_kind": "subagent",
+  "hidden": true
+}

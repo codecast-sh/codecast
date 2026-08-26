@@ -12,6 +12,7 @@ import {
   AGENT_CLIENTS,
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
+  GROK_EFFORT_LEVELS,
   PI_EFFORT_LEVELS,
   type AgentClientId,
 } from "@codecast/shared/contracts";
@@ -103,6 +104,13 @@ export function buildLaunchArgs(input: LaunchArgsInput): LaunchArgsResult {
     // the model/effort block below. Without this branch the configured args are
     // dropped.
     if (configuredArgs) args.push(...configuredArgs.split(/\s+/).filter(Boolean));
+  } else if (agentType === "grok") {
+    // grok folds in configured args + the daemon's permission flags
+    // (`--permission-mode bypassPermissions` — grok uses claude's exact flag
+    // spelling). getPermissionFlags already returns null when agent_args.grok
+    // pins a permission mode, so concatenating can't double up (codex shape).
+    if (configuredArgs) args.push(...configuredArgs.split(/\s+/).filter(Boolean));
+    if (permFlags) args.push(...permFlags.split(/\s+/).filter(Boolean));
   }
   // cursor / gemini: no configured args or permission flags today.
 
@@ -130,6 +138,14 @@ export function buildLaunchArgs(input: LaunchArgsInput): LaunchArgsResult {
     if (input.modelAlias) args.push("--model", input.modelAlias);
     if (input.requestedEffort && (PI_EFFORT_LEVELS as readonly string[]).includes(input.requestedEffort)) {
       args.push("--thinking", input.requestedEffort);
+    }
+  } else if (agentType === "grok") {
+    // grok selects a model with `-m <model-id>` (bare id, e.g. grok-4.6) and
+    // takes reasoning effort as a launch flag (`--reasoning-effort`; the TUI's
+    // effort menu is interactive-only, like codex's).
+    if (input.modelAlias) args.push("-m", input.modelAlias);
+    if (input.requestedEffort && (GROK_EFFORT_LEVELS as readonly string[]).includes(input.requestedEffort)) {
+      args.push("--reasoning-effort", input.requestedEffort);
     }
   }
 

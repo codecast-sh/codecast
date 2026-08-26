@@ -1,0 +1,14 @@
+{
+  "info": { "id": "c3f8a1b2-4d5e-4f60-8a9b-0c1d2e3f4a5b", "cwd": "/tmp/grok-demo" },
+  "session_summary": "list the files here",
+  "generated_title": "Listing project files",
+  "title_is_manual": false,
+  "created_at": "2026-03-03T14:00:00Z",
+  "updated_at": "2026-03-03T14:00:07Z",
+  "last_active_at": "2026-03-03T14:00:07Z",
+  "num_messages": 11,
+  "num_chat_messages": 5,
+  "current_model_id": "grok-4.6",
+  "reasoning_effort": "high",
+  "chat_format_version": 1
+}
