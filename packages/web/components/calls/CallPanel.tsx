@@ -103,6 +103,11 @@ export function CallPanel() {
       mic: !call.muted,
       camera: !!call.camera,
       scribe,
+      // Whether this window HAS the call, which is not the same question as
+      // which room it is pointed at. The shell's handback arbiter reads it, so
+      // that a window whose join failed is never mistaken for one holding a
+      // call — the case that would strand a live call with no owner.
+      joined: call.phase === "connected",
     });
   }, [call.phase, call.roomKey, call.muted, call.camera, scribe]);
 

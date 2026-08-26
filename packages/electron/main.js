@@ -31,7 +31,7 @@ for (const dir of ["downloads", "temp"]) {
 }
 
 const { pickWindow, pickOfferWindow, chooseLeader, RecentKeys } = require("./notificationRouter");
-const { shouldHandBackCall } = require("./callWindowPolicy");
+const { shouldHandBackCall, callWindowHoldsCall } = require("./callWindowPolicy");
 const {
   mergeMeetingDetect,
   meetingAppList,
@@ -568,6 +568,9 @@ const CALL_PANEL_SIZE = { width: 960, height: 640, minWidth: 520, minHeight: 380
 
 let callWindow = null;
 let callBoundsTimer = null;
+// When the panel was created. A window that has not reported a connection yet
+// is believed to be joining for a bounded moment (callWindowHoldsCall).
+let callWindowBornAt = 0;
 // What the panel says it is hosting: { room, mic, camera, scribe }. This IS the
 // handback payload — the main window has to arrive in the state the person was
 // already in, or closing the panel mutes them mid-sentence.
@@ -642,7 +645,8 @@ function createCallWindow(roomKey, opts) {
     backgroundColor: "#002b36",
   });
   callWindow = win;
-  callWindowState = { room: roomKey, mic: !!(opts && opts.mic), camera: !!(opts && opts.camera), scribe: !!(opts && opts.scribe) };
+  callWindowBornAt = Date.now();
+  callWindowState = { room: roomKey, mic: !!(opts && opts.mic), camera: !!(opts && opts.camera), scribe: !!(opts && opts.scribe), joined: false };
 
   win.loadURL(callPanelUrl(roomKey, opts));
   win.once("ready-to-show", () => win.show());
@@ -698,7 +702,7 @@ function handBackCall({ ended, from } = {}) {
   const hand = shouldHandBackCall({
     ended: !!ended,
     quitting: appIsQuitting,
-    otherCallWindow: otherCallWindowExists(from),
+    otherCallWindow: otherCallWindowHoldsCall(from),
     room: (state && state.room) || null,
   });
   if (!hand) return;
@@ -712,11 +716,28 @@ function handBackCall({ ended, from } = {}) {
   mainWindow.show();
 }
 
-// Is a window OTHER than the one closing still holding the call?
-function otherCallWindowExists(from) {
-  const panelLives = !!callWindow && !callWindow.isDestroyed();
-  const facesLive = !!facesWindow && !facesWindow.isDestroyed();
-  return from === "faces" ? panelLives : facesLive;
+// Is a window OTHER than the one closing still HOLDING the call?
+//
+// Holding, not existing. A window exists from the moment it is created and
+// holds the call only once it has joined the room, and a join can fail in
+// between — a denied microphone, a network blip. Answering this with existence
+// strands the call in exactly that gap: the closing window is told somebody
+// else has it, and nobody does.
+//
+// The renderers report `joined` on the same channel that carries the handback
+// payload (report-call-panel-state / report-faces-state), so the fact is the
+// window's own account of being connected rather than the shell's guess. A
+// window still on its way in has not reported yet, which is what the grace
+// inside `callWindowHoldsCall` is for.
+function otherCallWindowHoldsCall(from) {
+  const other = from === "faces"
+    ? { win: callWindow, state: callWindowState, bornAt: callWindowBornAt }
+    : { win: facesWindow, state: facesWindowState, bornAt: facesWindowBornAt };
+  return callWindowHoldsCall({
+    exists: !!other.win && !other.win.isDestroyed(),
+    joined: !!(other.state && other.state.joined),
+    ageMs: Date.now() - (other.bornAt || 0),
+  });
 }
 
 ipcMain.handle("open-call-panel", (_e, roomKey, opts) => {
@@ -742,6 +763,10 @@ ipcMain.on("report-call-panel-state", (e, state) => {
     mic: state.mic === true,
     camera: state.camera === true,
     scribe: state.scribe === true,
+    // The panel's own account of being connected. The handback arbiter reads
+    // it: "another window exists" and "another window has the call" are
+    // different facts, and only the second one may stop a handback.
+    joined: state.joined === true,
   };
 });
 
@@ -794,6 +819,7 @@ let facesWindow = null;
 let facesWindowState = null;
 let facesWindowEnded = false;
 let facesDragTimer = null;
+let facesWindowBornAt = 0;
 let facesMoveTimer = null;
 
 function loadFacesState() {
@@ -886,7 +912,9 @@ function createFacesWindow(roomKey, opts) {
     },
   });
   facesWindow = win;
+  facesWindowBornAt = Date.now();
   facesWindowState = {
+    joined: false,
     room: roomKey,
     mic: !!(opts && opts.mic),
     camera: !!(opts && opts.camera),
@@ -977,6 +1005,8 @@ ipcMain.on("report-faces-state", (e, state) => {
     camera: state.camera === true,
     scribe: state.scribe === true,
     mode: state.mode === "everyone" ? "everyone" : "speaker",
+    // Connected, as the window itself reports it — see the arbiter above.
+    joined: state.joined === true,
   };
 });
 

@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Maximize2, Mic, MicOff, PhoneOff, User, Users } from "lucide-react";
+import { Maximize2, Mic, MicOff, PhoneOff, User, Users, X } from "lucide-react";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -14,7 +14,7 @@ import {
   type ParticipantTile,
 } from "../../lib/calls/callManager";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
-import { callHandoffState } from "../../lib/calls/callHandoff";
+import { callHandoffState, facesLeaveGesture, facesWindowExit } from "../../lib/calls/callHandoff";
 import {
   closeFacesWindow,
   isFacesWindow,
@@ -72,6 +72,15 @@ import "./faces.css";
  * it is the last place in the app that should be re-rendering sixty times a
  * second to move a circle a pixel.
  */
+/**
+ * How long this window waits to get the call before it gives up and closes.
+ *
+ * Longer than an ordinary join by a wide margin, and longer than the shell's
+ * grace for a window that is still joining — so the shell stops believing this
+ * window is on its way in before this window stops trying.
+ */
+const TAKEOVER_DEADLINE_MS = 12_000;
+
 export function CallFaces() {
   const params = useMemo(
     () => new URLSearchParams(typeof window === "undefined" ? "" : window.location.search),
@@ -129,6 +138,12 @@ export function CallFaces() {
     });
   }, [roomKey, params]);
 
+  // Did this window ever actually GET the call? Everything about closing it
+  // turns on this, so it is tracked in a ref (read inside callbacks) and in
+  // state (the Leave control says a different thing in each case).
+  const held = useRef(false);
+  const [heldNow, setHeldNow] = useState(false);
+
   const scribe = useSyncExternalStore(subscribeScribe, getScribeStatus, getScribeStatus).active;
   useWatchEffect(() => {
     reportFacesState({
@@ -137,20 +152,58 @@ export function CallFaces() {
       camera: !!call.camera,
       scribe,
       mode,
+      // The shell's handback arbiter reads this. A window that exists is not a
+      // window that has the call, and only the second one may stop the call
+      // being handed back to the main window.
+      joined: call.phase === "connected",
     });
   }, [call.phase, call.roomKey, call.muted, call.camera, scribe, mode]);
 
-  // The call left this window — hung up here, restored to the panel, or ended
-  // by the last person leaving. There is nothing to float, so the window goes.
-  // `ended` only means "hand nothing back from ME": when the panel took the
-  // call, the shell already knows a call window exists and hands back nothing.
-  const wasConnected = useRef(false);
-  useWatchEffect(() => {
-    if (call.phase === "connected") wasConnected.current = true;
-    if (!wasConnected.current || call.phase !== "idle") return;
+  // ── Closing ─────────────────────────────────────────────────────────────
+  //
+  // This window has no title bar, no close box and no place in the dock: if it
+  // does not close itself, nothing closes it short of quitting the app. So
+  // every way this can stop being useful ends here, and `ended` carries the one
+  // thing the shell cannot work out for itself:
+  //
+  //   ended: true   the call is OVER. Hand nothing anywhere.
+  //   ended: false  the call is alive and this window is not the one holding
+  //                 it — hand it back, and let the shell's arbiter decide
+  //                 whether the main window or another call window takes it.
+  //
+  // Getting that backwards on the failure path is what strands a call: a window
+  // whose join failed, closing as though it had hung up, takes a call nobody
+  // else has been told about with it.
+  const closing = useRef(false);
+  const closeWindow = useCallback((ended: boolean) => {
+    if (closing.current) return;
+    closing.current = true;
     setCallOutlivesWindow(false);
-    void closeFacesWindow({ ended: true });
-  }, [call.phase]);
+    void closeFacesWindow({ ended });
+  }, []);
+
+  useWatchEffect(() => {
+    if (call.phase === "connected") {
+      held.current = true;
+      setHeldNow(true);
+    }
+    const exit = facesWindowExit({ phase: call.phase, held: held.current, deadlinePassed: false });
+    if (exit.close) closeWindow(exit.ended);
+  }, [call.phase, closeWindow]);
+
+  // The failure with nothing to show for itself: a join that neither connects
+  // nor errors. No state change is coming to close this window, so a clock has
+  // to. Bounded deliberately longer than the shell's grace for a window that is
+  // still joining, so the shell stops waiting for this window before it stops
+  // trying — never the other way round, which would leave a moment where both
+  // sides believe the other has the call.
+  useMountEffect(() => {
+    const t = setTimeout(() => {
+      const exit = facesWindowExit({ phase: "connecting", held: held.current, deadlinePassed: true });
+      if (exit.close) closeWindow(exit.ended);
+    }, TAKEOVER_DEADLINE_MS);
+    return () => clearTimeout(t);
+  });
 
   // ── Whose face the single circle shows ──────────────────────────────────
   //
@@ -261,10 +314,28 @@ export function CallFaces() {
     // `callHandoffState` is the one place a call's movable state is read, so
     // restoring the panel and popping out cannot hand it over differently.
     const state = callHandoffState();
-    if (!state) return;
+    if (!state) return closeWindow(false);
     // The panel joins and evicts this window; the phase watcher above closes it.
     void openCallPanel(state.room, state);
-  }, []);
+    // Unless this window never had the call. Then there is nothing for the
+    // panel to evict, no disconnect will ever arrive, and waiting for one would
+    // leave this window on screen forever.
+    if (!held.current) closeWindow(false);
+  }, [closeWindow]);
+
+  // Leave always wins, whatever state this window is in.
+  //
+  // What it MEANS depends on whether this window has the call. Holding it,
+  // leaving hangs up. Not holding it — a failed join — leaving is just closing
+  // a useless window, and it must NOT call `leaveCall`: the seat in
+  // `call_members` is shared with the window that does hold the call, and
+  // freeing it would take that window's occupancy, heartbeat and transcript
+  // authorization with it.
+  const leave = useCallback(() => {
+    const gesture = facesLeaveGesture(held.current);
+    if (gesture.hangUp) void leaveCall();
+    closeWindow(gesture.ended);
+  }, [closeWindow]);
 
   const diameter = mode === "speaker" ? SPEAKER_DIAMETER : EVERYONE_DIAMETER;
   const speaking = useMemo(() => new Set<string>(call.speaking ?? []), [call.speaking]);
@@ -326,8 +397,12 @@ export function CallFaces() {
         <button className="faces-btn" onClick={restore} title="Back to the call window">
           <Maximize2 className="h-3.5 w-3.5" />
         </button>
-        <button className="faces-btn faces-btn--alert" onClick={() => void leaveCall()} title="Leave the call">
-          <PhoneOff className="h-3.5 w-3.5" />
+        <button
+          className="faces-btn faces-btn--alert"
+          onClick={leave}
+          title={heldNow ? "Leave the call" : "Close this window — the call stays where it is"}
+        >
+          {heldNow ? <PhoneOff className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
         </button>
       </div>
     </div>

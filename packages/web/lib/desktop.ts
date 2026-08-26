@@ -61,7 +61,13 @@ declare global {
       // The panel keeps the shell told what it is hosting, so the shell can
       // hand the same room, mic and camera back when the window closes by any
       // route — the panel's own button or the OS close box.
-      reportCallPanelState?: (state: { room: string | null; mic: boolean; camera: boolean; scribe: boolean }) => void;
+      reportCallPanelState?: (state: {
+        room: string | null;
+        mic: boolean;
+        camera: boolean;
+        scribe: boolean;
+        joined?: boolean;
+      }) => void;
       // Main window only: the call is coming back, take it.
       onCallPanelHandback?: (
         cb: (payload: { room: string; mic: boolean; camera: boolean; scribe: boolean }) => void,
@@ -87,6 +93,7 @@ declare global {
         camera: boolean;
         scribe: boolean;
         mode: "speaker" | "everyone";
+        joined?: boolean;
       }) => void;
       setFacesInteractive?: (on: boolean) => void;
       setFacesSize?: (size: { width: number; height: number }) => void;
@@ -392,12 +399,22 @@ export async function closeCallPanel(opts?: { ended?: boolean }): Promise<void> 
   await bridge("closeCallPanel")?.(opts);
 }
 
-/** The panel tells the shell what it is hosting, so a handback carries it. */
+/**
+ * The panel tells the shell what it is hosting, so a handback carries it.
+ *
+ * `joined` is a different fact from `room` and the shell needs both: `room` is
+ * what a handback would carry, and `joined` is whether this window actually has
+ * the call. They come apart exactly when a join fails — the window still knows
+ * which room it was going to host, and holds nothing. The handback arbiter
+ * reads `joined`, because "a window exists" must not be mistaken for "somebody
+ * has the call".
+ */
 export function reportCallPanelState(state: {
   room: string | null;
   mic: boolean;
   camera: boolean;
   scribe: boolean;
+  joined: boolean;
 }): void {
   bridge("reportCallPanelState")?.(state);
 }
@@ -493,13 +510,14 @@ export async function closeFacesWindow(opts?: { ended?: boolean }): Promise<void
   await bridge("closeFacesWindow")?.(opts);
 }
 
-/** The faces window tells the shell what it is hosting, so a handback carries it. */
+/** The faces window's half of the same report — `joined` included, same reason. */
 export function reportFacesState(state: {
   room: string | null;
   mic: boolean;
   camera: boolean;
   scribe: boolean;
   mode: FacesMode;
+  joined: boolean;
 }): void {
   bridge("reportFacesState")?.(state);
 }
