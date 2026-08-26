@@ -41,6 +41,7 @@ import { teamHasFeature } from "../lib/teamFeatures";
 import { useShortcutAction, useShortcutContext } from "../shortcuts";
 import { useEventListener } from "./useEventListener";
 import { useMountEffect } from "./useMountEffect";
+import { useNowWhen } from "./useCoarseNow";
 import { usePagePresence } from "./usePagePresence";
 
 export function useWalkieStatus(): WalkieStatus {
@@ -611,6 +612,41 @@ export function nextStageOpen(
   if (ev.phase === "idle") return false;
   if (ev.walkieOwns) return open;
   return open || !!ev.notice || !!ev.newRemoteVideo;
+}
+
+/**
+ * THE DOOR, for the two toggles that let a person set it.
+ *
+ * One hook rather than two copies of `walkie_pref !== "off"`, because there is
+ * now a second way the door can be shut and a toggle that reads only the pref
+ * says "open" through the whole hour a snooze is running. A control that
+ * contradicts the thing it controls is worse than no control.
+ *
+ * Turning it back ON lifts the snooze with it. Otherwise the strip's Snooze
+ * button would be a shutter with no handle: a person who changed their mind
+ * inside the hour could flip the toggle, watch it say open, and still hear
+ * nothing.
+ */
+export function useWalkieDoor(): {
+  open: boolean;
+  /** Shut by the hour rather than by the pref — worth saying out loud, because
+   *  it is temporary and the pref is not. */
+  snoozed: boolean;
+  setOpen: (open: boolean) => void;
+} {
+  const pref = useInboxStore((s: any) => s.currentUser?.walkie_pref ?? "team");
+  const snoozedUntil = Number(useInboxStore((s: any) => s.currentUser?.walkie_snoozed_until ?? 0));
+  const now = useNowWhen((n) => (snoozedUntil > n ? "shut" : "open"), 30_000);
+  const snoozed = snoozedUntil > now;
+  const setOpen = useCallback(
+    (open: boolean) => {
+      const st = useInboxStore.getState() as any;
+      st.setWalkiePref(open ? "team" : "off");
+      if (open && snoozedUntil > Date.now()) st.snoozeWalkie(0);
+    },
+    [snoozedUntil],
+  );
+  return { open: pref !== "off" && !snoozed, snoozed, setOpen };
 }
 
 /**

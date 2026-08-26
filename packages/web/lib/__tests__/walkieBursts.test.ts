@@ -183,7 +183,7 @@ const seat = (over: Partial<Parameters<typeof shouldReleaseRoom>[0]> = {}) => ({
   opened: true,
   bursting: false,
   incoming: false,
-  muted: true,
+  joinedLive: false,
   ...over,
 });
 
@@ -198,10 +198,23 @@ describe("walkie: handing a room back", () => {
     expect(shouldReleaseRoom(seat({ opened: false }))).toBe(false);
   });
 
-  it("leaves a room that became a conversation alone", () => {
-    // A mic the person opened in the dock: this is a huddle now, and a huddle
-    // is left by hand.
-    expect(shouldReleaseRoom(seat({ muted: false }))).toBe(false);
+  it("leaves a room somebody stepped into on purpose alone", () => {
+    // Join live was pressed: this is a huddle now, and a huddle is left by
+    // hand rather than by a timer running out.
+    expect(shouldReleaseRoom(seat({ joinedLive: true }))).toBe(false);
+  });
+
+  it("hands back a room whose microphone is open but that nobody joined", () => {
+    // THE MUTE USED TO BE THE TEST HERE and it cannot be any more. Auto-listen
+    // is hot: every receiver's mic is open for the whole burst, so reading an
+    // open mic as "they joined" would refuse this handback on the ordinary
+    // listening path — the linger would never expire, the seat would never go
+    // back, and the microphone would stay open indefinitely with nothing
+    // holding it. `joinedLive` is the only thing that ever really meant a
+    // conversation had started, and this is what bounds the hot mic: the
+    // burst, plus the half minute an answer might arrive in, then it closes
+    // itself.
+    expect(shouldReleaseRoom(seat({ joinedLive: false }))).toBe(true);
   });
 
   it("does not pull the room out from under a burst still in flight", () => {
@@ -212,7 +225,7 @@ describe("walkie: handing a room back", () => {
   it("asks whose seat it is before anything else", () => {
     // Every other reason to stay is moot if the seat was never ours: the
     // answer is the same no matter what else is true.
-    for (const over of [{ bursting: true }, { incoming: true }, { muted: false }]) {
+    for (const over of [{ bursting: true }, { incoming: true }, { joinedLive: true }]) {
       expect(shouldReleaseRoom(seat({ opened: false, ...over }))).toBe(false);
     }
   });

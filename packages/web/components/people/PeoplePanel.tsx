@@ -34,6 +34,7 @@ import {
 import { STRAY_WORKSPACE, rosterSig, unreadBadgeText, type DmBadge } from "./peopleRoster";
 import { PeopleWall } from "./PeopleWall";
 import { usePeopleRoster } from "./usePeopleRoster";
+import { useWalkieDoor } from "../../hooks/useWalkie";
 import "./people.css";
 
 const STATUSES = ["available", "busy", "away"] as const;
@@ -242,21 +243,23 @@ function StatusPill({
  *  closed door mutes a speaker, it never silences them — so the words say what
  *  still happens, not only what stops. */
 function WalkieDoorToggle() {
-  const open = useInboxStore((s) => (s.currentUser as any)?.walkie_pref !== "off");
+  const { open, snoozed, setOpen } = useWalkieDoor();
   return (
     <button
       type="button"
-      onClick={() => useInboxStore.getState().setWalkiePref(open ? "off" : "team")}
+      onClick={() => setOpen(!open)}
       aria-pressed={open}
       title={
-        // Parallel on purpose: same second sentence both ways, because that is
+        // Parallel on purpose: same second sentence every way, because that is
         // the whole invariant — the door decides whether a voice PLAYS here,
         // never whether it reaches you. "Nobody plays out loud here" named the
         // wrong subject; it is the voice that does or does not play, not a
         // person who does or does not do it.
         open
           ? "A teammate's voice plays out loud here. Their words arrive as messages either way."
-          : "No voice plays out loud here. Their words arrive as messages either way."
+          : snoozed
+            ? "Snoozed for the hour. Turn this on to open the door again — their words arrive as messages either way."
+            : "No voice plays out loud here. Their words arrive as messages either way."
       }
       className={`flex h-7 items-center gap-1.5 rounded-md px-2 text-[11px] transition-colors ${
         open

@@ -1276,6 +1276,12 @@ function releaseRoom(roomKey: string) {
 function beginLinger(roomKey: string) {
   clearLinger();
   if (!inRoom(roomKey)) return;
+  // Nothing to hold open: somebody stepped in, so this is a call and the seat
+  // is theirs until they leave it. A timer here would expire against a live
+  // conversation (harmlessly — `shouldReleaseRoom` refuses — but `lingerUntil`
+  // would be claiming a burst was being held open during a huddle, which is a
+  // lie any surface reading it could paint).
+  if (status.joinedLive === roomKey) return;
   lingerRoomKey = roomKey;
   emit({ lingerUntil: Date.now() + LINGER_MS });
   lingerTimer = setTimeout(() => {
@@ -1306,11 +1312,9 @@ export function markWalkieUpgraded(roomKey: string): void {
   refresh();
 }
 
-/** The room ended, or the walkie moved on to another one. */
-function clearUpgrade(roomKey?: string): void {
-  if (!status.joinedLive) return;
-  if (roomKey && status.joinedLive !== roomKey) return;
-  emit({ joinedLive: null });
+/** The upgraded room ended, or the person walked into a different one. */
+function clearUpgrade(): void {
+  if (status.joinedLive) emit({ joinedLive: null });
 }
 
 /**
@@ -1347,7 +1351,10 @@ export async function joinWalkieLive(roomKey: string): Promise<void> {
  */
 export function shutWalkieDoor(): void {
   const was = status.incoming;
-  clearUpgrade();
+  // The upgrade is deliberately NOT cleared. Snooze shuts a door; it does not
+  // hang up a call somebody chose to be in. If both were somehow true, clearing
+  // it here would let the handback below leave a live conversation — a
+  // "not now" button ending a call is the wrong reading of the word.
   if (was) {
     emit({ incoming: null });
     abandonRoom(was.roomKey);

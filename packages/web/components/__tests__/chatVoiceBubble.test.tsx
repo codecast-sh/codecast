@@ -167,11 +167,52 @@ describe("who owns the dock", () => {
     expect(walkieOwnsCall(status as any, inRoom, { guest: false })).toBe(false);
   });
 
-  test("an open mic hands the room back: a room somebody talks in is a huddle", () => {
+  test("an open mic during the linger is still the walkie's, not a huddle", () => {
+    // THE MUTE STOPPED BEING THE TEST. Auto-listen is hot now, so the linger
+    // after a burst is a room this person is sitting in with their microphone
+    // OPEN and nobody having joined anything — the walkie's own state, not a
+    // conversation. Reading the mic the old way handed the ordinary call dock
+    // its full controls over every burst anybody listened to.
     const lingering = { ...base, lingerUntil: Date.now() + 30_000 };
     expect(walkieOwnsCall(lingering as any, inRoom, { lingerRoom: ROOM, guest: false })).toBe(true);
     expect(
       walkieOwnsCall(lingering as any, { ...inRoom, muted: false }, { lingerRoom: ROOM, guest: false }),
+    ).toBe(true);
+  });
+
+  test("somebody stepping in on purpose hands the room to the call dock", () => {
+    // The upgrade, from every angle the walkie can be in. It outranks a key
+    // that is still down, which is the founder's rule stated exactly: a hold
+    // stays a strip until the OTHER side explicitly joins.
+    const sending = {
+      ...base,
+      sending: { channelId: "c", roomKey: ROOM, clientId: "cid", messageId: null, startedAt: 0, transcript: "" },
+    };
+    const hearing = {
+      ...base,
+      incoming: { channelId: "c", messageId: "m", roomKey: ROOM, fromUserId: "u", fromName: "Ada" },
+    };
+    const lingering = { ...base, lingerUntil: Date.now() + 30_000 };
+    for (const status of [sending, hearing, lingering]) {
+      expect(walkieOwnsCall(status as any, inRoom, { lingerRoom: ROOM, guest: false })).toBe(true);
+      expect(
+        walkieOwnsCall(status as any, inRoom, { lingerRoom: ROOM, guest: false, upgraded: true }),
+      ).toBe(false);
+    }
+  });
+
+  test("the upgrade is read off the room it names, never a stale one", () => {
+    // `joinedLive` carries a room key rather than a flag for this reason: a
+    // call somebody joined and left must not turn the NEXT burst, in some
+    // other room, into a call nobody joined.
+    const hearing = {
+      ...base,
+      joinedLive: "dm:someone:else",
+      incoming: { channelId: "c", messageId: "m", roomKey: ROOM, fromUserId: "u", fromName: "Ada" },
+    };
+    expect(walkieOwnsCall(hearing as any, inRoom, { guest: false })).toBe(true);
+    expect(
+      walkieOwnsCall({ ...hearing, joinedLive: ROOM } as any, inRoom, { guest: false }),
     ).toBe(false);
   });
 
@@ -206,10 +247,15 @@ describe("who owns the dock", () => {
       ...base,
       incoming: { channelId: "c", messageId: "m", roomKey: ROOM, fromUserId: "u", fromName: "Ada" },
     };
-    // Two guards, either of which is enough on its own: the room was already a
-    // conversation, and the mic in it is open.
+    // ONE guard now, and it is the one that was always load-bearing: the room
+    // was already a conversation when the key went down. The open mic used to
+    // be a second, redundant guard here and has been dropped, because hot
+    // auto-listen made it fire on the ordinary listening path too — and it
+    // guarded nothing this does not, since `guest` is ruled from exactly this
+    // condition (useWalkie's subscription: same room, unmuted, connected) in
+    // the pre-burst world. Forcing `guest: false` here describes a state the
+    // engine cannot produce.
     expect(walkieOwnsCall(hearing as any, live, { guest: true })).toBe(false);
-    expect(walkieOwnsCall(hearing as any, live, { guest: false })).toBe(false);
 
     // And the linger afterwards is still inside that same huddle.
     const lingering = { ...base, lingerUntil: Date.now() + 30_000 };
