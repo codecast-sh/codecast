@@ -235,4 +235,42 @@ describe("flat views hoist subagent/teammate rows under their parent (ct-38183)"
   it("subagent toggle off still drops nested rows entirely", () => {
     expect(ids(flatten(base, "recent", false))).toEqual([LEAD, UNRELATED]);
   });
+
+  // Regression (ct-45319): the grouped view hides a Task subagent whose parent
+  // is absent (isOrphanSubagent — it rides its parent), but the flat views kept
+  // it at its own creation slot wearing the ↳ arrow, so an anchor's workers
+  // (the anchor is hidden from the inbox unless blocked) rendered as children
+  // of whatever unrelated card sorted above them.
+  describe("parent absent: a Task subagent is hidden, not floated (ct-45319)", () => {
+    const ANCHOR = cid(24);
+    const SUB_A = cid(25);
+    const SUB_B = cid(26);
+    const sub = (id: string, t: number, extra: Partial<InboxSession> = {}) =>
+      sess({ _id: id, parent_conversation_id: ANCHOR, is_subagent: true, started_at: t, updated_at: t, ...extra });
+    const withAnchor = {
+      [ANCHOR]: sess({ _id: ANCHOR, is_anchor: true, started_at: 500, updated_at: 500 }),
+      [UNRELATED]: base[UNRELATED],
+      [SUB_A]: sub(SUB_A, 2500),
+      [SUB_B]: sub(SUB_B, 2400),
+    };
+
+    it("time mode: the hidden anchor's subagents drop out instead of trailing an unrelated card", () => {
+      const cat = categorizeSessions(withAnchor, new Set());
+      expect(cat.sorted.map((x) => x._id)).not.toContain(ANCHOR);
+      expect(ids(flatViewSessions(cat.sorted, cat.subsByParent, { mode: "time", showSubagents: true }))).toEqual([UNRELATED]);
+    });
+
+    it("the focused and pinned orphans still render", () => {
+      const pinned = { ...withAnchor, [SUB_B]: sub(SUB_B, 2400, { is_pinned: true }) };
+      const cat = categorizeSessions(pinned, new Set());
+      expect(ids(flatViewSessions(cat.sorted, cat.subsByParent, { mode: "time", showSubagents: true, focusedId: SUB_A }))).toEqual([UNRELATED, SUB_A, SUB_B]);
+    });
+
+    it("parent filtered out by the chip: its subagents leave with it", () => {
+      const withLead = { ...withAnchor, [ANCHOR]: sess({ _id: ANCHOR, started_at: 500, updated_at: 500 }) };
+      const cat = categorizeSessions(withLead, new Set());
+      const chipMatches = (x: InboxSession) => x._id !== ANCHOR;
+      expect(ids(flatViewSessions(cat.sorted, cat.subsByParent, { mode: "time", showSubagents: true, chipMatches }))).toEqual([UNRELATED]);
+    });
+  });
 });

@@ -2196,17 +2196,17 @@ export function categorizeSessions(
   // own rest verdict, so a declared-dormant home quiet for a day stays Dormant.
   const settled = sorted.filter((s) => waitingForInput.get(s._id) && isFlat(s));
   const restOf = (s: InboxSession): SessionRestState => classifySession(s).rest;
-  const needsInput = settled.filter((s) => restOf(s) === "needs_input")
-    .sort((a, b) => {
-      // Deferred sessions sink to the bottom of the group; otherwise earliest-updated first.
-      if (!!a.is_deferred !== !!b.is_deferred) return a.is_deferred ? 1 : -1;
-      return (a.updated_at || 0) - (b.updated_at || 0);
-    });
-  // Oldest delivery first: Done is a queue you clear top-down, so the item
-  // that has waited longest for review sits at the top (same order as Needs
-  // Input) and a fresh delivery never displaces what you're reading.
-  const done = settled.filter((s) => restOf(s) === "done")
-    .sort((a, b) => (a.updated_at || 0) - (b.updated_at || 0));
+  // Needs Input and Done are both queues you clear top-down: oldest first, so
+  // the item that has waited longest sits at the top and a fresh arrival never
+  // displaces what you're reading. Defer (shift+backspace, "send to bottom")
+  // sinks a row below the rest of its group regardless of timestamp — one
+  // comparator for both so the gesture works the same wherever the row rests.
+  const settledQueueOrder = (a: InboxSession, b: InboxSession) => {
+    if (!!a.is_deferred !== !!b.is_deferred) return a.is_deferred ? 1 : -1;
+    return (a.updated_at || 0) - (b.updated_at || 0);
+  };
+  const needsInput = settled.filter((s) => restOf(s) === "needs_input").sort(settledQueueOrder);
+  const done = settled.filter((s) => restOf(s) === "done").sort(settledQueueOrder);
   // Most recently parked first.
   const dormant = settled.filter((s) => restOf(s) === "dormant")
     .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
@@ -2686,8 +2686,10 @@ export function chipMatchesSession(
 // it between unrelated cards while its (recently-active) parent sorts far away
 // — three ↳-styled rows adrift in the middle of the inbox. Children keep the
 // comparator's relative order among siblings and follow chains (a child's own
-// children ride along). A row whose parent didn't make the list stays where the
-// sort put it — same "parentless renders flat" semantics as categorizeSessions.
+// children ride along). A teammate whose lead didn't make the list stays where
+// the sort put it — same "parentless renders flat" semantics as
+// categorizeSessions; a parentless Task subagent never reaches here (see
+// dropOrphanSubagents).
 function hoistNestedUnderParent(list: InboxSession[]): InboxSession[] {
   const present = new Set(list.map((s) => s._id));
   const nestedHere = (s: InboxSession) => {
@@ -2727,6 +2729,12 @@ function hoistNestedUnderParent(list: InboxSession[]): InboxSession[] {
 // nested subagents when the toggle is off (always keeping the focused one),
 // sorts by the view comparator, applies the chip predicate, then hoists each
 // remaining subagent/teammate row under its parent (hoistNestedUnderParent).
+// A Task subagent whose parent is NOT in the final list is dropped, exactly as
+// categorizeSessions' isOrphanSubagent: it rides its parent (a hidden anchor's
+// worker, a parent that aged out, was dismissed, or fails the chip). Left in,
+// it floats at its own creation slot wearing the ↳ arrow and reads as a child
+// of whatever unrelated card sorts above it. Teammates keep the "parentless
+// renders flat" semantics (a real session someone may need to answer).
 export function flatViewSessions(
   sortedSessions: InboxSession[],
   subsByParent: Map<string, InboxSession[]>,
@@ -2758,7 +2766,18 @@ export function flatViewSessions(
     const fresh = list.filter((s) => !rank.has(s._id)); // new since the snapshot, still in live order
     ordered = [...frozen, ...fresh];
   }
-  return hoistNestedUnderParent(opts.chipMatches ? ordered.filter(opts.chipMatches) : ordered);
+  return hoistNestedUnderParent(dropOrphanSubagents(opts.chipMatches ? ordered.filter(opts.chipMatches) : ordered, opts.focusedId));
+}
+
+// Drop Task subagents whose nest parent didn't make `list` (see flatViewSessions).
+// The focused row always renders; a pinned one is an explicit "keep visible".
+function dropOrphanSubagents(list: InboxSession[], focusedId?: string | null): InboxSession[] {
+  const present = new Set(list.map((s) => s._id));
+  return list.filter((s) => {
+    if (s._id === focusedId || s.is_pinned || !isSubagentConversation(s)) return true;
+    const p = nestParentIdOf(s);
+    return !!p && p !== s._id && present.has(p);
+  });
 }
 
 // The manual sort key to give a row dropped at `insertIndex` among `orderedKeys`
