@@ -38,7 +38,7 @@ import { matchRefs, nearMatches } from "./snapshot.js";
 import { ensurePinnedTab } from "./pinnedTab.js";
 import { formatBytes, keepsOwnLogin, listRealProfiles } from "./profile.js";
 import { DEFAULT_START, startLocalBrowser, startManagedBrowser, type StartOptions } from "./managedBrowser.js";
-import { readState, stopInstance } from "./instance.js";
+import { readState, stopInstance, writeState } from "./instance.js";
 import { provisionLocalLogins } from "./credentials.js";
 import { isPidAlive } from "../workspace/chrome.js";
 import { auditLanding, NAVIGATING_VERBS, refuseNavigation, signInHost, signInLandingNote, viaFor } from "./siteGuard.js";
@@ -587,6 +587,26 @@ function currentTab(o: Ctx): { targetId: string; url: string } | null {
  * (Google — profile.ts), and the fallback for any site that keeps its session
  * where a cookie carry cannot reach.
  */
+/** One focus steal per this window, machine-wide — see InstanceState.loginRaisedAt. */
+export const LOGIN_RAISE_COOLDOWN_MS = 5 * 60_000;
+
+/**
+ * Whether `login` may pull the window to the front, given where the tab is
+ * and when a login raise last happened (machine-wide, from InstanceState).
+ * Pure, so the invariant is pinned by test: an already-authed page never
+ * raises, and a pending sign-in raises at most once per cooldown — a caller
+ * re-running `login` in a loop must never turn into repeated focus steals.
+ */
+export function loginRaisePlan(
+  startHost: string | null,
+  lastRaisedAt: number | undefined,
+  now: number,
+): "signed-in" | "cooldown" | "raise" {
+  if (!startHost) return "signed-in";
+  if (now - (lastRaisedAt ?? 0) < LOGIN_RAISE_COOLDOWN_MS) return "cooldown";
+  return "raise";
+}
+
 async function loginAsPerson(url: string | undefined, waitSeconds: number): Promise<number> {
   const o = ctx();
   if (url) {
@@ -599,15 +619,36 @@ async function loginAsPerson(url: string | undefined, waitSeconds: number): Prom
   const tab = currentTab(o);
   if (!tab) die("this session has no tab to sign in on", "give a URL: cast browser login <url>");
   const startHost = signInHost(tab.url);
-  const raised = await focusBrowserTabBlocking(tab.targetId);
-  if (raised.ok) console.log(`${OK} raised the agent browser${startHost ? ` on ${startHost}` : ""} — a separate window from your Chrome`);
-  else console.log(`${fmt.warning("!")} could not raise the window (${raised.reason}); it is the Chrome window titled by the page, behind your others`);
-  console.log(fmt.muted("  sign in there once; the login stays in the agent browser across restarts (only `stop --wipe` / `start --fresh` drop it)"));
-  printFooter(o, "login", auditOwner());
-  if (!startHost) {
-    console.log(`${OK} not on a sign-in page (${tab.url}) — nothing to wait for`);
+  const lastRaisedAt = readState()?.loginRaisedAt;
+  const plan = loginRaisePlan(startHost, lastRaisedAt, Date.now());
+  // Not a sign-in page: there is nothing for a person to type, so leave focus
+  // alone. A caller re-running `login` after the sign-in already landed must
+  // never keep pulling the window in front of the human (observed 2026-08-26:
+  // a retry loop raised the window every 10s over an already-authed page).
+  if (plan === "signed-in") {
+    console.log(`${OK} not on a sign-in page (${tab.url}) — already signed in, nothing to wait for; the window stays where it is`);
+    printFooter(o, "login", auditOwner());
     return 0;
   }
+  if (plan === "cooldown") {
+    // Still waiting on a person, but the window was raised moments ago —
+    // repeating the raise only steals focus, it cannot speed the sign-in up.
+    const sinceRaise = Math.round((Date.now() - (lastRaisedAt ?? 0)) / 1000);
+    console.log(
+      `${fmt.warning("!")} sign-in still pending on ${startHost} — the window was raised ${sinceRaise}s ago, not raising it again yet`,
+    );
+  } else {
+    // Stamp before raising: the focus sentinel (focusSentinel.ts) reads this
+    // to tell a wanted raise from a theft, so it must be visible on disk
+    // before the window ever moves.
+    const fresh = readState();
+    if (fresh) writeState({ ...fresh, loginRaisedAt: Date.now() });
+    const raised = await focusBrowserTabBlocking(tab.targetId);
+    if (raised.ok) console.log(`${OK} raised the agent browser on ${startHost} — a separate window from your Chrome`);
+    else console.log(`${fmt.warning("!")} could not raise the window (${raised.reason}); it is the Chrome window titled by the page, behind your others`);
+  }
+  console.log(fmt.muted("  sign in there once; the login stays in the agent browser across restarts (only `stop --wipe` / `start --fresh` drop it)"));
+  printFooter(o, "login", auditOwner());
   if (waitSeconds <= 0) return 0;
 
   const deadline = Date.now() + waitSeconds * 1000;

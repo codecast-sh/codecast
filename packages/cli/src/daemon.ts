@@ -136,6 +136,7 @@ import {
 import { startPaneStream, isPaneStreaming } from "./terminal/paneStream.js";
 import { attachWatchServer } from "./browser/watchServer.js";
 import { handleBrowserFocusHttp } from "./browser/focusHttp.js";
+import { startFocusSentinel } from "./browser/focusSentinel.js";
 import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOptions } from "./vault/vaultServer.js";
 import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
 import { enumerateProjectRoots, enumerateAgentHomeDirs, MAX_PROJECT_ROOTS } from "./projectRoots.js";
@@ -1511,6 +1512,8 @@ function startHookServer(
   setTimeout(() => { void healSqueezedAgentWindows(); }, 15_000).unref?.();
   const squeezeHealTimer = setInterval(() => { void healSqueezedAgentWindows(); }, 5 * 60 * 1000);
   squeezeHealTimer.unref?.();
+  // Bounce unprovoked raises by agent-driven Chromes (see focusSentinel.ts).
+  void startFocusSentinel(log).then((t) => t?.unref?.());
 
   server.listen(0, "127.0.0.1", () => {
     const addr = server.address();

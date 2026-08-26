@@ -22,19 +22,34 @@ import { spawnSync } from "../proc.js";
 import { readState } from "./instance.js";
 import { raiseAppByPidSync } from "./raiseApp.js";
 
-/** Pid of the frontmost app, or null off-macOS / when it cannot be read. */
-export function frontAppPid(): number | null {
+/** ASN key of the frontmost app — cheap (one spawn), stable per app, so a
+ *  poller can compare it between ticks and resolve the pid only on change. */
+export function frontAsn(): string | null {
   if (process.platform !== "darwin") return null;
   try {
     const asn = spawnSync("lsappinfo", ["front"], { encoding: "utf-8", timeout: 3_000 });
     const key = (asn.stdout ?? "").trim();
-    if (asn.status !== 0 || !key) return null;
+    return asn.status === 0 && key ? key : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve an ASN key from frontAsn() to its pid. */
+export function pidForAsn(key: string): number | null {
+  try {
     const info = spawnSync("lsappinfo", ["info", "-only", "pid", key], { encoding: "utf-8", timeout: 3_000 });
     const pid = parseInt(/=\s*(\d+)/.exec(info.stdout ?? "")?.[1] ?? "", 10);
     return pid > 0 ? pid : null;
   } catch {
     return null;
   }
+}
+
+/** Pid of the frontmost app, or null off-macOS / when it cannot be read. */
+export function frontAppPid(): number | null {
+  const key = frontAsn();
+  return key ? pidForAsn(key) : null;
 }
 
 /**
