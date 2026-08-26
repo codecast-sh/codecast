@@ -31,6 +31,7 @@ describe("fromConvexAgentType", () => {
     expect(fromConvexAgentType("gemini")).toBe("gemini");
     expect(fromConvexAgentType("opencode")).toBe("opencode");
     expect(fromConvexAgentType("pi")).toBe("pi");
+    expect(fromConvexAgentType("grok")).toBe("grok");
   });
 
   it("normalizes cowork, unknown, null and undefined to claude", () => {
@@ -49,6 +50,7 @@ describe("toConvexAgentType", () => {
     expect(toConvexAgentType("gemini")).toBe("gemini");
     expect(toConvexAgentType("opencode")).toBe("opencode");
     expect(toConvexAgentType("pi")).toBe("pi");
+    expect(toConvexAgentType("grok")).toBe("grok");
   });
 });
 
@@ -62,6 +64,7 @@ describe("parseExecutionAgentClientId", () => {
     expect(parseExecutionAgentClientId("gemini")).toBe("gemini");
     expect(parseExecutionAgentClientId("opencode")).toBe("opencode");
     expect(parseExecutionAgentClientId("pi")).toBe("pi");
+    expect(parseExecutionAgentClientId("grok")).toBe("grok");
   });
 
   it("fails closed for unknown, nullish, and non-string execution values", () => {
@@ -84,6 +87,7 @@ describe("fenced execution transports", () => {
     expect(AGENT_CLIENTS.gemini.executionTransports).toEqual(["tmux"]);
     expect(AGENT_CLIENTS.opencode.executionTransports).toEqual(["tmux"]);
     expect(AGENT_CLIENTS.pi.executionTransports).toEqual(["tmux"]);
+    expect(AGENT_CLIENTS.grok.executionTransports).toEqual(["tmux"]);
   });
 
   it("rejects unsupported app-server and external routing without fallback", () => {
@@ -193,6 +197,20 @@ describe("capabilitySupport", () => {
       plugin: "unsupported",
       hook: "unsupported",
     },
+    // Verified 2026-08-26 (planted-file `grok inspect` in a sandbox HOME, works
+    // logged out): AGENTS.md instruction slots and all four skills dirs load;
+    // `grok mcp` is the native MCP manager. Hooks (a config DIRECTORY), plugins
+    // (`grok plugin` semantics unverified) and subagents stay honestly
+    // unsupported.
+    grok: {
+      snippet: "write",
+      skill: "write",
+      command: "unsupported",
+      subagent: "unsupported",
+      mcp: "native",
+      plugin: "unsupported",
+      hook: "unsupported",
+    },
   };
 
   it("answers a defined support value for every (kind, client) pair", () => {
@@ -245,7 +263,7 @@ describe("agentFileTargets path templates", () => {
   const withTargets = Object.values(AGENT_CLIENTS).filter((d) => d.agentFileTargets);
 
   it("declares targets for exactly the verified clients", () => {
-    expect(withTargets.map((d) => d.id).sort()).toEqual(["claude", "codex", "cursor"]);
+    expect(withTargets.map((d) => d.id).sort()).toEqual(["claude", "codex", "cursor", "grok"]);
   });
 
   // The cross-client `.agents/skills` project dir is read by cursor (via
@@ -256,6 +274,10 @@ describe("agentFileTargets path templates", () => {
   // appearing there would tell a driver to write bytes claude never loads.
   it("pins who reads the cross-client .agents/skills project dir", () => {
     expect(AGENT_CLIENTS.cursor.agentFileTargets?.skillsDir?.sharedProject).toBe(".agents/skills");
+    // grok reads both the shared user dir and the shared project dir directly
+    // (skills.rs lookup order; all four verified live by inspect).
+    expect(AGENT_CLIENTS.grok.agentFileTargets?.skillsDir?.shared).toBe("~/.agents/skills");
+    expect(AGENT_CLIENTS.grok.agentFileTargets?.skillsDir?.sharedProject).toBe(".agents/skills");
     expect(AGENT_CLIENTS.codex.agentFileTargets?.skillsDir?.project).toBe(".agents/skills");
     expect(AGENT_CLIENTS.codex.agentFileTargets?.skillsDir?.sharedProject).toBeUndefined();
     expect(AGENT_CLIENTS.claude.agentFileTargets?.skillsDir?.shared).toBeUndefined();

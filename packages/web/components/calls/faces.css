@@ -1,0 +1,211 @@
+/*
+ * The floating faces: the call minimized to a circle of somebody's face,
+ * transparent everywhere else, over whatever you are working in.
+ *
+ * Everything here is written for a window with no background. The page paints
+ * nothing; only the circles and the chrome exist, and every pixel between them
+ * is a hole through to the application underneath — which is why the circles
+ * carry their own shadow (the window has none, deliberately: a rectangular
+ * drop shadow around invisible glass is the giveaway that ruins the effect).
+ */
+
+.faces-window {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 14px;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+/* Everyone: a row. Speaker: one circle with the rest stacked behind it at zero
+   opacity, so a swap is a crossfade and no video is ever torn down and rebuilt
+   for a person who is about to speak again. */
+.faces-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.faces-row--speaker .face {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+.faces-row--speaker .face--shown {
+  position: relative;
+}
+
+.face {
+  position: relative;
+  flex: none;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--sol-base02);
+  /* The circle's own depth. Two rings: a hairline that separates it from a
+     light background, and a soft shadow that separates it from a dark one. */
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--sol-text) 14%, transparent),
+    0 6px 18px rgba(0, 0, 0, 0.42);
+  opacity: 1;
+  transition: opacity 220ms ease, box-shadow 220ms ease, width 180ms ease, height 180ms ease;
+}
+.face--hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Speaking. The same cyan the walkie uses for a voice arriving, because it
+   means the same thing here: somebody is talking to you right now. */
+.face--speaking {
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--sol-cyan) 85%, transparent),
+    0 0 22px color-mix(in srgb, var(--sol-cyan) 30%, transparent),
+    0 6px 18px rgba(0, 0, 0, 0.42);
+}
+
+/* The video is laid out as a plain square and moved entirely by transform —
+   the crop loop writes one composited property per frame and never touches
+   layout. `fill` rather than `cover` because the transform is already doing
+   the aspect correction; `cover` would crop first and fight it. */
+.face video {
+  position: absolute;
+  left: 0;
+  top: 0;
+  object-fit: fill;
+  transform-origin: 0 0;
+  will-change: transform;
+  background: var(--sol-base02);
+}
+
+/* Camera off: the person's picture, filling the circle exactly as their video
+   would, so a row does not go ragged when somebody switches their camera off. */
+.face-avatar-img,
+.face-avatar-fallback {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.face-avatar-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sol-base02);
+  color: var(--sol-text-muted);
+  font-family: var(--font-mono);
+}
+
+/* Muted, on the circle itself: the one piece of state worth a glyph out here.
+   Everything else about a person lives back in the call. Top right, because the
+   bottom of the circle belongs to the name — at 72px the two collide there. */
+.face-mute {
+  position: absolute;
+  right: 4%;
+  top: 4%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--sol-red);
+  backdrop-filter: blur(4px);
+}
+
+.face-name {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 10px 6px 4px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent);
+  color: rgba(255, 255, 255, 0.92);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.1;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.face-waiting {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--sol-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+/* The chrome: hidden until the pointer comes near, and out of the way again
+   the moment it leaves. A permanent control bar under a floating face would
+   turn a glance into a widget. */
+.faces-chrome {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sol-base03) 88%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sol-text) 12%, transparent);
+  backdrop-filter: blur(8px);
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity 140ms ease, transform 140ms ease;
+  pointer-events: none;
+}
+.faces-window--hover .faces-chrome {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.faces-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: var(--sol-text-muted);
+  background: transparent;
+  transition: background 120ms ease, color 120ms ease;
+}
+.faces-btn:hover {
+  background: color-mix(in srgb, var(--sol-text) 12%, transparent);
+  color: var(--sol-text);
+}
+.faces-btn--on {
+  color: var(--sol-cyan);
+}
+.faces-btn--alert {
+  color: var(--sol-red);
+}
+.faces-btn--alert:hover {
+  background: color-mix(in srgb, var(--sol-red) 18%, transparent);
+  color: var(--sol-red);
+}
+
+/* Reduced motion: the swap still happens, it just happens at once. A crossfade
+   is a nicety; knowing who is talking is the product. */
+@media (prefers-reduced-motion: reduce) {
+  .face,
+  .faces-chrome,
+  .faces-btn {
+    transition: none;
+  }
+}

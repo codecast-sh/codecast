@@ -1,0 +1,405 @@
+/* The people window. Designed at 320px and never wider than it has to be:
+   every rule here is about surviving that column, not about decorating it.
+
+   NOTE, learned the hard way in presence.css: component CSS loads AFTER
+   Tailwind, so a `position` declared here would beat a caller's `absolute` and
+   drop the element into the flow. Nothing in this file declares position. */
+
+.people-panel {
+  /* Its own window: the page never scrolls, the roster does. */
+  height: 100vh;
+  overflow: hidden;
+  /* A buddy list is chrome end to end — names, presence lines, counts. Nothing
+     here is a paragraph anyone copies, and a drag across it used to highlight
+     half the roster. */
+  user-select: none;
+}
+
+/* A thin gutter that does not eat 15px of a 320px column. */
+.people-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sol-border) transparent;
+  overscroll-behavior: contain;
+}
+.people-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.people-scroll::-webkit-scrollbar-thumb {
+  background-color: var(--sol-border);
+  border-radius: 4px;
+}
+.people-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* The row's actions replace its unread badge on hover or keyboard focus.
+   Focus-within, not hover alone: a keyboard reaching the mic must SEE the mic.
+   Opacity rather than display, so the buttons keep their box and the name
+   column never reflows as a pointer crosses the list. */
+.people-row-actions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.people-row:hover .people-row-actions,
+.people-row:focus-within .people-row-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.people-row:hover .people-row-idle,
+.people-row:focus-within .people-row-idle {
+  opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .people-row-actions {
+    transition: none;
+  }
+}
+
+/* The mic on a row is not one action among three — it is THE action, and it
+   was invisible until a pointer happened to cross the row. It sits outside the
+   hover group with a seat of its own: half-lit at rest so the roster stays
+   quiet, full strength (and reachable) the moment the row is under a pointer or
+   a keyboard focus. */
+.people-row-key {
+  opacity: 0.5;
+  transition: opacity 120ms ease;
+}
+.people-row:hover .people-row-key,
+.people-row:focus-within .people-row-key {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .people-row-key {
+    transition: none;
+  }
+}
+
+/* ── The wall ────────────────────────────────────────────────────────────────
+ *
+ * Everyone at once, sized by how present they are. A loose cluster rather than
+ * a grid: a grid of unequal circles reads as a broken table, and the whole
+ * point of the sizes is that the eye should find the biggest face without
+ * counting anything. flex-wrap plus size-ordered faces does it for free.
+ *
+ * NOTE the rule at the top of this file: nothing here may declare `position` on
+ * an element a caller positions. The seat and the rings below are this file's
+ * own elements, which is why they may.
+ */
+
+.people-wall {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 12px 22px;
+}
+
+.people-wall-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 14px 16px;
+}
+
+/* The people who are not there. Their own quiet band under a hairline, so a
+   team of forty absentees costs one row and never sits shoulder to shoulder
+   with the people who are at their machines. */
+.people-wall-gone {
+  border-top: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
+  padding-top: 12px;
+}
+
+.people-wall-gone-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 10px;
+}
+
+/* One face's seat. It holds the circle at whatever size presence says, and the
+   floating name that hangs under it. Sized from --face so a presence change
+   animates the box and the avatar inside it together. */
+.people-face-seat {
+  position: relative;
+  display: inline-flex;
+  width: var(--face);
+  height: var(--face);
+  transition:
+    width 280ms cubic-bezier(0.2, 0.8, 0.3, 1),
+    height 280ms cubic-bezier(0.2, 0.8, 0.3, 1),
+    opacity 180ms ease;
+}
+
+/* Pointed at, the face and its name come to the front of the cluster: the
+   label is wider than the circle it belongs to, and behind a neighbour it
+   would be unreadable. */
+.people-face-seat:hover,
+.people-face-seat:focus-within,
+.people-face-seat[data-refused] {
+  z-index: 20;
+}
+
+/* THE FACE IS THE KEY, so the whole circle is the hit area — 88 pixels of it
+   for somebody with work running, and never smaller than the avatar you can
+   see. No border and no fill of its own: the face is the control, and a ring
+   drawn around a face is a ring the voice gets to use. */
+.people-face {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: 999px;
+  cursor: pointer;
+  /* A key is a key: dragging across a wall of them must not smear a selection
+     over the team, and a tap must not flash a grey box on a touch screen. */
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 120ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+.people-face:focus-visible {
+  outline: 2px solid var(--sol-cyan);
+  outline-offset: 3px;
+  border-radius: 999px;
+}
+
+/* The avatar inside follows the same clock as its seat, so a face growing when
+   somebody sits down grows as one thing rather than as a circle catching up
+   with its own box. */
+.people-face-av {
+  transition:
+    width 280ms cubic-bezier(0.2, 0.8, 0.3, 1),
+    height 280ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+/* THE LEVEL RING, once per direction.
+ *
+ * Same machinery as the walkie key's own ring and for the same reason: one
+ * custom property, `--level`, written straight onto the element by the
+ * subscription in hooks/useWalkie, so a voice moves a gradient and never a
+ * React tree. Two of them, because both directions can be true at once — you
+ * hold their face while their last burst is still playing — and one element
+ * can only carry one `--level`.
+ *
+ * Warm going out, cool coming in, from the walkie's own two tokens: the wall
+ * must not invent a third language for a direction the rest of the app already
+ * says in colour. */
+.people-face-ring {
+  --level: 0;
+  position: absolute;
+  inset: -5px;
+  border-radius: 999px;
+  opacity: 0;
+  pointer-events: none;
+  background: conic-gradient(
+    from -90deg,
+    var(--tone) calc(var(--level) * 360deg),
+    transparent calc(var(--level) * 360deg)
+  );
+  /* Hollow: a ring, not a pie. */
+  -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+  mask: radial-gradient(closest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+  transition: opacity 140ms ease;
+}
+
+.people-face-ring-tx { --tone: var(--walkie-tx); }
+.people-face-ring-rx { --tone: var(--walkie-rx); }
+
+/* Present from the moment the mic opens and brighter the louder the voice, so
+   a silent open microphone reads as a dim ring rather than as nothing at all —
+   which is the only proof on screen that the mic is hearing anything. */
+.people-face[data-tx] .people-face-ring-tx,
+.people-face[data-rx] .people-face-ring-rx {
+  opacity: calc(0.4 + var(--level) * 0.6);
+}
+
+/* HELD. The key goes down, because a key you are holding should look held —
+   the cheapest honesty available, on screen for exactly as long as the thumb
+   is on the face. */
+.people-face[data-tx] {
+  transform: scale(0.93);
+}
+
+.people-face[data-tx]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  pointer-events: none;
+  box-shadow:
+    inset 0 3px 9px color-mix(in srgb, #000 45%, transparent),
+    0 0 calc(4px + var(--level, 0) * 18px) color-mix(in srgb, var(--walkie-tx) 50%, transparent);
+}
+
+/* THEY are talking. A small lift, the cool ring, and nothing else: an incoming
+   burst is somebody else's gesture and must not look like one of yours. */
+.people-face[data-rx] {
+  transform: scale(1.06);
+}
+
+/* The hold cannot happen — their door is shut, you are in another call. The
+   face keeps its size (they are still there) and takes the refusal's outline,
+   and the reason arrives in words under it. Never a dead press. */
+.people-face-seat[data-refused] .people-face {
+  animation: people-face-refuse 260ms ease-in-out;
+}
+
+.people-face-seat[data-refused] .people-face::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: 999px;
+  pointer-events: none;
+  border: 1.5px solid color-mix(in srgb, var(--sol-red) 70%, transparent);
+}
+
+@keyframes people-face-refuse {
+  0%, 100% { transform: translateX(0); }
+  30%      { transform: translateX(-3px); }
+  70%      { transform: translateX(3px); }
+}
+
+/* One person is being talked to, so the rest of the wall steps back. Slight —
+   the others are still there and still readable — but enough that the eye is
+   in no doubt where the voice is going. */
+.people-wall[data-holding] .people-face-seat:not([data-hold]) {
+  opacity: 0.34;
+}
+
+/* The unread count, in the corner the presence badge does not use. */
+.people-face-unread {
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  border: 1.5px solid var(--sol-bg);
+  background: var(--sol-cyan);
+  color: var(--sol-bg);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* Muted keeps its number: muting a room is not the same as having read it. */
+.people-face-unread-muted {
+  background: var(--sol-border);
+  color: var(--sol-text);
+}
+
+/* The name and what they are doing, floating under the face rather than taking
+   a row of its own. A wall of forty people cannot afford forty lines of text,
+   and the one under the pointer is the only one being read. */
+.people-face-label {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  width: max-content;
+  max-width: 164px;
+  padding: 3px 8px 4px;
+  border-radius: 6px;
+  border: 1px solid var(--sol-border);
+  background: var(--sol-bg-alt);
+  box-shadow: 0 4px 12px color-mix(in srgb, #000 28%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.people-face-seat:hover .people-face-label,
+.people-face-seat:focus-within .people-face-label,
+.people-face-seat[data-refused] .people-face-label {
+  opacity: 1;
+}
+
+.people-face-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.25;
+  color: var(--sol-text);
+}
+
+/* The activity line WRAPS, unlike the name above it. A name is an identifier
+   and an ellipsis still identifies; this line can be a refusal ("You are in
+   another call"), and half a reason is not feedback — which is exactly what a
+   truncated one looked like the first time it rendered. */
+.people-face-line {
+  max-width: 100%;
+  font-size: 10.5px;
+  line-height: 1.3;
+  text-align: center;
+  text-wrap: balance;
+}
+
+/* The wall|list switch in the header. */
+.people-view-switch {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--sol-bg-alt);
+}
+
+.people-view-switch button {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--sol-text-dim);
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.people-view-switch button:hover {
+  color: var(--sol-text);
+}
+
+.people-view-switch button[aria-pressed="true"] {
+  background: var(--sol-bg-highlight);
+  color: var(--sol-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .people-face-seat,
+  .people-face,
+  .people-face-av,
+  .people-face-ring,
+  .people-face-label {
+    transition: none;
+  }
+  .people-face-seat[data-refused] .people-face {
+    animation: none;
+  }
+  /* The ring stops sweeping and becomes brightness alone. The level is still
+     shown — somebody who asked for less motion still has to be able to tell a
+     live microphone from a dead one — but it no longer moves an edge around a
+     face. Same trade the walkie key makes. */
+  .people-face-ring {
+    background: var(--tone);
+  }
+  .people-face[data-tx] .people-face-ring-tx,
+  .people-face[data-rx] .people-face-ring-rx {
+    opacity: calc(0.25 + var(--level) * 0.5);
+  }
+}

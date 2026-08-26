@@ -38,7 +38,7 @@
         "NSFaceIDUsageDescription": "Codecast uses Face ID to unlock the app and keep your workspace private. For example, you can require Face ID before the app opens your team's conversations.",
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "Codecast uses the camera to share your live video with teammates when you turn your camera on during a team huddle (a live voice and video call).",
-        "NSMicrophoneUsageDescription": "Codecast uses the microphone to transmit your voice to teammates while you are in a team huddle (a live voice and video call). Audio is only captured while you are in a huddle.",
+        "NSMicrophoneUsageDescription": "Codecast uses the microphone for two things you start yourself. In a team huddle (a live voice and video call) it transmits your voice to teammates. When you press record, it captures the meeting in the room so Codecast can write you a transcript and a summary; that recording is yours alone and no teammate can open it. Audio is never captured at any other time.",
         "NSPhotoLibraryUsageDescription": "Codecast uses your photo library so you can attach photos and screenshots to messages. For example, you can attach a screenshot of a bug to a task you send to your coding agent or teammates. Only the photos you select are uploaded."
       },
       "deploymentTarget": "16.0"

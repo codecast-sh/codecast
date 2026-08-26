@@ -20,13 +20,13 @@
 // several teams; each one runs through `requireTeam`, so naming a team you are
 // not in returns nothing rather than someone else's chat.
 
-import { internalMutation, mutation, query } from "./functions";
+import { internalAction, internalMutation, mutation, query } from "./functions";
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { getAuthenticatedUserId } from "./pendingMessages";
-import { isTeamAdmin, isTeamMember } from "./privacy";
+import { isConversationOwner, isTeamAdmin, isTeamMember } from "./privacy";
 import { requireTeamFeature, teamHasFeature } from "./teamFeatures";
 import { canAccessChannel, channelMemberIds, isChannelMember, isRestricted } from "./chatAccess";
 import { dmKeyFor, isAgentTurnInFlight, isLiveVoiceRow, isSilentAgentRow, isVisibleAgentPending } from "@codecast/shared/chat";
@@ -1862,6 +1862,11 @@ export const sendMessage = mutation({
     // inside a codecast-managed session, which is what makes the wake path's
     // first check real rather than decorative.
     origin: v.optional(v.literal("agent")),
+    // Which session typed it. Cosmetic self-identification riding the same
+    // honesty rule as `origin`: it changes how the line is DRESSED, never what
+    // it may do. Ignored without `origin`, and the title/agent snapshot is only
+    // taken when the caller owns the session — see postChatMessage.
+    origin_session_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
@@ -1913,6 +1918,7 @@ export const sendMessage = mutation({
       attachments,
       clientId: args.client_id,
       origin: args.origin,
+      originSessionId: args.origin ? args.origin_session_id : undefined,
       broadcast: args.broadcast,
     });
 
@@ -1998,6 +2004,8 @@ async function postChatMessage(
     attachments: Array<any>;
     clientId?: string;
     origin?: "agent";
+    // The session that typed an origin:"agent" line, for personification.
+    originSessionId?: string;
     // "Also send to #channel" — stored only on a real reply (root present).
     broadcast?: boolean;
     // Set when the author is an anchor's bot identity: the row renders as the
@@ -2017,6 +2025,27 @@ async function postChatMessage(
   const here = mentionsHere(content);
   if (here) await chatRateLimit(ctx, authorId, "chat.here", HERE_LIMIT);
 
+  // Personify a session-typed line. The id is caller-supplied, so the title
+  // snapshot happens only when the sender OWNS that session — otherwise any
+  // api_token holder could read a teammate's private session title into a
+  // channel by guessing its id. An unowned or unknown id still lands (it names
+  // nothing the viewer can resolve without access), only the snapshot is
+  // withheld. Title through the same one-line sanitizer as every name that
+  // crosses onto someone else's screen.
+  let originSession: { title?: string; agent_type?: string } | undefined;
+  if (opts.origin === "agent" && opts.originSessionId) {
+    const conv = await ctx.db
+      .query("conversations")
+      .withIndex("by_session_id", (q: any) => q.eq("session_id", opts.originSessionId))
+      .first();
+    if (conv && (await isConversationOwner(ctx, authorId, conv))) {
+      originSession = {
+        title: conv.title ? oneLine(conv.title, 80) : undefined,
+        agent_type: conv.agent_type,
+      };
+    }
+  }
+
   const messageId = await ctx.db.insert("chat_messages", {
     team_id: channel.team_id,
     channel_id: channel._id,
@@ -2031,6 +2060,9 @@ async function postChatMessage(
     attachments: attachments.length > 0 ? attachments : undefined,
     client_id: opts.clientId,
     origin: opts.origin,
+    origin_session_id: opts.origin === "agent" ? opts.originSessionId : undefined,
+    origin_session_title: originSession?.title,
+    origin_agent_type: originSession?.agent_type,
     created_at: now,
     updated_at: now,
   });
@@ -2046,6 +2078,7 @@ async function postChatMessage(
     here,
     createdAt: now,
     agent: !!opts.agent,
+    actorLabel: originSession?.title,
   });
 
   return { messageId, mentions, hereCount, actorName, createdAt: now };
@@ -2072,6 +2105,10 @@ async function announceChatMessage(
     createdAt: number;
     /** An anchor's post: no read mark and no bell of its own. */
     agent?: boolean;
+    /** Overrides the actor in bells and banners: a session-typed line notifies
+     *  as the SESSION, not as the human it ran as — the same personification
+     *  the transcript renders. Already ownership-checked by the caller. */
+    actorLabel?: string;
     /** Push body when the words are empty: an image send says what it carries,
      *  a burst whose transcript came back blank says "Voice note". */
     pushFallback?: string;
@@ -2094,7 +2131,9 @@ async function announceChatMessage(
   // self-editable and goes into the bell and the phone banner ahead of the
   // text, where a bidi override or a fake "…mentioned you in #security:" prefix
   // makes the banner read as if someone else sent it.
-  const actorName = oneLine(displayName(author), 60);
+  const actorName = opts.actorLabel
+    ? oneLine(opts.actorLabel, 60)
+    : oneLine(displayName(author), 60);
   const preview = plainPreview(content);
   // The banner's "where" line. A 1:1 DM gets none — the title already names
   // the person, and "Direct message" under their name is noise.
@@ -2264,6 +2303,13 @@ async function landVoiceBurst(
 ): Promise<Id<"users">[]> {
   const { channel, message, content, attachments } = opts;
   const mentions = await resolveMentions(ctx, channel.team_id, content, message.user_id);
+  // A burst that landed with a recording and no words. Something in the live
+  // path came back empty — the recognizer was refused, the socket never opened,
+  // the room was too quiet for the server's VAD — and the person still spoke.
+  // The recording is right there, so the words are recoverable, and recovering
+  // them is what makes "no words" impossible rather than merely unlikely.
+  const recording = attachments.find((a) => String(a?.mime ?? "").startsWith("audio/"));
+  const recover = !content.trim() && !!recording;
   await patchChat(ctx, message._id, {
     content,
     mentions: mentions.length > 0 ? mentions : undefined,
@@ -2272,6 +2318,7 @@ async function landVoiceBurst(
       status: "done" as const,
       duration_ms: opts.durationMs,
       room_key: message.voice?.room_key,
+      ...(recover ? { transcribing: true } : {}),
     },
   });
   await announceChatMessage(ctx, {
@@ -2290,8 +2337,91 @@ async function landVoiceBurst(
     // A recognizer that heard nothing still leaves a playable recording.
     pushFallback: "Voice note",
   });
+  // After the announcement, deliberately: the message has already happened, and
+  // the words arriving a couple of seconds later revise it rather than delay it.
+  if (recover) {
+    await ctx.scheduler.runAfter(0, internal.chat.transcribeVoiceNote, {
+      message_id: message._id,
+      storage_id: recording!.storage_id,
+    });
+  }
   return mentions;
 }
+
+/** What the server transcribes a rescued recording with. The same family as the
+ *  live recognizer's model, so the two paths do not disagree about a word. */
+const VOICE_FALLBACK_MODEL = "gpt-4o-mini-transcribe";
+
+/**
+ * The words, from the recording, when the live path produced none.
+ *
+ * This is the guarantee behind the whole feature: a voice message is words, and
+ * the live recognizer is only the fast way to get them. It costs an API call
+ * exactly when that fast way came back empty, which on a healthy client is
+ * never.
+ */
+export const transcribeVoiceNote = internalAction({
+  args: { message_id: v.id("chat_messages"), storage_id: v.id("_storage") },
+  handler: async (ctx, args): Promise<void> => {
+    let content = "";
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (apiKey) {
+      try {
+        const audio = await ctx.storage.get(args.storage_id);
+        if (audio) {
+          const form = new FormData();
+          // The extension is what the API reads the container off; the walkie
+          // records webm everywhere but Safari, which gives mp4.
+          const ext = audio.type.includes("mp4") ? "m4a" : "webm";
+          form.append("file", audio, `voice.${ext}`);
+          form.append("model", VOICE_FALLBACK_MODEL);
+          form.append("response_format", "text");
+          const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiKey}` },
+            body: form,
+          });
+          if (resp.ok) content = (await resp.text()).trim();
+          else console.error("[chat] voice transcription failed", resp.status, (await resp.text()).slice(0, 300));
+        }
+      } catch (err) {
+        console.error("[chat] voice transcription threw", err);
+      }
+    }
+    // Always run: the flag has to come off even when nothing was recovered, or
+    // the bubble sits on "getting the words" forever.
+    await ctx.runMutation(internal.chat.applyVoiceTranscription, {
+      message_id: args.message_id,
+      content: content.slice(0, MAX_CHAT_CONTENT),
+    });
+  },
+});
+
+/**
+ * Write recovered words onto the burst, if the burst still wants them.
+ *
+ * Guarded rather than trusted, because this lands seconds after the message
+ * became everybody's: a row that was deleted meanwhile, or that already has
+ * words (a late live transcript, an edit), keeps what it has and only loses the
+ * flag. The author is never touched — this recovers what somebody said, it does
+ * not say anything.
+ *
+ * Mentions are deliberately NOT resolved out of the recovered text. A spoken
+ * "at Sam" is a transcription artifact, exactly as a spoken "at here" is, and
+ * the message's one notification has already been sent.
+ */
+export const applyVoiceTranscription = internalMutation({
+  args: { message_id: v.id("chat_messages"), content: v.string() },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.message_id);
+    if (!message?.voice?.transcribing) return { patched: false };
+    const { transcribing: _was, ...voice } = message.voice;
+    const words = args.content.trim();
+    const keep = !!message.deleted_at || !!message.content.trim() || !words;
+    await patchChat(ctx, message._id, keep ? { voice } : { content: words, voice });
+    return { patched: !keep };
+  },
+});
 
 // A burst nobody will ever hear: a brushed key, or a hold that said nothing.
 // It tombstones, exactly like a deleted message, and is never removed from the

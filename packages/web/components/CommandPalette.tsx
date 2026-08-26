@@ -29,7 +29,8 @@ import { memberAvatarUrl, memberDisplayName } from "../lib/liveEntities";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useCollectionRows } from "../hooks/useCollectionRows";
 import { useSyncTriggers } from "../hooks/useSyncTriggers";
-import { isElectron } from "../lib/desktop";
+import { POP_OUT_PEOPLE_TITLE, isElectron, isPeopleWindow } from "../lib/desktop";
+import { popOutPeople } from "./people/popOutPeople";
 import { isInboxRoute } from "../lib/inboxRouting";
 import { sortedWorkbenches, switchToWorkbench } from "../lib/workbenchSwitch";
 import type { WorkbenchSnapshot } from "../store/workbench";
@@ -94,6 +95,8 @@ import {
   Zap,
   CornerDownRight,
   Headphones,
+  PictureInPicture2,
+  Users,
   Sparkles,
   LayoutDashboard,
   Plus,
@@ -2708,6 +2711,32 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 </CommandPrimitive.Item>
               );
             })}
+            {/* The buddy list, in a window of its own. Hand-written rather
+                than a GLOBAL_COMMANDS row because it carries no chord: those
+                rows derive a keycap hint from the shortcut registry, and an
+                empty one reads as a shortcut nobody can find. */}
+            {!isPeopleWindow() && (
+              <CommandPrimitive.Item
+                key="cmd-people-wall"
+                value="People wall faces team who is around hold to talk walkie everyone"
+                onSelect={() => { closePalette(); useInboxStore.getState().openPeopleWall(); }}
+                className={itemClass}
+              >
+                <Users className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                <span className="truncate flex-1">The team — hold a face to talk</span>
+              </CommandPrimitive.Item>
+            )}
+            {!isPeopleWindow() && (
+              <CommandPrimitive.Item
+                key="cmd-people"
+                value="People window buddy list roster presence pop out floating who is online"
+                onSelect={() => { closePalette(); void popOutPeople(); }}
+                className={itemClass}
+              >
+                <PictureInPicture2 className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                <span className="truncate flex-1">{POP_OUT_PEOPLE_TITLE}</span>
+              </CommandPrimitive.Item>
+            )}
             <CommandPrimitive.Item
               key="cmd-theme"
               value="Switch theme dark light mode appearance"

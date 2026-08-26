@@ -6,11 +6,13 @@ import { useMountEffect } from "../../../hooks/useMountEffect";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { setGuestImageScope } from "../../../hooks/useStorageImageUrl";
 import { DashboardLayout } from "../../../components/DashboardLayout";
+import { AppLoader } from "../../../components/AppLoader";
 import { ConversationDiffLayout } from "../../../components/ConversationDiffLayout";
 import { ConversationData } from "../../../components/ConversationView";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
-import { useInboxStore } from "../../../store/inboxStore";
+import { useInboxStore, isConvexId } from "../../../store/inboxStore";
+import { isForeignSession } from "../../../lib/liveEntities";
 import { PREFILL_PARAM, buildPrefillText } from "../../../lib/composerPrefill";
 import { setShareTokenScope } from "../../../lib/shareTokenScope";
 
@@ -162,60 +164,12 @@ function GuestConversationView({
   );
 }
 
+/** The single app loader, inside the shell so the sidebar and rails are
+ *  already in place when the inbox takes over — no hand-rolled skeleton. */
 function ConversationLoadingSkeleton() {
   return (
     <DashboardLayout>
-      <div className="max-w-4xl mx-auto px-4 py-4 space-y-6 animate-pulse motion-reduce:animate-none">
-        <div className="bg-sol-blue/10 border border-sol-blue/30 rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-6 h-6 rounded bg-sol-blue/30" />
-            <div className="h-3 w-12 bg-sol-blue/30 rounded" />
-            <div className="h-3 w-16 bg-sol-blue/20 rounded" />
-          </div>
-          <div className="pl-8 space-y-2">
-            <div className="h-3 bg-sol-blue/20 rounded w-3/4" />
-            <div className="h-3 bg-sol-blue/20 rounded w-1/2" />
-          </div>
-        </div>
-
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-6 h-6 rounded bg-sol-orange/60" />
-            <div className="h-3 w-14 bg-sol-bg-alt rounded" />
-            <div className="h-3 w-16 bg-sol-bg-alt rounded" />
-          </div>
-          <div className="pl-8 space-y-2">
-            <div className="h-3 bg-sol-bg-alt rounded w-full" />
-            <div className="h-3 bg-sol-bg-alt rounded w-5/6" />
-            <div className="h-3 bg-sol-bg-alt rounded w-4/5" />
-          </div>
-        </div>
-
-        <div className="bg-sol-blue/10 border border-sol-blue/30 rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-6 h-6 rounded bg-sol-blue/30" />
-            <div className="h-3 w-12 bg-sol-blue/30 rounded" />
-            <div className="h-3 w-16 bg-sol-blue/20 rounded" />
-          </div>
-          <div className="pl-8">
-            <div className="h-3 bg-sol-blue/20 rounded w-2/3" />
-          </div>
-        </div>
-
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-6 h-6 rounded bg-sol-orange/60" />
-            <div className="h-3 w-14 bg-sol-bg-alt rounded" />
-            <div className="h-3 w-16 bg-sol-bg-alt rounded" />
-          </div>
-          <div className="pl-8 space-y-2">
-            <div className="h-3 bg-sol-bg-alt rounded w-full" />
-            <div className="h-3 bg-sol-bg-alt rounded w-11/12" />
-            <div className="h-3 bg-sol-bg-alt rounded w-3/4" />
-            <div className="h-3 bg-sol-bg-alt rounded w-5/6" />
-          </div>
-        </div>
-      </div>
+      <AppLoader className="min-h-0 h-full bg-transparent" size={32} />
     </DashboardLayout>
   );
 }
@@ -282,13 +236,37 @@ export default function ConversationPage() {
     api.conversations.resolveConversation,
     id ? { id, ...(shareToken ? { share_token: shareToken } : {}) } : "skip"
   );
-  // Cached presence is not access evidence. This public/shared route waits for
-  // the server's explicit access result until it has its own offline-capable
-  // view contract.
   const effective = resolved;
 
+  // Local-first: a session already in this browser's cache was synced under
+  // this signed-in identity, so a deep link to it goes straight into the inbox
+  // — the same path a sidebar click takes — instead of holding the skeleton for
+  // a full resolveConversation round trip. Access is still enforced by every
+  // id-keyed query the inbox runs. Share-link visits keep the server wait: the
+  // token must be presented and redeemed before the inbox can see anything.
+  const cached = useInboxStore((s) => {
+    if (!treatAsAuthed || shareToken || !isConvexId(id)) return null;
+    const sess = s.sessions[id];
+    if (!sess) return null;
+    const me = s.currentUser?._id as string | undefined;
+    return { isOwn: !isForeignSession(sess, s.conversations[id], me) };
+  });
+
   if (!id) return <NotFoundView />;
-  if (effective === undefined) return <ConversationLoadingSkeleton />;
+  if (effective === undefined) {
+    if (cached) {
+      return (
+        <RedirectToInbox
+          id={id}
+          isOwn={cached.isOwn}
+          targetMessageId={targetMessageId}
+          highlightQuery={highlightQuery}
+          prefill={prefill}
+        />
+      );
+    }
+    return <ConversationLoadingSkeleton />;
+  }
   if (effective.access_level === "denied") {
     if (!isAuthLoading && !treatAsAuthed) {
       const returnTo = `/conversation/${id}${window.location.search}${window.location.hash}`;
