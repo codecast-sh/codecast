@@ -1,6 +1,11 @@
-// Parser for the session→session message wrapper produced by `cast send`.
-// The wire format is defined server-side by formatSessionMessage in
-// packages/convex/convex/pendingMessages.ts — keep the tag name in sync.
+// Parsers for the machine-delivered user-message wire formats. The detection
+// predicates live in @codecast/shared/contracts (machineMessages.ts) so the
+// convex send classifier shares them; this module re-exports them and adds the
+// client-side parsers/preview cleaning on top.
+//
+// The session→session wrapper is produced by `cast send` — the wire format is
+// defined server-side by formatSessionMessage in
+// packages/convex/convex/pendingMessages.ts; keep the tag name in sync.
 //
 //   <session-message from="jx7c6zk">
 //   the body
@@ -9,6 +14,28 @@
 // Greedy body is intentional: message text is exact user/agent content and may
 // itself mention `</session-message>`. The formatter's final close tag is the
 // framing boundary.
+import {
+  stripInjectionNoise,
+  isSessionMessage,
+  isTeammateMessage,
+  stripTeammateFraming,
+  isScheduledTaskMessage,
+  isChatWakePrompt,
+  isMachineDeliveredMessage,
+  CHAT_WAKE_HEADER,
+} from "@codecast/shared/contracts";
+
+export {
+  stripInjectionNoise,
+  isSessionMessage,
+  isTeammateMessage,
+  stripTeammateFraming,
+  isTeammateFramingOnly,
+  isScheduledTaskMessage,
+  isChatWakePrompt,
+  isMachineDeliveredMessage,
+} from "@codecast/shared/contracts";
+
 const SESSION_MESSAGE_RE = /<session-message\s+from="([^"]*)"[^>]*>([\s\S]*)<\/session-message>/;
 const SESSION_MESSAGE_NAME_RE = /<session-message\s+from="[^"]*"\s+name="([^"]*)"/;
 
@@ -36,17 +63,6 @@ export function parseSessionMessage(text: string): { from: string; body: string;
   return { from: match[1].trim(), body: removeSessionMessageFraming(match[2]), name };
 }
 
-// Normalize the wrappers/control chars the daemon may prepend before the tag.
-// A session message is injected via tmux, so the input-clearing keystrokes
-// (Ctrl-A/Ctrl-K) occasionally leak in as leading control chars, and
-// system/task reminders can be appended by the harness.
-function stripInjectionNoise(text: string): string {
-  return text
-    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
-    .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
-    .replace(/^[\x00-\x1f\s]+/, "");
-}
-
 // Full parse of an inbound session→session message from a raw user-message
 // content string. Use where the complete content is available (classification
 // and rendering) and the sender/body are needed.
@@ -57,17 +73,6 @@ export function parseInboundSessionMessage(
   const cleaned = stripInjectionNoise(rawContent);
   if (!cleaned.startsWith("<session-message")) return null;
   return parseSessionMessage(cleaned);
-}
-
-// Lightweight detection that a user message is actually an inbound
-// session→session message (delivered by `cast send`). Keys off the OPENING tag
-// only, so it still fires on a truncated preview (last_message_preview is
-// sliced to 200 chars, which can drop the closing tag). Surfaces that present
-// "what the human said" — the sticky pill, the message navigator, card
-// previews — use this to skip these machine-delivered messages.
-export function isSessionMessage(rawContent: string | null | undefined): boolean {
-  if (!rawContent) return false;
-  return /^<session-message\s+from="/.test(stripInjectionNoise(rawContent));
 }
 
 // Mirror of the server-side formatter, for any client that wants to construct one
@@ -120,12 +125,7 @@ export interface ChatWakePrompt {
   deadlineMinutes?: number;
 }
 
-const CHAT_WAKE_HEADER = /^\[codecast team chat — #([^\]\n]+)\]\n/;
 const CHAT_WAKE_SELF = "You (earlier)";
-
-export function isChatWakePrompt(rawContent: string | null | undefined): boolean {
-  return !!rawContent && CHAT_WAKE_HEADER.test(stripInjectionNoise(rawContent));
-}
 
 export function parseChatWakePrompt(rawContent: string | null | undefined): ChatWakePrompt | null {
   if (!rawContent) return null;
@@ -171,47 +171,6 @@ export function parseChatWakePrompt(rawContent: string | null | undefined): Chat
     entries: entries.map((e) => ({ ...e, content: e.content.trim() })).filter((e) => e.content),
     deadlineMinutes: deadline ? Number(deadline[1]) : undefined,
   };
-}
-
-// --- Teammate broadcasts (inter-agent multi-agent harness) ---------------------------
-// A separate wire format from `cast send`: the harness wraps a message from another agent
-// in <teammate-message teammate_id="…"> tags, plus a fixed boilerplate lead-in ("Another
-// Claude session sent a message:") and trailing disclaimer ("This came from another Claude
-// session — … permission laundering."). Like a session message, this is machine-delivered,
-// not typed by the human, so the "what the human said" surfaces skip it.
-
-const TEAMMATE_FRAMING_LEADIN = /^Another\s+\S+\s+session sent a message:?/i;
-const TEAMMATE_FRAMING_TRAILER = /This came from another\s+\S+\s+session[\s\S]*$/i;
-
-export function isTeammateMessage(rawContent: string | null | undefined): boolean {
-  return !!rawContent && rawContent.includes("<teammate-message");
-}
-
-// Strip the harness's framing boilerplate (machine instruction to the receiving agent, not
-// content). Use on the text left over after the <teammate-message> tags are removed.
-export function stripTeammateFraming(text: string): string {
-  return text.replace(TEAMMATE_FRAMING_LEADIN, "").replace(TEAMMATE_FRAMING_TRAILER, "").trim();
-}
-
-// True when the only non-tag text is that framing — i.e. a pure teammate broadcast with no
-// human-authored words around it.
-export function isTeammateFramingOnly(leftover: string): boolean {
-  return stripTeammateFraming(leftover).length === 0;
-}
-
-// A `cast trigger` injection (the taskScheduler wraps the prompt; the
-// transcript renders it as a ScheduledTaskBlock — same detection pattern as
-// conversationProcessor). The <scheduled-task> tag is the frozen wire format
-// from before the triggers rename; old transcripts carry it forever.
-export function isScheduledTaskMessage(rawContent: string | null | undefined): boolean {
-  return !!rawContent && /^<scheduled-task[\s>]/.test(rawContent.trim());
-}
-
-// Any user-role message delivered by machinery rather than typed by the human: a
-// cross-session `cast send` message, an inter-agent teammate broadcast, a
-// scheduled-task injection, or a team-chat mention waking the anchor.
-export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
-  return isSessionMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isChatWakePrompt(rawContent);
 }
 
 export type MachineDeliveredKind = "schedule" | "session" | "teammate" | "chat";
@@ -335,7 +294,8 @@ export function parseSpawnedTaskPrompt(rawContent: string | null | undefined): S
 // fallback, the mobile inbox/team cards). Lives here — not in a component file — because
 // the Expo bundle imports it and must not drag web UI dependencies into Hermes.
 
-const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan", "[Codecast import]", 'Background agent "'];
+// "[codecast]" is the CLI's injected session-move notice (sessionMoveNotice.ts).
+const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan", "[Codecast import]", "[codecast]", 'Background agent "'];
 
 const NOISE_PATTERNS = [
   /toolu_[A-Za-z0-9_-]+/,

@@ -21,6 +21,7 @@ export * from "./vaultProtocol";
 export * from "./vaultMirror";
 export * from "./terminalStream";
 export * from "./callRoomKeys";
+export * from "./recordingAudio";
 export * from "./callPush";
 export * from "./transcriptChunk";
 export * from "./convexErrors";
@@ -36,6 +37,9 @@ export * from "./capabilityResolver";
 export * from "./fleetDiff";
 export * from "./capabilityScopes";
 export * from "./sanitizeText";
+// Machine-delivered message detection: web/mobile previews and the convex
+// send classifier must agree on what a human-typed message is.
+export * from "./machineMessages";
 export * from "./mcpRegistry";
 export * from "./usageLimits";
 // The connectable-apps catalog (the /capabilities Apps tab): Convex answers
