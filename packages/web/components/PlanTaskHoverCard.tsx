@@ -7,35 +7,16 @@ import { useRouter } from "next/navigation";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import Link from "next/link";
-import {
-  Target,
-  Circle,
-  CircleDot,
-  CheckCircle2,
-  CircleDotDashed,
-  XCircle,
-} from "lucide-react";
+import { Target } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { TASK_STATUS, type TaskStatus } from "./TaskStatusBadge";
 
 const api = _api as any;
 
-const STATUS_ICON: Record<string, any> = {
-  draft: CircleDotDashed,
-  open: Circle,
-  in_progress: CircleDot,
-  in_review: CircleDot,
-  done: CheckCircle2,
-  dropped: XCircle,
-};
-
-const STATUS_COLOR: Record<string, string> = {
-  draft: "text-sol-text-dim",
-  open: "text-sol-blue",
-  in_progress: "text-sol-yellow",
-  in_review: "text-sol-violet",
-  done: "text-sol-green",
-  dropped: "text-sol-text-dim",
-};
+// Status glyph/color from the canonical TASK_STATUS vocabulary — the
+// StatusCircle "fill" icons, so tasks read the same here as on the board.
+const taskVisual = (status?: string | null) =>
+  TASK_STATUS[(status || "open") as TaskStatus] ?? TASK_STATUS.open;
 
 function PlanHoverContent({ planId }: { planId: Id<"plans"> }) {
   const queryPlan = useQuery(api.plans.webPlanContext, { plan_id: planId });
@@ -84,8 +65,7 @@ function PlanHoverContent({ planId }: { planId: Id<"plans"> }) {
       {plan.tasks.length > 0 && (
         <div className="space-y-0.5 max-h-[200px] overflow-y-auto">
           {plan.tasks.slice(0, 10).map((task: any) => {
-            const Icon = STATUS_ICON[task.status] || Circle;
-            const color = STATUS_COLOR[task.status] || "text-sol-text-dim";
+            const { icon: Icon, color } = taskVisual(task.status);
             return (
               <div key={task._id} className="flex items-center gap-1.5 py-0.5 text-[11px]">
                 <Icon className={`w-2.5 h-2.5 flex-shrink-0 ${color}`} />
@@ -173,14 +153,13 @@ export function TaskBadge({
   task: { _id: string; short_id: string; title: string; status?: string };
   className?: string;
 }) {
-  const Icon = STATUS_ICON[task.status || "open"] || Circle;
-  const color = STATUS_COLOR[task.status || "open"] || "text-sol-text-dim";
+  const { icon: Icon, color } = taskVisual(task.status);
   const router = useRouter();
 
   return (
     <button
       onClick={() => router.push(`/tasks/${task._id}`)}
-      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-yellow/10 text-sol-yellow border border-sol-yellow/20 hover:bg-sol-yellow/20 transition-colors max-w-[200px] ${className || ""}`}
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 hover:bg-sol-magenta/20 transition-colors max-w-[200px] ${className || ""}`}
     >
       <Icon className={`w-2.5 h-2.5 flex-shrink-0 ${color}`} />
       <span className="truncate">{task.title}</span>
