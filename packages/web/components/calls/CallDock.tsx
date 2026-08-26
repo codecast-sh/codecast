@@ -54,6 +54,30 @@ export function CallDock() {
     prevRemoteVideo.current = remoteVideo;
   }, [notice, remoteVideo]);
 
+  // A BURST OUTLIVES THE ROOM IT WAS SPOKEN INTO, so the strip has to as well.
+  //
+  // When the room falls over under an open microphone the call plane goes
+  // `idle` — but the recorder, the meter and the recognizer are all still
+  // running on that mic, the words are still being kept, and the burst still
+  // lands as a message. The key says exactly that ("Nobody is hearing this —
+  // still recording"). The STRIP, which is the surface mounted on every page
+  // for the person who is not looking at the key, disappeared: it was gated on
+  // the call, and the call is what just died. Measured by dropping a live
+  // room mid-hold — the key went to `dropped` and the strip went to nothing.
+  //
+  // Narrow on purpose: only when the call is GONE and a burst is still going.
+  // `walkieOwnsCall` cannot answer here — its sending branch compares the
+  // burst's room against the call's, and the call no longer has one — and it
+  // must keep answering everywhere else, because a burst spoken into somebody
+  // else's open huddle is a guest and the ordinary dock stays theirs.
+  //
+  // Deliberately NOT `&& !expanded`, unlike the branch below. `expanded` is
+  // local state that nothing resets when a call ends, so once somebody has
+  // opened the full stage it stays true for the life of the page — and the
+  // next line would swallow the strip on every dropped burst thereafter. It
+  // could not have protected anything either: at `phase === "idle"` the line
+  // below returns null first, so the stage can never render here anyway.
+  if (walkie.sending && call.phase === "idle") return <WalkieBanner />;
   if (call.phase === "idle") return null;
   // A push-to-talk burst joins a room the same way a huddle does, so without
   // this the dock would open its floating window for every sentence somebody

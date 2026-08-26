@@ -133,7 +133,10 @@ export function DesktopProvider() {
         // identical whether the window has focus or not. notifyNative already
         // no-ops when focused (the toast layer owns that case).
         if (typeof n.type === "string" && n.type.startsWith("chat_") && !document.hasFocus()) {
-          soundChatMessage();
+          // Keyed by the chat message, not by this notification row: the
+          // in-page toast layer watches the same arrival through the chat rail
+          // and sounds it too. One arrival, one sound.
+          soundChatMessage(n.chat_message_id ? String(n.chat_message_id) : undefined);
         }
       }
     }

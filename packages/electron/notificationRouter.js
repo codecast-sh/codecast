@@ -1,5 +1,5 @@
 // Pure policy for native notifications when the desktop runs several windows
-// (the main window plus detached tab windows). No Electron here — main.js
+// (the main window, detached tab windows, the people window). No Electron here — main.js
 // feeds it plain window descriptors so it can be unit tested with node --test.
 //
 // Three decisions live here:
@@ -9,10 +9,12 @@
 //      the same server row produce one banner, not N.
 //
 // A window descriptor:
-//   { id, isMain, focused, lastFocusedAt, active, open, inCall }
-//   active: the path this window shows now (main: its active tab; detached: its URL)
-//   open:   [{ id, path }] every surface the window could switch to (main: its tabs)
-//   inCall: this renderer hosts a connected huddle
+//   { id, isMain, isPeople, focused, lastFocusedAt, active, open, inCall }
+//   active:   the path this window shows now (main: its active tab; detached: its URL)
+//   open:     [{ id, path }] every surface the window could switch to (main: its tabs)
+//   inCall:   this renderer hosts a connected huddle
+//   isPeople: the people window — the floating buddy list. It IS the phone: it
+//             carries the roster, the call and walkie pumps and their sounds.
 // A target:
 //   { route, kind } — route is the banner's click path (may be null); kind is a
 //   hint for routeless banners ("call" for a ring).
@@ -69,6 +71,7 @@ function sameEntity(a, b) {
 // Rank windows for a click target. Highest score wins; ties go to the main
 // window, then to whichever window the user focused most recently.
 //
+//   people window, call or walkie target 110
 //   exact entity on the active surface   100
 //   in-call window, call target          100
 //   exact entity on an open tab           80
@@ -79,9 +82,15 @@ function sameEntity(a, b) {
 function scoreWindow(win, target) {
   const route = target && target.route;
   const cls = classifyRoute(route);
-  const area = cls.area || (target && target.kind) || null;
+  const kind = (target && target.kind) || null;
+  const area = cls.area || kind || null;
   const openPaths = (win.open || []).map((t) => t.path);
 
+  // The people window answers every ring. Keyed on the banner's KIND, not its
+  // route, because a call or walkie banner usually carries the DM route it came
+  // from — which would otherwise send the click to whichever window shows that
+  // conversation, away from the window hosting the audio.
+  if (win.isPeople && (kind === "call" || kind === "walkie")) return 110;
   if (route && win.active && sameEntity(win.active, route)) return 100;
   if (area === "call" && win.inCall) return 100;
   if (route && openPaths.some((p) => sameEntity(p, route))) return 80;
@@ -126,11 +135,16 @@ function tieBreak(a, b) {
   return (a.lastFocusedAt || 0) - (b.lastFocusedAt || 0);
 }
 
-// The one window that plays notification sounds: the focused window (sound
-// comes from where the user is), else the main window, else the window
-// focused most recently. Null when there are no windows.
+// The one window that plays notification sounds. While a people window exists
+// it is the leader, focused or not: it is the phone, it mounts the call and
+// walkie pumps, and its sounds are the ones that must never be missed. With no
+// people window the old rule stands: the focused window (sound comes from where
+// the user is), else the main window, else the window focused most recently.
+// Null when there are no windows.
 function chooseLeader(windows) {
   if (!windows.length) return null;
+  const people = windows.find((w) => w.isPeople);
+  if (people) return people;
   const focused = windows.find((w) => w.focused);
   if (focused) return focused;
   const main = windows.find((w) => w.isMain);

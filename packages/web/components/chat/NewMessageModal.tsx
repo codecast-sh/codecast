@@ -9,11 +9,13 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useChatRail, useOpenDm } from "../../hooks/useChatSync";
 import { matchScore } from "../../hooks/useMentionQuery";
 import {
-  PRESENCE_META,
-  memberPresenceState,
+  memberPresenceVisual,
+  presenceAvatarClass,
   presenceLine,
   compareMembersByPresence,
 } from "../presence/memberPresence";
+import { PresenceBadge } from "../presence/PresenceBadge";
+import { STRAY_WORKSPACE, isStrayWorkspace } from "../people/peopleRoster";
 import { channelDisplayName, chatViewRoomKey, memberHandles, memberName, type ChatMember } from "../../lib/chatViews";
 import { joinCall, ringInto, startHuddle } from "../../lib/calls/callManager";
 import { MAX_ROOM_MEMBERS, dmRoomKey } from "@codecast/shared/contracts";
@@ -82,6 +84,14 @@ export function NewMessageModal({
   const go = (path: string) => router.push(path);
   const rail = useChatRail();
   const teamMembers = useInboxStore((s) => s.teamMembers) as Member[];
+  // "No people match" is a lie when the window is pointed at a workspace the
+  // viewer has left: teams.getTeamMembers answers a non-member with [], not an
+  // error, so the roster is empty for a reason the picker would otherwise keep
+  // to itself. The predicate stays false until the real team list has arrived,
+  // so a cold boot never accuses anyone of anything.
+  const strayWorkspace = useInboxStore((s) =>
+    isStrayWorkspace(s.teams as any, s.clientState?.ui?.active_team_id),
+  );
   const viewer = useInboxStore((s) => (s as any).currentUser?._id ?? "");
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
 
@@ -320,7 +330,9 @@ export function NewMessageModal({
                 ? `A huddle holds up to ${MAX_ROOM_MEMBERS} people.`
                 : chips.length
                   ? "Everyone matching is already added."
-                  : "No people or channels match."}
+                  : strayWorkspace
+                    ? `${STRAY_WORKSPACE} Switch workspace to reach your team.`
+                    : "No people or channels match."}
               {!huddle && !chips.length && q.trim() && (
                 <button
                   type="button"
@@ -377,17 +389,19 @@ export function NewMessageModal({
 }
 
 function PersonRow({ member, now }: { member: Member; now: number }) {
-  const state = memberPresenceState(member as any);
+  const state = memberPresenceVisual(member as any);
   return (
     <>
-      <CommentAvatar
-        name={memberName(member)}
-        image={memberAvatarUrl(member)}
-        size={24}
-        letters={1}
-      />
+      <span className={presenceAvatarClass(state)}>
+        <CommentAvatar
+          name={memberName(member)}
+          image={memberAvatarUrl(member)}
+          size={24}
+          letters={1}
+        />
+      </span>
       <span className="ch-nm-name truncate">{memberName(member)}</span>
-      <span className={`ch-dm-dot ${PRESENCE_META[state].dot || "ch-dm-dot-off"}`} aria-hidden="true" />
+      <PresenceBadge state={state} size="sm" />
       <span className="ch-nm-sub truncate">{presenceLine(member as any, now)}</span>
     </>
   );

@@ -143,11 +143,25 @@ export const ChatComposer = memo(function ChatComposer({
           <ImagePlus className="w-3.5 h-3.5" />
         </button>
         {offerWalkie && (
-          <WalkiePttButton
-            roomKey={walkieRoomKey}
-            resolveChannelId={resolveChannelId}
-            title="Hold to talk — they hear you now, and the words land here"
-          />
+          <>
+            <WalkiePttButton
+              roomKey={walkieRoomKey}
+              resolveChannelId={resolveChannelId}
+              title="Hold to talk — they hear you now, and the words land here"
+            />
+            {/* The chord for the same gesture, ON the control rather than in
+                the hint row at the far right of the composer, which is where it
+                used to be: a binding is learned beside the thing it operates.
+                A hand already on the keyboard should never have to find the
+                mouse to say one sentence. */}
+            <span className="walkie-chord">
+              <span className="walkie-chord-word">hold</span>
+              <MenuKeyCaps
+                action="chat.pushToTalk"
+                className="inline-flex items-center gap-[2px]"
+              />
+            </span>
+          </>
         )}
         <input
           ref={pickerRef}
@@ -179,15 +193,9 @@ export const ChatComposer = memo(function ChatComposer({
             question: is there room? (see .ch-composer-hint-wide in chat.css) */}
         <span className="ch-composer-hint">
           <span className="ch-composer-hint-wide">
-            {offerWalkie && (
-              <>
-                <MenuKeyCaps
-                  action="chat.pushToTalk"
-                  className="inline-flex items-center gap-[2px]"
-                />{" "}
-                to talk ·{" "}
-              </>
-            )}
+            {/* Push to talk is NOT listed here any more: it is written beside
+                the key itself, and saying the same chord twice in one composer
+                made the row longer without making it clearer. */}
             <KeyCap size="xs">@</KeyCap> to mention ·{" "}
           </span>
           <KeyCap size="xs">Enter</KeyCap> to send · <KeyCap size="xs">Shift</KeyCap>

@@ -67,6 +67,7 @@ import { useCallSync } from "../hooks/useCallSync";
 import { useWalkieSync } from "../hooks/useWalkieSync";
 import { useCallRing } from "../hooks/useCallRing";
 import { CallDock } from "./calls/CallDock";
+import { ElsewhereCallPill } from "./calls/ElsewhereCallPill";
 import { leaveCall } from "../lib/calls/callManager";
 import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
 import { useSyncMentionPlans } from "../hooks/useSyncPlans";
@@ -1378,6 +1379,14 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         >
           <CallDock />
         </ErrorBoundary>
+      </div>
+      {/* The huddle the people window (or a detached tab) is hosting. The dock
+          above reads THIS window's call and correctly shows nothing, which
+          without a word left the main window looking as though no call were
+          running at all — and the first thing that invites is starting a second
+          one. It sits where the dock would, and says only where to look. */}
+      <div className="fixed bottom-20 right-4 z-[155] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt/95 px-3 py-2 shadow-xl">
+        <ElsewhereCallPill />
       </div>
       <GlobalCloseGuardDialog />
       {s.compose.open && (

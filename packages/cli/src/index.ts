@@ -7898,13 +7898,15 @@ program
     "  cast read jx70ntf :20               # Read first 20 messages\n" +
     "  cast read jx70ntf 15                # Read single message 15\n" +
     "  cast read jx70ntf 10:15 --full      # Show full tool call/result content\n" +
+    "                                      # (required for StructuredOutput payloads —\n" +
+    "                                      #  without it they collapse to a one-line summary)\n" +
     "  cast read 'https://codecast.sh/conversation/<id>#msg-<msgId>'\n" +
     "                                      # Read a window around a linked message\n" +
     "  cast read '<url-with-#msg>' -c 5    # …with 5 messages of context each side"
   )
   .argument("<conversation-id>", "Conversation ID, or a share URL (a #msg-<id> anchor reads around that message)")
   .argument("[range]", "Message range (e.g., 12:20, 12:, :20, 15)")
-  .option("-f, --full", "Show full tool call and tool result content")
+  .option("-f, --full", "Show full tool call and tool result content (the only way to see a StructuredOutput payload)")
   .option("-c, --context <n>", "Messages to show on each side of a #msg-<id> anchor (default 10)")
   .action(async (conversationId, range, options) => {
     const config = readConfig();
@@ -11866,12 +11868,18 @@ const chat = program
 // wake an anchor — a billed turn on a second person's laptop — for a line a
 // machine wrote. It can only take privilege away, so a stale or missing env var
 // leaves the send exactly as it was.
-function chatSendOrigin(): "agent" | undefined {
+function chatSendOrigin(): { origin?: "agent"; origin_session_id?: string } {
   const inSession = process.env.CODECAST_SESSION_ID
     || process.env.CODECAST_MANAGED_SESSION
     || process.env.CLAUDE_CODE_SESSION_ID
     || process.env.CODEX_SESSION_ID;
-  return inSession ? "agent" : undefined;
+  if (!inSession) return {};
+  // Only the codecast session id personifies the line (the server resolves it
+  // to the session's title and agent). The agent-native ids above prove "a
+  // machine typed this" but name no codecast session, so they stamp origin
+  // alone.
+  const sessionId = process.env.CODECAST_SESSION_ID || process.env.CODECAST_MANAGED_SESSION;
+  return { origin: "agent", origin_session_id: sessionId || undefined };
 }
 
 // The queries return an `authors` map (one bounded read per distinct author in
@@ -11879,9 +11887,14 @@ function chatSendOrigin(): "agent" | undefined {
 // left the team. `--json` carries the whole row for anything that needs more.
 function printChatMessage(row: any, authors?: Map<string, any>) {
   const author = authors?.get(String(row.user_id));
+  const humanName = author?.name || String(row.user_id).slice(0, 7);
+  // A session-typed line wears the session's name (snapshotted server-side at
+  // send), with the human it ran as in a dim credit.
   const who = row.author_kind === "agent"
     ? `${c.magenta}${author?.name || "anchor"}${c.reset}`
-    : `${c.cyan}${author?.name || String(row.user_id).slice(0, 7)}${c.reset}`;
+    : row.origin_session_title
+      ? `${c.magenta}${row.origin_session_title}${c.reset} ${c.dim}(session · via ${humanName})${c.reset}`
+      : `${c.cyan}${humanName}${c.reset}`;
   const when = new Date(row.created_at).toLocaleTimeString();
   const status = row.agent_status && row.agent_status !== "done"
     ? ` ${c.dim}[${row.agent_status}]${c.reset}`
@@ -12016,7 +12029,7 @@ chat
       channel_id: options.channel,
       content: body,
       thread_root_id: options.thread,
-      origin: chatSendOrigin(),
+      ...chatSendOrigin(),
     });
     if (options.json) {
       console.log(JSON.stringify(result, null, 2));

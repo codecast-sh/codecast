@@ -16,6 +16,11 @@ export type ChatAuthor = {
   isAgent?: boolean;
   /** Handle used for @mentions, without the @. */
   handle?: string;
+  /** Present when a codecast SESSION typed the line while running as its human
+   *  (row origin "agent"): the message personifies the session — its agent's
+   *  logo as the face, its title as the name — with the human as a dim "via"
+   *  credit. `id` is the session id, for opening it where the client can. */
+  session?: { id: string; agentType: string; via?: string };
 };
 
 export type ChatReaction = {
@@ -76,6 +81,14 @@ export type ChatMessageView = {
     durationMs?: number;
     /** The call room the burst was spoken into: what a live bubble joins. */
     roomKey?: string;
+    /** The live recognizer came back empty and the server is recovering the
+     *  words from the recording. A delay, never a loss — the bubble says so
+     *  instead of showing a blank that reads as silence. */
+    transcribing?: boolean;
+    /** No `voice` on the row: this is an ordinary message whose attachment
+     *  happens to be audio. It is a voice note either way, and rendering it as
+     *  file tiles was diagnosis 7 of pl-431. */
+    inferred?: boolean;
   };
   /** Optimistic, not yet echoed by the server. Renders like a sent row; the
    *  flag is kept for callers that reason about the outbox. */

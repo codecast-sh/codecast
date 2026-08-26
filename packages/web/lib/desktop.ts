@@ -41,6 +41,15 @@ declare global {
       detachTab: (path: string) => Promise<void>;
       attachTab: (path: string) => Promise<void>;
       onAdoptTab: (cb: (path: string) => void) => void;
+      // The people window (the floating buddy list at /people). A singleton:
+      // openPeopleWindow focuses the one that exists. setAlwaysOnTop resolves
+      // the pin the shell actually applied — it is honored only from the people
+      // window, so any other window gets false back. Absent on older builds —
+      // gate on them (isPeopleWindow is then undefined, i.e. not one).
+      isPeopleWindow?: boolean;
+      openPeopleWindow?: () => Promise<void>;
+      setAlwaysOnTop?: (on: boolean) => Promise<boolean>;
+      getAlwaysOnTop?: () => Promise<boolean>;
       // Screen-share primitives (huddles). The shell lists capturable
       // screens/windows and lets the web pre-select one for the NEXT
       // getDisplayMedia; the picker UI itself is web-owned. Absent on older
@@ -78,10 +87,18 @@ export type DesktopWindowState = {
 };
 
 // This window's role among the desktop's windows, pushed by the shell.
-//   leader:     the ONE window that may play notification sounds
-//   appFocused: some app window (not just this one) has OS focus
-//   anyInCall:  some window hosts a connected call
-export type DesktopWindowRole = { leader: boolean; appFocused: boolean; anyInCall: boolean };
+//   leader:       the ONE window that may play notification sounds
+//   appFocused:   some app window (not just this one) has OS focus
+//   anyInCall:    some window hosts a connected call
+//   peopleWindow: a people window exists somewhere in the app. The window that
+//                 IS it (isPeopleWindow) owns the roster, the call and walkie
+//                 pumps and their sounds; the others stand down from them.
+export type DesktopWindowRole = {
+  leader: boolean;
+  appFocused: boolean;
+  anyInCall: boolean;
+  peopleWindow: boolean;
+};
 
 export type DesktopDisplaySource = {
   id: string;
@@ -120,6 +137,104 @@ export function isDesktop(): boolean {
 // both. Checked by the tab router, TabBar, DashboardLayout and the store.
 export function isDetachedTabWindow(): boolean {
   return typeof window !== "undefined" && window.__CODECAST_ELECTRON__?.isTabWindow === true;
+}
+
+// ---------------------------------------------------------------------------
+// The people window: the floating buddy list — roster, status and calling in a
+// window of its own, like an AIM buddy list. On the desktop the shell owns it
+// (main.js createPeopleWindow); in a browser it is a popup of the same route.
+// ---------------------------------------------------------------------------
+
+export const PEOPLE_ROUTE = "/people";
+
+/** What every surface calls the gesture, so three of them cannot call it three
+ *  different things. */
+export const POP_OUT_PEOPLE_TITLE = "Pop out the people window";
+
+// This renderer IS the people window. It draws the panel, mounts the call,
+// walkie and ring pumps, and (on the desktop) is the shell's notification
+// leader while it lives. Every other window stands down from those.
+export function isPeopleWindow(): boolean {
+  return typeof window !== "undefined" && window.__CODECAST_ELECTRON__?.isPeopleWindow === true;
+}
+
+// A people window exists somewhere — this one or another. True inside the
+// people window itself, so a caller can ask "is the panel up anywhere?" with
+// one question. Before the shell's first role push (and outside the desktop)
+// only this window's own flag can answer.
+export function hasPeopleWindow(): boolean {
+  return isPeopleWindow() || windowRole.peopleWindow;
+}
+
+// Open the buddy list, or focus the one already open. Resolves false only when
+// a browser blocked the popup — the caller can then fall back to the route.
+export async function openPeopleWindow(): Promise<boolean> {
+  const open = bridge("openPeopleWindow");
+  if (open) {
+    await open();
+    return true;
+  }
+  if (typeof window === "undefined") return false;
+  // Browser: the same route in a named popup, so a second click raises the
+  // window it already opened instead of stacking another.
+  const ref = window.open(PEOPLE_ROUTE, "codecast-people", "popup,width=320,height=640");
+  ref?.focus();
+  return !!ref;
+}
+
+// The pin: float this window above other apps. Only the desktop people window
+// may, so this resolves the pin the shell actually applied — false everywhere
+// else, including a browser popup, where the caller hides the control.
+export async function setAlwaysOnTop(on: boolean): Promise<boolean> {
+  return (await bridge("setAlwaysOnTop")?.(on)) ?? false;
+}
+
+export async function getAlwaysOnTop(): Promise<boolean> {
+  return (await bridge("getAlwaysOnTop")?.()) ?? false;
+}
+
+// Whether this window can be pinned at all (an older shell has no pin).
+export function canPin(): boolean {
+  return isPeopleWindow() && typeof window.__CODECAST_ELECTRON__?.setAlwaysOnTop === "function";
+}
+
+/**
+ * Send a navigation to the MAIN window and raise it.
+ *
+ * A satellite window — the palette, the compose popup, the buddy list — is a
+ * place you stand, not a place you browse. Clicking a person in it must open
+ * the conversation where the work already is, in the window that holds the
+ * work, and leave the satellite showing what it was showing.
+ *
+ * The shell's verb is named for the palette because that was its first caller;
+ * what it DOES is show the main window, focus it, and hand it the path. A
+ * browser popup has no shell, so its opener plays that part.
+ *
+ * Returns false when there is no other window to send it to — a bare tab on
+ * /people, say — so the caller can navigate itself rather than swallow the
+ * click and look broken.
+ */
+export function navigateMainWindow(path: string): boolean {
+  const send = bridge("paletteNavigate");
+  if (send) {
+    send(path);
+    return true;
+  }
+  if (typeof window === "undefined") return false;
+  const opener = window.opener as Window | null;
+  if (!opener || opener.closed) return false;
+  try {
+    // A real navigation, not an event: the opener only listens for
+    // `codecast-navigate` on the desktop, and a popup's opener is a browser
+    // tab. Same origin, so this is allowed; the app boots from its local cache,
+    // so the tab lands on the DM rather than on a loading screen.
+    opener.location.href = path;
+    opener.focus();
+    return true;
+  } catch {
+    // A cross-origin or already-navigated-away opener. Not ours to move.
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -201,13 +316,38 @@ export function conversationIdFromPath(path: string): string | null {
 // with the user's own profile) firing a handoff while the user types here must
 // not yank the view. Installed once by DesktopProvider.
 let lastDesktopInputAt = 0;
+// Two clocks, on purpose, because two consumers ask different questions.
+//
+// INPUT is a committed gesture: a click or a keystroke. Auto handoff asks
+// "may I move the view", and only a committed gesture should say no — a
+// resting hand nudging the mouse must not block a handoff for ever.
+//
+// ACTIVITY is "a person is here", which is what presence reports. Scrolling a
+// long conversation with a trackpad is that, and pointerdown/keydown cannot
+// see it: read for the three minutes of INPUT_ACTIVE_MS without clicking and
+// the whole team watched you go idle while you were plainly using the app.
+// The desktop never had this, because Electron answers with the OS-wide
+// powerMonitor idle, which counts a moving mouse. Only the browser was blind,
+// and only to the gestures that leave no mark.
+//
+// wheel and pointermove and nothing else: both are unambiguously human. A
+// `scroll` listener would have been the obvious third and is exactly wrong —
+// the app auto-scrolls a streaming conversation on its own, and that would
+// pin an empty room "active" for as long as an agent kept talking.
+let lastDesktopActivityAt = 0;
 let inputTrackerInstalled = false;
 export function installDesktopInputTracker(): void {
   if (typeof window === "undefined" || inputTrackerInstalled) return;
   inputTrackerInstalled = true;
-  const note = () => { lastDesktopInputAt = Date.now(); };
+  const note = () => {
+    lastDesktopInputAt = Date.now();
+    lastDesktopActivityAt = lastDesktopInputAt;
+  };
+  const noteActivity = () => { lastDesktopActivityAt = Date.now(); };
   window.addEventListener("pointerdown", note, { capture: true, passive: true });
   window.addEventListener("keydown", note, { capture: true, passive: true });
+  window.addEventListener("wheel", noteActivity, { capture: true, passive: true });
+  window.addEventListener("pointermove", noteActivity, { capture: true, passive: true });
 }
 
 // 0 until the first input after page load. Consumers that need "activity"
@@ -215,6 +355,11 @@ export function installDesktopInputTracker(): void {
 // signals (focus changes) — see usePresenceReporter.
 export function getLastDesktopInputAt(): number {
   return lastDesktopInputAt;
+}
+
+/** The widest honest "a person is at this page" signal — see above. */
+export function getLastDesktopActivityAt(): number {
+  return lastDesktopActivityAt;
 }
 
 // Milliseconds since the machine's last user input. On Electron this is the
@@ -230,7 +375,7 @@ export async function getIdleMs(inPageActivityFloor: number): Promise<number> {
       } catch { /* fall through to in-page signal */ }
     }
   }
-  const last = Math.max(lastDesktopInputAt, inPageActivityFloor);
+  const last = Math.max(lastDesktopActivityAt, inPageActivityFloor);
   return last > 0 ? Date.now() - last : Number.MAX_SAFE_INTEGER;
 }
 
@@ -296,7 +441,7 @@ export async function notifyNative(
 // (or before the shell's first push) this window is the only one: leader.
 // ---------------------------------------------------------------------------
 
-let windowRole: DesktopWindowRole = { leader: true, appFocused: false, anyInCall: false };
+let windowRole: DesktopWindowRole = { leader: true, appFocused: false, anyInCall: false, peopleWindow: false };
 let windowRoleTracked = false;
 
 export function getDesktopWindowRole(): DesktopWindowRole {
@@ -308,12 +453,32 @@ export function isNotificationLeader(): boolean {
   return windowRole.leader;
 }
 
+// Watchers of the role above. The sound paths ASK for the role at the moment
+// they need it, so a plain module variable was enough; a surface that DRAWS it
+// (the people window's pin, the "in a huddle in another window" pill) has to
+// learn when it changes. The snapshot is replaced wholesale on every push, so
+// useSyncExternalStore can compare refs.
+const windowRoleWatchers = new Set<() => void>();
+
+export function subscribeWindowRole(cb: () => void): () => void {
+  windowRoleWatchers.add(cb);
+  return () => {
+    windowRoleWatchers.delete(cb);
+  };
+}
+
 // Subscribe once (DesktopProvider) so the role above tracks the shell.
 export function installWindowRoleTracker(): void {
   if (windowRoleTracked) return;
   windowRoleTracked = true;
   bridge("onWindowRole")?.((role) => {
-    windowRole = { leader: role.leader !== false, appFocused: !!role.appFocused, anyInCall: !!role.anyInCall };
+    windowRole = {
+      leader: role.leader !== false,
+      appFocused: !!role.appFocused,
+      anyInCall: !!role.anyInCall,
+      peopleWindow: !!role.peopleWindow,
+    };
+    for (const cb of windowRoleWatchers) cb();
   });
 }
 

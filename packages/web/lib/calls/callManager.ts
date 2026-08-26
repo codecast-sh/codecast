@@ -22,6 +22,7 @@ import {
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { useInboxStore } from "../../store/inboxStore";
+import { mutateOnUnload } from "../keepaliveMutation";
 import { memberDisplayName } from "../liveEntities";
 import { stopScribe } from "./transcription";
 import { CALL_HEARTBEAT_MS, humanizeConvexError } from "@codecast/shared/contracts";
@@ -278,7 +279,20 @@ function teardownMedia() {
 
 // Join a room end-to-end: control-plane row, token, SFU connect, mic publish.
 // The store paints "connecting" synchronously; every await settles after.
-export async function joinCall(roomKey: string): Promise<void> {
+//
+// `micTrack` is the one seam in the media plane's ownership, and it is a
+// handover: the caller has ALREADY acquired a microphone and is already reading
+// it (the walkie records and transcribes from t=0, long before this join can
+// land), so opening a second one here would put two mics on one person. Given a
+// track, this publishes THAT track under the microphone source and owns it from
+// then on — mute, the level meter and teardown all work on the publication
+// exactly as if the track had been made here, and disconnecting stops it like
+// any other. A caller that still needs its own copy hands over `track.clone()`,
+// which shares the one capture without sharing its lifetime.
+export async function joinCall(
+  roomKey: string,
+  opts?: { micTrack?: MediaStreamTrack },
+): Promise<void> {
   if (!convex) return;
   const prior = useInboxStore.getState().call;
   // Already in (or genuinely joining) this room: idempotent. "connecting" only
@@ -388,7 +402,16 @@ export async function joinCall(roomKey: string): Promise<void> {
     // Publish the mic in the muted state the user chose — join is silent by
     // default (the shoulder-tap contract), one keypress to speak.
     const muted = useInboxStore.getState().call.muted;
-    await r.localParticipant.setMicrophoneEnabled(!muted);
+    const given = opts?.micTrack;
+    if (given && given.readyState === "live") {
+      await r.localParticipant.publishTrack(given, { source: Track.Source.Microphone });
+      if (superseded(r)) return;
+      // The publication now answers to setMicrophoneEnabled like any other, so
+      // the mute the user chose applies to it unchanged.
+      if (muted) await r.localParticipant.setMicrophoneEnabled(false);
+    } else {
+      await r.localParticipant.setMicrophoneEnabled(!muted);
+    }
     if (superseded(r)) return;
     setCall({ phase: "connected" });
     soundCallJoin();
@@ -451,7 +474,7 @@ export async function setMuted(muted: boolean): Promise<void> {
 // yields nothing, and the Permissions API tells the two cases apart: a
 // blocked site setting versus a machine with no such device. The message is
 // the fix, phrased for the person holding the mouse.
-async function mediaFailureReason(kind: "camera" | "microphone", err?: any): Promise<string> {
+export async function mediaFailureReason(kind: "camera" | "microphone", err?: any): Promise<string> {
   const label = kind === "camera" ? "Camera" : "Microphone";
   if (err?.name === "NotFoundError" || err?.name === "OverconstrainedError") {
     return `No ${kind} found`;
@@ -725,11 +748,15 @@ export async function admitKnock(roomKey: string, userId: string): Promise<void>
 
 // Best-effort row cleanup when the tab dies mid-call; the 45s lease is the
 // real guarantee, this just makes the common case instant.
+//
+// Over HTTP, not through the client. This used to write the mutation to the
+// WebSocket, which is torn down before the frame leaves — measured while
+// chasing the same bug one file over, and it meant this guard had never once
+// done its job: every tab that died mid-call left its row for the lease to
+// clear. See lib/keepaliveMutation.
 if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", () => {
-    if (currentRoomKey && convex) {
-      convex.mutation(api.calls.leaveRoom, { room_key: currentRoomKey }).catch(() => {});
-    }
+    if (currentRoomKey) mutateOnUnload(api.calls.leaveRoom, { room_key: currentRoomKey });
   });
 }
 

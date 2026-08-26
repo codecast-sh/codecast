@@ -101,10 +101,14 @@ function openPipe(
   roomKey: string,
 ): void {
   if (!convex || pipes.has(key)) return;
-  const forget = () => {
-    pipes.delete(key);
-    emit({ trackCount: pipes.size });
-  };
+  // Dropping a pipe from the map IS closing it — they were two functions doing
+  // almost the same thing, and the "almost" was the bug: a forgotten pipe still
+  // holds a recognizer and, since capture starts at open(), an AudioContext and
+  // a ScriptProcessor. Outside the map, `stopScribe` can never reach them, and
+  // `attachRoomTracks` re-runs on every TrackSubscribed and every reconnect —
+  // so a huddle where the mint keeps failing accumulates them for its whole
+  // length. One function, so the two can never disagree again.
+  const forget = () => closePipe(key);
   const pipe = openAsrPipe({
     convex,
     roomKey,

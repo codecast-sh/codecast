@@ -78,14 +78,23 @@ function hash(s: string): number {
  *  arriving as an attachment. The words stream into `content` while the key is
  *  still down, so at release the content hash usually does not move — leaving
  *  them out hashed a finished burst identically to a live one and left the
- *  sender's own bubble pulsing "talking…" until a reload. */
+ *  sender's own bubble pulsing "talking…" until a reload.
+ *
+ *  `voice.transcribing` is in here for the same reason, one step later. When the
+ *  live recognizer heard nothing, the sender's own optimistic row has ALREADY
+ *  flipped status to done and written the duration, so the server echo that
+ *  turns transcribing on changes that one field and nothing else. Without it in
+ *  the hash the echo is a no-op, the bubble never repaints, and "getting the
+ *  words" — the whole point of the state — is unreachable on the screen that
+ *  needs it most. Verified live: the flag reached the store and the bubble
+ *  still read "no words" until the words themselves landed. */
 export const messagesSig = makeCollectionSig<ChatMessageRow>(
   (m) =>
     `${m._id}|${m.channel_id}|${m.thread_root_id ?? ""}|${m.user_id}|${m.author_kind ?? ""}` +
     `|${m.created_at}|${m.edited_at ?? 0}|${m.deleted_at ?? 0}|${m.agent_status ?? ""}` +
     `|${m._failedAt ?? 0}|${m.mention_scope ?? ""}|${(m.mentions ?? []).join(",")}` +
     `|${m.content.length}:${hash(m.content)}` +
-    `|${m.voice ? `${m.voice.status}:${m.voice.duration_ms ?? 0}:${m.voice.room_key ?? ""}` : ""}` +
+    `|${m.voice ? `${m.voice.status}:${m.voice.duration_ms ?? 0}:${m.voice.room_key ?? ""}:${m.voice.transcribing ? 1 : 0}` : ""}` +
     `|${(m.attachments ?? []).map((a) => a.storage_id).join(",")}`,
 );
 
@@ -107,6 +116,15 @@ export const railMessagesSig = makeCollectionSig<ChatMessageRow>(
   (m) =>
     `${m._id}|${m.channel_id}|${m.user_id}|${m.created_at}|${m.deleted_at ?? 0}` +
     `|${m.mention_scope ?? ""}|${(m.mentions ?? []).join(",")}|${m.voice?.status ?? ""}`,
+);
+
+/** What a session PERSONA on a chat line renders (chatViews sessionAuthorFor):
+ *  the session's current title and agent, keyed by session id. Sessions
+ *  heartbeat about once a second, so the transcript must never subscribe to the
+ *  raw collection — this wakes it only when a session is renamed, retyped, or
+ *  appears. */
+const sessionOriginSig = makeCollectionSig<any>(
+  (s) => `${s.session_id ?? ""}|${s.display_title || s.title || ""}|${s.agent_type ?? ""}`,
 );
 
 const channelsSig = makeCollectionSig<ChatChannelRow>(
@@ -455,6 +473,24 @@ export function useMessageViews(
   rollupSource: Record<string, ChatMessageRow>,
   summaries?: Record<string, any>,
 ): ChatMessageView[] {
+  // Live session identities for lines a session typed. Signature-gated: the
+  // sessions collection churns on heartbeats, and a transcript only cares when
+  // a title or agent changes.
+  const st = useTrackedStore([(s: any) => sessionOriginSig(s.sessions)]);
+  const sessionsSig = sessionOriginSig(st.sessions);
+  const sessionFor = useMemo(() => {
+    const map = new Map<string, { title?: string; agentType?: string }>();
+    for (const row of Object.values(st.sessions ?? {}) as any[]) {
+      if (!row?.session_id) continue;
+      map.set(String(row.session_id), {
+        title: row.display_title || row.title || undefined,
+        agentType: row.agent_type,
+      });
+    }
+    return (id: string) => map.get(id);
+    // The signature is the real dep: the raw map ref flips on every push.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionsSig]);
   return useMemo(() => {
     const rollups = threadRollups(Object.values(rollupSource));
     const byMessage = new Map<string, ChatReactionRow[]>();
@@ -471,12 +507,13 @@ export function useMessageViews(
       rollups,
       summaries,
       sendState: chatSendState,
+      sessionFor,
       reactionsFor: (messageId) => {
         const list = byMessage.get(messageId);
         return list ? foldReactions(list, viewerId, nameOf) : undefined;
       },
     });
-  }, [rows, reactionRows, byId, viewerId, rollupSource, summaries]);
+  }, [rows, reactionRows, byId, viewerId, rollupSource, summaries, sessionFor]);
 }
 
 /** One channel's timeline, ready to render. Roots only — replies live in the
