@@ -27,7 +27,7 @@
 // component exists. A hidden tab that marks the channel read and silences its
 // own toasts is the exact failure this file's read rule exists to prevent.
 
-import { useTeamFeature } from "../../lib/teamFeatures";
+import { useCallsAvailable, useTeamFeature } from "../../lib/teamFeatures";
 import { TeamFeatureOff } from "../../components/TeamFeatureOff";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
@@ -179,8 +179,18 @@ export default function ChatPage() {
   // ── Push to talk ──────────────────────────────────────────────────────────
   // DMs only in v1: a burst is spoken into the DM's own room, and a channel-wide
   // walkie is a different product decision nobody has made.
+  // Gated on calls being AVAILABLE, not merely on this being a DM: the team's
+  // feature flag and a deployment with LiveKit behind it. Without this the mic
+  // rendered enabled with calls off, and pressing it joined a room that threw
+  // — leaving the call plane in `error` rather than `idle`, which the ordinary
+  // call dock does not bail on, so a floating call window with an empty roster
+  // and a hang-up button opened out of a chat composer. The teammate hover card
+  // already asked this question; the composer, which is the primary way anyone
+  // reaches push to talk, did not. This also disarms the keyboard chord, whose
+  // `enabled` is derived from the same value.
+  const callsAvailable = useCallsAvailable();
   const walkieRoomKey =
-    activeChannel?.kind === "dm"
+    callsAvailable && activeChannel?.kind === "dm"
       ? chatViewRoomKey(activeChannel, viewerId, teamMembers)
       : undefined;
   const resolveWalkieChannel = useCallback(() => activeChannelId ?? null, [activeChannelId]);
