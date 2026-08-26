@@ -18,6 +18,7 @@ import {
   sortCards,
   toggledOpenEntry,
   unreadByChip,
+  unreadOnlyCards,
   visibleChips,
   type ThreadCardModel,
 } from "../../lib/threadKinds";
@@ -99,9 +100,18 @@ export function ThreadsView({ present }: { present: boolean }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, rail, chatOn, sessionCardList, questionCardList, taskShortSig, pageSlugSig]);
   const counts = useMemo(() => unreadByChip(allCards), [allCards]);
-  const cards = useMemo(
+  const chipped = useMemo(
     () => sortCards(cardsForChip(allCards, chip, includeSessions), chip),
     [allCards, chip, includeSessions],
+  );
+  // The All view shows only cards with something unread for the viewer; kind
+  // chips stay full browse lists. The hold set keeps a card on screen for the
+  // visit once it has shown, so reading it (which zeroes unread) cannot yank
+  // it away under the reader.
+  const heldRef = useRef<Set<string>>(new Set());
+  const cards = useMemo(
+    () => (chip === "all" ? unreadOnlyCards(chipped, heldRef.current) : chipped),
+    [chipped, chip],
   );
 
   // ── Open cards ────────────────────────────────────────────────────────────
@@ -191,7 +201,12 @@ export function ThreadsView({ present }: { present: boolean }) {
               ))}
             </div>
           ) : showEmpty ? (
-            <ThreadsEmpty chip={chip} sessionsOn={includeSessions} onNewMessage={chatOn ? openNewMessage : undefined} />
+            <ThreadsEmpty
+              chip={chip}
+              sessionsOn={includeSessions}
+              caughtUp={chip === "all" && chipped.length > 0}
+              onNewMessage={chatOn ? openNewMessage : undefined}
+            />
           ) : (
             <div className="th-scroll">
               {feedFailed && (

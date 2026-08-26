@@ -1,18 +1,28 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useInboxStore, useTrackedStore, type TaskDetail, type ThreadInboxRow } from "../../../store/inboxStore";
 import { useSyncTaskDetail } from "../../../hooks/useSyncTasks";
 import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
 import { TaskStatusBadge } from "../../TaskStatusBadge";
 import { Badge } from "../../ui/badge";
-import { TaskCommentStream } from "../../tasks/TaskCommentStream";
+import { Avatar, TaskCommentStream, TimeAgo } from "../../tasks/TaskCommentStream";
+import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
 import { useTailPin } from "../cardWindow";
 import { useThreadsPage } from "../threadsContext";
 
-// The task kind: a task's comment stream. The collapsed card is the short id,
-// the title, the status and the latest comment; expanded, the comments and
-// the same composer the task page uses (components/tasks/TaskCommentStream),
-// fed by the task detail query so the optimistic reply and the server echo
-// land in tasks[id].comments exactly as they do on the task page.
+// The task kind: the task itself, then its comment stream. The collapsed card
+// is the short id, the title, the status and the latest comment; expanded,
+// the status row grows the task's metadata (priority, assignee, plan, age),
+// the description renders clamped with its own expand, and below them the
+// newest few comments and the same composer the task page uses
+// (components/tasks/TaskCommentStream), fed by the task detail query so the
+// optimistic reply and the server echo land in tasks[id].comments exactly as
+// they do on the task page.
+
+/** The expanded card shows this many newest comments; the rest sit behind a
+ *  "show earlier" reveal. The thread's news is its tail — the full stream is
+ *  one click away here and lives whole on the task page. */
+const CARD_COMMENT_LIMIT = 5;
 
 function rowOf(card: ThreadCardModel): ThreadInboxRow {
   return card.source as ThreadInboxRow;
@@ -27,7 +37,7 @@ function taskIdOf(card: ThreadCardModel): string {
 function taskSig(t: TaskDetail | undefined): string {
   if (!t) return "";
   const last = t.comments?.[t.comments.length - 1];
-  return `${t.short_id}|${t.title}|${t.status}|${t.comments?.length ?? 0}|${last?._id ?? ""}|${last?.text?.length ?? 0}`;
+  return `${t.short_id}|${t.title}|${t.status}|${t.priority ?? ""}|${t.assignee_info?.name ?? ""}|${t.plan?.short_id ?? ""}|${(t.description ?? "").length}|${t.comments?.length ?? 0}|${last?._id ?? ""}|${last?.text?.length ?? 0}`;
 }
 
 function useTaskRow(taskId: string): TaskDetail | undefined {
@@ -59,6 +69,29 @@ export function TaskRoot({ card, expanded }: { card: ThreadCardModel; expanded: 
       {task ? (
         <div className="th-card-root th-card-taskrow">
           <TaskStatusBadge status={task.status} />
+          {/* Expanded, the row carries the task's metadata; collapsed it
+              stays one badge so the list scans. */}
+          {expanded && (
+            <>
+              {task.priority && (
+                <Badge variant="outline" className="text-[10px] px-1">{task.priority}</Badge>
+              )}
+              {task.assignee_info?.name && (
+                <span className="th-task-meta" title={`Assigned to ${task.assignee_info.name}`}>
+                  <Avatar name={task.assignee_info.name} image={task.assignee_info.image} />
+                  {task.assignee_info.name.split(" ")[0]}
+                </span>
+              )}
+              {task.plan?.short_id && (
+                <Link href={`/plans/${task.plan._id}`} className="th-task-meta font-mono" title={task.plan.title}>
+                  {task.plan.short_id}
+                </Link>
+              )}
+              <span className="th-task-meta th-task-meta-age">
+                created <TimeAgo ts={task.created_at} />
+              </span>
+            </>
+          )}
         </div>
       ) : (
         <div className="th-card-root th-card-ghost" aria-hidden="true">
@@ -112,10 +145,36 @@ export function TaskExpanded({ card, seen, focusComposer }: { card: ThreadCardMo
   const pinRef = useTailPin(comments.length ? `${comments[comments.length - 1]._id}|${comments.length}` : "");
 
   return (
-    <div ref={pinRef} className="th-card-open th-card-open-task">
-      {/* Auto-open (and its focus grab) only on the user's own expand: fifty
-          default-open cards each opening a composer would fight over focus. */}
-      <TaskCommentStream shortId={task?.short_id} comments={comments} composerAutoOpen={focusComposer} />
+    <>
+      {/* The description sits ABOVE the scroller so the tail pin cannot bury
+          it: the card leads with what the task IS, then its conversation. */}
+      <TaskDescription task={task} />
+      <div ref={pinRef} className="th-card-open th-card-open-task">
+        {/* Auto-open (and its focus grab) only on the user's own expand: fifty
+            default-open cards each opening a composer would fight over focus. */}
+        <TaskCommentStream shortId={task?.short_id} comments={comments} composerAutoOpen={focusComposer} initialLimit={CARD_COMMENT_LIMIT} />
+      </div>
+    </>
+  );
+}
+
+/** The task's own description, clamped to a few lines under a fade until the
+ *  reader asks for the rest. A short description renders whole, no toggle. */
+function TaskDescription({ task }: { task: TaskDetail | undefined }) {
+  const [open, setOpen] = useState(false);
+  const desc = (task?.description ?? "").trim();
+  if (!desc) return null;
+  const clampable = desc.length > 280 || desc.split("\n").length > 4;
+  return (
+    <div className="th-task-desc">
+      <div className={clampable && !open ? "th-task-desc-clip" : undefined}>
+        <MarkdownRenderer content={desc} className="text-sm text-sol-text prose-sm prose-invert max-w-none" />
+      </div>
+      {clampable && (
+        <button type="button" className="th-task-desc-toggle" onClick={() => setOpen((v) => !v)}>
+          {open ? "Show less" : "Show more"}
+        </button>
+      )}
     </div>
   );
 }
