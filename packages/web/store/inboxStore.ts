@@ -2367,6 +2367,30 @@ export function resolveComposeProjectPath(opts: {
   return context?.projectPath || context?.gitRoot || convPath || activeProjectPath || recentProjects?.[0]?.path || undefined;
 }
 
+// The directory a label filter implies for a NEW session. Labels carry no
+// project of their own (inbox_buckets has no path), so derive one from the
+// label's members: the most recently updated session filed under it whose
+// checkout lives on one of my machines. Only an INCLUDE chip seeds — an
+// exclude chip ("everything but X") is a hide, not a place to start work.
+export function bucketProjectPath(state: {
+  activeBucketFilter: string | null;
+  chipFilterExclude: boolean;
+  sessions: Record<string, InboxSession>;
+  bucketAssignments: Record<string, BucketAssignmentItem>;
+  machineRoster?: Array<Pick<MachineCandidate, "local_project_roots">>;
+}): string | undefined {
+  if (!state.activeBucketFilter || state.chipFilterExclude) return undefined;
+  const bucketByConv = convBucketMap(state.bucketAssignments);
+  let best: InboxSession | undefined;
+  for (const s of Object.values(state.sessions)) {
+    if (bucketByConv[s._id] !== state.activeBucketFilter) continue;
+    const p = s.git_root || s.project_path;
+    if (!p || (state.machineRoster && !pathOnMyMachines(state.machineRoster, p))) continue;
+    if (!best || s.updated_at > best.updated_at) best = s;
+  }
+  return best ? best.git_root || best.project_path : undefined;
+}
+
 // Find a checkout of a project by name among everything we know about —
 // recent projects first (the user's own machines, freshest), then session
 // rows, then the machine roster's project roots. Paths a machine of mine

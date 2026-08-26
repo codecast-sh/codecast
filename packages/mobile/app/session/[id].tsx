@@ -3141,9 +3141,12 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
     // Clear the draft both locally and on the server. Without the local clear,
     // a restart-right-after-send would re-hydrate the stale draft (cache-first).
     // clearDraft resolves stub ids; the server patch is gated on a real id.
+    // clearDraftFinal (not clearDraft) — the web send path: it dispatches the
+    // client_state clear through the outbox and nulls the conversation row, so
+    // a cached-row push can't re-seed the composer on the next mount.
     const store = useInboxStore.getState();
-    store.clearDraft(conversationId);
-    store.syncRecord('conversations', conversationId, { draft_message: null });
+    store.clearDraftFinal(conversationId);
+    store.syncRecord('sessions', conversationId, { draft_message: null });
     if (isConvexId(conversationId as string)) {
       patchConversation({ id: conversationId, fields: { draft_message: null } }).catch(() => {});
     }
@@ -4340,7 +4343,10 @@ export default function SessionDetailScreen() {
       <Stack.Screen options={{ headerShown: false }} />
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        // Android already resizes the window for the IME (adjustResize +
+        // edge-to-edge); a 'height' behavior on top of that double-adjusts and
+        // the container oscillates while the list re-lays out during streaming.
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={0}
       >
         {/* Compact custom title bar — back + title + actions in one slim band,
