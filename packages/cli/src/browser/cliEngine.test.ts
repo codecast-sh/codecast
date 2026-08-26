@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { lastMutatingIndex, parseEngineRefs, translate, rankByVisibility, readEvalScript} from "./cliEngine.js";
+import { lastMutatingIndex, parseEngineRefs, translate, rankByVisibility, readEvalScript, loginRaisePlan, LOGIN_RAISE_COOLDOWN_MS } from "./cliEngine.js";
 
 describe("translate: text", () => {
   test("bare text reads the whole page", () => {
@@ -170,5 +170,23 @@ describe("rankByVisibility", () => {
 
   test("all visible: untouched", () => {
     expect(rankByVisibility(["b", "c"], (h) => boxes[h]).ordered).toEqual(["b", "c"]);
+  });
+});
+
+describe("loginRaisePlan", () => {
+  const now = 1_000_000_000;
+  test("an already-authed page never raises, even with no prior raise on record", () => {
+    expect(loginRaisePlan(null, undefined, now)).toBe("signed-in");
+    expect(loginRaisePlan(null, now - LOGIN_RAISE_COOLDOWN_MS * 10, now)).toBe("signed-in");
+  });
+
+  test("a pending sign-in raises when no raise happened recently", () => {
+    expect(loginRaisePlan("accounts.google.com", undefined, now)).toBe("raise");
+    expect(loginRaisePlan("accounts.google.com", now - LOGIN_RAISE_COOLDOWN_MS - 1, now)).toBe("raise");
+  });
+
+  test("a pending sign-in inside the cooldown does not raise again", () => {
+    expect(loginRaisePlan("accounts.google.com", now - 10_000, now)).toBe("cooldown");
+    expect(loginRaisePlan("accounts.google.com", now - LOGIN_RAISE_COOLDOWN_MS + 1, now)).toBe("cooldown");
   });
 });
