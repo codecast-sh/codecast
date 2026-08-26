@@ -64,8 +64,9 @@ export type ThreadCardModel = {
   /** dm only: the rail's own stamp (sortAt, either direction). The DMs chip —
    *  a browsing surface — ranks by this; everything else reads activityAt. */
   browseAt?: number;
-  /** dm only: the counterpart has never spoken (viewer-only sends, or an
-   *  empty room). Listed under the DMs chip, absent from the All view. */
+  /** dm only: nothing awaits the viewer — the counterpart has never spoken,
+   *  or the viewer already answered their last message. Listed under the DMs
+   *  chip, absent from the All view. */
   browseOnly?: boolean;
   /** Server: row.unread. dm: the rail count (0 when muted). session: 0 or 1. */
   unread: number;
@@ -223,23 +224,27 @@ export function serverCards(
 }
 
 /** DM rooms from the synced rail. Multi-person DMs are `dm` too. A muted room
- *  shows no unread, the same rule the rail applies. Presence and rank key to
- *  the counterpart's last message: your own send never creates, removes, or
- *  re-ranks a card in the All view — replying leaves the card in place, read,
- *  until the other person speaks again. A room they have never spoken in is
- *  browse-only: on the DMs chip (the full rail), never in All. */
+ *  shows no unread, the same rule the rail applies. Presence and rank in the
+ *  All view key to the counterpart's last message: a room they have never
+ *  spoken in is browse-only, and so is a room the viewer has ANSWERED — their
+ *  own reply is the newest message, so nothing awaits them. Replying retires
+ *  the card from All; the next inbound brings it back, ranked by that
+ *  message. The DMs chip stays the full rail either way. */
 export function dmCards(rail: ChatRailChannel[]): ThreadCardModel[] {
   const out: ThreadCardModel[] = [];
   for (const c of rail) {
     if (c.kind !== "dm") continue;
     const inboundAt = c.lastInboundAt;
+    // sortAt is the room's newest message, either direction; newer than the
+    // last inbound means the viewer spoke last.
+    const answered = inboundAt !== undefined && c.sortAt > inboundAt;
     out.push({
       id: `dm:${c.id}`,
       kind: "dm",
       chip: "dm",
       activityAt: inboundAt ?? c.sortAt,
       browseAt: c.sortAt,
-      browseOnly: inboundAt === undefined,
+      browseOnly: inboundAt === undefined || answered,
       unread: c.muted ? 0 : (c.unreadCount ?? 0),
       unreadCapped: !!c.unreadCapped,
       href: `/chat/${c.id}`,
