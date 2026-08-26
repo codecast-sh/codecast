@@ -7,7 +7,7 @@ import { internal } from "./_generated/api";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
 import { hasGrantedSendAccess } from "./collab";
-import { addSessionOwnerRow, listSessionOwnerIds, syncPrimaryOwnerCache } from "./sessionOwners";
+import { ackAssignmentOnEngage, addSessionOwnerRow, listSessionOwnerIds, syncPrimaryOwnerCache } from "./sessionOwners";
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { insertEnqueuedPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
@@ -359,6 +359,14 @@ export async function enqueuePendingMessage(
       )
       .first();
     if (existing) return existing._id;
+  }
+
+  // Sending into a thread you were HANDED is the acknowledgment — retire the
+  // sender's unacked "assigned to you" ping so it can't outlive their reply.
+  // Machine-initiated injections (the trigger scheduler) don't count: nobody
+  // saw anything.
+  if (fields.origin !== "scheduler") {
+    await ackAssignmentOnEngage(ctx, conversation._id, fromUserId);
   }
 
   // This is the sole insertion choke point for every producer. Legacy rows are

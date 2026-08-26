@@ -58,6 +58,26 @@ export async function addSessionOwnerRow(
   return true;
 }
 
+// Replying in an assigned thread IS the acknowledgment: stamp seen_at on the
+// SENDER's own unacked handoff row so the "assigned to you" ping doesn't
+// outlive their engagement. Only handoffs from someone ELSE carry a ping
+// (self-claims are pre-acknowledged at insert), so the added_by check is just
+// a guard against legacy rows. Idempotent no-op otherwise.
+export async function ackAssignmentOnEngage(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  userId: Id<"users">,
+): Promise<void> {
+  const row = await ctx.db
+    .query("session_owners")
+    .withIndex("by_conversation_user", (q: any) =>
+      q.eq("conversation_id", conversationId).eq("user_id", userId))
+    .first();
+  if (row && !row.seen_at && row.added_by?.toString() !== userId.toString()) {
+    await ctx.db.patch(row._id, { seen_at: Date.now() });
+  }
+}
+
 // Remove an owner if present. Returns true iff a row was deleted.
 export async function removeSessionOwnerRow(
   ctx: { db: any },
