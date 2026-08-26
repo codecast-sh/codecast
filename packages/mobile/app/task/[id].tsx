@@ -193,7 +193,11 @@ export default function TaskDetailScreen() {
   const steps = task.steps ?? [];
   const criteria = task.acceptance_criteria ?? [];
   const labels = task.labels ?? [];
-  const comments = [...((task as any).comments ?? [])].sort(
+  // Array.isArray, not just ??: a cached row poisoned by a stale pending lock
+  // once carried a lone comment object here (see tasks.unprotectedFields in
+  // clientSyncRegistry); one bad row must not crash the screen.
+  const rawComments = (task as any).comments;
+  const comments = (Array.isArray(rawComments) ? [...rawComments] : []).sort(
     (a: any, b: any) => (a.created_at ?? 0) - (b.created_at ?? 0),
   );
 

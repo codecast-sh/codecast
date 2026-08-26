@@ -72,6 +72,13 @@ export type ClientSyncRegistryEntry = {
   // webGetTaskDetail lingers in the never-pruned cache forever as a phantom
   // task that 404s when opened.
   validRow?: (row: any) => boolean;
+  // Fields on a localFirst collection that auto pending protection must skip
+  // (see RegistryEntry.unprotectedFields in @platform/engine). For an
+  // append-stream field the optimistic local value contains stub content the
+  // server echo can never match, so a field lock would freeze it forever;
+  // the optimistic write renders until the server's authoritative set
+  // reconciles it. Stale locks on these fields are dropped at hydration.
+  unprotectedFields?: readonly string[];
   // Trim a persisted row as it is hydrated into memory. The list channels for a
   // collection may have shipped fields an older client version cached forever
   // (docs once carried full `content` — 115MB in memory / 125MB on disk for
@@ -121,10 +128,21 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     localFirst: true,
     workspaceScoped: true,
+    // The comment stream is append-only and reconciled wholesale by the
+    // detail query: addTaskComment renders its optimistic row instantly, and
+    // the server's full set (which includes the real comment) replaces it. A
+    // field lock here could never retire — the temp-id stub never matches the
+    // server echo — and would freeze the stream at its optimistic snapshot.
+    unprotectedFields: ["comments"],
     // Real tasks always carry a ct- short_id (required by schema, asserted by
     // webGetTaskDetail's lookup guard). Conversations masquerading as tasks
-    // carry a session short id (jx…) or none.
-    validRow: (row: any) => typeof row?.short_id === "string" && row.short_id.startsWith("ct-"),
+    // carry a session short id (jx…) or none. A non-array `comments` is a row
+    // poisoned by a pre-fix pending lock (a lone comment object re-asserted as
+    // the whole field — crashed the Threads page); dropping it at hydration
+    // lets the live sync re-fill the row clean.
+    validRow: (row: any) =>
+      typeof row?.short_id === "string" && row.short_id.startsWith("ct-") &&
+      (row.comments === undefined || Array.isArray(row.comments)),
   },
   capabilityBindings: {
     persistence: { kind: "collection", key: "capabilityBindings" },

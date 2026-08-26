@@ -57,6 +57,23 @@ describe("client sync registry", () => {
     expect(isProtectedSyncCollection("pendingMessages")).toBe(false);
   });
 
+  it("never field-locks a task's comment stream", () => {
+    // The append-only comment list reconciles wholesale from the server; a
+    // field lock could never retire (the optimistic temp comment never matches
+    // the echo) and once corrupted the whole Threads page down. See
+    // tasks.unprotectedFields in the registry.
+    expect(CLIENT_SYNC_REGISTRY.tasks.unprotectedFields).toContain("comments");
+  });
+
+  it("rejects task rows whose comment stream was poisoned into a non-array", () => {
+    const validRow = collectionRowValidator("tasks")!;
+    expect(validRow({ short_id: "ct-1" })).toBe(true);
+    expect(validRow({ short_id: "ct-1", comments: [] })).toBe(true);
+    // A pre-fix pending lock re-asserted a lone comment object as the whole
+    // field; hydration drops such rows so live sync re-fills them clean.
+    expect(validRow({ short_id: "ct-1", comments: { _id: "temp_1" } })).toBe(false);
+  });
+
   it("keeps server dispatch table metadata in the same registry", () => {
     expect(DISPATCH_TABLE_MAP.conversations).toEqual({ table: "conversations", kind: "collection" });
     expect(DISPATCH_TABLE_MAP.clientState).toEqual({ table: "client_state", kind: "singleton" });
