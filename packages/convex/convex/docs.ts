@@ -2204,7 +2204,10 @@ export const webCreate = mutation({
       sort_order,
     });
 
-    return { id };
+    // The row rides back with the receipt so the client seeds its store before
+    // navigating: the doc page paints from the store, never waiting on the
+    // list feed to echo the create.
+    return { id, row: await ctx.db.get(id) };
   },
 });
 

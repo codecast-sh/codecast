@@ -39,6 +39,7 @@ import { BubbleToolbar } from "./BubbleToolbar";
 import { ImageUploadPlaceholder, uploadImageWithPlaceholder } from "./ImageUploadPlugin";
 import { createWikiLinkExtension } from "./WikiLinkExtension";
 import { useMountEffect } from "../../hooks/useMountEffect";
+import { EMPTY_PM_DOC, writeDocSyncCache } from "../../lib/docSyncCache";
 import type { SyncApi } from "@convex-dev/prosemirror-sync";
 
 const api = _api as any;
@@ -461,22 +462,14 @@ function EditorInner({
   );
 }
 
-// useTiptapSync reads a sessionStorage cache (`convex-sync-<id>`) to skip the
-// snapshot round-trip on mount, but never writes it — we write it here so
-// reopening a doc renders the editor instantly and catches up via getSteps.
+// Cache confirmed editor state so reopening a doc renders the editor instantly
+// and catches up via getSteps (see lib/docSyncCache for the cache contract).
 function writeSyncCache(docId: string, editor: HeadlessEditor) {
   if (editor.isDestroyed) return;
   // Only cache confirmed state: content holding unconfirmed local steps would
   // get those steps re-applied by the catch-up fetch on restore.
   if (sendableSteps(editor.state)) return;
-  try {
-    sessionStorage.setItem(
-      `convex-sync-${docId}`,
-      JSON.stringify({ content: editor.state.doc.toJSON(), version: getVersion(editor.state) }),
-    );
-  } catch {
-    // best-effort — without the cache, loading falls back to the server path
-  }
+  writeDocSyncCache(docId, editor.state.doc.toJSON(), getVersion(editor.state));
 }
 
 function markdownToJson(markdown: string, extensions: any[]): any {
@@ -573,7 +566,7 @@ export function CollabDocEditor({
       createdRef.current = true;
       const json = markdownContent
         ? markdownToJson(markdownContent, extensionsRef.current)
-        : { type: "doc", content: [{ type: "paragraph" }] };
+        : EMPTY_PM_DOC;
       (sync as any).create(json);
     }
     return (

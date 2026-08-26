@@ -8570,6 +8570,18 @@ const inboxStoreConfig = (set: any, get: any) => ({
     serverResult: any,
     _commandId: string,
   ) {
+    const seedTarget = { createDoc: "docs", createPlan: "plans", createProject: "projects" } as const;
+    if (actionName in seedTarget) {
+      // The receipt carries the inserted row. Seed the collection so the detail
+      // page (which paints from the store) has its row before the view moves;
+      // the list feed's echo reconciles the same key.
+      const row = serverResult?.row;
+      const collection = (this as any)[seedTarget[actionName as keyof typeof seedTarget]];
+      if (continuation.kind === "navigate" && row && typeof row._id === "string" && collection && !collection[row._id]) {
+        collection[row._id] = row;
+      }
+      return;
+    }
     if (
       actionName !== "createBucket" ||
       continuation.kind !== "assignBucket" ||
