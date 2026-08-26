@@ -43,12 +43,30 @@ import { ensureUp, hostState, readHosts as readCloudHosts, toRemoteHost } from "
  * require naming anything. An explicit --host id is honored from either
  * registry; waking a stopped instance is part of resolving it.
  */
-async function resolveTransferHost(hostId?: string): Promise<{ host: RemoteHost; cloudId?: string }> {
+async function resolveTransferHost(hostId?: string): Promise<{ host: RemoteHost; cloudId?: string; deviceId?: string }> {
   const cloud = readCloudHosts();
   const pick = hostId ? cloud.find((h) => h.id === hostId) : cloud.find((h) => h.provider === "aws");
   if (pick) {
     const up = await ensureUp(pick, (m) => console.log(`  ${m}`));
-    return { host: toRemoteHost(up), cloudId: up.id };
+    const host = toRemoteHost(up);
+    // Ask the box for ITS codecast device id, so a move targets exactly the
+    // machine we just transferred files to. Deriving the device from "first
+    // online remote" broke the moment a second remote existed: the registry
+    // still listed a retired Mac whose daemon kept heartbeating, and the
+    // ownership flip would have sent the session there while the worktree
+    // landed here.
+    let deviceId: string | undefined;
+    try {
+      const { execFileSync } = await import("node:child_process");
+      const line = execFileSync(
+        "ssh",
+        ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
+         "-o", "BatchMode=yes", `${host.user}@${host.address}`, "cast remote hosts 2>/dev/null | head -1"],
+        { encoding: "utf-8", timeout: 60_000 },
+      );
+      deviceId = /\(([0-9a-f-]{8,})\)/.exec(line)?.[1];
+    } catch { /* fall back to the online-remote pick */ }
+    return { host, cloudId: up.id, deviceId };
   }
   return { host: loadRemoteHost(hostId) };
 }
@@ -273,7 +291,8 @@ export function registerRemoteCommand(program: Command): void {
     .option("--host <id>", "Target a specific host id")
     .option("--to-device <id>", "Target a specific codecast device id (default: first online remote)")
     .action(async (sessionId: string, opts: { host?: string; toDevice?: string }) => {
-      const { host } = await resolveTransferHost(opts.host);
+      const { host, deviceId: hostDeviceId } = await resolveTransferHost(opts.host);
+      const targetDevice = opts.toDevice ?? hostDeviceId;
       const { client, token, api } = await convexClient();
       const conv = await client.query(api.devices.resolveConversationBySession, { api_token: token, session_id: sessionId });
       if (!conv?._id) { console.error(`No conversation for session ${sessionId} (is it synced?)`); process.exit(1); }
@@ -289,19 +308,19 @@ export function registerRemoteCommand(program: Command): void {
       const pickDeadline = Date.now() + 90_000;
       for (;;) {
         const devices = await client.query(api.devices.listDevices, { api_token: token });
-        macDevice = opts.toDevice
-          ? devices.find((d: any) => d.device_id === opts.toDevice)
+        macDevice = targetDevice
+          ? devices.find((d: any) => d.device_id === targetDevice)
           : devices.find((d: any) => d.is_remote && d.online);
         if (macDevice || Date.now() > pickDeadline) break;
         console.log("  waiting for the remote daemon to come online…");
         await new Promise((r) => setTimeout(r, 5000));
       }
-      if (!macDevice && !opts.toDevice) {
+      if (!macDevice && !targetDevice) {
         const devices = await client.query(api.devices.listDevices, { api_token: token });
         macDevice = devices.find((d: any) => d.is_remote);
       }
       if (!macDevice) {
-        console.error(opts.toDevice ? `Device ${opts.toDevice} not found` : "No online remote device found (is the remote daemon provisioned? `cast browser hosts provision`)");
+        console.error(targetDevice ? `Device ${targetDevice} not found` : "No online remote device found (is the remote daemon provisioned? `cast browser hosts provision`)");
         process.exit(1);
       }
 
