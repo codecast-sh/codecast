@@ -94,6 +94,16 @@ export interface InstanceState {
    * it navigates normally.
    */
   navByTab?: Record<string, { requested: string; landed: string }>;
+  /**
+   * When `login` last raised the window to the front, machine-wide.
+   *
+   * The raise steals focus from whatever the human is in, and one browser
+   * serves every agent — so a caller re-running `login` (or several sessions
+   * blocked on the same sign-in) must not turn into a raise every few seconds.
+   * `loginAsPerson` raises at most once per cooldown against this stamp; the
+   * command still reports the sign-in is pending, it just leaves focus alone.
+   */
+  loginRaisedAt?: number;
   /** Fallback for callers with no session (a human at a terminal). */
   activeTargetId: string | null;
 }

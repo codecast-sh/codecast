@@ -20,6 +20,7 @@
 import type http from "http";
 import { CdpConnection, listTargets } from "./cdp.js";
 import { raiseAppByPid, raiseAppByPidSync } from "./raiseApp.js";
+import { noteDeliberateRaise } from "./focusSentinel.js";
 import { readState } from "./instance.js";
 import { listChromeDebugPorts } from "./localChrome.js";
 import { isPidAlive } from "../workspace/chrome.js";
@@ -192,6 +193,8 @@ export async function focusBrowserTab(query: string, deps: FocusDeps = defaultDe
       worse("browser-unreachable");
       continue;
     }
+    // This raise is asked for — tell the sentinel not to bounce it.
+    noteDeliberateRaise();
     if (tab.pid) deps.raiseApp(tab.pid, deps.log);
     return { ok: true };
   }
