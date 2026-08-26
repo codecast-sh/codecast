@@ -3,6 +3,7 @@
 // the row shape is whatever api.artifacts.listForWeb returns (see
 // packages/convex/convex/artifacts.ts toCliRow + listForWeb extras).
 
+import { copyToClipboard } from "../../lib/utils";
 import { useState } from "react";
 import { AvatarImg } from "../../lib/avatarCache";
 import { useMutation } from "convex/react";
@@ -107,7 +108,7 @@ export function ArtifactCard({
 
   const copyLink = async () => {
     try {
-      await navigator.clipboard.writeText(a.url);
+      await copyToClipboard(a.url);
       toast.success("Link copied");
     } catch {
       toast.error("Couldn't copy link");

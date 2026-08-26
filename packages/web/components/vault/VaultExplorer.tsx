@@ -9,6 +9,7 @@
 // inline: the label becomes an input and the store does the move. The tree's
 // pure model (shape, order, naming rules) lives in lib/vault/explorerModel.
 
+import { copyToClipboard } from "../../lib/utils";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -485,7 +486,7 @@ export const VaultExplorer = memo(function VaultExplorer({
                   icon={ClipboardCopy}
                   onSelect={() => {
                     closeMenu();
-                    void navigator.clipboard?.writeText(menuNode.path).catch(() => {});
+                    void copyToClipboard(menuNode.path).catch(() => {});
                   }}
                 >
                   Copy path

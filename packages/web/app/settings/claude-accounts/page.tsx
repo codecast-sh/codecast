@@ -1,5 +1,6 @@
 "use client";
 
+import { copyToClipboard } from "../../../lib/utils";
 // First-class management of Claude Code accounts (the Max/Pro login every
 // claude session on a machine shares). The credential is machine-global, so
 // everything here is per-device and executes daemon-side: profiles are
@@ -54,7 +55,7 @@ function CopyableCommand({ cmd }: { cmd: string }) {
   return (
     <button
       onClick={() => {
-        navigator.clipboard.writeText(cmd).then(() => {
+        copyToClipboard(cmd).then(() => {
           setCopied(true);
           setTimeout(() => setCopied(false), 1500);
         });

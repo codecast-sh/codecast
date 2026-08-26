@@ -1,5 +1,6 @@
 "use client";
 import { ReactNode, useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { copyToClipboard } from "../lib/utils";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRouter, usePathname } from "next/navigation";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -683,7 +684,7 @@ export function GenericListView<T>({
     if (!shareUrl) return;
     const url = shareUrl();
     try {
-      await navigator.clipboard.writeText(url);
+      await copyToClipboard(url);
       toast.success("Link to this view copied");
     } catch {
       toast.error("Couldn't copy link");

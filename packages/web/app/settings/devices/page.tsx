@@ -1,5 +1,6 @@
 "use client";
 
+import { copyToClipboard } from "../../../lib/utils";
 import { useMemo, useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -80,7 +81,7 @@ function GrantAccessCard({ d, blocked }: { d: Device; blocked: RepoPlane[] }) {
             <button
               type="button"
               onClick={() => {
-                void navigator.clipboard.writeText(d.git_pubkey!);
+                void copyToClipboard(d.git_pubkey!);
                 setCopied(true);
                 setTimeout(() => setCopied(false), 1500);
               }}

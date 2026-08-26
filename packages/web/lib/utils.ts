@@ -183,19 +183,31 @@ export function buildProjectPathOptions(opts: {
 }
 
 export async function copyToClipboard(text: string): Promise<void> {
-  // Sync execCommand first - must run before dropdown/popup closes and shifts focus
+  // Async Clipboard API first. The execCommand path cannot be the primary:
+  // its hidden textarea lives outside any open Radix dialog, so the dialog's
+  // focus trap yanks focus off it and the copy silently grabs nothing while
+  // still reporting success (the InviteModal "Copy" bug).
+  if (navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // e.g. "Document is not focused" — fall through to execCommand.
+    }
+  }
+
+  // execCommand fallback. Park the textarea inside the open dialog (when one
+  // is up) so a focus trap can't steal focus from it mid-copy.
+  const host =
+    (document.activeElement?.closest?.('[role="dialog"]') as HTMLElement | null) ??
+    document.body;
   const textArea = document.createElement("textarea");
   textArea.value = text;
   textArea.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
-  document.body.appendChild(textArea);
+  host.appendChild(textArea);
   textArea.focus();
   textArea.select();
   const ok = document.execCommand("copy");
-  document.body.removeChild(textArea);
-  if (ok) return;
-
-  // Async Clipboard API fallback (only available in secure contexts)
-  if (navigator.clipboard) {
-    await navigator.clipboard.writeText(text);
-  }
+  host.removeChild(textArea);
+  if (!ok) throw new Error("Copy to clipboard failed");
 }

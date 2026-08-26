@@ -1,5 +1,6 @@
 "use client";
 
+import { copyToClipboard } from "../../lib/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -476,7 +477,7 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
   const copyPrompt = async (e?: React.MouseEvent) => {
     e?.stopPropagation();
     try {
-      await navigator.clipboard.writeText(task.prompt ?? "");
+      await copyToClipboard(task.prompt ?? "");
       toast.success("Prompt copied");
     } catch {
       toast.error("Couldn't copy");
