@@ -16,6 +16,7 @@ import {
   type AgentClientId,
 } from "@codecast/shared/contracts";
 import { getAgentArgs, type Config } from "./config/types.js";
+import { stableClaudeBinary } from "./stableClaudeBinary.js";
 
 /**
  * The single seam for reading a client's user-configured base launch args.
@@ -135,7 +136,21 @@ export function buildLaunchArgs(input: LaunchArgsInput): LaunchArgsResult {
   return { binaryArgs: args, notifyCodexBypass };
 }
 
-/** The binary launched for a fresh session — a registry lookup. */
-export function launchBinary(agentType: AgentClientId): string {
+export interface LaunchBinaryDeps {
+  warn?: (message: string) => void;
+  /** Test seam for the macOS fixed-path claude copy. */
+  stable?: (opts: { warn?: (message: string) => void }) => string | null;
+}
+
+/**
+ * The binary a session launches or resumes with — a registry lookup, except
+ * claude on macOS, which runs from its fixed-path copy (stableClaudeBinary) so
+ * the user's folder grants survive Claude Code updates.
+ */
+export function launchBinary(agentType: AgentClientId, deps: LaunchBinaryDeps = {}): string {
+  if (agentType === "claude") {
+    const stable = (deps.stable ?? stableClaudeBinary)({ warn: deps.warn });
+    if (stable) return stable;
+  }
   return AGENT_CLIENTS[agentType].binary;
 }
