@@ -25,7 +25,7 @@ import { isNonTabRoute } from "../src/compat/tabRouting";
 import { score, matchScore } from "../hooks/useMentionQuery";
 import { dmOtherIds } from "@codecast/shared/chat";
 import { channelDisplayName, dmCounterpart, memberName } from "../lib/chatViews";
-import { memberAvatarUrl } from "../lib/liveEntities";
+import { memberAvatarUrl, memberDisplayName } from "../lib/liveEntities";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useCollectionRows } from "../hooks/useCollectionRows";
 import { useSyncTriggers } from "../hooks/useSyncTriggers";
@@ -255,7 +255,7 @@ function getShortPath(p: string): string {
 }
 
 // ─── Action submenu component (Linear-style) ───────────────────
-function ActionSubmenu({
+export function ActionSubmenu({
   mode,
   targets,
   targetType,
@@ -460,12 +460,15 @@ function ActionSubmenu({
       return matched;
     }
     if (mode === "assign") {
-      const members = (teamMembers || []).filter(Boolean).map((m: any) => ({
-        key: m._id,
-        label: currentUser && m._id === currentUser._id ? `${m.name} (you)` : m.name,
-        type: "user" as const,
-        image: m.image || m.github_avatar_url,
-      }));
+      const members = (teamMembers || []).filter(Boolean).map((m: any) => {
+        const name = memberDisplayName(m);
+        return {
+          key: m._id,
+          label: currentUser && m._id === currentUser._id ? `${name} (you)` : name,
+          type: "user" as const,
+          image: memberAvatarUrl(m),
+        };
+      });
       return members.filter((o) => o.label.toLowerCase().includes(q));
     }
     if (mode === "agent_run") {
@@ -711,7 +714,7 @@ function ActionSubmenu({
       } else if (mode === "assign") {
         applyTaskUpdate({ assignee: item.key });
         const member = (teamMembers || []).find((m: any) => m._id === item.key);
-        toast.success(`Assigned to ${member?.name || "user"}`);
+        toast.success(`Assigned to ${memberDisplayName(member, "user")}`);
       } else if (mode === "parent") {
         let failed = 0;
         for (const t of targets as TaskItem[]) {
