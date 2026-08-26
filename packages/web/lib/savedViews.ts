@@ -14,7 +14,7 @@ export type ViewPrefs = Record<string, unknown>;
 /** Fields that describe presentation rather than which rows you are looking at.
  *  A view still counts as selected when only these differ, so flipping to the
  *  board or reversing the sort does not silently deselect it. */
-const PRESENTATION_FIELDS = new Set(["view", "dir"]);
+const PRESENTATION_FIELDS = new Set(["view", "dir", "kanban_order"]);
 
 /**
  * Which saved view the list was opened FROM, stamped into the page's prefs.

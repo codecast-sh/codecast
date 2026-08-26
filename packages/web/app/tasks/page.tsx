@@ -23,7 +23,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { TaskStatusBadge, TASK_STATUS, TASK_STATUS_ORDER, type TaskStatus } from "../../components/TaskStatusBadge";
 import { buildTaskGroups, isValidTaskGroup, parseTaskGroup, taskGroupDropUpdates, TASK_AXES, TASK_AXIS_KEYS } from "../../lib/taskGrouping";
-import { statusByKey, statusVisual, statusWriteFields, taskStatusKey, taskStatusOf, useTeamTaskStatusList } from "../../lib/taskStatuses";
+import { boardOrderedStatuses, statusByKey, statusVisual, statusWriteFields, taskStatusKey, taskStatusOf, useTeamTaskStatusList } from "../../lib/taskStatuses";
 import type { TeamTaskStatus } from "@codecast/shared/tasks";
 import { LabelChips } from "../../components/LabelChips";
 import { toast } from "sonner";
@@ -570,6 +570,8 @@ function KanbanCard({
   );
 }
 
+const COLUMN_DRAG_TYPE = "application/x-codecast-kanban-column";
+
 function KanbanView({
   statuses,
   grouped,
@@ -580,6 +582,7 @@ function KanbanView({
   onContextMenu,
   onAddTask,
   onStatusChange,
+  onReorder,
   parentChipFor,
 }: {
   /** The workspace's status vocabulary — one column per status, board-ordered. */
@@ -593,11 +596,14 @@ function KanbanView({
   onContextMenu: (e: React.MouseEvent, task: TaskItem) => void;
   onAddTask: (status: string) => void;
   onStatusChange: (task: TaskItem, newStatusKey: string) => void;
+  /** Persist a new column order (all status ids, board order). */
+  onReorder: (order: string[]) => void;
   parentChipFor?: (task: TaskItem) => { short_id: string; title: string } | null;
 }) {
   const visibleStatuses = statuses.filter((s) => !hiddenStatuses.has(s.id));
   const hiddenWithTasks = statuses.filter((s) => hiddenStatuses.has(s.id));
   const [dragging, setDragging] = useState<string | null>(null);
+  const [draggingCol, setDraggingCol] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
 
   const onDragStart = useCallback((e: React.DragEvent, shortId: string) => {
@@ -611,9 +617,39 @@ function KanbanView({
     setDragOver(null);
   }, []);
 
+  // Column drags ride a custom type so a drop can tell them apart from card
+  // drags (text/plain). Types are readable during dragover, data only on drop.
+  const onColDragStart = useCallback((e: React.DragEvent, status: string) => {
+    e.dataTransfer.setData(COLUMN_DRAG_TYPE, status);
+    e.dataTransfer.effectAllowed = "move";
+    setDraggingCol(status);
+  }, []);
+
+  const onColDragEnd = useCallback(() => {
+    setDraggingCol(null);
+    setDragOver(null);
+  }, []);
+
   const onDrop = useCallback((e: React.DragEvent, targetStatus: string) => {
     e.preventDefault();
     setDragOver(null);
+    const colId = e.dataTransfer.getData(COLUMN_DRAG_TYPE);
+    if (colId) {
+      setDraggingCol(null);
+      if (colId === targetStatus) return;
+      // Dropping on a column takes its place: moving right lands after it,
+      // moving left lands before it. Hidden columns keep their slots.
+      const ids = statuses.map((s) => s.id);
+      const from = ids.indexOf(colId);
+      const to = ids.indexOf(targetStatus);
+      if (from < 0 || to < 0) return;
+      ids.splice(from, 1);
+      // After the removal, index `to` is after the target when moving right
+      // and before it when moving left, so the dragged column takes its place.
+      ids.splice(to, 0, colId);
+      onReorder(ids);
+      return;
+    }
     const shortId = e.dataTransfer.getData("text/plain");
     if (!shortId) return;
     const allTasks = Object.values(grouped).flat();
@@ -624,7 +660,7 @@ function KanbanView({
     }
     onStatusChange(task, targetStatus);
     setDragging(null);
-  }, [grouped, keyFor, onStatusChange]);
+  }, [grouped, keyFor, onStatusChange, onReorder, statuses]);
 
   const handleDragOver = useCallback((e: React.DragEvent, status: string) => {
     e.preventDefault();
@@ -652,9 +688,14 @@ function KanbanView({
               onDragLeave={onDragLeave}
               className={`flex flex-col w-[272px] flex-shrink-0 min-h-0 rounded-lg transition-colors ${
                 dragOver === status ? "bg-sol-bg-alt/50 ring-1 ring-sol-yellow/30" : ""
-              }`}
+              } ${draggingCol === status ? "opacity-40" : ""}`}
             >
-              <div className="flex items-center gap-2 px-1 py-2 mb-2">
+              <div
+                draggable
+                onDragStart={(e) => onColDragStart(e, status)}
+                onDragEnd={onColDragEnd}
+                className="flex items-center gap-2 px-1 py-2 mb-2 cursor-grab select-none"
+              >
                 <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${cfg.color}`} />
                 <span className="text-sm font-medium text-sol-text">{cfg.label}</span>
                 <span className="text-[11px] text-sol-text-dim tabular-nums">{tasks.length}</span>
@@ -986,6 +1027,19 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
   // (filterToWorkspace below), so one list serves columns, groups and drops.
   const taskStatuses = useTeamTaskStatusList(activeTeamId);
   const kanbanKeyFor = useCallback((t: TaskItem) => taskStatusKey(t as any, taskStatuses), [taskStatuses]);
+  // Board columns run pipeline order (open left, done right), then any order
+  // the user dragged into place. The order is presentation, so it lives in the
+  // per-user view prefs, not the URL.
+  const kanbanOrder = taskView?.kanban_order;
+  const boardStatuses = useMemo(
+    () => boardOrderedStatuses(taskStatuses, kanbanOrder),
+    [taskStatuses, kanbanOrder]
+  );
+  const updateClientUIStore = useInboxStore((s) => s.updateClientUI);
+  const handleColumnReorder = useCallback(
+    (order: string[]) => updateClientUIStore({ task_view: { ...taskView, kanban_order: order } }),
+    [updateClientUIStore, taskView]
+  );
   const teamMembers = useQuery(api.teams.getTeamMembers, effectiveTeamId ? { team_id: effectiveTeamId } : "skip");
   const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
 
@@ -1564,9 +1618,10 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
           )}
           customContent={viewMode === "kanban" ? ({ openContextMenuForItems }) => (
             <KanbanView
-              statuses={taskStatuses}
+              statuses={boardStatuses}
               grouped={kanbanGrouped}
               keyFor={kanbanKeyFor}
+              onReorder={handleColumnReorder}
               hiddenStatuses={hiddenStatuses}
               onToggleHidden={(s) => setHiddenStatuses((prev) => {
                 const next = new Set(prev);
