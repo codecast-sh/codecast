@@ -3,7 +3,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { LayoutDashboard, Users, UserMinus, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { useInboxStore, type SavedViewRow } from "../store/inboxStore";
-import { matchesWorkbench, type WorkbenchSnapshot } from "../store/workbench";
+import { chipFilterOf, matchesWorkbench, type WorkbenchSnapshot } from "../store/workbench";
 import { switchToWorkbench, sortedWorkbenches } from "../lib/workbenchSwitch";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { getShortcutsForAction, formatShortcutParts, type ShortcutAction } from "../shortcuts";
@@ -37,6 +37,19 @@ export function WorkbenchSection({
   const deleteSavedView = useInboxStore((s) => s.deleteSavedView);
   const updateSavedView = useInboxStore((s) => s.updateSavedView);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
+  // The chip filter is part of the layout, so matching reads it too. Selected
+  // field by field: one selector returning the composed filter would hand
+  // zustand a fresh object every render.
+  const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
+  const activeProjectFilter = useInboxStore((s) => s.activeProjectFilter);
+  const activeProjectPath = useInboxStore((s) => s.activeProjectPath);
+  const chipFilterExclude = useInboxStore((s) => s.chipFilterExclude);
+  const buckets = useInboxStore((s) => s.buckets);
+
+  const liveFilter = useMemo(
+    () => chipFilterOf({ activeBucketFilter, activeProjectFilter, activeProjectPath, chipFilterExclude, buckets }),
+    [activeBucketFilter, activeProjectFilter, activeProjectPath, chipFilterExclude, buckets],
+  );
 
   const saved = useMemo(
     () => sortedWorkbenches({ savedViews: savedViewRows ?? {}, clientState: { ui: { active_team_id: activeTeamId } } }),
@@ -49,14 +62,14 @@ export function WorkbenchSection({
   // arrangement that happens to equal a workbench you never clicked.
   const activeId = useMemo(() => {
     if (activeWorkbenchId && saved.some((v) => v._id === activeWorkbenchId)) return activeWorkbenchId;
-    return saved.find((v) => matchesWorkbench(workspace, v.prefs as WorkbenchSnapshot, { zen }))?._id;
-  }, [workspace, zen, saved, activeWorkbenchId]);
+    return saved.find((v) => matchesWorkbench(workspace, v.prefs as WorkbenchSnapshot, { zen, filter: liveFilter, buckets }))?._id;
+  }, [workspace, zen, saved, activeWorkbenchId, liveFilter, buckets]);
 
   // Drifted from the saved shape → the active row offers update without hover.
   const activeIsDirty = useMemo(() => {
     const v = saved.find((r) => r._id === activeId);
-    return !!v && !matchesWorkbench(workspace, v.prefs as WorkbenchSnapshot, { zen });
-  }, [saved, activeId, workspace, zen]);
+    return !!v && !matchesWorkbench(workspace, v.prefs as WorkbenchSnapshot, { zen, filter: liveFilter, buckets });
+  }, [saved, activeId, workspace, zen, liveFilter, buckets]);
 
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
@@ -118,7 +131,7 @@ export function WorkbenchSection({
         )}
         {saved.map((v, i) => {
           const active = v._id === activeId;
-          const hint = i < 4 ? keyHint(`workbench.${i + 1}` as ShortcutAction) : null;
+          const hint = i < 9 ? keyHint(`workbench.${i + 1}` as ShortcutAction) : null;
           const mine = v.is_mine !== false;
           const showUpdateAlways = active && activeIsDirty && mine;
           return (

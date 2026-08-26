@@ -37,8 +37,10 @@ export function switchToWorkbench(
   pathname?: string | null,
   id?: string,
 ) {
-  useInboxStore.getState().applyWorkbench(snap, id);
-  if (snap.path && !sameSurface(surfaceForPath(snap.path), surfaceForPath(pathname ?? ""))) {
-    nav.push(snap.path);
-  }
+  // Where we LAND is resolved first: the arrangement's filter is applied against
+  // the destination's session list, so a layout that changes surface must evict
+  // focus using the surface you are arriving on, not the one you are leaving.
+  const goes = !!snap.path && !sameSurface(surfaceForPath(snap.path), surfaceForPath(pathname ?? ""));
+  useInboxStore.getState().applyWorkbench(snap, id, goes ? snap.path! : pathname);
+  if (goes) nav.push(snap.path!);
 }

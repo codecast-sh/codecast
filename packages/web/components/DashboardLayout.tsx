@@ -70,7 +70,7 @@ import { CallDock } from "./calls/CallDock";
 import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
 import { useSyncMentionPlans } from "../hooks/useSyncPlans";
 import { useSyncMentionTasks } from "../hooks/useSyncTasks";
-import { isInboxSessionView, resolveSessionSelectKind } from "../lib/inboxRouting";
+import { isInboxSessionView, resolveSessionSelectKind, sessionFocusKind } from "../lib/inboxRouting";
 import { useSessionSwitcher } from "../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "./SessionSwitcher";
 import { TabBar, AttachTabButton } from "./TabBar";
@@ -551,10 +551,13 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // On working pages the rail highlights the attended conversation (the one
   // the companion mirrors) — same precedence as the inbox. sidePanelSessionId
   // is a stale persisted pointer nothing on these surfaces writes anymore;
-  // reading it left the highlight frozen on whatever it last held.
-  const sessionListActiveId = isOnInboxPage || isOnWorkingPage
+  // reading it left the highlight frozen on whatever it last held. Which
+  // pointer is live comes from the shared helper, so whatever MOVES this
+  // highlight (the workbench filter's eviction) reads the same answer.
+  const focusKind = sessionFocusKind(pathname, s.currentConversation?.source);
+  const sessionListActiveId = focusKind === "current"
     ? (s.viewingDismissedId ?? s.currentSessionId)
-    : isOnConversationPage
+    : focusKind === "url"
     ? (conversationPageId ?? s.currentSessionId)
     : s.sidePanelSessionId;
 
