@@ -3068,22 +3068,8 @@ export async function performListRecentSessions(ctx: { db: QueryCtx["db"] }, use
   const effectiveTeamId = user?.active_team_id;
   const authorById = new Map<string, { name: string; avatar: string | null }>();
   if (effectiveTeamId) {
-    const feedFilter = await createTeamFeedFilter(ctx, effectiveTeamId);
-    const visibleMembers = feedFilter.memberships.filter((m) => {
-      if (m.user_id.toString() === userId.toString()) return false;
-      return ((m as any).visibility || "summary") !== "hidden";
-    });
-    const perMember = await Promise.all(
-      visibleMembers.map(async (m) => {
-        const convs = await ctx.db
-          .query("conversations")
-          .withIndex("by_team_user_updated", (q) =>
-            q.eq("team_id", effectiveTeamId).eq("user_id", m.user_id).gte("updated_at", thirtyDaysAgo)
-          )
-          .order("desc")
-          .take(10);
-        return convs.filter((c) => isSessionRow(c) && feedFilter.isVisible(c));
-      })
+    const { visibleMembers, rows } = await collectTeammateConversationsSince(
+      ctx, effectiveTeamId, userId, thirtyDaysAgo, () => 10,
     );
     const memberUsers = await Promise.all(visibleMembers.map((m) => ctx.db.get(m.user_id)));
     for (const u of memberUsers) {
@@ -3092,7 +3078,7 @@ export async function performListRecentSessions(ctx: { db: QueryCtx["db"] }, use
         avatar: (u as any).image || (u as any).github_avatar_url || null,
       });
     }
-    for (const c of perMember.flat()) {
+    for (const c of rows.filter(isSessionRow)) {
       const id = c._id.toString();
       if (!byId.has(id)) byId.set(id, { conv: c, isOwn: false });
     }
@@ -6884,6 +6870,51 @@ export const getMessageCountsForReconciliation = query({
   },
 });
 
+// Teammates' conversations updated after `since`: one bounded, newest-first
+// range per visible member on by_team_user_updated (the viewer and hidden
+// members are skipped, and the index bound means rows older than `since` are
+// never read). Fanning out per member instead of scanning the whole team keeps
+// the viewer's OWN rows out of the read set, so a live subscriber never re-runs
+// on the viewer's own heartbeats, and it reuses the index the team feed pages
+// on. `perMember(memberCount)` caps reads per member so total work is bounded
+// regardless of team size.
+export async function collectTeammateConversationsSince(
+  ctx: Pick<QueryCtx, "db">,
+  teamId: Id<"teams">,
+  viewerId: Id<"users">,
+  since: number,
+  perMember: (memberCount: number) => number,
+) {
+  const feedFilter = await createTeamFeedFilter(ctx, teamId);
+  const visibleMembers = feedFilter.memberships.filter((m) =>
+    m.user_id.toString() !== viewerId.toString() &&
+    (m.visibility || "summary") !== "hidden"
+  );
+  const take = Math.max(1, perMember(visibleMembers.length));
+  const perMemberRows = await Promise.all(
+    visibleMembers.map((m) =>
+      ctx.db
+        .query("conversations")
+        .withIndex("by_team_user_updated", (q) =>
+          q.eq("team_id", teamId).eq("user_id", m.user_id).gt("updated_at", since)
+        )
+        .order("desc")
+        .take(take)
+        .then((rows) => rows.filter((c) => feedFilter.isVisible(c)))
+    )
+  );
+  return { feedFilter, visibleMembers, rows: perMemberRows.flat() };
+}
+
+// Total doc reads one unread recount may spend across all teammates. The badge
+// is a count, not a list: when a member has more than their share of unread
+// rows the number saturates rather than the query scanning further.
+export const TEAM_UNREAD_MAX_READS = 100;
+
+// Sidebar "Feed" badge: teammates' feed-visible conversations updated since the
+// viewer last opened the feed (markTeamConversationsSeen). A live subscription
+// on every connected client, so the read set must stay small: only rows past
+// the viewer's read mark are read, and never the viewer's own.
 export const getTeamUnreadCount = query({
   args: {
     teamId: v.optional(v.id("teams")),
@@ -6903,26 +6934,12 @@ export const getTeamUnreadCount = query({
       return 0;
     }
 
-    const feedFilter = await createTeamFeedFilter(ctx, effectiveTeamId);
-
     const lastSeen = user.team_conversations_last_seen || 0;
-
-    const recentConversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_team_id", (q) => q.eq("team_id", effectiveTeamId))
-      .order("desc")
-      .take(100);
-
-    let count = 0;
-    for (const conv of recentConversations) {
-      if (conv.updated_at > lastSeen && conv.user_id.toString() !== userId.toString()) {
-        if (feedFilter.isVisible(conv)) {
-          count++;
-        }
-      }
-    }
-
-    return count;
+    const { rows } = await collectTeammateConversationsSince(
+      ctx, effectiveTeamId, userId, lastSeen,
+      (members) => Math.max(3, Math.floor(TEAM_UNREAD_MAX_READS / Math.max(members, 1))),
+    );
+    return rows.length;
   },
 });
 
