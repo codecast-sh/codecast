@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { Globe, ArrowUpRight, ChevronsUpDown } from "lucide-react";
+import { Link, ArrowUpRight, ChevronsUpDown } from "lucide-react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { CONVEX_URL } from "../lib/localAuth";
 
@@ -67,7 +67,7 @@ export function PublishedPageEmbed({ slug, caption }: { slug: string; caption?: 
     <span className="not-prose my-3 block">
       <span className="block overflow-hidden rounded-md border border-sol-border">
         <span className="flex items-center gap-2 border-b border-sol-border bg-sol-bg-alt px-3 py-1.5">
-          <Globe className="h-3.5 w-3.5 flex-shrink-0 text-sol-blue" />
+          <PageFavicon className="h-4 w-4" />
           <span className="min-w-0 flex-1 truncate text-xs font-medium text-sol-text">{title}</span>
           <button
             type="button"
@@ -102,11 +102,30 @@ export function PublishedPageEmbed({ slug, caption }: { slug: string; caption?: 
   );
 }
 
+/** Tiny "favicon" disc: the published page's identity mark. Every flat accent
+ *  pill already names an internal object (blue session, cyan plan, green doc,
+ *  violet project…), so a page — a link OUT to the web — gets a duotone disc
+ *  no entity owns instead of another accent from the same family. */
+function PageFavicon({ className = "h-3.5 w-3.5" }: { className?: string }) {
+  return (
+    <span
+      className={`inline-flex flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-sol-cyan/35 to-sol-violet/35 ${className}`}
+    >
+      <Link className="h-[62%] w-[62%] text-sol-text" />
+    </span>
+  );
+}
+
 /**
  * Inline reference to a published page: a small titled pill, for a publish URL
  * that sits inside a sentence rather than on its own line. Opens the page in a
  * new tab; the label is the live page title (or the author's link text when
  * they wrote one).
+ *
+ * Styled as a miniature browser chip — rounded-full on neutral chrome with a
+ * favicon disc and an external-link arrow — deliberately NOT the rectangular
+ * accent-tinted shape of entity pills: those mean "internal object", this
+ * means "web page".
  */
 export function PublishedPagePill({
   slug,
@@ -124,11 +143,12 @@ export function PublishedPagePill({
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="inline-flex max-w-xs items-center gap-1 rounded border border-sol-blue/20 bg-sol-blue/10 px-1.5 py-0 align-baseline text-[11px] font-medium leading-[1.4] text-sol-blue no-underline hover:bg-sol-blue/20 transition-colors"
+      className="group inline-flex max-w-xs items-center gap-1 rounded-full border border-sol-border bg-sol-bg-alt py-0 pl-[3px] pr-1.5 align-baseline text-[11px] font-medium leading-[1.4] text-sol-text-secondary no-underline transition-colors hover:border-sol-violet/50 hover:text-sol-text"
       title={meta?.title || href}
     >
-      <Globe className="h-3 w-3 flex-shrink-0" />
+      <PageFavicon />
       <span className="truncate">{text}</span>
+      <ArrowUpRight className="h-2.5 w-2.5 flex-shrink-0 text-sol-text-dim transition-transform group-hover:-translate-y-px group-hover:translate-x-px group-hover:text-sol-violet" />
     </a>
   );
 }
