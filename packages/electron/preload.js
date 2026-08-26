@@ -123,5 +123,14 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   detachTab: (navPath) => ipcRenderer.invoke("detach-tab", navPath),
   attachTab: (navPath) => ipcRenderer.invoke("attach-tab", navPath),
   onAdoptTab,
+  // The people window: the floating buddy list (route /people). One per app —
+  // openPeopleWindow focuses the existing one. `isPeopleWindow` tells this
+  // renderer it IS that window, so it draws the panel and mounts the call and
+  // walkie pumps. The always-on-top pin is honored only from that window and
+  // persists across launches.
+  isPeopleWindow: process.argv.includes("--people-window"),
+  openPeopleWindow: () => ipcRenderer.invoke("open-people-window"),
+  setAlwaysOnTop: (on) => ipcRenderer.invoke("set-always-on-top", on),
+  getAlwaysOnTop: () => ipcRenderer.invoke("get-always-on-top"),
   platform: process.platform,
 });

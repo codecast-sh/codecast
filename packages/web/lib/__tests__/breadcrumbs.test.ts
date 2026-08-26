@@ -60,6 +60,16 @@ describe("buildBreadcrumbs", () => {
     expect(labels("/projects/p9/t9", {})).toEqual(["Projects", "p9", "t9"]);
   });
 
+  it("never renders a raw Convex id — a session shows its short handle, others their kind", () => {
+    const raw = "jx7bpagx1jct409wgrkdqcn4558d7560";
+    const [, sess] = buildBreadcrumbs(`/conversation/${raw}`, {});
+    expect(sess.label).toBe("jx7bpag");
+    expect(sess.shortId).toBeUndefined();
+    const [, task] = buildBreadcrumbs(`/tasks/${raw}`, {});
+    expect(task.label).toBe("Task");
+    expect(task.shortId).toBeUndefined();
+  });
+
   it("uses whichever name field the entity carries", () => {
     expect(labels("/chat/c1")).toEqual(["Chat", "general"]);
     expect(labels("/docs/d1")).toEqual(["Docs", "Sync design notes"]);

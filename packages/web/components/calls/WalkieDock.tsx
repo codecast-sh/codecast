@@ -20,7 +20,7 @@ import { leaveCall } from "../../lib/calls/callManager";
 import { lastWalkieTarget, useWalkieStatus } from "../../hooks/useWalkie";
 import { useChatMessageRow } from "../../hooks/useChatSync";
 import { useRoomDescription } from "../../hooks/useCallRoom";
-import { WalkiePttButton } from "./WalkiePtt";
+import { WalkieLevelBars, WalkiePttButton } from "./WalkiePtt";
 import "./walkie.css";
 
 /** How much of a live transcript the strip carries. It is a tail, not the
@@ -58,19 +58,47 @@ export function WalkieBanner() {
   // otherwise — which keeps naming a renamed teammate correctly, live, instead
   // of freezing whatever they were called when the burst started.
   const name = incoming?.fromName ?? label;
+  // THE STRIP SAYS WHICH OF THE TWO TRUE THINGS IS HAPPENING. A burst is kept
+  // from the moment the microphone opens and heard from the moment the track
+  // reaches the room, and those are seconds apart on a cold room. Saying
+  // "talking to Sam" through the gap promised the first thing while only the
+  // second was true; now each half gets its own sentence, and neither of them
+  // is a failure.
   const headline = sending
-    ? `Talking to ${name}`
+    ? !sending.live
+      ? `Opening the mic for ${name}`
+      : sending.heardLive
+        ? `Live to ${name}`
+        : `Recording — ${name} gets it`
     : incoming
       ? `${name} is talking`
       : `Still open with ${name}`;
+  // A recognizer that is down is a burst without live words, not a failed
+  // burst: the audio records, the message lands, and the server recovers the
+  // words from the recording afterwards. Saying so is the difference between a
+  // blank tail that reads as silence and one that reads as a delay.
+  const quiet = sending && status.asr === "unavailable";
+  const tone = sending ? "tx" : incoming ? "rx" : null;
 
   return createPortal(
     <div className="walkie-strip-host">
-      <div className={`walkie-strip ${incoming || sending ? "walkie-strip-live" : ""}`}>
+      <div
+        className={`walkie-strip ${incoming || sending ? "walkie-strip-live" : ""} ${
+          tone ? `walkie-strip-${tone}` : ""
+        }`}
+      >
         <div className="walkie-strip-head">
-          <span className="walkie-strip-pulse" aria-hidden="true">
-            <span className="walkie-strip-dot" />
-          </span>
+          {/* The meter replaces the dot while somebody is actually talking: the
+              dot could only say that a burst existed, and the bars say whether a
+              voice is reaching the microphone at all. The dot stays for the
+              linger, where there is no voice to measure. */}
+          {tone ? (
+            <WalkieLevelBars identity={incoming?.fromUserId} tone={tone} />
+          ) : (
+            <span className="walkie-strip-pulse" aria-hidden="true">
+              <span className="walkie-strip-dot" />
+            </span>
+          )}
           {/* A teammate's voice arriving is the one thing here that happens TO
               you rather than because of you, and it was announced only by the
               sound and the strip appearing. Polite, not assertive: it is worth
@@ -90,6 +118,7 @@ export function WalkieBanner() {
         </div>
 
         {incoming && <LiveTail messageId={incoming.messageId} />}
+        {quiet && <div className="walkie-strip-quiet">recording, no live words</div>}
 
         <div className="walkie-strip-actions">
           {/* Not while our own key is down: the reply to a burst you are still
@@ -98,8 +127,8 @@ export function WalkieBanner() {
             <WalkiePttButton
               roomKey={target.roomKey}
               resolveChannelId={() => target.channelId}
-              label="Hold to reply"
-              className="walkie-strip-reply"
+              size="lg"
+              title="Hold to reply"
             />
           )}
           <button

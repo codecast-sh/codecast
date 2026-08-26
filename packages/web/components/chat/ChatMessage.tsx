@@ -10,7 +10,7 @@ import { copyToClipboard } from "../../lib/utils";
 import type { ChatAttachmentView, ChatMessageView } from "./chatTypes";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { useStorageImageUrl } from "../../hooks/useStorageImageUrl";
-import { ChatVoiceBubble } from "./ChatVoiceBubble";
+import { ChatVoiceBubble, VoicePlayButton } from "./ChatVoiceBubble";
 import { ImageLightbox } from "../ImageGallery";
 import "./chat.css";
 import "../editor/editor.css";
@@ -48,15 +48,42 @@ function AttachmentTile({ att, onOpen }: { att: ChatAttachmentView; onOpen: (src
   );
 }
 
-function ChatAttachments({ attachments }: { attachments: ChatAttachmentView[] }) {
+function ChatAttachments({
+  messageId,
+  attachments,
+}: {
+  messageId: string;
+  attachments: ChatAttachmentView[];
+}) {
   const [lightbox, setLightbox] = useState<string | null>(null);
+  // A recording is not a picture. Every attachment used to go through
+  // AttachmentTile, which puts the storage id in an <img> — so a voice note
+  // that arrived beside other files rendered as a broken thumbnail with no way
+  // to hear it, which is the symptom diagnosis 7 was reported from. A row whose
+  // ONLY attachment is audio becomes a voice bubble upstream and never reaches
+  // this grid; these are the mixed rows, and they get the same play control the
+  // bubble uses rather than a second one invented here.
+  const audio = attachments.filter((a) => a.mime?.startsWith("audio/"));
+  const images = attachments.filter((a) => !a.mime?.startsWith("audio/"));
   return (
-    <div className={`ch-atts ${attachments.length > 1 ? "ch-atts-grid" : ""}`}>
-      {attachments.map((att) => (
-        <AttachmentTile key={att.storage_id} att={att} onOpen={setLightbox} />
+    <>
+      {audio.map((att) => (
+        <div className="ch-voice ch-voice-att" key={att.storage_id}>
+          {/* One player is shared by the whole app, so the key has to name this
+              recording and not just its message. */}
+          <VoicePlayButton playKey={`${messageId}:${att.storage_id}`} att={att} />
+          <span className="ch-voice-text">{att.name || "recording"}</span>
+        </div>
       ))}
+      {images.length > 0 && (
+        <div className={`ch-atts ${images.length > 1 ? "ch-atts-grid" : ""}`}>
+          {images.map((att) => (
+            <AttachmentTile key={att.storage_id} att={att} onOpen={setLightbox} />
+          ))}
+        </div>
+      )}
       {lightbox && <ImageLightbox src={lightbox} onClose={() => setLightbox(null)} />}
-    </div>
+    </>
   );
 }
 
@@ -246,7 +273,13 @@ export const ChatMessage = memo(function ChatMessage({
             {clockTime(message.createdAt)}
           </span>
         ) : (
-          <CommentAvatar name={author.name} image={author.avatarUrl} isAgent={author.isAgent} letters={2} />
+          <CommentAvatar
+            name={author.name}
+            image={author.avatarUrl}
+            isAgent={author.isAgent}
+            agentType={author.session?.agentType}
+            letters={2}
+          />
         )}
       </div>
 
@@ -254,7 +287,16 @@ export const ChatMessage = memo(function ChatMessage({
         {!grouped && (
           <div className="ch-msg-head">
             <span className="ch-msg-author">{author.name}</span>
-            {author.isAgent && <span className="ch-agent-chip">agent</span>}
+            {/* A session persona wears a "session" chip and credits the human
+                it ran as; the anchor keeps its plain "agent" chip. */}
+            {author.session ? (
+              <>
+                <span className="ch-agent-chip">session</span>
+                {author.session.via && <span className="ch-msg-via">via {author.session.via}</span>}
+              </>
+            ) : (
+              author.isAgent && <span className="ch-agent-chip">agent</span>
+            )}
             <a
               className="ch-msg-time"
               // The permalink the server mints, not a DOM fragment: a fragment
@@ -359,7 +401,7 @@ export const ChatMessage = memo(function ChatMessage({
               {message.content}
             </ReactMarkdown>
             {message.attachments && message.attachments.length > 0 && (
-              <ChatAttachments attachments={message.attachments} />
+              <ChatAttachments messageId={message.id} attachments={message.attachments} />
             )}
             {message.editedAt && (
               <span className="ch-msg-edited" title={FULL_TIME.format(new Date(message.editedAt))}>

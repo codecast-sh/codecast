@@ -41,6 +41,8 @@ import { CreateDocModal } from "./CreateDocModal";
 import { CreateChannelModal } from "./CreateChannelModal";
 import { NewMessageModal } from "./chat/NewMessageModal";
 import { Globe, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Blocks, Lock, SquarePen, Phone, PhoneCall } from "lucide-react";
+import { useSyncTeams } from "../hooks/useSyncTeams";
+import { PopOutPeopleButton } from "./people/PopOutPeopleButton";
 import { LiveNowRail } from "./calls/LiveNow";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { inActiveWorkspace } from "../lib/workspaceScope";
@@ -156,6 +158,7 @@ function NavSection({
   badge,
   unread,
   items,
+  headerAction,
   expanded,
   onToggle,
 }: {
@@ -176,6 +179,9 @@ function NavSection({
   /** Rows nested under this one — the projects under Projects, the saved views
    *  under Tasks and Docs. */
   items?: SectionRowSpec[];
+  /** An action that belongs to the SECTION, not to any row in it — revealed on
+   *  hover beside the label, the way Calls reveals "start huddle". */
+  headerAction?: React.ReactNode;
   expanded?: boolean;
   onToggle?: () => void;
 }) {
@@ -183,7 +189,7 @@ function NavSection({
   const hasChildren = !isNarrow && !!items && items.length > 0;
   return (
     <div data-simple-hide={simpleHide ? "" : undefined}>
-      <div className={`flex items-center border-l-2 transition-colors motion-reduce:transition-none ${
+      <div className={`group/nav flex items-center border-l-2 transition-colors motion-reduce:transition-none ${
         isActive
           ? "bg-sol-bg-highlight text-sol-text border-sol-cyan"
           : "text-sol-text-muted border-transparent hover:text-sol-text hover:bg-sol-bg-highlight/60"
@@ -199,6 +205,7 @@ function NavSection({
           {!isNarrow && <span className={unread && !isActive ? "font-semibold text-sol-text" : undefined}>{label}</span>}
           {!isNarrow && badge}
         </Link>
+        {!isNarrow && headerAction}
         {hasChildren && (
           <button
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggle?.(); }}
@@ -509,6 +516,9 @@ const ChatNavRow = memo(function ChatNavRow({
         }
         icon={<MessageSquare className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         items={[...items, ...suggestedItems]}
+        headerAction={
+          <PopOutPeopleButton className="mr-1 rounded p-1 text-sol-text-dim opacity-0 transition-opacity hover:text-sol-text focus-visible:opacity-100 group-hover/nav:opacity-100" />
+        }
         expanded={expanded}
         onToggle={onToggle}
       />
@@ -771,7 +781,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const { user: currentUser } = useCurrentUser();
   const teamMembers = useInboxStore((s) => s.teamMembers);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
-  const teamsQuery = useQuery(api.teams.getUserTeams);
+  const teamsQuery = useSyncTeams();
   const teams = useInboxStore((s) => s.teams);
   const activeTeam = (teamsQuery ?? teams)?.find((t: any) => t?._id === activeTeamId);
   // A badge, not the surface: a server failure (e.g. the backend's syscall
@@ -974,7 +984,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
     // moves as you navigate between projects.
   }, [wsProjects, router, onMobileClose, pathname, pinned]);
 
-  useConvexSync(teamsQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teams", d), []));
   useConvexSync(teamUnreadCountQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamUnreadCount", d), []));
   useConvexSync(favoritesQuery, useCallback((d: any) => useInboxStore.getState().syncTable("favorites", d), []));
   // Local-first: the workspace/directory rail derives from the viewer's own

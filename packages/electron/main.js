@@ -384,6 +384,149 @@ ipcMain.handle("attach-tab", (e, navPath) => {
 });
 
 // ---------------------------------------------------------------------------
+// The people window: a compact floating buddy list (route /people) carrying the
+// roster, status and calling. Singleton — one per app, focused rather than
+// duplicated. It is the phone: while it exists it is the notification leader
+// for sounds and every call/walkie banner lands in it (notificationRouter.js).
+// Its size, position and always-on-top pin persist across launches; the pin is
+// the only window control the renderer may drive, and only from this window.
+// ---------------------------------------------------------------------------
+
+const PEOPLE_PATH = "/people";
+const PEOPLE_SIZE = { width: 320, height: 640, minWidth: 280, minHeight: 420 };
+
+let peopleWindow = null;
+let peopleBoundsTimer = null;
+
+function loadPeopleState() {
+  const saved = loadFullSettings().peopleWindow;
+  return saved && typeof saved === "object" ? saved : {};
+}
+
+function updatePeopleState(patch) {
+  updateSettings({ peopleWindow: { ...loadPeopleState(), ...patch } });
+}
+
+// A saved rectangle only helps if it is still on screen: displays get unplugged
+// and resolutions change. getDisplayMatching gives us the display it overlaps
+// most (the nearest one when it overlaps none), and we clamp into that display's
+// work area — so a window saved on a monitor that is gone reopens on a real one.
+function clampToVisibleDisplay(saved) {
+  if (!saved || typeof saved.x !== "number" || typeof saved.y !== "number") return null;
+  const area = screen.getDisplayMatching({
+    x: saved.x,
+    y: saved.y,
+    width: Math.round(saved.width) || PEOPLE_SIZE.width,
+    height: Math.round(saved.height) || PEOPLE_SIZE.height,
+  }).workArea;
+  const width = Math.min(Math.max(PEOPLE_SIZE.minWidth, Math.round(saved.width) || PEOPLE_SIZE.width), area.width);
+  const height = Math.min(Math.max(PEOPLE_SIZE.minHeight, Math.round(saved.height) || PEOPLE_SIZE.height), area.height);
+  return {
+    width,
+    height,
+    x: Math.min(Math.max(Math.round(saved.x), area.x), area.x + area.width - width),
+    y: Math.min(Math.max(Math.round(saved.y), area.y), area.y + area.height - height),
+  };
+}
+
+function savePeopleBounds(win) {
+  if (!win || win.isDestroyed() || win.isMinimized()) return;
+  updatePeopleState({ bounds: win.getBounds() });
+}
+
+function createPeopleWindow() {
+  if (peopleWindow && !peopleWindow.isDestroyed()) {
+    peopleWindow.show();
+    peopleWindow.focus();
+    return peopleWindow;
+  }
+  const state = loadPeopleState();
+  const bounds = clampToVisibleDisplay(state.bounds);
+  const zoom = getAutoZoomFactor();
+  const win = new BrowserWindow({
+    width: PEOPLE_SIZE.width,
+    height: PEOPLE_SIZE.height,
+    ...(bounds || {}),
+    minWidth: PEOPLE_SIZE.minWidth,
+    minHeight: PEOPLE_SIZE.minHeight,
+    // Same inset lights as every other window, so the web's one titlebar
+    // measurement (desktopHeaderClass / attachTitlebarHead, --titlebar-inset)
+    // clears them here too — the panel draws its own drag region from that.
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: { x: 16, y: 12 },
+    // Restored from the last session: a pinned buddy list stays pinned.
+    alwaysOnTop: state.alwaysOnTop === true,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      zoomFactor: zoom,
+      additionalArguments: [`--zoom-factor=${zoom}`, "--people-window"],
+      // It is the phone: rings, presence and walkie audio must keep arriving
+      // while it sits unfocused beside another app.
+      backgroundThrottling: false,
+    },
+    icon: path.join(__dirname, "assets", "icon.png"),
+    show: false,
+    backgroundColor: "#002b36",
+  });
+  peopleWindow = win;
+
+  win.loadURL(`${currentBaseUrl}${PEOPLE_PATH}`);
+  win.once("ready-to-show", () => win.show());
+  win.webContents.on("did-finish-load", () => {
+    if (win.isDestroyed()) return;
+    win.webContents.setZoomFactor(getAutoZoomFactor());
+    win.webContents.executeJavaScript(
+      "document.documentElement.classList.add('electron-desktop')"
+    );
+  });
+  // Same rule as every window: new-window links open in the default browser.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+
+  // Dragging and resizing fire continuously; save once the gesture settles.
+  const rememberBounds = () => {
+    clearTimeout(peopleBoundsTimer);
+    peopleBoundsTimer = setTimeout(() => savePeopleBounds(win), 400);
+  };
+  win.on("move", rememberBounds);
+  win.on("resize", rememberBounds);
+  win.on("close", () => {
+    clearTimeout(peopleBoundsTimer);
+    savePeopleBounds(win);
+  });
+  win.on("closed", () => {
+    if (peopleWindow === win) peopleWindow = null;
+    broadcastWindowRole();
+  });
+  broadcastWindowRole();
+  return win;
+}
+
+ipcMain.handle("open-people-window", () => {
+  createPeopleWindow();
+});
+
+// The pin. Only the people window may float above other apps — any other
+// renderer asking is answered with what it actually is (false), never granted.
+ipcMain.handle("set-always-on-top", (e, on) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win || win.isDestroyed() || win !== peopleWindow) return false;
+  const pinned = on === true;
+  win.setAlwaysOnTop(pinned);
+  updatePeopleState({ alwaysOnTop: pinned });
+  return pinned;
+});
+
+ipcMain.handle("get-always-on-top", (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  return !!win && !win.isDestroyed() && win.isAlwaysOnTop();
+});
+
+// ---------------------------------------------------------------------------
 // Multi-window notification routing. Every window runs the same web app and
 // would otherwise fire its own banner and sound for the same event. Main is
 // the one process that sees all windows, so it (a) collapses duplicates,
@@ -399,12 +542,14 @@ const windowStates = new Map();
 const lastFocusedAt = new Map();
 const recentBanners = new RecentKeys();
 
-// The app windows that count for routing: main + detached tab windows. The
-// palette is a floating summon, never a place a banner should land or sound.
+// The app windows that count for routing: main + detached tab windows + the
+// people window. The palette is a floating summon, never a place a banner
+// should land or sound.
 function appWindows() {
   const out = [];
   if (mainWindow && !mainWindow.isDestroyed()) out.push(mainWindow);
   for (const w of tabWindows) if (!w.isDestroyed()) out.push(w);
+  if (peopleWindow && !peopleWindow.isDestroyed()) out.push(peopleWindow);
   return out;
 }
 
@@ -414,6 +559,7 @@ function describeWindows() {
     return {
       id: win.id,
       isMain: win === mainWindow,
+      isPeople: win === peopleWindow,
       focused: win.isFocused(),
       lastFocusedAt: lastFocusedAt.get(win.id) || 0,
       active: st.active || null,
@@ -438,11 +584,16 @@ function broadcastWindowRole() {
     const leader = chooseLeader(windows);
     const anyInCall = windows.some((w) => w.inCall);
     const appFocused = windows.some((w) => w.focused);
+    // Whether a people window exists at all — every window needs it: the one
+    // that IS it renders the panel, the others stand down from the pumps and
+    // surfaces it owns.
+    const hasPeople = !!peopleWindow && !peopleWindow.isDestroyed();
     for (const win of appWindows()) {
       win.webContents.send("window-role", {
         leader: !!leader && leader.id === win.id,
         appFocused,
         anyInCall,
+        peopleWindow: hasPeople,
       });
     }
   }, 30);
@@ -700,6 +851,11 @@ function toggleEnvironment() {
     paletteWindow = null;
   }
   createPaletteWindow();
+  // The people window shows the same environment's roster; leaving it on the
+  // old origin would have it watching a different world than the main window.
+  if (peopleWindow && !peopleWindow.isDestroyed()) {
+    peopleWindow.loadURL(`${currentBaseUrl}${PEOPLE_PATH}`);
+  }
 }
 
 function createTray() {

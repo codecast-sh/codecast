@@ -3977,6 +3977,12 @@ export default defineSchema({
       // join the conversation. A join still runs through authorizeRoom, so this
       // string grants nothing on its own.
       room_key: v.optional(v.string()),
+      // The words are being recovered from the recording right now. Set when a
+      // burst lands carrying audio and no transcript — the live recognizer was
+      // down, or heard nothing — and cleared by the action that transcribes it.
+      // The bubble reads it to say "getting the words" instead of showing a
+      // finished voice note that looks like it was said in silence.
+      transcribing: v.optional(v.boolean()),
     })),
     // Optimistic altKey AND the server's send-dedupe key: a retried send with the
     // same client_id returns the existing row instead of inserting a twin (and,
@@ -3990,6 +3996,16 @@ export default defineSchema({
     // CLI, so it is an honest downgrade rather than a boundary: a caller who
     // omits it is treated exactly as a human, which is what it already was.
     origin: v.optional(v.literal("agent")),
+    // Which session typed it, when `origin` is "agent" — so the line renders as
+    // that session (agent logo + session title) instead of wearing the human's
+    // face for words a machine wrote. Title/agent_type are a send-time snapshot,
+    // taken server-side only when the sender OWNS the session (a caller-supplied
+    // id must not leak someone else's private title into a channel). A viewer
+    // who can see the session live shows its current title instead; the
+    // snapshot is the fallback for everyone else.
+    origin_session_id: v.optional(v.string()),
+    origin_session_title: v.optional(v.string()),
+    origin_agent_type: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.number(),
     edited_at: v.optional(v.number()),

@@ -70,6 +70,7 @@ export type RouteLayout =
   | "share"
   | "codeReview"
   | "palette"
+  | "people"
   | "settings";
 
 // -- Lazy component refs — import targets copied verbatim from App.tsx / TabContent.tsx so
@@ -171,6 +172,9 @@ const ReviewBatch = lazy(() => import("@/app/review/batch/page"));
 
 // Palette
 const Palette = lazy(() => import("@/app/palette/page"));
+
+// People window
+const People = lazy(() => import("@/app/people/page"));
 
 // Settings
 const Settings = lazy(() => import("@/app/settings/page"));
@@ -293,6 +297,9 @@ export const ROUTES: RouteEntry[] = [
 
   // -- Palette (PaletteLayout, transparent) --
   { path: "palette", component: cast(Palette), layout: "palette" },
+
+  // -- The people window (its own OS window / browser popup, no tab shell) --
+  { path: "people", component: cast(People), layout: "people" },
 
   // -- Settings (SettingsLayout; index = /settings) --
   { path: "settings", component: cast(Settings), layout: "settings" },

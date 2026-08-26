@@ -1,0 +1,78 @@
+/* One presence language, drawn once.
+ *
+ * The old encoding was hue only — a thin olive ring for active, 50% opacity for
+ * away — and the founder could not read it. Every state here differs in SHAPE
+ * before it differs in color: solid for active, hollow for idle, a glyph for
+ * away and busy, nothing at all for offline. Color is the second channel, the
+ * label the third.
+ */
+
+/* No `position` here on purpose: a caller anchors the badge over an avatar
+ * with its own `absolute`, and a position declared in this file would win
+ * against Tailwind's (component CSS loads after it) and drop the badge into
+ * the flow below the face. The glyph centers with flex instead. */
+.pres {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  line-height: 0;
+  color: var(--sol-bg);
+}
+
+/* The ring that separates a badge from whatever it sits on scales with it. */
+.pres-sm { width: 10px; height: 10px; --pres-ring: 1.5px; --pres-cut: 2px; }
+.pres-md { width: 14px; height: 14px; --pres-ring: 2px; --pres-cut: 2px; }
+
+/* Active: solid cyan with a soft static glow. The one state meant to catch the
+ * eye across a strip of faces. The glow never animates — a pulse on every
+ * online teammate is a room full of blinking lights. */
+.pres-active {
+  background: var(--sol-cyan);
+  box-shadow:
+    0 0 0 var(--pres-cut) var(--sol-bg),
+    0 0 6px 1px color-mix(in srgb, var(--sol-cyan) 55%, transparent);
+}
+
+/* Idle: hollow. At the machine, not at the keys — the empty center says it
+ * without needing the yellow to be seen. */
+.pres-idle {
+  background: var(--sol-bg);
+  box-shadow:
+    0 0 0 var(--pres-cut) var(--sol-bg),
+    inset 0 0 0 var(--pres-ring) var(--sol-yellow);
+}
+
+/* Away: muted disc carrying a moon. --sol-border, not a new token: its two
+ * values are exactly Solarized's muted grays (light #93a1a1, dark #586e75),
+ * and --sol-base01 exists only as a Tailwind literal, not a CSS variable —
+ * var() of an undefined name resets background to transparent and the disc
+ * never paints. */
+.pres-away {
+  background: var(--sol-border);
+  box-shadow: 0 0 0 var(--pres-cut) var(--sol-bg);
+}
+
+/* Busy: the manual do-not-disturb. Red plus a minus bar, so it reads as
+ * "stop" even where red does not land. */
+.pres-busy {
+  background: var(--sol-red);
+  box-shadow: 0 0 0 var(--pres-cut) var(--sol-bg);
+}
+
+/* Offline draws nothing at all; the span stays so a row keeps its rhythm. */
+
+.pres-glyph {
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+}
+
+/* The face that goes with the badge. Away drains most of the color out of a
+ * teammate, offline all of it — presence you can read from the avatar alone,
+ * before the badge is even in focus. */
+.pres-av-away { filter: grayscale(60%); }
+.pres-av-offline { filter: grayscale(100%); opacity: 0.45; }
+.pres-av-away,
+.pres-av-offline { transition: filter 200ms, opacity 200ms; }

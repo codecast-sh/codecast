@@ -28,6 +28,10 @@ const NON_TAB_EXACT = new Set([
   "/forgot-password",
   "/reset-password",
   "/palette",
+  // The people window renders the buddy list as a whole window (its own OS
+  // window on the desktop, a popup in a browser). The tab shell must never
+  // intercept it, or the window rewrites its own URL and paints a blank pane.
+  "/people",
 ]);
 // "/documentation" is a prefix (not exact) so the guide pages under
 // /documentation/<slug> stay outside the tab shell too.

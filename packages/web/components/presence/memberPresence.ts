@@ -1,45 +1,134 @@
 // Pure display logic for person presence (teams.getTeamMembers extensions):
-// state → ring/dot styling, the hover-card presence line, and the fleet line
-// derived from sessions already in the store. Kept React-free so it's
-// unit-testable under bun, mirroring fleetBands.ts.
+// state → badge/avatar styling, the activity line every surface leads with, and
+// the fleet counts derived from sessions already in the store. Kept React-free
+// so it's unit-testable under bun, mirroring fleetBands.ts. The React half is
+// PresenceBadge.tsx, which paints what this module decides.
 import { type InboxSession } from "../../store/inboxStore";
 import { fleetBandFor, type FleetBandOpts } from "../fleetBands";
 
 export type PresenceState = "active" | "idle" | "away" | "offline";
+/** What a badge draws. "busy" is the manual status, not a heartbeat state. */
+export type PresenceVisual = PresenceState | "busy";
 
-// Ring + dot classes per state. The ring is the always-visible signal (color
-// vision aside, active/idle/away also differ by fill vs dim vs none); the
-// manual "busy" status adds a red dot badge on top in the bar itself.
+// Shape + color + word, never hue alone: the old encoding was a green ring for
+// active and 50% opacity for away, which is one channel (hue) in the palette's
+// lowest-contrast accent and unreadable at 8px. Every state now differs in
+// FILL (solid, hollow, glyph, absent) before it differs in color, and carries a
+// label the surfaces print.
 export const PRESENCE_META: Record<
-  PresenceState,
-  { ring: string; dot: string; label: string; dim: boolean }
+  PresenceVisual,
+  {
+    /** The bare word, for a chip or a title attribute. */
+    label: string;
+    /** presence.css class the badge takes on top of .pres. */
+    badge: string;
+    /** Tailwind text color for the activity line and the state's own words. */
+    text: string;
+    /** presence.css class for the avatar treatment; "" leaves it untouched. */
+    avatar: string;
+    /** Drawn inside the badge. "" is a plain disc or ring. */
+    glyph: "" | "moon" | "minus";
+  }
 > = {
-  active: {
-    // Solarized voices only — the neon Tailwind defaults read as lime against
-    // this palette and were called out for it.
-    ring: "ring-2 ring-sol-green/80",
-    dot: "bg-sol-green",
-    label: "Active",
-    dim: false,
-  },
-  idle: {
-    ring: "ring-2 ring-sol-yellow/60",
-    dot: "bg-sol-yellow",
-    label: "Idle",
-    dim: false,
-  },
-  away: {
-    ring: "ring-1 ring-sol-border",
-    dot: "bg-sol-base01",
-    label: "Away",
-    dim: true,
-  },
-  offline: { ring: "", dot: "", label: "Offline", dim: true },
+  active: { label: "Active", badge: "pres-active", text: "text-sol-cyan", avatar: "", glyph: "" },
+  idle: { label: "Idle", badge: "pres-idle", text: "text-sol-yellow", avatar: "", glyph: "" },
+  away: { label: "Away", badge: "pres-away", text: "text-sol-text-muted", avatar: "pres-av-away", glyph: "moon" },
+  offline: { label: "Offline", badge: "", text: "text-sol-text-dim", avatar: "pres-av-offline", glyph: "" },
+  busy: { label: "Busy", badge: "pres-busy", text: "text-sol-red", avatar: "", glyph: "minus" },
 };
 
 export function memberPresenceState(member: any): PresenceState {
   const s = member?.presence_state;
   return s === "active" || s === "idle" || s === "away" ? s : "offline";
+}
+
+/** What to DRAW for a member: the heartbeat state, overridden by what they
+ *  DECLARED (`busy`, `away`). A declaration is the stronger fact — the point of
+ *  setting one is that teammates see it — and it governs the words too, so the
+ *  badge and the line can never disagree.
+ *
+ *  Offline wins over both: a machine that stopped reporting is not busy, it is
+ *  gone, and a stale do-not-disturb flag must not claim otherwise. */
+export function memberPresenceVisual(member: any): PresenceVisual {
+  const state = memberPresenceState(member);
+  if (state === "offline") return "offline";
+  if (member?.status === "busy") return "busy";
+  if (member?.status === "away") return "away";
+  return state;
+}
+
+/** The name a surface prints for a member, and nothing fancier: their name,
+ *  else the local part of their email, else a word rather than a blank. One
+ *  helper so the strip, the roster and the card cannot disagree about what a
+ *  person is called. */
+export function memberDisplayName(member: any): string {
+  return member?.name || member?.email?.split("@")[0] || "Unknown";
+}
+
+/** The bare word for a state — for chips, titles and legends. */
+export function presenceLabel(state: PresenceVisual): string {
+  return PRESENCE_META[state].label;
+}
+
+/** The avatar treatment that goes with a presence state (grayscale/opacity).
+ *  One helper so the strip, the hover card and the roster fade a face the same
+ *  way instead of each inventing an opacity. */
+export function presenceAvatarClass(state: PresenceVisual): string {
+  return PRESENCE_META[state].avatar;
+}
+
+/** The roster's sections, in the order a buddy list shows them. Busy sits under
+ *  Online: they are at the machine and reachable, and the badge already says
+ *  not now. A DECLARED away sorts under Away even on a live heartbeat, because
+ *  that is what they said. */
+export type PresenceBand = "online" | "idle" | "away" | "offline";
+
+export const PRESENCE_BAND_LABEL: Record<PresenceBand, string> = {
+  online: "Online",
+  idle: "Idle",
+  away: "Away",
+  offline: "Offline",
+};
+
+const BAND_OF: Record<PresenceVisual, PresenceBand> = {
+  active: "online",
+  busy: "online",
+  idle: "idle",
+  away: "away",
+  offline: "offline",
+};
+
+export function presenceBand(member: any): PresenceBand {
+  return BAND_OF[memberPresenceVisual(member)];
+}
+
+const BAND_ORDER: PresenceBand[] = ["online", "idle", "away", "offline"];
+
+/** The roster, cut into its sections. Empty sections are dropped, so a team
+ *  where nobody is idle shows no Idle heading. Within a section the order is
+ *  by name and NOTHING else — a roster that reshuffled on every heartbeat
+ *  would be unusable as a list of people you click. */
+export function groupMembersByBand<T>(
+  members: T[],
+): { band: PresenceBand; label: string; members: T[] }[] {
+  const buckets = new Map<PresenceBand, T[]>();
+  for (const m of members) {
+    if (!m) continue;
+    const band = presenceBand(m);
+    const bucket = buckets.get(band);
+    if (bucket) bucket.push(m);
+    else buckets.set(band, [m]);
+  }
+  const out: { band: PresenceBand; label: string; members: T[] }[] = [];
+  for (const band of BAND_ORDER) {
+    const rows = buckets.get(band);
+    if (!rows?.length) continue;
+    rows.sort((a: any, b: any) =>
+      (a.name || a.email || "").localeCompare(b.name || b.email || ""),
+    );
+    out.push({ band, label: PRESENCE_BAND_LABEL[band], members: rows });
+  }
+  return out;
 }
 
 const PRESENCE_ORDER: Record<PresenceState, number> = {
@@ -70,7 +159,8 @@ function compactDuration(ms: number): string {
 // The hover card's one presence sentence. `now` must be a coarse clock
 // (useCoarseNow), never Date.now() in render.
 export function presenceLine(member: any, now: number): string {
-  const state = memberPresenceState(member);
+  const state = memberPresenceVisual(member);
+  if (state === "busy") return "Busy";
   if (state === "active") return "Active now";
   if (state === "idle") {
     const at = member.presence_input_at;
@@ -106,6 +196,8 @@ export interface FleetSummary {
   needsYou: number;
   /** thread_state_status of the most actionable session, for the quote line. */
   topStatus: string | null;
+  /** Its title, for the activity line's "· fixing auth" tail. */
+  topTitle: string | null;
   topSessionKey: string | null;
 }
 
@@ -119,27 +211,43 @@ export function memberFleetSummary(
   memberId: string,
   opts: FleetBandOpts,
 ): FleetSummary | null {
-  let working = 0;
-  let needsYou = 0;
-  let topStatus: string | null = null;
-  let topSessionKey: string | null = null;
-  let sawAny = false;
+  const mine = sessions.filter((s) => s && String(s.user_id ?? "") === memberId);
+  return mine.length ? fleetSummariesByMember(mine, opts).get(memberId) ?? null : null;
+}
+
+/** The same counts for EVERY member in one pass. A roster of twenty faces asks
+ *  this once at the list, instead of walking the whole session cache per row. */
+export function fleetSummariesByMember(
+  sessions: InboxSession[],
+  opts: FleetBandOpts,
+): Map<string, FleetSummary> {
+  const out = new Map<string, FleetSummary>();
   for (const s of sessions) {
-    if (!s || String(s.user_id ?? "") !== memberId) continue;
-    sawAny = true;
+    const uid = s ? String(s.user_id ?? "") : "";
+    if (!uid) continue;
+    let f = out.get(uid);
+    if (!f) {
+      f = { working: 0, needsYou: 0, topStatus: null, topTitle: null, topSessionKey: null };
+      out.set(uid, f);
+    }
     const band = fleetBandFor(s, opts);
-    if (band === "running") working++;
-    else if (band === "needsYou") needsYou++;
+    if (band === "running") f.working++;
+    else if (band === "needsYou") f.needsYou++;
     // Quote the most actionable live status line: prefer a needsYou session's,
     // else any running one's.
     const status = (s as any).thread_state_status;
-    if (status && (band === "needsYou" || (band === "running" && !topStatus))) {
-      topStatus = status;
-      topSessionKey = (s as any).session_id ?? s._id;
+    if (status && (band === "needsYou" || (band === "running" && !f.topStatus))) {
+      f.topStatus = status;
+      f.topSessionKey = (s as any).session_id ?? s._id;
+    }
+    // The title follows the same band preference but needs no status line:
+    // "2 agents working · fixing auth" is the point of it.
+    if (band === "needsYou" || (band === "running" && !f.topTitle)) {
+      const title = (s.title ?? "").trim();
+      if (title) f.topTitle = title;
     }
   }
-  if (!sawAny) return null;
-  return { working, needsYou, topStatus, topSessionKey };
+  return out;
 }
 
 export function fleetLine(f: FleetSummary): string {
@@ -147,4 +255,61 @@ export function fleetLine(f: FleetSummary): string {
   if (f.working) parts.push(`${f.working} working`);
   if (f.needsYou) parts.push(`${f.needsYou} need${f.needsYou === 1 ? "s" : ""} input`);
   return parts.join(" · ");
+}
+
+export interface PresenceActivityCtx {
+  /** Coarse clock (useCoarseNow), never Date.now() in render. */
+  now: number;
+  /** The member's fleet, from memberFleetSummary. */
+  fleet?: FleetSummary | null;
+  /** The huddle this member is sitting in, when the viewer can see it at all
+   *  (useLiveRoomOfMember). A locked room the viewer may not enter still
+   *  arrives here, and says so. */
+  room?: { label?: string; locked?: boolean } | null;
+  /** The viewer is hearing this member on the walkie right now. */
+  talking?: boolean;
+}
+
+const CAP = (n: number) => (n > 20 ? "20+" : String(n));
+const agents = (n: number) => `${CAP(n)} agent${n === 1 ? "" : "s"}`;
+
+/**
+ * The one line that answers "what is this person doing right now", in words a
+ * reader understands with no legend. Most-specific first: a live voice, then a
+ * room, then their agents, then the plain presence fact.
+ *
+ * Every surface that shows a person — the strip's hover card, the people
+ * window, a roster row — prints THIS, so they can never phrase the same
+ * situation two ways.
+ */
+export function presenceActivityLine(member: any, ctx: PresenceActivityCtx): string {
+  if (ctx.talking) return "talking on the walkie";
+
+  const room = ctx.room;
+  if (member?.in_room_key || member?.in_huddle || room) {
+    // A locked room the viewer is not in has no name to print (the server
+    // redacts it); saying it is locked is the honest and useful thing.
+    if (room?.locked && !member?.in_room_key) return "in a locked huddle";
+    return room?.label ? `in a huddle · ${room.label}` : "in a huddle";
+  }
+
+  const fleet = ctx.fleet;
+  if (fleet?.working) {
+    const head = `${agents(fleet.working)} working`;
+    return fleet.topTitle ? `${head} · ${fleet.topTitle}` : head;
+  }
+  if (fleet?.needsYou) return `needs to answer ${agents(fleet.needsYou)}`;
+
+  const state = memberPresenceVisual(member);
+  if (state === "busy") return "busy";
+  if (state === "idle") {
+    const at = member?.presence_input_at;
+    return typeof at === "number" ? `idle ${compactDuration(ctx.now - at)}` : "idle";
+  }
+  if (state === "away") return "away";
+  if (state === "active") return "active now";
+  const seen = member?.daemon_last_seen;
+  return typeof seen === "number"
+    ? `last seen ${compactDuration(ctx.now - seen)} ago`
+    : "offline";
 }

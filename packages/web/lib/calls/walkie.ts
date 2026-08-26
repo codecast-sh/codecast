@@ -19,14 +19,30 @@
 // is UNAVAILABLE while the user is in another huddle: hijacking a live call to
 // shout into a DM would be a media-plane fight nobody asked for, so the status
 // says so instead and the UI disables push-to-talk.
+//
+// WHO OWNS THE MICROPHONE. This module does, and that is the inversion the
+// whole feature turned on. It used to join the room first and then borrow
+// whatever track LiveKit had published, which meant a control-plane round trip,
+// a token mint and an SFU connect stood between the key going down and anything
+// listening — measured at 1.0s into a warm room and 12.7s into a cold one.
+// Everything said in that gap reached nobody and landed in no recording, so a
+// two second burst came back as "no words".
+//
+// Now the order runs the other way. getUserMedia first, then the recorder, the
+// meter and the recognizer on that track, and only then the room — carrying a
+// CLONE, so callManager can own, mute and stop its copy without ever
+// truncating the recording. Nothing waits on the join, so a release that beats
+// it still lands a complete message. `sending.live` says the words are being
+// kept; `sending.heardLive` says somebody is hearing them right now. Those are
+// two different claims, and the old status could only make the second.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Track } from "livekit-client";
 import { useInboxStore } from "../../store/inboxStore";
 import { newChatMessageClientId } from "../../store/chatSlice";
-import { getRoom, joinCall, leaveCall, setMuted } from "./callManager";
+import { getRoom, joinCall, leaveCall, mediaFailureReason, setMuted } from "./callManager";
 import { openAsrPipe, type AsrPipe } from "./asrPipe";
 import { uploadBlobToStorage } from "../uploadBlob";
-import { soundWalkieOpen } from "../sounds";
+import { soundWalkieKeyUp, soundWalkieOpen, soundWalkieRoger, soundWalkieSquelch } from "../sounds";
 
 const api = _api as any;
 
@@ -66,11 +82,18 @@ export type WalkieSending = {
   /** Null until chat.startVoiceBurst answers; the bubble exists either way. */
   messageId: string | null;
   startedAt: number;
-  /** When the mic actually went live in the room — after acquiring it, joining
-   *  and unmuting. Null until then, and that gap is not small: measured at
-   *  1.0s into a warm room and 12.7s into a cold one. Everything said before it
-   *  reaches nobody and lands in no recording, so no surface may call this
-   *  burst "talking" until it is set. */
+  /** The recorder and the recognizer are running on a live microphone: every
+   *  word from here on is being KEPT, whatever the room is doing. This is what
+   *  a push-to-talk key should light on — it is true within about a tenth of a
+   *  second of the press, because nothing but getUserMedia precedes it. */
+  live: boolean;
+  /** The track reached the room, so a teammate sitting at their desk hears this
+   *  as it is spoken. Later than `live`, and that gap is not small: measured at
+   *  1.0s into a warm room and 12.7s into a cold one. Nothing said before it
+   *  reaches anybody LIVE — but it is recorded and transcribed, and it lands in
+   *  the message, so the gap costs immediacy and never words. */
+  heardLive: boolean;
+  /** When `heardLive` became true; null until then. */
   openAt: number | null;
   transcript: string;
 };
@@ -94,6 +117,18 @@ export type WalkieStatus = {
   unavailable: null | "another-call" | "not-ready";
   /** True when holding the key would answer someone — the reply affordance. */
   canReply: boolean;
+  /**
+   * Whether live words are coming back from the recognizer, for the most recent
+   * burst. A DOWN RECOGNIZER IS NOT A FAILED BURST: the audio still records, the
+   * message still lands, and the server transcribes the recording afterwards. So
+   * this exists to let a surface say "recording, no live words" instead of
+   * showing an empty transcript that reads as silence.
+   *
+   * It describes the last burst rather than the moment, and is reset to "live"
+   * by the next press — so the strip can still explain a burst that has just
+   * landed without words.
+   */
+  asr: "live" | "unavailable";
   error: string | null;
 };
 
@@ -103,6 +138,7 @@ let status: WalkieStatus = {
   lingerUntil: null,
   unavailable: "not-ready",
   canReply: false,
+  asr: "live",
   error: null,
 };
 
@@ -118,6 +154,7 @@ function emit(patch: Partial<WalkieStatus>) {
     next.lingerUntil === status.lingerUntil &&
     next.unavailable === status.unavailable &&
     next.canReply === status.canReply &&
+    next.asr === status.asr &&
     next.error === status.error
   ) {
     return;
@@ -192,6 +229,246 @@ function localMicTrack(): MediaStreamTrack | null {
   return track && track.readyState === "live" ? track : null;
 }
 
+// ── the microphone ──────────────────────────────────────────────────────────
+//
+// The walkie holds its own microphone, and this is the change that makes the
+// whole feature work. It used to have none: a press joined the room and then
+// took whatever track LiveKit had published, which put a control-plane round
+// trip, a token mint and an SFU connect between the key going down and anything
+// listening — 1.0s warm, 12.7s cold, all of it spoken into nothing.
+//
+// So the order is inverted. getUserMedia first, recorder and recognizer on it
+// immediately, and the room joins behind them holding a CLONE of the same
+// capture. A clone shares the one microphone without sharing its lifetime, so
+// callManager may own, mute and stop its copy exactly as it owns every other
+// published track, and the recording is never cut short by a room closing.
+//
+// The track outlives the burst by a minute, because the second press is the one
+// that has to feel instant and getUserMedia on an already-granted device is
+// still tens of milliseconds of work.
+
+/** How long an unused microphone is held before it is given back. Long enough
+ *  to cover a conversation's back-and-forth, short enough that the browser's
+ *  recording indicator is not left on after somebody walks away. */
+const MIC_IDLE_MS = 60_000;
+
+let mic: MediaStreamTrack | null = null;
+let micPending: Promise<MediaStreamTrack | null> | null = null;
+let micIdleTimer: ReturnType<typeof setTimeout> | null = null;
+/** A press has been granted the microphone at least once in this tab, so
+ *  asking again cannot raise a prompt. The Permissions API answers the same
+ *  question where it supports "microphone"; this covers the browsers where it
+ *  does not. */
+let micGranted = false;
+
+function heldMic(): MediaStreamTrack | null {
+  if (mic && mic.readyState === "live") return mic;
+  mic = null;
+  return null;
+}
+
+function stopMic() {
+  try {
+    mic?.stop();
+  } catch {}
+  mic = null;
+}
+
+/** Start the clock on giving the microphone back. A burst in flight keeps it. */
+function releaseMicLater() {
+  if (micIdleTimer) clearTimeout(micIdleTimer);
+  micIdleTimer = setTimeout(() => {
+    micIdleTimer = null;
+    if (burst) return;
+    stopMic();
+  }, MIC_IDLE_MS);
+}
+
+/** Open the microphone, or hand back the one already open. Concurrent callers
+ *  share one getUserMedia — two push-to-talk surfaces under one pointer must
+ *  not open two devices. */
+function acquireMic(): Promise<MediaStreamTrack | null> {
+  const held = heldMic();
+  if (held) return Promise.resolve(held);
+  if (!micPending) {
+    micPending = (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const track = stream.getAudioTracks()[0] ?? null;
+        if (track) {
+          mic = track;
+          micGranted = true;
+        }
+        return track;
+      } catch {
+        return null;
+      } finally {
+        micPending = null;
+      }
+    })();
+  }
+  return micPending;
+}
+
+/** Whether asking for the microphone right now is certain not to prompt. */
+async function micAlreadyGranted(): Promise<boolean> {
+  if (micGranted) return true;
+  try {
+    const perm = await navigator.permissions.query({ name: "microphone" as PermissionName });
+    return perm.state === "granted";
+  } catch {
+    // A browser with no Permissions API entry for the microphone cannot tell us,
+    // and the whole point of a pre-warm is that it is invisible. Never guess.
+    return false;
+  }
+}
+
+/**
+ * Open the microphone BEFORE the key goes down, so the first burst is as fast
+ * as the second. Called on pointer enter of a push-to-talk surface — a gesture
+ * that means "might talk", not "am talking".
+ *
+ * IT MUST NEVER PROMPT. A permission dialog raised by a pointer passing over a
+ * button is an ambush: the person never asked for the microphone, cannot tell
+ * what asked, and a denial then blocks the real press. So this proceeds only
+ * where the answer is already yes, and a real press is the only thing allowed
+ * to raise the question.
+ */
+export async function warmMic(): Promise<void> {
+  if (heldMic() || micPending) {
+    releaseMicLater();
+    return;
+  }
+  if (!(await micAlreadyGranted())) return;
+  await acquireMic();
+  releaseMicLater();
+}
+
+// ── levels ──────────────────────────────────────────────────────────────────
+//
+// How loudly somebody is talking, sampled per animation frame, for a meter that
+// makes the key feel alive. Deliberately NOT on WalkieStatus and doubly not in
+// the store: `emit` wakes every React subscriber of the walkie, and a value that
+// moves sixty times a second would wake all of them sixty times a second — the
+// same jank the sidebar's wake signatures exist to prevent. It is its own
+// subscription, and only the surfaces that draw a meter take it.
+//
+// Keyed, because both directions animate: no key is this client's own mic while
+// the key is held, and a participant identity is the teammate being heard.
+
+export type WalkieLevels = {
+  /** This client's own microphone, 0 to 1. Zero when not holding the key. */
+  local: number;
+  /** Everyone audible in the room right now, by LiveKit participant identity. */
+  remote: Record<string, number>;
+};
+
+const NO_LEVELS: WalkieLevels = { local: 0, remote: {} };
+let levels: WalkieLevels = NO_LEVELS;
+const levelSubscribers = new Set<() => void>();
+
+export function subscribeWalkieLevel(cb: () => void): () => void {
+  levelSubscribers.add(cb);
+  return () => levelSubscribers.delete(cb);
+}
+
+export function getWalkieLevels(): WalkieLevels {
+  return levels;
+}
+
+/** One number for one meter: the local mic, or one participant's voice. */
+export function getWalkieLevel(participantId?: string): number {
+  return participantId ? (levels.remote[participantId] ?? 0) : levels.local;
+}
+
+let meterCtx: AudioContext | null = null;
+let meterAnalyser: AnalyserNode | null = null;
+let meterBytes: Uint8Array<ArrayBuffer> | null = null;
+let meterFrame: number | null = null;
+
+function sameRemote(a: Record<string, number>, b: Record<string, number>): boolean {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((k) => k in b && Math.abs(a[k] - b[k]) <= 0.02);
+}
+
+function publishLevels(local: number, remote: Record<string, number>) {
+  if (Math.abs(local - levels.local) <= 0.02 && sameRemote(levels.remote, remote)) return;
+  levels = { local, remote };
+  for (const cb of levelSubscribers) cb();
+}
+
+function readLocalLevel(): number {
+  if (!meterAnalyser || !meterBytes) return 0;
+  meterAnalyser.getByteTimeDomainData(meterBytes);
+  let sum = 0;
+  for (let i = 0; i < meterBytes.length; i++) {
+    const v = (meterBytes[i] - 128) / 128;
+    sum += v * v;
+  }
+  // RMS is small for ordinary speech; the gain puts a normal voice near the top
+  // of the meter rather than in the bottom fifth of it.
+  return Math.min(1, Math.sqrt(sum / meterBytes.length) * 4);
+}
+
+/** Everyone else's voice, straight off LiveKit's own speaker measurements —
+ *  no second analyser per remote track, and no work at all when nobody is
+ *  being heard. */
+function readRemoteLevels(): Record<string, number> {
+  const room = getRoom();
+  if (!room || !status.incoming) return {};
+  const out: Record<string, number> = {};
+  for (const p of room.remoteParticipants.values()) {
+    const v = Math.min(1, (p.audioLevel ?? 0) * 4);
+    if (v > 0.02) out[p.identity] = v;
+  }
+  return out;
+}
+
+function pumpMeter() {
+  if (meterFrame !== null || typeof requestAnimationFrame !== "function") return;
+  const tick = () => {
+    meterFrame = null;
+    const wanted = !!meterAnalyser || !!status.incoming;
+    if (!wanted) {
+      publishLevels(0, {});
+      return;
+    }
+    publishLevels(meterAnalyser ? readLocalLevel() : 0, readRemoteLevels());
+    meterFrame = requestAnimationFrame(tick);
+  };
+  meterFrame = requestAnimationFrame(tick);
+}
+
+function startLocalMeter(track: MediaStreamTrack) {
+  stopLocalMeter();
+  try {
+    const ac = new AudioContext();
+    meterCtx = ac;
+    void Promise.resolve(ac.resume?.()).catch(() => {});
+    const analyser = ac.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.6;
+    ac.createMediaStreamSource(new MediaStream([track])).connect(analyser);
+    meterAnalyser = analyser;
+    meterBytes = new Uint8Array(new ArrayBuffer(analyser.fftSize));
+  } catch {
+    // No meter is a flat key, not a failed burst.
+    meterAnalyser = null;
+  }
+  pumpMeter();
+}
+
+function stopLocalMeter() {
+  meterAnalyser = null;
+  meterBytes = null;
+  if (meterCtx) {
+    void meterCtx.close().catch(() => {});
+    meterCtx = null;
+  }
+  publishLevels(0, levels.remote);
+}
+
 // ── the burst ───────────────────────────────────────────────────────────────
 
 type Burst = {
@@ -200,14 +477,24 @@ type Burst = {
   clientId: string;
   messageId: string | null;
   startedAt: number;
+  /** Utterances the recognizer has closed. */
   transcript: string;
+  /** The sentence still being said, revised on every delta and folded into
+   *  `transcript` when it closes. Kept apart so a revision replaces it instead
+   *  of stuttering the same half sentence twice into the words. */
+  partial: string;
   pushed: string;
   pushedAt: number;
   mime: string;
   /** When the mic went live in the room. Null through setup. */
   openAt: number | null;
-  /** When the recorder actually started, which is after the mic and the room
-   *  were acquired. Null until then, and for a browser that gave no recorder. */
+  /** When the microphone opened and the words started being kept — the first
+   *  thing that happens after the press, and the honest measure of "this is
+   *  recording now". */
+  micAt: number | null;
+  /** When the recorder actually started. Null for a browser that gave no
+   *  recorder, which is what makes it the recording's own span rather than the
+   *  burst's. */
   captureAt: number | null;
   recorder: MediaRecorder | null;
   chunks: Blob[];
@@ -223,6 +510,13 @@ let burst: Burst | null = null;
 let lingerTimer: ReturnType<typeof setTimeout> | null = null;
 let lingerRoomKey: string | null = null;
 
+/** Everything heard so far: the closed utterances, then the one still being
+ *  said. What the bubble shows and what the server is told. */
+function burstWords(b: Burst): string {
+  if (!b.partial) return b.transcript;
+  return b.transcript ? `${b.transcript} ${b.partial}` : b.partial;
+}
+
 function publishSending(b: Burst | null) {
   emit({
     sending: b
@@ -232,8 +526,10 @@ function publishSending(b: Burst | null) {
           clientId: b.clientId,
           messageId: b.messageId,
           startedAt: b.startedAt,
+          live: b.micAt !== null,
+          heardLive: b.openAt !== null,
           openAt: b.openAt,
-          transcript: b.transcript,
+          transcript: burstWords(b),
         }
       : null,
   });
@@ -301,7 +597,7 @@ function pushTranscript(b: Burst, onlyIfDue = false) {
   if (!convex || !b.messageId || b.done) return;
   const now = Date.now();
   if (onlyIfDue && now - b.pushedAt < TRANSCRIPT_PUSH_MS) return;
-  const text = b.transcript.trim();
+  const text = burstWords(b).trim();
   const overdue = now - b.pushedAt >= KEEPALIVE_MS;
   if (text === b.pushed && !overdue) return;
   if (!text && !overdue) return;
@@ -314,10 +610,17 @@ function pushTranscript(b: Burst, onlyIfDue = false) {
 }
 
 /**
- * Hold to talk. Returns when the burst is fully set up (mic live, recorder and
- * recognizer running, server row open) — a caller that just wants to key the
- * mic can ignore the promise; `endBurst` awaits it either way, so a press
- * shorter than the setup is still cancelled correctly.
+ * Hold to talk. Returns when the burst is set up — the microphone open, the
+ * recorder and the recognizer running on it, the server row open. A caller that
+ * just wants to key the mic can ignore the promise; `endBurst` awaits it either
+ * way, so a press shorter than the setup is still cancelled correctly.
+ *
+ * THE ROOM IS NOT IN THAT LIST. Joining it is the slowest thing a burst does
+ * and the only one nothing depends on: the words are already being recorded and
+ * already being recognized, so the join only decides whether a teammate hears
+ * them NOW or a moment later off the message. It therefore runs behind this
+ * promise, and a release that arrives before it lands still finalizes a
+ * complete burst.
  */
 export function startBurst(channelId: string, roomKey: string): Promise<void> {
   if (!convex) {
@@ -340,11 +643,13 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
     messageId: null,
     startedAt: Date.now(),
     transcript: "",
+    partial: "",
     pushed: "",
     // The row is as fresh as the burst is old until the first push lands.
     pushedAt: Date.now(),
     mime: recorderMime(),
     openAt: null,
+    micAt: null,
     captureAt: null,
     recorder: null,
     chunks: [],
@@ -358,52 +663,80 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
   // The bubble is on screen before anything is awaited — a voice message is a
   // message, and a message never waits for a round trip to appear.
   useInboxStore.getState().beginVoiceBurstRow(channelId, clientId, roomKey);
-  emit({ error: null, unavailable: null });
+  emit({ error: null, unavailable: null, asr: "live" });
   publishSending(b);
 
   b.ready = (async () => {
     try {
-      // Hold the mic OPEN for as long as the key is down. joinCall publishes in
-      // whatever mute state the store carries, so the intent is written first.
+      // 1. THE MICROPHONE, and nothing before it.
+      //
+      // Two ways to already have one, both instant next to a join: a track this
+      // module warmed on hover, or the one already published into this very
+      // room — hold-to-reply inside a huddle the person is sitting in. The
+      // unmute comes first there, because a muted LiveKit track reads as
+      // silence and the recorder would keep that silence.
+      const seated = inRoom(roomKey);
       claimRoom(roomKey);
-      if (inRoom(roomKey)) await setMuted(false);
-      else {
-        useInboxStore.getState().setCallState({ muted: false });
-        await joinCall(roomKey);
-      }
+      if (seated) await setMuted(false);
       if (b.done) return;
-      const track = localMicTrack();
+      const track = (seated ? localMicTrack() : null) ?? (await acquireMic());
+      if (b.done) return;
       if (!track) {
-        emit({ error: useInboxStore.getState().call.error ?? "Microphone unavailable" });
+        emit({ error: await mediaFailureReason("microphone") });
         await abortBurst(b);
         return;
       }
-      // The mic is in the room now. Say so: every surface holding this burst
-      // has been claiming it since the key went down.
-      b.openAt = Date.now();
-      publishSending(b);
+      b.micAt = Date.now();
+      // The mic is open: from here every word is kept. The chirp marks that
+      // instant, which is the one thing a key cannot show to somebody who is
+      // looking at what they are about to talk about rather than at the key.
+      soundWalkieKeyUp();
+
+      // 2. KEEP WHAT IS BEING SAID. All local, all immediate: the recorder for
+      //    the message, the recognizer for the words, the meter for the key.
       startRecording(b, track);
+      startLocalMeter(track);
       b.pipe = openAsrPipe({
         convex: convex!,
         roomKey,
         track,
         clock: () => Date.now() - b.startedAt,
         events: {
+          onPartial: (text) => {
+            b.partial = text;
+            publishSending(b);
+            pushTranscript(b, true);
+          },
           onUtterance: ({ text }) => {
+            b.partial = "";
             b.transcript = b.transcript ? `${b.transcript} ${text}` : text;
             publishSending(b);
             pushTranscript(b, true);
           },
-          // A recognizer that failed is a burst without words, not a failed
-          // burst: the audio is still live and still recorded.
-          onFailed: () => {},
-          onDropped: () => {},
+          // A recognizer that failed is a burst WITHOUT WORDS, not a failed
+          // burst: the audio is still recorded, still lands as a message, and
+          // the server transcribes it afterwards. Saying so is the whole fix —
+          // these two used to be swallowed, so a refused mint and a silent room
+          // were the same blank bubble.
+          onFailed: () => emit({ asr: "unavailable" }),
+          onDropped: () => emit({ asr: "unavailable" }),
         },
       });
       b.pushTimer = setInterval(() => pushTranscript(b), TRANSCRIPT_PUSH_MS);
       // The cap releases the key on the user's behalf: the burst lands as the
       // message it already is, and pressing again opens the next one.
       b.maxTimer = setTimeout(() => void endBurst(), MAX_BURST_MS);
+      // The key is LIVE from here: meter moving, words coming, audio kept.
+      publishSending(b);
+
+      // 3. THE ROOM, behind all of it. Nothing above waits for this, and a
+      //    release that beats it still lands a complete message.
+      if (seated) {
+        b.openAt = b.micAt;
+        publishSending(b);
+      } else {
+        void openRoomForBurst(b, track);
+      }
 
       const res = await convex!.mutation(api.chat.startVoiceBurst, {
         channel_id: channelId,
@@ -421,12 +754,43 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
   return b.ready;
 }
 
+/**
+ * Carry the burst into the room, alongside everything else it is already doing.
+ *
+ * A CLONE goes to the room, never the track itself. callManager owns what it
+ * publishes — it mutes it, and disconnecting stops it — and this burst is still
+ * recording from the original. Cloning shares the one capture (no second
+ * getUserMedia, no second permission, no second device indicator) without
+ * sharing its lifetime, so a room that closes mid-word cannot truncate the
+ * recording.
+ *
+ * Every failure here is survivable by design: a room that will not open is a
+ * burst nobody hears live, which still records, still transcribes and still
+ * lands as a message.
+ */
+async function openRoomForBurst(b: Burst, track: MediaStreamTrack): Promise<void> {
+  try {
+    // joinCall publishes in whatever mute state the store carries, so the
+    // intent to be heard is written before the join reads it.
+    useInboxStore.getState().setCallState({ muted: false });
+    await joinCall(b.roomKey, { micTrack: track.clone() });
+    if (b.done || !inRoom(b.roomKey)) return;
+    b.openAt = Date.now();
+    publishSending(b);
+  } catch {}
+}
+
 /** Release. Lands the burst as a message, or throws it away if nothing was
  *  said. Safe to call twice — the max-length cap releases the key first, and
  *  the hand coming off it afterwards finds nothing left to do. */
 export async function endBurst(): Promise<void> {
   const b = burst;
   if (!b) return;
+  // Only for a burst that got a mic. A press that never opened one has nothing
+  // to sign off, and the roger would claim a message that is about to be thrown
+  // away. Before the await for the same reason the clock below is: the sound
+  // answers the thumb, not the finalize.
+  if (b.micAt !== null) soundWalkieRoger();
   // Stamped HERE, not inside finishBurst: that function's first act is to wait
   // for the setup this release may have beaten, and reading the clock after the
   // wait would charge the setup to the person's thumb.
@@ -449,12 +813,21 @@ async function abortBurst(b: Burst): Promise<void> {
   refresh();
 }
 
-function teardownBurst(b: Burst) {
+/** The key is up: stop everything that was running for the hold, EXCEPT the
+ *  recognizer, which still owes this burst its last sentence. */
+function stopBurstWork(b: Burst) {
   b.done = true;
   if (b.pushTimer) clearInterval(b.pushTimer);
   if (b.maxTimer) clearTimeout(b.maxTimer);
   b.pushTimer = null;
   b.maxTimer = null;
+  stopLocalMeter();
+  releaseMicLater();
+}
+
+/** Abandon the burst outright: nothing is committed and nothing is waited for. */
+function teardownBurst(b: Burst) {
+  stopBurstWork(b);
   b.pipe?.close();
   b.pipe = null;
 }
@@ -493,16 +866,23 @@ async function finishBurst(b: Burst, releasedAt: number): Promise<void> {
   // server row to land or cancel, then land it.
   await b.ready;
   if (b.done) return;
-  teardownBurst(b);
+  stopBurstWork(b);
   const blob = await stopRecording(b);
   const stoppedAt = Date.now();
+  // THE LAST SENTENCE IS THE WHOLE MESSAGE, on a burst short enough to be one.
+  // Closing the recognizer here — which is what release used to do — threw away
+  // the utterance the server's VAD had not closed yet, so a two second burst
+  // came back empty every time. `finish` commits what was said and waits,
+  // bounded, for the words to come back.
+  await b.pipe?.finish();
+  b.pipe = null;
   await setMuted(true);
   if (burst === b) {
     burst = null;
     publishSending(null);
   }
 
-  const transcript = b.transcript.trim();
+  const transcript = burstWords(b).trim();
   const { durationMs, discard } = measureBurst({
     startedAt: b.startedAt,
     captureAt: b.captureAt,
@@ -829,6 +1209,9 @@ function applyReport(): void {
       clearLinger();
       incomingSince = Date.now();
       emit({ incoming });
+      // Their voice gets a meter too, so a surface can animate the burst it is
+      // hearing the same way it animates the one being spoken.
+      pumpMeter();
       soundWalkieOpen();
       claimRoom(incoming.roomKey);
       if (!inRoom(incoming.roomKey)) {
@@ -855,7 +1238,12 @@ function applyReport(): void {
     const heardMs = Date.now() - incomingSince;
     emit({ incoming: null });
     if (heardMs < MIN_BURST_MS) abandonRoom(was.roomKey);
-    else beginLinger(was.roomKey);
+    else {
+      // The tail closes what soundWalkieOpen opened. Under the same threshold
+      // as the linger, so a key somebody brushed makes no sound at either end.
+      soundWalkieSquelch();
+      beginLinger(was.roomKey);
+    }
   }
   refresh();
 }
@@ -868,6 +1256,8 @@ if (typeof window !== "undefined" && import.meta.env.DEV) {
     status: getWalkieStatus,
     startBurst,
     endBurst,
+    warmMic,
+    levels: getWalkieLevels,
     observe: observeWalkie,
     blockedFor: walkieBlockedFor,
     bound: () => !!convex,

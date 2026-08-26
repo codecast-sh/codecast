@@ -27,10 +27,13 @@ import {
 import { toast } from "sonner";
 import {
   endBurst,
+  getWalkieLevel,
   getWalkieStatus,
   startBurst,
   subscribeWalkie,
+  subscribeWalkieLevel,
   walkieBlockedFor,
+  warmMic,
   type WalkieStatus,
 } from "../lib/calls/walkie";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
@@ -194,11 +197,35 @@ export type PushToTalk = {
    *  being recorded and the burst will still land as a message — that half is
    *  fine — but nobody is hearing them right now. */
   dropped: boolean;
+  /** THE MICROPHONE IS OPEN and the recorder, the meter and the recognizer are
+   *  running on it: every word from here is kept, whatever the room is doing.
+   *  True about a tenth of a second after the press, because nothing but
+   *  getUserMedia precedes it — so this, not `live`, is what the key lights on.
+   *  `live` above answers the later and different question of whether anybody
+   *  is hearing it as it is said. */
+  capturing: boolean;
   /** Null when the gesture is available. */
   reason: string | null;
   press: () => void;
   release: () => void;
 };
+
+/**
+ * What the key is doing, out of the three booleans the gesture reports — four
+ * states, four different claims about where the words are going.
+ *
+ * `dropped` first, because it is the only one that is bad news and it is true
+ * at the same time as `capturing`. Then the microphone being open, which is
+ * what the key lights on: the words are being kept from that instant, whatever
+ * the room is doing. `opening` is only the gap before it.
+ */
+export function walkieKeyState(
+  ptt: Pick<PushToTalk, "holding" | "capturing" | "dropped">,
+): "idle" | "opening" | "live" | "dropped" {
+  if (ptt.dropped) return "dropped";
+  if (ptt.capturing) return "live";
+  return ptt.holding ? "opening" : "idle";
+}
 
 /**
  * The gesture, without any of the chrome.
@@ -276,6 +303,7 @@ export function usePushToTalk(
     holding,
     live: opened && seated,
     dropped: opened && !seated,
+    capturing: holding && !!status.sending?.live,
     reason: walkieBlockedReason(roomKey),
     press,
     release,
@@ -339,6 +367,46 @@ export function useHoldToTalk(
 }
 
 /**
+ * How loudly somebody is talking, written straight onto an element as the CSS
+ * custom property `--level` (0 to 1), for a meter to draw itself from.
+ *
+ * NOT React state, and that is the whole point. The level moves every animation
+ * frame, so a `useState` behind it would re-render this component sixty times a
+ * second and every component under it with it — the exact jank the engine kept
+ * the level off `WalkieStatus` to avoid. A custom property crosses the same
+ * distance with no render at all: the subscription writes one string, and CSS
+ * redraws the ring.
+ *
+ * It is a REF CALLBACK rather than a ref plus an effect, which is the smaller
+ * shape for the same job: React runs it when the element arrives and runs the
+ * returned cleanup when it leaves or when `active`/`identity` change, so the
+ * subscription's life is exactly the element's.
+ *
+ * `identity` picks whose voice: absent is this client's own microphone while
+ * the key is down, a LiveKit participant identity is the teammate being heard.
+ */
+export function useWalkieLevelVar<T extends HTMLElement>(active: boolean, identity?: string) {
+  return useCallback(
+    (el: T | null) => {
+      if (!el) return;
+      el.style.setProperty("--level", "0");
+      if (!active) return;
+      // The engine already debounces: it wakes subscribers only when a level
+      // moved by more than a couple of percent, and stops its loop when nobody
+      // is talking. So this writes as often as the number really changes.
+      const write = () => el.style.setProperty("--level", getWalkieLevel(identity).toFixed(3));
+      write();
+      const off = subscribeWalkieLevel(write);
+      return () => {
+        off();
+        el.style.setProperty("--level", "0");
+      };
+    },
+    [active, identity],
+  );
+}
+
+/**
  * The gesture as DOM props, spread onto whatever element carries it.
  *
  * A HOLD IS A HOLD ON THE KEYBOARD TOO. This used to be pointer events alone,
@@ -358,6 +426,20 @@ const HOLD_KEYS = new Set([" ", "Spacebar", "Enter"]);
 
 export function pttHoldProps(ptt: PushToTalk) {
   return {
+    // A pointer arriving on a push-to-talk key means "might talk". Opening the
+    // microphone now takes the device acquisition out of the press, so the first
+    // burst of a session is as instant as the second. It CANNOT prompt — the
+    // engine only proceeds where permission is already granted — so nobody is
+    // ever asked for a microphone by moving a mouse.
+    //
+    // Deliberately the KEY and not the conversation. Warming whenever a DM is
+    // open would turn the browser's recording indicator on for reading a
+    // message, which is a real thing to do to somebody for a burst they may
+    // never speak. Pointing at the mic is the first gesture that says otherwise.
+    // A keyboard-only hold therefore pays for getUserMedia at press time — tens
+    // of milliseconds on an already-granted device, against the seconds the room
+    // join used to cost.
+    onPointerEnter: () => void warmMic(),
     onPointerDown: (e: PointerEvent) => {
       // Left button only, and never the gesture that opens a context menu.
       if (e.button !== 0) return;

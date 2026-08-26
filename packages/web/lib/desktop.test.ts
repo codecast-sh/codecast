@@ -253,12 +253,16 @@ import {
   installWindowRoleTracker,
   notifyNative,
   reportDesktopWindowState,
+  isPeopleWindow,
+  hasPeopleWindow,
+  subscribeWindowRole,
+  navigateMainWindow,
 } from "./desktop";
 
 describe("desktop window role", () => {
   test("defaults to leader with no shell", () => {
     expect(isNotificationLeader()).toBe(true);
-    expect(getDesktopWindowRole()).toEqual({ leader: true, appFocused: false, anyInCall: false });
+    expect(getDesktopWindowRole()).toEqual({ leader: true, appFocused: false, anyInCall: false, peopleWindow: false });
   });
 
   test("tracks the shell's pushes and reports state through the bridge", async () => {
@@ -282,9 +286,18 @@ describe("desktop window role", () => {
     try {
       installWindowRoleTracker();
       expect(roleCb).not.toBeNull();
-      roleCb!({ leader: false, appFocused: true, anyInCall: true });
+      // A surface that DRAWS the role (the pin, the "call is elsewhere" pill)
+      // has to learn when it changes; the sound paths only ever ask.
+      let woke = 0;
+      const unsubscribe = subscribeWindowRole(() => { woke += 1; });
+      roleCb!({ leader: false, appFocused: true, anyInCall: true, peopleWindow: true });
+      expect(woke).toBe(1);
       expect(isNotificationLeader()).toBe(false);
       expect(getDesktopWindowRole().anyInCall).toBe(true);
+      // A people window elsewhere: this window knows without being one.
+      expect(getDesktopWindowRole().peopleWindow).toBe(true);
+      expect(isPeopleWindow()).toBe(false);
+      expect(hasPeopleWindow()).toBe(true);
 
       reportDesktopWindowState({ active: "/chat/a", open: [{ id: "t1", path: "/chat/a" }], inCall: false });
       expect(reported).toEqual([{ active: "/chat/a", open: [{ id: "t1", path: "/chat/a" }], inCall: false }]);
@@ -300,11 +313,76 @@ describe("desktop window role", () => {
       g.document = { hasFocus: () => true };
       expect(await notifyNative("t", "b", { key: "first" })).toBe(false);
       expect(shown.length).toBe(3);
+
+      // An unsubscribed watcher stops being woken — a window that closed its
+      // pin must not keep a dead callback alive for the life of the process.
+      unsubscribe();
+      const before = woke;
+      roleCb!({ leader: false, appFocused: true, anyInCall: false, peopleWindow: true });
+      expect(woke).toBe(before);
     } finally {
       // Module state is shared with any later test: hand the role back.
       roleCb!({ leader: true, appFocused: false, anyInCall: false });
       g.window = prevWindow;
       g.document = prevDocument;
+    }
+  });
+});
+
+describe("navigateMainWindow", () => {
+  const g = globalThis as any;
+
+  test("hands the path to the shell, which raises the main window", () => {
+    const sent: string[] = [];
+    const prev = g.window;
+    g.window = { __CODECAST_ELECTRON__: { paletteNavigate: (p: string) => sent.push(p) } };
+    try {
+      expect(navigateMainWindow("/chat/c1")).toBe(true);
+      expect(sent).toEqual(["/chat/c1"]);
+    } finally {
+      g.window = prev;
+    }
+  });
+
+  test("in a browser popup, moves the opener and raises it", () => {
+    const prev = g.window;
+    const opener: any = { closed: false, location: { href: "/inbox" }, focused: 0 };
+    opener.focus = () => { opener.focused += 1; };
+    g.window = { opener };
+    try {
+      expect(navigateMainWindow("/chat/c1")).toBe(true);
+      expect(opener.location.href).toBe("/chat/c1");
+      expect(opener.focused).toBe(1);
+    } finally {
+      g.window = prev;
+    }
+  });
+
+  test("reports failure with no other window, so the caller can move itself", () => {
+    const prev = g.window;
+    try {
+      g.window = { opener: null };
+      expect(navigateMainWindow("/chat/c1")).toBe(false);
+      // An opener the user already closed is not a window either.
+      g.window = { opener: { closed: true } };
+      expect(navigateMainWindow("/chat/c1")).toBe(false);
+    } finally {
+      g.window = prev;
+    }
+  });
+
+  test("a cross-origin opener is refused, not thrown at the caller", () => {
+    const prev = g.window;
+    g.window = {
+      opener: {
+        closed: false,
+        get location() { throw new Error("cross-origin"); },
+      },
+    };
+    try {
+      expect(navigateMainWindow("/chat/c1")).toBe(false);
+    } finally {
+      g.window = prev;
     }
   });
 });

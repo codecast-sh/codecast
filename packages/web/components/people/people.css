@@ -1,0 +1,53 @@
+/* The people window. Designed at 320px and never wider than it has to be:
+   every rule here is about surviving that column, not about decorating it.
+
+   NOTE, learned the hard way in presence.css: component CSS loads AFTER
+   Tailwind, so a `position` declared here would beat a caller's `absolute` and
+   drop the element into the flow. Nothing in this file declares position. */
+
+.people-panel {
+  /* Its own window: the page never scrolls, the roster does. */
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* A thin gutter that does not eat 15px of a 320px column. */
+.people-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sol-border) transparent;
+  overscroll-behavior: contain;
+}
+.people-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.people-scroll::-webkit-scrollbar-thumb {
+  background-color: var(--sol-border);
+  border-radius: 4px;
+}
+.people-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* The row's actions replace its unread badge on hover or keyboard focus.
+   Focus-within, not hover alone: a keyboard reaching the mic must SEE the mic.
+   Opacity rather than display, so the buttons keep their box and the name
+   column never reflows as a pointer crosses the list. */
+.people-row-actions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.people-row:hover .people-row-actions,
+.people-row:focus-within .people-row-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.people-row:hover .people-row-idle,
+.people-row:focus-within .people-row-idle {
+  opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .people-row-actions {
+    transition: none;
+  }
+}

@@ -95,6 +95,7 @@ const Sessions = lazy(() => import("@/app/sessions/page"));
 const Windows = lazy(() => import("@/app/windows/page"));
 
 const Palette = lazy(() => import("@/app/palette/page"));
+const People = lazy(() => import("@/app/people/page"));
 
 const Settings = lazy(() => import("@/app/settings/page"));
 const SettingsCli = lazy(() => import("@/app/settings/cli/page"));
@@ -246,6 +247,12 @@ export function App() {
             <Route element={<PaletteLayout />}>
               <Route path="palette" element={<E name="Palette"><Palette /></E>} />
             </Route>
+
+            {/* The people window (AIM buddy list): the roster, calling and the
+                walkie in a window of their own. Own <Route>, no tab shell and no
+                DashboardLayout — it is a whole window, not a page inside one.
+                MUST stay above ":username" or the profile catch-all eats it. */}
+            <Route path="people" element={<E name="People"><People /></E>} />
 
             {/* Settings - shared sidebar layout */}
             <Route path="settings" element={<SettingsLayout />}>

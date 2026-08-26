@@ -1,10 +1,11 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { bindWalkie } from "../../lib/calls/walkie";
-import { walkieBlockedReason, walkieJoinReason, walkieOwnsCall } from "../../hooks/useWalkie";
+import { walkieBlockedReason, walkieJoinReason, walkieKeyState, walkieOwnsCall } from "../../hooks/useWalkie";
 import { useInboxStore } from "../../store/inboxStore";
 import { voiceDuration } from "../../lib/voicePlayer";
 import { ChatMessage } from "../chat/ChatMessage";
+import { toMessageView } from "../../lib/chatViews";
 import type { ChatMessageView } from "../chat/chatTypes";
 
 // What a walkie burst emits in the timeline. The regressions with teeth are all
@@ -308,5 +309,178 @@ describe("the clock only appears when there is something to time", () => {
     );
     expect(html).toContain("ch-voice-clock");
     expect(html).toContain("0:07");
+  });
+});
+
+// ct-45855. The bubble gained three states the founder asked for by name — a
+// meter while somebody is talking, a direction you can read without words, and
+// an honest wait while the server recovers what the live recognizer missed —
+// and one bug fix: a message carrying audio is a voice note whatever wrote it.
+
+describe("the live bubble reads as a direction", () => {
+  test("a burst you are not sending is the cool, incoming colour", () => {
+    // No burst of our own is in flight in this process, so every live bubble
+    // here is somebody else's voice arriving.
+    const html = render(view({ content: "on my way", voice: { status: "live", roomKey: ROOM } }));
+    expect(html).toContain("ch-voice-rx");
+    expect(html).not.toContain("ch-voice-tx");
+  });
+
+  test("with no voice to measure, the dot carries it alone", () => {
+    // A live burst in a DM somebody has open but is not in the room for has no
+    // level on either side. Four bars sitting flat would say the microphone was
+    // dead; the pulsing dot says only what is known, which is that a burst is
+    // open.
+    const html = render(view({ content: "hello", voice: { status: "live", roomKey: ROOM } }));
+    expect(html).toContain("ch-voice-dot");
+    expect(html).not.toContain("walkie-level");
+  });
+});
+
+describe("while the server is recovering the words", () => {
+  test("it says it is getting them, rather than showing a silence", () => {
+    // The live recognizer came back empty and chat.transcribeVoiceNote is
+    // reading the recording. An empty bubble beside a playable file reads as a
+    // burst nobody could transcribe, when the words are seconds away.
+    const html = render(
+      view({
+        voice: { status: "done", durationMs: 4_000, transcribing: true },
+        attachments: [{ storage_id: "st1", mime: "audio/webm" }],
+      }),
+    );
+    expect(html).toContain("getting the words");
+    expect(html).toContain("ch-voice-spinner");
+    expect(html).not.toContain("no words");
+  });
+
+  test("words that have landed win over the state that was waiting for them", () => {
+    // The flag comes off in the same patch that writes the transcript, but the
+    // two reach a client in whatever order the sync gives them. Whichever
+    // arrives first, the words are the answer.
+    const html = render(
+      view({
+        content: "the deploy is green",
+        voice: { status: "done", durationMs: 4_000, transcribing: true },
+      }),
+    );
+    expect(html).toContain("the deploy is green");
+    expect(html).not.toContain("getting the words");
+  });
+});
+
+describe("a message whose attachment is audio", () => {
+  const row = (over: Record<string, unknown> = {}) =>
+    toMessageView(
+      {
+        _id: MESSAGE,
+        channel_id: CHANNEL,
+        user_id: "u1",
+        content: "",
+        created_at: Date.now(),
+        attachments: [{ storage_id: "st1", mime: "audio/webm" }],
+        ...over,
+      } as any,
+      { members: new Map(), viewerId: "u1" } as any,
+    );
+
+  test("alone, and with nothing typed, it is a voice note", () => {
+    // Diagnosis 7 of pl-431: the renderer keyed on `voice` rather than on what
+    // was attached, so a recording that arrived any other way rendered as file
+    // tiles — a storage id in an <img>, with no way to play it.
+    const v = row();
+    expect(v.voice?.status).toBe("done");
+    expect(v.voice?.inferred).toBe(true);
+    const html = render(v);
+    expect(html).toContain(`data-walkie-play="${MESSAGE}"`);
+    expect(html).not.toContain("ch-att");
+  });
+
+  test("an image attachment is still an image", () => {
+    expect(row({ attachments: [{ storage_id: "st1", mime: "image/png" }] }).voice).toBeUndefined();
+  });
+
+  test("a real voice field is never overwritten by the guess", () => {
+    const v = row({ voice: { status: "live", room_key: ROOM } });
+    expect(v.voice?.status).toBe("live");
+    expect(v.voice?.inferred).toBeUndefined();
+  });
+
+  // A voice bubble REPLACES the body — the markdown and the attachment grid
+  // both — so guessing one for a row that carries anything else is a way to
+  // make that something else disappear off the screen with no trace. These pin
+  // that nothing vanishes in any combination.
+  test("text plus a recording plus an image loses none of the three", () => {
+    const v = row({
+      content: "here is the **clip** I mentioned",
+      attachments: [
+        { storage_id: "st-audio", mime: "audio/webm" },
+        { storage_id: "st-image", mime: "image/png" },
+      ],
+    });
+    // Not a voice note: it is an ordinary message that happens to carry one.
+    expect(v.voice).toBeUndefined();
+    const html = render(v);
+    // The text survives as markdown rather than as a transcript.
+    expect(html).toContain("<strong>clip</strong>");
+    // The image still reaches the grid, which is what silently vanished.
+    expect(html).toContain("ch-att");
+    // And the recording is playable rather than drawn as a broken thumbnail.
+    expect(html).toContain(`data-walkie-play="${MESSAGE}:st-audio"`);
+  });
+
+  test("a recording beside typed words keeps the words as words", () => {
+    const v = row({ content: "listen to this", attachments: [{ storage_id: "st-a", mime: "audio/webm" }] });
+    expect(v.voice).toBeUndefined();
+    const html = render(v);
+    expect(html).toContain("listen to this");
+    expect(html).toContain(`data-walkie-play="${MESSAGE}:st-a"`);
+  });
+
+  test("two recordings on one row get their own player keys", () => {
+    // One audio element serves the whole app, so two recordings sharing a key
+    // would fight over it: pressing the second would show the first as playing.
+    const html = render(
+      row({
+        attachments: [
+          { storage_id: "st-a", mime: "audio/webm" },
+          { storage_id: "st-b", mime: "audio/webm" },
+        ],
+      }),
+    );
+    expect(html).toContain(`data-walkie-play="${MESSAGE}:st-a"`);
+    expect(html).toContain(`data-walkie-play="${MESSAGE}:st-b"`);
+  });
+});
+
+// The key's four states, which are four different claims about where the words
+// are going. The middle two are the redesign: the microphone being open and a
+// teammate hearing it are seconds apart on a cold room, and the key used to
+// wait for the second before it lit — telling the person to start speaking at
+// the one moment nothing was being kept.
+describe("what the key is doing", () => {
+  const ptt = (over: Record<string, boolean> = {}) => ({
+    holding: false,
+    capturing: false,
+    dropped: false,
+    ...over,
+  });
+
+  test("idle until the key goes down", () => {
+    expect(walkieKeyState(ptt())).toBe("idle");
+  });
+
+  test("opening while the key is down and the microphone is not open yet", () => {
+    expect(walkieKeyState(ptt({ holding: true }))).toBe("opening");
+  });
+
+  test("live the moment the microphone opens, whatever the room is doing", () => {
+    // `capturing` is the engine's `sending.live`: recorder, meter and recognizer
+    // running. It does NOT wait on `heardLive`, which is the room, because the
+    // words are already being kept and that is what makes it worth speaking.
+    expect(walkieKeyState(ptt({ holding: true, capturing: true }))).toBe("live");
+  });
+
+  test("dropped wins over everything: the mic is open and nobody is hearing it", () => {
+    expect(walkieKeyState(ptt({ holding: true, capturing: true, dropped: true }))).toBe("dropped");
   });
 });
