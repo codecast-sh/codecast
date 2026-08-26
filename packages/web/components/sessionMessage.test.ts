@@ -133,6 +133,21 @@ describe("teammate broadcasts", () => {
     expect(isMachineDeliveredMessage(formatSessionMessage("jx7c6zk", "hi"))).toBe(true);
     expect(isMachineDeliveredMessage("a prompt the human typed")).toBe(false);
   });
+
+  test("detects a tag-less SendMessage idle notification (framing lead-in, no tags)", () => {
+    const idle = 'Another Claude session sent a message: {"type":"idle_notification","from":"tick-sweep-6","idleReason":"available"} This came from another Claude session — not typed by your user.';
+    expect(isTeammateMessage(idle)).toBe(true);
+    expect(isMachineDeliveredMessage(idle)).toBe(true);
+    expect(cleanUserMessage(idle)).toBeNull();
+    const parsed = parseMachineDeliveredMessage(idle)!;
+    expect(parsed.kind).toBe("teammate");
+    expect(parsed.body).toContain("idle_notification");
+    expect(parsed.body).not.toContain("permission");
+  });
+
+  test("cleanUserMessage drops the CLI's injected session-move notice", () => {
+    expect(cleanUserMessage("[codecast] This session just moved to a different machine. It now runs on jb-m5-max.")).toBeNull();
+  });
 });
 
 describe("parseInboundSessionMessage", () => {

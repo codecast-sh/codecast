@@ -1,4 +1,5 @@
 import type { Doc, Id } from "../_generated/dataModel";
+import { isMachineDeliveredMessage } from "@codecast/shared/contracts";
 
 // Human-send detection + the per-day send counters behind the "Sends" chart
 // metric. A "send" is a user-role message a person actually typed — the same
@@ -13,6 +14,8 @@ const NOISE_PREFIXES = [
   "Full transcript available at:",
   "Read the output file to retrieve the result:",
   "[Codecast import]",
+  // The CLI's injected session-move notice (sessionMoveNotice.ts).
+  "[codecast]",
 ];
 const COMMAND_RE = /^(<command-name>|<command-message>|<local-command-stdout>|<local-command-stderr>|Caveat:|\/[a-z][\w-]*)/i;
 const SKILL_RE = /Base directory for this skill:\s/;
@@ -33,10 +36,11 @@ export function isUserMessageNoise(content: string): boolean {
   if (!content) return true;
   const t = content.trim();
   if (!t) return true;
-  // Session→session messages (cast send) land as user-role turns wrapped in
-  // <session-message from="..">. They're agent coordination, not something the
+  // Machine-delivered user-role turns — cast send session messages, inter-agent
+  // teammate broadcasts (with or without <teammate-message> tags), scheduled-task
+  // injections, team-chat anchor wakes. Agent coordination, not something the
   // human typed into this session — drop them from "what I wrote".
-  if (t.startsWith("<session-message")) return true;
+  if (isMachineDeliveredMessage(t)) return true;
   if (COMMAND_RE.test(t)) return true;
   if (SKILL_RE.test(t)) return true;
   if (t.startsWith("<task-notification>") && !t.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "").trim()) return true;
