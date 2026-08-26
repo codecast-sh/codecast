@@ -3470,6 +3470,18 @@ export default defineSchema({
     // Monotonic per-transcript segment counter (writer-owned; the scribe is
     // the only appender, so no contention).
     last_seq: v.number(),
+    // A RECORDING'S LEASE. A huddle's transcript is kept alive by the room's
+    // seat leases (call_members), and the orphan sweep ends it when they go
+    // stale. A recording has no room and therefore no seats, so it carries the
+    // lease itself: the engine beats this field while it records, and a
+    // transcript whose beat went stale is a browser tab that died mid-sentence.
+    // Same window, same reason, one less table.
+    last_beat: v.optional(v.number()),
+    // The audio, when there is any. A recording (`rec:` room key) uploads what
+    // its microphone heard once it stops; a huddle has no single recording to
+    // keep. Best effort by design — the transcript is the artifact, and a
+    // failed upload must never cost anyone their words.
+    recording_storage_id: v.optional(v.id("_storage")),
   })
     .index("by_room", ["room_key"])
     .index("by_status", ["status"])
@@ -3977,6 +3989,12 @@ export default defineSchema({
       // join the conversation. A join still runs through authorizeRoom, so this
       // string grants nothing on its own.
       room_key: v.optional(v.string()),
+      // The words are being recovered from the recording right now. Set when a
+      // burst lands carrying audio and no transcript — the live recognizer was
+      // down, or heard nothing — and cleared by the action that transcribes it.
+      // The bubble reads it to say "getting the words" instead of showing a
+      // finished voice note that looks like it was said in silence.
+      transcribing: v.optional(v.boolean()),
     })),
     // Optimistic altKey AND the server's send-dedupe key: a retried send with the
     // same client_id returns the existing row instead of inserting a twin (and,
@@ -3990,6 +4008,16 @@ export default defineSchema({
     // CLI, so it is an honest downgrade rather than a boundary: a caller who
     // omits it is treated exactly as a human, which is what it already was.
     origin: v.optional(v.literal("agent")),
+    // Which session typed it, when `origin` is "agent" — so the line renders as
+    // that session (agent logo + session title) instead of wearing the human's
+    // face for words a machine wrote. Title/agent_type are a send-time snapshot,
+    // taken server-side only when the sender OWNS the session (a caller-supplied
+    // id must not leak someone else's private title into a channel). A viewer
+    // who can see the session live shows its current title instead; the
+    // snapshot is the fallback for everyone else.
+    origin_session_id: v.optional(v.string()),
+    origin_session_title: v.optional(v.string()),
+    origin_agent_type: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.number(),
     edited_at: v.optional(v.number()),

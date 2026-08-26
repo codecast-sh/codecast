@@ -1,10 +1,11 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { bindWalkie } from "../../lib/calls/walkie";
-import { walkieBlockedReason, walkieJoinReason, walkieOwnsCall } from "../../hooks/useWalkie";
+import { callDockSurface, walkieBlockedReason, walkieBurstDropped, walkieJoinReason, walkieKeyName, walkieKeyState, walkieOwnsCall } from "../../hooks/useWalkie";
 import { useInboxStore } from "../../store/inboxStore";
 import { voiceDuration } from "../../lib/voicePlayer";
 import { ChatMessage } from "../chat/ChatMessage";
+import { toMessageView } from "../../lib/chatViews";
 import type { ChatMessageView } from "../chat/chatTypes";
 
 // What a walkie burst emits in the timeline. The regressions with teeth are all
@@ -73,7 +74,7 @@ describe("voice bubble", () => {
   test("a live burst nobody can join says so instead of offering a dead door", () => {
     const html = render(view({ content: "hello", voice: { status: "live" } }));
     expect(html).toContain("disabled");
-    expect(html).toContain("This one cannot be joined");
+    expect(html).toContain("This burst has no room to join");
   });
 
   test("a burst with no words yet says which silence this is", () => {
@@ -229,6 +230,98 @@ describe("who owns the dock", () => {
   });
 });
 
+// The founder, holding the composer key and talking: "it kind of switches to
+// the full call unexpectedly after a few seconds." Reproduced with two
+// identities — the full call stage replaced his DM about a second into every
+// hold, because a huddle he had expanded EARLIER in the session left
+// `expanded` true and the branch read `walkieOwnsCall(...) && !expanded`.
+//
+// So the rule these pin is one sentence: while the key is down and nobody else
+// has unmuted, the surface is the strip, and nothing local outranks it.
+describe("which surface the dock shows while the key is down", () => {
+  const base = {
+    sending: null,
+    incoming: null,
+    lingerUntil: null,
+    unavailable: null,
+    canReply: false,
+    error: null,
+  } as const;
+  const sendingInto = (room = ROOM) => ({
+    ...base,
+    sending: { channelId: "c", roomKey: room, clientId: "cid", messageId: null, startedAt: 0, transcript: "" },
+  });
+  /** The sender's own seat through a burst: the engine unmutes to publish. */
+  const seated = { roomKey: ROOM, phase: "connected", muted: false };
+  const surface = (status: any, call: any, expanded: boolean) =>
+    callDockSurface(status, call, { expanded, guest: false, lingerRoom: ROOM });
+
+  test("a stale expanded from an EARLIER call does not open the stage over a burst", () => {
+    // The regression itself. Nothing about the burst differs between these two
+    // calls — only a flag left behind by a huddle that ended minutes ago.
+    expect(surface(sendingInto(), seated, false)).toBe("walkie");
+    expect(surface(sendingInto(), seated, true)).toBe("walkie");
+  });
+
+  test("heardLive landing mid-hold changes nothing", () => {
+    // The room answers a second or two in and the words start reaching the
+    // other person live. That is the burst working, not the burst becoming a
+    // call, so the surface must not move — with or without a stale flag.
+    const before = { ...sendingInto().sending, heardLive: false, openAt: null };
+    const after = { ...sendingInto().sending, heardLive: true, openAt: 1_700_000_001_000 };
+    for (const expanded of [false, true]) {
+      expect(surface({ ...base, sending: before }, seated, expanded)).toBe("walkie");
+      expect(surface({ ...base, sending: after }, seated, expanded)).toBe("walkie");
+    }
+  });
+
+  test("a muted teammate joining mid-hold changes nothing", () => {
+    // The receiver's door auto-joins them MUTED to hear the burst — occupancy
+    // goes to two while the key is still down. Nothing in the answer reads the
+    // roster, and this says so: the same status against the same seat.
+    //
+    // When they UNMUTE the room does become a conversation and the dock is the
+    // right answer, but that is the deliberate upgrade and ct-46032 owns
+    // building it. Today a hold stays a strip until it ends.
+    expect(surface(sendingInto(), seated, false)).toBe("walkie");
+    expect(surface(sendingInto(), seated, true)).toBe("walkie");
+  });
+
+  test("the room the walkie holds after the key comes up is still the walkie's", () => {
+    // The gap this closes: between the burst clearing and the linger starting
+    // the engine used to answer for nobody, and the dock took a room the
+    // walkie had not let go of — measured at 861ms, the length of the audio
+    // upload. `beginLinger` now runs where `sending` is cleared, so the two
+    // states below are the only two that exist.
+    const lingering = { ...base, lingerUntil: Date.now() + 30_000 };
+    const held = { roomKey: ROOM, phase: "connected", muted: true };
+    expect(surface(sendingInto(), seated, false)).toBe("walkie");
+    expect(surface(lingering, held, false)).toBe("walkie");
+    // And a stale flag cannot take it during the linger either.
+    expect(surface(lingering, held, true)).toBe("walkie");
+  });
+
+  test("a burst that outlived its room keeps the strip, and no call at all shows nothing", () => {
+    const gone = { roomKey: null, phase: "idle", muted: true };
+    expect(surface(sendingInto(), gone, false)).toBe("walkie");
+    expect(surface(sendingInto(), gone, true)).toBe("walkie");
+    expect(surface(base, gone, false)).toBe("none");
+    expect(surface(base, gone, true)).toBe("none");
+  });
+
+  test("an ordinary huddle still gets the dock, and the stage when it was expanded", () => {
+    // The other half of the rule: pinning the walkie's surface must not have
+    // taken the stage away from the calls it belongs to.
+    const huddle = { roomKey: "channel:elsewhere", phase: "connected", muted: false };
+    expect(callDockSurface(base as any, huddle, { expanded: false, guest: false, lingerRoom: null })).toBe("dock");
+    expect(callDockSurface(base as any, huddle, { expanded: true, guest: false, lingerRoom: null })).toBe("stage");
+    // And a burst spoken INSIDE somebody's live huddle is a guest there: the
+    // call keeps its own controls, expanded or not.
+    expect(callDockSurface(sendingInto() as any, seated, { expanded: false, guest: true })).toBe("dock");
+    expect(callDockSurface(sendingInto() as any, seated, { expanded: true, guest: true })).toBe("stage");
+  });
+});
+
 describe("voiceDuration", () => {
   test("reads as a clock, rounded to the second", () => {
     expect(voiceDuration(0)).toBe("0:00");
@@ -308,5 +401,248 @@ describe("the clock only appears when there is something to time", () => {
     );
     expect(html).toContain("ch-voice-clock");
     expect(html).toContain("0:07");
+  });
+});
+
+// ct-45855. The bubble gained three states the founder asked for by name — a
+// meter while somebody is talking, a direction you can read without words, and
+// an honest wait while the server recovers what the live recognizer missed —
+// and one bug fix: a message carrying audio is a voice note whatever wrote it.
+
+describe("the live bubble reads as a direction", () => {
+  test("a burst you are not sending is the cool, incoming colour", () => {
+    // No burst of our own is in flight in this process, so every live bubble
+    // here is somebody else's voice arriving.
+    const html = render(view({ content: "on my way", voice: { status: "live", roomKey: ROOM } }));
+    expect(html).toContain("ch-voice-rx");
+    expect(html).not.toContain("ch-voice-tx");
+  });
+
+  test("with no voice to measure, the dot carries it alone", () => {
+    // A live burst in a DM somebody has open but is not in the room for has no
+    // level on either side. Four bars sitting flat would say the microphone was
+    // dead; the pulsing dot says only what is known, which is that a burst is
+    // open.
+    const html = render(view({ content: "hello", voice: { status: "live", roomKey: ROOM } }));
+    expect(html).toContain("ch-voice-dot");
+    expect(html).not.toContain("walkie-level");
+  });
+});
+
+describe("while the server is recovering the words", () => {
+  test("it says it is getting them, rather than showing a silence", () => {
+    // The live recognizer came back empty and chat.transcribeVoiceNote is
+    // reading the recording. An empty bubble beside a playable file reads as a
+    // burst nobody could transcribe, when the words are seconds away.
+    const html = render(
+      view({
+        voice: { status: "done", durationMs: 4_000, transcribing: true },
+        attachments: [{ storage_id: "st1", mime: "audio/webm" }],
+      }),
+    );
+    expect(html).toContain("getting the words");
+    expect(html).toContain("ch-voice-spinner");
+    expect(html).not.toContain("no words");
+  });
+
+  test("words that have landed win over the state that was waiting for them", () => {
+    // The flag comes off in the same patch that writes the transcript, but the
+    // two reach a client in whatever order the sync gives them. Whichever
+    // arrives first, the words are the answer.
+    const html = render(
+      view({
+        content: "the deploy is green",
+        voice: { status: "done", durationMs: 4_000, transcribing: true },
+      }),
+    );
+    expect(html).toContain("the deploy is green");
+    expect(html).not.toContain("getting the words");
+  });
+});
+
+describe("a message whose attachment is audio", () => {
+  const row = (over: Record<string, unknown> = {}) =>
+    toMessageView(
+      {
+        _id: MESSAGE,
+        channel_id: CHANNEL,
+        user_id: "u1",
+        content: "",
+        created_at: Date.now(),
+        attachments: [{ storage_id: "st1", mime: "audio/webm" }],
+        ...over,
+      } as any,
+      { members: new Map(), viewerId: "u1" } as any,
+    );
+
+  test("alone, and with nothing typed, it is a voice note", () => {
+    // Diagnosis 7 of pl-431: the renderer keyed on `voice` rather than on what
+    // was attached, so a recording that arrived any other way rendered as file
+    // tiles — a storage id in an <img>, with no way to play it.
+    const v = row();
+    expect(v.voice?.status).toBe("done");
+    expect(v.voice?.inferred).toBe(true);
+    const html = render(v);
+    expect(html).toContain(`data-walkie-play="${MESSAGE}"`);
+    expect(html).not.toContain("ch-att");
+  });
+
+  test("an image attachment is still an image", () => {
+    expect(row({ attachments: [{ storage_id: "st1", mime: "image/png" }] }).voice).toBeUndefined();
+  });
+
+  test("a real voice field is never overwritten by the guess", () => {
+    const v = row({ voice: { status: "live", room_key: ROOM } });
+    expect(v.voice?.status).toBe("live");
+    expect(v.voice?.inferred).toBeUndefined();
+  });
+
+  // A voice bubble REPLACES the body — the markdown and the attachment grid
+  // both — so guessing one for a row that carries anything else is a way to
+  // make that something else disappear off the screen with no trace. These pin
+  // that nothing vanishes in any combination.
+  test("text plus a recording plus an image loses none of the three", () => {
+    const v = row({
+      content: "here is the **clip** I mentioned",
+      attachments: [
+        { storage_id: "st-audio", mime: "audio/webm" },
+        { storage_id: "st-image", mime: "image/png" },
+      ],
+    });
+    // Not a voice note: it is an ordinary message that happens to carry one.
+    expect(v.voice).toBeUndefined();
+    const html = render(v);
+    // The text survives as markdown rather than as a transcript.
+    expect(html).toContain("<strong>clip</strong>");
+    // The image still reaches the grid, which is what silently vanished.
+    expect(html).toContain("ch-att");
+    // And the recording is playable rather than drawn as a broken thumbnail.
+    expect(html).toContain(`data-walkie-play="${MESSAGE}:st-audio"`);
+  });
+
+  test("a recording beside typed words keeps the words as words", () => {
+    const v = row({ content: "listen to this", attachments: [{ storage_id: "st-a", mime: "audio/webm" }] });
+    expect(v.voice).toBeUndefined();
+    const html = render(v);
+    expect(html).toContain("listen to this");
+    expect(html).toContain(`data-walkie-play="${MESSAGE}:st-a"`);
+  });
+
+  test("two recordings on one row get their own player keys", () => {
+    // One audio element serves the whole app, so two recordings sharing a key
+    // would fight over it: pressing the second would show the first as playing.
+    const html = render(
+      row({
+        attachments: [
+          { storage_id: "st-a", mime: "audio/webm" },
+          { storage_id: "st-b", mime: "audio/webm" },
+        ],
+      }),
+    );
+    expect(html).toContain(`data-walkie-play="${MESSAGE}:st-a"`);
+    expect(html).toContain(`data-walkie-play="${MESSAGE}:st-b"`);
+  });
+});
+
+// The key's four states, which are four different claims about where the words
+// are going. The middle two are the redesign: the microphone being open and a
+// teammate hearing it are seconds apart on a cold room, and the key used to
+// wait for the second before it lit — telling the person to start speaking at
+// the one moment nothing was being kept.
+describe("what the key is doing", () => {
+  const ptt = (over: Record<string, boolean> = {}) => ({
+    holding: false,
+    capturing: false,
+    dropped: false,
+    ...over,
+  });
+
+  test("idle until the key goes down", () => {
+    expect(walkieKeyState(ptt())).toBe("idle");
+  });
+
+  test("opening while the key is down and the microphone is not open yet", () => {
+    expect(walkieKeyState(ptt({ holding: true }))).toBe("opening");
+  });
+
+  test("live the moment the microphone opens, whatever the room is doing", () => {
+    // `capturing` is the engine's `sending.live`: recorder, meter and recognizer
+    // running. It does NOT wait on `heardLive`, which is the room, because the
+    // words are already being kept and that is what makes it worth speaking.
+    expect(walkieKeyState(ptt({ holding: true, capturing: true }))).toBe("live");
+  });
+
+  test("dropped wins over everything: the mic is open and nobody is hearing it", () => {
+    expect(walkieKeyState(ptt({ holding: true, capturing: true, dropped: true }))).toBe("dropped");
+  });
+});
+
+// ── What the key is CALLED, for the sense that cannot see it ───────────────
+//
+// The eye reads the ring, the fill and the dot. A screen reader gets this
+// string and nothing else, so it carries the state — and, when idle, WHICH
+// key it is. A roster of twenty teammates draws twenty of these, and every one
+// of them used to arrive as the identical "Hold to talk": the teammate's name
+// was in `title`, where only a pointer could find it.
+describe("walkieKeyName", () => {
+  test("says why it cannot be held, over everything else", () => {
+    expect(
+      walkieKeyName("live", { reason: "You are in another call", live: true, title: "Hold to talk to Ann" }),
+    ).toBe("You are in another call");
+  });
+
+  test("names each of the three moments of a hold", () => {
+    expect(walkieKeyName("opening", {})).toBe("Opening the mic — do not talk yet");
+    expect(walkieKeyName("live", { live: false })).toBe("Recording — they get it when you let go");
+    expect(walkieKeyName("live", { live: true })).toBe("Live — they hear you now, release to send");
+    expect(walkieKeyName("dropped", {})).toBe("Nobody is hearing this — still recording");
+  });
+
+  test("names the person when idle, instead of twenty identical controls", () => {
+    expect(walkieKeyName("idle", { title: "Hold to talk to Ann Diaz" })).toBe("Hold to talk to Ann Diaz");
+    expect(walkieKeyName("idle", { title: "Hold to talk to Bo Chen" })).toBe("Hold to talk to Bo Chen");
+  });
+
+  test("keeps a visible label in the name, so heard contains seen", () => {
+    expect(walkieKeyName("idle", { label: "Hold to reply", title: "Hold to reply" })).toBe("Hold to reply");
+  });
+
+  test("falls back to the gesture when a caller says nothing at all", () => {
+    expect(walkieKeyName("idle", {})).toBe("Hold to talk");
+  });
+});
+
+// ── The room going away under an open microphone ──────────────────────────
+//
+// Nothing in a burst is tied to the room's connection state, and
+// `sending.heardLive` only ever says the track reached the room ONCE. So a
+// LiveKit disconnect mid-hold left the engine's `sending` untouched while the
+// call plane correctly went idle, and the strip went on saying "Live to Jordan
+// Lee" to somebody whose voice was reaching nobody.
+//
+// The key and the strip now ask this one function, so they cannot drift.
+describe("walkieBurstDropped", () => {
+  const burst = { openAt: 1000, roomKey: "dm:a:b" };
+
+  test("is false while the client is seated in the burst's room", () => {
+    expect(walkieBurstDropped(burst, { roomKey: "dm:a:b", phase: "connected" })).toBe(false);
+    // Connecting counts: the track is on its way and nothing has been lost.
+    expect(walkieBurstDropped(burst, { roomKey: "dm:a:b", phase: "connecting" })).toBe(false);
+  });
+
+  test("is true once the call plane leaves that room", () => {
+    expect(walkieBurstDropped(burst, { roomKey: null, phase: "idle" })).toBe(true);
+    // Or lands somewhere else entirely.
+    expect(walkieBurstDropped(burst, { roomKey: "dm:a:c", phase: "connected" })).toBe(true);
+  });
+
+  test("is false before the track ever reached the room", () => {
+    // Nothing has dropped yet — this is the ordinary opening window, and
+    // calling it a drop would report a failure where there is only a wait.
+    expect(walkieBurstDropped({ openAt: null, roomKey: "dm:a:b" }, { roomKey: null, phase: "idle" })).toBe(false);
+  });
+
+  test("is false when there is no burst at all", () => {
+    expect(walkieBurstDropped(null, { roomKey: null, phase: "idle" })).toBe(false);
   });
 });

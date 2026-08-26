@@ -51,6 +51,11 @@ const onUpdateStatus = bufferedChannel("update-status", { latest: true });
 // one would silently lose the user's tab.
 const onAdoptTab = bufferedChannel("adopt-tab");
 
+// The call panel closing hands its room back to the main window. Buffered
+// because a dropped one drops a live call: the panel is going away either way,
+// so this message is the only thing that keeps the huddle alive.
+const onCallPanelHandback = bufferedChannel("call-panel-handback");
+
 // Window role (notification leader / app focus / any call) is pushed by main
 // whenever windows or focus change. Keep the latest so a subscriber that
 // mounts after the first push starts from the truth instead of a default.
@@ -123,5 +128,30 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   detachTab: (navPath) => ipcRenderer.invoke("detach-tab", navPath),
   attachTab: (navPath) => ipcRenderer.invoke("attach-tab", navPath),
   onAdoptTab,
+  // The people window: the floating buddy list (route /people). One per app —
+  // openPeopleWindow focuses the existing one. `isPeopleWindow` tells this
+  // renderer it IS that window, so it draws the panel and mounts the call and
+  // walkie pumps. The always-on-top pin is honored only from that window and
+  // persists across launches.
+  isPeopleWindow: process.argv.includes("--people-window"),
+  openPeopleWindow: () => ipcRenderer.invoke("open-people-window"),
+  setAlwaysOnTop: (on) => ipcRenderer.invoke("set-always-on-top", on),
+  getAlwaysOnTop: () => ipcRenderer.invoke("get-always-on-top"),
+  // The call panel: a huddle in a window of its own (route /call-panel). One
+  // per app, because one call at a time. `isCallPanelWindow` tells this
+  // renderer it IS that window, so it takes the call over on load and treats
+  // its own closing as a handoff rather than a hang-up.
+  //
+  // `closeCallPanel({ended})` is how the panel says WHY it is closing: a
+  // hang-up ended the call and nothing is handed anywhere, while any other
+  // close — including the OS close box, which says nothing — hands the room
+  // back to the main window. `reportCallPanelState` keeps the shell holding
+  // the payload for that handback: the same room, in the same mic, camera and
+  // scribe state the person was already in.
+  isCallPanelWindow: process.argv.includes("--call-panel-window"),
+  openCallPanel: (roomKey, opts) => ipcRenderer.invoke("open-call-panel", roomKey, opts ?? {}),
+  closeCallPanel: (opts) => ipcRenderer.invoke("close-call-panel", opts ?? {}),
+  reportCallPanelState: (state) => ipcRenderer.send("report-call-panel-state", state),
+  onCallPanelHandback,
   platform: process.platform,
 });

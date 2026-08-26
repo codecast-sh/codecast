@@ -10,6 +10,7 @@
 // pattern).
 import {
   ConnectionState,
+  DisconnectReason,
   LocalParticipant,
   Participant,
   RemoteParticipant,
@@ -22,8 +23,9 @@ import {
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { useInboxStore } from "../../store/inboxStore";
+import { mutateOnUnload } from "../keepaliveMutation";
 import { memberDisplayName } from "../liveEntities";
-import { stopScribe } from "./transcription";
+import { startScribe, stopScribe } from "./transcription";
 import { CALL_HEARTBEAT_MS, humanizeConvexError } from "@codecast/shared/contracts";
 import {
   soundCallJoin,
@@ -278,7 +280,20 @@ function teardownMedia() {
 
 // Join a room end-to-end: control-plane row, token, SFU connect, mic publish.
 // The store paints "connecting" synchronously; every await settles after.
-export async function joinCall(roomKey: string): Promise<void> {
+//
+// `micTrack` is the one seam in the media plane's ownership, and it is a
+// handover: the caller has ALREADY acquired a microphone and is already reading
+// it (the walkie records and transcribes from t=0, long before this join can
+// land), so opening a second one here would put two mics on one person. Given a
+// track, this publishes THAT track under the microphone source and owns it from
+// then on — mute, the level meter and teardown all work on the publication
+// exactly as if the track had been made here, and disconnecting stops it like
+// any other. A caller that still needs its own copy hands over `track.clone()`,
+// which shares the one capture without sharing its lifetime.
+export async function joinCall(
+  roomKey: string,
+  opts?: { micTrack?: MediaStreamTrack },
+): Promise<void> {
   if (!convex) return;
   const prior = useInboxStore.getState().call;
   // Already in (or genuinely joining) this room: idempotent. "connecting" only
@@ -366,12 +381,19 @@ export async function joinCall(roomKey: string): Promise<void> {
         pushFlags();
       }
     });
-    r.on(RoomEvent.Disconnected, () => {
+    r.on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
+      if (useInboxStore.getState().call.roomKey !== roomKey) return;
+      // Another WINDOW of mine took this call over (the call panel popping out,
+      // or the main window taking it back as the panel closes). Not a
+      // disconnect to recover from and not a hang-up: the call is still going,
+      // one room over. Hand the room across quietly.
+      if (reason === DisconnectReason.DUPLICATE_IDENTITY) {
+        void yieldRoomToOtherWindow();
+        return;
+      }
       // SFU-side disconnect (kicked, server restart, network gave up after
       // livekit-client's own retries): reflect reality and free the row.
-      if (useInboxStore.getState().call.roomKey === roomKey) {
-        void leaveCall();
-      }
+      void leaveCall();
     });
     r.on(RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
       const call = useInboxStore.getState().call;
@@ -388,7 +410,16 @@ export async function joinCall(roomKey: string): Promise<void> {
     // Publish the mic in the muted state the user chose — join is silent by
     // default (the shoulder-tap contract), one keypress to speak.
     const muted = useInboxStore.getState().call.muted;
-    await r.localParticipant.setMicrophoneEnabled(!muted);
+    const given = opts?.micTrack;
+    if (given && given.readyState === "live") {
+      await r.localParticipant.publishTrack(given, { source: Track.Source.Microphone });
+      if (superseded(r)) return;
+      // The publication now answers to setMicrophoneEnabled like any other, so
+      // the mute the user chose applies to it unchanged.
+      if (muted) await r.localParticipant.setMicrophoneEnabled(false);
+    } else {
+      await r.localParticipant.setMicrophoneEnabled(!muted);
+    }
     if (superseded(r)) return;
     setCall({ phase: "connected" });
     soundCallJoin();
@@ -409,6 +440,58 @@ export async function joinCall(roomKey: string): Promise<void> {
     // Free the control-plane row so occupancy doesn't show a ghost.
     convex?.mutation(api.calls.leaveRoom, { room_key: roomKey }).catch(() => {});
   }
+}
+
+// ── handing the call to another window of my own ──────────────────────────
+//
+// A call belongs to ONE renderer at a time, because the media does: the Room,
+// the mic publication and the audio elements are all module singletons here.
+// Popping the call out into its own desktop window therefore has to MOVE it,
+// and the move needs a signal both windows agree on.
+//
+// The signal comes free from the media plane. `mintAccessToken` signs the
+// LiveKit identity as the user id, so a second window of mine joining the same
+// room is a duplicate identity, and the SFU evicts the older participant with
+// DisconnectReason.DUPLICATE_IDENTITY. That gives the exact ordering the
+// handoff wants and gives it in the right order: the new window is CONNECTED
+// before the old one is told to stand down, so the audio never has a hole in
+// the middle of it.
+//
+// The control plane deliberately takes no part. `call_members` is keyed by
+// (user, room), so both windows share ONE row: `joinRoom` for a room I am
+// already in just refreshes it. That is why the yield below must not call
+// `leaveRoom` — the seat it would free is the seat the OTHER window is now
+// sitting in, and freeing it would leave that window in the room with no
+// occupancy, no heartbeat and no transcript authorization.
+
+// Set by a window whose disappearance is a HANDOFF rather than a hang-up (the
+// call panel, whose closing hands the call back to the main window). It is
+// declared while the window lives, not at unload: the beforeunload hook below
+// runs before any listener a page registers later, so a flag set at unload time
+// would be set too late to be read.
+let callOutlivesWindow = false;
+
+export function setCallOutlivesWindow(on: boolean): void {
+  callOutlivesWindow = on;
+}
+
+// Release the room without ending the call: no leave sound (nothing ended),
+// no `leaveRoom` (the seat moved, it did not empty) and no error state (this
+// is the plan working). The scribe's local pipes close, but the transcript
+// stays live on the server so the window taking over rejoins the same run.
+async function yieldRoomToOtherWindow(): Promise<void> {
+  callGen++;
+  await stopScribe({ keepLive: true });
+  teardownMedia();
+  setCall({
+    phase: "idle",
+    roomKey: null,
+    speaking: [],
+    camera: false,
+    sharing: false,
+    error: null,
+    muted: true,
+  });
 }
 
 export async function leaveCall(): Promise<void> {
@@ -434,6 +517,38 @@ export async function leaveCall(): Promise<void> {
   }
 }
 
+/**
+ * Take a call over from another window of mine — the receiving half of the
+ * handoff above.
+ *
+ * A DELIBERATE join: no ring (I am already in this room, the seat is mine) and
+ * no shoulder-tap mute, because the mic state is not a fresh decision here. It
+ * is the state I was already in one window ago, handed across so that popping
+ * the call out mid-sentence does not silence me. `muted` is written to the
+ * store BEFORE joining, which is what makes `controlJoin` record it and the mic
+ * publish honor it — the same order `startHuddle` uses for its unmuted join.
+ *
+ * The camera can only be applied after connecting: it publishes a track.
+ */
+export async function takeOverCall(opts: {
+  roomKey: string;
+  mic: boolean;
+  camera: boolean;
+  scribe?: boolean;
+}): Promise<void> {
+  setCall({ muted: !opts.mic });
+  await joinCall(opts.roomKey);
+  if (useInboxStore.getState().call.phase !== "connected") return;
+  if (opts.camera) await setCamera(true);
+  // The scribe follows the call. It resumes into the SAME transcript rather
+  // than forking one — `transcripts.start` is idempotent per room — so the
+  // words carry straight across the window boundary and the record has no seam
+  // where a window happened to change.
+  if (opts.scribe && convex && room) {
+    await startScribe({ convex, room, roomKey: opts.roomKey, routes: [] }).catch(() => {});
+  }
+}
+
 export async function setMuted(muted: boolean): Promise<void> {
   setCall({ muted });
   if (room) {
@@ -451,7 +566,7 @@ export async function setMuted(muted: boolean): Promise<void> {
 // yields nothing, and the Permissions API tells the two cases apart: a
 // blocked site setting versus a machine with no such device. The message is
 // the fix, phrased for the person holding the mouse.
-async function mediaFailureReason(kind: "camera" | "microphone", err?: any): Promise<string> {
+export async function mediaFailureReason(kind: "camera" | "microphone", err?: any): Promise<string> {
   const label = kind === "camera" ? "Camera" : "Microphone";
   if (err?.name === "NotFoundError" || err?.name === "OverconstrainedError") {
     return `No ${kind} found`;
@@ -725,10 +840,19 @@ export async function admitKnock(roomKey: string, userId: string): Promise<void>
 
 // Best-effort row cleanup when the tab dies mid-call; the 45s lease is the
 // real guarantee, this just makes the common case instant.
+//
+// Over HTTP, not through the client. This used to write the mutation to the
+// WebSocket, which is torn down before the frame leaves — measured while
+// chasing the same bug one file over, and it meant this guard had never once
+// done its job: every tab that died mid-call left its row for the lease to
+// clear. See lib/keepaliveMutation.
 if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", () => {
-    if (currentRoomKey && convex) {
-      convex.mutation(api.calls.leaveRoom, { room_key: currentRoomKey }).catch(() => {});
+    // `callOutlivesWindow` is the call panel closing on purpose: the seat is
+    // shared with the window taking the call back, so freeing it here would
+    // evict the window that is mid-join. The row is not ours alone to drop.
+    if (currentRoomKey && !callOutlivesWindow) {
+      mutateOnUnload(api.calls.leaveRoom, { room_key: currentRoomKey });
     }
   });
 }
@@ -750,6 +874,7 @@ if (typeof window !== "undefined" && import.meta.env.DEV) {
     // are null, so a harness must reach the app's instance through here.
     joinCall,
     leaveCall,
+    takeOverCall,
     setMuted,
     setCamera,
     setScreenShare,

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { Rnd } from "react-rnd";
-import { ChevronUp, Maximize2, Pin, PinOff, Video, VideoOff } from "lucide-react";
+import { AppWindow, ChevronUp, Maximize2, Pin, PinOff, Video, VideoOff } from "lucide-react";
 import { useTrackedStore } from "../../store/inboxStore";
 import {
   getCallTiles,
@@ -15,9 +15,12 @@ import { AddPeopleButton } from "./AddPeople";
 import { HangUpButton, MicButton } from "./CallControls";
 import { RoomKnocks, RoomLockButton } from "./RoomDoor";
 import { WalkieBanner } from "./WalkieDock";
-import { useWalkieStatus, walkieOwnsCall } from "../../hooks/useWalkie";
+import { callDockSurface, useWalkieStatus } from "../../hooks/useWalkie";
 import { firstName } from "./speakers";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
+import { POP_OUT_CALL_TITLE, canPopOutCall, isCallPanelWindow } from "../../lib/desktop";
+import { useDesktopWindowRole } from "../../hooks/useDesktopWindowRole";
+import { popOutCall } from "../../lib/calls/popOutCall";
 
 // The in-call surface while the stage is collapsed, on every tab, only while
 // a call exists (call.phase !== idle). Two shapes, chosen by the pin:
@@ -43,25 +46,57 @@ export function CallDock() {
   const [bounds, setBounds] = useState<Bounds | null>(null);
   const tiles = useSyncExternalStore(subscribeCallTiles, getCallTiles, () => []);
   const walkie = useWalkieStatus();
+  const role = useDesktopWindowRole();
   // New video or a share arriving is the moment the stage earns the room;
   // a media notice opens it too, so its sentence is read.
   const notice = call.phase === "connected" ? call.error : null;
   const remoteVideo = tiles.some((t) => !t.isLocal);
   const prevRemoteVideo = useRef(false);
-  useEffect(() => {
-    if (notice) setExpanded(true);
-    if (remoteVideo && !prevRemoteVideo.current) setExpanded(true);
-    prevRemoteVideo.current = remoteVideo;
-  }, [notice, remoteVideo]);
 
-  if (call.phase === "idle") return null;
-  // A push-to-talk burst joins a room the same way a huddle does, so without
-  // this the dock would open its floating window for every sentence somebody
-  // says. The walkie has its own, much lighter surface for that; the two must
-  // never be on screen together, which is why this is a branch here rather
-  // than a second thing mounted beside the dock.
-  if (walkieOwnsCall(walkie, call) && !expanded) return <WalkieBanner />;
-  if (expanded) {
+  // THE STAGE BELONGS TO THE CALL THAT WAS EXPANDED, and to no call after it
+  // (ct-45974). Nothing used to put `expanded` back: this component is mounted
+  // for the life of the page and merely returns null when idle, so one expanded
+  // huddle left the flag true forever — and the next call, or the next walkie
+  // burst, opened full screen by itself. Ending the call un-expands the stage,
+  // exactly as collapsing it does.
+  //
+  // Adjusted during the render that sees the call end, rather than in an
+  // effect: React re-runs this component and throws the first pass away, so
+  // there is no committed frame in between and no second paint.
+  const prevPhase = useRef(call.phase);
+  if (prevPhase.current !== call.phase) {
+    prevPhase.current = call.phase;
+    if (call.phase === "idle" && expanded) setExpanded(false);
+  }
+
+  // Which of the four surfaces this is, decided once, by the rule that lives
+  // beside `walkieOwnsCall` because it is a rule about the walkie.
+  const surface = callDockSurface(walkie, call, { expanded });
+  const walkieOwns = surface === "walkie";
+  useEffect(() => {
+    // Never over a burst. The stage opening on remote video is right for a
+    // huddle and wrong for three seconds of somebody's voice, and it does
+    // lasting damage: `expanded` would stay true after the burst and take the
+    // surface from every later one.
+    if (!walkieOwns) {
+      if (notice) setExpanded(true);
+      if (remoteVideo && !prevRemoteVideo.current) setExpanded(true);
+    }
+    // Tracked either way, so a burst cannot arm the next call's first frame.
+    prevRemoteVideo.current = remoteVideo;
+  }, [notice, remoteVideo, walkieOwns]);
+
+  if (surface === "walkie") return <WalkieBanner />;
+  if (surface === "none") return null;
+  // The call has a window of its own, and it is not this one. Every other
+  // window stands down from the dock rather than drawing a second set of
+  // controls for a microphone it does not hold — the elsewhere pill says where
+  // to look instead. Below the walkie branches on purpose: a burst is not the
+  // panel's business, and the strip stays wherever it lands. This window's own
+  // call state goes idle a moment later anyway, when the panel's join evicts
+  // it; the gate is what keeps two docks off the screen during that moment.
+  if (role.callPanel && !isCallPanelWindow()) return null;
+  if (surface === "stage") {
     return <CallStage onCollapse={() => setExpanded(false)} />;
   }
   // Portaled to <body> like the stage: the dock mounts inside the app shell,
@@ -175,6 +210,7 @@ function MiniWindow({
             >
               {statusText}
             </span>
+            <PopOutCallButton />
             <button
               onClick={onExpand}
               className="rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
@@ -321,6 +357,7 @@ function DockPill({
       >
         <Pin className="h-4 w-4" />
       </button>
+      <PopOutCallButton className="rounded-md p-1.5 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text" iconClassName="h-4 w-4" />
       <div className="mx-0.5 h-5 w-px bg-sol-border" />
       {call.roomKey && call.phase === "connected" && (
         <>
@@ -331,5 +368,35 @@ function DockPill({
       <MicButton muted={call.muted} size="compact" />
       <HangUpButton size="compact" />
     </div>
+  );
+}
+
+/**
+ * Give the call a window of its own.
+ *
+ * Desktop only, and ABSENT rather than degraded anywhere else: the ladder
+ * behind it (lib/calls/popOutCall) has no browser rung on purpose, so a browser
+ * has no gesture to offer and offering one would only produce the Chrome popup
+ * this panel exists to make impossible. It hides inside the panel too, where
+ * the call already has its window.
+ */
+function PopOutCallButton({
+  className = "rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text",
+  iconClassName = "h-3.5 w-3.5",
+}: {
+  className?: string;
+  iconClassName?: string;
+}) {
+  if (!canPopOutCall()) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => void popOutCall()}
+      className={className}
+      title={POP_OUT_CALL_TITLE}
+      aria-label={POP_OUT_CALL_TITLE}
+    >
+      <AppWindow className={iconClassName} />
+    </button>
   );
 }

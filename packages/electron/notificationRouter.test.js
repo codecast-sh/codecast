@@ -112,3 +112,39 @@ test("RecentKeys collapses duplicates inside the TTL and forgets after it", () =
   assert.equal(RecentKeys.keyFor({ title: "a", body: "b", data: { key: "k" } }), "k");
   assert.equal(RecentKeys.keyFor({ title: "a", body: "b", data: { route: "/r" } }), "a|b|/r");
 });
+
+// --- The people window: the phone -------------------------------------------
+// While it exists it plays every notification sound and catches every call and
+// walkie banner, wherever the user happens to be looking.
+
+const peopleWin = (over = {}) => ({
+  id: 9,
+  isMain: false,
+  isPeople: true,
+  focused: false,
+  lastFocusedAt: 5,
+  active: "/people",
+  open: [],
+  inCall: false,
+  ...over,
+});
+
+test("the people window leads the sounds while it exists", () => {
+  assert.equal(chooseLeader([main({ focused: true }), peopleWin()]).id, 9, "even over the focused window");
+  assert.equal(chooseLeader([main(), peopleWin()]).id, 9, "even over the main window");
+  assert.equal(chooseLeader([main(), tabWin(2, "/chat/a", { focused: true })]).id, 2, "no people window: old rule");
+});
+
+test("call and walkie banners land in the people window", () => {
+  const windows = [main({ active: "/conversation/c1" }), tabWin(2, "/calls"), peopleWin()];
+  assert.equal(pickWindow(windows, { route: "/calls", kind: "call" }).window.id, 9);
+  // The banner's own route names the DM it came from; the kind still wins.
+  assert.equal(pickWindow(windows, { route: "/conversation/c1", kind: "walkie" }).window.id, 9);
+  // Anything else keeps its usual home.
+  assert.equal(pickWindow(windows, { route: "/conversation/c1" }).window.id, 1);
+  // With no people window a call still lands where the call is hosted.
+  assert.equal(
+    pickWindow([main(), tabWin(2, "/calls", { inCall: true })], { route: null, kind: "call" }).window.id,
+    2,
+  );
+});

@@ -217,3 +217,70 @@ describe("walkie: handing a room back", () => {
     }
   });
 });
+
+// ── The meter's calibration ────────────────────────────────────────────────
+//
+// A meter linear in amplitude spends nearly all of its travel doing nothing,
+// because speech is not linear. The numbers below come from the real WAV the
+// real-speech run played through the fake microphone: 831 windows of 256
+// samples, RMS per window, exactly what the AnalyserNode sees. Quiet talkers
+// are that recording scaled down, which is what a soft voice or a far mic is.
+//
+// What the old `min(1, rms * 4)` did to them, as a share of voiced windows
+// landing in each fifth of the meter, and the sweep of a 360-degree ring:
+//
+//   loud    26/25/31/11/8   ring  28° … 273°
+//   quiet   92/8/0/0/0      ring  15° …  70°
+//   softer  100/0/0/0/0     ring   9° …  34°   ← the meter is dead
+//
+// A person talking softly watched a ring that never left its starting point,
+// which reads as "the microphone is not working". Under the dB curve the same
+// three recordings read 129/244/291, 84/152/194 and 50/104/144.
+import { meterLevel } from "../calls/walkie";
+
+describe("meterLevel", () => {
+  it("is silent for silence and for a room's noise floor", () => {
+    expect(meterLevel(0)).toBe(0);
+    expect(meterLevel(-1)).toBe(0);
+    // -50 dBFS is the bottom of the scale; below it is a room, not a voice.
+    expect(meterLevel(0.003)).toBe(0);
+  });
+
+  it("pegs only on a shout, and never above 1", () => {
+    // -6 dBFS is the top of the scale; 0.5 amplitude IS -6.02 dB, so it
+    // arrives a whisker short, and anything louder is clamped.
+    expect(meterLevel(0.5)).toBeGreaterThan(0.99);
+    expect(meterLevel(0.6)).toBe(1);
+    expect(meterLevel(1)).toBe(1);
+  });
+
+  it("moves visibly for the valleys between syllables", () => {
+    // The dips a talker makes between words. The old scale mapped these to
+    // 0.02–0.05 — seven to eighteen degrees of the ring.
+    expect(meterLevel(0.005)).toBeGreaterThan(0.08);
+    expect(meterLevel(0.0125)).toBeGreaterThan(0.25);
+  });
+
+  it("puts an ordinary voice in the upper half without pinning it", () => {
+    const ordinary = meterLevel(0.0986); // the real WAV's median voiced window
+    expect(ordinary).toBeGreaterThan(0.6);
+    expect(ordinary).toBeLessThan(0.85);
+  });
+
+  it("gives a soft talker most of the meter, where linear gain gave none", () => {
+    // The real WAV at a quarter amplitude: its 10th and 90th percentile
+    // voiced windows. Linear gain put BOTH in the bottom fifth.
+    expect(meterLevel(0.0102)).toBeGreaterThan(0.2);
+    expect(meterLevel(0.0666)).toBeLessThan(0.95);
+    expect(meterLevel(0.0666) - meterLevel(0.0102)).toBeGreaterThan(0.25);
+  });
+
+  it("rises monotonically, so a louder voice never draws a smaller ring", () => {
+    let prev = -1;
+    for (const rms of [0, 0.004, 0.005, 0.01, 0.05, 0.1, 0.3, 0.5, 0.9]) {
+      const v = meterLevel(rms);
+      expect(v).toBeGreaterThanOrEqual(prev);
+      prev = v;
+    }
+  });
+});

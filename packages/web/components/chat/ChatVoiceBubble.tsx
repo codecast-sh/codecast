@@ -6,15 +6,21 @@
 // is no waveform — a waveform says "you must listen to know what this is", and
 // here you never must.
 //
-// Two states, one row shape:
+// Two states, one row shape, and the direction is the colour — warm when the
+// voice going out is yours, cool when it is theirs coming in, the same two
+// tokens the key and the strip wear.
 //
-//   LIVE   the sender is still holding the key. A violet dot breathes (the
-//          same motion the anchor's "thinking" uses, because it means the same
-//          thing: words are still arriving) and the transcript grows in place.
-//          Clicking joins the room — the burst is being spoken INTO a live call
-//          room, and walking into it is the whole "join in if I see it" move.
-//   DONE   play, pause, duration. The recording is an ordinary attachment, so
-//          it resolves through the same storage-url path an image does.
+//   LIVE   the sender is still holding the key. A dot breathes (the same motion
+//          the anchor's "thinking" uses, because it means the same thing: words
+//          are still arriving), the level bars beside it move with the actual
+//          voice, and the transcript grows in place. Clicking joins the room —
+//          the burst is being spoken INTO a live call room, and walking into it
+//          is the whole "join in if I see it" move.
+//   DONE   play, pause, duration, and a hairline under the words while it is
+//          playing. The recording is an ordinary attachment, so it resolves
+//          through the same storage-url path an image does. A message carrying
+//          audio and no `voice` field lands here too: what a row IS is decided
+//          by what is attached to it, not by which feature wrote it.
 //
 // It takes a ChatMessageView and nothing else, so it renders from a fixture the
 // way the rest of the chat surface does. The two things it can DO — play a
@@ -22,10 +28,11 @@
 // own them, which is what keeps a join handler from being threaded down through
 // all four surfaces that mount a timeline.
 import { useSyncExternalStore } from "react";
-import { Play, Pause, Radio } from "lucide-react";
+import { Play, Pause, Radio, Loader2 } from "lucide-react";
 import { useStorageImageUrl } from "../../hooks/useStorageImageUrl";
 import { joinCall } from "../../lib/calls/callManager";
 import { useWalkieStatus, walkieJoinReason } from "../../hooks/useWalkie";
+import { WalkieLevelBars } from "../calls/WalkiePtt";
 import {
   getVoicePlayback,
   getVoicePlaybackServer,
@@ -36,19 +43,30 @@ import {
 } from "../../lib/voicePlayer";
 import type { ChatAttachmentView, ChatMessageView } from "./chatTypes";
 import "./chat.css";
+// The direction tokens the whole walkie wears, warm out and cool in. A bubble
+// is a walkie surface like the key and the strip, so it takes them from the
+// same file rather than keeping a second copy of the decision.
+import "../calls/walkie.css";
 
 /** The play control, kept in its own component for the same reason
  *  AttachmentTile is: it is the only thing here that resolves a storage url,
  *  and that reaches for the Convex client. A live bubble has no recording yet,
- *  so it must not pay for one. */
-function VoicePlayButton({ messageId, att }: { messageId: string; att: ChatAttachmentView }) {
+ *  so it must not pay for one.
+ *
+ *  Exported, because a recording is playable wherever it appears: the message
+ *  timeline renders one of these for an audio attachment that arrived beside
+ *  other files, where the alternative is the image grid putting a webm in an
+ *  <img> — diagnosis 7's actual symptom, and the reason the key is a prop. One
+ *  player is shared by the whole app, so two recordings in one message need two
+ *  distinct keys. */
+export function VoicePlayButton({ playKey, att }: { playKey: string; att: ChatAttachmentView }) {
   const url = useStorageImageUrl(att.storage_id);
   const playback = useSyncExternalStore(
     subscribeVoicePlayer,
     getVoicePlayback,
     getVoicePlaybackServer,
   );
-  const mine = playback.key === messageId;
+  const mine = playback.key === playKey;
   const playing = mine && playback.playing;
   // The hook says which of the two silences this is: undefined while the url is
   // still resolving, null once the storage object is known to be gone. Saying
@@ -69,8 +87,8 @@ function VoicePlayButton({ messageId, att }: { messageId: string; att: ChatAttac
       disabled={!url}
       aria-label={name}
       title={name}
-      data-walkie-play={messageId}
-      onClick={() => url && toggleVoice(messageId, url)}
+      data-walkie-play={playKey}
+      onClick={() => url && toggleVoice(playKey, url)}
     >
       {playing ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
     </button>
@@ -100,6 +118,35 @@ function VoiceClock({ messageId, durationMs }: { messageId: string; durationMs?:
   );
 }
 
+/** How far through the recording the playback is, as a thin line under the
+ *  transcript. Only the bubble being played draws one — everywhere else there
+ *  is no position to show, and a track at zero would read as a player that had
+ *  failed to start.
+ *
+ *  THE SERVER'S LENGTH FIRST, exactly as the clock beside it does. A walkie
+ *  recording is webm/opus written by MediaRecorder, and that container carries
+ *  no duration in its metadata — so `el.duration` is Infinity and the player's
+ *  own `durationMs` stays zero for every burst this feature produces. Keying
+ *  the line on it meant it never drew at all, which is how it was caught: the
+ *  transcript said 0:02 and the line under it was missing. */
+function VoiceProgress({ messageId, durationMs }: { messageId: string; durationMs?: number }) {
+  const playback = useSyncExternalStore(
+    subscribeVoicePlayer,
+    getVoicePlayback,
+    getVoicePlaybackServer,
+  );
+  const total = durationMs || playback.durationMs;
+  if (playback.key !== messageId || !total) return null;
+  const done = Math.min(1, playback.positionMs / total);
+  return (
+    <span
+      className="ch-voice-progress"
+      aria-hidden="true"
+      style={{ ["--p" as string]: done.toFixed(4) }}
+    />
+  );
+}
+
 /**
  * The bubble while the key is still down. Clicking it walks into the room the
  * burst is being spoken into, which is the "join in if I see it" move the open
@@ -114,9 +161,24 @@ function VoiceClock({ messageId, durationMs }: { messageId: string; durationMs?:
 function VoiceLiveBubble({ message }: { message: ChatMessageView }) {
   const roomKey = message.voice?.roomKey;
   const transcript = message.content.trim();
-  // The snapshot is the wake, not the answer: it moves whenever the call plane
-  // does, and the per-room answer is asked fresh below.
-  useWalkieStatus();
+  // The snapshot is the wake AND, here, the answer to whose burst this is.
+  const status = useWalkieStatus();
+  // WHICH DIRECTION THIS BUBBLE IS. Asked of the engine rather than of the
+  // viewer's id, because the engine knows it exactly: the burst it is sending
+  // is this row (under either id — the optimistic one it painted, or the server
+  // row that superseded it), or the burst it is hearing is. Warm for your own
+  // voice going out, cool for theirs coming in, the same two colours the key
+  // and the strip wear.
+  const mine =
+    !!status.sending &&
+    (status.sending.clientId === message.id || status.sending.messageId === message.id);
+  const theirs =
+    status.incoming?.messageId === message.id ? status.incoming.fromUserId : undefined;
+  // A meter needs a voice to measure. A live burst in a DM somebody has open
+  // but is not in the room for has neither — the row says it is live and that
+  // is all this client knows — so the pulsing dot carries it alone rather than
+  // four bars sitting flat, which would say the microphone was dead.
+  const metered = mine || !!theirs;
   // The JOIN question, not the push-to-talk one. Clicking a live bubble walks
   // into the room to listen, and being already in it is no reason to refuse —
   // joinCall is idempotent there. A room you cannot talk into can still be one
@@ -127,7 +189,7 @@ function VoiceLiveBubble({ message }: { message: ChatMessageView }) {
     <div className="ch-msg-body">
       <button
         type="button"
-        className="ch-voice ch-voice-live"
+        className={`ch-voice ch-voice-live ${mine ? "ch-voice-tx" : "ch-voice-rx"}`}
         disabled={!!reason}
         data-walkie-live={message.id}
         title={reason ?? "Join the room and talk back"}
@@ -136,6 +198,7 @@ function VoiceLiveBubble({ message }: { message: ChatMessageView }) {
         <span className="ch-voice-pulse" aria-hidden="true">
           <span className="ch-voice-dot" />
         </span>
+        {metered && <WalkieLevelBars identity={theirs} tone={mine ? "tx" : "rx"} />}
         <span className="ch-voice-text">
           {/* Motion alone is not an accessible signal, so the state is also a
               word — and until the recognizer has heard anything, that word is
@@ -158,11 +221,17 @@ export function ChatVoiceBubble({ message }: { message: ChatMessageView }) {
 
   if (message.voice?.status === "live") return <VoiceLiveBubble message={message} />;
 
+  // The live recognizer heard nothing and the server is reading the recording
+  // instead. It is a wait, not a loss, and it has to say which: an empty bubble
+  // beside a playable recording reads as a burst nobody managed to transcribe,
+  // when the words are seconds away.
+  const recovering = !!message.voice?.transcribing && !transcript;
+
   return (
     <div className="ch-msg-body">
       <div className="ch-voice">
         {att ? (
-          <VoicePlayButton messageId={message.id} att={att} />
+          <VoicePlayButton playKey={message.id} att={att} />
         ) : (
           // A burst whose recording never uploaded: the words still landed, and
           // they were always the point. The glyph says where they came from.
@@ -170,7 +239,20 @@ export function ChatVoiceBubble({ message }: { message: ChatMessageView }) {
             <Radio className="w-3 h-3" />
           </span>
         )}
-        <span className="ch-voice-text">{transcript || <span className="ch-voice-waiting">no words</span>}</span>
+        <span className="ch-voice-body">
+          <span className="ch-voice-text">
+            {recovering ? (
+              <span className="ch-voice-waiting">
+                <Loader2 className="ch-voice-spinner" aria-hidden="true" />
+                getting the words
+              </span>
+            ) : (
+              transcript || <span className="ch-voice-waiting">no words</span>
+            )}
+          </span>
+          {/* Where the playback has got to, for the one bubble being played. */}
+          <VoiceProgress messageId={message.id} durationMs={message.voice?.durationMs} />
+        </span>
         <VoiceClock messageId={message.id} durationMs={message.voice?.durationMs} />
       </div>
     </div>

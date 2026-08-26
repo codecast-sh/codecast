@@ -28,6 +28,15 @@ const NON_TAB_EXACT = new Set([
   "/forgot-password",
   "/reset-password",
   "/palette",
+  // The people window renders the buddy list as a whole window (its own OS
+  // window on the desktop, a popup in a browser). The tab shell must never
+  // intercept it, or the window rewrites its own URL and paints a blank pane.
+  "/people",
+  // The call panel renders a huddle as a whole window (its own OS window on
+  // the desktop, a detached tab window on older builds). Same reason as
+  // /people: the tab shell intercepting it would rewrite the window's own URL
+  // and paint a blank pane — with a live microphone behind it.
+  "/call-panel",
 ]);
 // "/documentation" is a prefix (not exact) so the guide pages under
 // /documentation/<slug> stay outside the tab shell too.

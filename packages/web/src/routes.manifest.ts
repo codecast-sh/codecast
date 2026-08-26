@@ -70,6 +70,8 @@ export type RouteLayout =
   | "share"
   | "codeReview"
   | "palette"
+  | "people"
+  | "callPanel"
   | "settings";
 
 // -- Lazy component refs — import targets copied verbatim from App.tsx / TabContent.tsx so
@@ -171,6 +173,10 @@ const ReviewBatch = lazy(() => import("@/app/review/batch/page"));
 
 // Palette
 const Palette = lazy(() => import("@/app/palette/page"));
+
+// People window
+const People = lazy(() => import("@/app/people/page"));
+const CallPanel = lazy(() => import("@/app/call-panel/page"));
 
 // Settings
 const Settings = lazy(() => import("@/app/settings/page"));
@@ -293,6 +299,16 @@ export const ROUTES: RouteEntry[] = [
 
   // -- Palette (PaletteLayout, transparent) --
   { path: "palette", component: cast(Palette), layout: "palette" },
+
+  // -- The people window (its own OS window / browser popup, no tab shell) --
+  { path: "people", component: cast(People), layout: "people" },
+
+  // -- The call panel (a huddle in its own OS window, no tab shell) --
+  //    Its own layout value rather than "standalone": the parity test asserts
+  //    IN_SHELL_ROOT_SEGMENTS equals the manifest's single-segment
+  //    dashboardShell/standalone routes, so calling it standalone would force
+  //    "call-panel" into the in-shell set — the opposite of what it is.
+  { path: "call-panel", component: cast(CallPanel), layout: "callPanel" },
 
   // -- Settings (SettingsLayout; index = /settings) --
   { path: "settings", component: cast(Settings), layout: "settings" },

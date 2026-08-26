@@ -16,10 +16,22 @@ import { useConversationMessages } from "../hooks/useConversationMessages";
 // edit. Keyed by page path, so a genuinely new route still gets a fresh lazy.
 const lazyPages: Map<string, LazyExoticComponent<ComponentType<any>>> =
   ((globalThis as any).__codecastLazyPages ??= new Map());
+const lazyLoaders = new Map<string, () => Promise<unknown>>();
 function lazyPage(key: string, loader: () => Promise<{ default: ComponentType<any> }>) {
+  lazyLoaders.set(key, loader);
   let c = lazyPages.get(key);
   if (!c) { c = lazy(loader); lazyPages.set(key, c); }
   return c;
+}
+
+// Import every shell route's module now. A route this window never imported is
+// a landmine after a deploy: the SW swap purges the old-hash chunk, the first
+// navigation to it fails, and ErrorBoundary heals with a full reload that
+// loses the destination. Once imported, the module registry keeps the route
+// for the window's lifetime, so navigation never fetches at click time.
+// Failures are ignored — the route's own lazy() retries the fetch on visit.
+export function warmTabRoutes(): void {
+  for (const load of lazyLoaders.values()) void load().catch(() => {});
 }
 
 const Tasks = lazyPage("@/app/tasks/page", () => import("@/app/tasks/page"));

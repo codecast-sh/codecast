@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   authorizeRoom,
+  authorizeRoomInviter,
+  authorizeRoomMembership,
   authorizeRoomNoGrant,
   clearRoomState,
   expireRoomGrants,
@@ -10,6 +12,7 @@ import {
   isRoomLocked,
   openRoomDoor,
   parseRoomKey,
+  recRoomKey,
   sessionRoomKey,
 } from "./callRooms";
 import { CALL_MEMBER_STALE_MS } from "@codecast/shared/contracts";
@@ -31,6 +34,10 @@ function fakeCtx(seed: Record<string, any[]> = {}) {
     call_room_state: [],
     call_knocks: [],
     conversations: [],
+    // Recordings answer out of the transcript they started, and the routing
+    // team comes off the user row.
+    transcripts: [],
+    users: [],
     ...seed,
   };
   return {
@@ -88,6 +95,10 @@ describe("parseRoomKey", () => {
       kind: "session",
       conversationId: "cv1",
     });
+    expect(parseRoomKey("rec:9f8e7d6c-1234-4abc-9def-0123456789ab")).toEqual({
+      kind: "rec",
+      recId: "9f8e7d6c-1234-4abc-9def-0123456789ab",
+    });
   });
 
   test("rejects malformed keys", () => {
@@ -103,6 +114,11 @@ describe("parseRoomKey", () => {
       "channel:",
       "session:",
       "room:xyz",
+      "rec:",
+      "rec:short",              // an id nobody would have generated
+      "rec:a:b",                // a recording is one id, never a path
+      "rec:has spaces here!!",  // the charset is the whole shape check
+      "rec:" + "a".repeat(65),
       "x".repeat(300),
     ]) {
       expect(parseRoomKey(bad)).toBeNull();
@@ -118,6 +134,7 @@ describe("parseRoomKey", () => {
     expect(parseRoomKey(dmRoomKey(["zed", "bob", "alice"]))).not.toBeNull();
     expect(parseRoomKey(channelRoomKey("c1"))).not.toBeNull();
     expect(parseRoomKey(sessionRoomKey("cv1"))).not.toBeNull();
+    expect(parseRoomKey(recRoomKey("9f8e7d6c-1234-4abc-9def-0123456789ab"))).not.toBeNull();
   });
 
   test("a chat DM or group thread huddles in its member-set room; channels in their own", () => {
@@ -571,5 +588,127 @@ describe("clearRoomState", () => {
     expect((ctx as any).tables.call_room_state).toEqual([]);
     // Another room's knocks are untouched.
     expect((ctx as any).tables.call_knocks.map((k: any) => k._id)).toEqual(["k2"]);
+  });
+});
+
+// Recordings. A `rec:` key is a room key that names no room, so the whole
+// point of these tests is what stays SHUT: the doors a huddle opens must not
+// open here, and the person who pressed record must be the only one who ever
+// reaches what their microphone heard.
+describe("authorizeRoom rec", () => {
+  const REC = recRoomKey("9f8e7d6c-1234-4abc-9def-0123456789ab");
+  const owner = { _id: "ua", name: "Ann", active_team_id: TEAM };
+  // The row that makes the key someone's: a recording IS its transcript.
+  const recording = (startedBy: string, team = TEAM, status = "live") => ({
+    _id: "t-rec",
+    room_key: REC,
+    team_id: team,
+    started_by: startedBy,
+    status,
+    started_at: Date.now() - 60_000,
+    routes: [],
+    last_seq: 0,
+  });
+  const team = () => ({
+    users: [owner, { _id: "ub", name: "Bo", active_team_id: TEAM }],
+    team_memberships: [membership("ua"), membership("ub")],
+  });
+
+  test("a fresh id belongs to whoever starts on it, filed under their team", async () => {
+    const ctx = fakeCtx(team());
+    const res = await authorizeRoom(ctx, "ua" as any, REC, { rec: true });
+    expect(res.ok).toBe(true);
+    // Routing, not access: the row lands where the owner's own history list
+    // looks for it.
+    if (res.ok) expect(String(res.teamId)).toBe(TEAM);
+  });
+
+  test("once started it is the creator's alone — a teammate is refused", async () => {
+    const ctx = fakeCtx({ ...team(), transcripts: [recording("ua")] });
+    expect((await authorizeRoom(ctx, "ua" as any, REC, { rec: true })).ok).toBe(true);
+    const other = await authorizeRoom(ctx, "ub" as any, REC, { rec: true });
+    expect(other.ok).toBe(false);
+    if (!other.ok) expect(other.reason).toBe("not your recording");
+  });
+
+  test("a recording that ended stays the creator's", async () => {
+    const ctx = fakeCtx({ ...team(), transcripts: [recording("ua", TEAM, "ended")] });
+    expect((await authorizeRoom(ctx, "ub" as any, REC, { rec: true })).ok).toBe(false);
+  });
+
+  test("a live recording outranks an older row that reused the id", async () => {
+    // Ownership can never be taken by starting a second transcript on a key
+    // somebody is recording under right now.
+    const ctx = fakeCtx({
+      ...team(),
+      transcripts: [
+        { ...recording("ub", TEAM, "ended"), _id: "t-old", started_at: Date.now() },
+        recording("ua"),
+      ],
+    });
+    expect((await authorizeRoom(ctx, "ua" as any, REC, { rec: true })).ok).toBe(true);
+    expect((await authorizeRoom(ctx, "ub" as any, REC, { rec: true })).ok).toBe(false);
+  });
+
+  test("every door refuses a rec key unless the caller asks for one", async () => {
+    // The default. joinRoom, invite, knock, the media token mint and occupancy
+    // all call authorizeRoom plainly, so all of them refuse — including for
+    // the owner, who has a recording and not a room.
+    const ctx = fakeCtx({ ...team(), transcripts: [recording("ua")] });
+    const plain = await authorizeRoom(ctx, "ua" as any, REC);
+    expect(plain.ok).toBe(false);
+    if (!plain.ok) expect(plain.reason).toBe("a recording is not a room");
+  });
+
+  test("no grant, no invitation, no walking in", async () => {
+    const ctx = fakeCtx({ ...team(), transcripts: [recording("ua")] });
+    expect((await authorizeRoomNoGrant(ctx, "ua" as any, REC)).ok).toBe(false);
+    expect((await authorizeRoomInviter(ctx, "ua" as any, REC)).ok).toBe(false);
+    expect((await authorizeRoomInviter(ctx, "ub" as any, REC)).ok).toBe(false);
+  });
+
+  test("the open door stays shut even if a seat row somehow existed", async () => {
+    // Nothing can write one — joinRoom refuses the key — but the refusal is
+    // structural rather than a consequence of an empty table, so a stray row
+    // could never turn a recording into a huddle the team may walk into.
+    const ctx = fakeCtx({
+      ...team(),
+      transcripts: [recording("ua")],
+      call_members: [
+        { _id: "cm1", room_key: REC, team_id: TEAM, user_id: "ua", joined_at: Date.now(), last_seen: Date.now() },
+      ],
+    });
+    expect(await openRoomDoor(ctx, "ub" as any, REC)).toBeNull();
+    expect(await openRoomDoor(ctx, "ub" as any, REC, { ignoreLock: true })).toBeNull();
+    expect((await authorizeRoom(ctx, "ub" as any, REC, { rec: true })).ok).toBe(false);
+  });
+
+  test("recording needs no calls feature — it is nobody's huddle", async () => {
+    const ctx = fakeCtx({
+      users: [{ _id: "uc", name: "Cy", active_team_id: "team-off" }],
+      team_memberships: [membership("uc", "team-off")],
+      transcripts: [{ ...recording("uc", "team-off"), _id: "t-off" }],
+    });
+    expect((await authorizeRoom(ctx, "uc" as any, REC, { rec: true })).ok).toBe(true);
+    // …and the huddle rules for that team are untouched by the exemption.
+    expect((await authorizeRoom(ctx, "uc" as any, dmRoomKey("uc", "ud"))).ok).toBe(false);
+  });
+
+  test("a person with no team cannot file a recording anywhere", async () => {
+    const ctx = fakeCtx({ users: [{ _id: "uz", name: "Zed" }] });
+    const res = await authorizeRoom(ctx, "uz" as any, REC, { rec: true });
+    expect(res.ok).toBe(false);
+  });
+
+  test("a stale active-team pointer files the recording somewhere the owner can see it", async () => {
+    // active_team_id names a team they have left: routing falls through to a
+    // team they are actually in, so their own list still finds the row.
+    const ctx = fakeCtx({
+      users: [{ _id: "ua", name: "Ann", active_team_id: "team-gone", team_id: "team-gone" }],
+      team_memberships: [membership("ua")],
+    });
+    const res = await authorizeRoomMembership(ctx, "ua" as any, REC);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(String(res.teamId)).toBe(TEAM);
   });
 });

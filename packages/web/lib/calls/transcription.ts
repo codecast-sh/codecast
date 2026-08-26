@@ -1,186 +1,78 @@
-// The scribe engine: live, speaker-attributed transcription of a huddle.
+// The scribe: live, speaker-attributed transcription of a huddle.
 //
 // Runs entirely in the client that toggled Transcribe on. For every audio
 // track in the room — the local mic and each subscribed remote track — it
 // opens one OpenAI Realtime transcription websocket and streams that track's
 // PCM. One track = one participant, so every piece of text arrives already
-// attributed; there is no diarization step to be wrong. Completed utterances
-// are appended to convex (transcripts.appendSegments); when EVERY track has
-// been silent for GAP_MS (per the server VAD's speech start/stop events), the
-// engine calls transcripts.flush — the beat where live routes deliver and a
-// routed agent naturally answers. A busy room can go minutes without that
-// lull, so undelivered words older than MAX_HOLD_MS ship anyway at the next
-// completed utterance — the routed agent follows the conversation in beats
-// instead of receiving ten minutes at once.
+// attributed; there is no diarization step to be wrong.
 //
-// Module singleton beside callManager, same pattern: components read the
-// small status snapshot via subscribe/getSnapshot; nothing here touches the
-// store except through convex mutations.
+// What this file OWNS is the room: which LiveKit tracks exist right now, and
+// keeping the run's set of microphones equal to that set as people join,
+// leave, mute and reconnect. Everything downstream of a microphone — the
+// recognizers, the appended segments, the caption tail and the silence beat on
+// which live routes deliver — is lib/calls/scribeEngine, which the recorder
+// runs a second instance of on one local mic.
+//
+// Module singleton beside callManager, same pattern: components read the small
+// status snapshot via subscribe/getSnapshot; nothing here touches the store
+// except through convex mutations.
 import { Room, RoomEvent, Track } from "livekit-client";
-import { api } from "@codecast/convex/convex/_generated/api";
-import { openAsrPipe, type AsrPipe } from "./asrPipe";
+import { createScribeEngine, type ConvexHandle, type ScribeStatus } from "./scribeEngine";
 
-type ConvexHandle = {
-  mutation: (fn: any, args: any) => Promise<any>;
-  action: (fn: any, args: any) => Promise<any>;
-};
+export { GAP_MS, MAX_HOLD_MS, type ScribeStatus } from "./scribeEngine";
 
-// Silence long enough to count as a conversational gap. VAD closes an
-// utterance at 600ms; a gap is a real lull, not a breath.
-export const GAP_MS = 2_500;
-const FLUSH_MIN_INTERVAL_MS = 8_000;
-// The hold limit: how long undelivered words may wait for a lull before the
-// engine flushes mid-conversation. Also unwedges a pipe whose VAD sticks with
-// `speaking` true, which would otherwise block delivery forever.
-export const MAX_HOLD_MS = 30_000;
+const engine = createScribeEngine();
 
-export type ScribeStatus = {
-  active: boolean;
-  transcriptId: string | null;
-  trackCount: number;
-  error: string | null;
-  /** Rolling caption tail, newest last. */
-  tail: Array<{ speaker: string; text: string }>;
-};
-
-let status: ScribeStatus = {
-  active: false,
-  transcriptId: null,
-  trackCount: 0,
-  error: null,
-  tail: [],
-};
-const subscribers = new Set<() => void>();
-function emit(patch: Partial<ScribeStatus>) {
-  status = { ...status, ...patch };
-  for (const cb of subscribers) cb();
-}
-export function subscribeScribe(cb: () => void): () => void {
-  subscribers.add(cb);
-  return () => subscribers.delete(cb);
-}
-export function getScribeStatus(): ScribeStatus {
-  return status;
-}
-
-type TrackPipe = {
-  pipe: AsrPipe;
-  speakerId: string;
-  speakerName: string;
-};
-
-let convex: ConvexHandle | null = null;
 let room: Room | null = null;
-let transcriptId: string | null = null;
-let startedAt = 0;
-let pipes = new Map<string, TrackPipe>();
-let lastSpeechEndMs = 0;
-let anySegmentsSinceFlush = false;
-let firstUnflushedAt = 0;
-let lastFlushAt = 0;
-let gapTimer: ReturnType<typeof interval> | null = null;
 let roomListener: (() => void) | null = null;
+/** Every pipe key the room opened, so a track that goes away can be matched
+ *  back to it by track sid alone (LiveKit hands the sid to the unsubscribe
+ *  event, never our key). */
+const keysBySid = new Map<string, string>();
 
-function interval(fn: () => void, ms: number) {
-  return setInterval(fn, ms);
+export function subscribeScribe(cb: () => void): () => void {
+  return engine.subscribe(cb);
 }
 
-function nowMs(): number {
-  return Date.now() - startedAt;
+export function getScribeStatus(): ScribeStatus {
+  return engine.getStatus();
 }
 
-// One recognizer per track (lib/calls/asrPipe), wrapped in the scribe's own
-// bookkeeping: who the track belongs to, where its words go, and the reconnect
-// the huddle wants — a dropped socket mid-huddle is a token expiry, not the end
-// of the conversation.
-function openPipe(
+function attachTrack(
   key: string,
-  mediaTrack: MediaStreamTrack,
+  sid: string | undefined,
+  track: MediaStreamTrack,
   speakerId: string,
   speakerName: string,
-  roomKey: string,
-): void {
-  if (!convex || pipes.has(key)) return;
-  const forget = () => {
-    pipes.delete(key);
-    emit({ trackCount: pipes.size });
-  };
-  const pipe = openAsrPipe({
-    convex,
-    roomKey,
-    track: mediaTrack,
-    clock: nowMs,
-    events: {
-      onSpeechStop: () => {
-        lastSpeechEndMs = Date.now();
-      },
-      onUtterance: ({ text, t0, t1 }) => {
-        const seg = { speaker_id: speakerId, speaker_name: speakerName, text, t0, t1 };
-        anySegmentsSinceFlush = true;
-        if (!firstUnflushedAt) firstUnflushedAt = Date.now();
-        emit({ tail: [...status.tail, { speaker: speakerName, text }].slice(-6) });
-        convex
-          ?.mutation(api.transcripts.appendSegments, {
-            transcript_id: transcriptId,
-            segments: [seg],
-          })
-          .catch(() => {});
-      },
-      onError: (message) => emit({ error: message }),
-      onFailed: (message) => {
-        emit({ error: message });
-        forget();
-      },
-      onDropped: () => {
-        if (!status.active) return forget();
-        // Token expiry or transient drop: reopen this pipe fresh.
-        forget();
-        if (room && transcriptId) {
-          setTimeout(() => {
-            if (status.active && !pipes.has(key) && mediaTrack.readyState === "live") {
-              openPipe(key, mediaTrack, speakerId, speakerName, roomKey);
-            }
-          }, 1000);
-        }
-      },
-    },
-  });
-  pipes.set(key, { pipe, speakerId, speakerName });
-  emit({ trackCount: pipes.size });
+) {
+  if (sid) keysBySid.set(sid, key);
+  engine.attach(key, track, speakerId, speakerName);
 }
 
-function closePipe(key: string) {
-  const entry = pipes.get(key);
-  if (!entry) return;
-  entry.pipe.close();
-  pipes.delete(key);
-  emit({ trackCount: pipes.size });
-}
-
-function attachRoomTracks(roomKey: string) {
+function attachRoomTracks() {
   if (!room) return;
   // Local mic.
   const micPub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
   const me = room.localParticipant;
   if (micPub?.track?.mediaStreamTrack) {
-    openPipe(
+    attachTrack(
       `local:${micPub.trackSid}`,
+      micPub.trackSid,
       micPub.track.mediaStreamTrack,
       me.identity,
       me.name || "Me",
-      roomKey,
     );
   }
   // Every subscribed remote audio track.
   for (const p of room.remoteParticipants.values()) {
     const pub = p.getTrackPublication(Track.Source.Microphone);
     if (pub?.isSubscribed && pub.track?.mediaStreamTrack) {
-      openPipe(
+      attachTrack(
         `${p.identity}:${pub.trackSid}`,
+        pub.trackSid,
         pub.track.mediaStreamTrack,
         p.identity,
         p.name || p.identity,
-        roomKey,
       );
     }
   }
@@ -192,71 +84,44 @@ export async function startScribe(opts: {
   roomKey: string;
   routes?: Array<{ kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after" }>;
 }): Promise<void> {
-  if (status.active) return;
-  convex = opts.convex;
+  if (engine.getStatus().active) return;
   room = opts.room;
-  const res = await opts.convex.mutation(api.transcripts.start, {
-    room_key: opts.roomKey,
-    routes: (opts.routes ?? []).map((r) => ({ ...r, sent_seq: 0 })),
-  });
-  transcriptId = String(res.transcript_id);
-  startedAt = Date.now();
-  lastSpeechEndMs = 0;
-  anySegmentsSinceFlush = false;
-  firstUnflushedAt = 0;
-  lastFlushAt = Date.now();
-  emit({ active: true, transcriptId, error: null, tail: [] });
+  keysBySid.clear();
+  await engine.start({ convex: opts.convex, roomKey: opts.roomKey, routes: opts.routes });
 
-  attachRoomTracks(opts.roomKey);
-  const onTrack = () => attachRoomTracks(opts.roomKey);
+  attachRoomTracks();
+  const onTrack = () => attachRoomTracks();
   room.on(RoomEvent.TrackSubscribed, onTrack);
   room.on(RoomEvent.LocalTrackPublished, onTrack);
-  room.on(RoomEvent.TrackUnsubscribed, (_t, pub) => closePipe(findPipeKey(pub.trackSid)));
+  const onGone = (_t: unknown, pub: { trackSid?: string }) => {
+    const key = pub?.trackSid ? keysBySid.get(pub.trackSid) : undefined;
+    if (key) {
+      engine.detach(key);
+      keysBySid.delete(pub.trackSid!);
+    }
+  };
+  room.on(RoomEvent.TrackUnsubscribed, onGone as any);
   roomListener = () => {
     room?.off(RoomEvent.TrackSubscribed, onTrack);
     room?.off(RoomEvent.LocalTrackPublished, onTrack);
+    room?.off(RoomEvent.TrackUnsubscribed, onGone as any);
   };
-
-  // The gap watcher: flush the live routes when nobody has spoken for GAP_MS,
-  // or when the oldest undelivered words have waited MAX_HOLD_MS — whichever
-  // comes first. FLUSH_MIN_INTERVAL_MS keeps a stop-start conversation from
-  // spamming a routed agent. The hold path fires between utterances, never
-  // mid-word: segments only exist once the VAD closes them.
-  gapTimer = interval(() => {
-    if (!status.active || !transcriptId || !convex) return;
-    if (!anySegmentsSinceFlush || Date.now() - lastFlushAt < FLUSH_MIN_INTERVAL_MS) return;
-    const anySpeaking = [...pipes.values()].some((p) => p.pipe.speaking);
-    const roomQuiet =
-      !anySpeaking && lastSpeechEndMs > 0 && Date.now() - lastSpeechEndMs >= GAP_MS;
-    const heldTooLong = firstUnflushedAt > 0 && Date.now() - firstUnflushedAt >= MAX_HOLD_MS;
-    if (roomQuiet || heldTooLong) {
-      anySegmentsSinceFlush = false;
-      firstUnflushedAt = 0;
-      lastFlushAt = Date.now();
-      convex.mutation(api.transcripts.flush, { transcript_id: transcriptId }).catch(() => {});
-    }
-  }, 1000);
 }
 
-function findPipeKey(trackSid: string | undefined): string {
-  if (!trackSid) return "";
-  for (const key of pipes.keys()) if (key.endsWith(`:${trackSid}`)) return key;
-  return "";
-}
-
-export async function stopScribe(): Promise<void> {
-  const id = transcriptId;
-  for (const key of [...pipes.keys()]) closePipe(key);
-  if (gapTimer) clearInterval(gapTimer);
-  gapTimer = null;
+/**
+ * End this window's scribe run.
+ *
+ * `keepLive` passes straight through to the engine: it releases the local
+ * machinery without declaring the transcript over on the server. The call panel
+ * handoff is what needs it — the huddle carries on in another window, and a
+ * transcript must not end at a window boundary the speakers never saw.
+ */
+export async function stopScribe(opts?: { keepLive?: boolean }): Promise<void> {
   roomListener?.();
   roomListener = null;
   room = null;
-  transcriptId = null;
-  emit({ active: false, transcriptId: null, trackCount: 0, tail: [] });
-  if (convex && id) {
-    await convex.mutation(api.transcripts.stop, { transcript_id: id }).catch(() => {});
-  }
+  keysBySid.clear();
+  await engine.stop(opts);
 }
 
 // Dev console / e2e access to the real module instance (a dynamic import()

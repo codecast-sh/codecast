@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import Link from "next/link";
 import {
+  AppWindow,
   Captions,
   ChevronDown,
   ExternalLink,
@@ -38,6 +39,7 @@ import { humanizeConvexError, parseRoomKey } from "@codecast/shared/contracts";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { getScribeStatus, stopScribe, subscribeScribe } from "../../lib/calls/transcription";
 import { TranscribeControls } from "./TranscribePanel";
 import { AddPeopleButton } from "./AddPeople";
@@ -49,7 +51,14 @@ import { openFeedTargetPicker, useAddLiveFeed, useRemoveLiveFeed, type FeedTarge
 import { firstName, fmtClock, speakerColor } from "./speakers";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
 import { useRoomLock } from "../../hooks/useLiveRooms";
-import type { DesktopDisplaySource } from "../../lib/desktop";
+import {
+  POP_OUT_CALL_TITLE,
+  attachTitlebarHead,
+  canPopOutCall,
+  navigateMainWindow,
+  type DesktopDisplaySource,
+} from "../../lib/desktop";
+import { popOutCall } from "../../lib/calls/popOutCall";
 
 // The call stage: the full surface a huddle opens into when video or a screen
 // share deserves the room. Design intents, in order:
@@ -81,7 +90,29 @@ const SPEAKING_RING = "ring-2 ring-sol-cyan/80 shadow-[0_0_0_5px_rgba(42,161,152
 type StageView = "auto" | "speaker" | "grid";
 type RailTab = "transcript" | "chat";
 
-export function CallStage({ onCollapse }: { onCollapse: () => void }) {
+/**
+ * The huddle, full bleed.
+ *
+ * Two shapes, one component. In the app it is an OVERLAY over the work
+ * (`fixed inset-0`, portaled to the body) that the collapse button and Esc put
+ * away. In `panel` mode it is the whole contents of a window of its own — the
+ * desktop call panel — and there is nothing to collapse INTO, so the ways out
+ * change rather than the stage: no collapse button, no Esc, and the two links
+ * that leave the huddle (its session, its call page) open in the MAIN window
+ * instead of navigating this one. A satellite window is a place you stand, not
+ * a place you browse; a call panel that browsed away from its own call would
+ * take the microphone with it.
+ */
+export function CallStage({
+  onCollapse,
+  panel = false,
+}: {
+  onCollapse?: () => void;
+  panel?: boolean;
+}) {
+  // Memoized because it feeds an effect's dependency list: a fresh no-op every
+  // render would re-bind the key listener on every render.
+  const collapse = useMemo(() => onCollapse ?? (() => {}), [onCollapse]);
   const s = useTrackedStore([
     (st: any) => st.call,
     (st: any) => (st.call.roomKey ? st.callOccupancy[st.call.roomKey] : undefined),
@@ -116,17 +147,20 @@ export function CallStage({ onCollapse }: { onCollapse: () => void }) {
     if (first) setLastSpeaker(String(first));
   }, [call.speaking]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
+    // In the panel there is nothing behind the stage for Esc to reveal, and a
+    // key that closed the window would end a call by accident.
+    if (panel) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       // Typing in the chat composer: Esc leaves the field, not the stage.
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) return el.blur();
-      onCollapse();
+      collapse();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onCollapse]);
+  }, [collapse, panel]);
 
   const screens = tiles.filter((t) => t.kind === "screen");
   const cameras = tiles.filter((t) => t.kind === "camera");
@@ -138,6 +172,18 @@ export function CallStage({ onCollapse }: { onCollapse: () => void }) {
 
   const toggleRail = (tab: RailTab) => setRail((r) => (r === tab ? null : tab));
 
+  // In the panel this header row IS the window's titlebar: it becomes the drag
+  // surface and indents past the traffic lights. Measured rather than declared,
+  // the same idiom every other desktop window's top row uses — the stage has no
+  // chrome of its own to hang a title on, so the row that is already there
+  // plays the part.
+  const headRef = useRef<HTMLDivElement | null>(null);
+  useWatchEffect(() => {
+    const el = headRef.current;
+    if (!panel || !el) return;
+    return attachTitlebarHead(el);
+  }, [panel]);
+
   // Portaled to <body>: the dock mounts inside the app shell, whose
   // transformed ancestors would otherwise capture this fixed overlay (the
   // classic fixed-under-transform trap) and leave the header painted on top.
@@ -147,10 +193,10 @@ export function CallStage({ onCollapse }: { onCollapse: () => void }) {
   // palette whatever theme the app is in. Without it, light mode paints
   // --sol-text (#002b36) on a #002b36 stage and every label disappears.
   return createPortal(
-    <div className="dark fixed inset-0 z-[200] flex flex-col bg-sol-base03 text-sol-text">
+    <div className="dark fixed inset-0 z-[200] flex flex-col select-none bg-sol-base03 text-sol-text">
       {/* Header: where this huddle lives, the ways out, and the view. One
           quiet line — no boxes; the selected view reads by weight alone. */}
-      <div className="flex h-11 shrink-0 items-center gap-1 px-4">
+      <div ref={headRef} className="flex h-11 shrink-0 items-center gap-1 px-4">
         <span className="truncate font-mono text-[12.5px] text-sol-text-secondary">
           {parsed?.kind === "session" ? `huddle · ${label}` : label}
         </span>
@@ -162,8 +208,9 @@ export function CallStage({ onCollapse }: { onCollapse: () => void }) {
         {parsed?.kind === "session" && (
           <StageChromeButton
             onClick={() => {
+              if (panel) return void navigateMainWindow(`/conversation/${parsed.conversationId}`);
               useInboxStore.getState().navigateToSession(parsed.conversationId);
-              onCollapse();
+              collapse();
             }}
             title="Open the session this huddle is about"
             className="ml-1"
@@ -172,17 +219,27 @@ export function CallStage({ onCollapse }: { onCollapse: () => void }) {
             session
           </StageChromeButton>
         )}
-        {live && (
-          <Link
-            href={`/calls/${live.transcript_id}`}
-            onClick={onCollapse}
-            className={`${CHROME_BTN} text-sol-green hover:bg-sol-green/10 hover:text-sol-green`}
-            title="Open the call page — full transcript, summary, chat"
-          >
-            <Radio className="h-3 w-3" />
-            call page
-          </Link>
-        )}
+        {live &&
+          (panel ? (
+            <StageChromeButton
+              onClick={() => void navigateMainWindow(`/calls/${live.transcript_id}`)}
+              className="text-sol-green hover:bg-sol-green/10 hover:text-sol-green"
+              title="Open the call page in the main window — full transcript, summary, chat"
+            >
+              <Radio className="h-3 w-3" />
+              call page
+            </StageChromeButton>
+          ) : (
+            <Link
+              href={`/calls/${live.transcript_id}`}
+              onClick={collapse}
+              className={`${CHROME_BTN} text-sol-green hover:bg-sol-green/10 hover:text-sol-green`}
+              title="Open the call page — full transcript, summary, chat"
+            >
+              <Radio className="h-3 w-3" />
+              call page
+            </Link>
+          ))}
         {/* The door. An open huddle is the default — any teammate can walk in
             — so the lock is the exception, and it reads as one: lit violet
             while the room is closed, quiet chrome while it is open. */}
@@ -238,14 +295,30 @@ export function CallStage({ onCollapse }: { onCollapse: () => void }) {
           <MessageSquare className="h-3.5 w-3.5" />
           chat
         </StageChromeButton>
-        <StageChromeButton
-          onClick={onCollapse}
-          className="ml-2"
-          title="Collapse to the pill — the call continues (Esc)"
-        >
-          <ChevronDown className="h-3.5 w-3.5" />
-          collapse
-        </StageChromeButton>
+        {/* Give the call a window of its own. Desktop only, and deliberately
+            absent in a browser rather than degraded: the ladder behind this
+            has no browser rung, because a call in a Chrome popup is the bug
+            this panel exists to make impossible. */}
+        {canPopOutCall() && (
+          <StageChromeButton
+            onClick={() => void popOutCall()}
+            className="ml-2"
+            title={POP_OUT_CALL_TITLE}
+          >
+            <AppWindow className="h-3.5 w-3.5" />
+            pop out
+          </StageChromeButton>
+        )}
+        {!panel && (
+          <StageChromeButton
+            onClick={collapse}
+            className="ml-2"
+            title="Collapse to the pill — the call continues (Esc)"
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+            collapse
+          </StageChromeButton>
+        )}
       </div>
 
       {/* Who is at the door, over the stage's top-right corner — visible
@@ -897,7 +970,10 @@ function TranscriptRail({
         </div>
       </div>
 
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-1">
+      {/* The words are content, not chrome: the stage turns selection off
+          wholesale (its toolbar is a toolbar, not a paragraph) and the
+          transcript turns it back on, so a call can still be quoted. */}
+      <div ref={scrollRef} className="min-h-0 flex-1 select-text overflow-y-auto px-3 pb-3 pt-1">
         {!live ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-3 text-center">
             <Captions className="h-5 w-5 text-sol-text-muted" />

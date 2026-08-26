@@ -10,6 +10,16 @@
 // doc (content append), or a linked Slack channel. Route mode "live" delivers
 // on the silence gaps the scribe detects via server VAD — the natural beat for
 // an agent to reply; "after" delivers once at stop.
+//
+// A RECORDING (`rec:<uuid>`, see callRooms) is the same machinery with one
+// track and no room: somebody presses record, their microphone becomes the
+// only scribe, and everything after capture — segments, flush beats, the
+// summary and action items, the calls page, `cast calls` — happens unchanged.
+// Only three things differ, and each is marked where it lives: the paths a
+// recording may walk pass `{ rec: true }` to authorizeRoom; `canReadCall`
+// answers a recording with its creator and nobody else; and the row carries
+// its own liveness (`last_beat`) because there are no seat leases to read it
+// off, plus the audio file it uploads when it stops.
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import {
@@ -22,11 +32,19 @@ import {
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { authorizeRoom, authorizeRoomNoGrant, liveMembers } from "./callRooms";
+import {
+  CALL_MEMBER_STALE_MS,
+  authorizeRoom,
+  authorizeRoomNoGrant,
+  liveMembers,
+} from "./callRooms";
 import { isTeamMember } from "./privacy";
 import { teamHasFeature } from "./teamFeatures";
 import { performSessionSend } from "./pendingMessages";
-import { formatTranscriptChunk as formatChunk } from "@codecast/shared/contracts";
+import {
+  formatTranscriptChunk as formatChunk,
+  isRecRoomKey,
+} from "@codecast/shared/contracts";
 import { requireAccessibleDoc } from "./lib/access";
 import { verifyApiToken } from "./apiTokens";
 
@@ -63,7 +81,11 @@ export const start = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
-    const auth = await authorizeRoom(ctx, userId, args.room_key);
+    // `{ rec: true }`: this is one of the five paths a recording is allowed
+    // to walk. For a rec key the rule underneath is the transcript's own
+    // creator, and a fresh uuid nobody has started on belongs to whoever
+    // starts it here.
+    const auth = await authorizeRoom(ctx, userId, args.room_key, { rec: true });
     if (!auth.ok) throw new Error(`Cannot transcribe this room: ${auth.reason}`);
     // One live transcript per room: a second Transcribe toggle joins the
     // existing run rather than forking the record.
@@ -127,7 +149,14 @@ export const addRoute = mutation({
     // guest rung into the room may point the words at their agent even
     // before they have spoken (canReadCall is the HISTORY rule — its
     // participant door would blink on only once the scribe hears them).
-    if (!t || !(await authorizeRoom(ctx, userId, t.room_key)).ok) {
+    if (!t || !(await authorizeRoom(ctx, userId, t.room_key, { rec: true })).ok) {
+      throw new Error("Transcript not found");
+    }
+    // A recording has exactly one participant, so "any participant" is its
+    // owner and nothing else. Checked against THIS row rather than the room:
+    // a rec key is a uuid, and the room's answer could be some later
+    // transcript that reused it.
+    if (isRecRoomKey(t.room_key) && String(t.started_by) !== String(userId)) {
       throw new Error("Transcript not found");
     }
     if (t.status !== "live") throw new Error("Transcript has ended");
@@ -244,6 +273,60 @@ export const flush = mutation({
   },
 });
 
+/**
+ * Has a recording's own lease gone stale?
+ *
+ * This is the whole difference between a recording and a huddle in the orphan
+ * sweep. A huddle's transcript is kept alive by the room's seat leases; a
+ * recording has no room and no seats, so an empty `call_members` table is its
+ * NORMAL state — reading that as "the room emptied" would end every live
+ * recording on the sweep's next pass, two minutes in. It reads the row's own
+ * beat instead, through the same window a seat uses.
+ *
+ * A recording that has not beaten yet is measured from its start, so a tab
+ * that died during the first fifteen seconds still gets swept.
+ */
+export function recLeaseExpired(
+  t: { last_beat?: number; started_at: number },
+  now: number,
+): boolean {
+  return now - (t.last_beat ?? t.started_at) >= CALL_MEMBER_STALE_MS;
+}
+
+/** A recording says it is still going. The room's seat leases do this job for
+ *  a huddle; a recording has no room, so it holds its own lease and the orphan
+ *  sweep reads the same staleness window off it. */
+export const beat = mutation({
+  args: { transcript_id: v.id("transcripts") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const t = await requireOwnLiveTranscript(ctx, userId, args.transcript_id);
+    await ctx.db.patch(t._id, { last_beat: Date.now() });
+  },
+});
+
+/** The audio a recording kept, uploaded once it stops. Additive to the row and
+ *  deliberately separate from `stop`: the transcript, the summary and the
+ *  action items are the artifact, and they must land whether or not the bytes
+ *  do. Callable on an ended transcript for exactly that reason — the upload
+ *  finishes after the recording has. */
+export const attachRecording = mutation({
+  args: {
+    transcript_id: v.id("transcripts"),
+    storage_id: v.id("_storage"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t || String(t.started_by) !== String(userId)) {
+      throw new Error("Transcript not found");
+    }
+    await ctx.db.patch(t._id, { recording_storage_id: args.storage_id });
+  },
+});
+
 export const stop = mutation({
   args: { transcript_id: v.id("transcripts") },
   handler: async (ctx, args) => {
@@ -312,6 +395,17 @@ export const sweepOrphanedLive = internalMutation({
       .collect();
     let ended = 0;
     for (const t of live) {
+      // A recording is its own room, so it holds its own lease. Without this
+      // branch the sweep would end every live recording two minutes in: a rec
+      // key has no call_members rows by design, which reads here as an empty
+      // room. Same staleness window as a seat, ended at the last beat so the
+      // duration stays honest.
+      if (isRecRoomKey(t.room_key)) {
+        if (!recLeaseExpired(t, now)) continue;
+        await endTranscript(ctx, t, t.last_beat ?? t.started_at);
+        ended++;
+        continue;
+      }
       const seated = await ctx.db
         .query("call_members")
         .withIndex("by_room", (q) => q.eq("room_key", t.room_key))
@@ -475,7 +569,7 @@ export const getLive = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
-    const auth = await authorizeRoom(ctx, userId, args.room_key);
+    const auth = await authorizeRoom(ctx, userId, args.room_key, { rec: true });
     if (!auth.ok) return null;
     const all = await ctx.db
       .query("transcripts")
@@ -535,6 +629,11 @@ async function canReadCall(
   userId: Id<"users">,
   t: Doc<"transcripts">,
 ): Promise<boolean> {
+  // A RECORDING IS ITS CREATOR'S, FULL STOP. No participant door (they are the
+  // only voice in it), no team door, no feature gate — a person recording the
+  // meeting in the room around them has not published anything to anybody, and
+  // the row lands in a team only so their own history list can find it.
+  if (isRecRoomKey(t.room_key)) return String(t.started_by) === String(userId);
   if ((t.participants ?? []).some((p) => String(p.id) === String(userId))) {
     return (
       (await isTeamMember(ctx, userId, t.team_id)) &&
@@ -597,6 +696,11 @@ async function getCallCore(
     .collect();
   return {
     ...shapeCallRow(t),
+    // Present only for a recording that finished uploading its audio; a
+    // detail view offers playback when there is something to play.
+    recording_url: t.recording_storage_id
+      ? await ctx.storage.getUrl(t.recording_storage_id)
+      : null,
     routes: t.routes.map((r: any) => ({
       kind: r.kind,
       target: r.target,
@@ -708,7 +812,9 @@ export const authForAsr = internalQuery({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
-    const auth = await authorizeRoom(ctx, userId, args.room_key);
+    // A recording mints against its own key like a huddle does; authorizeRoom
+    // has already answered "is this transcript yours".
+    const auth = await authorizeRoom(ctx, userId, args.room_key, { rec: true });
     return auth.ok ? { user_id: String(userId) } : null;
   },
 });

@@ -384,6 +384,332 @@ ipcMain.handle("attach-tab", (e, navPath) => {
 });
 
 // ---------------------------------------------------------------------------
+// The people window: a compact floating buddy list (route /people) carrying the
+// roster, status and calling. Singleton — one per app, focused rather than
+// duplicated. It is the phone: while it exists it is the notification leader
+// for sounds and every call/walkie banner lands in it (notificationRouter.js).
+// Its size, position and always-on-top pin persist across launches; the pin is
+// the only window control the renderer may drive, and only from this window.
+// ---------------------------------------------------------------------------
+
+const PEOPLE_PATH = "/people";
+const PEOPLE_SIZE = { width: 320, height: 640, minWidth: 280, minHeight: 420 };
+
+let peopleWindow = null;
+let peopleBoundsTimer = null;
+
+function loadPeopleState() {
+  const saved = loadFullSettings().peopleWindow;
+  return saved && typeof saved === "object" ? saved : {};
+}
+
+function updatePeopleState(patch) {
+  updateSettings({ peopleWindow: { ...loadPeopleState(), ...patch } });
+}
+
+// A saved rectangle only helps if it is still on screen: displays get unplugged
+// and resolutions change. getDisplayMatching gives us the display it overlaps
+// most (the nearest one when it overlaps none), and we clamp into that display's
+// work area — so a window saved on a monitor that is gone reopens on a real one.
+function clampToVisibleDisplay(saved, size = PEOPLE_SIZE) {
+  if (!saved || typeof saved.x !== "number" || typeof saved.y !== "number") return null;
+  const area = screen.getDisplayMatching({
+    x: saved.x,
+    y: saved.y,
+    width: Math.round(saved.width) || size.width,
+    height: Math.round(saved.height) || size.height,
+  }).workArea;
+  const width = Math.min(Math.max(size.minWidth, Math.round(saved.width) || size.width), area.width);
+  const height = Math.min(Math.max(size.minHeight, Math.round(saved.height) || size.height), area.height);
+  return {
+    width,
+    height,
+    x: Math.min(Math.max(Math.round(saved.x), area.x), area.x + area.width - width),
+    y: Math.min(Math.max(Math.round(saved.y), area.y), area.y + area.height - height),
+  };
+}
+
+function savePeopleBounds(win) {
+  if (!win || win.isDestroyed() || win.isMinimized()) return;
+  updatePeopleState({ bounds: win.getBounds() });
+}
+
+function createPeopleWindow() {
+  if (peopleWindow && !peopleWindow.isDestroyed()) {
+    peopleWindow.show();
+    peopleWindow.focus();
+    return peopleWindow;
+  }
+  const state = loadPeopleState();
+  const bounds = clampToVisibleDisplay(state.bounds);
+  const zoom = getAutoZoomFactor();
+  const win = new BrowserWindow({
+    width: PEOPLE_SIZE.width,
+    height: PEOPLE_SIZE.height,
+    ...(bounds || {}),
+    minWidth: PEOPLE_SIZE.minWidth,
+    minHeight: PEOPLE_SIZE.minHeight,
+    // Same inset lights as every other window, so the web's one titlebar
+    // measurement (desktopHeaderClass / attachTitlebarHead, --titlebar-inset)
+    // clears them here too — the panel draws its own drag region from that.
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: { x: 16, y: 12 },
+    // Restored from the last session: a pinned buddy list stays pinned.
+    alwaysOnTop: state.alwaysOnTop === true,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      zoomFactor: zoom,
+      additionalArguments: [`--zoom-factor=${zoom}`, "--people-window"],
+      // It is the phone: rings, presence and walkie audio must keep arriving
+      // while it sits unfocused beside another app.
+      backgroundThrottling: false,
+    },
+    icon: path.join(__dirname, "assets", "icon.png"),
+    show: false,
+    backgroundColor: "#002b36",
+  });
+  peopleWindow = win;
+
+  win.loadURL(`${currentBaseUrl}${PEOPLE_PATH}`);
+  win.once("ready-to-show", () => win.show());
+  win.webContents.on("did-finish-load", () => {
+    if (win.isDestroyed()) return;
+    win.webContents.setZoomFactor(getAutoZoomFactor());
+    win.webContents.executeJavaScript(
+      "document.documentElement.classList.add('electron-desktop')"
+    );
+  });
+  // Same rule as every window: new-window links open in the default browser.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+
+  // Dragging and resizing fire continuously; save once the gesture settles.
+  const rememberBounds = () => {
+    clearTimeout(peopleBoundsTimer);
+    peopleBoundsTimer = setTimeout(() => savePeopleBounds(win), 400);
+  };
+  win.on("move", rememberBounds);
+  win.on("resize", rememberBounds);
+  win.on("close", () => {
+    clearTimeout(peopleBoundsTimer);
+    savePeopleBounds(win);
+  });
+  win.on("closed", () => {
+    if (peopleWindow === win) peopleWindow = null;
+    broadcastWindowRole();
+  });
+  broadcastWindowRole();
+  return win;
+}
+
+ipcMain.handle("open-people-window", () => {
+  createPeopleWindow();
+});
+
+// The pin. Only the people window may float above other apps — any other
+// renderer asking is answered with what it actually is (false), never granted.
+ipcMain.handle("set-always-on-top", (e, on) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win || win.isDestroyed() || win !== peopleWindow) return false;
+  const pinned = on === true;
+  win.setAlwaysOnTop(pinned);
+  updatePeopleState({ alwaysOnTop: pinned });
+  return pinned;
+});
+
+ipcMain.handle("get-always-on-top", (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  return !!win && !win.isDestroyed() && win.isAlwaysOnTop();
+});
+
+// ---------------------------------------------------------------------------
+// The call panel: a huddle in a window of its own (route /call-panel) — the
+// stage full bleed with its controls, and nothing else.
+//
+// A REAL window. The founder's screenshot was a call stage living in a Chrome
+// popup: no app chrome, the OS treating it as a browser, and a microphone
+// permission attached to a window nobody recognizes. This is the window that
+// makes that outcome impossible, and the web side refuses to fall back to
+// window.open for a call at all.
+//
+// Singleton, because the product allows ONE huddle at a time (calls.joinRoom
+// enforces it server-side): opening the panel onto another room moves the
+// window that exists rather than making a second.
+//
+// ── The handoff ───────────────────────────────────────────────────────────
+// The shell does not move the call; it only opens and closes the window. The
+// call moves because whichever window is showing /call-panel JOINS the room,
+// and LiveKit signs every window of one person with the same identity — so the
+// new window's join evicts the old window's participant, in that order. This
+// end of it therefore has exactly one job on the way out: tell the main window
+// the room is coming back.
+//
+// That message is sent on 'close', NOT on 'closed'. The panel is still
+// connected at that moment, so the main window's rejoin is what evicts it, and
+// the audio never has a hole in it. Waiting for the window to be destroyed
+// would open a real gap for no reason.
+// ---------------------------------------------------------------------------
+
+const CALL_PANEL_PATH = "/call-panel";
+const CALL_PANEL_SIZE = { width: 960, height: 640, minWidth: 520, minHeight: 380 };
+
+let callWindow = null;
+let callBoundsTimer = null;
+// What the panel says it is hosting: { room, mic, camera, scribe }. This IS the
+// handback payload — the main window has to arrive in the state the person was
+// already in, or closing the panel mutes them mid-sentence.
+let callWindowState = null;
+// The panel declared the call OVER (its hang-up button). Closing then hands
+// nothing back. Silence means the opposite: a window closed without a hang-up
+// is a call still going, so the safe reading is to hand it back.
+let callWindowEnded = false;
+
+function loadCallPanelState() {
+  const saved = loadFullSettings().callPanelWindow;
+  return saved && typeof saved === "object" ? saved : {};
+}
+
+function saveCallPanelBounds(win) {
+  if (!win || win.isDestroyed() || win.isMinimized()) return;
+  updateSettings({ callPanelWindow: { ...loadCallPanelState(), bounds: win.getBounds() } });
+}
+
+function callPanelUrl(roomKey, opts) {
+  const q = new URLSearchParams({ room: String(roomKey) });
+  if (opts && opts.mic) q.set("mic", "1");
+  if (opts && opts.camera) q.set("cam", "1");
+  if (opts && opts.scribe) q.set("scribe", "1");
+  return `${currentBaseUrl}${CALL_PANEL_PATH}?${q.toString()}`;
+}
+
+function createCallWindow(roomKey, opts) {
+  if (!roomKey || typeof roomKey !== "string") return null;
+  callWindowEnded = false;
+  if (callWindow && !callWindow.isDestroyed()) {
+    // Already open. On a DIFFERENT room, point it at the new one — one call at
+    // a time means one panel, and the person asked for this room.
+    if (!callWindowState || callWindowState.room !== roomKey) {
+      callWindow.loadURL(callPanelUrl(roomKey, opts));
+    }
+    callWindow.show();
+    callWindow.focus();
+    return callWindow;
+  }
+  const bounds = clampToVisibleDisplay(loadCallPanelState().bounds, CALL_PANEL_SIZE);
+  const zoom = getAutoZoomFactor();
+  const win = new BrowserWindow({
+    width: CALL_PANEL_SIZE.width,
+    height: CALL_PANEL_SIZE.height,
+    ...(bounds || {}),
+    minWidth: CALL_PANEL_SIZE.minWidth,
+    minHeight: CALL_PANEL_SIZE.minHeight,
+    // Same inset lights as every other window, so the stage's own top row can
+    // measure itself into a titlebar (attachTitlebarHead) the way the buddy
+    // list's header does.
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: { x: 16, y: 12 },
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      zoomFactor: zoom,
+      additionalArguments: [`--zoom-factor=${zoom}`, "--call-panel-window"],
+      // It holds the call. Throttling this window would throttle the media.
+      backgroundThrottling: false,
+    },
+    icon: path.join(__dirname, "assets", "icon.png"),
+    show: false,
+    backgroundColor: "#002b36",
+  });
+  callWindow = win;
+  callWindowState = { room: roomKey, mic: !!(opts && opts.mic), camera: !!(opts && opts.camera), scribe: !!(opts && opts.scribe) };
+
+  win.loadURL(callPanelUrl(roomKey, opts));
+  win.once("ready-to-show", () => win.show());
+  win.webContents.on("did-finish-load", () => {
+    if (win.isDestroyed()) return;
+    win.webContents.setZoomFactor(getAutoZoomFactor());
+    win.webContents.executeJavaScript(
+      "document.documentElement.classList.add('electron-desktop')"
+    );
+  });
+  // Same rule as every window: new-window links open in the default browser.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+
+  const rememberBounds = () => {
+    clearTimeout(callBoundsTimer);
+    callBoundsTimer = setTimeout(() => saveCallPanelBounds(win), 400);
+  };
+  win.on("move", rememberBounds);
+  win.on("resize", rememberBounds);
+  win.on("close", () => {
+    clearTimeout(callBoundsTimer);
+    saveCallPanelBounds(win);
+    handBackCall();
+  });
+  win.on("closed", () => {
+    if (callWindow === win) {
+      callWindow = null;
+      callWindowState = null;
+      callWindowEnded = false;
+    }
+    broadcastWindowRole();
+  });
+  broadcastWindowRole();
+  return win;
+}
+
+// Tell the main window the call is coming back. Sent while the panel is still
+// connected, so the main window's join is what ends the panel's participation
+// and the two never both let go at once.
+function handBackCall() {
+  if (callWindowEnded) return;
+  const state = callWindowState;
+  if (!state || !state.room) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send("call-panel-handback", {
+    room: state.room,
+    mic: !!state.mic,
+    camera: !!state.camera,
+    scribe: !!state.scribe,
+  });
+  mainWindow.show();
+}
+
+ipcMain.handle("open-call-panel", (_e, roomKey, opts) => {
+  createCallWindow(roomKey, opts && typeof opts === "object" ? opts : {});
+});
+
+// Only the panel may close the panel, and only it can say whether the call
+// ended — verified by sender identity, never by the renderer's claim.
+ipcMain.handle("close-call-panel", (e, opts) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win || win.isDestroyed() || win !== callWindow) return false;
+  callWindowEnded = !!(opts && opts.ended);
+  win.close();
+  return true;
+});
+
+ipcMain.on("report-call-panel-state", (e, state) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win || win.isDestroyed() || win !== callWindow) return;
+  if (!state || typeof state !== "object") return;
+  callWindowState = {
+    room: typeof state.room === "string" ? state.room : null,
+    mic: state.mic === true,
+    camera: state.camera === true,
+    scribe: state.scribe === true,
+  };
+});
+
+// ---------------------------------------------------------------------------
 // Multi-window notification routing. Every window runs the same web app and
 // would otherwise fire its own banner and sound for the same event. Main is
 // the one process that sees all windows, so it (a) collapses duplicates,
@@ -399,12 +725,18 @@ const windowStates = new Map();
 const lastFocusedAt = new Map();
 const recentBanners = new RecentKeys();
 
-// The app windows that count for routing: main + detached tab windows. The
-// palette is a floating summon, never a place a banner should land or sound.
+// The app windows that count for routing: main + detached tab windows + the
+// people window. The palette is a floating summon, never a place a banner
+// should land or sound.
 function appWindows() {
   const out = [];
   if (mainWindow && !mainWindow.isDestroyed()) out.push(mainWindow);
   for (const w of tabWindows) if (!w.isDestroyed()) out.push(w);
+  if (peopleWindow && !peopleWindow.isDestroyed()) out.push(peopleWindow);
+  // The call panel counts: `anyInCall` is computed from these windows' reports,
+  // and it is what makes every OTHER window show "in a huddle in another
+  // window" instead of drawing a second dock for a call it does not hold.
+  if (callWindow && !callWindow.isDestroyed()) out.push(callWindow);
   return out;
 }
 
@@ -414,6 +746,7 @@ function describeWindows() {
     return {
       id: win.id,
       isMain: win === mainWindow,
+      isPeople: win === peopleWindow,
       focused: win.isFocused(),
       lastFocusedAt: lastFocusedAt.get(win.id) || 0,
       active: st.active || null,
@@ -438,11 +771,28 @@ function broadcastWindowRole() {
     const leader = chooseLeader(windows);
     const anyInCall = windows.some((w) => w.inCall);
     const appFocused = windows.some((w) => w.focused);
+    // Whether a people window exists at all — every window needs it: the one
+    // that IS it renders the panel, the others stand down from the pumps and
+    // surfaces it owns.
+    const hasPeople = !!peopleWindow && !peopleWindow.isDestroyed();
+    // Whether a call panel exists. The call lives THERE, so no other window
+    // draws a dock for it.
+    const hasCallPanel = !!callWindow && !callWindow.isDestroyed();
     for (const win of appWindows()) {
+      // A window can be past its render frame's disposal and not yet report
+      // isDestroyed(), and sending into that gap throws "Render frame was
+      // disposed before WebFrameMain could be accessed". The broadcast is
+      // deferred by a tick precisely because windows churn, so the gap is not
+      // rare — and the call panel, which is created and closed once per call,
+      // walks through it far more often than the windows this code was
+      // written for. Observed in a from-source run.
+      if (win.webContents.isDestroyed()) continue;
       win.webContents.send("window-role", {
         leader: !!leader && leader.id === win.id,
         appFocused,
         anyInCall,
+        peopleWindow: hasPeople,
+        callPanel: hasCallPanel,
       });
     }
   }, 30);
@@ -700,6 +1050,11 @@ function toggleEnvironment() {
     paletteWindow = null;
   }
   createPaletteWindow();
+  // The people window shows the same environment's roster; leaving it on the
+  // old origin would have it watching a different world than the main window.
+  if (peopleWindow && !peopleWindow.isDestroyed()) {
+    peopleWindow.loadURL(`${currentBaseUrl}${PEOPLE_PATH}`);
+  }
 }
 
 function createTray() {

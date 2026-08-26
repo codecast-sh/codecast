@@ -1,4 +1,5 @@
 import { useCallsAvailable } from "../../lib/teamFeatures";
+import { useWalkieStatus, walkieOwnsCall } from "../../hooks/useWalkie";
 import { Headphones } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { joinCall, startHuddle } from "../../lib/calls/callManager";
@@ -36,7 +37,7 @@ export function Facepile({
             className="h-full w-full object-cover"
             fallback={
               <span
-                className="flex h-full w-full items-center justify-center bg-sol-base02"
+                className="flex h-full w-full items-center justify-center bg-sol-bg-highlight text-sol-text-muted"
                 style={{ fontSize: Math.max(8, Math.round(size / 2)) }}
               >
                 {(m.user_name || "?").charAt(0).toUpperCase()}
@@ -47,7 +48,7 @@ export function Facepile({
       ))}
       {extra > 0 && (
         <span
-          className="inline-flex items-center justify-center rounded-full border border-sol-bg bg-sol-base02 text-sol-text-muted"
+          className="inline-flex items-center justify-center rounded-full border border-sol-bg bg-sol-bg-highlight text-sol-text-muted"
           style={{ height: size, width: size, fontSize: Math.max(8, Math.round(size / 2)) }}
         >
           +{extra}
@@ -76,9 +77,19 @@ export function OccupancyChip({
     (st: any) => st.callOccupancy[roomKey],
     (st: any) => st.call.roomKey === roomKey,
   ]);
+  // The same question CallDock asks, and for the same reason: a burst joins a
+  // room exactly the way a huddle does, so without this the DM header put a
+  // violet "in huddle" chip on a three-second voice message — six inches from
+  // a walkie strip already saying "Live to Jordan Lee". Two surfaces, two
+  // names, one thing. The strip is the one that knows what is happening, so
+  // this stands down while the walkie owns the room, and comes back the moment
+  // the room becomes a real huddle (walkieOwnsCall is false for a burst that
+  // walked into somebody's open mic, and false once a linger is answered).
+  const walkie = useWalkieStatus();
   const roster: any[] = s.callOccupancy[roomKey] || [];
   const inThisRoom = s.call.roomKey === roomKey;
   if (roster.length === 0) return null;
+  if (inThisRoom && walkieOwnsCall(walkie, s.call)) return null;
 
   return (
     <button

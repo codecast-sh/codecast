@@ -1,0 +1,153 @@
+/* The recording pill.
+ *
+ * RED, and only here. The walkie owns warm-out and cool-in, calls own violet;
+ * a recording in progress is the one state in this app that has to be readable
+ * from across a desk as "something is listening right now", and red is the
+ * colour every recorder in the world has used for that. It is a small surface
+ * with a loud edge rather than a loud surface: unmissable when you look for
+ * it, not something you have to look past all afternoon.
+ */
+
+.rec-pill-host {
+  position: fixed;
+  right: 1rem;
+  /* Above the dock's row, below a modal. Clear of the walkie strip's 5rem so
+     the two can coexist: somebody can record the room while in a huddle. */
+  bottom: 9.5rem;
+  z-index: 152;
+  max-width: 340px;
+  user-select: none;
+}
+
+.rec-pill {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 9px 8px 11px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--sol-red) 55%, transparent);
+  background: color-mix(in srgb, var(--sol-bg-alt) 96%, transparent);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.3);
+  backdrop-filter: blur(6px);
+}
+
+/* The dot is the recording, and it breathes so a still screenshot and a live
+   screen cannot be confused. */
+.rec-pill-dot {
+  position: relative;
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--sol-red);
+  animation: rec-breathe 1.8s ease-in-out infinite;
+}
+
+@keyframes rec-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rec-pill-dot { animation: none; }
+  .rec-pill-level i { transition: none; }
+}
+
+.rec-pill-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.rec-pill-head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.rec-pill-clock {
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--sol-text);
+}
+
+.rec-pill-what {
+  font-size: 11px;
+  color: var(--sol-text-dim);
+  white-space: nowrap;
+}
+
+/* The last words heard. Two lines at most: it is proof the microphone is
+   working, not a place to read the transcript. */
+.rec-pill-tail {
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--sol-text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.rec-pill-quiet {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--sol-text-dim);
+  font-style: italic;
+}
+
+/* The meter: four bars driven by --level, written per animation frame by a ref
+   callback. Nothing in React moves when this moves. */
+.rec-pill-level {
+  --level: 0;
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.rec-pill-level i {
+  width: 2.5px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--sol-red) 75%, transparent);
+  height: calc(3px + (11px * var(--level) * var(--b, 1)));
+  transition: height 70ms linear;
+}
+
+.rec-pill-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 5px 9px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--sol-red) 45%, transparent);
+  background: color-mix(in srgb, var(--sol-red) 14%, transparent);
+  color: var(--sol-red);
+  font-size: 11.5px;
+  font-weight: 500;
+  transition: background 120ms;
+}
+
+.rec-pill-stop:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--sol-red) 26%, transparent);
+}
+
+.rec-pill-stop:disabled {
+  opacity: 0.5;
+}
+
+.rec-pill-open {
+  flex-shrink: 0;
+  padding: 4px;
+  border-radius: 6px;
+  color: var(--sol-text-dim);
+  transition: color 120ms, background 120ms;
+}
+
+.rec-pill-open:hover {
+  color: var(--sol-text);
+  background: color-mix(in srgb, var(--sol-text) 8%, transparent);
+}

@@ -153,9 +153,34 @@ export function soundKill() {
 // marimba rather than as a sine, plus a 20 ms filtered-noise transient for
 // the wooden knock at the front. Over in ~300 ms, master gain kept low so it
 // can land mid-sentence in another window without startling.
-export function soundChatMessage() {
+//
+// `messageId` collapses one arrival to one sound. Two layers watch the same
+// message through two different feeds and neither can see the other: the
+// in-page toast reads the chat rail, and the notification watcher in
+// DesktopProvider reads notification rows and sounds the unfocused case that
+// silent OS banners leave mute. Both are right to sound it. Unfocused, both
+// fired, ~15 ms apart, and it was audible as a doubled blip on every arrival.
+// The message's own id settles it — the same rule notifyNative already uses to
+// collapse one row reported by every open window into one banner.
+export function soundChatMessage(messageId?: string) {
   if (!isChatEnabled() || !isSupported() || !isAnnouncer()) return;
+  if (soundedRecently(messageId)) return;
   playKnockMotif();
+}
+
+// Long enough to cover the two feeds answering the same push (measured 15 ms
+// apart), short enough that a real second message from the same author is
+// never swallowed — nobody sends the same message id twice.
+const ARRIVAL_COLLAPSE_MS = 3_000;
+const soundedAt = new Map<string, number>();
+
+function soundedRecently(key: string | undefined): boolean {
+  if (!key) return false;
+  const now = Date.now();
+  for (const [k, t] of soundedAt) if (now - t > ARRIVAL_COLLAPSE_MS) soundedAt.delete(k);
+  const seen = soundedAt.has(key);
+  soundedAt.set(key, now);
+  return seen;
 }
 
 // Someone knocking at the locked huddle you are in. The SAME two-tap wooden
@@ -283,6 +308,80 @@ export function soundWalkieOpen() {
     { freq: 1046.5, start: 0, dur: 0.05, gain: 0.35, type: "square" },
     { freq: 698.46, start: 0.06, dur: 0.09, gain: 0.3, type: "sine" },
   ], 0.03);
+}
+
+// The walkie door closed: the burst you were hearing ended. A radio's squelch
+// tail — the short hiss that follows a released key — so the end of a sentence
+// is as audible as its start. Quiet on purpose: it is punctuation, not news.
+export function soundWalkieSquelch() {
+  if (!isEnabled() || !isSupported() || !isAnnouncer()) return;
+  try {
+    const ac = getCtx();
+    // Quieter than the chirp that opened the burst, and deliberately so: this
+    // file's gains are master times note peak, and every cue sits between
+    // 0.010 (soundWalkieOpen) and 0.030, with the 0.080 of soundKill reserved
+    // for an alarm. This landed at 0.100 first — louder than the alarm and ten
+    // times its own pair partner — because 0.2 reads as a small number until
+    // you compare it with the master values around it. Broadband noise also
+    // carries further than a sine at equal peak, so the tail sits just UNDER
+    // the door it closes: 0.018 x 0.5 = 0.009.
+    const master = ac.createGain();
+    master.gain.value = 0.018;
+    master.connect(ac.destination);
+
+    // Noise rather than a tone: a squelch tail is the receiver's own hiss
+    // coming back, and any pitch in it would read as a second voice.
+    const frames = Math.floor(ac.sampleRate * 0.08);
+    const buf = ac.createBuffer(1, frames, ac.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < frames; i++) data[i] = Math.random() * 2 - 1;
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+
+    // Band-limited so it sits where a small radio speaker sits, instead of as
+    // full-spectrum static across the room.
+    const band = ac.createBiquadFilter();
+    band.type = "bandpass";
+    band.frequency.value = 1800;
+    band.Q.value = 0.8;
+
+    const env = ac.createGain();
+    env.gain.setValueAtTime(0.5, ac.currentTime);
+    env.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.08);
+
+    src.connect(band);
+    band.connect(env);
+    env.connect(master);
+    src.start(ac.currentTime);
+    src.stop(ac.currentTime + 0.09);
+  } catch {}
+}
+
+// YOUR key going down, at the moment the mic is genuinely open — the classic
+// two-tone rising chirp a radio makes when it keys up. Two things make it worth
+// having: it is the only confirmation that arrives without looking at the
+// screen, and it marks the exact instant it becomes worth speaking.
+//
+// NOT announcer gated, unlike the receive sounds above. This is feedback for a
+// gesture this window's own user just made, so it belongs in this window the
+// way `soundSend` does — the leader election exists to keep ONE window from
+// announcing an event all of them observed, and a key held here is not that.
+export function soundWalkieKeyUp() {
+  if (!isEnabled()) return;
+  play([
+    { freq: 880, start: 0, dur: 0.06, gain: 0.4, type: "square" },
+    { freq: 1174.66, start: 0.06, dur: 0.09, gain: 0.35, type: "square" },
+  ], 0.028);
+}
+
+// Your key coming up: the "roger" beep, one short falling tone. It says the
+// burst is closed and on its way, which is the half a push-to-talk key cannot
+// show — the hand is already off it and the eye has moved on.
+export function soundWalkieRoger() {
+  if (!isEnabled()) return;
+  play([
+    { freq: 659.25, start: 0, dur: 0.09, gain: 0.35, type: "sine" },
+  ], 0.035);
 }
 
 // Your ring was declined or timed out — one low, brief, apologetic note.

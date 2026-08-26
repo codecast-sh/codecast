@@ -1135,6 +1135,12 @@ export type ClientUI = {
   // inputs. Off by default; stamped LWW — a behavior pref that follows the
   // user, not the device.
   composer_suggestions?: boolean;
+  // The composer's mic has been explained once, so it never explains itself
+  // again. A hold is not a click, and a 40px round key cannot say so on its own
+  // — the first DM composer that offers push to talk floats a small callout
+  // over it, and this retires that callout for good. Stamped LWW: learning the
+  // gesture on the laptop means the phone's browser has learned it too.
+  walkie_hold_seen?: boolean;
   // Fold the pinned thread-state panel above the composer down to its headline
   // row. Expanded by default — the panel exists to be read on arrival — and
   // left unstamped, so it stays a per-device reading preference like the other
@@ -4138,6 +4144,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 export const STAMPED_UI_KEYS = new Set([
   "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "show_triggers", "card_bars", "inbox_show_old",
   "simple_view", "inbox_image_thumbs", "composer_suggestions", "inbox_home", "threads_include_sessions",
+  "walkie_hold_seen",
 ]);
 
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
