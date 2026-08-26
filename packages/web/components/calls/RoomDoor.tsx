@@ -26,6 +26,10 @@ export function RoomLockButton({ roomKey }: { roomKey: string }) {
           : "text-sol-text-muted hover:bg-sol-bg-highlight"
       }`}
       title={title}
+      // aria-pressed is right HERE — unlike push to talk, this is a genuine
+      // click-to-latch toggle. But the glyph is the whole button, so without a
+      // name it announced as an unlabelled toggle.
+      aria-label={locked ? "Locked — click to open the room" : "Open room — click to lock it"}
       aria-pressed={locked}
     >
       {locked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
@@ -53,10 +57,19 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
   const [admitted, setAdmitted] = useState<Record<string, number>>({});
 
   const waiting = knocks.filter((k) => (admitted[String(k.from_user)] ?? 0) < k.created_at);
-  if (waiting.length === 0) return null;
 
+  // Somebody arriving at the door is a moment, and it was a silent one: this
+  // appeared as a coloured row and nothing else, so a person hosting a locked
+  // room with a screen reader had no way to learn anyone was waiting short of
+  // re-scanning the page. The region is mounted even when empty — a live
+  // region that appears with its content already in it is the case screen
+  // readers handle least reliably.
   return (
-    <div className="flex flex-col gap-1 px-2 py-1">
+    <div
+      role="status"
+      aria-live="polite"
+      className={waiting.length ? "flex flex-col gap-1 px-2 py-1" : undefined}
+    >
       {waiting.map((k) => (
         <div
           key={String(k.from_user)}
@@ -83,6 +96,7 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
               void admitKnock(roomKey, String(k.from_user));
             }}
             className="shrink-0 rounded bg-sol-violet/20 px-2 py-0.5 text-[11px] font-medium text-sol-violet transition-colors hover:bg-sol-violet/30"
+            aria-label={`Admit ${firstName(k.from_name)}`}
           >
             Admit
           </button>
