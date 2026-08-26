@@ -13,9 +13,10 @@ import type { ChatRailChannel } from "../store/chatSlice";
 
 // DM cards on /threads: presence and rank in the All view key to the
 // counterpart's last message (lastInboundAt). The viewer's own send never
-// creates, removes, or re-ranks a card there — and never re-opens a card the
-// user collapsed. The DMs chip stays a browsing surface over the full rail,
-// ordered by sortAt.
+// creates or re-ranks a card there — a reply RETIRES the card from All (the
+// viewer spoke last, nothing awaits them) until the next inbound — and never
+// re-opens a card the user collapsed. The DMs chip stays a browsing surface
+// over the full rail, ordered by sortAt.
 
 const T0 = 1_700_000_000_000;
 
@@ -60,23 +61,25 @@ describe("rank and timestamp", () => {
     room("b", { sortAt: bSortAt, lastInboundAt: bInboundAt }),
   ];
 
-  test("own send does not change activityAt or the All rank; inbound does", () => {
+  test("own send answers the thread: the card leaves All until the next inbound", () => {
     const before = dmCards(rail(T0, T0));
-    // The viewer replies in b: sortAt jumps, inbound stands.
+    expect(cardsForChip(before, "all", false).map((c) => c.id).sort()).toEqual(["dm:a", "dm:b"]);
+    // The viewer replies in b: sortAt jumps past the inbound — answered, gone from All.
     const afterOwnSend = dmCards(rail(T0 + 9000, T0));
     const cardB = (cards: ReturnType<typeof dmCards>) => cards.find((c) => c.id === "dm:b")!;
     expect(cardB(afterOwnSend).activityAt).toBe(cardB(before).activityAt);
-    expect(sortCards(afterOwnSend).map((c) => c.id)).toEqual(["dm:a", "dm:b"]);
-    // The counterpart replies: the card re-ranks.
+    expect(cardsForChip(afterOwnSend, "all", false).map((c) => c.id)).toEqual(["dm:a"]);
+    // The counterpart replies: the card returns, ranked by their message.
     const afterInbound = dmCards(rail(T0 + 9000, T0 + 9000));
     expect(cardB(afterInbound).activityAt).toBe(T0 + 9000);
-    expect(sortCards(afterInbound).map((c) => c.id)).toEqual(["dm:b", "dm:a"]);
+    expect(sortCards(cardsForChip(afterInbound, "all", false)).map((c) => c.id)).toEqual(["dm:b", "dm:a"]);
   });
 
   test("the shown time is the inbound time, not the own-send time", () => {
     const [card] = dmCards([room("b", { sortAt: T0 + 9000, lastInboundAt: T0 })]);
     expect(card.activityAt).toBe(T0);
     expect(card.browseAt).toBe(T0 + 9000);
+    expect(card.browseOnly).toBe(true);
   });
 
   test("the DMs chip ranks by the rail stamp, own sends included", () => {
@@ -109,9 +112,12 @@ describe("counts", () => {
         room("quiet", { unreadCount: 1 }), // no inbound: whatever the count says, not in All
         room("live", { unreadCount: 2, lastInboundAt: T0 }),
         room("hushed", { unreadCount: 3, muted: true, lastInboundAt: T0 }),
+        // Answered elsewhere but the count is stale: the DMs chip still says
+        // unread, the All badge (presence-keyed) does not.
+        room("answered", { unreadCount: 1, sortAt: T0 + 5000, lastInboundAt: T0 }),
       ]),
     );
     expect(counts.all).toBe(1);
-    expect(counts.dm).toBe(2);
+    expect(counts.dm).toBe(3);
   });
 });
