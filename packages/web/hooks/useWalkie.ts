@@ -16,7 +16,14 @@
 // surface unmounting under the hand. The engine's endBurst is idempotent, so a
 // release arriving twice costs nothing and one arriving late still lands the
 // burst.
-import { useCallback, useRef, useSyncExternalStore, type MouseEvent, type PointerEvent } from "react";
+import {
+  useCallback,
+  useRef,
+  useSyncExternalStore,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
+} from "react";
 import { toast } from "sonner";
 import {
   endBurst,
@@ -27,6 +34,7 @@ import {
   type WalkieStatus,
 } from "../lib/calls/walkie";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
+import { teamHasFeature } from "../lib/teamFeatures";
 import { useShortcutAction, useShortcutContext } from "../shortcuts";
 import { useEventListener } from "./useEventListener";
 import { useMountEffect } from "./useMountEffect";
@@ -107,6 +115,15 @@ export function lastWalkieTarget(): WalkieTarget | null {
   return lastTarget;
 }
 
+/** Calls are available at all: the deployment has LiveKit and the ACTIVE team
+ *  has the feature on. Read from the store rather than the hook so the two
+ *  reason functions below stay callable outside React, which is how the live
+ *  bubble and every push-to-talk surface share one answer. */
+export function callsAvailableNow(): boolean {
+  const s = useInboxStore.getState() as any;
+  return !!s.callConfig?.enabled && teamHasFeature(s.teams, s.clientState?.ui?.active_team_id, "calls");
+}
+
 /**
  * Why this room cannot be entered right now, or null when it can. A live call
  * somewhere else is the only thing that keeps you out of a room — walking into
@@ -117,6 +134,13 @@ export function lastWalkieTarget(): WalkieTarget | null {
  */
 export function walkieJoinReason(roomKey: string | undefined): string | null {
   if (!roomKey) return "This one cannot be joined";
+  // Calls off for this team, or the deployment has no LiveKit behind it. The
+  // engine's own "not ready" only knows whether it has a Convex client, so
+  // without this the gesture stayed offered and failed at the far end: the
+  // join throws, the call plane lands in `error` rather than `idle`, and the
+  // ordinary call dock opens a floating window on a failure — from a mic
+  // button in a chat composer.
+  if (!callsAvailableNow()) return "Calls are not on for this team";
   const blocked = walkieBlockedFor(roomKey);
   if (blocked === "another-call") return "You are in another call";
   if (blocked === "not-ready") return "Calls are not ready yet";
@@ -160,6 +184,16 @@ export function walkieBlockedReason(roomKey: string | undefined): string | null 
 export type PushToTalk = {
   /** This surface's room is the one being talked into right now. */
   holding: boolean;
+  /** The mic is actually open in the room. False through setup — acquiring the
+   *  mic, joining and unmuting — which is a real gap, not a formality: 1.0s
+   *  into a warm room and 12.7s into a cold one, measured. A surface that says
+   *  "talking" before this is telling the person their words are reaching
+   *  somebody when they are reaching nobody. */
+  live: boolean;
+  /** The mic WAS open and the room went away under it. The words are still
+   *  being recorded and the burst will still land as a message — that half is
+   *  fine — but nobody is hearing them right now. */
+  dropped: boolean;
   /** Null when the gesture is available. */
   reason: string | null;
   press: () => void;
@@ -188,6 +222,11 @@ export function usePushToTalk(
     (st: any) => st.call?.roomKey ?? "",
     (st: any) => st.call?.phase ?? "idle",
     (st: any) => st.call?.muted !== false,
+    // Whether calls are available at all is part of the same answer, and an
+    // admin turning the feature off must reach the button without waiting for
+    // an unrelated burst to refresh it.
+    (st: any) => !!st.callConfig?.enabled,
+    (st: any) => st.clientState?.ui?.active_team_id ?? "",
   ]);
   const held = useRef(false);
 
@@ -213,8 +252,30 @@ export function usePushToTalk(
   // hover card closing under the pointer — must not leave the mic open either.
   useMountEffect(() => () => release());
 
+  const holding = !!status.sending && status.sending.roomKey === roomKey;
+  // Whether the mic is live is TWO questions, and the second one only the call
+  // plane can answer: is this client still in the room? A LiveKit disconnect
+  // mid-burst (the SFU kicking a duplicate identity, a network drop it gave up
+  // on) leaves the engine's `sending` exactly as it was — nothing in the burst
+  // is tied to the room's connection state — while the call plane correctly
+  // goes idle. Verified in the running app: after killing the room mid-hold the
+  // call phase was idle, `sending` was still set, and the button still read
+  // "Talking — release to send" with the person's voice reaching nobody.
+  //
+  // The recording keeps running locally and the burst still lands as a message,
+  // so nothing is lost. What was wrong was only the claim, in the present
+  // tense, that somebody was hearing it.
+  // Read rather than subscribed: the useTrackedStore above already subscribes
+  // to exactly these fields, so this render is the one triggered by them
+  // changing.
+  const call = useInboxStore.getState().call;
+  const seated =
+    call.roomKey === roomKey && (call.phase === "connected" || call.phase === "connecting");
+  const opened = holding && !!status.sending?.openAt;
   return {
-    holding: !!status.sending && status.sending.roomKey === roomKey,
+    holding,
+    live: opened && seated,
+    dropped: opened && !seated,
     reason: walkieBlockedReason(roomKey),
     press,
     release,
@@ -277,8 +338,25 @@ export function useHoldToTalk(
   return ptt;
 }
 
-/** The pointer half of the gesture, spread onto whatever element carries it. */
-export function pttPointerProps(ptt: PushToTalk) {
+/**
+ * The gesture as DOM props, spread onto whatever element carries it.
+ *
+ * A HOLD IS A HOLD ON THE KEYBOARD TOO. This used to be pointer events alone,
+ * and `onClick` cancelled itself — so Enter and Space did nothing on any of the
+ * four surfaces. The chord is only armed while the matching DM is the open,
+ * present tab, which left the hover card's mic and the receiver strip's "Hold
+ * to reply" with no keyboard path at all, on any page. Space and Enter are how
+ * a keyboard presses a button, so they press this one: down opens the mic, up
+ * closes it, exactly like a thumb.
+ *
+ * The click is still cancelled. A button fires one synthetically on Space, and
+ * a click that keyed the mic would key it with nothing left to release it.
+ * Auto-repeat needs no guard beyond the one `press` already has, but `e.repeat`
+ * says the intent plainly.
+ */
+const HOLD_KEYS = new Set([" ", "Spacebar", "Enter"]);
+
+export function pttHoldProps(ptt: PushToTalk) {
   return {
     onPointerDown: (e: PointerEvent) => {
       // Left button only, and never the gesture that opens a context menu.
@@ -289,8 +367,16 @@ export function pttPointerProps(ptt: PushToTalk) {
     onPointerUp: ptt.release,
     onPointerLeave: ptt.release,
     onPointerCancel: ptt.release,
-    // A hold is not a click, and a mic button that also fired on Enter would
-    // key the mic with no way to release it.
+    onKeyDown: (e: ReactKeyboardEvent) => {
+      if (!HOLD_KEYS.has(e.key) || e.repeat) return;
+      // Space would scroll the page out from under the person mid-sentence.
+      e.preventDefault();
+      ptt.press();
+    },
+    onKeyUp: (e: ReactKeyboardEvent) => {
+      if (!HOLD_KEYS.has(e.key)) return;
+      ptt.release();
+    },
     onClick: (e: MouseEvent) => e.preventDefault(),
   };
 }

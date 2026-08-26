@@ -28,10 +28,26 @@ function view(overrides: Partial<ChatMessageView> = {}): ChatMessageView {
   } as ChatMessageView;
 }
 
+const TEAM = "team1234567890123456789012345678";
+
+/** Calls available: the deployment has LiveKit and the active team has the
+ *  feature on. Since ct-44931 round 5 this is a precondition of every walkie
+ *  gesture, for the same reason a bound Convex client is — without it the
+ *  answer to every question below is "calls are not on", which is correct and
+ *  is not the case worth testing. */
+function callsOn(on = true) {
+  useInboxStore.setState({
+    callConfig: { enabled: on, url: "wss://x", teams: [TEAM] },
+    teams: [{ _id: TEAM, features: { calls: on, chat: true } }],
+    clientState: { ...(useInboxStore.getState() as any).clientState, ui: { active_team_id: TEAM } },
+  } as any);
+}
+
 // Until React binds a live Convex client the walkie reports "not ready" and
 // every door is shut, which is correct and is also not the case worth testing.
 beforeAll(() => {
   bindWalkie({ mutation: async () => null, action: async () => null });
+  callsOn();
 });
 
 function render(message: ChatMessageView): string {
@@ -60,9 +76,16 @@ describe("voice bubble", () => {
     expect(html).toContain("This one cannot be joined");
   });
 
-  test("a burst with no words yet still reads as something happening", () => {
-    const html = render(view({ voice: { status: "live", roomKey: ROOM } }));
-    expect(html).toContain("talking…");
+  test("a burst with no words yet says which silence this is", () => {
+    // The pulsing dot already says somebody is talking. What only this line can
+    // say is that nothing has been heard so far — and it uses the same words as
+    // the finished bubble's "no words", so the pair reads as one fact at two
+    // moments: not yet, and never.
+    const live = render(view({ voice: { status: "live", roomKey: ROOM } }));
+    expect(live).toContain("no words yet");
+    const done = render(view({ voice: { status: "done", durationMs: 2_000 } }));
+    expect(done).toContain("no words");
+    expect(done).not.toContain("no words yet");
   });
 
   test("a finished burst is its transcript, its length, and a play button", () => {
@@ -217,6 +240,7 @@ describe("voiceDuration", () => {
 
 describe("when push to talk refuses", () => {
   function callPlane(patch: Record<string, unknown>) {
+    callsOn();
     useInboxStore.setState({
       call: { phase: "idle", roomKey: null, muted: true, camera: false, sharing: false, speaking: [], error: null, ...patch },
     } as any);
@@ -245,5 +269,44 @@ describe("when push to talk refuses", () => {
     callPlane({});
     expect(walkieBlockedReason(ROOM)).toBe(null);
     expect(walkieBlockedReason(undefined)).toBe("There is nobody to talk to here yet");
+  });
+
+  test("calls off for this team refuses both the key and the door", () => {
+    // The composer's mic used to render enabled with calls off, and pressing
+    // it joined a room that threw — leaving the call plane in `error`, which
+    // the ordinary dock does not bail on, so a floating call window opened out
+    // of a chat composer. Both questions answer the same way now.
+    callPlane({});
+    callsOn(false);
+    expect(walkieBlockedReason(ROOM)).toBe("Calls are not on for this team");
+    expect(walkieJoinReason(ROOM)).toBe("Calls are not on for this team");
+    callsOn(true);
+    expect(walkieBlockedReason(ROOM)).toBe(null);
+  });
+});
+
+// ct-44931 polish round 12. A burst whose finalize never landed carries no
+// duration, and the clock rendered "0:00" beside its transcript — claiming a
+// recording of no length rather than no recording at all, which the glyph
+// beside it already says correctly.
+describe("the clock only appears when there is something to time", () => {
+  test("a burst with no duration shows no clock", () => {
+    const html = render(view({ content: "the deploy is green", voice: { status: "done" } }));
+    expect(html).toContain("the deploy is green");
+    expect(html).toContain("ch-voice-noaudio");
+    expect(html).not.toContain("0:00");
+    expect(html).not.toContain("ch-voice-clock");
+  });
+
+  test("a burst with a real length still shows it", () => {
+    const html = render(
+      view({
+        content: "shipping it",
+        voice: { status: "done", durationMs: 7_400 },
+        attachments: [{ storage_id: "st1", mime: "audio/webm" }],
+      }),
+    );
+    expect(html).toContain("ch-voice-clock");
+    expect(html).toContain("0:07");
   });
 });

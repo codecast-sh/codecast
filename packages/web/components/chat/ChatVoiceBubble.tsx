@@ -50,14 +50,25 @@ function VoicePlayButton({ messageId, att }: { messageId: string; att: ChatAttac
   );
   const mine = playback.key === messageId;
   const playing = mine && playback.playing;
+  // The hook says which of the two silences this is: undefined while the url is
+  // still resolving, null once the storage object is known to be gone. Saying
+  // "not available" through the ordinary loading window called a brief wait a
+  // permanent loss. The transcript beside it is untouched either way.
+  const resolving = url === undefined;
+  const name = resolving
+    ? "Getting the recording"
+    : !url
+      ? "The recording is not available"
+      : playing
+        ? "Pause"
+        : "Play";
   return (
     <button
       type="button"
       className={`ch-voice-play ${playing ? "ch-voice-play-on" : ""}`}
-      // The recording is still resolving, or the storage object is gone. The
-      // transcript beside it is untouched either way.
       disabled={!url}
-      title={!url ? "The recording is not available" : playing ? "Pause" : "Play"}
+      aria-label={name}
+      title={name}
       data-walkie-play={messageId}
       onClick={() => url && toggleVoice(messageId, url)}
     >
@@ -77,6 +88,10 @@ function VoiceClock({ messageId, durationMs }: { messageId: string; durationMs?:
   );
   const mine = playback.key === messageId;
   const total = durationMs ?? (mine ? playback.durationMs : 0);
+  // Nothing to time. A burst whose finalize never landed carries no duration,
+  // and "0:00" beside a transcript claims a recording of no length rather than
+  // no recording at all — which the glyph beside it already says correctly.
+  if (!total) return null;
   return (
     <span className="ch-voice-clock">
       {mine && playback.positionMs > 0 ? `${voiceDuration(playback.positionMs)} / ` : ""}
@@ -124,8 +139,13 @@ function VoiceLiveBubble({ message }: { message: ChatMessageView }) {
         <span className="ch-voice-text">
           {/* Motion alone is not an accessible signal, so the state is also a
               word — and until the recognizer has heard anything, that word is
-              the whole bubble. */}
-          {transcript || <span className="ch-voice-waiting">talking…</span>}
+              the whole bubble.
+              "No words yet" rather than "talking", because the pulsing dot
+              beside it already says somebody is talking and this is the one
+              place that can say what is missing. It also rhymes with the
+              finished bubble's "no words", so the pair reads as the same fact
+              at two moments: not heard YET, and never heard at all. */}
+          {transcript || <span className="ch-voice-waiting">no words yet</span>}
         </span>
       </button>
     </div>

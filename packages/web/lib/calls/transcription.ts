@@ -8,7 +8,10 @@
 // are appended to convex (transcripts.appendSegments); when EVERY track has
 // been silent for GAP_MS (per the server VAD's speech start/stop events), the
 // engine calls transcripts.flush — the beat where live routes deliver and a
-// routed agent naturally answers.
+// routed agent naturally answers. A busy room can go minutes without that
+// lull, so undelivered words older than MAX_HOLD_MS ship anyway at the next
+// completed utterance — the routed agent follows the conversation in beats
+// instead of receiving ten minutes at once.
 //
 // Module singleton beside callManager, same pattern: components read the
 // small status snapshot via subscribe/getSnapshot; nothing here touches the
@@ -24,8 +27,12 @@ type ConvexHandle = {
 
 // Silence long enough to count as a conversational gap. VAD closes an
 // utterance at 600ms; a gap is a real lull, not a breath.
-export const GAP_MS = 6_000;
-const FLUSH_MIN_INTERVAL_MS = 10_000;
+export const GAP_MS = 2_500;
+const FLUSH_MIN_INTERVAL_MS = 8_000;
+// The hold limit: how long undelivered words may wait for a lull before the
+// engine flushes mid-conversation. Also unwedges a pipe whose VAD sticks with
+// `speaking` true, which would otherwise block delivery forever.
+export const MAX_HOLD_MS = 30_000;
 
 export type ScribeStatus = {
   active: boolean;
@@ -69,6 +76,7 @@ let startedAt = 0;
 let pipes = new Map<string, TrackPipe>();
 let lastSpeechEndMs = 0;
 let anySegmentsSinceFlush = false;
+let firstUnflushedAt = 0;
 let lastFlushAt = 0;
 let gapTimer: ReturnType<typeof interval> | null = null;
 let roomListener: (() => void) | null = null;
@@ -109,6 +117,7 @@ function openPipe(
       onUtterance: ({ text, t0, t1 }) => {
         const seg = { speaker_id: speakerId, speaker_name: speakerName, text, t0, t1 };
         anySegmentsSinceFlush = true;
+        if (!firstUnflushedAt) firstUnflushedAt = Date.now();
         emit({ tail: [...status.tail, { speaker: speakerName, text }].slice(-6) });
         convex
           ?.mutation(api.transcripts.appendSegments, {
@@ -194,6 +203,7 @@ export async function startScribe(opts: {
   startedAt = Date.now();
   lastSpeechEndMs = 0;
   anySegmentsSinceFlush = false;
+  firstUnflushedAt = 0;
   lastFlushAt = Date.now();
   emit({ active: true, transcriptId, error: null, tail: [] });
 
@@ -207,22 +217,21 @@ export async function startScribe(opts: {
     room?.off(RoomEvent.LocalTrackPublished, onTrack);
   };
 
-  // The gap watcher: when nobody has spoken for GAP_MS and there are
-  // undelivered words, flush the live routes. FLUSH_MIN_INTERVAL_MS keeps a
-  // stop-start conversation from spamming a routed agent.
+  // The gap watcher: flush the live routes when nobody has spoken for GAP_MS,
+  // or when the oldest undelivered words have waited MAX_HOLD_MS — whichever
+  // comes first. FLUSH_MIN_INTERVAL_MS keeps a stop-start conversation from
+  // spamming a routed agent. The hold path fires between utterances, never
+  // mid-word: segments only exist once the VAD closes them.
   gapTimer = interval(() => {
     if (!status.active || !transcriptId || !convex) return;
+    if (!anySegmentsSinceFlush || Date.now() - lastFlushAt < FLUSH_MIN_INTERVAL_MS) return;
     const anySpeaking = [...pipes.values()].some((p) => p.pipe.speaking);
-    const quietFor = Date.now() - Math.max(lastSpeechEndMs, lastFlushAt);
-    if (
-      !anySpeaking &&
-      anySegmentsSinceFlush &&
-      lastSpeechEndMs > 0 &&
-      Date.now() - lastSpeechEndMs >= GAP_MS &&
-      quietFor >= 0 &&
-      Date.now() - lastFlushAt >= FLUSH_MIN_INTERVAL_MS
-    ) {
+    const roomQuiet =
+      !anySpeaking && lastSpeechEndMs > 0 && Date.now() - lastSpeechEndMs >= GAP_MS;
+    const heldTooLong = firstUnflushedAt > 0 && Date.now() - firstUnflushedAt >= MAX_HOLD_MS;
+    if (roomQuiet || heldTooLong) {
       anySegmentsSinceFlush = false;
+      firstUnflushedAt = 0;
       lastFlushAt = Date.now();
       convex.mutation(api.transcripts.flush, { transcript_id: transcriptId }).catch(() => {});
     }
