@@ -244,6 +244,7 @@ export default function PlanDetailPage() {
               hasShareToken={!!(plan as any).share_token}
               shareUrl={(plan as any).share_token ? `${shareOrigin()}/share/plan/${(plan as any).share_token}` : null}
               pageUrl={canonicalUrl()}
+              forwardLabel="plan"
               onGenerateShareLink={async () => {
                 const result = await generateShareLink({ short_id: plan.short_id });
                 return `${shareOrigin()}/share/plan/${result.share_token}`;

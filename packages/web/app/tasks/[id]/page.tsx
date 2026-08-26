@@ -58,7 +58,10 @@ import {
   MoreHorizontal,
   Plus,
   CornerDownRight,
+  Forward,
 } from "lucide-react";
+import { openForwardToChat } from "../../../lib/forwardToChat";
+import { useTeamFeature } from "../../../lib/teamFeatures";
 import { MAX_TASK_DEPTH, directChildren, isActiveTask, subtaskProgressOf, taskDepth } from "@codecast/shared/tasks";
 import { closeTaskWithGuard, createTaskAndAdopt, setTaskParent } from "../../../lib/taskActions";
 import { statusByKey, statusEntityOptions, statusVisual, statusWriteFields, taskStatusKey, taskStatusOf, useTeamTaskStatusList } from "../../../lib/taskStatuses";
@@ -503,6 +506,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
   const params = useParams();
   const router = useRouter();
   const openLinkedSession = useOpenLinkedSession();
+  const chatOn = useTeamFeature("chat");
   const id = taskId ?? (params?.id as string);
   const isInline = variant === "inline";
 
@@ -746,6 +750,15 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                 </svg>
               </button>
+              {chatOn && (
+                <button
+                  onClick={() => openForwardToChat({ url: canonicalUrl(), label: "task" })}
+                  className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
+                  title="Send to chat"
+                >
+                  <Forward className="w-3.5 h-3.5" />
+                </button>
+              )}
               <PeekLayoutControls />
               <OverflowMenu>
                 <WatchButton entityType="task" entityId={data._id} variant="menuItem" />

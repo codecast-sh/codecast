@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { SmilePlus, MessageSquare, MoreHorizontal, RotateCw, AlertTriangle, Link2, Pencil, Trash2 } from "lucide-react";
+import { SmilePlus, MessageSquare, MoreHorizontal, RotateCw, AlertTriangle, Link2, Pencil, Trash2, Forward } from "lucide-react";
+import { openForwardToChat } from "../../lib/forwardToChat";
 import { remarkSanitizeInvisibleUnicode } from "../tools/MarkdownRenderer";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
 import { CommentAvatar } from "../comments/CommentAvatar";
@@ -557,6 +558,23 @@ export const ChatMessage = memo(function ChatMessage({
                 >
                   <Link2 className="w-3 h-3" />
                   Copy link
+                </button>
+              )}
+              {permalink && (
+                <button
+                  type="button"
+                  className="ch-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    openForwardToChat({
+                      url: typeof window === "undefined" ? permalink : new URL(permalink, window.location.origin).toString(),
+                      label: "message",
+                    });
+                  }}
+                >
+                  <Forward className="w-3 h-3" />
+                  Forward to…
                 </button>
               )}
               {canEdit && (

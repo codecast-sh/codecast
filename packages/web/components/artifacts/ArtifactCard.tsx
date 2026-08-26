@@ -28,6 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "../ui/context-menu";
+import { ForwardCtxItem } from "../menus/ObjectContextMenus";
 import { EntityIdPill } from "../EntityIdPill";
 import { CONVEX_URL } from "../../lib/localAuth";
 import { relativeTime, withEditParam } from "./artifactCardUtils";
@@ -132,6 +133,7 @@ export function ArtifactCard({
         Open
       </CtxItem>
       <CtxItem icon={Copy} onSelect={copyLink}>Copy link</CtxItem>
+      <ForwardCtxItem url={a.url} label="page" />
       {a.manage_url && (
         <>
           <CtxSeparator />

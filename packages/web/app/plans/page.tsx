@@ -32,7 +32,10 @@ import {
   User,
   Bot,
   Link2,
+  Forward,
 } from "lucide-react";
+import { openForwardToChat } from "../../lib/forwardToChat";
+import { useTeamFeature } from "../../lib/teamFeatures";
 import { toast } from "sonner";
 import { LivenessDot } from "../../components/LivenessDot";
 import { planLivenessState } from "../../lib/liveness";
@@ -222,22 +225,26 @@ export default function PlansPage() {
     if (src && src !== planSource) setPlanSource(src);
   }, []);
 
-  // Copy a deep-linkable URL for the current view: the source filter plus the
+  // A deep-linkable URL for the current view: the source filter plus the
   // open plan (already carried in the URL as ?plan=). Built from state rather
   // than window.location because the source toggle doesn't live-sync the URL.
-  const copyViewLink = useCallback(async () => {
+  const chatOn = useTeamFeature("chat");
+  const viewLink = useCallback(() => {
     const params = new URLSearchParams();
     if (planSource) params.set("source", planSource);
     if (selectedPlan) params.set("plan", selectedPlan);
     const qs = params.toString();
     const origin = typeof window !== "undefined" ? window.location.origin : "";
+    return `${origin}/plans${qs ? `?${qs}` : ""}`;
+  }, [planSource, selectedPlan]);
+  const copyViewLink = useCallback(async () => {
     try {
-      await copyToClipboard(`${origin}/plans${qs ? `?${qs}` : ""}`);
+      await copyToClipboard(viewLink());
       toast.success("Link to this view copied");
     } catch {
       toast.error("Couldn't copy link");
     }
-  }, [planSource, selectedPlan]);
+  }, [viewLink]);
 
   // Local-first: the board renders from the store's plans collection
   // synchronously (workspace-scoped through the one chokepoint); these
@@ -353,6 +360,15 @@ export default function PlansPage() {
                 >
                   <Link2 className="w-3.5 h-3.5" />
                 </button>
+                {chatOn && (
+                  <button
+                    onClick={() => openForwardToChat({ url: viewLink(), label: "view" })}
+                    className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
+                    title="Send this view to chat"
+                  >
+                    <Forward className="w-3.5 h-3.5" />
+                  </button>
+                )}
                 <button
                   onClick={() => setShowCreate(!showCreate)}
                   className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"

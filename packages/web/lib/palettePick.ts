@@ -9,10 +9,13 @@
 // `onPick` and closes the palette. Open it with
 // `useInboxStore.getState().openPalette({ pick })`.
 
-export type PalettePickKind = "session" | "doc" | "task" | "plan";
+export type PalettePickKind = "session" | "doc" | "task" | "plan" | "channel";
 
 export type PalettePickTarget =
   | { kind: PalettePickKind; id: string; label: string }
+  // Offered only when kinds includes "channel": a teammate with no DM room
+  // yet. The caller opens the DM (openDmChannel) with this member id.
+  | { kind: "person"; id: string; label: string }
   // One of the caller's extra rows.
   | { kind: "extra"; key: string };
 

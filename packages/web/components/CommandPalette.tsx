@@ -1476,28 +1476,46 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // never restated here: the store caches rooms across workspaces, and an
   // inlined predicate is how another team's rooms leak into this one's palette.
   const chatChannelRows = useMemo(() => {
-    if (!open || !chatOn || query.trim().length < 1) return [] as Array<{ id: string; label: string; kind?: string; isPrivate?: boolean; image?: string }>;
+    // Channel pick mode (e.g. "send this link to…") browses with an empty
+    // query and also offers teammates with no DM room yet — the caller opens
+    // the DM on pick.
+    const pickingChannels = picking && pickAllows("channel");
+    if (!open || !chatOn || (!pickingChannels && query.trim().length < 1))
+      return [] as Array<{ id: string; label: string; kind?: string; isPrivate?: boolean; image?: string }>;
     const state = useInboxStore.getState() as any;
     const viewerId = state.currentUser?._id ? String(state.currentUser._id) : "";
     const members = (state.teamMembers ?? []) as any[];
     const teamScope = activeTeamId ? String(activeTeamId) : undefined;
     const q = query.trim().toLowerCase();
-    const rows: Array<{ id: string; label: string; kind?: string; isPrivate?: boolean; image?: string; s: number }> = [];
+    const rows: Array<{ id: string; label: string; kind?: string; isPrivate?: boolean; image?: string; s: number; t: number }> = [];
+    const dmPartners = new Set<string>();
     for (const id in state.chatChannels) {
       const c = state.chatChannels[id];
       if (!c || c.archived_at) continue;
       if (!inActiveWorkspace({ team_id: c.team_id ? String(c.team_id) : undefined }, teamScope)) continue;
       const others = c.kind === "dm" ? dmOtherIds(c.dm_key, viewerId) : [];
       if (c.kind === "dm" && !others.length) continue;
+      if (c.kind === "dm" && others.length === 1) dmPartners.add(others[0]);
       const label = channelDisplayName({ name: c.name, kind: c.kind, dmMemberIds: others }, members);
       if (!label) continue;
       const counterpart = dmCounterpart({ kind: c.kind, dmMemberIds: others }, members);
       const s = matchScore(label, q);
       if (s === Infinity) continue;
-      rows.push({ id, label, kind: c.kind, isPrivate: c.kind === "private", image: memberAvatarUrl(counterpart), s });
+      rows.push({ id, label, kind: c.kind, isPrivate: c.kind === "private", image: memberAvatarUrl(counterpart), s, t: c.updated_at ?? 0 });
     }
-    return rows.sort((a, b) => a.s - b.s).slice(0, 5);
-  }, [open, query, activeTeamId, chatOn]);
+    if (pickingChannels) {
+      for (const m of members) {
+        const mid = m?._id ? String(m._id) : "";
+        if (!mid || mid === viewerId || dmPartners.has(mid)) continue;
+        const label = memberName(m);
+        if (!label) continue;
+        const s = matchScore(label, q);
+        if (s === Infinity) continue;
+        rows.push({ id: mid, label, kind: "person", image: memberAvatarUrl(m), s, t: 0 });
+      }
+    }
+    return rows.sort((a, b) => a.s - b.s || b.t - a.t).slice(0, pickingChannels ? 12 : 5);
+  }, [open, query, activeTeamId, chatOn, picking, pick]);
 
   // Chat message hits ride the same debounced non-throwing lane as
   // conversation search — and the same access story: the server re-checks
@@ -2349,16 +2367,26 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {!picking && (chatChannelRows.length > 0 || chatHits.length > 0) && (
+        {(!picking || pickAllows("channel")) && (chatChannelRows.length > 0 || (!picking && chatHits.length > 0)) && (
           <CommandPrimitive.Group heading="Chat" className={groupClass}>
             {chatChannelRows.map((c) => (
               <CommandPrimitive.Item
                 key={`chatc-${c.id}`}
                 value={`__chat__ ${c.label}|||${c.id}`}
-                onSelect={() => navigate(`/chat/${c.id}`)}
+                onSelect={() => {
+                  if (pick) {
+                    finishPick(
+                      c.kind === "person"
+                        ? { kind: "person", id: c.id, label: c.label }
+                        : { kind: "channel", id: c.id, label: c.label },
+                    );
+                    return;
+                  }
+                  navigate(`/chat/${c.id}`);
+                }}
                 className={itemClass}
               >
-                {c.kind === "dm" ? (
+                {c.kind === "dm" || c.kind === "person" ? (
                   <AvatarImg
                     src={c.image}
                     alt=""
@@ -2372,11 +2400,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 )}
                 <span className="truncate flex-1">{c.label}</span>
                 <span className="text-[10px] text-sol-text-dim flex-shrink-0">
-                  {c.kind === "dm" ? "direct message" : "channel"}
+                  {c.kind === "dm" ? "direct message" : c.kind === "person" ? "new direct message" : "channel"}
                 </span>
               </CommandPrimitive.Item>
             ))}
-            {chatHits.map((h) => (
+            {!picking && chatHits.map((h) => (
               <CommandPrimitive.Item
                 key={`chatm-${h._id}`}
                 value={`__chat__ ${h.snippet?.slice(0, 80) ?? ""}|||${h._id}`}
