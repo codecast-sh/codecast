@@ -150,12 +150,27 @@ function formatPart(part: string, isMac: boolean): string {
   }
 }
 
+export interface ShortcutConflict<A extends string> {
+  /** The colliding combo as resolved on this platform, modifiers in a fixed
+      order. */
+  combo: string;
+  /** The shared context tag; undefined = the global bindings. */
+  when?: string;
+  defs: ShortcutDef<A>[];
+}
+
 export interface ShortcutCatalog<A extends string> {
   shortcuts: ShortcutDef<A>[];
   isMac: boolean;
   matchShortcut(e: KeyboardEvent, def: ShortcutDef<A>): boolean;
   getShortcutsForAction(action: A): ShortcutDef<A>[];
   getShortcutsByContext(when?: string): ShortcutDef<A>[];
+  // Same-chord collisions: defs whose effective combo (after the mac variant
+  // resolves) and context tag coincide. A report, never an error — catalog
+  // order and handler decline semantics resolve these at dispatch, and some
+  // overlaps are deliberate (one chord shared by two surfaces where at most
+  // one claims it). For tests and settings UIs.
+  conflicts(): ShortcutConflict<A>[];
   formatShortcutParts(def: ShortcutDef<A>): string[];
   formatAcceleratorParts(accelerator: string): string[];
   formatShortcutLabel(action: A): string | null;
@@ -200,6 +215,22 @@ export function createShortcutCatalog<A extends string>(
     return shortcuts.filter(s => s.when === when);
   }
 
+  function conflicts(): ShortcutConflict<A>[] {
+    const groups = new Map<string, ShortcutConflict<A>>();
+    for (const def of shortcuts) {
+      const combo = (isMac && def.mac) ? def.mac : def.key;
+      const p = parseKeyCombo(combo);
+      const canonical = [
+        p.ctrl && 'ctrl', p.meta && 'meta', p.alt && 'alt', p.shift && 'shift', p.key,
+      ].filter(Boolean).join('+');
+      const key = `${def.when ?? ''} ${canonical}`;
+      const group = groups.get(key);
+      if (group) group.defs.push(def);
+      else groups.set(key, { combo: canonical, when: def.when, defs: [def] });
+    }
+    return [...groups.values()].filter(g => g.defs.length > 1);
+  }
+
   function formatShortcutParts(def: ShortcutDef<A>): string[] {
     const combo = (isMac && def.mac) ? def.mac : def.key;
     return combo.split('+').map(p => formatPart(p, isMac));
@@ -232,6 +263,7 @@ export function createShortcutCatalog<A extends string>(
     matchShortcut,
     getShortcutsForAction,
     getShortcutsByContext,
+    conflicts,
     formatShortcutParts,
     formatAcceleratorParts,
     formatShortcutLabel,
