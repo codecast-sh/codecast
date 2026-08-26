@@ -152,6 +152,7 @@ export async function openCdpScreencast(
     stopped = true;
     if (ackTimer) clearTimeout(ackTimer);
     clearInterval(pollTimer);
+    clearInterval(fallbackTimer);
     // Best effort: the CDP connection is ours alone, so closing it tears
     // the screencast down browser-side even if stopScreencast never lands.
     if (cdpSessionId) void conn.send("Page.stopScreencast", {}, cdpSessionId, 2000).catch(() => {});
@@ -184,6 +185,7 @@ export async function openCdpScreencast(
     if (stopped) return;
     if (ev.method === "Page.screencastFrame" && ev.sessionId === cdpSessionId) {
       const p = ev.params as { data: string; metadata: Record<string, number>; sessionId: number };
+      lastFrameAt = Date.now();
       handlers.onFrame({ data: p.data, width: p.metadata?.deviceWidth ?? 0, height: p.metadata?.deviceHeight ?? 0 });
       scheduleAck(p.sessionId);
     } else if (ev.method === "Target.detachedFromTarget" && (ev.params as any).sessionId === cdpSessionId) {
@@ -191,6 +193,40 @@ export async function openCdpScreencast(
       handlers.onGone();
     }
   });
+
+  // The screencast rides the compositor, and Chrome only composites VISIBLE
+  // tabs — a background tab, or the active tab of an occluded or minimized
+  // window, paints nothing and the screencast goes silent while staying
+  // "started". In a one-Chrome-many-agents world that is the common case, so
+  // silence is watched for: once no frame has arrived for a while, poll
+  // Page.captureScreenshot instead, which forces a frame regardless of
+  // visibility. Real screencast frames resuming (tab brought back to front)
+  // starve the watchdog and the stream switches back on its own.
+  let lastFrameAt = Date.now();
+  let lastFallbackData = "";
+  let capturing = false;
+  const staleAfterMs = Math.max(1200, opts.minIntervalMs * 3);
+  const fallbackTimer = setInterval(() => {
+    if (stopped || !cdpSessionId || capturing) return;
+    if (opts.shouldHold()) return;
+    if (Date.now() - lastFrameAt < staleAfterMs) return;
+    capturing = true;
+    conn
+      .send<{ data?: string }>("Page.captureScreenshot", { format: "jpeg", quality: opts.quality }, cdpSessionId, 5000)
+      .then((shot) => {
+        if (stopped || !shot?.data) return;
+        // A hidden page is usually static: don't resend the identical JPEG.
+        if (shot.data === lastFallbackData) return;
+        lastFallbackData = shot.data;
+        lastFrameAt = Date.now();
+        handlers.onFrame({ data: shot.data, width: 0, height: 0 });
+      })
+      .catch(() => {})
+      .finally(() => {
+        capturing = false;
+      });
+  }, Math.max(250, opts.minIntervalMs));
+  fallbackTimer.unref?.();
 
   const pollTimer = setInterval(() => {
     if (stopped) return;
