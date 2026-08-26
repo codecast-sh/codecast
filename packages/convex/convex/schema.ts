@@ -355,7 +355,8 @@ export default defineSchema({
       // Widened ahead of their clients (plan phases 1-2) so rows can store them
       // before descriptors exist; see shared ConvexAgentType.
       v.literal("opencode"),
-      v.literal("pi")
+      v.literal("pi"),
+      v.literal("grok")
     ),
     session_id: v.string(),
     slug: v.optional(v.string()),
