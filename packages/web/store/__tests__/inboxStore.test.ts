@@ -967,6 +967,31 @@ describe("categorizeSessions", () => {
       "conv-deferred",
     ]);
   });
+
+  it("sinks deferred sessions to the bottom of Done", () => {
+    // Same gesture, same rule: shift+backspace on a Done card must send it to
+    // the bottom of the Done queue, not leave it in timestamp order.
+    const doneBase = { ...baseSession, message_count: 3, agent_status: "done" as const };
+    const early: InboxSession = { ...doneBase, _id: "conv-done-early", session_id: "sd-early", updated_at: 100 };
+    const late: InboxSession = { ...doneBase, _id: "conv-done-late", session_id: "sd-late", updated_at: 200 };
+    // Deferred and OLDEST — a pure updated_at sort would put it first.
+    const deferred: InboxSession = { ...doneBase, _id: "conv-done-deferred", session_id: "sd-deferred", updated_at: 50, is_deferred: true };
+
+    const { done } = categorizeSessions(
+      {
+        [deferred._id]: deferred,
+        [early._id]: early,
+        [late._id]: late,
+      },
+      new Set(),
+    );
+
+    expect(done.map((s) => s._id)).toEqual([
+      "conv-done-early",
+      "conv-done-late",
+      "conv-done-deferred",
+    ]);
+  });
 });
 
 describe("mergeMessages — sync-recovery safety net", () => {
