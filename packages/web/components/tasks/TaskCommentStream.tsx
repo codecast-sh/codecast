@@ -310,7 +310,10 @@ export function TaskCommentStream({
   composerAutoOpen?: boolean;
 }) {
   const openLinkedSession = useOpenLinkedSession();
-  const sorted = [...comments].sort((a, b) => a.created_at - b.created_at);
+  // A cached row poisoned by a stale pending lock once carried a lone comment
+  // OBJECT here and crashed the whole Threads page. Hydration heals such rows
+  // now; this guard keeps one bad row from ever taking the page down again.
+  const sorted = (Array.isArray(comments) ? [...comments] : []).sort((a, b) => a.created_at - b.created_at);
   return (
     <div className="th-task-stream">
       {sorted.length === 0 ? (

@@ -5,9 +5,11 @@
 // there); this module injects codecast's session-shaped policy.
 import {
   partitionCacheRetention,
+  deriveRegistryMaps,
   expireExcludeTombstones as engineExpireExcludeTombstones,
 } from "@platform/engine";
 import { isConvexId } from "../lib/entityLinks";
+import { CLIENT_SYNC_REGISTRY } from "./clientSyncRegistry";
 
 // Retention for the persisted sessions collection, applied at hydration. The
 // in-memory sessions map is never-prune BY DESIGN (rows the UI holds must not
@@ -57,10 +59,14 @@ export function partitionSessionRetention(
 // 30d window as the cache retention above — age them out at hydration. Legacy
 // entries without a timestamp get stamped `now` and age out one window later.
 // include/field entries are local-first writes awaiting server acknowledgment:
-// never expired.
+// never expired — except field locks on fields the registry declares
+// unprotected (tasks.comments), which no current build can create; stale ones
+// persisted by older builds would override every server push forever.
+const { isUnprotectedField } = deriveRegistryMaps(CLIENT_SYNC_REGISTRY as any);
+
 export function expireExcludeTombstones(
   pending: Record<string, any>,
   now: number,
 ): Record<string, any> {
-  return engineExpireExcludeTombstones(pending, now, SESSION_CACHE_TTL_MS);
+  return engineExpireExcludeTombstones(pending, now, SESSION_CACHE_TTL_MS, isUnprotectedField);
 }
