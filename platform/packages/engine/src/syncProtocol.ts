@@ -72,7 +72,11 @@ function scalarFieldsEqual(a: any, b: any, ignoreFields?: Set<string>): boolean 
     // null is a scalar for our purposes; only non-null objects/arrays are skipped.
     const aScalar = av === null || typeof av !== "object";
     const bScalar = bv === null || typeof bv !== "object";
-    if (!aScalar || !bScalar) continue;
+    // A field crossing between scalar and object (null → {…}, {…} → undefined)
+    // is a real change, not nested churn: the anchor space's `anchor` going
+    // from null to a row is exactly what flips onboarding to the real page.
+    if (aScalar !== bScalar) return false;
+    if (!aScalar) continue;
     if (av !== bv) return false;
   }
   return true;

@@ -259,6 +259,19 @@ describe("identity reuse", () => {
     expect(table.a.status).toBe("busy");
   });
 
+  it("takes the incoming row when a field crosses between null and an object", () => {
+    const prev: Record<string, Row> = { user: { _id: "user", scope_type: "user", anchor: null } };
+    const { table } = applySyncTable<any>(
+      "anchorSpaces",
+      [{ _id: "user", scope_type: "user", anchor: { _id: "x1", name: "Anchor" } }],
+      {},
+      prev,
+      { isDelta: true },
+    );
+    expect(table.user).not.toBe(prev.user);
+    expect(table.user.anchor?.name).toBe("Anchor");
+  });
+
   it("ignores fields listed as churn for the version key", () => {
     const prev = { a: row("a", { updated_at: 1 }) };
     const { table } = applySyncTable("items", [row("a", { updated_at: 99 })], {}, prev, {
