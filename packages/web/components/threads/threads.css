@@ -340,6 +340,18 @@
   overflow-y: auto;
 }
 
+/* A card the DEFAULT rule opened is a skim, not the whole thread: its body
+   caps low and scrolls within itself (tail-pinned, so the newest lines are
+   the ones showing). A card the reader expands by hand keeps the full
+   windows above. */
+.th-card-auto .th-card-replies,
+.th-card-auto .th-page-comments { max-height: min(230px, 30vh); }
+
+.th-card-auto .th-card-open-comments,
+.th-card-auto .th-card-open-task { max-height: min(250px, 32vh); }
+
+.th-card-auto .th-question-context { max-height: 140px; }
+
 /* The comment thread on the card's own surface. Its composer wears the app's
    one composer frame — CommentKind hands CommentComposer the `ch-composer`
    class, which draws the border, background and focus ring AND cancels the
@@ -846,3 +858,46 @@
 }
 
 .th-head-done svg { color: var(--sol-green); }
+
+/* ── Task kind: the task itself on the card ── */
+
+/* Metadata chips joining the status row when the card is expanded. */
+.th-task-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--sol-text-muted);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+a.th-task-meta:hover { color: var(--sol-cyan); }
+
+.th-task-meta-age { margin-left: auto; }
+
+/* The task's description, above the comment scroller. Clamped it clips under
+   a fade; Show more lifts the clip. */
+.th-task-desc { padding: 4px 14px 0; }
+
+.th-task-desc-clip {
+  max-height: 76px;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, black 55%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, black 55%, transparent);
+}
+
+.th-task-desc-toggle,
+.th-task-earlier {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--sol-blue);
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.th-task-desc-toggle:hover,
+.th-task-earlier:hover { text-decoration: underline; }
+
+/* The reveal sits where the hidden comments would: above the visible tail. */
+.th-task-earlier { display: block; padding: 2px 0 6px; }

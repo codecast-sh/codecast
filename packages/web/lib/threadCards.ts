@@ -166,8 +166,8 @@ export const THREAD_KIND_META: Record<ThreadCardKind, ThreadKindMeta> = {
   },
 };
 
-/** The default view's empty copy: the three ways a thread reaches this page. */
-export const ALL_EMPTY_COPY = "Chat replies, session comments, task comments and page comments all land here.";
+/** The default view's empty copy: the ways a thread reaches this page. */
+export const ALL_EMPTY_COPY = "Chat replies, session comments, task comments and page comments land here when they have something new for you.";
 
 /** The collapsed card's count line, one shape for every kind: "3 replies",
  *  "1 comment", or "No messages yet" when there are none. */
@@ -311,6 +311,20 @@ export function questionCards(decisions: SessionDecisionItem[]): ThreadCardModel
 export function cardsForChip(cards: ThreadCardModel[], chip: ChipKey, includeSessions: boolean): ThreadCardModel[] {
   if (chip === "all") return cards.filter((c) => !c.browseOnly && (includeSessions || c.chip !== "session"));
   return cards.filter((c) => c.chip === chip);
+}
+
+/** The default view is an inbox: a card earns its place by carrying unread.
+ *  `held` is the visit's memory — a card admitted once stays until the page
+ *  is left, so a card marking itself read under the reader never vanishes
+ *  mid-read. Sessions are exempt: the Sessions switch asks for them by name,
+ *  and their unread has its own meaning (grown since last open). */
+export function unreadOnlyCards(cards: ThreadCardModel[], held: Set<string>): ThreadCardModel[] {
+  const out: ThreadCardModel[] = [];
+  for (const c of cards) {
+    if (c.unread > 0) held.add(c.id);
+    if (c.unread > 0 || held.has(c.id) || c.chip === "session") out.push(c);
+  }
+  return out;
 }
 
 /** Newest activity first. One merge sort across every source. The DMs chip is

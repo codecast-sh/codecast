@@ -110,7 +110,7 @@ export const ThreadCard = memo(function ThreadCard({
   const Expanded = spec.Expanded;
 
   return (
-    <section ref={ref} className={`th-card th-kind-${card.kind} ${unread ? "th-card-unread" : ""} ${expanded ? "th-card-expanded" : ""}`}>
+    <section ref={ref} className={`th-card th-kind-${card.kind} ${unread ? "th-card-unread" : ""} ${expanded ? "th-card-expanded" : ""} ${expanded && expandedBy === "auto" ? "th-card-auto" : ""}`}>
       <div className="th-card-head">
         <button type="button" className="th-card-hit" onClick={() => toggle(card)} aria-expanded={expanded}>
           <span className={`th-card-kind th-tone-${spec.tone}`} aria-label={spec.label} title={spec.label}>

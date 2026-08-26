@@ -11,18 +11,23 @@ import { ALL_EMPTY_COPY, THREAD_KIND_META, type ChipKey } from "../../lib/thread
 export function ThreadsEmpty({
   chip,
   sessionsOn,
+  caughtUp,
   onNewMessage,
 }: {
   chip: ChipKey;
   /** The Sessions toggle is on (only meaningful under All). */
   sessionsOn: boolean;
+  /** All view only: the viewer HAS threads, just nothing unread — good news,
+   *  not an empty page. */
+  caughtUp?: boolean;
   onNewMessage?: () => void;
 }) {
-  const answered = chip === "question";
-  const Icon = answered ? CheckCircle2 : chip === "all" ? MessagesSquare : THREAD_KIND_META[chip].icon;
-  const tone = answered ? "green" : chip === "all" ? "blue" : THREAD_KIND_META[chip].tone;
+  const goodNews = chip === "question" || !!caughtUp;
+  const Icon = goodNews ? CheckCircle2 : chip === "all" ? MessagesSquare : THREAD_KIND_META[chip].icon;
+  const tone = goodNews ? "green" : chip === "all" ? "blue" : THREAD_KIND_META[chip].tone;
   const title =
-    chip === "all" ? "No threads yet"
+    caughtUp ? "All caught up"
+    : chip === "all" ? "No threads yet"
     : chip === "chat" ? "No channel threads yet"
     : chip === "dm" ? "No direct messages yet"
     : chip === "comment" ? "No comment threads yet"
@@ -32,7 +37,8 @@ export function ThreadsEmpty({
   // The default view holds every kind, so it keeps one title and one sentence.
   // The Sessions switch adds a source; it does not replace the others.
   const copy =
-    chip === "all" ? (sessionsOn ? `${ALL_EMPTY_COPY} Your inbox sessions show here too.` : ALL_EMPTY_COPY)
+    caughtUp ? "Nothing here is unread for you. Every thread, read or not, is under its chip above."
+    : chip === "all" ? (sessionsOn ? `${ALL_EMPTY_COPY} Your inbox sessions show here too.` : ALL_EMPTY_COPY)
     : THREAD_KIND_META[chip].emptyCopy;
   return (
     <div className="ch-empty">

@@ -304,23 +304,35 @@ export function TaskCommentStream({
   shortId,
   comments,
   composerAutoOpen,
+  initialLimit,
 }: {
   shortId: string | undefined;
   comments: TaskCommentRow[];
   composerAutoOpen?: boolean;
+  /** Render only the newest N comments, the rest behind a "show earlier"
+   *  reveal (the Threads card). Unset renders the whole stream. */
+  initialLimit?: number;
 }) {
   const openLinkedSession = useOpenLinkedSession();
+  const [showAll, setShowAll] = useState(false);
   // A cached row poisoned by a stale pending lock once carried a lone comment
   // OBJECT here and crashed the whole Threads page. Hydration heals such rows
   // now; this guard keeps one bad row from ever taking the page down again.
   const sorted = (Array.isArray(comments) ? [...comments] : []).sort((a, b) => a.created_at - b.created_at);
+  const hidden = initialLimit !== undefined && !showAll ? Math.max(0, sorted.length - initialLimit) : 0;
+  const visible = hidden > 0 ? sorted.slice(hidden) : sorted;
   return (
     <div className="th-task-stream">
       {sorted.length === 0 ? (
         <div className="th-card-note">No comments yet.</div>
       ) : (
         <div className="space-y-0">
-          {sorted.map((c) => (
+          {hidden > 0 && (
+            <button type="button" className="th-task-earlier" onClick={() => setShowAll(true)}>
+              Show {hidden} earlier {hidden === 1 ? "comment" : "comments"}
+            </button>
+          )}
+          {visible.map((c) => (
             <TaskCommentItem key={c._id} comment={c} openLinkedSession={openLinkedSession} />
           ))}
         </div>
