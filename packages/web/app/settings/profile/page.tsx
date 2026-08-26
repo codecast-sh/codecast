@@ -9,6 +9,7 @@ import { Button } from "../../../components/ui/button";
 import { Textarea } from "../../../components/ui/textarea";
 import { Switch } from "../../../components/ui/switch";
 import { useInboxStore } from "../../../store/inboxStore";
+import { useWalkieDoor } from "../../../hooks/useWalkie";
 
 export default function ProfilePage() {
   const user = useQuery(api.users.getCurrentUser);
@@ -331,11 +332,11 @@ function SoundsToggle() {
  *  closed door mutes a speaker, it never silences them, which is why the copy
  *  says what still happens rather than only what stops. */
 function WalkieToggle() {
-  const open = useInboxStore((s) => (s.currentUser as any)?.walkie_pref !== "off");
-  const setWalkiePref = useInboxStore((s) => s.setWalkiePref);
-  return (
-    <Switch checked={open} onCheckedChange={(v) => setWalkiePref(v ? "team" : "off")} />
-  );
+  // The snooze is part of this answer, not a separate one: a switch reading
+  // "on" through the hour somebody snoozed is the control contradicting the
+  // thing it controls. Turning it on lifts the snooze too.
+  const { open, setOpen } = useWalkieDoor();
+  return <Switch checked={open} onCheckedChange={setOpen} />;
 }
 
 function ChatSoundsToggle() {

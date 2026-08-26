@@ -1,18 +1,29 @@
 // The walkie's own surface, and the reason the call dock has a second shape.
 //
-// A burst puts you in a real call room — the engine joins it muted so the voice
-// comes out of the existing audio host — so the ordinary dock would appear for
+// A burst puts you in a real call room, so the ordinary dock would appear for
 // every three seconds of someone's voice: a 320x250 floating window with a
 // video grid and a hang-up button, for a sentence. That is the wrong weight,
 // and two floating surfaces at once would be worse. So while the walkie owns
 // the room, THIS is the dock: one compact strip that says who is talking, shows
-// the words as they arrive, and offers the two things anybody wants next —
-// answer, or go to the conversation.
+// the words as they arrive, and offers what anybody wants next.
 //
-// The moment it stops being a walkie and becomes a huddle — the person opens
-// their own mic — ownership ends and the ordinary dock takes the room back.
-// `call.muted` is the test, which is the same signal the engine's linger uses
-// to decide the room has become a conversation.
+// WHAT IT OFFERS IS THE WHOLE UPGRADE. A burst and a call are the same room —
+// the difference is only whether somebody decided to be in it — so stepping in
+// is one button rather than a second surface: Join live, and the strip becomes
+// the call dock in place, same seat, same open microphone, nothing torn down.
+// Beside it, Snooze, because the answer to a voice arriving is as often "not
+// now" as it is "yes"; and the key itself, to talk back without joining
+// anything at all.
+//
+// AND IT HAS TO SAY THAT THE MICROPHONE IS OPEN. Auto-listen is hot now:
+// hearing a teammate means they can hear you. That is the founder's decision
+// and it is the one thing on this screen a person must never meet by accident,
+// so it takes the top line with Mute in the same breath.
+//
+// The moment it stops being a walkie and becomes a huddle is `joinedLive`, not
+// the mute. The mute used to be the test and could not stay one — every
+// listener's mic is open now, so it says who can be heard and nothing at all
+// about whether a conversation started (hooks/useWalkie, ct-46032).
 import { createPortal } from "react-dom";
 import { BellOff, MessageSquare, MicOff, X } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -52,7 +63,10 @@ function LiveTail({ messageId }: { messageId: string }) {
   );
 }
 
-export function WalkieBanner({ leaving = false }: { leaving?: boolean } = {}) {
+export function WalkieBanner({
+  leaving = false,
+  onLeft,
+}: { leaving?: boolean; onLeft?: () => void } = {}) {
   const status = useWalkieStatus();
   const router = useRouter();
   // Three scalars, so a strip mounted on every page cannot be woken by anything
@@ -121,7 +135,10 @@ export function WalkieBanner({ leaving = false }: { leaving?: boolean } = {}) {
   const hotMic = !sending && !call.muted && call.phase === "connected";
 
   return createPortal(
-    <div className={`walkie-strip-host ${leaving ? "walkie-strip-leaving" : ""}`}>
+    <div
+      className={`walkie-strip-host ${leaving ? "walkie-strip-leaving" : ""}`}
+      onAnimationEnd={leaving ? onLeft : undefined}
+    >
       <div
         className={`walkie-strip ${incoming || sending ? "walkie-strip-live" : ""} ${
           tone ? `walkie-strip-${tone}` : ""
@@ -175,44 +192,49 @@ export function WalkieBanner({ leaving = false }: { leaving?: boolean } = {}) {
         {incoming && <LiveTail messageId={incoming.messageId} />}
         {quiet && <div className="walkie-strip-quiet">recording, no live words</div>}
 
-        <div className="walkie-strip-actions">
-          {/* Not while our own key is down: the reply to a burst you are still
-              speaking is the same burst, and there is nothing to step into
-              that we are not already in. */}
-          {!sending && (
-            <>
-              {/* THE UPGRADE, and the reason this strip exists. It is the only
-                  violet on a surface that is deliberately warm and cool
-                  everywhere else, because violet is what calls are — pressing
-                  it is the moment a burst becomes one. */}
-              <button
-                type="button"
-                className="walkie-strip-join"
-                onClick={() => void joinWalkieLive(target.roomKey)}
-              >
-                Join live
-              </button>
-              <button
-                type="button"
-                className="walkie-strip-snooze"
-                title="No bursts play here for an hour. They still arrive as messages."
-                onClick={() => {
-                  useInboxStore.getState().snoozeWalkie(Date.now() + SNOOZE_MS);
-                  shutWalkieDoor();
-                }}
-              >
-                <BellOff className="h-3.5 w-3.5" />
-                Snooze
-              </button>
-              <WalkiePttButton
-                roomKey={target.roomKey}
-                resolveChannelId={() => target.channelId}
-                size="md"
-                title="Hold to reply"
-              />
-            </>
-          )}
-        </div>
+        {/* Nothing while our own key is down: the reply to a burst you are
+            still speaking is the same burst, and there is nothing to step into
+            that we are not already in. The ROW goes rather than its contents —
+            an empty row is still a row, and it made the strip taller mid-hold
+            than it is at rest. */}
+        {!sending && (
+          <div className="walkie-strip-actions">
+            {/* THE UPGRADE, and the reason this strip exists. It is the only
+                violet on a surface that is deliberately warm and cool
+                everywhere else, because violet is what calls are — pressing it
+                is the moment a burst becomes one. */}
+            <button
+              type="button"
+              className="walkie-strip-join"
+              onClick={() => void joinWalkieLive(target.roomKey)}
+            >
+              Join live
+            </button>
+            {/* And the honest opposite of it. The answer to a voice arriving is
+                as often "not now" as it is "yes", and with a hot microphone
+                that answer has to be reachable in the same glance rather than
+                in a settings page. */}
+            <button
+              type="button"
+              className="walkie-strip-snooze"
+              title="No bursts play here for an hour. They still arrive as messages."
+              onClick={() => {
+                useInboxStore.getState().snoozeWalkie(Date.now() + SNOOZE_MS);
+                shutWalkieDoor();
+              }}
+            >
+              <BellOff className="h-3.5 w-3.5" />
+              Snooze
+            </button>
+            {/* Talking back without joining anything: the walkie, still. */}
+            <WalkiePttButton
+              roomKey={target.roomKey}
+              resolveChannelId={() => target.channelId}
+              size="md"
+              title="Hold to reply"
+            />
+          </div>
+        )}
       </div>
     </div>,
     document.body,
@@ -250,17 +272,21 @@ function HotMicLine({ name }: { name: string }) {
   );
 }
 
-/** Whoever is talking, from the live roster this client already has. */
+/**
+ * Whoever is talking, from the live roster this client already has.
+ *
+ * Subscribed as the two scalars it renders rather than as the member row.
+ * `teamMembers` is replaced wholesale on every push, so a selector returning
+ * the row itself hands back a new reference on every heartbeat in the team and
+ * re-renders this on all of them — for an avatar that did not change.
+ */
 function TalkerFace({ userId, name }: { userId: string; name: string }) {
-  const member = useInboxStore((st: any) =>
-    (st.teamMembers ?? []).find((m: any) => String(m?._id) === String(userId)),
-  );
+  const find = (st: any) => (st.teamMembers ?? []).find((m: any) => String(m?._id) === String(userId));
+  const image = useInboxStore((st: any) => memberAvatarUrl(find(st)));
+  const displayName = useInboxStore((st: any) => memberDisplayName(find(st), name));
   return (
     <span className="walkie-strip-face">
-      <Avatar
-        m={{ user_image: memberAvatarUrl(member), user_name: memberDisplayName(member, name) }}
-        size={26}
-      />
+      <Avatar m={{ user_image: image, user_name: displayName }} size={26} />
     </span>
   );
 }

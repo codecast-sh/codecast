@@ -6,11 +6,17 @@
 // deliberately without the transcript so a burst's own words do not re-push it
 // to every watcher on every sentence).
 //
-// The DOOR is decided here and nowhere else: the walkie pref, the manual busy
-// flag, and whether the person is actually at this machine. The engine applies
-// it (lib/calls/walkie), which keeps the policy readable in one place and the
-// media plane out of React.
-import { useCallback, useEffect, useMemo, useState } from "react";
+// The DOOR is decided here and nowhere else: the walkie pref, the snooze, the
+// manual busy flag, and whether the person is actually at this machine. The
+// engine applies it (lib/calls/walkie), which keeps the policy readable in one
+// place and the media plane out of React.
+//
+// It carries more weight than it used to. Auto-listen is HOT — hearing a
+// teammate means they can hear you — so this door is now also the only thing
+// standing between a burst and somebody's microphone opening without them
+// touching anything. That is why it is a named rule below rather than a
+// boolean expression buried in a hook.
+import { useCallback, useMemo, useState } from "react";
 import { useConvex, useConvexAuth } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
@@ -41,6 +47,35 @@ const api = _api as any;
 function atTheMachine(): boolean {
   if (typeof document === "undefined") return false;
   return document.visibilityState === "visible";
+}
+
+/**
+ * THE DOOR: whether a teammate's burst may play out loud on this client.
+ *
+ * A rule rather than an inline expression because a hot microphone hangs off
+ * it. Auto-listen is unmuted now — hearing somebody means they can hear you —
+ * so this is no longer only "may their voice reach me", it is also "may my
+ * microphone open without my touching anything". Every clause below is load
+ * bearing for that second question, and there is exactly one copy of them.
+ *
+ * The pref is open by default: a teammate's voice reaching you is the point of
+ * the feature, and "off" is the deliberate act. The snooze is the same door
+ * shut for an hour — pressed to stop the voice that is playing right now, not
+ * to change what the product is. Neither touches DELIVERY: a burst behind a
+ * closed door still lands in the DM with its unread and its push, so nobody
+ * can be silenced by somebody else's setting.
+ */
+export function walkieDoorOpen(input: {
+  callsOn: boolean;
+  /** The person is at this machine, with this window in front of them. */
+  present: boolean;
+  snoozed: boolean;
+  pref?: string | null;
+  status?: string | null;
+}): boolean {
+  if (!input.callsOn || !input.present || input.snoozed) return false;
+  if (input.pref === "off") return false;
+  return input.status !== "busy";
 }
 
 export function useWalkieSync(): void {
@@ -99,16 +134,13 @@ export function useWalkieSync(): void {
   const now = useNowWhen((n) => (snoozedUntil > n ? "shut" : "open"), 30_000);
   const snoozed = snoozedUntil > now;
 
-  // The pref is open by default: a teammate's voice reaching you is the point
-  // of the feature, and "off" is the deliberate act. The snooze is the same
-  // door for an hour — pressed to stop the voice that is playing right now,
-  // not to change what the product is.
-  const doorOpen =
-    callsOn &&
-    present &&
-    !snoozed &&
-    s.currentUser?.walkie_pref !== "off" &&
-    s.currentUser?.status !== "busy";
+  const doorOpen = walkieDoorOpen({
+    callsOn,
+    present,
+    snoozed,
+    pref: s.currentUser?.walkie_pref,
+    status: s.currentUser?.status,
+  });
 
   // One object, changing exactly when the engine's answer could change: a new
   // burst, one ending, or the door opening or closing under the person's feet.
@@ -185,15 +217,21 @@ function useWalkieUpgrade(): void {
   const mine = walkieRoomOf(status) === roomKey && !!roomKey;
   const upgraded = mine && otherJoinedLive(roster, s.currentUser?._id);
 
-  useEffect(() => {
-    if (!upgraded || !roomKey) return;
-    if (getWalkieStatus().joinedLive === roomKey) return;
-    markWalkieUpgraded(roomKey);
-    soundCallJoin();
-    if (readJoinPrefs().cameraOn && !useInboxStore.getState().call.camera) {
-      void setCamera(true);
-    }
-  }, [upgraded, roomKey]);
+  // Fired through the same change-driven hook the rest of this file uses: it
+  // runs when its value CHANGES and skips `undefined`, which is exactly one
+  // run per room somebody steps into and none at all the rest of the time.
+  useConvexSync(
+    upgraded && roomKey ? roomKey : undefined,
+    useCallback((room: string) => {
+      // Already known — my own Join live, or a re-push of the same roster.
+      if (getWalkieStatus().joinedLive === room) return;
+      markWalkieUpgraded(room);
+      soundCallJoin();
+      if (readJoinPrefs().cameraOn && !useInboxStore.getState().call.camera) {
+        void setCamera(true);
+      }
+    }, []),
+  );
 }
 
 /** The room the walkie considers its own, for the watcher above: the one being

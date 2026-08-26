@@ -119,6 +119,97 @@ describe("joinRoom rejoin after lease lapse", () => {
   });
 });
 
+// THE EXPLICIT-JOIN STAMP. A burst seats everyone who hears it, so being in the
+// room says nothing about whether a conversation started — and the microphone
+// stopped answering that question when auto-listen went hot. `walkie_join` is
+// the intent, recorded rather than inferred, and both sides read it back off
+// the roster they already subscribe to.
+describe("joinRoom: stamping a deliberate step into a burst", () => {
+  function stampCtx(existing?: any) {
+    const now = Date.now();
+    const rows: any[] = [{ _id: "m1", user_id: "u1", team_id: "t1" }];
+    if (existing) {
+      rows.push({
+        _id: "cm1", room_key: "channel:ch1", team_id: "t1", user_id: "u1", user_name: "U",
+        joined_at: now - 5_000, last_seen: now - 1_000, muted: true, camera: false, sharing: false,
+        ...existing,
+      });
+    }
+    const patches: any[] = [];
+    const inserted: any[] = [];
+    const ctx: any = {
+      auth: { getUserIdentity: async () => ({ subject: "u1|sess", tokenIdentifier: "x" }) },
+      db: {
+        query: (_t: string) => ({
+          withIndex: (_i: string, builder: any) => {
+            const eqs: Array<[string, any]> = [];
+            builder({ eq(f: string, v: any) { eqs.push([f, v]); return this; } });
+            const hit = rows.filter((r) => eqs.every(([f, v]) => String(r[f]) === String(v)));
+            return { collect: async () => hit, unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
+          },
+        }),
+        get: async (id: string) =>
+          id === "u1" ? { _id: "u1", name: "U" }
+          : id === "ch1" ? { _id: "ch1", team_id: "t1" }
+          : id === "t1" ? { _id: "t1", name: "T", features: { calls: true, chat: true } }
+          : rows.find((r) => r._id === id) ?? null,
+        delete: async () => {},
+        patch: async (_id: string, doc: any) => { patches.push(doc); },
+        insert: async (_t: string, doc: any) => { inserted.push(doc); return "cm2"; },
+      },
+    };
+    return { ctx, patches, inserted };
+  }
+
+  async function join(ctx: any, args: any) {
+    const { joinRoom } = await import("./calls");
+    const handler = (joinRoom as any)._handler ?? (joinRoom as any).handler;
+    return handler(ctx, { room_key: "channel:ch1", ...args });
+  }
+
+  test("an ordinary join carries no stamp", async () => {
+    const { ctx, inserted } = stampCtx();
+    await join(ctx, { muted: true });
+    expect(inserted[0].walkie_joined_at).toBeUndefined();
+  });
+
+  test("a deliberate step into a burst stamps the new seat", async () => {
+    const { ctx, inserted } = stampCtx();
+    const before = Date.now();
+    await join(ctx, { muted: false, walkie_join: true });
+    expect(inserted[0].walkie_joined_at).toBeGreaterThanOrEqual(before);
+    expect(inserted[0].muted).toBe(false);
+  });
+
+  test("stepping in from a seat the walkie already took stamps that seat", async () => {
+    // The real shape of Join live: auto-listen seated this person before they
+    // decided anything, so the deliberate gesture finds a row rather than
+    // making one. Stamping only on insert would have missed every upgrade the
+    // feature actually produces.
+    const { ctx, patches } = stampCtx({ muted: false });
+    await join(ctx, { muted: false, walkie_join: true });
+    expect(patches[0].walkie_joined_at).toBeGreaterThan(0);
+  });
+
+  test("keeps the FIRST moment somebody stepped in", async () => {
+    // A heartbeat recovery re-takes the seat through this same mutation. The
+    // conversation started when they pressed the button, not when the network
+    // hiccupped.
+    const { ctx, patches } = stampCtx({ walkie_joined_at: 1_000 });
+    await join(ctx, { walkie_join: true });
+    expect(patches[0].walkie_joined_at).toBe(1_000);
+  });
+
+  test("an ordinary rejoin never erases a stamp already there", async () => {
+    // Only leaving ends a call, and leaving deletes the row. Nothing else may
+    // take the stamp back — a mute or a lease refresh would otherwise demote a
+    // live conversation to a burst on both people's screens.
+    const { ctx, patches } = stampCtx({ walkie_joined_at: 1_000 });
+    await join(ctx, { muted: true });
+    expect(patches[0].walkie_joined_at).toBe(1_000);
+  });
+});
+
 // invite fan-out: one mutation rings many. Each recipient gets their own row
 // and their own outcome; teammates outside the room's anchor are rung (the
 // ring is their grant); strangers to the team are refused per row, never by

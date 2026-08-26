@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { Rnd } from "react-rnd";
 import { AppWindow, ChevronUp, Maximize2, Pin, PinOff, Video, VideoOff } from "lucide-react";
@@ -73,7 +73,7 @@ export function CallDock() {
   // beside `walkieOwnsCall` because it is a rule about the walkie.
   const surface = callDockSurface(walkie, call, { expanded });
   const walkieOwns = surface === "walkie";
-  const morphing = useUpgradeMorph(surface, bounds, setBounds);
+  const { morphing, onMorphEnd } = useUpgradeMorph(surface, bounds, setBounds);
   useEffect(() => {
     setExpanded((open) =>
       nextStageOpen(open, {
@@ -105,8 +105,9 @@ export function CallDock() {
   // whose transformed ancestors would otherwise capture a fixed overlay.
   return createPortal(
     <>
-      {/* Both surfaces, for the length of the morph. */}
-      {morphing && <WalkieBanner leaving />}
+      {/* Both surfaces, for the length of the morph. The strip says when it is
+          done rather than being timed out from here. */}
+      {morphing && <WalkieBanner leaving onLeft={onMorphEnd} />}
       {pinned ? (
         <MiniWindow
           call={call}
@@ -143,9 +144,6 @@ export function CallDock() {
 type Bounds = { x: number; y: number; width: number; height: number };
 const MINI_W = 320;
 const MINI_H = 250;
-/** How long the strip and the dock share the screen while one becomes the
- *  other. Matched to the two keyframes in walkie.css. */
-const MORPH_MS = 200;
 // Top right, under the header — where the palette-style overlays live.
 function defaultBounds(): Bounds {
   const vw = typeof window === "undefined" ? 1200 : window.innerWidth;
@@ -168,32 +166,43 @@ function stripBounds(): Bounds {
 /**
  * The strip just became the dock.
  *
- * True for the length of the animation after the surface leaves "walkie" for
- * one of the call's own shapes, which in practice is one event: somebody
- * pressed Join live. The dock is placed in the strip's corner on that edge —
- * unless the person has already dragged the dock somewhere, in which case the
- * place they put it outranks the animation.
+ * True from the moment the surface leaves "walkie" for one of the call's own
+ * shapes — in practice one event, somebody pressing Join live — until the
+ * strip's exit animation reports itself finished. The dock is placed in the
+ * strip's corner on that edge, unless the person has already dragged the dock
+ * somewhere, in which case the place they put it outranks the animation.
+ *
+ * Settled during the render that SEES the change, the same way this component
+ * already settles `expanded`: React re-runs and throws the first pass away, so
+ * there is no committed frame showing the dock without its morph.
+ *
+ * ENDED BY `animationend` RATHER THAN BY A TIMER. The duration then lives in
+ * the stylesheet beside the keyframes instead of in a constant here that
+ * somebody has to remember to keep in step — and a reduced-motion run, which
+ * shortens the animation rather than removing it, ends correctly for free.
  */
 function useUpgradeMorph(
   surface: DockSurface,
   bounds: Bounds | null,
   onBounds: (b: Bounds) => void,
-): boolean {
+): { morphing: boolean; onMorphEnd: () => void } {
   const prev = useRef<DockSurface>(surface);
   const [morphing, setMorphing] = useState(false);
-  useEffect(() => {
+  if (prev.current !== surface) {
     const was = prev.current;
     prev.current = surface;
-    if (was !== "walkie" || surface === "walkie" || surface === "none") return;
-    if (!bounds) onBounds(stripBounds());
-    setMorphing(true);
-    const t = setTimeout(() => setMorphing(false), MORPH_MS);
-    return () => clearTimeout(t);
-    // `bounds` is read at the edge, never a reason to re-run: a drag mid-morph
-    // must not restart it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [surface]);
-  return morphing;
+    if (was === "walkie" && surface === "dock") {
+      if (!bounds) onBounds(stripBounds());
+      setMorphing(true);
+    }
+  }
+  // Self-correcting, so the flag can never outlive the thing it describes: the
+  // strip's own `animationend` is what normally ends the morph, and the strip
+  // only renders on the dock branch — so any surface that returns before it
+  // (the stage, a call that ended, the panel taking the room) would otherwise
+  // leave this true and flash a strip out on some later, unrelated frame.
+  if (morphing && surface !== "dock") setMorphing(false);
+  return { morphing, onMorphEnd: useCallback(() => setMorphing(false), []) };
 }
 
 // One sentence for where the call stands, shared by the pill and the window.

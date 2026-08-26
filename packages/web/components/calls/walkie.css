@@ -274,7 +274,11 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .walkie-strip-leaving { animation: none; opacity: 0; }
+  /* Shortened rather than removed. The strip's exit is what tells React the
+     morph is over (`animationend`), so an animation that never runs is an
+     animation that never ends — and the strip would sit there over the dock
+     for good. One millisecond is not motion, and it still fires. */
+  .walkie-strip-leaving { animation-duration: 1ms; }
   .call-dock-morph { animation: none; }
 }
 
