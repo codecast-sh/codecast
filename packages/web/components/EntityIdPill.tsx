@@ -6,11 +6,6 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
 import {
   Target,
-  Circle,
-  CircleDot,
-  CheckCircle2,
-  CircleDotDashed,
-  XCircle,
   ArrowUpRight,
   AlertTriangle,
   ArrowUp,
@@ -22,6 +17,7 @@ import {
   Folder,
   Zap,
 } from "lucide-react";
+import { TASK_STATUS, type TaskStatus } from "./TaskStatusBadge";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
 import { stripMarkdown, docContentPreview } from "../lib/notificationText";
 import {
@@ -50,22 +46,14 @@ const api = _api as any;
 
 export { isEntityId };
 
-const STATUS_ICON: Record<string, any> = {
-  draft: CircleDotDashed,
-  open: Circle,
-  in_progress: CircleDot,
-  in_review: CircleDot,
-  done: CheckCircle2,
-  dropped: XCircle,
-  backlog: Circle,
-};
+// Task status glyph/color/label come from the canonical TASK_STATUS vocabulary
+// (TaskStatusBadge) — the StatusCircle "fill" icons, so a task reads the same
+// here as on the board. These maps cover PLAN statuses only.
+const taskVisual = (status?: string | null) =>
+  TASK_STATUS[(status || "open") as TaskStatus] ?? TASK_STATUS.open;
 
 const STATUS_COLOR: Record<string, string> = {
   draft: "text-gray-400",
-  open: "text-sol-blue",
-  backlog: "text-gray-400",
-  in_progress: "text-sol-yellow",
-  in_review: "text-sol-violet",
   done: "text-sol-green",
   dropped: "text-gray-500",
   active: "text-sol-green",
@@ -75,10 +63,6 @@ const STATUS_COLOR: Record<string, string> = {
 
 const STATUS_LABEL: Record<string, string> = {
   draft: "Draft",
-  open: "Open",
-  backlog: "Backlog",
-  in_progress: "In Progress",
-  in_review: "In Review",
   done: "Done",
   dropped: "Dropped",
   active: "Active",
@@ -151,9 +135,7 @@ function PersonRow({ label, person }: { label: string; person: { name?: string; 
 }
 
 function TaskHoverContent({ task }: { task: any }) {
-  const StatusIcon = STATUS_ICON[task.status || "open"] || Circle;
-  const statusColor = STATUS_COLOR[task.status || "open"] || "text-gray-400";
-  const statusLabel = STATUS_LABEL[task.status] || task.status;
+  const { icon: StatusIcon, color: statusColor, label: statusLabel } = taskVisual(task.status);
   const priority = PRIORITY_CONFIG[task.priority];
   const { creator, assignee } = taskPeople(task);
 
@@ -254,8 +236,7 @@ function PlanHoverContent({ plan }: { plan: any }) {
       {tasks.length > 0 && (
         <div className="space-y-0.5 pl-[22px] max-h-[120px] overflow-y-auto">
           {tasks.slice(0, 6).map((t: any) => {
-            const Icon = STATUS_ICON[t.status] || Circle;
-            const color = STATUS_COLOR[t.status] || "text-gray-400";
+            const { icon: Icon, color } = taskVisual(t.status);
             return (
               <div key={t._id} className="flex items-center gap-1.5 py-0.5 text-[10px]">
                 <Icon className={`w-2.5 h-2.5 flex-shrink-0 ${color}`} />
@@ -747,6 +728,10 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
   const entity: any = served ?? seed;
   const status = entity?.status;
 
+  // A task pill's icon is the StatusCircle at the task's status, in the
+  // status's own color — the pill chrome stays one consistent task color
+  // (magenta) while the disc's fill and tint say where the work stands.
+  const taskV = isTask ? taskVisual(status) : null;
   const Icon = isSession
     ? MessageSquare
     : isPlan
@@ -757,7 +742,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
           ? FileText
           : type === "project"
             ? Folder
-            : STATUS_ICON[status || "open"] || Circle;
+            : taskV!.icon;
 
   const colors = isSession
     ? "bg-sol-blue/10 text-sol-blue border-sol-blue/20 hover:bg-sol-blue/20"
@@ -769,7 +754,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
           ? "bg-sol-green/10 text-sol-green border-sol-green/20 hover:bg-sol-green/20"
           : type === "project"
             ? "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20"
-            : "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/20 hover:bg-sol-yellow/20";
+            : "bg-sol-magenta/10 text-sol-magenta border-sol-magenta/20 hover:bg-sol-magenta/20";
 
   // One label rule for every type, shared with mobile: the pill reads as the
   // object's NAME, and the id moves to the hover card. A trigger prefers its
@@ -854,7 +839,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
             {isSession && (session?.author_name || session?.author_avatar) ? (
               <AuthorAvatar name={session.author_name} avatar={session.author_avatar} size={14} />
             ) : (
-              <Icon className="w-3 h-3" />
+              <Icon className={`w-3 h-3 ${taskV ? taskV.color : ""}`} />
             )}
             {((isSession && status === "active") || (isTrigger && status === "running")) && (
               <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />

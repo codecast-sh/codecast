@@ -28,12 +28,12 @@ const TYPE_LABEL: Record<EntityType, string> = {
   trigger: 'Trigger',
 };
 
-// Web pill palette: session=blue, plan=cyan, task=yellow, doc=green,
+// Web pill palette: session=blue, plan=cyan, task=magenta, doc=green,
 // project=violet, trigger=orange.
 const TYPE_COLOR: Record<EntityType, string> = {
   session: Theme.blue,
   plan: Theme.cyan,
-  task: '#b58900',
+  task: Theme.magenta,
   doc: Theme.green,
   project: Theme.violet,
   trigger: Theme.orange,
@@ -46,6 +46,18 @@ const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']
   doc: 'file-text',
   project: 'folder',
   trigger: 'zap',
+};
+
+// Mobile stand-in for web's StatusCircle glyphs: the circle "fills in" as the
+// task progresses (disc = started, check/x = finished), tinted with the same
+// status colors the web board uses.
+const TASK_STATUS_ICON: Record<string, { icon: React.ComponentProps<typeof Feather>['name']; color: string }> = {
+  backlog: { icon: 'circle', color: Theme.textDim },
+  open: { icon: 'circle', color: Theme.blue },
+  in_progress: { icon: 'disc', color: Theme.accent },
+  in_review: { icon: 'disc', color: Theme.violet },
+  done: { icon: 'check-circle', color: Theme.green },
+  dropped: { icon: 'x-circle', color: Theme.textDim },
 };
 
 /**
@@ -131,7 +143,14 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
       onPress={route ? () => router.push(route as any) : undefined}
       suppressHighlighting
     >
-      <Feather name={TYPE_ICON[type]} size={10} color={color} />
+      {type === 'task' ? (
+        (() => {
+          const s = TASK_STATUS_ICON[entity?.status || 'open'] ?? TASK_STATUS_ICON.open;
+          return <Feather name={s.icon} size={10} color={s.color} />;
+        })()
+      ) : (
+        <Feather name={TYPE_ICON[type]} size={10} color={color} />
+      )}
       {isSession && entity?.status === 'active' && <RNText style={{ color: Theme.greenBright, fontSize: 8 }}>{' '}●</RNText>}
       {/* NBSP so the icon never strands on the previous line when the pill wraps */}
       {' '}{label}
