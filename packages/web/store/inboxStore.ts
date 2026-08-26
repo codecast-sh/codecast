@@ -3018,7 +3018,13 @@ export function findReusableBlankSession(
 export type LiveRoom = {
   room_key: string;
   team_id: string;
+  /** The room's door, as a fact about the ROOM: what the lock glyph paints. */
   locked: boolean;
+  /** May THIS viewer walk in right now — the server's own authorizeRoom answer.
+   *  A lock shuts the open door only, so a member of the room or a guest
+   *  holding a live grant is still true here while `locked` is too. This, never
+   *  `locked`, decides Join versus Knock. */
+  can_join: boolean;
   redacted: boolean;
   title?: string;
   members: { user_id: string; user_name?: string; user_image?: string; muted?: boolean }[];
