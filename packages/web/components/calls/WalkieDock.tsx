@@ -71,10 +71,17 @@ export function WalkieBanner() {
           <span className="walkie-strip-pulse" aria-hidden="true">
             <span className="walkie-strip-dot" />
           </span>
-          <span className="walkie-strip-name">{headline}</span>
+          {/* A teammate's voice arriving is the one thing here that happens TO
+              you rather than because of you, and it was announced only by the
+              sound and the strip appearing. Polite, not assertive: it is worth
+              saying, and never worth cutting somebody off mid-sentence to say. */}
+          <span className="walkie-strip-name" role="status" aria-live="polite">
+            {headline}
+          </span>
           <button
             type="button"
             className="walkie-strip-icon"
+            aria-label="Leave the room"
             title="Leave the room"
             onClick={() => void leaveCall()}
           >
