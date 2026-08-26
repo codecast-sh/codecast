@@ -24,17 +24,19 @@ import {
   CODEX_MODEL_OPTIONS,
   OPENCODE_MODEL_OPTIONS,
   PI_MODEL_OPTIONS,
+  GROK_MODEL_OPTIONS,
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
   OPENCODE_EFFORT_LEVELS,
   PI_EFFORT_LEVELS,
+  GROK_EFFORT_LEVELS,
   isDynamicModelKey,
   dynamicModelOption,
 } from "./modelOptions";
 
 /** The single named union for a supported agent CLI client — the daemon's
  *  agent-type spelling and the registry key. */
-export type AgentClientId = "claude" | "codex" | "cursor" | "gemini" | "opencode" | "pi";
+export type AgentClientId = "claude" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok";
 
 /** Runtime transports that may create/deliver for a fenced execution binding. */
 export type AgentExecutionTransport = "tmux" | "app-server" | "external";
@@ -50,7 +52,8 @@ export type ConvexAgentType =
   | "gemini"
   | "cowork"
   | "opencode"
-  | "pi";
+  | "pi"
+  | "grok";
 
 const CONVEX_BY_ID: Record<AgentClientId, ConvexAgentType> = {
   claude: "claude_code",
@@ -59,6 +62,7 @@ const CONVEX_BY_ID: Record<AgentClientId, ConvexAgentType> = {
   gemini: "gemini",
   opencode: "opencode",
   pi: "pi",
+  grok: "grok",
 };
 
 /** Client id → Convex spelling (`claude` → `claude_code`). */
@@ -88,6 +92,8 @@ export function fromConvexAgentType(agentType: string | null | undefined): Agent
       return "opencode";
     case "pi":
       return "pi";
+    case "grok":
+      return "grok";
     default:
       return "claude";
   }
@@ -134,6 +140,7 @@ export function parseExecutionAgentClientId(agentType: unknown): AgentClientId {
     case "gemini":
     case "opencode":
     case "pi":
+    case "grok":
       return agentType;
     default:
       throw new InvalidExecutionAgentTypeError(agentType);
@@ -405,6 +412,19 @@ const PI_MODEL: AgentModelConfig = {
   midSession: false,
   dynamic: true,
 };
+const GROK_MODEL: AgentModelConfig = {
+  models: GROK_MODEL_OPTIONS,
+  efforts: GROK_EFFORT_LEVELS,
+  // The TUI's model/effort menus are interactive-only; model and effort are
+  // launch-time flags (-m, --reasoning-effort), tracked from the transcript
+  // after (_meta.modelId on user_message_chunk updates).
+  midSession: false,
+  // Keys are bare model ids (grok-4.6), not provider/model — dynamic would be
+  // wrong by construction (isDynamicModelKey requires a slash). The catalog is
+  // closed logged out (`grok models` prints exactly grok-4.6, grok-4.5); remote
+  // settings could extend it post-login — revisit only with evidence.
+  dynamic: false,
+};
 
 /**
  * The four supported clients, populated from the facts currently hardcoded across
@@ -638,6 +658,96 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // from the transcript (model_change entries + each assistant message's `model`).
     modelConfig: PI_MODEL,
     capabilities: { panePromptMonitoring: false, bracketedPaste: true },
+  },
+  grok: {
+    id: "grok",
+    // Picker label; the product name is "Grok Build", the binary "grok".
+    displayName: "Grok",
+    convexId: "grok",
+    // tmux TUI only; `grok agent` ACP transports (stdio/headless/serve) exist
+    // but are unresearched — a follow-up, not phase 1.
+    executionTransports: ["tmux"],
+    // npm @xai-official/grok; the shim execs the Rust binary at ~/.grok/bin/grok
+    // (ps comm basename "grok", verified live on v1.0.5).
+    binary: "grok",
+    launchArgs: [],
+    // Always resume by UUID: a non-UUID argument matches session TITLES for the
+    // cwd case-insensitively and ERRORS on duplicates (ambiguity by design), so
+    // title resume is banned. `-c` (most recent) is deliberately unused — we
+    // always target a specific id.
+    resumeCmd: (sessionId) => `grok --resume ${sessionId}`,
+    // ~/.grok/sessions/{url-encoded cwd}/{session uuid}/updates.jsonl — the
+    // append-only durable transcript. chat_history.jsonl in the same dir is a
+    // rewriteable model-context cache (compaction replaces it wholesale) and is
+    // deliberately not watched.
+    transcriptRoots: ["~/.grok/sessions"],
+    watcherKind: "jsonl-dir",
+    // Derived from the TUI source, not a captured logged-in pane (the sandbox is
+    // logged out; login needs a paid account): the main composer renders the
+    // prompt arrow `❯ ` (U+276F + space) — prompt_widget/mod.rs:3160-3180 +
+    // pager-render glyphs.rs:22 `prompt_arrow`, show_prefix: true. The shared
+    // /[❯›]/ readiness path matches it too, so resume readiness needs no special
+    // case. Busy chrome uses braille spinner frames ⠋⠙⠹… (already in the busy
+    // regex). CAUTION from source: grok has NO "esc to interrupt" string, and
+    // its IDLE states contain the words "send a message to interrupt" — never
+    // add a generic /interrupt/ busy heuristic for grok.
+    promptReadyPattern: /❯/,
+    // `gk-` — free: cc/cx/cu/gm/oc/pi taken.
+    tmuxPrefix: "gk",
+    modelConfig: GROK_MODEL,
+    capabilities: {
+      // Grok's permission prompt swaps the spinner for a pulsing ◆ (source:
+      // views/turn_status.rs); nobody has built or verified a pane-prompt
+      // matcher for it — off.
+      panePromptMonitoring: false,
+      // fork: ABSENT in phase 1. `--resume <id> --fork-session --session-id
+      // <new>` is a real fork (session/fork.rs), but the daemon has no
+      // resume-flag fork branch yet; setting fork:true now would show a fork UI
+      // whose generic path fabricates a context-less spawn. Flipped in the same
+      // change that adds the branch (work item B7).
+      //
+      // bracketedPaste — source-verified: crossterm EnableBracketedPaste on boot
+      // AND re-entry (app/mod.rs:1472, event_loop.rs:489); wrap_restore tracks
+      // DECSET ?2004. Implementer B additionally live-verifies the ?2004h
+      // emission before shipping — if that check fails, delete this line.
+      bracketedPaste: true,
+    },
+    // Slots below follow the honest-absence contract (see the block comment
+    // above AgentFileTargets): present only where research PROVED grok reads
+    // the location.
+    agentFileTargets: {
+      // Project AGENTS.md and user ~/.grok/AGENTS.md both verified live via
+      // `grok inspect` with planted files (2026-08-26, sandbox HOME, works
+      // logged out) — inspect lists both under "Project Instructions". There
+      // is NO GROK.md (a planted one was ignored; the string is absent from
+      // the grok-build repo) — grok's instruction slot is the shared AGENTS.md
+      // standard, not a bespoke file.
+      instructionFile: { user: "~/.grok/AGENTS.md", project: "AGENTS.md", format: "markdown" },
+      // All four dirs verified live by the same planted-file `grok inspect`
+      // run: project .grok/skills + .agents/skills list as "project", user
+      // ~/.grok/skills + ~/.agents/skills list as "user" (source:
+      // xai-grok-agent/src/prompt/skills.rs:51).
+      skillsDir: {
+        user: "~/.grok/skills",
+        project: ".grok/skills",
+        shared: "~/.agents/skills",
+        sharedProject: ".agents/skills",
+      },
+      // TOML [mcp_servers] in ~/.grok/config.toml (user) / ./.grok/config.toml
+      // (project) — from `grok mcp add --help`. Same surgical-edit rule as
+      // codex's config.toml: a shared user-owned file, never rewrite.
+      mcpConfig: { user: "~/.grok/config.toml", project: ".grok/config.toml", shape: "toml_mcp_servers" },
+      // `grok mcp add|remove|list|enable|disable|doctor` exists (help captured).
+      // The native manager outranks the file write in capabilitySupport.
+      nativeManager: { mcp: "grok mcp" },
+      // OMITTED, honestly: hooksConfig (grok hooks are a DIRECTORY
+      // ~/.grok/hooks/ of JSON plus config.toml layers — doesn't fit the
+      // single-file target shape; writing guessed bytes is worse than absence),
+      // agentsDir (subagent config format unresearched), pluginSettings +
+      // nativeManager.plugin (`grok plugin` exists but install semantics
+      // unverified — listing it would grant "native" support capabilitySupport
+      // can't back), sessionOverlay (no --add-dir analog verified).
+    },
   },
 };
 

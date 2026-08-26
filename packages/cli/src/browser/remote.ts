@@ -126,6 +126,16 @@ function launchDetached(host: RemoteHost, command: string): void {
   child.unref();
 }
 
+/** Copy one local file to a path on the remote (used for the cast binary). */
+export function scpTo(host: RemoteHost, localPath: string, remotePath: string): void {
+  execFileSync(
+    "scp",
+    ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
+     "-o", "BatchMode=yes", localPath, `${host.user}@${host.address}:${remotePath}`],
+    { timeout: 300_000, stdio: ["ignore", "ignore", "pipe"] },
+  );
+}
+
 export class RemoteUnreachable extends Error {
   constructor(host: RemoteHost, detail: string) {
     super(
@@ -146,15 +156,18 @@ export interface RemoteBrowser {
   sshPid: number;
   chromeVersion: string;
   os: RemoteOs;
+  /** The X display Chrome renders into, when the host has one (live view). */
+  display?: string;
 }
 
 /**
  * Start Chrome on the remote and tunnel its CDP port to loopback here.
  *
- * Headless, because a machine reached over SSH usually has no window server
- * session to draw into, and a Chrome that cannot open a window exits without
- * ever binding its debugging port — a failure that looks like a network problem
- * and is not.
+ * On a provisioned Linux host Chrome renders into the Xvfb display so the
+ * live-view stream can see it. Anywhere else it runs headless: a machine
+ * reached over SSH usually has no window server session to draw into, and a
+ * Chrome that cannot open a window exits without ever binding its debugging
+ * port — a failure that looks like a network problem and is not.
  */
 export async function startRemoteBrowser(
   host: RemoteHost,
@@ -198,10 +211,28 @@ export async function startRemoteBrowser(
 
   const size = opts.windowSize ?? { width: 1440, height: 900 };
   const t = REMOTE_TARGETS[os];
+
+  // Prefer a real (virtual) display over headless when the host has one. A
+  // provisioned Linux box runs Xvfb on :99 precisely so that Chrome's pixels
+  // exist somewhere the live-view stream can capture — headless Chrome renders
+  // to nowhere and x11grab would show an empty desktop. The probe is the X
+  // socket itself: if Xvfb is up, its unix socket exists.
+  let display = "";
+  if (os === "linux") {
+    try {
+      const disp = remoteExec(host, `[ -S /tmp/.X11-unix/X99 ] && echo :99 || true`, 15_000);
+      if (disp === ":99") display = disp;
+    } catch { /* no display service — fall back to headless */ }
+  }
+  const mode = display
+    ? `env DISPLAY=${display} ` // set for the launch below via prefix
+    : "";
+  const headlessFlag = display ? `--window-position=0,0 ` : `--headless=new `;
+
   const launch =
-    `rm -rf ${REMOTE_PROFILE} && mkdir -p ${REMOTE_PROFILE} && setsid nohup ${t.binary} ` +
+    `rm -rf ${REMOTE_PROFILE} && mkdir -p ${REMOTE_PROFILE} && setsid nohup ${mode}${t.binary} ` +
     `--remote-debugging-port=${remotePort} --remote-debugging-address=127.0.0.1 ` +
-    `--user-data-dir=${REMOTE_PROFILE} --headless=new ${t.extraArgs}` +
+    `--user-data-dir=${REMOTE_PROFILE} ${headlessFlag}${t.extraArgs}` +
     `--window-size=${size.width},${size.height} ` +
     `--no-first-run --no-default-browser-check --disable-sync ` +
     `about:blank > /tmp/cast-browser.log 2>&1 < /dev/null &`;
@@ -252,7 +283,7 @@ export async function startRemoteBrowser(
   const deadline = Date.now() + 40_000;
   while (Date.now() < deadline) {
     if (await isCdpAlive(opts.localPort)) {
-      return { localPort: opts.localPort, remotePort, sshPid: tunnel.pid, chromeVersion, os };
+      return { localPort: opts.localPort, remotePort, sshPid: tunnel.pid, chromeVersion, os, display: display || undefined };
     }
     await sleep(400);
   }

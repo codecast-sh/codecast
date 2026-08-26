@@ -51,11 +51,6 @@ export function DecisionQueue({ onExit }: { onExit?: () => void }) {
     onDone: () => advance(current.key),
     onSkip,
     onExit,
-    // A card the queue should never have offered (a usage/billing
-    // interstitial, a permission answered elsewhere): the card already marked
-    // it resolved in the store, so it leaves everywhere at once — this only
-    // moves the anchor along.
-    onNotADecision: () => advance(current.key),
     item: current.source === "decide" ? undefined : current,
   } : null, [current, position, queue.length, advance, onSkip, onExit]);
 

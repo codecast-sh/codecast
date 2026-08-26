@@ -70,6 +70,9 @@ export type RouteLayout =
   | "share"
   | "codeReview"
   | "palette"
+  | "people"
+  | "callPanel"
+  | "callFaces"
   | "settings";
 
 // -- Lazy component refs — import targets copied verbatim from App.tsx / TabContent.tsx so
@@ -171,6 +174,11 @@ const ReviewBatch = lazy(() => import("@/app/review/batch/page"));
 
 // Palette
 const Palette = lazy(() => import("@/app/palette/page"));
+
+// People window
+const People = lazy(() => import("@/app/people/page"));
+const CallPanel = lazy(() => import("@/app/call-panel/page"));
+const CallFaces = lazy(() => import("@/app/call-faces/page"));
 
 // Settings
 const Settings = lazy(() => import("@/app/settings/page"));
@@ -291,8 +299,23 @@ export const ROUTES: RouteEntry[] = [
   { path: "review/:id", component: cast(ReviewView), layout: "codeReview" },
   { path: "review/batch", component: cast(ReviewBatch), layout: "codeReview" },
 
-  // -- Palette (PaletteLayout, transparent) --
+  // -- Palette (TransparentWindowLayout) --
   { path: "palette", component: cast(Palette), layout: "palette" },
+
+  // -- The people window (its own OS window / browser popup, no tab shell) --
+  { path: "people", component: cast(People), layout: "people" },
+
+  // -- The call panel (a huddle in its own OS window, no tab shell) --
+  //    Its own layout value rather than "standalone": the parity test asserts
+  //    IN_SHELL_ROOT_SEGMENTS equals the manifest's single-segment
+  //    dashboardShell/standalone routes, so calling it standalone would force
+  //    "call-panel" into the in-shell set — the opposite of what it is.
+  { path: "call-panel", component: cast(CallPanel), layout: "callPanel" },
+
+  // -- The floating faces (the call minimized to circles, its own transparent
+  //    always-on-top OS window). Same reasoning as the panel above: its own
+  //    layout value, so the parity test does not sweep it into the in-shell set.
+  { path: "call-faces", component: cast(CallFaces), layout: "callFaces" },
 
   // -- Settings (SettingsLayout; index = /settings) --
   { path: "settings", component: cast(Settings), layout: "settings" },

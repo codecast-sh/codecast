@@ -15,7 +15,8 @@ import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilit
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, stableHostname } from "./remote/device.js";
 import { readInputIdleMs } from "./inputIdle.js";
-import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
+import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredential, type RemoteHost } from "./remote/session-move.js";
+import { listCloudRemoteHosts, sshReachable } from "./browser/cloudHost.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import { GIT_PLANE_REPORT_CAP, repoRootFor, sweepGitPlane, type RepoPlaneState } from "./gitPlane.js";
@@ -64,6 +65,7 @@ import {
   WATCHDOG_HEARTBEAT_FILENAME,
   WATCHDOG_PASS_STAMP_FILENAME,
 } from "./supervision.js";
+import { agentSpawnPath } from "./agentSpawnPath.js";
 import {
   CodexAppServer,
   threadItemsToMessages,
@@ -2015,20 +2017,42 @@ let remoteCredPushInFlight = false;
 let lastPushedCredHash: string | null = null;
 let lastCredSkipReason: string | null = null;
 
+/**
+ * Every transfer host worth pushing to right now: the Scaleway Macs plus any
+ * cloud (AWS) box that is actually AWAKE. Reachability is a TCP probe of port
+ * 22, never an AWS call and never a wake — a box that put itself to sleep must
+ * not be booted (and billed) just to receive a credential it will re-receive
+ * at the next move anyway (refreshRemoteCredential runs at move time, and
+ * provisioning pushes one too).
+ */
+async function reachableTransferHosts(): Promise<RemoteHost[]> {
+  const candidates = [...listScalewayHosts(), ...listCloudRemoteHosts()];
+  if (!candidates.length) return [];
+  const probes = await Promise.all(candidates.map((h) => sshReachable(h)));
+  return candidates.filter((_, i) => probes[i]);
+}
+
 async function pushCredentialToRemoteHosts(
   reason: string,
   opts: { onlyIfChanged?: boolean } = {},
 ): Promise<void> {
-  if (isRemoteDevice() || remoteCredPushInFlight || !remoteHostsRegistered()) return;
+  if (isRemoteDevice() || remoteCredPushInFlight) return;
   remoteCredPushInFlight = true;
   try {
-    const host = loadRemoteHost();
     if (opts.onlyIfChanged) {
       const gate = readPushableCredential();
       const hash = gate.cred ? createHash("sha256").update(gate.cred).digest("hex") : null;
       if (hash !== null && hash === lastPushedCredHash) return; // in step — the common case
     }
-    const res = await copyCredentialToRemoteAsync(host);
+    const hosts = await reachableTransferHosts();
+    if (!hosts.length) return;
+    let res: Awaited<ReturnType<typeof copyCredentialToRemoteAsync>> | null = null;
+    for (const host of hosts) {
+      res = await copyCredentialToRemoteAsync(host);
+      if (!res.pushed) break; // an unpushable credential is unpushable everywhere
+      log(`[REMOTE-AUTH] pushed fresh credential to ${host.user}@${host.address} (${reason})`);
+    }
+    if (!res) return;
     if (!res.pushed) {
       // Log a skip once per distinct reason, not every 60s tick: the state is
       // what matters ("local login is down"), not the polling.
@@ -2042,7 +2066,6 @@ async function pushCredentialToRemoteHosts(
     const hash = createHash("sha256").update(res.cred!).digest("hex");
     const changed = hash !== lastPushedCredHash;
     lastPushedCredHash = hash;
-    log(`[REMOTE-AUTH] pushed fresh credential to ${host.user}@${host.address} (${reason}${changed ? ", changed" : ""})`);
     // A changed credential is the recovery event for remote sessions parked on
     // "Login expired" (CC re-reads the store on its next turn) — nudge them.
     if (changed && syncServiceRef) {
@@ -2070,18 +2093,21 @@ function readLocalProviderKeysBlob(): string | null {
 }
 
 async function pushProviderKeysToRemoteHosts(reason: string, opts: { onlyIfChanged?: boolean } = {}): Promise<void> {
-  if (isRemoteDevice() || remoteKeysPushInFlight || !remoteHostsRegistered()) return;
+  if (isRemoteDevice() || remoteKeysPushInFlight) return;
   remoteKeysPushInFlight = true;
   try {
     const blob = readLocalProviderKeysBlob();
     const hash = blob === null ? "∅" : createHash("sha256").update(blob).digest("hex");
     if (opts.onlyIfChanged && hash === lastPushedKeysHash) return; // in step — the common case
-    const host = loadRemoteHost();
-    await copyProviderKeysToRemoteAsync(host, blob);
+    const hosts = await reachableTransferHosts();
+    if (!hosts.length) return;
+    for (const host of hosts) {
+      await copyProviderKeysToRemoteAsync(host, blob);
+    }
     const changed = hash !== lastPushedKeysHash;
     lastPushedKeysHash = hash;
     if (changed) {
-      log(`[REMOTE-KEYS] pushed provider keys to ${host.user}@${host.address} (${reason}${blob === null ? ", cleared" : ""})`);
+      log(`[REMOTE-KEYS] pushed provider keys to ${hosts.map((h) => `${h.user}@${h.address}`).join(", ")} (${reason}${blob === null ? ", cleared" : ""})`);
     }
   } catch (err) {
     log(`[REMOTE-KEYS] provider-key push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
@@ -2123,6 +2149,16 @@ export function summarizeLoginPaneTail(pane: string): string | null {
   return tail ? tail.slice(0, 160) : null;
 }
 
+// The pane inherits the daemon's launchd PATH (no ~/.local/bin, where the
+// claude binary lives), so the command must carry a full PATH itself. The
+// trailing sleep keeps a dead CLI's pane alive past the watcher's next 2s
+// poll — an instantly-dying pane vanishes before the first capture and
+// reduces the failure report to the generic fallback.
+export function buildLoginFlowCommand(email: string | undefined): string {
+  const login = `PATH=${shellEscapeForSh(agentSpawnPath())} claude auth login --claudeai${email ? ` --email ${shellEscapeForSh(email)}` : ""}`;
+  return `${login}; sleep 4`;
+}
+
 async function startLoginFlow(email: string | undefined): Promise<string> {
   // A second click while a flow is live joins it — the browser tab is already
   // open, and a second `claude auth login` would fight it for the callback port.
@@ -2131,7 +2167,7 @@ async function startLoginFlow(email: string | undefined): Promise<string> {
   try {
     const baselineHash = credentialHashOf(readActiveCredential());
     await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
-    const cmd = `claude auth login --claudeai${email ? ` --email ${shellEscapeForSh(email)}` : ""}`;
+    const cmd = buildLoginFlowCommand(email);
     tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", LOGIN_FLOW_TMUX, cmd], { timeout: 5000 });
     log(`[LOGIN-FLOW] started browser sign-in${email ? ` for ${email}` : ""} (tmux ${LOGIN_FLOW_TMUX})`);
     void watchLoginFlow(baselineHash, email)

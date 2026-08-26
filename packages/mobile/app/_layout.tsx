@@ -215,6 +215,10 @@ function RootLayoutNav() {
                   <Stack.Screen name="task/[id]" options={{ title: 'Task' }} />
                   <Stack.Screen name="plan/[id]" options={{ title: 'Plan' }} />
                   <Stack.Screen name="doc/[id]" options={{ title: 'Doc' }} />
+                  {/* Both draw their own header (a back chevron and a title),
+                      so the nav header would be a second one stacked on top. */}
+                  <Stack.Screen name="record" options={{ headerShown: false }} />
+                  <Stack.Screen name="recording/[id]" options={{ headerShown: false }} />
                   <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
                   <Stack.Screen
                     name="call"

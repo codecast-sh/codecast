@@ -99,6 +99,14 @@ export function describeRoom(
     return { label: name, anchorTitle: name, otherIds: [] };
   }
 
+  // A recording names one person's microphone, and there is nothing to look
+  // up: no room, no roster, no anchor. It never reaches the live lists (no
+  // seats exist for it), so this is the fallback for a key that arrives from
+  // a transcript row.
+  if (parsed.kind === "rec") {
+    return { label: "Recording", otherIds: [] };
+  }
+
   // session
   const conv =
     s.conversations?.[parsed.conversationId] ??

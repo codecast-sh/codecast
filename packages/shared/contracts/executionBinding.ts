@@ -166,7 +166,7 @@ function requirePositiveInteger(
 
 function requireCanonicalAgent(value: Record<string, unknown>, field: string): AgentClientId {
   const candidate = requireNonEmptyString(value, field);
-  if (!["claude", "codex", "cursor", "gemini", "opencode", "pi"].includes(candidate)) {
+  if (!["claude", "codex", "cursor", "gemini", "opencode", "pi", "grok"].includes(candidate)) {
     throw new TypeError(`Invalid ready binding: ${field} is not a canonical agent id`);
   }
   return candidate as AgentClientId;

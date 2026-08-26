@@ -67,38 +67,70 @@ export function useCallRing(): void {
       };
       toast.custom(
         () => (
-          <div className="flex items-center gap-3 rounded-lg border border-sol-border bg-sol-bg-alt px-4 py-3 shadow-lg">
-            {invite.from_image ? (
-              <img
-                src={invite.from_image}
-                alt=""
-                className="h-9 w-9 rounded-full object-cover ring-2 ring-sol-cyan/60"
-              />
-            ) : (
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-sol-base02 text-sm text-sol-text-muted">
-                {(invite.from_name || "?").charAt(0).toUpperCase()}
-              </div>
-            )}
-            <div className="min-w-0">
-              <div className="text-sm font-medium text-sol-text">
-                {invite.from_name} wants to huddle
-              </div>
-              {invite.anchor_title && (
-                <div className="truncate text-xs text-sol-text-muted">
-                  {invite.anchor_title}
+          // ONE layout, and stacked, at every width — because the width that
+          // matters is the CARD's, not the window's. Sonner caps a toast at
+          // 356px, so putting the buttons beside the sentence leaves it about
+          // 137px however wide the screen is: at 320px it broke "Jordan Lee
+          // wants to huddle" over five lines, and at 1200px over three. The
+          // buttons take a row of their own and the sentence gets the card.
+          //
+          // Equal halves, 128x34 each. The two answers to a ringing phone are
+          // the same weight, and this card's usual home is a 320px window you
+          // are reaching across the desk to hit.
+          <div className="flex flex-col gap-2.5 rounded-lg border border-sol-border bg-sol-bg-alt px-3 py-2.5 shadow-lg">
+            <div className="flex min-w-0 items-center gap-2.5">
+              {invite.from_image ? (
+                <img
+                  src={invite.from_image}
+                  alt=""
+                  className="h-9 w-9 shrink-0 rounded-full object-cover ring-2 ring-sol-cyan/60"
+                />
+              ) : (
+                // bg-sol-bg-highlight, matching MemberFace's fallback disc —
+                // the one initial-avatar treatment in the app, and a themed
+                // token. `sol-base02` is a Tailwind literal that never flips:
+                // in dark it is byte-identical to this card and the disc
+                // vanished, in light it was a black hole in a cream toast.
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sol-bg-highlight text-sm text-sol-text-muted">
+                  {(invite.from_name || "?").charAt(0).toUpperCase()}
                 </div>
               )}
+              <div className="min-w-0">
+                <div className="text-sm font-medium leading-snug text-sol-text">
+                  {invite.from_name} wants to huddle
+                </div>
+                {invite.anchor_title && (
+                  <div className="truncate text-xs text-sol-text-muted">
+                    {invite.anchor_title}
+                  </div>
+                )}
+              </div>
             </div>
-            <div className="ml-2 flex shrink-0 gap-2">
+            <div className="flex gap-2">
               <button
                 onClick={answer}
-                className="rounded bg-sol-green/20 px-3 py-1.5 text-xs font-medium text-sol-green transition-colors hover:bg-sol-green/30"
+                // Filled, like every answer-the-call button ever made. The
+                // tinted `bg-sol-green/20` it replaces put Solarized green
+                // text on a green wash over a dark card and measured 3.13:1 —
+                // under AA, on the one control the ring exists for. `sol-base03`
+                // is a fixed literal on purpose here: the fill it sits on is a
+                // fixed accent, so the pair must not drift with the theme.
+                className="flex-1 rounded border border-sol-green bg-sol-green px-3 py-2 text-xs font-semibold text-sol-base03 transition-colors hover:bg-sol-green/90"
               >
                 Join
               </button>
               <button
                 onClick={decline}
-                className="rounded bg-sol-base02 px-3 py-1.5 text-xs text-sol-text-muted transition-colors hover:text-sol-text"
+                // The quiet half of the pair: no fill at rest, so "Join" is
+                // the one filled thing on the card and the eye goes there. The
+                // border keeps it a legible target at 320px, and Join carries
+                // a matching one so the two boxes stay the same size.
+                //
+                // Full text colour, not muted. Hierarchy is carried by the
+                // fill and the weight; dimming the LABEL of a button put it at
+                // 4.39:1 on the light card, under AA for 12px, and "hard to
+                // read" is not a way to say "secondary".
+                className="flex-1 rounded border border-sol-border/60 px-3 py-2 text-xs text-sol-text transition-colors hover:bg-sol-bg-highlight"
               >
                 Decline
               </button>

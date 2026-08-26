@@ -3,6 +3,7 @@ import { useRef, useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import type { Components } from "react-markdown";
 import { CollabDocEditor } from "./editor/CollabDocEditor";
+import { AppLoader } from "./AppLoader";
 import { useMentionQuery, useActiveMentionScope } from "../hooks/useMentionQuery";
 import { useImageUpload } from "../hooks/useImageUpload";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -243,6 +244,10 @@ export function DocumentDetailLayout({
                   contentReady={contentReady}
                 />
               </ErrorBoundary>
+            ) : !markdownContent.trim() && !contentReady ? (
+              // The detail (which carries the content) hasn't synced yet — an
+              // empty body here means "loading", never "empty document".
+              <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
             ) : !markdownContent.trim() && initialEditable ? (
               // An empty doc in read mode is a dead end (nothing to read,
               // nothing clickable) — offer the way in directly.

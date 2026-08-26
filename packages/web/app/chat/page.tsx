@@ -36,6 +36,7 @@ import { api as _chatApi } from "@codecast/convex/convex/_generated/api";
 const api = _chatApi as any;
 import { Lock, BellOff, Bell, Plus, AlertTriangle, RotateCw, Search, SquarePen } from "lucide-react";
 import { ChannelMembersButton, DmHeadline } from "../../components/chat/ChannelPeople";
+import { WalkiePttButton } from "../../components/calls/WalkiePtt";
 import { HuddleButton } from "../../components/calls/OccupancyChip";
 import { chatViewRoomKey } from "../../lib/chatViews";
 import { NewMessageModal } from "../../components/chat/NewMessageModal";
@@ -455,6 +456,21 @@ export default function ChatPage() {
                 : <span className="ch-head-topic" />}
               {activeChannel && (activeChannel.kind === "dm" || activeChannel.isPrivate) && (
                 <ChannelMembersButton channel={activeChannel} />
+              )}
+              {/* The key gets a seat in the header, beside the huddle button.
+                  It used to be reachable only from the composer, so a DM read
+                  from the top of the room had no visible way to talk back —
+                  and the key IS the product. Rendered only where a burst has
+                  somewhere to land (a DM, calls on); every other reason it
+                  cannot be held is the key's own honest disabled state. */}
+              {walkieRoomKey && (
+                <WalkiePttButton
+                  roomKey={walkieRoomKey}
+                  resolveChannelId={resolveWalkieChannel}
+                  size="sm"
+                  className="shrink-0"
+                  title="Hold to talk — they hear you now, and the words land here"
+                />
               )}
               {/* Every room can huddle. A DM or group thread rings its people
                   the moment it opens; a channel is an open door — the rail

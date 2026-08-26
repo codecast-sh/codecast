@@ -10,6 +10,16 @@
 // doc (content append), or a linked Slack channel. Route mode "live" delivers
 // on the silence gaps the scribe detects via server VAD — the natural beat for
 // an agent to reply; "after" delivers once at stop.
+//
+// A RECORDING (`rec:<uuid>`, see callRooms) is the same machinery with one
+// track and no room: somebody presses record, their microphone becomes the
+// only scribe, and everything after capture — segments, flush beats, the
+// summary and action items, the calls page, `cast calls` — happens unchanged.
+// Only three things differ, and each is marked where it lives: the paths a
+// recording may walk pass `{ rec: true }` to authorizeRoom; `canReadCall`
+// answers a recording with its creator and nobody else; and the row carries
+// its own liveness (`last_beat`) because there are no seat leases to read it
+// off, plus the audio file it uploads when it stops.
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import {
@@ -22,13 +32,24 @@ import {
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { authorizeRoom, authorizeRoomNoGrant, liveMembers } from "./callRooms";
+import {
+  CALL_MEMBER_STALE_MS,
+  authorizeRoom,
+  authorizeRoomNoGrant,
+  liveMembers,
+} from "./callRooms";
 import { isTeamMember } from "./privacy";
 import { teamHasFeature } from "./teamFeatures";
 import { performSessionSend } from "./pendingMessages";
-import { formatTranscriptChunk as formatChunk } from "@codecast/shared/contracts";
+import {
+  RECORDING_SUMMARY_PUSH_TYPE,
+  TRANSCRIBE_MAX_BYTES,
+  formatTranscriptChunk as formatChunk,
+  isRecRoomKey,
+} from "@codecast/shared/contracts";
 import { requireAccessibleDoc } from "./lib/access";
 import { verifyApiToken } from "./apiTokens";
+import { enqueuePush } from "./pushRouter";
 
 // added_by is deliberately NOT accepted from clients: delivery acts AS the
 // route's adder (deliverRoutes), so a client-chosen added_by would let a
@@ -63,7 +84,11 @@ export const start = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
-    const auth = await authorizeRoom(ctx, userId, args.room_key);
+    // `{ rec: true }`: this is one of the five paths a recording is allowed
+    // to walk. For a rec key the rule underneath is the transcript's own
+    // creator, and a fresh uuid nobody has started on belongs to whoever
+    // starts it here.
+    const auth = await authorizeRoom(ctx, userId, args.room_key, { rec: true });
     if (!auth.ok) throw new Error(`Cannot transcribe this room: ${auth.reason}`);
     // One live transcript per room: a second Transcribe toggle joins the
     // existing run rather than forking the record.
@@ -127,7 +152,14 @@ export const addRoute = mutation({
     // guest rung into the room may point the words at their agent even
     // before they have spoken (canReadCall is the HISTORY rule — its
     // participant door would blink on only once the scribe hears them).
-    if (!t || !(await authorizeRoom(ctx, userId, t.room_key)).ok) {
+    if (!t || !(await authorizeRoom(ctx, userId, t.room_key, { rec: true })).ok) {
+      throw new Error("Transcript not found");
+    }
+    // A recording has exactly one participant, so "any participant" is its
+    // owner and nothing else. Checked against THIS row rather than the room:
+    // a rec key is a uuid, and the room's answer could be some later
+    // transcript that reused it.
+    if (isRecRoomKey(t.room_key) && String(t.started_by) !== String(userId)) {
       throw new Error("Transcript not found");
     }
     if (t.status !== "live") throw new Error("Transcript has ended");
@@ -187,27 +219,60 @@ export const appendSegments = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
     const t = await requireOwnLiveTranscript(ctx, userId, args.transcript_id);
-    let seq = t.last_seq;
-    for (const s of args.segments) {
-      const text = s.text.trim();
-      if (!text) continue;
-      seq += 1;
-      await ctx.db.insert("transcript_segments", {
-        transcript_id: t._id,
-        seq,
-        speaker_id: s.speaker_id,
-        speaker_name: s.speaker_name,
-        text,
-        t0: s.t0,
-        t1: s.t1,
-      });
-    }
-    if (seq !== t.last_seq) {
-      // Accumulate the speaker roster on the call object as voices appear —
-      // actual speakers, not seat leases (a lurker who never talks is in the
-      // room but not in the transcript's cast).
-      const known = new Set((t.participants ?? []).map((p) => p.id));
-      const newcomers = args.segments
+    return { last_seq: await writeSegments(ctx, t, args.segments) };
+  },
+});
+
+/**
+ * The one place `transcript_segments` rows are made.
+ *
+ * Two callers reach it and they disagree about everything except the write:
+ * the live scribe appends to its own transcript while it runs, and the
+ * recording transcriber appends to its own transcript after it ended. Keeping
+ * one writer is what makes the seq watermark trustworthy — it is the routes'
+ * delivery cursor, and two hand-rolled increments would eventually skip one.
+ *
+ * `trackParticipants` is off for a recording, deliberately. The roster means
+ * "voices we could put a name to", and one microphone in a room can name none
+ * of them; filling it with a placeholder would put a fake person on the call
+ * object that the list, the summary and the detail view all read.
+ */
+async function writeSegments(
+  ctx: any,
+  t: Doc<"transcripts">,
+  segments: {
+    speaker_id: string;
+    speaker_name: string;
+    text: string;
+    t0: number;
+    t1: number;
+  }[],
+  opts: { trackParticipants?: boolean } = {},
+): Promise<number> {
+  const trackParticipants = opts.trackParticipants !== false;
+  let seq = t.last_seq;
+  for (const s of segments) {
+    const text = s.text.trim();
+    if (!text) continue;
+    seq += 1;
+    await ctx.db.insert("transcript_segments", {
+      transcript_id: t._id,
+      seq,
+      speaker_id: s.speaker_id,
+      speaker_name: s.speaker_name,
+      text,
+      t0: s.t0,
+      t1: s.t1,
+    });
+  }
+  if (seq === t.last_seq) return seq;
+  // Accumulate the speaker roster on the call object as voices appear —
+  // actual speakers, not seat leases (a lurker who never talks is in the
+  // room but not in the transcript's cast).
+  const known = new Set((t.participants ?? []).map((p) => p.id));
+  const newcomers = !trackParticipants
+    ? []
+    : segments
         .filter((s) => s.text.trim() && !known.has(s.speaker_id))
         .reduce((acc: { id: string; name: string }[], s) => {
           if (!acc.some((p) => p.id === s.speaker_id)) {
@@ -215,16 +280,14 @@ export const appendSegments = mutation({
           }
           return acc;
         }, []);
-      await ctx.db.patch(t._id, {
-        last_seq: seq,
-        ...(newcomers.length
-          ? { participants: [...(t.participants ?? []), ...newcomers] }
-          : {}),
-      });
-    }
-    return { last_seq: seq };
-  },
-});
+  await ctx.db.patch(t._id, {
+    last_seq: seq,
+    ...(newcomers.length
+      ? { participants: [...(t.participants ?? []), ...newcomers] }
+      : {}),
+  });
+  return seq;
+}
 
 // The room went quiet (scribe-side VAD gap): ship every live route its unsent
 // segments. Also called with force=true on stop, where "after" routes ship too.
@@ -243,6 +306,104 @@ export const flush = mutation({
     });
   },
 });
+
+/**
+ * Has a recording's own lease gone stale?
+ *
+ * This is the whole difference between a recording and a huddle in the orphan
+ * sweep. A huddle's transcript is kept alive by the room's seat leases; a
+ * recording has no room and no seats, so an empty `call_members` table is its
+ * NORMAL state — reading that as "the room emptied" would end every live
+ * recording on the sweep's next pass, two minutes in. It reads the row's own
+ * beat instead, through the same window a seat uses.
+ *
+ * A recording that has not beaten yet is measured from its start, so a tab
+ * that died during the first fifteen seconds still gets swept.
+ */
+export function recLeaseExpired(
+  t: { last_beat?: number; started_at: number },
+  now: number,
+): boolean {
+  return now - (t.last_beat ?? t.started_at) >= CALL_MEMBER_STALE_MS;
+}
+
+/** A recording says it is still going. The room's seat leases do this job for
+ *  a huddle; a recording has no room, so it holds its own lease and the orphan
+ *  sweep reads the same staleness window off it. */
+export const beat = mutation({
+  args: { transcript_id: v.id("transcripts") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const t = await requireOwnLiveTranscript(ctx, userId, args.transcript_id);
+    // Only a recording holds its own lease; a huddle's liveness is its seats.
+    if (!isRecRoomKey(t.room_key)) throw new Error("Not a recording");
+    await ctx.db.patch(t._id, { last_beat: Date.now() });
+  },
+});
+
+/** The audio a recording kept, uploaded once it stops. Additive to the row and
+ *  deliberately separate from `stop`: the transcript, the summary and the
+ *  action items are the artifact, and they must land whether or not the bytes
+ *  do. Callable on an ended transcript for exactly that reason — the upload
+ *  finishes after the recording has. */
+export const attachRecording = mutation({
+  args: {
+    transcript_id: v.id("transcripts"),
+    storage_id: v.id("_storage"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t || String(t.started_by) !== String(userId)) {
+      throw new Error("Transcript not found");
+    }
+    // A huddle has no single recording to keep: its transcript is shared, and
+    // an audio blob attached by one seat would publish that seat's mic to the
+    // whole room's detail page. Only rec transcripts carry audio.
+    if (!isRecRoomKey(t.room_key)) throw new Error("Not a recording");
+    await ctx.db.patch(t._id, { recording_storage_id: args.storage_id });
+    if (!needsServerTranscription(t)) return;
+    // A finished recording that produced no words while it ran has none at all
+    // unless the server reads them out of the audio. That is every phone
+    // recording by construction, and a desktop one whose recognizer died.
+    //
+    // Both statuses go back to pending here. `stop` already ran the summary
+    // against an empty transcript and got "skipped" for it, which would
+    // otherwise sit on the screen as a finished, wordless meeting while the
+    // words were still being fetched.
+    await ctx.db.patch(t._id, {
+      transcribe_status: "pending",
+      summary_status: "pending",
+    });
+    await ctx.scheduler.runAfter(0, internal.transcripts.transcribeRecording, {
+      transcript_id: t._id,
+    });
+  },
+});
+
+/**
+ * Does this recording still need its words read out of its audio?
+ *
+ * Three conditions, and each one rules out a different way of being wrong:
+ * only a recording has audio to read (a huddle's transcript is shared and its
+ * audio is nobody's); only an ENDED one is finished being written, so this can
+ * never race a live recognizer that is still appending; and only an EMPTY one
+ * has nothing, so a desktop recording whose live pipe worked is never
+ * transcribed twice and never pays for the same words at the same API a second
+ * time.
+ *
+ * Exported for its test: the condition is the whole trigger, and getting it
+ * wrong is either a silent duplicate transcript or a permanently wordless one.
+ */
+export function needsServerTranscription(t: {
+  room_key: string;
+  status: string;
+  last_seq: number;
+}): boolean {
+  return isRecRoomKey(t.room_key) && t.status === "ended" && t.last_seq === 0;
+}
 
 export const stop = mutation({
   args: { transcript_id: v.id("transcripts") },
@@ -312,6 +473,17 @@ export const sweepOrphanedLive = internalMutation({
       .collect();
     let ended = 0;
     for (const t of live) {
+      // A recording is its own room, so it holds its own lease. Without this
+      // branch the sweep would end every live recording two minutes in: a rec
+      // key has no call_members rows by design, which reads here as an empty
+      // room. Same staleness window as a seat, ended at the last beat so the
+      // duration stays honest.
+      if (isRecRoomKey(t.room_key)) {
+        if (!recLeaseExpired(t, now)) continue;
+        await endTranscript(ctx, t, t.last_beat ?? t.started_at);
+        ended++;
+        continue;
+      }
       const seated = await ctx.db
         .query("call_members")
         .withIndex("by_room", (q) => q.eq("room_key", t.room_key))
@@ -349,6 +521,7 @@ export const getForSummary = internalQuery({
       .collect();
     return {
       title: t.title,
+      room_key: t.room_key,
       started_at: t.started_at,
       ended_at: t.ended_at,
       participants: t.participants ?? [],
@@ -377,6 +550,23 @@ export const setSummary = internalMutation({
       ...(args.title && !t.title ? { title: args.title } : {}),
       ...(args.summary ? { summary: args.summary } : {}),
       ...(args.action_items ? { action_items: args.action_items } : {}),
+    });
+    // A recording is the one transcript whose owner walked away from it. They
+    // pressed stop, put the phone in a pocket, and the words, the summary and
+    // the action items land minutes later with nothing on screen to see them
+    // on. A huddle is the opposite — everyone was just in it — so it does not
+    // push, and nobody but the recording's creator can read it anyway.
+    if (args.summary_status !== "done" || !isRecRoomKey(t.room_key)) return;
+    const owner = await ctx.db.get(t.started_by);
+    if (!owner) return;
+    await enqueuePush(ctx, {
+      user: owner,
+      type: RECORDING_SUMMARY_PUSH_TYPE,
+      title: args.title || "Recording ready",
+      body: args.summary
+        ? args.summary.slice(0, 200)
+        : "Your recording has been transcribed.",
+      data: { type: RECORDING_SUMMARY_PUSH_TYPE, recordingId: String(t._id) },
     });
   },
 });
@@ -407,13 +597,25 @@ export const generateSummary = internalAction({
       });
       return;
     }
-    let text = t.lines
-      .map((l: { speaker: string; text: string }) => `${l.speaker}: ${l.text}`)
-      .join("\n");
+    // A huddle is one audio track per person, so who said what is structural
+    // and the model can be told to trust it. A recording is one microphone in
+    // a room: it heard everybody and can tell nobody apart, so the same
+    // instruction would invite it to invent an attribution out of a placeholder
+    // speaker label. The two transcripts are not the same evidence and must not
+    // be described to the model as if they were.
+    const isRecording = isRecRoomKey(t.room_key);
+    let text = isRecording
+      ? t.lines.map((l: { text: string }) => l.text).join("\n")
+      : t.lines
+          .map((l: { speaker: string; text: string }) => `${l.speaker}: ${l.text}`)
+          .join("\n");
     if (text.length > SUMMARY_MAX_CHARS) text = text.slice(-SUMMARY_MAX_CHARS);
     const durationMin = t.ended_at
       ? Math.max(1, Math.round((t.ended_at - t.started_at) / 60_000))
       : null;
+    const source = isRecording
+      ? `This is the transcript of a meeting recorded on ONE microphone in the room${durationMin ? `, about ${durationMin} min` : ""}. Voices are NOT separated and nobody is identified: attribute something to a person only when the words themselves name them, and otherwise write about what was said, not who said it.`
+      : `This is the transcript of a team huddle (voice call)${durationMin ? `, about ${durationMin} min` : ""}. Speakers are exactly attributed.`;
     try {
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -428,7 +630,7 @@ export const generateSummary = internalAction({
           messages: [
             {
               role: "user",
-              content: `This is the transcript of a team huddle (voice call)${durationMin ? `, about ${durationMin} min` : ""}. Speakers are exactly attributed.
+              content: `${source}
 
 Write JSON only, this shape:
 {"title": "3-7 word title of what the call was about", "summary": "2-5 sentences: what was discussed, what was decided. Name people for decisions and disagreements. Plain words.", "action_items": ["each concrete follow-up someone committed to, with the owner's name first, e.g. 'Sam: ship the fix behind a flag'"]}
@@ -468,6 +670,215 @@ ${text}`,
   },
 });
 
+// ── Reading a recording's words out of its audio ──────────────────────────
+// The live recognizer is a websocket fed PCM by the browser, and a phone
+// cannot open one: React Native has no AudioContext and no way to tap a
+// microphone as samples. So a phone recording arrives as a finished m4a with
+// an empty transcript, and this is where it gets its words.
+
+/**
+ * What reads the file.
+ *
+ * Deliberately NOT the live recognizer's model. The live path streams words as
+ * they are spoken and has no use for timestamps; a recording is a finished
+ * thing somebody scrolls through next to a player, so every line needs to know
+ * when it was said. `whisper-1` is the transcription model that returns
+ * segment boundaries, which is the whole reason it is used here.
+ */
+const RECORDING_TRANSCRIBE_MODEL = "whisper-1";
+
+/** Segments written per mutation. A two hour meeting is a couple of thousand
+ *  lines, and one mutation inserting all of them would run past what a
+ *  transaction should do; the seq watermark makes the batches safe to resume
+ *  from and stitch back together in order. */
+const SEGMENT_WRITE_BATCH = 200;
+
+/** One microphone in a room heard everybody. There is no diarization here and
+ *  no honest name to put on a line, so every segment carries the same one and
+ *  the surfaces that render a recording hide the label entirely. */
+const RECORDING_SPEAKER = { id: "mic", name: "Speaker" } as const;
+
+/**
+ * The transcriber's reply, as segments this table can hold.
+ *
+ * `verbose_json` gives `{ text, segments: [{ start, end, text }] }` with the
+ * times in seconds. A reply without a segments array is still words — the
+ * models degrade to a plain transcript under load and for very short audio —
+ * so it becomes one segment spanning the whole file rather than nothing.
+ * Exported for its test: this is the seam between somebody else's JSON and our
+ * rows, and it is the piece most likely to change under us.
+ */
+export function parseTranscriptionSegments(
+  payload: unknown,
+  fallbackDurationMs: number,
+): { speaker_id: string; speaker_name: string; text: string; t0: number; t1: number }[] {
+  const body = (payload ?? {}) as {
+    text?: unknown;
+    segments?: unknown;
+  };
+  const speaker = {
+    speaker_id: RECORDING_SPEAKER.id,
+    speaker_name: RECORDING_SPEAKER.name,
+  };
+  if (Array.isArray(body.segments)) {
+    const out = body.segments
+      .map((raw: any) => {
+        const text = typeof raw?.text === "string" ? raw.text.trim() : "";
+        if (!text) return null;
+        const t0 = Math.max(0, Math.round((Number(raw?.start) || 0) * 1000));
+        const t1 = Math.max(t0, Math.round((Number(raw?.end) || 0) * 1000));
+        return { ...speaker, text, t0, t1 };
+      })
+      .filter(Boolean) as {
+      speaker_id: string;
+      speaker_name: string;
+      text: string;
+      t0: number;
+      t1: number;
+    }[];
+    if (out.length) return out;
+  }
+  const whole = typeof body.text === "string" ? body.text.trim() : "";
+  if (!whole) return [];
+  return [{ ...speaker, text: whole, t0: 0, t1: Math.max(0, fallbackDurationMs) }];
+}
+
+/** Append a batch of a recording's transcribed words. Owner-checked at the
+ *  scheduling end (only `attachRecording` reaches this), rec-checked here so a
+ *  future caller cannot use it to write into somebody's huddle. */
+export const appendRecordingSegments = internalMutation({
+  args: {
+    transcript_id: v.id("transcripts"),
+    segments: v.array(
+      v.object({
+        speaker_id: v.string(),
+        speaker_name: v.string(),
+        text: v.string(),
+        t0: v.number(),
+        t1: v.number(),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t || !isRecRoomKey(t.room_key)) return { last_seq: 0 };
+    // A recording names no voices; see writeSegments.
+    return { last_seq: await writeSegments(ctx, t, args.segments, { trackParticipants: false }) };
+  },
+});
+
+/** Close the transcription out: say how it went, and hand a transcript that
+ *  now has words to the parts of the pipeline that were waiting for them. */
+export const finishRecordingTranscript = internalMutation({
+  args: { transcript_id: v.id("transcripts"), ok: v.boolean() },
+  handler: async (ctx, args) => {
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t || !isRecRoomKey(t.room_key)) return;
+    if (!args.ok) {
+      // The audio is still there and still plays. What is gone is the words,
+      // and with them anything to summarize — "skipped" is exactly what that
+      // means everywhere else in this file, so the surfaces need no new case.
+      await ctx.db.patch(t._id, {
+        transcribe_status: "failed",
+        summary_status: "skipped",
+      });
+      return;
+    }
+    await ctx.db.patch(t._id, { transcribe_status: "done" });
+    // Everything downstream of an ended transcript runs now, for the first
+    // time with something in it: the routes ship the words, and the summary
+    // and action items generate off them.
+    await ctx.scheduler.runAfter(0, internal.transcripts.deliverRoutes, {
+      transcript_id: t._id,
+      include_after_routes: true,
+    });
+    await ctx.scheduler.runAfter(0, internal.transcripts.generateSummary, {
+      transcript_id: t._id,
+    });
+  },
+});
+
+/**
+ * Transcribe a recording's uploaded audio.
+ *
+ * Scheduled by `attachRecording`, once, for a recording that ended with
+ * nothing in it. Every exit sets a status: a recording that sits on
+ * "transcribing" forever is worse than one that says it failed, because the
+ * person watching cannot tell the difference between working and broken.
+ */
+export const transcribeRecording = internalAction({
+  args: { transcript_id: v.id("transcripts") },
+  handler: async (ctx, args): Promise<void> => {
+    let ok = false;
+    try {
+      const row = await ctx.runQuery(internal.transcripts.getForTranscription, {
+        transcript_id: args.transcript_id,
+      });
+      if (!row?.storage_id) throw new Error("no audio attached");
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
+      const audio = await ctx.storage.get(row.storage_id);
+      if (!audio) throw new Error("audio missing from storage");
+      // The recorder stops before it can make a file this big (see
+      // shared/contracts/recordingAudio). Reaching here means something else
+      // produced the audio, and the endpoint would refuse it with a 413 that
+      // reads like an outage — say the real thing instead.
+      if (audio.size > TRANSCRIBE_MAX_BYTES) {
+        throw new Error(
+          `audio is ${Math.round(audio.size / 1024 / 1024)}MB, over the ${Math.round(TRANSCRIBE_MAX_BYTES / 1024 / 1024)}MB transcription limit`,
+        );
+      }
+      const form = new FormData();
+      // The extension is what the API reads the container off. A phone records
+      // m4a; the desktop recorder's MediaRecorder gives webm everywhere but
+      // Safari, which gives mp4.
+      const ext = audio.type.includes("webm") ? "webm" : "m4a";
+      form.append("file", audio, `recording.${ext}`);
+      form.append("model", RECORDING_TRANSCRIBE_MODEL);
+      form.append("response_format", "verbose_json");
+      const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: form,
+      });
+      if (!resp.ok) {
+        throw new Error(`OpenAI ${resp.status}: ${(await resp.text()).slice(0, 300)}`);
+      }
+      const segments = parseTranscriptionSegments(
+        await resp.json(),
+        Math.max(0, (row.ended_at ?? row.started_at) - row.started_at),
+      );
+      if (!segments.length) throw new Error("transcription came back empty");
+      for (let i = 0; i < segments.length; i += SEGMENT_WRITE_BATCH) {
+        await ctx.runMutation(internal.transcripts.appendRecordingSegments, {
+          transcript_id: args.transcript_id,
+          segments: segments.slice(i, i + SEGMENT_WRITE_BATCH),
+        });
+      }
+      ok = true;
+    } catch (err) {
+      console.error("[transcripts] recording transcription failed", String(err).slice(0, 300));
+    }
+    await ctx.runMutation(internal.transcripts.finishRecordingTranscript, {
+      transcript_id: args.transcript_id,
+      ok,
+    });
+  },
+});
+
+export const getForTranscription = internalQuery({
+  args: { transcript_id: v.id("transcripts") },
+  handler: async (ctx, args) => {
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t || !isRecRoomKey(t.room_key)) return null;
+    return {
+      storage_id: t.recording_storage_id ?? null,
+      started_at: t.started_at,
+      ended_at: t.ended_at ?? null,
+    };
+  },
+});
+
 // Live view for the dock caption strip + the routes popover. Team-gated the
 // same way the room is.
 export const getLive = query({
@@ -475,7 +886,7 @@ export const getLive = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
-    const auth = await authorizeRoom(ctx, userId, args.room_key);
+    const auth = await authorizeRoom(ctx, userId, args.room_key, { rec: true });
     if (!auth.ok) return null;
     const all = await ctx.db
       .query("transcripts")
@@ -535,6 +946,11 @@ async function canReadCall(
   userId: Id<"users">,
   t: Doc<"transcripts">,
 ): Promise<boolean> {
+  // A RECORDING IS ITS CREATOR'S, FULL STOP. No participant door (they are the
+  // only voice in it), no team door, no feature gate — a person recording the
+  // meeting in the room around them has not published anything to anybody, and
+  // the row lands in a team only so their own history list can find it.
+  if (isRecRoomKey(t.room_key)) return String(t.started_by) === String(userId);
   if ((t.participants ?? []).some((p) => String(p.id) === String(userId))) {
     return (
       (await isTeamMember(ctx, userId, t.team_id)) &&
@@ -556,6 +972,9 @@ function shapeCallRow(t: Doc<"transcripts">) {
     summary: t.summary ?? null,
     action_items: t.action_items ?? [],
     summary_status: t.summary_status ?? null,
+    // Absent on everything that got its words live, which is every huddle. A
+    // recording waiting on the server to read its audio says so with this.
+    transcribe_status: t.transcribe_status ?? null,
     last_seq: t.last_seq,
   };
 }
@@ -597,6 +1016,11 @@ async function getCallCore(
     .collect();
   return {
     ...shapeCallRow(t),
+    // Present only for a recording that finished uploading its audio; a
+    // detail view offers playback when there is something to play.
+    recording_url: t.recording_storage_id
+      ? await ctx.storage.getUrl(t.recording_storage_id)
+      : null,
     routes: t.routes.map((r: any) => ({
       kind: r.kind,
       target: r.target,
@@ -708,7 +1132,9 @@ export const authForAsr = internalQuery({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
-    const auth = await authorizeRoom(ctx, userId, args.room_key);
+    // A recording mints against its own key like a huddle does; authorizeRoom
+    // has already answered "is this transcript yours".
+    const auth = await authorizeRoom(ctx, userId, args.room_key, { rec: true });
     return auth.ok ? { user_id: String(userId) } : null;
   },
 });

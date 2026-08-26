@@ -1136,6 +1136,27 @@ export type ClientUI = {
   // inputs. Off by default; stamped LWW — a behavior pref that follows the
   // user, not the device.
   composer_suggestions?: boolean;
+  // The composer's mic has been explained once, so it never explains itself
+  // again. A hold is not a click, and a small round key cannot say so on its own
+  // — the first DM composer that offers push to talk floats a small callout
+  // over it, and this retires that callout for good. Stamped LWW: learning the
+  // gesture on the laptop means the phone's browser has learned it too.
+  walkie_hold_seen?: boolean;
+  // Which view the people window shows: the wall of faces (default) or the
+  // roster list. Unstamped, so it stays a per-device reading preference like
+  // the sidebar and zen mode — the window is a different size on every machine,
+  // and which view fits is a fact about the window, not about the person.
+  people_view?: "wall" | "list";
+  // Which microphone and camera a deliberate join opens (lib/calls/joinPrefs).
+  // Unstamped on purpose: a device id names hardware attached to THIS machine,
+  // so the newest choice must not travel — the laptop's headset id is noise on
+  // the desktop, and switchActiveDevice would simply fail on it.
+  call_mic_device_id?: string;
+  call_camera_device_id?: string;
+  // Whether a deliberate join turns the camera on. Stamped LWW, because this
+  // one IS about the person: somebody who joins with video joins with video
+  // wherever they are signed in.
+  call_camera_on?: boolean;
   // Fold the pinned thread-state panel above the composer down to its headline
   // row. Expanded by default — the panel exists to be read on arrival — and
   // left unstamped, so it stays a per-device reading preference like the other
@@ -3342,6 +3363,7 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   toggleBookmark: (conversationId: string, messageId: string) => void;
   setMyStatus: (status: "available" | "busy" | "away") => void;
   setWalkiePref: (pref: "team" | "off") => void;
+  snoozeWalkie: (until: number) => number;
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
   sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
@@ -3754,6 +3776,15 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   openSettingsModal: (section?: SettingsSectionId) => void;
   closeSettingsModal: () => void;
 
+  // -- The people wall, over the main window --
+  // The same wall the people window shows, thrown over whatever you were doing
+  // for as long as it takes to hold one face. Ephemeral (a modal toggle, never
+  // persisted): which window you are in is not a preference.
+  peopleWallOpen: boolean;
+  openPeopleWall: () => void;
+  closePeopleWall: () => void;
+  togglePeopleWall: () => void;
+
   // -- Side panel --
   // -- Workspace slots (see store/workspace.ts + WORKSPACE_SLOTS.md) --
   // The layout as data: fixed slots, at most one pane each. Regions migrate
@@ -4141,6 +4172,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 export const STAMPED_UI_KEYS = new Set([
   "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "show_triggers", "card_bars", "inbox_show_old",
   "simple_view", "inbox_image_thumbs", "composer_suggestions", "inbox_home", "threads_include_sessions",
+  "walkie_hold_seen", "call_camera_on",
 ]);
 
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
@@ -6517,6 +6549,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (this.currentUser) (this.currentUser as any).walkie_pref = pref;
   }),
 
+  // Snooze: the shutter under that door. Same local-first reason again, and
+  // more urgently — this is pressed to stop a voice that is playing RIGHT NOW,
+  // so a door that waited on a round trip would let the next burst in.
+  snoozeWalkie: action(function (this: Draft, until: number) {
+    if (this.currentUser) (this.currentUser as any).walkie_snoozed_until = until;
+    return until;
+  }),
+
   // Notifications are a protected collection: the optimistic `read` flip is
   // field-protected so the next list sync can't revert it (the badge + bold
   // state clear instantly). The named side-effects delegate to the existing
@@ -8854,6 +8894,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
   openSettingsModal: (section?: SettingsSectionId) =>
     set({ settingsModalSection: section ?? DEFAULT_SETTINGS_SECTION }),
   closeSettingsModal: () => set({ settingsModalSection: null }),
+
+  peopleWallOpen: false,
+  openPeopleWall: () => set({ peopleWallOpen: true }),
+  closePeopleWall: () => set({ peopleWallOpen: false }),
+  togglePeopleWall: () => set({ peopleWallOpen: !get().peopleWallOpen }),
 
   // The ONE conversation allowed to share the stage with a working page (a
   // task, a doc). Opening another replaces it — stage panes swap, they never

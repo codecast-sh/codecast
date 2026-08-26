@@ -152,6 +152,14 @@ export default defineSchema({
     // message, it just never plays itself. The door gates live playback only,
     // never delivery, so nobody can be silenced by someone else's setting.
     walkie_pref: v.optional(v.union(v.literal("team"), v.literal("off"))),
+    // The shutter, as opposed to the door above. "Leave me alone for an hour":
+    // the pref stays on, and until this moment passes no burst plays itself
+    // here. It lives on the user rather than in the client prefs bag because
+    // snoozing is a statement about the PERSON, not about the browser they
+    // happened to press it in — it has to hold on the laptop and the phone at
+    // once. Delivery is untouched, exactly like the pref: the burst still
+    // lands as a voice message with its unread and its push.
+    walkie_snoozed_until: v.optional(v.number()),
     timezone: v.optional(v.string()),
     hide_activity: v.optional(v.boolean()),
     // Public-profile opt-in. A claimed, unique handle (lowercase alnum+dash) that
@@ -3342,6 +3350,20 @@ export default defineSchema({
     muted: v.boolean(),
     camera: v.boolean(),
     sharing: v.boolean(),
+    // THIS PERSON STEPPED INTO A WALKIE BURST ON PURPOSE, and when.
+    //
+    // A burst puts everyone who hears it in the room, so being seated says
+    // nothing about whether a conversation started. The mic used to answer
+    // that — an open mic meant somebody had joined — and it stopped being an
+    // answer when auto-listen went hot: every listener's mic is open now, so
+    // every listener would read as a conversation.
+    //
+    // So the intent is stamped rather than inferred. The client sets it only
+    // for the deliberate "Join live" gesture, and both sides read it off the
+    // roster they already subscribe to: another person's stamp on my walkie
+    // room is what turns the strip into the call dock, on their screen and on
+    // mine. Absent on every ordinary join, which is why it is optional.
+    walkie_joined_at: v.optional(v.number()),
   })
     .index("by_room", ["room_key"])
     .index("by_user", ["user_id"])
@@ -3470,6 +3492,33 @@ export default defineSchema({
     // Monotonic per-transcript segment counter (writer-owned; the scribe is
     // the only appender, so no contention).
     last_seq: v.number(),
+    // A RECORDING'S LEASE. A huddle's transcript is kept alive by the room's
+    // seat leases (call_members), and the orphan sweep ends it when they go
+    // stale. A recording has no room and therefore no seats, so it carries the
+    // lease itself: the engine beats this field while it records, and a
+    // transcript whose beat went stale is a browser tab that died mid-sentence.
+    // Same window, same reason, one less table.
+    last_beat: v.optional(v.number()),
+    // The audio, when there is any. A recording (`rec:` room key) uploads what
+    // its microphone heard once it stops; a huddle has no single recording to
+    // keep. Best effort by design — the transcript is the artifact, and a
+    // failed upload must never cost anyone their words.
+    recording_storage_id: v.optional(v.id("_storage")),
+    // Reading the words back OUT of that audio, for a recorder that had no
+    // recognizer of its own. A phone cannot stream microphone audio to the live
+    // recognizer — React Native has no AudioContext — so its recording arrives
+    // as a finished file with an empty transcript, and the server transcribes
+    // it once the upload lands. Absent on every transcript that got its words
+    // live, which is every huddle and every desktop recording that worked.
+    transcribe_status: v.optional(
+      v.union(
+        v.literal("pending"),
+        v.literal("done"),
+        // The audio is there and playable; the words could not be read out of
+        // it. Said plainly in the UI rather than left spinning.
+        v.literal("failed"),
+      ),
+    ),
   })
     .index("by_room", ["room_key"])
     .index("by_status", ["status"])
@@ -3977,6 +4026,12 @@ export default defineSchema({
       // join the conversation. A join still runs through authorizeRoom, so this
       // string grants nothing on its own.
       room_key: v.optional(v.string()),
+      // The words are being recovered from the recording right now. Set when a
+      // burst lands carrying audio and no transcript — the live recognizer was
+      // down, or heard nothing — and cleared by the action that transcribes it.
+      // The bubble reads it to say "getting the words" instead of showing a
+      // finished voice note that looks like it was said in silence.
+      transcribing: v.optional(v.boolean()),
     })),
     // Optimistic altKey AND the server's send-dedupe key: a retried send with the
     // same client_id returns the existing row instead of inserting a twin (and,
@@ -3990,6 +4045,16 @@ export default defineSchema({
     // CLI, so it is an honest downgrade rather than a boundary: a caller who
     // omits it is treated exactly as a human, which is what it already was.
     origin: v.optional(v.literal("agent")),
+    // Which session typed it, when `origin` is "agent" — so the line renders as
+    // that session (agent logo + session title) instead of wearing the human's
+    // face for words a machine wrote. Title/agent_type are a send-time snapshot,
+    // taken server-side only when the sender OWNS the session (a caller-supplied
+    // id must not leak someone else's private title into a channel). A viewer
+    // who can see the session live shows its current title instead; the
+    // snapshot is the fallback for everyone else.
+    origin_session_id: v.optional(v.string()),
+    origin_session_title: v.optional(v.string()),
+    origin_agent_type: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.number(),
     edited_at: v.optional(v.number()),

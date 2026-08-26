@@ -140,6 +140,10 @@ export const updateProfile = mutation({
     // voice message either way, so closing the door mutes a speaker, never
     // silences them.
     walkie_pref: v.optional(v.union(v.literal("team"), v.literal("off"))),
+    // The shutter under that door: bursts stop playing here until this moment
+    // passes. Zero re-opens it now. Same contract as the pref — playback only,
+    // never delivery.
+    walkie_snoozed_until: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -153,6 +157,9 @@ export const updateProfile = mutation({
     if (args.status !== undefined) updateData.status = args.status;
     if (args.timezone !== undefined) updateData.timezone = args.timezone;
     if (args.walkie_pref !== undefined) updateData.walkie_pref = args.walkie_pref;
+    if (args.walkie_snoozed_until !== undefined) {
+      updateData.walkie_snoozed_until = args.walkie_snoozed_until;
+    }
     await ctx.db.patch(userId, updateData);
     return userId;
   },
@@ -1177,7 +1184,7 @@ const RESERVED_USERNAMES = new Set([
   "join", "inbox", "feed", "search", "notifications", "conversation", "docs", "plans",
   "tasks", "projects", "workflows", "routines", "schedules", "sessions", "team",
   "admin", "config", "dashboard", "explore", "timeline", "windows", "orchestration",
-  "roadmap", "cli", "share", "commit", "pr", "review", "palette", "settings",
+  "roadmap", "cli", "share", "commit", "pr", "review", "palette", "people", "call-panel", "call-faces", "settings",
   "pricing", "blog", "a",
   // Product nouns / safety
   "u", "api", "teams", "codecast", "help", "status", "me", "you", "new", "null", "undefined",

@@ -5,8 +5,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { UserRound, Filter, Link2, Headphones, MessageSquare } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, useTrackedStore } from "../store/inboxStore";
-import { sessionsWithPendingSend } from "../store/inboxStore";
+import { useInboxStore } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -15,16 +14,16 @@ import { ContextMenu, useContextMenu, CtxItem, CtxHeader } from "./ui/context-me
 import {
   PRESENCE_META,
   compareMembersByPresence,
-  fleetLine,
   localTimeLine,
-  memberFleetSummary,
+  memberDisplayName,
   memberPresenceState,
   presenceLine,
 } from "./presence/memberPresence";
-import { joinCall, knockRoom, startHuddle } from "../lib/calls/callManager";
-import { useLiveRoomOfMember } from "../hooks/useLiveRooms";
+import { MemberFace } from "./presence/MemberFace";
+import { useMemberActivity } from "./presence/useMemberActivity";
+import { useMemberHuddle } from "./presence/useMemberHuddle";
 import { WalkiePttButton } from "./calls/WalkiePtt";
-import { AvatarImg } from "../lib/avatarCache";
+import { PopOutPeopleButton } from "./people/PopOutPeopleButton";
 import { useOpenDm } from "../hooks/useChatSync";
 import { dmRoomKey } from "@codecast/shared/contracts";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -40,7 +39,7 @@ interface TeamAvatarBarProps {
 // avatar row on each push. The pump renders nothing; the bar below reads the
 // store, whose teamMembers ref only changes when something displayable changed
 // (the sync layer quantizes presence timestamps and bails on identical pushes).
-function TeamMembersPump({ teamId }: { teamId: Id<"teams"> | undefined }) {
+export function TeamMembersPump({ teamId }: { teamId: Id<"teams"> | undefined }) {
   const teamMembersQuery = useQuery(
     api.teams.getTeamMembers,
     teamId ? { team_id: teamId } : "skip"
@@ -73,7 +72,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
       // Full manual status, not just the busy bit: the hover card highlights
       // the active status pill from this same memo, so an available↔away flip
       // must wake the bar too — it's a rare, user-initiated change.
-      sig += `${m._id}|${memberPresenceState(m)}|${m.status ?? ""}|${m.image ?? ""}|${m.github_avatar_url ?? ""}|${m.name ?? ""}|${m.email ?? ""}|${m.github_username ?? ""}|${m.in_room_key ?? ""}\n`;
+      sig += `${m._id}|${memberPresenceState(m)}|${m.status ?? ""}|${m.image ?? ""}|${m.github_avatar_url ?? ""}|${m.name ?? ""}|${m.email ?? ""}|${m.github_username ?? ""}|${m.in_room_key ?? ""}|${m.in_huddle ? 1 : 0}\n`;
     }
     return sig;
   });
@@ -144,12 +143,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
     <div className="flex items-center gap-1 px-2">
       <TeamMembersPump teamId={effectiveTeamId} />
       {sortedMembers.slice(0, 6).map((member) => {
-        const state = memberPresenceState(member);
-        const meta = PRESENCE_META[state];
-        const busy = member.status === "busy";
-        const avatar = member.image || member.github_avatar_url;
-        const initial = (member.name || member.email || "?").charAt(0).toUpperCase();
-        const displayName = member.name || member.email?.split("@")[0] || "Unknown";
+        const displayName = memberDisplayName(member);
         const isSelected = memberFilter === member._id;
         const isSelf = String(member._id) === String((currentUser as any)?._id ?? "");
         return (
@@ -164,38 +158,17 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
             onContextMenu={(e) => ctxMenu.open(e, { id: member._id, username: member.github_username, displayName })}
             className="relative block"
           >
-            <div
-              className={`h-8 w-8 overflow-hidden rounded-full transition-all duration-200 ${
-                isSelected
-                  ? "ring-2 ring-sol-cyan ring-offset-1 ring-offset-sol-bg"
-                  : meta.ring
-              } ${meta.dim && !isSelected ? "opacity-50 hover:opacity-80" : ""}`}
-            >
-              <AvatarImg
-                src={avatar}
-                alt={displayName}
-                className="h-full w-full object-cover"
-                fallback={
-                  <div className="flex h-full w-full items-center justify-center bg-sol-bg-highlight">
-                    <span className="text-xs font-medium text-sol-text-muted">{initial}</span>
-                  </div>
-                }
-              />
-            </div>
-            {busy && (
-              <span
-                className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-sol-bg bg-sol-red"
-                title="Busy"
-              />
-            )}
-            {(member.in_huddle || member.in_room_key) && (
-              <span
-                className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-sol-bg bg-sol-violet"
-                title="In a huddle"
-              >
-                <Headphones className="h-2 w-2 text-sol-bg" />
-              </span>
-            )}
+            {/* The face, its badge and the huddle chip are one block shared
+                with the people window's roster (presence/MemberFace) — the
+                strip and the buddy list draw a person the same way or they
+                are two designs. The filter ring is this surface's own. */}
+            <MemberFace
+              member={member}
+              size={32}
+              className={`transition-all duration-200 ${
+                isSelected ? "rounded-full ring-2 ring-sol-cyan ring-offset-1 ring-offset-sol-bg" : ""
+              }`}
+            />
           </button>
           {/* Its own boundary: a crash inside the card (or a join it starts)
               must degrade to a chip that NAMES this surface, not take the App
@@ -229,6 +202,10 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           <Headphones className="h-3.5 w-3.5" />
         </button>
       )}
+      {/* Pop the roster out into its own window — the buddy list, floating
+          beside whatever you are doing. Hidden inside the people window
+          itself, where the gesture has nowhere to go. */}
+      <PopOutPeopleButton className="flex h-8 w-8 items-center justify-center rounded-full text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text" />
       {teamMembers.length > 6 && (
         <button
           onClick={() => router.push("/team/activity?filter=team")}
@@ -244,7 +221,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           className="ml-1 flex items-center gap-1.5 rounded-full border border-sol-cyan/40 bg-sol-cyan/20 px-2 py-1 text-xs text-sol-cyan transition-colors hover:bg-sol-cyan/30"
           title="Clear filter"
         >
-          <span className="max-w-[80px] truncate">{selectedMember.name || selectedMember.email?.split("@")[0]}</span>
+          <span className="max-w-[80px] truncate">{memberDisplayName(selectedMember)}</span>
           <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
           </svg>
@@ -298,29 +275,15 @@ function MemberHoverCard({
   onOpenChat: () => void;
 }) {
   const now = useCoarseNow(15_000);
-  const state = memberPresenceState(member);
-  const meta = PRESENCE_META[state];
-  const s = useTrackedStore([
-    (st: any) => st.sessions,
-    (st: any) => st.sessionsWithQueuedMessages,
-    (st: any) => st.pendingMessages,
-  ]);
-  const fleet = useMemo(() => {
-    // Honest counts: only sessions with a live agent or recent activity. The
-    // store's session cache is deliberately liberal (30 days of rows), and
-    // counting it raw produced absurdities like "608 need input".
-    const RECENT_MS = 6 * 3600_000;
-    const sessions = (Object.values(s.sessions ?? {}) as any[]).filter(
-      (x) => x && (x.is_live || now - (x.updated_at ?? 0) < RECENT_MS),
-    );
-    return memberFleetSummary(sessions, String(member._id), {
-      queued: s.sessionsWithQueuedMessages ?? new Set(),
-      pendingSendIds: sessionsWithPendingSend(s.pendingMessages),
-      now,
-    });
-  }, [s.sessions, s.sessionsWithQueuedMessages, s.pendingMessages, member._id, now]);
+  // One source for the badge, the activity line and the fleet counts — the
+  // people window reads the same hook, so the two surfaces cannot phrase the
+  // same situation differently.
+  const { visual, line, fleet, room: liveRoom } = useMemberActivity(member);
+  const meta = PRESENCE_META[visual];
 
   const time = localTimeLine(member.timezone, now);
+  const presence = presenceLine(member, now);
+  const presenceEchoesLine = presence.toLowerCase() === line.toLowerCase();
   const avatar = member.image || member.github_avatar_url;
   // A quote is only worth quoting when it reads like a sentence the agent
   // wrote, not a bare status token.
@@ -330,45 +293,11 @@ function MemberHoverCard({
       : null;
   const cap = (n: number) => (n > 20 ? "20+" : String(n));
 
-  // In a huddle the viewer may join (in_room_key is only sent when they may):
-  // the button becomes "join them" — ringing someone out of the room they are
-  // sitting in is the one wrong gesture. A LOCKED huddle sends no room key at
-  // all, so the live-rooms list is what finds it, and the button knocks: the
-  // same gesture, one door further out. Otherwise, one click rings them.
-  const liveRoom = useLiveRoomOfMember(String(member._id));
-  const lockedRoom = !member.in_room_key && liveRoom?.locked ? liveRoom : null;
-  const huddleLabel = member.in_room_key
-    ? "Join huddle"
-    : !lockedRoom
-      ? "Huddle"
-      : lockedRoom.knocked
-        ? "Knocked"
-        : "Knock";
-  // "Knocked" is a state, not a gesture: the knock is already at the door and
-  // there is nothing left to do but wait for it to open. The button used to
-  // stay fully enabled and hover-lit in that state while its handler returned
-  // immediately, so a click on a perfectly ordinary-looking button did nothing
-  // at all and said nothing about why. LiveNow answers this same state by
-  // rendering no control; here the button sits in a row of equal-width
-  // siblings, so it keeps its place and stops pretending instead.
-  const huddleWaiting = !!lockedRoom?.knocked;
-  const huddleTitle = member.in_room_key
-    ? "Join the huddle — you arrive muted"
-    : !lockedRoom
-      ? `Ring ${displayName} into a huddle`
-      : huddleWaiting
-        ? "They can see you at the door"
-        : "This huddle is locked — knock to ask in";
-  const huddle = () => {
-    if (member.in_room_key) void joinCall(member.in_room_key);
-    else if (lockedRoom) {
-      if (!lockedRoom.knocked) void knockRoom(lockedRoom.roomKey);
-    } else
-      void startHuddle({
-        roomKey: dmRoomKey(currentUserId, String(member._id)),
-        toUserIds: [String(member._id)],
-      });
-  };
+  // The huddle gesture is shared with the people window's roster rows
+  // (components/presence/useMemberHuddle), so the two surfaces cannot drift
+  // into two answers for the same door.
+  const huddle = useMemberHuddle(member, currentUserId, liveRoom, displayName);
+
   // Local-first: the store action flips the roster row in the same tick (the
   // pill must not wait on a server round-trip) and dispatches the
   // authoritative updateProfile through the outbox.
@@ -398,18 +327,7 @@ function MemberHoverCard({
     >
       <div className="w-[280px] rounded-lg border border-sol-border bg-sol-bg-alt p-3 text-left shadow-xl motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-150">
         <div className="flex items-start gap-2.5">
-          <div className={`h-9 w-9 shrink-0 overflow-hidden rounded-full ${meta.ring}`}>
-            <AvatarImg
-              src={avatar}
-              alt=""
-              className="h-full w-full object-cover"
-              fallback={
-                <div className="flex h-full w-full items-center justify-center bg-sol-bg-highlight text-sm text-sol-text-muted">
-                  {displayName.charAt(0).toUpperCase()}
-                </div>
-              }
-            />
-          </div>
+          <MemberFace member={member} size={36} title="" />
           <div className="min-w-0 flex-1">
             <button
               onClick={onOpenProfile}
@@ -419,32 +337,32 @@ function MemberHoverCard({
               {displayName}
               {isSelf && <span className="ml-1.5 text-[10px] font-normal text-sol-text-dim">you</span>}
             </button>
-            <div className="mt-0.5 flex items-center gap-1.5 text-xs">
-              <span className={`inline-block h-1.5 w-1.5 rounded-full ${meta.dot || "bg-sol-base01"}`} />
-              <span className={state === "active" ? "text-sol-green" : "text-sol-text-muted"}>
-                {presenceLine(member, now)}
-              </span>
-              {time && <span className="text-sol-text-dim">· {time}</span>}
+            {/* What they are DOING leads; the presence fact and their clock
+                follow it, smaller. That order is the whole complaint: status
+                was legible only to someone who knew the color code, and the
+                activity was not on the card at all.
+
+                With nothing to report the activity line IS the presence line
+                ("active now"), so the second row drops to the clock alone
+                rather than saying it twice. */}
+            <div className={`mt-0.5 line-clamp-2 text-[12px] leading-snug ${meta.text}`} title={line}>
+              {line}
             </div>
-            {member.status && member.status !== "available" && !isSelf && (
-              <div className="mt-0.5 text-[11px] capitalize text-sol-orange">{member.status}</div>
+            {(!presenceEchoesLine || time) && (
+              <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-sol-text-dim">
+                {!presenceEchoesLine && <span>{presence}</span>}
+                {time && <span>{presenceEchoesLine ? time : `· ${time}`}</span>}
+              </div>
             )}
           </div>
         </div>
-
-        {member.in_huddle && !isSelf && (
-          <div className="mt-2 flex items-center gap-1.5 text-[11px] text-sol-violet">
-            <Headphones className="h-3 w-3" />
-            {lockedRoom ? "in a locked huddle" : "in a huddle now"}
-          </div>
-        )}
 
         {fleet && (fleet.working > 0 || fleet.needsYou > 0) && (
           <div className="mt-2.5 border-t border-sol-border/60 pt-2">
             <div className="flex items-center gap-3 text-[11px]">
               {fleet.working > 0 && (
                 <span className="flex items-center gap-1 text-sol-text-muted">
-                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-sol-green" />
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-sol-cyan" />
                   {cap(fleet.working)} working
                 </span>
               )}
@@ -477,7 +395,7 @@ function MemberHoverCard({
                       ? "bg-sol-red/15 text-sol-red"
                       : st === "away"
                         ? "bg-sol-bg-highlight text-sol-text"
-                        : "bg-sol-green/15 text-sol-green"
+                        : "bg-sol-cyan/15 text-sol-cyan"
                     : "text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text"
                 }`}
               >
@@ -489,17 +407,17 @@ function MemberHoverCard({
               {callsEnabled && (
                 <button
                   type="button"
-                  onClick={huddle}
-                  disabled={huddleWaiting}
-                  title={huddleTitle}
+                  onClick={huddle.go}
+                  disabled={huddle.waiting}
+                  title={huddle.title}
                   className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] font-medium transition-colors ${
-                    huddleWaiting
+                    huddle.waiting
                       ? "cursor-default border border-sol-border/50 text-sol-text-dim"
                       : "bg-sol-violet/15 text-sol-violet hover:bg-sol-violet/25"
                   }`}
                 >
                   <Headphones className="h-3.5 w-3.5" />
-                  {huddleLabel}
+                  {huddle.label}
                 </button>
               )}
               <button
@@ -522,7 +440,7 @@ function MemberHoverCard({
                   resolveChannelId={() =>
                     useInboxStore.getState().openDmChannel([String(member._id)])
                   }
-                  className="flex items-center justify-center rounded-md bg-sol-bg-highlight px-2 py-1.5 text-sol-text-muted transition-colors hover:text-sol-text"
+                  size="sm"
                   title={`Hold to talk to ${displayName}`}
                 />
               )}

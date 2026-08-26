@@ -1172,6 +1172,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await (ctx as any).runMutation(api.users.updateProfile, { walkie_pref: pref });
   },
 
+  // Snooze, from the receiver strip (store snoozeWalkie). On the user doc
+  // rather than in the client prefs bag because "leave me alone" is a
+  // statement about the person: it has to hold on every device they are
+  // signed in on, and the door is decided per client.
+  snoozeWalkie: async (ctx, userId, [until]: [number]) => {
+    await (ctx as any).runMutation(api.users.updateProfile, { walkie_snoozed_until: until });
+  },
+
   // Trigger verbs (store triggerAction / deleteTrigger). The client flipped
   // the agent_tasks row on its draft; these run the real mutations, which own
   // leases, rescheduling and the run-now kick.

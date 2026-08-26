@@ -19,7 +19,8 @@ import {
   isAgentActive,
   getProjectName,
 } from "../store/inboxStore";
-import { isLivenessStale } from "@codecast/shared/contracts";
+import { isLivenessStale, THREAD_STATE_STALE_MSGS } from "@codecast/shared/contracts";
+import { makeCollectionSig } from "../store/wakeSig";
 import { threadStateView, compactAge } from "../lib/threadState";
 import { sessionCardSummary } from "../lib/sessionSummary";
 import { formatModel } from "../lib/conversationProcessor";
@@ -66,6 +67,69 @@ export function fleetBandFor(s: InboxSession, opts: FleetBandOpts): FleetBand {
   if (ts?.status === "blocked") return "needsYou";
   return "finished";
 }
+
+/**
+ * A wake signature over exactly what `fleetBandFor` and the fleet summary
+ * BRANCH ON — nothing else.
+ *
+ * It lives here, beside the function it projects, because the two must be
+ * edited together: a new branch in `fleetBandFor` that is not signed here is a
+ * band that silently stops updating, and that failure is invisible.
+ *
+ * Deliberately absent, and this is the whole point:
+ *
+ *   `updated_at` and `last_heartbeat` — they move every second on every live
+ *   session. `isLivenessStale` reads `updated_at`, so staleness IS partly a
+ *   function of it, but staleness is a TIME transition, not a field change:
+ *   pair this signature with a coarse clock (useCoarseNow), which is what
+ *   `useFleetSummaries` does. Folding `updated_at` in would defeat the entire
+ *   signature and re-render every subscriber on every tick — the bug that
+ *   pegged the inbox sidebar at ~70% idle main-thread.
+ *
+ *   The raw `message_count` — it streams token by token during a run. The band
+ *   only ever asks two questions of it: is there ANY output, and has the
+ *   pinned thread state gone stale from messages piling up since it was
+ *   written. Both are thresholds, so both are folded to a bit and a burst of
+ *   200 streamed messages costs one signature change instead of 200.
+ */
+export function fleetSessionSig(s: InboxSession): string {
+  const messagesSince =
+    s.thread_state_msg_count == null
+      ? null
+      : Math.max(0, (s.message_count ?? 0) - s.thread_state_msg_count);
+  return [
+    s._id,
+    // Whose fleet this counts toward, and what the "· fixing auth" tail says.
+    s.user_id ?? "",
+    s.title ?? "",
+    s.session_id ?? "",
+    // The band's own inputs.
+    s.agent_status ?? "",
+    s.is_idle ? 1 : 0,
+    // Liveness overlay field; not on the base row type (teamSessionsLiveness
+    // merges it in), and the fleet filter branches on it.
+    (s as any).is_live ? 1 : 0,
+    s.inbox_killed_at ? 1 : 0,
+    s.awaiting_input ? 1 : 0,
+    s.session_error ? 1 : 0,
+    s.pending_api_error ? 1 : 0,
+    s.is_unresponsive ? 1 : 0,
+    s.has_pending ? 1 : 0,
+    // Thresholds, not counts (see above).
+    (s.message_count ?? 0) > 0 ? 1 : 0,
+    messagesSince != null && messagesSince >= THREAD_STATE_STALE_MSGS ? 1 : 0,
+    // The pinned state: whether there is one, when it was written (every
+    // rewrite stamps a new timestamp, so this stands in for the text), and the
+    // declared status the "blocked" branch and the quote line both read.
+    s.thread_state ? 1 : 0,
+    s.thread_state_at ?? 0,
+    s.thread_state_status ?? "",
+  ].join("\x1f");
+}
+
+/** The same signature over the whole session map, memoized by the map ref —
+ *  what an always-mounted fleet surface subscribes to instead of `s.sessions`. */
+export const fleetSessionsWakeSig = makeCollectionSig<InboxSession>(fleetSessionSig);
 
 export interface FleetBands {
   needsYou: InboxSession[];

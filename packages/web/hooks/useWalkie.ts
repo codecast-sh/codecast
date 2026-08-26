@@ -27,10 +27,13 @@ import {
 import { toast } from "sonner";
 import {
   endBurst,
+  getWalkieLevel,
   getWalkieStatus,
   startBurst,
   subscribeWalkie,
+  subscribeWalkieLevel,
   walkieBlockedFor,
+  warmMic,
   type WalkieStatus,
 } from "../lib/calls/walkie";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
@@ -133,7 +136,7 @@ export function callsAvailableNow(): boolean {
  * listen. Push-to-talk asks a stricter one, below.
  */
 export function walkieJoinReason(roomKey: string | undefined): string | null {
-  if (!roomKey) return "This one cannot be joined";
+  if (!roomKey) return "This burst has no room to join";
   // Calls off for this team, or the deployment has no LiveKit behind it. The
   // engine's own "not ready" only knows whether it has a Convex client, so
   // without this the gesture stayed offered and failed at the far end: the
@@ -194,11 +197,90 @@ export type PushToTalk = {
    *  being recorded and the burst will still land as a message — that half is
    *  fine — but nobody is hearing them right now. */
   dropped: boolean;
+  /** THE MICROPHONE IS OPEN and the recorder, the meter and the recognizer are
+   *  running on it: every word from here is kept, whatever the room is doing.
+   *  True about a tenth of a second after the press, because nothing but
+   *  getUserMedia precedes it — so this, not `live`, is what the key lights on.
+   *  `live` above answers the later and different question of whether anybody
+   *  is hearing it as it is said. */
+  capturing: boolean;
   /** Null when the gesture is available. */
   reason: string | null;
   press: () => void;
   release: () => void;
 };
+
+/**
+ * What the key is doing, out of the three booleans the gesture reports — four
+ * states, four different claims about where the words are going.
+ *
+ * `dropped` first, because it is the only one that is bad news and it is true
+ * at the same time as `capturing`. Then the microphone being open, which is
+ * what the key lights on: the words are being kept from that instant, whatever
+ * the room is doing. `opening` is only the gap before it.
+ */
+export function walkieKeyState(
+  ptt: Pick<PushToTalk, "holding" | "capturing" | "dropped">,
+): "idle" | "opening" | "live" | "dropped" {
+  if (ptt.dropped) return "dropped";
+  if (ptt.capturing) return "live";
+  return ptt.holding ? "opening" : "idle";
+}
+
+/**
+ * What a screen reader is told the key IS, right now.
+ *
+ * Beside `walkieKeyState` because the two answer the same question for two
+ * different senses, and they must never disagree — the eye reads the ring and
+ * the fill, and this is the whole of what a reader gets instead.
+ *
+ * The state is IN the name rather than in `aria-pressed`, which is a toggle's
+ * word: it announces "not pressed" and promises a latch, when what is here is
+ * a key you keep down.
+ *
+ * When idle it names WHICH key this is. A roster of twenty teammates draws
+ * twenty of these, and every one of them used to reach a screen reader as the
+ * identical "Hold to talk" — the teammate's name lived in `title`, where only
+ * a pointer could find it. A visible label still wins when there is one, so
+ * what is heard always contains what is seen.
+ */
+/**
+ * The burst's room went away under an open microphone: still recording, heard
+ * by nobody.
+ *
+ * The engine cannot answer this. Nothing in a burst is tied to the room's
+ * connection state — a LiveKit disconnect mid-hold (the SFU kicking a
+ * duplicate identity, a network drop it gave up on) leaves `sending` exactly
+ * as it was — and `sending.heardLive` only ever says the track reached the
+ * room ONCE, never that somebody is hearing it now. So the answer is the
+ * engine's burst plus the call plane's seat, and it lives here, once, because
+ * the key and the strip must never disagree about it.
+ */
+export function walkieBurstDropped(
+  sending: { openAt: number | null; roomKey: string } | null,
+  call: { roomKey: string | null; phase: string },
+): boolean {
+  if (!sending || sending.openAt === null) return false;
+  const seated =
+    call.roomKey === sending.roomKey &&
+    (call.phase === "connected" || call.phase === "connecting");
+  return !seated;
+}
+
+export function walkieKeyName(
+  state: ReturnType<typeof walkieKeyState>,
+  opts: { reason?: string | null; live?: boolean; label?: string; title?: string },
+): string {
+  if (opts.reason) return opts.reason;
+  if (state === "dropped") return "Nobody is hearing this — still recording";
+  if (state === "opening") return "Opening the mic — do not talk yet";
+  if (state === "live") {
+    return opts.live
+      ? "Live — they hear you now, release to send"
+      : "Recording — they get it when you let go";
+  }
+  return opts.label ?? opts.title ?? "Hold to talk";
+}
 
 /**
  * The gesture, without any of the chrome.
@@ -269,13 +351,13 @@ export function usePushToTalk(
   // to exactly these fields, so this render is the one triggered by them
   // changing.
   const call = useInboxStore.getState().call;
-  const seated =
-    call.roomKey === roomKey && (call.phase === "connected" || call.phase === "connecting");
   const opened = holding && !!status.sending?.openAt;
+  const dropped = opened && walkieBurstDropped(status.sending, call);
   return {
     holding,
-    live: opened && seated,
-    dropped: opened && !seated,
+    live: opened && !dropped,
+    dropped,
+    capturing: holding && !!status.sending?.live,
     reason: walkieBlockedReason(roomKey),
     press,
     release,
@@ -339,6 +421,46 @@ export function useHoldToTalk(
 }
 
 /**
+ * How loudly somebody is talking, written straight onto an element as the CSS
+ * custom property `--level` (0 to 1), for a meter to draw itself from.
+ *
+ * NOT React state, and that is the whole point. The level moves every animation
+ * frame, so a `useState` behind it would re-render this component sixty times a
+ * second and every component under it with it — the exact jank the engine kept
+ * the level off `WalkieStatus` to avoid. A custom property crosses the same
+ * distance with no render at all: the subscription writes one string, and CSS
+ * redraws the ring.
+ *
+ * It is a REF CALLBACK rather than a ref plus an effect, which is the smaller
+ * shape for the same job: React runs it when the element arrives and runs the
+ * returned cleanup when it leaves or when `active`/`identity` change, so the
+ * subscription's life is exactly the element's.
+ *
+ * `identity` picks whose voice: absent is this client's own microphone while
+ * the key is down, a LiveKit participant identity is the teammate being heard.
+ */
+export function useWalkieLevelVar<T extends HTMLElement>(active: boolean, identity?: string) {
+  return useCallback(
+    (el: T | null) => {
+      if (!el) return;
+      el.style.setProperty("--level", "0");
+      if (!active) return;
+      // The engine already debounces: it wakes subscribers only when a level
+      // moved by more than a couple of percent, and stops its loop when nobody
+      // is talking. So this writes as often as the number really changes.
+      const write = () => el.style.setProperty("--level", getWalkieLevel(identity).toFixed(3));
+      write();
+      const off = subscribeWalkieLevel(write);
+      return () => {
+        off();
+        el.style.setProperty("--level", "0");
+      };
+    },
+    [active, identity],
+  );
+}
+
+/**
  * The gesture as DOM props, spread onto whatever element carries it.
  *
  * A HOLD IS A HOLD ON THE KEYBOARD TOO. This used to be pointer events alone,
@@ -356,8 +478,38 @@ export function useHoldToTalk(
  */
 const HOLD_KEYS = new Set([" ", "Spacebar", "Enter"]);
 
+/** Whether a key event is the keyboard's version of a thumb on the key.
+ *  Exported so a surface that WRAPS these handlers — the people wall, whose
+ *  face is both a hold and a click — asks the same question rather than
+ *  keeping its own copy of the set and drifting from it. */
+export function isWalkieHoldKey(key: string): boolean {
+  return HOLD_KEYS.has(key);
+}
+
 export function pttHoldProps(ptt: PushToTalk) {
   return {
+    // A pointer arriving on a push-to-talk key means "might talk". Opening the
+    // microphone now takes the device acquisition out of the press, so the first
+    // burst of a session is as instant as the second. It CANNOT prompt — the
+    // engine only proceeds where permission is already granted — so nobody is
+    // ever asked for a microphone by moving a mouse.
+    //
+    // Deliberately the KEY and not the conversation. Warming whenever a DM is
+    // open would turn the browser's recording indicator on for reading a
+    // message, which is a real thing to do to somebody for a burst they may
+    // never speak. Pointing at the mic is the first gesture that says otherwise.
+    // A keyboard-only hold therefore pays for getUserMedia at press time — tens
+    // of milliseconds on an already-granted device, against the seconds the room
+    // join used to cost.
+    onPointerEnter: () => void warmMic(),
+    // The keyboard's version of a pointer arriving. Tabbing onto a
+    // push-to-talk key is as deliberate as pointing at one, and it was the
+    // gap: the pointer path paid for the device before the press and the
+    // keyboard path paid for it inside the press, so a keyboard-only hold
+    // was reliably the slowest way to start a burst. Same engine call, same
+    // guarantee — `warmMic` returns unless permission is already granted, so
+    // no Tab key can raise a microphone prompt.
+    onFocus: () => void warmMic(),
     onPointerDown: (e: PointerEvent) => {
       // Left button only, and never the gesture that opens a context menu.
       if (e.button !== 0) return;
@@ -397,20 +549,131 @@ export function pttHoldProps(ptt: PushToTalk) {
 export function walkieOwnsCall(
   status: WalkieStatus,
   call: { roomKey: string | null; phase: string; muted: boolean },
-  opts: { lingerRoom?: string | null; guest?: boolean } = {},
+  opts: { lingerRoom?: string | null; guest?: boolean; upgraded?: boolean } = {},
 ): boolean {
   const lingerRoom = opts.lingerRoom !== undefined ? opts.lingerRoom : (lastTarget?.roomKey ?? null);
+  // SOMEBODY STEPPED IN ON PURPOSE. This outranks every branch below, including
+  // a key that is still down: the founder's rule is that a hold stays a strip
+  // until the other side explicitly joins, and this is that moment arriving.
+  //
+  // It replaces the mute, which used to carry this meaning everywhere below —
+  // an open microphone meant a person had joined. Hot auto-listen ended that
+  // reading: every listener's mic is open now, so a burst played to three
+  // people would have read as three conversations and put the full call dock
+  // over all three of their screens for a sentence.
+  if (opts.upgraded !== undefined ? opts.upgraded : status.joinedLive === call.roomKey) {
+    return false;
+  }
   // The walkie walked into a call that was already running with this person's
   // mic open. It is a guest there, and a guest does not take the room's controls
   // away from it — not while talking, not while listening, and not through the
   // linger afterwards, which is still happening inside that same huddle.
   if (opts.guest !== undefined ? opts.guest : guest) return false;
+  // Being handed back is still being owned. Leaving is asynchronous — the call
+  // plane keeps reporting a live seat for a few ticks after the walkie is done
+  // with the room — and during those ticks the answer here has to stay yes, or
+  // the ordinary dock appears for an instant on a room that is in the middle of
+  // disappearing. When it finally does, the phase goes idle and the surface is
+  // "none", which is what the person should see.
+  if (status.releasing && status.releasing === call.roomKey) return true;
   if (status.sending) return status.sending.roomKey === call.roomKey;
-  if (status.incoming) return status.incoming.roomKey === call.roomKey && call.muted;
-  // Lingering: THIS room is being held open in case anybody answers. An open
-  // mic means somebody did, and a room people are talking in is a huddle rather
-  // than a burst, so the ordinary dock takes it back.
-  return (
-    !!status.lingerUntil && !!call.roomKey && call.roomKey === lingerRoom && call.muted
-  );
+  if (status.incoming) return status.incoming.roomKey === call.roomKey;
+  // Lingering: THIS room is being held open in case anybody answers. Nobody
+  // has, or the test above would have taken the room back.
+  return !!status.lingerUntil && !!call.roomKey && call.roomKey === lingerRoom;
+}
+
+/**
+ * Whether the full call stage is open, after something happened.
+ *
+ * The dock holds this as its own state and hands every change through here, so
+ * that the two ways it moves are one rule in one place — the person's own
+ * gestures (the expand button, the collapse button) set it directly and are not
+ * this function's business.
+ *
+ * THE STAGE BELONGS TO THE CALL THAT WAS EXPANDED, and to no call after it.
+ * Nothing used to put it back: the dock is mounted for the life of the page and
+ * merely draws nothing when idle, so one expanded huddle left the flag true
+ * forever, and the next call — or the next walkie burst — opened full screen by
+ * itself, a second or two in, when the room connected. That is the founder's
+ * "it kind of switches to the full call unexpectedly", reproduced with two
+ * identities and screenshotted (ct-45974, ct-46031).
+ *
+ * AND NEVER OVER A BURST. Remote video arriving earns the stage in a huddle and
+ * does not in three seconds of somebody's voice — and opening it there does
+ * lasting damage, because the flag would outlive the burst and take the surface
+ * from every later one.
+ */
+export function nextStageOpen(
+  open: boolean,
+  ev: { phase: string; walkieOwns?: boolean; notice?: boolean; newRemoteVideo?: boolean },
+): boolean {
+  if (ev.phase === "idle") return false;
+  if (ev.walkieOwns) return open;
+  return open || !!ev.notice || !!ev.newRemoteVideo;
+}
+
+/**
+ * Has anybody ELSE in this room stepped into the burst on purpose?
+ *
+ * The far side's half of the upgrade. Their gesture stamps their seat
+ * (call_members.walkie_joined_at) and the stamp rides the roster both sides
+ * already subscribe to, so no new query and no new channel carries it — the
+ * dock's own occupancy list is the wire.
+ *
+ * MY OWN stamp is excluded on purpose. This side already knows what it pressed,
+ * synchronously, through the engine's `joinedLive`; reading my own row back
+ * would only be a slower way to learn it, and it would make the rule depend on
+ * a round trip that the local-first path is there to avoid.
+ */
+export function otherJoinedLive(
+  roster: { user_id?: unknown; walkie_joined_at?: number }[],
+  myUserId: string | null | undefined,
+): boolean {
+  const me = String(myUserId ?? "");
+  return roster.some((m) => !!m?.walkie_joined_at && String(m.user_id ?? "") !== me);
+}
+
+/** The four things the call dock can be. */
+export type DockSurface = "none" | "walkie" | "stage" | "dock";
+
+/**
+ * Which surface the dock shows, out of the walkie's state and the call's.
+ *
+ * Here rather than inline in the component because the answer is a rule about
+ * the walkie, not a rendering detail — and because the rule was wrong in a way
+ * only a test would have caught. The stage used to be able to outrank the
+ * walkie: the branch read `walkieOwnsCall(...) && !expanded`, and `expanded` is
+ * the dock's own `useState` that nothing put back when a call ended. So one
+ * expanded huddle, at any point in the session, made every later hold of the
+ * key open the full call stage over the person's conversation about a second
+ * into the burst — the room join is what they saw as "after a few seconds".
+ * Reproduced with two identities, screenshotted, ct-46031.
+ *
+ * WHOEVER OWNS THE ROOM OWNS THE SURFACE, and nothing local overrides it. The
+ * order below is the whole rule: a burst that outlived its room, then no call
+ * at all, then the walkie, and only then the two shapes of the ordinary dock.
+ *
+ * THE UPGRADE IS A CHANGE OF OWNER, not a fifth surface. When somebody presses
+ * Join live the room stops being a burst for everyone in it, `walkieOwnsCall`
+ * answers false from that moment, and the ordinary dock takes the room the way
+ * it takes any other — which is why there is no branch for it here. Unmuting
+ * is NOT that signal any more and must never be read as one: auto-listen opens
+ * every listener's microphone, so the mute says who can be heard and nothing
+ * at all about whether a conversation started (ct-46032).
+ */
+export function callDockSurface(
+  status: WalkieStatus,
+  call: { roomKey: string | null; phase: string; muted: boolean },
+  opts: { expanded: boolean; lingerRoom?: string | null; guest?: boolean; upgraded?: boolean },
+): DockSurface {
+  // A BURST OUTLIVES THE ROOM IT WAS SPOKEN INTO. When the room falls over
+  // under an open microphone the call plane goes idle, but the recorder, the
+  // meter and the recognizer are still running and the burst still lands as a
+  // message. `walkieOwnsCall` cannot answer here — its sending branch compares
+  // the burst's room against the call's, and the call no longer has one.
+  if (status.sending && call.phase === "idle") return "walkie";
+  if (call.phase === "idle") return "none";
+  if (walkieOwnsCall(status, call, opts)) return "walkie";
+  return opts.expanded ? "stage" : "dock";
 }

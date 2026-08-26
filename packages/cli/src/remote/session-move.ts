@@ -30,12 +30,20 @@ import { applySnapshotFastForward, createWipSnapshot, remoteSnapshotScript } fro
 export interface RemoteHost {
   /** SSH host/IP. */
   address: string;
-  /** SSH username (Scaleway Apple Silicon: "m1"). */
+  /** SSH username (Scaleway Apple Silicon: "m1"; EC2 Ubuntu: "ubuntu"). */
   user: string;
   /** Path to the private key. */
   keyPath: string;
   /** Base dir on the remote under which worktrees are placed. */
-  remoteBaseDir: string; // e.g. /Users/m1/work
+  remoteBaseDir: string; // e.g. /Users/m1/work or /home/ubuntu/work
+  /** The user's home on the remote. Defaults to the macOS layout for the
+   * original Scaleway hosts; Linux hosts must say /home/<user>. */
+  homeDir?: string;
+}
+
+/** Where ~ is on the remote — the macOS default unless the host says otherwise. */
+export function remoteHome(host: RemoteHost): string {
+  return host.homeDir ?? `/Users/${host.user}`;
 }
 
 export interface LocalSession {
@@ -578,7 +586,7 @@ export async function pushSession(sessionId: string, host: RemoteHost): Promise<
   const name = path.basename(s.cwd);
   const remoteCwd = path.posix.join(host.remoteBaseDir, name);
   const remoteProjectDir = path.posix.join(
-    `/Users/${host.user}/.claude/projects`,
+    remoteHome(host), ".claude", "projects",
     cwdToSlug(remoteCwd),
   );
 
@@ -690,6 +698,33 @@ const SCALEWAY_DIR = path.join(os.homedir(), ".codecast", "scaleway");
 /** Cheap check for the daemon's periodic refresh: is any remote Mac registered? */
 export function remoteHostsRegistered(): boolean {
   return fs.existsSync(path.join(SCALEWAY_DIR, "hosts.json"));
+}
+
+/**
+ * Every usable Scaleway Mac, as RemoteHosts. Stopped entries are excluded —
+ * a Mac marked stopped is gone or deliberately retired, and pushing
+ * credentials at a dead IP is a failure log on every tick for nothing.
+ */
+export function listScalewayHosts(): RemoteHost[] {
+  const hostsFile = path.join(SCALEWAY_DIR, "hosts.json");
+  if (!fs.existsSync(hostsFile)) return [];
+  try {
+    const { hosts } = JSON.parse(fs.readFileSync(hostsFile, "utf-8")) as {
+      hosts: Array<{ id: string; address: string; sshUsername: string; stopped?: boolean }>;
+    };
+    return hosts.filter((h) => !h.stopped).map((h) => {
+      const perHost = path.join(SCALEWAY_DIR, h.id, "id_ed25519");
+      const fallback = path.join(SCALEWAY_DIR, "d7_id_ed25519");
+      return {
+        address: h.address,
+        user: h.sshUsername || "m1",
+        keyPath: fs.existsSync(perHost) ? perHost : fallback,
+        remoteBaseDir: `/Users/${h.sshUsername || "m1"}/work`,
+      };
+    });
+  } catch {
+    return [];
+  }
 }
 
 /** Load a usable remote Mac host from the Scaleway registry (shared by CLI + daemon). */

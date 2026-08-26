@@ -129,3 +129,18 @@ export function voiceAttachment<T extends { mime?: string }>(
 ): T | undefined {
   return attachments?.find((a) => a.mime?.startsWith("audio/"));
 }
+
+// Dev console / e2e access to the real module instance, exactly as the walkie
+// and callManager expose theirs. The one audio element lives here and is never
+// in the document — it is `new Audio()`, not a tag — so without this there is
+// no way to ask a running app whether a recording is actually decoding, which
+// is the difference between "the playhead is broken" and "this machine has no
+// audio output".
+if (typeof window !== "undefined" && import.meta.env.DEV) {
+  (window as any).__voicePlayer = {
+    playback: getVoicePlayback,
+    toggle: toggleVoice,
+    stop: stopVoice,
+    el: () => el,
+  };
+}

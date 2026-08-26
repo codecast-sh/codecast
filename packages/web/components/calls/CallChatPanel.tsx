@@ -58,9 +58,11 @@ export function CallChatPanel({
     });
   };
 
+  // What people said is content — the stage around this panel is chrome and
+  // turns selection off, so the messages and the box turn it back on.
   return (
     <div className={`flex min-h-0 flex-col ${className ?? ""}`}>
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-2.5 overflow-y-auto px-3 py-3">
+      <div ref={scrollRef} className="min-h-0 flex-1 select-text space-y-2.5 overflow-y-auto px-3 py-3">
         {messages.length === 0 ? (
           <div className="px-1 py-6 text-center text-[12px] text-sol-text-muted">
             {readOnly ? "Nothing was said in chat." : "Drop links and asides here — they stay with the call."}
@@ -123,7 +125,7 @@ export function CallChatPanel({
               }}
               rows={1}
               placeholder="Message the room…"
-              className="max-h-24 min-w-0 flex-1 resize-none rounded-xl bg-sol-bg-highlight px-3 py-1.5 text-[12.5px] text-sol-text placeholder:text-sol-text-muted focus:outline-none focus:ring-1 focus:ring-sol-cyan/50"
+              className="max-h-24 min-w-0 flex-1 select-text resize-none rounded-xl bg-sol-bg-highlight px-3 py-1.5 text-[12.5px] text-sol-text placeholder:text-sol-text-muted focus:outline-none focus:ring-1 focus:ring-sol-cyan/50"
             />
             <button
               onClick={send}

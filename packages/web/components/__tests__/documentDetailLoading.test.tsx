@@ -1,0 +1,97 @@
+import { describe, expect, test, mock } from "bun:test";
+import { renderToStaticMarkup } from "react-dom/server";
+
+// The read-mode body has three empty-content states that must not be confused:
+// still-loading (detail not synced → loader), genuinely empty (the "Empty
+// document" affordance), and loaded content (the review blocks). The regression
+// with teeth: a doc opened from the list has NO content until the detail query
+// returns (webListPaginated strips it), and that window used to render as a
+// blank body with no loading state.
+
+// The layout's chrome pulls in router, store, and Convex-backed children that
+// can't SSR outside the app — stub them; the branch under test is the layout's
+// own.
+mock.module("next/link", () => ({
+  default: ({ href, children }: any) => <a href={String(href)}>{children}</a>,
+}));
+mock.module("next/navigation", () => ({
+  useRouter: () => ({ push: () => {}, replace: () => {} }),
+  usePathname: () => "/docs/doc1",
+  useSearchParams: () => new URLSearchParams(),
+  useParams: () => ({}),
+}));
+mock.module("../ContextChatInput", () => ({
+  ContextChatInput: () => <div data-stub="chat-input" />,
+}));
+mock.module("../MessageReview", () => ({
+  MessageReview: ({ content }: { content: string }) => (
+    <div data-stub="message-review">{content}</div>
+  ),
+}));
+mock.module("../DocReviewBar", () => ({
+  DocReviewBar: () => <div data-stub="review-bar" />,
+}));
+mock.module("../DetailSplitLayout", () => ({
+  PeekLayoutControls: () => null,
+}));
+mock.module("../workspace/Slot", () => ({
+  SlotActions: () => null,
+}));
+mock.module("../editor/CollabDocEditor", () => ({
+  CollabDocEditor: () => <div data-stub="collab-editor" />,
+}));
+mock.module("../../hooks/useMentionQuery", () => ({
+  useMentionQuery: () => () => [],
+  useActiveMentionScope: () => null,
+}));
+mock.module("../../hooks/useImageUpload", () => ({
+  useImageUpload: () => async () => "",
+}));
+mock.module("../../hooks/useTitlebarHead", () => ({
+  useTitlebarHead: () => ({ current: null }),
+}));
+const realStore = await import("../../store/inboxStore");
+mock.module("../../store/inboxStore", () => ({
+  ...realStore,
+  useInboxStore: (selector: (s: any) => any) =>
+    selector({ reviewComments: {} }),
+}));
+
+const { DocumentDetailLayout } = await import("../DocumentDetailLayout");
+
+function render(props: Partial<Parameters<typeof DocumentDetailLayout>[0]>) {
+  return renderToStaticMarkup(
+    <DocumentDetailLayout
+      docId="doc1"
+      title="My Doc"
+      markdownContent=""
+      onTitleChange={() => {}}
+      backHref="/docs"
+      {...props}
+    />,
+  );
+}
+
+describe("DocumentDetailLayout read-mode body", () => {
+  test("content not yet synced → loader, never a blank or 'empty' body", () => {
+    const html = render({ markdownContent: "", contentReady: false });
+    expect(html).toContain("app-loader-bar");
+    expect(html).not.toContain("Empty document");
+  });
+
+  test("confirmed-empty doc → the empty-document affordance, no loader", () => {
+    const html = render({ markdownContent: "", contentReady: true });
+    expect(html).toContain("Empty document");
+    expect(html).not.toContain("app-loader-bar");
+  });
+
+  test("loaded content renders through the review blocks", () => {
+    const html = render({
+      markdownContent: "## The idea",
+      contentReady: true,
+    });
+    expect(html).toContain("The idea");
+    expect(html).not.toContain("app-loader-bar");
+    expect(html).not.toContain("Empty document");
+  });
+});

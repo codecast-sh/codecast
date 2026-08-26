@@ -77,6 +77,28 @@ export const PI_MODEL_OPTIONS: ModelOption[] = [
 export const PI_EFFORT_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 export type PiEffortLevel = (typeof PI_EFFORT_LEVELS)[number];
 
+// Grok Build's baked-in catalog (default_models.json; `grok models` logged out
+// prints exactly these two). Keys are the exact `-m` values — bare model ids,
+// not `provider/model`, so grok is a STATIC client (isDynamicModelKey can never
+// accept its keys). `grok-code-fast-1` is NOT in the catalog (it appears only in
+// a slash-command parse test upstream) — deliberately absent.
+export const GROK_MODEL_OPTIONS: ModelOption[] = [
+  { key: "default", label: "Default", hint: "Your grok configured model" },
+  { key: "grok-4.6", label: "Grok 4.6", hint: "Default frontier model, 500k context", cliAlias: "grok-4.6" },
+  { key: "grok-4.5", label: "Grok 4.5", hint: "Previous generation", cliAlias: "grok-4.5" },
+];
+
+// `--reasoning-effort` (alias `--effort`) accepts none|minimal|low|medium|high|
+// xhigh|max as a serde enum, but the per-model menus offer only the model's own
+// list: grok-4.6 low|medium|high|xhigh, grok-4.5 low|medium|high (default high
+// for both). The picker is per-agent, not per-model, so it offers the UNION of
+// the shipped models' menus (same compromise as codex); "default" (= omit the
+// flag) comes from launchRailOptions. Verified: the CLI accepts any effort
+// string at flag-parse time (validation is post-login), so xhigh on grok-4.5
+// cannot hard-error at launch.
+export const GROK_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
+export type GrokEffortLevel = (typeof GROK_EFFORT_LEVELS)[number];
+
 // ---------------------------------------------------------------------------
 // Dynamic model inventory (opencode / pi)
 //

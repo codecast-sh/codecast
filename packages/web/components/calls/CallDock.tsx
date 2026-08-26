@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { Rnd } from "react-rnd";
-import { ChevronUp, Maximize2, Pin, PinOff, Video, VideoOff } from "lucide-react";
+import { AppWindow, ChevronUp, Maximize2, Pin, PinOff, Video, VideoOff } from "lucide-react";
 import { useTrackedStore } from "../../store/inboxStore";
 import {
   getCallTiles,
@@ -15,9 +15,12 @@ import { AddPeopleButton } from "./AddPeople";
 import { HangUpButton, MicButton } from "./CallControls";
 import { RoomKnocks, RoomLockButton } from "./RoomDoor";
 import { WalkieBanner } from "./WalkieDock";
-import { useWalkieStatus, walkieOwnsCall } from "../../hooks/useWalkie";
+import { callDockSurface, nextStageOpen, useWalkieStatus, type DockSurface } from "../../hooks/useWalkie";
 import { firstName } from "./speakers";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
+import { POP_OUT_CALL_TITLE, canPopOutCall, isCallPanelWindow } from "../../lib/desktop";
+import { useDesktopWindowRole } from "../../hooks/useDesktopWindowRole";
+import { popOutCall } from "../../lib/calls/popOutCall";
 
 // The in-call surface while the stage is collapsed, on every tab, only while
 // a call exists (call.phase !== idle). Two shapes, chosen by the pin:
@@ -43,53 +46,96 @@ export function CallDock() {
   const [bounds, setBounds] = useState<Bounds | null>(null);
   const tiles = useSyncExternalStore(subscribeCallTiles, getCallTiles, () => []);
   const walkie = useWalkieStatus();
+  const role = useDesktopWindowRole();
   // New video or a share arriving is the moment the stage earns the room;
   // a media notice opens it too, so its sentence is read.
   const notice = call.phase === "connected" ? call.error : null;
   const remoteVideo = tiles.some((t) => !t.isLocal);
   const prevRemoteVideo = useRef(false);
-  useEffect(() => {
-    if (notice) setExpanded(true);
-    if (remoteVideo && !prevRemoteVideo.current) setExpanded(true);
-    prevRemoteVideo.current = remoteVideo;
-  }, [notice, remoteVideo]);
 
-  if (call.phase === "idle") return null;
-  // A push-to-talk burst joins a room the same way a huddle does, so without
-  // this the dock would open its floating window for every sentence somebody
-  // says. The walkie has its own, much lighter surface for that; the two must
-  // never be on screen together, which is why this is a branch here rather
-  // than a second thing mounted beside the dock.
-  if (walkieOwnsCall(walkie, call) && !expanded) return <WalkieBanner />;
-  if (expanded) {
+  // THE STAGE BELONGS TO THE CALL THAT WAS EXPANDED, and to no call after it
+  // (ct-45974). Nothing used to put `expanded` back: this component is mounted
+  // for the life of the page and merely returns null when idle, so one expanded
+  // huddle left the flag true forever — and the next call, or the next walkie
+  // burst, opened full screen by itself.
+  //
+  // Settled during the render that sees the phase change rather than in an
+  // effect: React re-runs this component and throws the first pass away, so
+  // there is no committed frame in between and no second paint.
+  const prevPhase = useRef(call.phase);
+  if (prevPhase.current !== call.phase) {
+    prevPhase.current = call.phase;
+    const settled = nextStageOpen(expanded, { phase: call.phase });
+    if (settled !== expanded) setExpanded(settled);
+  }
+
+  // Which of the four surfaces this is, decided once, by the rule that lives
+  // beside `walkieOwnsCall` because it is a rule about the walkie.
+  const surface = callDockSurface(walkie, call, { expanded });
+  const walkieOwns = surface === "walkie";
+  const morphing = useUpgradeMorph(surface, bounds, setBounds);
+  useEffect(() => {
+    setExpanded((open) =>
+      nextStageOpen(open, {
+        phase: call.phase,
+        walkieOwns,
+        notice: !!notice,
+        newRemoteVideo: remoteVideo && !prevRemoteVideo.current,
+      }),
+    );
+    // Tracked whatever the rule decided, so a burst cannot arm the next call's
+    // first frame.
+    prevRemoteVideo.current = remoteVideo;
+  }, [call.phase, notice, remoteVideo, walkieOwns]);
+
+  if (surface === "walkie") return <WalkieBanner />;
+  if (surface === "none") return null;
+  // The call has a window of its own, and it is not this one. Every other
+  // window stands down from the dock rather than drawing a second set of
+  // controls for a microphone it does not hold — the elsewhere pill says where
+  // to look instead. Below the walkie branches on purpose: a burst is not the
+  // panel's business, and the strip stays wherever it lands. This window's own
+  // call state goes idle a moment later anyway, when the panel's join evicts
+  // it; the gate is what keeps two docks off the screen during that moment.
+  if (role.callPanel && !isCallPanelWindow()) return null;
+  if (surface === "stage") {
     return <CallStage onCollapse={() => setExpanded(false)} />;
   }
   // Portaled to <body> like the stage: the dock mounts inside the app shell,
   // whose transformed ancestors would otherwise capture a fixed overlay.
   return createPortal(
-    pinned ? (
-      <MiniWindow
-        call={call}
-        roster={roster}
-        tiles={tiles}
-        bounds={bounds ?? defaultBounds()}
-        onBounds={setBounds}
-        onUnpin={() => setPinned(false)}
-        onExpand={() => setExpanded(true)}
-      />
-    ) : (
-      <div className="fixed bottom-20 right-4 z-[150] w-auto max-w-[420px] select-none">
-        <div className="rounded-xl border border-sol-border bg-sol-bg-alt/95 shadow-xl backdrop-blur">
-          {call.roomKey && call.phase === "connected" && <RoomKnocks roomKey={call.roomKey} />}
-          <DockPill
-            call={call}
-            roster={roster}
-            onExpand={() => setExpanded(true)}
-            onPin={() => setPinned(true)}
-          />
+    <>
+      {/* Both surfaces, for the length of the morph. */}
+      {morphing && <WalkieBanner leaving />}
+      {pinned ? (
+        <MiniWindow
+          call={call}
+          roster={roster}
+          tiles={tiles}
+          bounds={bounds ?? defaultBounds()}
+          onBounds={setBounds}
+          onUnpin={() => setPinned(false)}
+          onExpand={() => setExpanded(true)}
+          morphing={morphing}
+        />
+      ) : (
+        <div
+          className={`fixed bottom-20 right-4 z-[150] w-auto max-w-[420px] select-none ${
+            morphing ? "call-dock-morph" : ""
+          }`}
+        >
+          <div className="rounded-xl border border-sol-border bg-sol-bg-alt/95 shadow-xl backdrop-blur">
+            {call.roomKey && call.phase === "connected" && <RoomKnocks roomKey={call.roomKey} />}
+            <DockPill
+              call={call}
+              roster={roster}
+              onExpand={() => setExpanded(true)}
+              onPin={() => setPinned(true)}
+            />
+          </div>
         </div>
-      </div>
-    ),
+      )}
+    </>,
     document.body,
   );
 }
@@ -97,10 +143,57 @@ export function CallDock() {
 type Bounds = { x: number; y: number; width: number; height: number };
 const MINI_W = 320;
 const MINI_H = 250;
+/** How long the strip and the dock share the screen while one becomes the
+ *  other. Matched to the two keyframes in walkie.css. */
+const MORPH_MS = 200;
 // Top right, under the header — where the palette-style overlays live.
 function defaultBounds(): Bounds {
   const vw = typeof window === "undefined" ? 1200 : window.innerWidth;
   return { x: Math.max(8, vw - MINI_W - 16), y: 60, width: MINI_W, height: MINI_H };
+}
+
+/** Where the walkie strip is (walkie.css: right 1rem, bottom 5rem). The dock
+ *  opens HERE when a burst becomes a call, so the surface grows out of the
+ *  thing the person was already looking at instead of jumping a screen away. */
+function stripBounds(): Bounds {
+  if (typeof window === "undefined") return defaultBounds();
+  return {
+    x: Math.max(8, window.innerWidth - MINI_W - 16),
+    y: Math.max(8, window.innerHeight - MINI_H - 80),
+    width: MINI_W,
+    height: MINI_H,
+  };
+}
+
+/**
+ * The strip just became the dock.
+ *
+ * True for the length of the animation after the surface leaves "walkie" for
+ * one of the call's own shapes, which in practice is one event: somebody
+ * pressed Join live. The dock is placed in the strip's corner on that edge —
+ * unless the person has already dragged the dock somewhere, in which case the
+ * place they put it outranks the animation.
+ */
+function useUpgradeMorph(
+  surface: DockSurface,
+  bounds: Bounds | null,
+  onBounds: (b: Bounds) => void,
+): boolean {
+  const prev = useRef<DockSurface>(surface);
+  const [morphing, setMorphing] = useState(false);
+  useEffect(() => {
+    const was = prev.current;
+    prev.current = surface;
+    if (was !== "walkie" || surface === "walkie" || surface === "none") return;
+    if (!bounds) onBounds(stripBounds());
+    setMorphing(true);
+    const t = setTimeout(() => setMorphing(false), MORPH_MS);
+    return () => clearTimeout(t);
+    // `bounds` is read at the edge, never a reason to re-run: a drag mid-morph
+    // must not restart it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [surface]);
+  return morphing;
 }
 
 // One sentence for where the call stands, shared by the pill and the window.
@@ -127,6 +220,7 @@ function MiniWindow({
   onBounds,
   onUnpin,
   onExpand,
+  morphing,
 }: {
   call: any;
   roster: any[];
@@ -135,6 +229,8 @@ function MiniWindow({
   onBounds: (b: Bounds) => void;
   onUnpin: () => void;
   onExpand: () => void;
+  /** The strip is turning into this window right now (see useUpgradeMorph). */
+  morphing?: boolean;
 }) {
   const statusText = useCallStatusText(call, roster);
   const speaking = useMemo(() => new Set<string>(call.speaking), [call.speaking]);
@@ -164,7 +260,7 @@ function MiniWindow({
         onResizeStop={(_e, _dir, ref, _delta, position) =>
           onBounds({ x: position.x, y: position.y, width: ref.offsetWidth, height: ref.offsetHeight })
         }
-        className="pointer-events-auto"
+        className={`pointer-events-auto ${morphing ? "call-dock-morph" : ""}`}
       >
         <div className="flex h-full w-full select-none flex-col overflow-hidden rounded-xl border border-sol-border bg-sol-bg-alt/95 shadow-2xl backdrop-blur">
           <div className="call-window-drag-handle flex shrink-0 cursor-grab items-center gap-1.5 px-2.5 py-1.5 active:cursor-grabbing">
@@ -175,6 +271,7 @@ function MiniWindow({
             >
               {statusText}
             </span>
+            <PopOutCallButton />
             <button
               onClick={onExpand}
               className="rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
@@ -321,6 +418,7 @@ function DockPill({
       >
         <Pin className="h-4 w-4" />
       </button>
+      <PopOutCallButton className="rounded-md p-1.5 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text" iconClassName="h-4 w-4" />
       <div className="mx-0.5 h-5 w-px bg-sol-border" />
       {call.roomKey && call.phase === "connected" && (
         <>
@@ -331,5 +429,35 @@ function DockPill({
       <MicButton muted={call.muted} size="compact" />
       <HangUpButton size="compact" />
     </div>
+  );
+}
+
+/**
+ * Give the call a window of its own.
+ *
+ * Desktop only, and ABSENT rather than degraded anywhere else: the ladder
+ * behind it (lib/calls/popOutCall) has no browser rung on purpose, so a browser
+ * has no gesture to offer and offering one would only produce the Chrome popup
+ * this panel exists to make impossible. It hides inside the panel too, where
+ * the call already has its window.
+ */
+function PopOutCallButton({
+  className = "rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text",
+  iconClassName = "h-3.5 w-3.5",
+}: {
+  className?: string;
+  iconClassName?: string;
+}) {
+  if (!canPopOutCall()) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => void popOutCall()}
+      className={className}
+      title={POP_OUT_CALL_TITLE}
+      aria-label={POP_OUT_CALL_TITLE}
+    >
+      <AppWindow className={iconClassName} />
+    </button>
   );
 }

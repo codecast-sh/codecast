@@ -467,6 +467,12 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
         const first = summarizeToolCall(calls[0]);
         const more = calls.length > 1 ? ` ...(${calls.length - 1} more)` : "";
         lines.push(`       ${fmt.muted(`${first}${more}`)}`);
+        // A StructuredOutput call's INPUT is the agent's whole deliverable, and
+        // this collapsed line is all a non-full read shows of it — readers have
+        // mistaken that for an empty result. Point at the exact command.
+        if (calls.some((tc) => tc.name === "StructuredOutput")) {
+          lines.push(`       ${fmt.muted(`↳ full payload: cast read ${truncateId(conv.id)} ${msg.line} --full`)}`);
+        }
       }
     }
 

@@ -288,6 +288,9 @@ export function QueuePageClient() {
 
   // ID we're trying to navigate to that isn't yet in the queue
   const [pendingInjectId, setPendingInjectId] = useState<string | null>(null);
+  // A deep-link target the server would not hand over (deleted, or private to
+  // someone else). Rendered as an honest note instead of an empty pane.
+  const [unavailableId, setUnavailableId] = useState<string | null>(null);
   const [scrollTarget, setScrollTarget] = useState<{ sessionId: string; messageId: string; timestamp?: number } | null>(null);
   const [activeHighlight, setActiveHighlight] = useState<string | undefined>(undefined);
 
@@ -333,6 +336,7 @@ export function QueuePageClient() {
         useInboxStore.setState({ pendingScrollToMessageId: null, pendingScrollToMessageTimestamp: null });
       }
     }
+    setUnavailableId(null);
     if (store.sessions[paramSessionId]) {
       if (store.showMySessions) setShowMySessions(false);
       navigateToSession(paramSessionId);
@@ -374,6 +378,7 @@ export function QueuePageClient() {
     // directConv: undefined = still loading, null = not found/no access
     if (directConv === undefined) return;
     if (directConv === null) {
+      setUnavailableId(pendingInjectId);
       setPendingInjectId(null);
       paramProcessedRef.current = true;
       return;
@@ -652,6 +657,21 @@ export function QueuePageClient() {
         </ErrorBoundary>
       ) : pendingInjectId ? (
         <AppLoader className="min-h-0 h-full bg-transparent" size={32} />
+      ) : unavailableId ? (
+        <div className="h-full flex items-center justify-center">
+          <div className="text-center max-w-sm px-4">
+            <div className="text-sm text-sol-text">This conversation isn't available</div>
+            <p className="mt-1 text-xs text-sol-text-dim">
+              It was deleted, or it belongs to someone who hasn't shared it.
+            </p>
+            <button
+              onClick={() => { setUnavailableId(null); handleBack(); }}
+              className="mt-4 px-3 py-1 rounded border border-sol-border text-xs text-sol-text-secondary hover:bg-sol-bg-alt transition-colors"
+            >
+              Back to inbox
+            </button>
+          </div>
+        </div>
       ) : sortedSessions.length > 0 ? (
         <div className="h-full" />
       ) : (

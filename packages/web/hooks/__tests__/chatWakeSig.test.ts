@@ -39,6 +39,36 @@ describe("messagesSig — a burst finalizing wakes the transcript", () => {
     expect(sig(done)).not.toBe(sig(live));
   });
 
+  it("flips when the server turns transcribing on and moves nothing else", () => {
+    // The forced-fallback case, and the one the signature missed. When the live
+    // recognizer heard nothing, the sender's own optimistic row has already
+    // written status done and the duration, so the server echo that starts the
+    // fallback carries exactly one new field. Hash it identically and the bubble
+    // never repaints: "getting the words" is unreachable on the sender's screen,
+    // which is the screen waiting for them.
+    const landed = msg({
+      voice: { status: "done", duration_ms: 4_313, room_key: "dm:a:b" },
+      attachments: [{ storage_id: "st1", mime: "audio/webm", name: "voice.webm" }],
+    });
+    const recovering = msg({
+      voice: { status: "done", duration_ms: 4_313, room_key: "dm:a:b", transcribing: true },
+      attachments: [{ storage_id: "st1", mime: "audio/webm", name: "voice.webm" }],
+    });
+    expect(sig(recovering)).not.toBe(sig(landed));
+  });
+
+  it("flips again when the words arrive and transcribing clears", () => {
+    const recovering = msg({
+      content: "",
+      voice: { status: "done", duration_ms: 4_313, room_key: "dm:a:b", transcribing: true },
+    });
+    const words = msg({
+      content: "Hey Sam, the deploy is green.",
+      voice: { status: "done", duration_ms: 4_313, room_key: "dm:a:b" },
+    });
+    expect(sig(words)).not.toBe(sig(recovering));
+  });
+
   it("flips when a cancelled burst becomes a tombstone", () => {
     expect(sig(msg({ voice: { status: "canceled" }, deleted_at: 2_000 }))).not.toBe(sig(live));
   });

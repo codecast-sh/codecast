@@ -7,8 +7,8 @@
 // a screen remount must never lose an upload it already started.
 
 import { Alert } from 'react-native';
-import { api } from '@codecast/convex/convex/_generated/api';
 import type { ConvexReactClient } from 'convex/react';
+import { uploadUriToStorage } from '@/lib/uploadToStorage';
 
 // Lazy-required, NEVER statically imported: a native module missing from the
 // installed binary throws during initial JS eval — before expo-updates marks
@@ -70,18 +70,7 @@ export function startUpload(convex: ConvexReactClient, img: PickedImage): Promis
   if (existing) return existing;
   const task = (async (): Promise<string | null> => {
     try {
-      const uploadUrl = await convex.mutation(api.images.generateUploadUrl, {});
-      const blob = await (await fetch(img.uri)).blob();
-      const res = await fetch(uploadUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': img.mime },
-        body: blob,
-      });
-      if (!res.ok) throw new Error(`upload ${res.status}`);
-      const { storageId } = await res.json();
-      return storageId as string;
-    } catch {
-      return null;
+      return await uploadUriToStorage(convex, img.uri, img.mime);
     } finally {
       // The map holds only IN-FLIGHT work; the resolved id lives in state.
       setTimeout(() => pendingChatUploads.delete(img.uri), 0);

@@ -6,10 +6,11 @@ import { useInboxStore } from "../../store/inboxStore";
 import { useRouter } from "next/navigation";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import {
-  PRESENCE_META,
-  memberPresenceState,
+  memberPresenceVisual,
+  presenceAvatarClass,
   presenceLine,
 } from "../presence/memberPresence";
+import { PresenceBadge } from "../presence/PresenceBadge";
 import { channelDisplayName, knownAgentMember, memberName, type ChatMember } from "../../lib/chatViews";
 import { AnchorScopePill } from "../anchor/AnchorIdentity";
 import { useAnchorIdentity } from "../../hooks/useSyncAnchors";
@@ -56,7 +57,7 @@ export function DmHeadline({ channel }: { channel: ChatRailChannel }) {
     [channel.dmMemberIds, teamMembers],
   );
   const one = others.length === 1 ? others[0] : undefined;
-  const state = one && !one.is_bot ? memberPresenceState(one as any) : undefined;
+  const state = one && !one.is_bot ? memberPresenceVisual(one as any) : undefined;
   // A DM with an anchor says WHICH anchor: two of them can share the name.
   const anchorScope = useAnchorIdentity(one && (one as any).is_bot ? (one as any).anchor_id ?? null : null);
   return (
@@ -72,7 +73,7 @@ export function DmHeadline({ channel }: { channel: ChatRailChannel }) {
       {anchorScope && <AnchorScopePill anchor={anchorScope} />}
       {one && state && (
         <span className="ch-dm-presence" title={presenceLine(one as any, now)}>
-          <span className={`ch-dm-dot ${PRESENCE_META[state].dot}`} />
+          <PresenceBadge state={state} size="sm" />
           <span className="ch-dm-presence-line">{presenceLine(one as any, now)}</span>
         </span>
       )}
@@ -134,15 +135,15 @@ export function ChannelMembersButton({ channel }: { channel: ChatRailChannel }) 
         <div className="ch-people-list">
           {ids.map((id) => {
             const m = byId.get(String(id));
-            const state = m ? memberPresenceState(m as any) : "offline";
+            const state = m ? memberPresenceVisual(m as any) : "offline";
             return (
               <div className="ch-people-row" key={String(id)}>
-                {memberAvatar(m, 22)}
+                <span className={presenceAvatarClass(state)}>{memberAvatar(m, 22)}</span>
                 <span className="ch-people-name truncate">
                   {memberName(m)}
                   {String(id) === viewer && <span className="ch-people-you"> (you)</span>}
                 </span>
-                <span className={`ch-dm-dot ${PRESENCE_META[state as keyof typeof PRESENCE_META]?.dot ?? ""}`} title={m ? presenceLine(m as any, now) : undefined} />
+                <PresenceBadge state={state} size="sm" title={m ? presenceLine(m as any, now) : undefined} />
                 {mayRemove(String(id)) && (
                   <button
                     type="button"

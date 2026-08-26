@@ -9,6 +9,10 @@
 //   channel:<channelId>  a chat channel's standing room (private channels
 //                        admit their members only)
 //   session:<convId>     a huddle about one conversation/session
+//   rec:<uuid>           NOT a room: one person's microphone, recorded. See
+//                        the recordings section below — every door here is
+//                        shut on it and the transcript's creator is the only
+//                        person it admits.
 //
 // Membership is not the only door. An accepted ring is a GRANT: whoever a
 // member rang into a room may join it while THAT huddle still runs, whether
@@ -83,7 +87,9 @@ export {
   channelRoomKey,
   chatRoomKey,
   dmRoomKey,
+  isRecRoomKey,
   parseRoomKey,
+  recRoomKey,
   roomMemberIds,
   sessionRoomKey,
   type ParsedRoomKey,
@@ -94,6 +100,66 @@ export {
  *  getMyCalls, the grant, the presence strip). */
 export function liveMembers<T extends { last_seen: number }>(rows: T[], now: number): T[] {
   return rows.filter((m) => now - m.last_seen < CALL_MEMBER_STALE_MS);
+}
+
+// ── Recordings ────────────────────────────────────────────────────────────
+//
+// `rec:<uuid>` is the one room kind with no room in it. A recording is one
+// person's microphone: no media server, no seat, no second participant. It
+// borrows a room key only because everything downstream of capture — the ASR
+// mint, segments, flush beats, the summary, the calls page, `cast calls` — is
+// keyed by one, and reusing that pipeline whole is the entire design.
+//
+// So the key grants nothing by itself: it names a uuid and no owner. The
+// TRANSCRIPT is the truth. Whoever started it owns the recording, and nobody
+// else may reach it — not a teammate, not an admin, not somebody who learned
+// the uuid. A key with no transcript is a fresh id the caller just minted, so
+// any authenticated user may start on it; that first `start` is what makes it
+// theirs.
+//
+// Every live-call door stays shut on rec keys, and the default is what shuts
+// them: `authorizeRoom` and `authorizeRoomNoGrant` REFUSE a rec key unless the
+// caller passes `{ rec: true }`, so joinRoom, invite, knock, the media token
+// mint, occupancy and the inviter rule all refuse without being edited — as
+// will anything written next. Only the transcription paths a recording truly
+// needs opt in. `openRoomDoor` returns null before it reads anything, which
+// means no call_members row can be created for a rec key, which in turn is why
+// getLiveRooms and getRoomOccupancy cannot list one: they enumerate that table.
+
+/** The transcript a rec key belongs to, or null while the id is unclaimed. The
+ *  LIVE one wins over an older ended row, so a recording in progress can never
+ *  have its ownership answered by some earlier transcript that happened to use
+ *  the same id. */
+async function recTranscript(ctx: any, roomKey: string): Promise<Doc<"transcripts"> | null> {
+  const rows: Doc<"transcripts">[] = await ctx.db
+    .query("transcripts")
+    .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
+    .collect();
+  return (
+    rows.find((t) => t.status === "live") ??
+    rows.sort((a, b) => b.started_at - a.started_at)[0] ??
+    null
+  );
+}
+
+/** Which team a new recording ROUTES to (transcripts.team_id) so the owner's
+ *  own history list finds it. Routing, never access — the recording stays
+ *  visible to its creator alone whatever team it bills to. A team the person
+ *  has actually joined, because a stale active-team pointer would file the row
+ *  where their own list never looks. */
+async function recRoutingTeam(
+  ctx: any,
+  userId: Id<"users">,
+): Promise<Id<"teams"> | null> {
+  const user = await ctx.db.get(userId);
+  for (const candidate of [user?.active_team_id, user?.team_id]) {
+    if (candidate && (await isTeamMember(ctx, userId, candidate))) return candidate;
+  }
+  const firstMembership = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .first();
+  return firstMembership?.team_id ?? null;
 }
 
 // A team every one of `users` belongs to, walking the first user's
@@ -216,6 +282,11 @@ export async function openRoomDoor(
 ): Promise<Id<"teams"> | null> {
   const parsed = parseRoomKey(roomKey);
   if (!parsed) return null;
+  // A recording has no door to be open: nobody can be inside one. Refusing
+  // here rather than relying on the empty table is what makes that structural
+  // — a stray call_members row could never turn a recording into a huddle
+  // anyone may walk into.
+  if (parsed.kind === "rec") return null;
   if (parsed.kind === "channel") {
     // The one room the open door does not touch: a channel's standing room is
     // that channel's own space, so a private channel or group thread keeps its
@@ -282,6 +353,14 @@ export async function authorizeRoomNoGrant(
   userId: Id<"users">,
   roomKey: string,
 ): Promise<RoomAuthorization> {
+  // Rec keys never pass here. Both questions this answers are a huddle's —
+  // who may ring more people in, and who may read a ROOM's call history — and
+  // a recording answers each elsewhere: nobody can be rung into one, and its
+  // record belongs to its creator alone (transcripts.canReadCall, which
+  // settles a rec transcript before it ever calls this).
+  if (parseRoomKey(roomKey)?.kind === "rec") {
+    return { ok: false, reason: "a recording is not a room" };
+  }
   const auth = await authorizeRoomMembership(ctx, userId, roomKey);
   if (!auth.ok) return auth;
   if (!(await teamHasFeature(ctx, auth.teamId, "calls"))) {
@@ -325,11 +404,24 @@ export async function authorizeRoom(
   ctx: any,
   userId: Id<"users">,
   roomKey: string,
+  opts: { rec?: boolean } = {},
 ): Promise<RoomAuthorization> {
+  // DEFAULT DENY FOR RECORDINGS. Every caller here is a live-call door —
+  // joining, ringing, knocking, minting a media token, reading occupancy — and
+  // none of them has any business with one person's microphone. Refusing
+  // unless a caller says `{ rec: true }` means the transcription paths opt in
+  // one at a time and everything else, including whatever is written next, is
+  // shut without having to remember.
+  if (!opts.rec && parseRoomKey(roomKey)?.kind === "rec") {
+    return { ok: false, reason: "a recording is not a room" };
+  }
   let auth = await authorizeRoomMembership(ctx, userId, roomKey);
   if (!auth.ok) {
     const parsed = parseRoomKey(roomKey);
     if (!parsed) return auth;
+    // No grant and no open door for a recording: refusal by the transcript's
+    // owner is the whole answer, and there is no second layer under it.
+    if (parsed.kind === "rec") return auth;
     // The open door first: it is the common case now and the cheaper read.
     // The grant is tried regardless because it survives a lock — whoever was
     // rung in was let in deliberately.
@@ -339,6 +431,13 @@ export async function authorizeRoom(
     if (!granted) return auth;
     auth = { ok: true, teamId: granted, parsed };
   }
+  // A recording is exempt from the calls feature. That flag buys a team the
+  // huddle: a media server, rooms, rings, someone else's voice. Recording your
+  // own microphone needs none of it, so gating it there would charge a team
+  // for something it is not using. The dependency a recording really has is
+  // the server's OPENAI_API_KEY, and mintAsrToken says so in plain words when
+  // it is missing.
+  if (auth.parsed.kind === "rec") return auth;
   if (!(await teamHasFeature(ctx, auth.teamId, "calls"))) {
     return { ok: false, reason: teamFeatureOffMessage("calls") };
   }
@@ -347,7 +446,12 @@ export async function authorizeRoom(
 
 /** The membership rules alone, without the feature gate. Exported for
  *  getLiveRooms, whose label redaction asks exactly this question: may this
- *  user SEE what the room is about, as opposed to walk into it? */
+ *  user SEE what the room is about, as opposed to walk into it?
+ *
+ *  This is also where a rec key gets its only answer — the transcript's
+ *  creator, nobody else — so callers that need a recording (transcripts.start
+ *  and friends, via `authorizeRoom(..., { rec: true })`) and callers that must
+ *  refuse one share a single rule. */
 export async function authorizeRoomMembership(
   ctx: any,
   userId: Id<"users">,
@@ -363,6 +467,22 @@ export async function authorizeRoomMembership(
     }
     const teamId = await sharedTeam(ctx, parsed.users as Id<"users">[]);
     if (!teamId) return { ok: false, reason: "no shared team" };
+    return { ok: true, teamId, parsed };
+  }
+
+  if (parsed.kind === "rec") {
+    // Owner only, and the transcript says who that is. An unclaimed id is not
+    // a room standing open — it is a uuid this caller just generated, and the
+    // `start` it is about to make is what claims it.
+    const t = await recTranscript(ctx, roomKey);
+    if (t) {
+      if (String(t.started_by) !== String(userId)) {
+        return { ok: false, reason: "not your recording" };
+      }
+      return { ok: true, teamId: t.team_id, parsed };
+    }
+    const teamId = await recRoutingTeam(ctx, userId);
+    if (!teamId) return { ok: false, reason: "no team to file this recording under" };
     return { ok: true, teamId, parsed };
   }
 

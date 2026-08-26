@@ -159,6 +159,48 @@ describe("foldReactions", () => {
   });
 });
 
+describe("sessionAuthorFor", () => {
+  const base = { members: byId, viewerId: ME._id };
+  const sessionRow = () =>
+    row({
+      _id: "s1",
+      user_id: "u2",
+      origin: "agent",
+      origin_session_id: "sess-1",
+      origin_session_title: "Fix the auth race",
+      origin_agent_type: "codex",
+    } as any);
+
+  it("dresses a session-typed line as the session, crediting the human", () => {
+    const view = toMessageView(sessionRow(), base);
+    expect(view.author).toMatchObject({
+      id: "u2",
+      name: "Fix the auth race",
+      isAgent: true,
+      session: { id: "sess-1", agentType: "codex", via: "Maya" },
+    });
+    expect(view.author.avatarUrl).toBeUndefined();
+  });
+
+  it("prefers the live session title and agent when the viewer can see it", () => {
+    const view = toMessageView(sessionRow(), {
+      ...base,
+      sessionFor: (id) => (id === "sess-1" ? { title: "Auth race (renamed)", agentType: "claude_code" } : undefined),
+    });
+    expect(view.author.name).toBe("Auth race (renamed)");
+    expect(view.author.session?.agentType).toBe("claude_code");
+  });
+
+  it("falls back to a generic session name without a snapshot, and never fires without the origin stamp", () => {
+    const bare = toMessageView(row({ _id: "s2", user_id: "u2", origin: "agent", origin_session_id: "x" } as any), base);
+    expect(bare.author.name).toBe("Agent session");
+    expect(bare.author.session?.agentType).toBe("claude_code");
+    const human = toMessageView(row({ _id: "s3", user_id: "u2", origin_session_id: "x", origin_session_title: "T" } as any), base);
+    expect(human.author.session).toBeUndefined();
+    expect(human.author.name).toBe("Maya");
+  });
+});
+
 describe("toMessageView", () => {
   const ctx = {
     members: byId,

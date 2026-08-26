@@ -31,6 +31,27 @@ import {
 import { reorientationNotice } from "../sessionMoveNotice.js";
 import { deviceInfo, deviceId } from "./device.js";
 import { decryptToken } from "../tokenEncryption.js";
+import { ensureUp, hostState, readHosts as readCloudHosts, toRemoteHost } from "../browser/cloudHost.js";
+
+/**
+ * Find the machine a session should move to, whichever registry it lives in.
+ *
+ * Two registries exist for historical reasons: the Scaleway Macs
+ * (~/.codecast/scaleway) came first, then the AWS Linux boxes
+ * (~/.codecast/browser/hosts.json). The Linux box is the default — it wakes on
+ * demand and sleeps when idle, so "move this session to the cloud" should not
+ * require naming anything. An explicit --host id is honored from either
+ * registry; waking a stopped instance is part of resolving it.
+ */
+async function resolveTransferHost(hostId?: string): Promise<{ host: RemoteHost; cloudId?: string }> {
+  const cloud = readCloudHosts();
+  const pick = hostId ? cloud.find((h) => h.id === hostId) : cloud.find((h) => h.provider === "aws");
+  if (pick) {
+    const up = await ensureUp(pick, (m) => console.log(`  ${m}`));
+    return { host: toRemoteHost(up), cloudId: up.id };
+  }
+  return { host: loadRemoteHost(hostId) };
+}
 
 /** A Convex client + api_token + generated api, from the local config (move flow). */
 async function convexClient(): Promise<{ client: any; token: string; api: any }> {
@@ -158,11 +179,18 @@ export function registerRemoteCommand(program: Command): void {
     .action(() => {
       const d = deviceInfo();
       console.log(`this device: ${d.label}  (${d.deviceId})`);
-      if (!fs.existsSync(HOSTS_FILE)) { console.log("no remote hosts registered"); return; }
-      const { hosts } = JSON.parse(fs.readFileSync(HOSTS_FILE, "utf-8")) as { hosts: ScalewayHostMeta[] };
-      for (const h of hosts) {
-        console.log(`  ${h.id}  ${h.sshUsername}@${h.address}  ${h.commercialType} ${h.stopped ? "(stopped)" : ""}`);
+      const cloud = readCloudHosts();
+      for (const h of cloud) {
+        const s = hostState(h);
+        console.log(`  ${h.id}  ${h.user}@${s.address ?? "(asleep — wakes on use)"}  ${h.provider} ${s.state}  [default]`);
       }
+      if (fs.existsSync(HOSTS_FILE)) {
+        const { hosts } = JSON.parse(fs.readFileSync(HOSTS_FILE, "utf-8")) as { hosts: ScalewayHostMeta[] };
+        for (const h of hosts) {
+          console.log(`  ${h.id}  ${h.sshUsername}@${h.address}  ${h.commercialType} ${h.stopped ? "(stopped)" : ""}`);
+        }
+      }
+      if (!cloud.length && !fs.existsSync(HOSTS_FILE)) console.log("no remote hosts registered");
     });
 
   remote
@@ -170,7 +198,7 @@ export function registerRemoteCommand(program: Command): void {
     .description("Push a session (worktree + transcript + credential) to the remote Mac")
     .option("--host <id>", "Target a specific host id")
     .action(async (sessionId: string, opts: { host?: string }) => {
-      const host = loadRemoteHost(opts.host);
+      const { host } = await resolveTransferHost(opts.host);
       const s = resolveLocalSession(sessionId);
       console.log(`pushing ${sessionId}\n  ${s.cwd}\n  -> ${host.user}@${host.address}`);
       const move = await pushSession(sessionId, host);
@@ -188,7 +216,7 @@ export function registerRemoteCommand(program: Command): void {
     .description("Pull the latest remote state (transcript + working tree) back to local")
     .option("--host <id>", "Target a specific host id")
     .action(async (sessionId: string, opts: { host?: string }) => {
-      const host = loadRemoteHost(opts.host);
+      const { host } = await resolveTransferHost(opts.host);
       const moves = readMoves();
       const move = moves[sessionId];
       if (!move) {
@@ -210,8 +238,8 @@ export function registerRemoteCommand(program: Command): void {
     .description("Drive the moved session on the remote (one-shot, print mode)")
     .option("--host <id>", "Target a specific host id")
     .option("--mode <mode>", "permission mode: acceptEdits|bypassPermissions|default", "acceptEdits")
-    .action((sessionId: string, prompt: string, opts: { host?: string; mode?: string }) => {
-      const host = loadRemoteHost(opts.host);
+    .action(async (sessionId: string, prompt: string, opts: { host?: string; mode?: string }) => {
+      const { host } = await resolveTransferHost(opts.host);
       const moves = readMoves();
       const move = moves[sessionId];
       if (!move) { console.error(`No recorded push for ${sessionId}.`); process.exit(1); }
@@ -228,7 +256,7 @@ export function registerRemoteCommand(program: Command): void {
     .option("--host <id>", "Target a specific host id")
     .option("--destroy", "Also request Scaleway host deletion (if past 24h commitment)")
     .action(async (_opts: { host?: string; destroy?: boolean }) => {
-      const host = loadRemoteHost(_opts.host);
+      const { host } = await resolveTransferHost(_opts.host);
       const SSH = `ssh -i ${host.keyPath} -o StrictHostKeyChecking=accept-new ${host.user}@${host.address}`;
       console.log(`tearing down ${host.user}@${host.address}`);
       const { execSync } = await import("../proc.js");
@@ -245,20 +273,35 @@ export function registerRemoteCommand(program: Command): void {
     .option("--host <id>", "Target a specific host id")
     .option("--to-device <id>", "Target a specific codecast device id (default: first online remote)")
     .action(async (sessionId: string, opts: { host?: string; toDevice?: string }) => {
-      const host = loadRemoteHost(opts.host);
+      const { host } = await resolveTransferHost(opts.host);
       const { client, token, api } = await convexClient();
       const conv = await client.query(api.devices.resolveConversationBySession, { api_token: token, session_id: sessionId });
       if (!conv?._id) { console.error(`No conversation for session ${sessionId} (is it synced?)`); process.exit(1); }
 
-      // identify the target Mac's codecast device id. When the web initiates the
+      // identify the target's codecast device id. When the web initiates the
       // move it names an explicit destination (--to-device); otherwise fall back
-      // to the first online remote (single-Mac convenience for the CLI).
-      const devices = await client.query(api.devices.listDevices, { api_token: token });
-      const macDevice = opts.toDevice
-        ? devices.find((d: any) => d.device_id === opts.toDevice)
-        : devices.find((d: any) => d.is_remote && d.online) ?? devices.find((d: any) => d.is_remote);
+      // to the first online remote (single-remote convenience for the CLI).
+      // A cloud host that was just woken needs a moment for its daemon to
+      // heartbeat back online — the systemd service starts with the boot, but
+      // "the instance is running" and "the daemon has said hello" are two
+      // different clocks. Poll briefly rather than failing the move.
+      let macDevice: any;
+      const pickDeadline = Date.now() + 90_000;
+      for (;;) {
+        const devices = await client.query(api.devices.listDevices, { api_token: token });
+        macDevice = opts.toDevice
+          ? devices.find((d: any) => d.device_id === opts.toDevice)
+          : devices.find((d: any) => d.is_remote && d.online);
+        if (macDevice || Date.now() > pickDeadline) break;
+        console.log("  waiting for the remote daemon to come online…");
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+      if (!macDevice && !opts.toDevice) {
+        const devices = await client.query(api.devices.listDevices, { api_token: token });
+        macDevice = devices.find((d: any) => d.is_remote);
+      }
       if (!macDevice) {
-        console.error(opts.toDevice ? `Device ${opts.toDevice} not found` : "No online remote device found (start the Mac daemon)");
+        console.error(opts.toDevice ? `Device ${opts.toDevice} not found` : "No online remote device found (is the remote daemon provisioned? `cast browser hosts provision`)");
         process.exit(1);
       }
 
@@ -294,7 +337,7 @@ export function registerRemoteCommand(program: Command): void {
     .description("Bring a session back from the Mac to this machine")
     .option("--host <id>", "Target a specific host id")
     .action(async (sessionId: string, opts: { host?: string }) => {
-      const host = loadRemoteHost(opts.host);
+      const { host } = await resolveTransferHost(opts.host);
       const moves = readMoves();
       const move = moves[sessionId];
       if (!move) { console.error(`No recorded move for ${sessionId}.`); process.exit(1); }

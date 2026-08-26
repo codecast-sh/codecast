@@ -30,6 +30,7 @@
 
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RemoteHost } from "../remote/session-move.js";
@@ -102,6 +103,60 @@ export function hostState(host: CloudHost): { state: HostState; address?: string
   }
 }
 
+/**
+ * Make sure the host's security group admits SSH from where we are NOW.
+ *
+ * The group pins port 22 to a /32, which is right — but a laptop changes
+ * networks, and the first symptom of a stale rule is an SSH timeout that reads
+ * as "the host is broken". Discovered live: the registered host became
+ * unreachable purely because the current IP was not the one recorded weeks
+ * earlier. So reachability is healed, not assumed: add today's IP, and retire
+ * the /32 entries this code added on past networks (manual entries — anything
+ * without our description — are left alone).
+ */
+const AUTO_RULE_TAG = "codecast-auto";
+
+export function healSecurityGroup(host: CloudHost, onProgress: (m: string) => void = () => {}): void {
+  if (host.provider !== "aws") return;
+  try {
+    const r = aws(["ec2", "describe-instances", "--instance-ids", host.id], host.region);
+    const groupId = r?.Reservations?.[0]?.Instances?.[0]?.SecurityGroups?.[0]?.GroupId;
+    if (!groupId) return;
+
+    const ip = execFileSync("curl", ["-s", "--max-time", "6", "https://checkip.amazonaws.com"], {
+      encoding: "utf-8", timeout: 10_000,
+    }).trim();
+    if (!/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return;
+    const myCidr = `${ip}/32`;
+
+    const sg = aws(["ec2", "describe-security-groups", "--group-ids", groupId], host.region);
+    const sshRules = (sg?.SecurityGroups?.[0]?.IpPermissions ?? []).filter(
+      (p: any) => p.IpProtocol === "tcp" && p.FromPort === 22 && p.ToPort === 22,
+    );
+    const ranges: Array<{ CidrIp: string; Description?: string }> = sshRules.flatMap((p: any) => p.IpRanges ?? []);
+    if (ranges.some((x) => x.CidrIp === myCidr)) return;
+
+    onProgress(`this network is new to the host — allowing SSH from ${ip}`);
+    aws(
+      ["ec2", "authorize-security-group-ingress", "--group-id", groupId, "--ip-permissions",
+       JSON.stringify([{ IpProtocol: "tcp", FromPort: 22, ToPort: 22, IpRanges: [{ CidrIp: myCidr, Description: AUTO_RULE_TAG }] }])],
+      host.region,
+    );
+    // Retire the auto-added entries from networks we are no longer on.
+    const stale = ranges.filter((x) => x.Description === AUTO_RULE_TAG && x.CidrIp !== myCidr);
+    if (stale.length) {
+      aws(
+        ["ec2", "revoke-security-group-ingress", "--group-id", groupId, "--ip-permissions",
+         JSON.stringify([{ IpProtocol: "tcp", FromPort: 22, ToPort: 22, IpRanges: stale.map((x) => ({ CidrIp: x.CidrIp })) }])],
+        host.region,
+      );
+    }
+  } catch {
+    // Healing is best-effort: if the rule is already right, SSH works anyway,
+    // and if AWS says no we will find out from the SSH wait loop's error.
+  }
+}
+
 export class HostGone extends Error {
   constructor(host: CloudHost) {
     super(
@@ -145,6 +200,8 @@ export async function ensureUp(
 
   if (!address) throw new Error(`${host.id} is running but has no public address`);
 
+  healSecurityGroup(host, onProgress);
+
   // Running is not the same as accepting SSH: sshd comes up seconds later, and
   // a connection attempted in that window fails in a way that reads as a key
   // problem rather than a timing one.
@@ -181,6 +238,29 @@ export function stopHost(host: CloudHost): void {
   aws(["ec2", "stop-instances", "--instance-ids", host.id], host.region);
 }
 
+/**
+ * The cloud hosts as RemoteHosts, using their last-known addresses — for
+ * flows that must NEVER wake a sleeping box (the daemon's credential push).
+ * A stopped instance has released its IP, so a quick TCP probe of port 22
+ * (sshReachable) is both the liveness check and the staleness filter.
+ */
+export function listCloudRemoteHosts(): RemoteHost[] {
+  return readHosts()
+    .filter((h) => h.address)
+    .map((h) => toRemoteHost(h));
+}
+
+/** Does anything answer SSH there right now? Cheap, no AWS API call. */
+export function sshReachable(host: RemoteHost, timeoutMs = 4000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = net.connect({ host: host.address, port: 22 });
+    const done = (up: boolean) => { sock.destroy(); resolve(up); };
+    sock.once("connect", () => done(true));
+    sock.once("error", () => done(false));
+    sock.setTimeout(timeoutMs, () => done(false));
+  });
+}
+
 /** The RemoteHost shape the SSH helpers already speak. */
 export function toRemoteHost(host: CloudHost): RemoteHost {
   if (!host.address) throw new Error(`host ${host.id} has no address — start it first`);
@@ -189,5 +269,6 @@ export function toRemoteHost(host: CloudHost): RemoteHost {
     user: host.user,
     keyPath: host.keyPath,
     remoteBaseDir: `/home/${host.user}/work`,
+    homeDir: `/home/${host.user}`,
   };
 }

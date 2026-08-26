@@ -51,6 +51,18 @@ const onUpdateStatus = bufferedChannel("update-status", { latest: true });
 // one would silently lose the user's tab.
 const onAdoptTab = bufferedChannel("adopt-tab");
 
+// The call panel closing hands its room back to the main window. Buffered
+// because a dropped one drops a live call: the panel is going away either way,
+// so this message is the only thing that keeps the huddle alive.
+const onCallPanelHandback = bufferedChannel("call-panel-handback");
+
+// A meeting app started on this machine and the shell is offering to record
+// it. Buffered like a deep link: the offer is about something happening NOW,
+// and one that lands while the renderer is still booting would otherwise be
+// dropped in exactly the case it was written for — the app opening because the
+// person just sat down to a meeting.
+const onMeetingDetected = bufferedChannel("meeting-detected");
+
 // Window role (notification leader / app focus / any call) is pushed by main
 // whenever windows or focus change. Keep the latest so a subscriber that
 // mounts after the first push starts from the truth instead of a default.
@@ -123,5 +135,56 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   detachTab: (navPath) => ipcRenderer.invoke("detach-tab", navPath),
   attachTab: (navPath) => ipcRenderer.invoke("attach-tab", navPath),
   onAdoptTab,
+  // The people window: the floating buddy list (route /people). One per app —
+  // openPeopleWindow focuses the existing one. `isPeopleWindow` tells this
+  // renderer it IS that window, so it draws the panel and mounts the call and
+  // walkie pumps. The always-on-top pin is honored only from that window and
+  // persists across launches.
+  isPeopleWindow: process.argv.includes("--people-window"),
+  openPeopleWindow: () => ipcRenderer.invoke("open-people-window"),
+  setAlwaysOnTop: (on) => ipcRenderer.invoke("set-always-on-top", on),
+  getAlwaysOnTop: () => ipcRenderer.invoke("get-always-on-top"),
+  // The call panel: a huddle in a window of its own (route /call-panel). One
+  // per app, because one call at a time. `isCallPanelWindow` tells this
+  // renderer it IS that window, so it takes the call over on load and treats
+  // its own closing as a handoff rather than a hang-up.
+  //
+  // `closeCallPanel({ended})` is how the panel says WHY it is closing: a
+  // hang-up ended the call and nothing is handed anywhere, while any other
+  // close — including the OS close box, which says nothing — hands the room
+  // back to the main window. `reportCallPanelState` keeps the shell holding
+  // the payload for that handback: the same room, in the same mic, camera and
+  // scribe state the person was already in.
+  isCallPanelWindow: process.argv.includes("--call-panel-window"),
+  openCallPanel: (roomKey, opts) => ipcRenderer.invoke("open-call-panel", roomKey, opts ?? {}),
+  closeCallPanel: (opts) => ipcRenderer.invoke("close-call-panel", opts ?? {}),
+  reportCallPanelState: (state) => ipcRenderer.send("report-call-panel-state", state),
+  onCallPanelHandback,
+  // The floating faces (route /call-faces): the call minimized to circles of
+  // people's faces on a transparent always-on-top window. A separate window
+  // from the panel because Electron decides `transparent` and `frame` when a
+  // window is CONSTRUCTED, so minimizing is a handoff, not a reconfiguration.
+  //
+  // The three setters are what a see-through window needs and a normal one
+  // does not: `setFacesInteractive` decides whether the window takes the mouse
+  // at all (off except over a circle, so a click on the desktop behind reaches
+  // the desktop), `setFacesSize` keeps the window exactly as big as its
+  // circles, and `setFacesDragging` has the shell follow the cursor while a
+  // circle is held — a drag region would eat the mouse events the renderer
+  // needs to know the pointer left.
+  isFacesWindow: process.argv.includes("--call-faces-window"),
+  openFacesWindow: (roomKey, opts) => ipcRenderer.invoke("open-faces-window", roomKey, opts ?? {}),
+  closeFacesWindow: (opts) => ipcRenderer.invoke("close-faces-window", opts ?? {}),
+  reportFacesState: (state) => ipcRenderer.send("report-faces-state", state),
+  setFacesInteractive: (on) => ipcRenderer.send("set-faces-interactive", on === true),
+  setFacesSize: (size) => ipcRenderer.send("set-faces-size", size),
+  setFacesDragging: (on) => ipcRenderer.send("set-faces-dragging", on === true),
+  // Meeting detection: the shell polls the names of running programs (and
+  // nothing else) while the setting is on, and offers to record when a meeting
+  // app starts. The ANSWER lives here in the web layer — main never starts a
+  // recording, it only says a meeting looks like it began.
+  onMeetingDetected,
+  getMeetingDetect: () => ipcRenderer.invoke("get-meeting-detect"),
+  setMeetingDetect: (patch) => ipcRenderer.invoke("set-meeting-detect", patch ?? {}),
   platform: process.platform,
 });

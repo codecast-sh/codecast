@@ -4,6 +4,7 @@ import { makeFakeDb } from "./testDb";
 import {
   addChannelMembers,
   appendVoiceTranscript,
+  applyVoiceTranscription,
   cancelVoiceBurst,
   createChannel,
   deleteMessage,
@@ -1123,6 +1124,51 @@ describe("the anchor in a thread", () => {
     expect(sent.anchor_wake_skipped).toBe("agent_authored");
     expect(placeholders(ctx).length).toBe(0);
     expect(ctx.db._tables.pending_messages.length).toBe(0);
+  });
+
+  test("a session-typed line is personified only when the sender owns the session", async () => {
+    // The row names the session that typed it, and the server snapshots that
+    // session's title/agent so every reader can dress the line as the session.
+    // The id is caller-supplied, so the snapshot is gated on OWNERSHIP: a
+    // teammate's private session title must not leak into a channel because
+    // someone guessed its session id.
+    const seed = anchorTeamSeed({
+      conversations: [
+        { _id: CONV, user_id: BOB, title: "Anchor", status: "active", updated_at: 1 },
+        { _id: "conv-alice", user_id: ALICE, session_id: "sess-alice", title: "Fix the auth race", agent_type: "codex", status: "active", updated_at: 1 },
+        { _id: "conv-bob", user_id: BOB, session_id: "sess-bob", title: "Bob's private spike", agent_type: "claude_code", status: "active", updated_at: 1 },
+      ],
+      session_owners: [
+        { _id: "so-1", conversation_id: "conv-alice", user_id: ALICE, added_at: 1 },
+        { _id: "so-2", conversation_id: "conv-bob", user_id: BOB, added_at: 1 },
+      ],
+    });
+    const ctx = context(ALICE, seed);
+    const mine = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "tests are green", origin: "agent", origin_session_id: "sess-alice",
+    });
+    const mineRow = messagesIn(ctx).find((m: any) => m._id === mine.message_id);
+    expect(mineRow.origin_session_id).toBe("sess-alice");
+    expect(mineRow.origin_session_title).toBe("Fix the auth race");
+    expect(mineRow.origin_agent_type).toBe("codex");
+    // The bell speaks as the session, not as the human it ran as.
+    expect(ctx.db._tables.notifications.every((n: any) => !String(n.title ?? n.body ?? "").includes("Alice"))).toBe(true);
+
+    const theirs = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "leak?", origin: "agent", origin_session_id: "sess-bob",
+    });
+    const theirsRow = messagesIn(ctx).find((m: any) => m._id === theirs.message_id);
+    expect(theirsRow.origin_session_id).toBe("sess-bob");
+    expect(theirsRow.origin_session_title).toBeUndefined();
+    expect(theirsRow.origin_agent_type).toBeUndefined();
+
+    // Without the origin stamp the session id means nothing.
+    const plain = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "human typed", origin_session_id: "sess-alice",
+    });
+    const plainRow = messagesIn(ctx).find((m: any) => m._id === plain.message_id);
+    expect(plainRow.origin_session_id).toBeUndefined();
+    expect(plainRow.origin_session_title).toBeUndefined();
   });
 
   test("an anchor with no session yet keeps the message and reports why", async () => {
@@ -2568,6 +2614,115 @@ describe("voice bursts", () => {
     await expect(call(finalizeVoiceBurst, ctx, {
       message_id: empty.message_id, content: "  ", duration_ms: 10,
     })).rejects.toThrow("needs audio or a transcript");
+  });
+
+  // The words are a GUARANTEE, not a hope. When the live recognizer comes back
+  // with nothing — refused mint, socket that never opened, a room too quiet for
+  // the server's VAD — the recording is still right there, and the server gets
+  // the words out of it. Three real bursts on a real microphone came back as
+  // "no words" before this existed.
+  describe("recovering the words from the recording", () => {
+    async function landedSilent(ctx: any, channel: any) {
+      const started = await call(startVoiceBurst, ctx, { channel_id: channel });
+      await call(finalizeVoiceBurst, ctx, {
+        message_id: started.message_id, content: "", duration_ms: 1200, attachments: [AUDIO],
+      });
+      return started.message_id;
+    }
+
+    test("a wordless burst with a recording schedules the transcription and says it is happening", async () => {
+      const ctx = context(ALICE);
+      const channel = await dmWith(ctx, BOB);
+      const id = await landedSilent(ctx, channel);
+
+      expect(rowFor(ctx, id).voice).toEqual({
+        status: "done", duration_ms: 1200, room_key: undefined, transcribing: true,
+      });
+      const job = ctx._scheduled.at(-1);
+      expect(getFunctionName(job.reference)).toBe("chat:transcribeVoiceNote");
+      expect(job.args).toEqual({ message_id: id, storage_id: AUDIO.storage_id });
+      // And it is scheduled AFTER the message announced: the burst already
+      // happened, the words revise it rather than delay it.
+      expect(ctx._emitted.map((e: any) => e.args.event_type)).toEqual(["chat_dm"]);
+    });
+
+    test("a burst that already carried words costs nothing", async () => {
+      const ctx = context(ALICE);
+      const channel = await dmWith(ctx, BOB);
+      const started = await call(startVoiceBurst, ctx, { channel_id: channel });
+      ctx._scheduled.length = 0;
+      await call(finalizeVoiceBurst, ctx, {
+        message_id: started.message_id, content: "back in five", duration_ms: 1500, attachments: [AUDIO],
+      });
+      expect(ctx._scheduled).toEqual([]);
+      expect(rowFor(ctx, started.message_id).voice.transcribing).toBeUndefined();
+    });
+
+    test("a burst with no recording to transcribe is not rescued, because there is nothing to rescue", async () => {
+      const ctx = context(ALICE);
+      const channel = await dmWith(ctx, BOB);
+      const started = await call(startVoiceBurst, ctx, { channel_id: channel });
+      ctx._scheduled.length = 0;
+      await call(finalizeVoiceBurst, ctx, {
+        message_id: started.message_id, content: "said out loud", duration_ms: 1500,
+      });
+      expect(ctx._scheduled).toEqual([]);
+    });
+
+    test("the recovered words land on the row, and the transcribing state comes off", async () => {
+      const ctx = context(ALICE);
+      const channel = await dmWith(ctx, BOB);
+      const id = await landedSilent(ctx, channel);
+
+      await call(applyVoiceTranscription, ctx, { message_id: id, content: "  back in five  " });
+      const row = rowFor(ctx, id);
+      expect(row.content).toBe("back in five");
+      expect(row.voice).toEqual({ status: "done", duration_ms: 1200, room_key: undefined });
+      // The author is untouched: this recovers what somebody said, it does not
+      // say anything.
+      expect(String(row.user_id)).toBe(ALICE);
+    });
+
+    test("it never overwrites words the row already has", async () => {
+      const ctx = context(ALICE);
+      const channel = await dmWith(ctx, BOB);
+      const id = await landedSilent(ctx, channel);
+      // A late live transcript, or an edit, got there first.
+      await patchChat(ctx, id, { content: "what was actually said" });
+
+      const res = await call(applyVoiceTranscription, ctx, { message_id: id, content: "a worse guess" });
+      expect(res.patched).toBe(false);
+      expect(rowFor(ctx, id).content).toBe("what was actually said");
+      // The flag still comes off, or the bubble waits forever.
+      expect(rowFor(ctx, id).voice.transcribing).toBeUndefined();
+    });
+
+    test("a deleted burst keeps its silence, and a recovery that found nothing changes nothing", async () => {
+      const ctx = context(ALICE);
+      const channel = await dmWith(ctx, BOB);
+
+      const gone = await landedSilent(ctx, channel);
+      await call(deleteMessage, ctx, { message_id: gone });
+      expect((await call(applyVoiceTranscription, ctx, { message_id: gone, content: "too late" })).patched)
+        .toBe(false);
+      expect(rowFor(ctx, gone).content).toBe("");
+
+      const quiet = await landedSilent(ctx, channel);
+      expect((await call(applyVoiceTranscription, ctx, { message_id: quiet, content: "   " })).patched)
+        .toBe(false);
+      expect(rowFor(ctx, quiet).content).toBe("");
+      expect(rowFor(ctx, quiet).voice.transcribing).toBeUndefined();
+    });
+
+    test("it only ever fires once: a second delivery finds nothing to do", async () => {
+      const ctx = context(ALICE);
+      const channel = await dmWith(ctx, BOB);
+      const id = await landedSilent(ctx, channel);
+
+      expect((await call(applyVoiceTranscription, ctx, { message_id: id, content: "first" })).patched).toBe(true);
+      expect((await call(applyVoiceTranscription, ctx, { message_id: id, content: "second" })).patched).toBe(false);
+      expect(rowFor(ctx, id).content).toBe("first");
+    });
   });
 
   test("a transcript names its speaker: nobody else writes it, and nothing writes it after the release", async () => {

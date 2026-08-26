@@ -29,7 +29,20 @@ export type ParsedRoomKey =
   // counts, so nothing else in the system needs a second "group" kind.
   | { kind: "dm"; users: string[] }
   | { kind: "channel"; channelId: string }
-  | { kind: "session"; conversationId: string };
+  | { kind: "session"; conversationId: string }
+  // A recording: one person's microphone, not a room anybody can walk into.
+  // The key names a uuid the recorder minted and nothing else — it carries no
+  // owner, so who may reach it is answered by the transcript row it started
+  // (callRooms authorizeRoomMembership). It is a room key only because the
+  // whole transcription pipeline — the ASR mint, segments, flush beats,
+  // summaries, the calls page — is keyed by one, and reusing that is the
+  // entire design.
+  | { kind: "rec"; recId: string };
+
+// A recording id is a uuid this client generated. The parser bounds the shape
+// so a key cannot smuggle separators or arbitrary length past it; who owns the
+// recording is the server's question, never the key's.
+const REC_ID = /^[A-Za-z0-9-]{8,64}$/;
 
 // Ids are opaque strings; the parser enforces shape only — existence and
 // authorization are the server's job.
@@ -53,6 +66,9 @@ export function parseRoomKey(roomKey: string): ParsedRoomKey | null {
   if (parts[0] === "session" && parts.length === 2 && parts[1]) {
     return { kind: "session", conversationId: parts[1] };
   }
+  if (parts[0] === "rec" && parts.length === 2 && REC_ID.test(parts[1])) {
+    return { kind: "rec", recId: parts[1] };
+  }
   return null;
 }
 
@@ -75,6 +91,19 @@ export function channelRoomKey(channelId: string): string {
 
 export function sessionRoomKey(conversationId: string): string {
   return `session:${conversationId}`;
+}
+
+/** The key a recording runs under. The caller mints the id (crypto.randomUUID)
+ *  and starts a transcript on it; that transcript is what makes the key theirs. */
+export function recRoomKey(recId: string): string {
+  return `rec:${recId}`;
+}
+
+/** Is this key a recording rather than a room? Asked on both sides — the server
+ *  to shut every live-call door on it, the client to draw a microphone instead
+ *  of a telephone. */
+export function isRecRoomKey(roomKey: string | null | undefined): boolean {
+  return !!roomKey && parseRoomKey(roomKey)?.kind === "rec";
 }
 
 // The room a chat channel huddles in. A DM or group thread's identity IS its

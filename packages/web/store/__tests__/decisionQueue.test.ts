@@ -263,3 +263,29 @@ describe("local question resolutions", () => {
     expect(sessionHasOpenQuestion(row, undefined)).toBe(true);
   });
 });
+
+// Viewing a question is read-only. The card once auto-resolved a session's
+// question from a mount effect when the pending-permissions query came back
+// empty — but a buffered AskUserQuestion (Claude Code holds it in memory; the
+// transcript and the permissions table have nothing) looks exactly like that,
+// so opening the queue destroyed a real question. The only allowed
+// resolveSessionQuestion call sites in the card are explicit gestures.
+describe("SessionDecisionCard writes only on gestures", () => {
+  it("resolveSessionQuestion appears only as the selector and the dismiss gesture", async () => {
+    const source = await Bun.file(
+      new URL("../../components/SessionDecisionCard.tsx", import.meta.url)
+    ).text();
+    const calls = source.match(/resolveSessionQuestion\(/g) ?? [];
+    // The one call lives inside dismiss(). A second call site means someone
+    // wired a render-driven resolution back in.
+    expect(calls.length).toBe(1);
+    // No effect body may resolve, answer, or send — effects here may only
+    // manage focus, size, and key routing.
+    for (const banned of ["resolveSessionQuestion(", "answerDecision(", "sendMessage("]) {
+      for (const effect of source.split(/use(?:Layout)?Effect\(/).slice(1)) {
+        const body = effect.slice(0, effect.indexOf("}, ["));
+        expect(body).not.toContain(banned);
+      }
+    }
+  });
+});

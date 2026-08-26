@@ -228,15 +228,25 @@ export default function ChatThreadScreen() {
 
   const toView = useCallback((m: any): MobileChatMessage => {
     const member = memberById.get(String(m.user_id));
+    const humanName = member?.name || authorById.get(String(m.user_id))?.name;
+    // Session-typed line → session persona (see app/chat/[id].tsx toView).
+    const sessionOrigin = m.origin === 'agent' && m.origin_session_id && m.author_kind !== 'agent';
     return {
       id: String(m._id),
-      author: {
-        id: String(m.user_id),
-        name: member?.name || authorById.get(String(m.user_id))?.name
-          || (m.author_kind === 'agent' ? thread?.anchor?.name ?? 'Anchor' : 'Teammate'),
-        avatarUrl: member?.github_avatar_url || member?.image || undefined,
-        isAgent: m.author_kind === 'agent' || member?.is_bot,
-      },
+      author: sessionOrigin
+        ? {
+            id: String(m.user_id),
+            name: m.origin_session_title || 'Agent session',
+            isAgent: true,
+            session: { agentType: m.origin_agent_type, via: humanName },
+          }
+        : {
+            id: String(m.user_id),
+            name: humanName
+              || (m.author_kind === 'agent' ? thread?.anchor?.name ?? 'Anchor' : 'Teammate'),
+            avatarUrl: member?.github_avatar_url || member?.image || undefined,
+            isAgent: m.author_kind === 'agent' || member?.is_bot,
+          },
       content: m.content,
       createdAt: m.created_at,
       editedAt: m.edited_at,

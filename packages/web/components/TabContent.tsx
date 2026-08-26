@@ -1,4 +1,4 @@
-import { lazy, Suspense, useRef, useEffect, useMemo, type ComponentType, type LazyExoticComponent } from "react";
+import { lazy, Suspense, useEffect, useMemo, type ComponentType, type LazyExoticComponent } from "react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
 import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
 import { TabParamsCtx } from "../lib/tabParams";
@@ -16,10 +16,22 @@ import { useConversationMessages } from "../hooks/useConversationMessages";
 // edit. Keyed by page path, so a genuinely new route still gets a fresh lazy.
 const lazyPages: Map<string, LazyExoticComponent<ComponentType<any>>> =
   ((globalThis as any).__codecastLazyPages ??= new Map());
+const lazyLoaders = new Map<string, () => Promise<unknown>>();
 function lazyPage(key: string, loader: () => Promise<{ default: ComponentType<any> }>) {
+  lazyLoaders.set(key, loader);
   let c = lazyPages.get(key);
   if (!c) { c = lazy(loader); lazyPages.set(key, c); }
   return c;
+}
+
+// Import every shell route's module now. A route this window never imported is
+// a landmine after a deploy: the SW swap purges the old-hash chunk, the first
+// navigation to it fails, and ErrorBoundary heals with a full reload that
+// loses the destination. Once imported, the module registry keeps the route
+// for the window's lifetime, so navigation never fetches at click time.
+// Failures are ignored — the route's own lazy() retries the fetch on visit.
+export function warmTabRoutes(): void {
+  for (const load of lazyLoaders.values()) void load().catch(() => {});
 }
 
 const Tasks = lazyPage("@/app/tasks/page", () => import("@/app/tasks/page"));
@@ -59,6 +71,22 @@ const Questions = lazyPage("@/app/questions/page", () => import("@/app/questions
 // The Threads inbox: every conversation the viewer is in, one page.
 const Threads = lazyPage("@/app/threads/page", () => import("@/app/threads/page"));
 const AdminDaemonLogs = lazyPage("@/app/admin/daemon-logs/page", () => import("@/app/admin/daemon-logs/page"));
+
+// The entry URL, adopted into the active tab ONCE PER DOCUMENT LOAD — not once
+// per TabContent mount. The component remounts when the layout around it
+// changes, and a remount is not a navigation: consuming the address bar again
+// there stamped whatever URL the previous tab had written into the tab being
+// switched to, corrupting stored tab paths (and, via clientState sync, the
+// server's copy of them). Document scope on globalThis for the same reason the
+// lazy pages live there: a dev hot update re-executes this module.
+const navBoot: { url: string | null } = ((globalThis as any).__codecastTabNavBoot ??= {
+  url: typeof window !== "undefined" && window.location ? window.location.pathname + window.location.search : null,
+});
+
+// Which tabs have mounted panes, document-scoped for the same reason: when
+// TabContent itself remounts, a surviving set means every previously visited
+// tab remounts warm (hidden) instead of silently losing its pane.
+const mountedTabs: Set<string> = ((globalThis as any).__codecastMountedTabs ??= new Set());
 
 type RouteEntry = {
   pattern: RegExp;
@@ -226,21 +254,22 @@ export function TabContent() {
   // The store is updated in the effect below. Full-path compare: an entry URL
   // that differs only in query (e.g. /search?q=new vs a restored /search?q=old)
   // must also win, or the restored tab silently clobbers the typed query.
-  const navUrl = useRef<string | null>(window.location.pathname + window.location.search);
+  // navBoot is consumed once per document load (see its declaration) — a
+  // TabContent remount must never re-adopt the address bar.
   let renderTabs = tabs;
-  if (navUrl.current && activeTabId) {
+  if (navBoot.url && activeTabId) {
     const active = tabs.find((t: AppTab) => t.id === activeTabId);
-    if (active && active.path !== navUrl.current) {
-      const url = navUrl.current;
+    if (active && active.path !== navBoot.url) {
+      const url = navBoot.url;
       renderTabs = tabs.map((t: AppTab) =>
         t.id === activeTabId ? { ...t, path: url } : t
       );
     }
   }
   useEffect(() => {
-    if (!navUrl.current) return;
-    const url = navUrl.current;
-    navUrl.current = null;
+    if (!navBoot.url) return;
+    const url = navBoot.url;
+    navBoot.url = null;
     const store = useInboxStore.getState();
     if (!store.activeTabId) return;
     const active = store.tabs.find((t: AppTab) => t.id === store.activeTabId);
@@ -261,24 +290,23 @@ export function TabContent() {
   // tabs opened in the background by a Cmd-click (lib/openIntent), which mount
   // hidden so they are warm on first switch. A prewarm tab stops being one the
   // moment it is shown; from then on it is an ordinary visited tab.
-  const mountedRef = useRef(new Set<string>());
   for (const tab of tabs) {
     if (tab.id === activeTabId) clearPrewarmTab(tab.id);
-    if (tab.id === activeTabId || mountedRef.current.has(tab.id) || isPrewarmTab(tab.id)) {
-      mountedRef.current.add(tab.id);
+    if (tab.id === activeTabId || mountedTabs.has(tab.id) || isPrewarmTab(tab.id)) {
+      mountedTabs.add(tab.id);
     }
   }
   // Clean up removed tabs
-  for (const id of mountedRef.current) {
+  for (const id of mountedTabs) {
     if (!tabs.find((t: AppTab) => t.id === id)) {
-      mountedRef.current.delete(id);
+      mountedTabs.delete(id);
     }
   }
 
   return (
     <div className="h-full">
       {renderTabs.map((tab: AppTab) => {
-        if (!mountedRef.current.has(tab.id)) return null;
+        if (!mountedTabs.has(tab.id)) return null;
         const isActive = tab.id === activeTabId;
         const prewarmSession = !isActive && isPrewarmTab(tab.id) ? tabSessionId(tab) : null;
         return (

@@ -24,8 +24,11 @@ import {
   installWindowRoleTracker,
   reportDesktopWindowState,
   isDetachedTabWindow,
+  onCallPanelHandback,
 } from "../lib/desktop";
+import { takeOverCall } from "../lib/calls/callManager";
 import { showBrowserHandoffToast } from "./BrowserHandoffToast";
+import { installMeetingOfferListener } from "../lib/calls/meetingOffers";
 import { cleanNotificationBody } from "../lib/notificationText";
 import { notificationRoute } from "../lib/notificationTypes";
 import { soundChatMessage } from "../lib/sounds";
@@ -133,7 +136,10 @@ export function DesktopProvider() {
         // identical whether the window has focus or not. notifyNative already
         // no-ops when focused (the toast layer owns that case).
         if (typeof n.type === "string" && n.type.startsWith("chat_") && !document.hasFocus()) {
-          soundChatMessage();
+          // Keyed by the chat message, not by this notification row: the
+          // in-page toast layer watches the same arrival through the chat rail
+          // and sounds it too. One arrival, one sound.
+          soundChatMessage(n.chat_message_id ? String(n.chat_message_id) : undefined);
         }
       }
     }
@@ -150,6 +156,28 @@ export function DesktopProvider() {
 
     installDesktopInputTracker();
     installWindowRoleTracker();
+    // The shell offers to record a meeting it noticed starting. It picked this
+    // window; the answer, and the microphone, are ours.
+    installMeetingOfferListener();
+
+    // The call panel closing hands its huddle back here.
+    //
+    // Taking it is an ordinary deliberate join — the seat in `call_members` is
+    // already ours, so there is no ring and no permission to re-ask. It carries
+    // the mic, camera and scribe state the panel was in, because a handback
+    // that muted you would be a bug you could only discover by being talked
+    // over. The panel is STILL CONNECTED as this arrives (the shell sends it on
+    // the window's close, not after), so this join is what ends the panel's
+    // participation, in that order, and the audio has no hole in it.
+    onCallPanelHandback((payload) => {
+      if (!payload?.room) return;
+      void takeOverCall({
+        roomKey: payload.room,
+        mic: !!payload.mic,
+        camera: !!payload.camera,
+        scribe: !!payload.scribe,
+      });
+    });
 
     // Single in-app navigation path, shared by codecast:// deep links (from the
     // native layer) and the codecast-navigate event (tray/menus/notifications).

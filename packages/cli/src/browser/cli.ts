@@ -17,6 +17,7 @@
  * second call asking.
  */
 
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -285,6 +286,83 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       if (s.state === "missing") die(`${instanceId} was not found in ${o.region}`);
       upsertHost({ ...host, address: s.address });
       console.log(`${OK} registered ${instanceId} (${s.state})`);
+    });
+
+  hosts
+    .command("provision [id]")
+    .description("Set up a Linux host as a full remote service: display, live stream, idle auto-stop, codecast daemon")
+    .option("--idle <minutes>", "Auto-stop after this many idle minutes (0 disables)", "20")
+    .option("--no-daemon", "Skip the codecast daemon (browser + stream only; sessions cannot move there)")
+    .action(async (id: string | undefined, o: { idle: string; daemon: boolean }) => {
+      const rows = readHosts();
+      const h = id ? rows.find((r) => r.id === id) : rows.find((r) => r.provider === "aws");
+      if (!h) die(id ? `no host ${id}` : "no linux host registered", "`cast browser hosts add <instance-id> --key <pem>` first");
+      const idle = parseInt(o.idle, 10);
+      const { provisionLinuxHost } = await import("./provisionLinux.js");
+      console.log(`provisioning ${h.id} (${h.region})…`);
+      const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
+      try {
+        const report = await provisionLinuxHost(toRemoteHost(up), { idleStopMinutes: idle, skipDaemon: !o.daemon }, (m) =>
+          console.log(fmt.muted(`  ${m}`)),
+        );
+        upsertHost({ ...up, idleStopMinutes: idle });
+        console.log(`${OK} ${h.id} is a full remote service`);
+        console.log(`  chrome:   ${report.chrome.trim()}`);
+        console.log(`  cast:     ${report.cast.trim()}`);
+        console.log(`  claude:   ${report.claude.trim()}`);
+        console.log(`  services: ${report.services.trim()}`);
+        console.log(`  daemon:   ${report.device.trim()}`);
+        console.log(fmt.muted(`  idle auto-stop: ${idle ? `${idle}m` : "disabled"} — it powers itself off and costs only its disk`));
+        console.log(fmt.muted(`  watch it: cast browser hosts view`));
+      } catch (err) {
+        die((err as Error).message);
+      }
+    });
+
+  hosts
+    .command("view [id]")
+    .description("Live view of the host's screen — VLC (RTSP) or any browser (HLS), over an SSH tunnel")
+    .option("--vlc", "Open it in VLC")
+    .action(async (id: string | undefined, o: { vlc?: boolean }) => {
+      const rows = readHosts();
+      const h = id ? rows.find((r) => r.id === id) : rows.find((r) => r.provider === "aws");
+      if (!h) die(id ? `no host ${id}` : "no linux host registered");
+      const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
+      const { ensureViewTunnel } = await import("./liveView.js");
+      try {
+        const v = await ensureViewTunnel(toRemoteHost(up));
+        console.log(`${OK} live view is up${v.tunnelPid ? ` (tunnel pid ${v.tunnelPid})` : " (reusing the existing tunnel)"}`);
+        console.log(`  VLC:     ${fmt.highlight(v.rtsp)}`);
+        console.log(`  browser: ${fmt.highlight(v.hls)}`);
+        console.log(fmt.muted("  the stream only encodes while someone is watching; closing the player stops it"));
+        if (o.vlc) {
+          try {
+            execFileSync("open", ["-a", "VLC", v.rtsp], { stdio: "ignore", timeout: 10_000 });
+            console.log(`${OK} opened in VLC`);
+          } catch {
+            console.log(fmt.warning("  VLC is not installed — `brew install --cask vlc`, or open the browser URL"));
+          }
+        }
+      } catch (err) {
+        die((err as Error).message);
+      }
+    });
+
+  hosts
+    .command("shot [id]")
+    .description("One screenshot of the host's screen, saved locally")
+    .action(async (id: string | undefined) => {
+      const rows = readHosts();
+      const h = id ? rows.find((r) => r.id === id) : rows.find((r) => r.provider === "aws");
+      if (!h) die(id ? `no host ${id}` : "no linux host registered");
+      const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
+      const { machineShot } = await import("./liveView.js");
+      try {
+        const file = machineShot(toRemoteHost(up));
+        console.log(file);
+      } catch (err) {
+        die((err as Error).message);
+      }
     });
 
   hosts

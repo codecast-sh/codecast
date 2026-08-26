@@ -1,5 +1,6 @@
 import type { AppTab } from "../store/inboxStore";
 import { pathLabel, inboxTabSessionId } from "./pathLabel";
+import { isConvexId } from "./entityLinks";
 import { vaultNoteTitle } from "./vault/noteTitle";
 import { channelDisplayName } from "./chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
@@ -42,7 +43,9 @@ export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: R
   const sid = tabSessionId(tab);
   if (sid && sessions[sid]) {
     const s = sessions[sid];
-    return s.title || s.session_id?.slice(0, 12) || "Session";
+    // Untitled: the 7-char short handle (what every cast link and command
+    // uses), never a slice of the agent's UUID.
+    return s.title || (isConvexId(sid) ? sid.slice(0, 7) : "Session");
   }
   const chat = chatTabTitle(tab.path, channels, members, viewerId);
   if (chat) return chat;

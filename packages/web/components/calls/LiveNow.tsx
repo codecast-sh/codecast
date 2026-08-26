@@ -41,7 +41,7 @@ export function LiveRoomAction({
         type="button"
         onClick={(e) => {
           e.stopPropagation();
-          void joinCall(row.roomKey);
+          void joinCall(row.roomKey, { intent: "deliberate" });
         }}
         className={`shrink-0 rounded-full border border-sol-violet/30 bg-sol-violet/10 px-2 py-0.5 text-[11px] font-medium text-sol-violet transition-colors hover:bg-sol-violet/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-violet ${className}`}
         // The visible word is one syllable because the row already says which
@@ -142,7 +142,7 @@ export function LiveNowRail({
               key={row.roomKey}
               type="button"
               onClick={() => {
-                if (row.canJoin) void joinCall(row.roomKey);
+                if (row.canJoin) void joinCall(row.roomKey, { intent: "deliberate" });
                 else void knockRoom(row.roomKey);
                 onNavigate?.();
               }}
@@ -182,7 +182,7 @@ export function LiveNowRail({
           key={row.roomKey}
           onClick={() => {
             if (row.mine || !row.canJoin) return;
-            void joinCall(row.roomKey);
+            void joinCall(row.roomKey, { intent: "deliberate" });
             onNavigate?.();
           }}
           className={`group/room flex items-center gap-2 px-4 py-1 text-[12px] text-sol-text-muted ${

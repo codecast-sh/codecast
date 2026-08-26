@@ -53,6 +53,9 @@ const CURRENT_USER_METADATA_FIELDS = [
   // and a field dropped in projection reads as the default — which would quietly
   // reopen a door somebody deliberately shut.
   "walkie_pref",
+  // The shutter, for exactly the same reason: dropped in projection it reads
+  // as "not snoozed", which is a door somebody shut opening itself again.
+  "walkie_snoozed_until",
   "timezone",
   "hide_activity",
   "username",

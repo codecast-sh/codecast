@@ -14306,6 +14306,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
+      // A hidden tab pane (display:none ancestor) has zero geometry: every
+      // metric reads 0, which computes as "at the bottom" and would overwrite
+      // the latches that remember the real reading position. Those events are
+      // noise — ignore them until the pane is visible again.
+      if (clientHeight === 0) return;
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
       const isAtBottom = distanceFromBottom < 100;
       isNearBottomRef.current = isAtBottom;
@@ -14367,6 +14372,43 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return () => {
       scrollContainer.removeEventListener("scroll", handleScroll);
     };
+  });
+
+  // Freeze the reading position across a hidden spell. A background tab pane
+  // is display:none, so this container's geometry collapses to zero; on
+  // re-show the browser restores scrollTop, but the virtualizer treats the
+  // 0→height resize as a size change and — "at the end" being trivially true
+  // at zero geometry — re-pins the view to the bottom. Save the last visible
+  // offset when the pane hides and re-assert it when it shows, keeping the
+  // tail-follow latch off unless the reader really was at the bottom.
+  const hiddenFreezeRef = useRef<{ scrollTop: number; pinned: boolean } | null>(null);
+  useMountEffect(() => {
+    const sc = containerRef.current;
+    if (!sc) return;
+    let lastHeight = sc.clientHeight;
+    const ro = new ResizeObserver(() => {
+      const h = sc.clientHeight;
+      if (h === 0 && lastHeight > 0) {
+        hiddenFreezeRef.current = { scrollTop: lastScrollTopRef.current, pinned: isNearBottomRef.current };
+      } else if (h > 0 && lastHeight === 0 && hiddenFreezeRef.current) {
+        const frozen = hiddenFreezeRef.current;
+        hiddenFreezeRef.current = null;
+        if (frozen.pinned) {
+          scrollToBottomFnRef.current();
+        } else {
+          setUserScrolled(true);
+          // Re-assert across a few ticks: the virtualizer's own resize
+          // handling lands on its own schedule and must not win.
+          const reassert = () => { if (Math.abs(sc.scrollTop - frozen.scrollTop) > 1) sc.scrollTop = frozen.scrollTop; };
+          reassert();
+          requestAnimationFrame(reassert);
+          setTimeout(reassert, 80);
+        }
+      }
+      lastHeight = h;
+    });
+    ro.observe(sc);
+    return () => ro.disconnect();
   });
 
   // Load the previous (older) page when the user scrolls the content near the top.

@@ -222,6 +222,32 @@ export function authorFor(
   };
 }
 
+/** The session persona for a line a codecast session typed (origin "agent").
+ *
+ *  Follows the same live-derivation rule as everything above: when the viewer
+ *  can see the session, its CURRENT title and agent come from the store via
+ *  `ctx.sessionFor`, so a renamed session renames its chat lines. The server's
+ *  send-time snapshot on the row is the fallback for viewers without access.
+ *  The human the session ran as stays visible as the `via` credit — the words
+ *  are machine-typed but the authority is still that person's. */
+export function sessionAuthorFor(row: ChatMessageRow, ctx: ViewContext): ChatAuthor | null {
+  // An anchor reply (author_kind "agent") already has its own identity.
+  if (row.origin !== "agent" || !row.origin_session_id || row.author_kind === "agent") return null;
+  const live = ctx.sessionFor?.(row.origin_session_id);
+  const human = ctx.members.get(row.user_id);
+  const title = live?.title || row.origin_session_title;
+  return {
+    id: row.user_id,
+    name: title || "Agent session",
+    isAgent: true,
+    session: {
+      id: row.origin_session_id,
+      agentType: live?.agentType || row.origin_agent_type || "claude_code",
+      via: human ? memberName(human) : undefined,
+    },
+  };
+}
+
 export function mentionsViewer(row: ChatMessageRow, viewerId: string): boolean {
   if (row.mention_scope === "here") return true;
   return !!row.mentions?.some((id) => id === viewerId);
@@ -272,6 +298,9 @@ export type ViewContext = {
   }>;
   /** "sent" | "pending" | "failed" for a row — store/chatSlice's chatSendState. */
   sendState?: (row: ChatMessageRow) => "sent" | "pending" | "failed";
+  /** Live lookup for a session that typed a line (sessionAuthorFor). Absent
+   *  where the caller has no session store — the row's snapshot still renders. */
+  sessionFor?: (sessionId: string) => { title?: string; agentType?: string } | undefined;
 };
 
 export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessageView {
@@ -286,7 +315,7 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
   const reactions = ctx.reactionsFor?.(row._id);
   return {
     id: row._id,
-    author: authorFor(row.user_id, row.author_kind, ctx.members),
+    author: sessionAuthorFor(row, ctx) ?? authorFor(row.user_id, row.author_kind, ctx.members),
     threadRootId: row.thread_root_id,
     content: row.content,
     createdAt: row.created_at,
@@ -297,9 +326,31 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
     // A canceled burst carries `deleted_at` too, so it never reaches the voice
     // bubble — the deleted branch above it answers first. toMessageViews drops
     // it before that, unless somebody replied to it.
+    // AUDIO ALONE IS A VOICE NOTE. `voice` is what a walkie burst carries, and
+    // keying the bubble on it alone meant a row holding a recording and nothing
+    // else fell through to the attachment grid, which puts every storage id in
+    // an <img>: a broken thumbnail where a voice note should be, with no way to
+    // play it. What a row IS, is decided by what is on it.
+    //
+    // SOLE, and with nothing typed. A voice bubble replaces the whole body —
+    // the markdown and the attachment grid both — so inferring one for a row
+    // that also carries an image made the image silently disappear, and a row
+    // that also carries typed text rendered that text as if it were speech.
+    // Those rows are ordinary messages that happen to have a recording on them,
+    // and they keep their body; ChatMessage's grid plays the audio rather than
+    // trying to draw it.
     voice: row.voice
-      ? { status: row.voice.status, durationMs: row.voice.duration_ms, roomKey: row.voice.room_key }
-      : undefined,
+      ? {
+          status: row.voice.status,
+          durationMs: row.voice.duration_ms,
+          roomKey: row.voice.room_key,
+          transcribing: row.voice.transcribing,
+        }
+      : row.attachments?.length === 1 &&
+          row.attachments[0].mime?.startsWith("audio/") &&
+          !row.content.trim()
+        ? { status: "done" as const, inferred: true }
+        : undefined,
     reactions: reactions && reactions.length > 0 ? reactions : undefined,
     agentStatus: row.agent_status,
     replyCount: replyCount || undefined,
