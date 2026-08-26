@@ -42,6 +42,7 @@ import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader } from "./AppLoader";
 import { SettingsModal } from "./settings/SettingsModal";
+import { PeopleWallModal } from "./people/PeopleWallModal";
 import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, sessionsWakeSig, pendingSendWakeSig, isSessionHidden, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { pathOnMyMachines } from "../lib/machinePicker";
@@ -64,9 +65,12 @@ import { useChatChannelsSync, useChatUnread } from "../hooks/useChatSync";
 import { useThreadUnreadSync } from "../hooks/useThreadsSync";
 import { useChatToasts } from "../hooks/useChatToasts";
 import { useCallSync } from "../hooks/useCallSync";
+import { useRecorderSync } from "../hooks/useRecorder";
 import { useWalkieSync } from "../hooks/useWalkieSync";
 import { useCallRing } from "../hooks/useCallRing";
 import { CallDock } from "./calls/CallDock";
+import { RecordingPill } from "./calls/RecordingPill";
+import { ElsewhereCallPill } from "./calls/ElsewhereCallPill";
 import { leaveCall } from "../lib/calls/callManager";
 import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
 import { useSyncMentionPlans } from "../hooks/useSyncPlans";
@@ -241,6 +245,9 @@ function DashboardSyncEffects() {
   // Push-to-talk's receiving half: a teammate's live burst has to reach someone
   // whose DM is closed, which is exactly why this is not on the chat page.
   useWalkieSync();
+  // The recorder's Convex client. The record button and the pill live on
+  // different pages, so neither of them can be what binds the engine.
+  useRecorderSync();
   return null;
 }
 
@@ -921,12 +928,29 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // peeks the sidebar; right edge peeks the session list (rightPeekEnabled above).
   const peekEnabled = sidebarCollapsed && !hideSidebar && !isZenMode && !isMobile;
 
+  // THE STAGE's secondary slot, computed up here because the collapse/expand
+  // effect below must run on every render path (hooks precede the guest
+  // return). Only working surfaces host a companion; elsewhere the page owns
+  // the stage.
+  const showCompanion = !!companionId(s.workspace) && isOnWorkingPage && !isMobile;
+  // The Files pane shares the slot: a conversation on stage may have the
+  // project's files beside it (slotPolicyFor(...).files).
+  const showFilesPane = !showCompanion && s.workspace.secondary.pane?.kind === "files" && s.workspace.secondary.presentation === "split" && slotPolicy.files && !isMobile;
+  const showStageSecondary = showCompanion || showFilesPane;
+  // The secondary slot owns the companion's share of the stage, so a workbench
+  // restores it.
+  const rawCompanionSize = s.workspace.secondary.size;
+  const companionSize = rawCompanionSize !== undefined && rawCompanionSize >= 20 && rawCompanionSize <= 65 ? rawCompanionSize : 42;
+  const stageCompanionPanelRef = usePanelRef();
+  const companionDragEchoRef = useRef<number | null>(companionSize);
+
   // The context slot owns the rail's width. Its size field serves whichever
   // pane holds the edge — a percent for the session list, pixels for the
   // comment rail — so only a plausibly-percent value is read here.
   const handleStageLayoutChange = useDragGatedLayoutPersist((newLayout) => {
     const size = newLayout["stage-companion"];
-    if (!size || size < 5) return;
+    if (!size || size < 5 || !showStageSecondary) return;
+    companionDragEchoRef.current = size;
     useInboxStore.getState().wsSetSize("secondary", size);
   });
 
@@ -955,6 +979,25 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       if (!ref.isCollapsed()) ref.collapse();
     }
   }, [showSessionList, railSize]);
+
+  // Same choreography for the stage's companion Panel. The Group is ALWAYS
+  // rendered and this collapses the Panel to 0 when nothing sits beside the
+  // page — swapping the Group in and out instead remounted everything under
+  // it, TabContent included, so every inbox↔working tab switch rebuilt all
+  // kept-mounted panes and re-armed the one-shot URL adoption (which then
+  // stamped the stale address-bar URL into the switched-to tab).
+  useWatchEffect(() => {
+    const ref = stageCompanionPanelRef.current;
+    if (!ref) return;
+    if (showStageSecondary) {
+      if (ref.isCollapsed() || companionDragEchoRef.current !== companionSize) {
+        companionDragEchoRef.current = companionSize;
+        ref.resize(`${companionSize}%`);
+      }
+    } else {
+      if (!ref.isCollapsed()) ref.collapse();
+    }
+  }, [showStageSecondary, companionSize]);
 
   // Guest/unauthenticated: minimal layout, no top header — branding lives in the
   // bottom bar. Always simple-view: anonymous share viewers get the calm reading
@@ -992,24 +1035,27 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // THE STAGE: at most two panes, ever — the page, and (optionally) one
   // conversation running beside it. A second session swaps this one out
   // (there is a single companionSessionId), so panes cannot accumulate.
-  // Only working surfaces host a companion; elsewhere the page owns the stage.
-  const showCompanion = !!companionId(s.workspace) && isOnWorkingPage && !isMobile;
-  // The Files pane shares the slot: a conversation on stage may have the
-  // project's files beside it (slotPolicyFor(...).files).
-  const showFilesPane = !showCompanion && s.workspace.secondary.pane?.kind === "files" && s.workspace.secondary.presentation === "split" && slotPolicy.files && !isMobile;
-  // The secondary slot owns the companion's share of the stage, so a workbench
-  // restores it. Group remounts with showCompanion, which re-reads this.
-  const rawCompanionSize = s.workspace.secondary.size;
-  const companionSize = rawCompanionSize !== undefined && rawCompanionSize >= 20 && rawCompanionSize <= 65 ? rawCompanionSize : 42;
-  const pageContent = showCompanion || showFilesPane ? (
-    <Group orientation="horizontal" className="h-full" defaultLayout={{ "stage-page": 100 - companionSize, "stage-companion": companionSize }} onLayoutChange={handleStageLayoutChange}>
+  // The Group is always rendered and the companion Panel collapses to 0 when
+  // not in use (same pattern as the session rail): the stage's element
+  // structure must be identical on every surface, or a tab switch across
+  // surfaces unmounts the whole page subtree.
+  const pageContent = (
+    <Group orientation="horizontal" className="h-full" defaultLayout={{ "stage-page": showStageSecondary ? 100 - companionSize : 100, "stage-companion": showStageSecondary ? companionSize : 0 }} onLayoutChange={handleStageLayoutChange}>
       <Panel id="stage-page" minSize={320}>{pageContentInner}</Panel>
-      <Separator className={separatorClass} />
-      <Panel id="stage-companion" minSize={320} maxSize="65%">
-        {showCompanion ? <StageCompanion /> : <StageFilesPane />}
+      <Separator className={`${separatorClass} ${showStageSecondary ? "" : "invisible"}`} />
+      <Panel
+        id="stage-companion"
+        panelRef={stageCompanionPanelRef}
+        minSize={320}
+        maxSize="65%"
+        defaultSize={showStageSecondary ? companionSize : 0}
+        collapsible
+        collapsedSize={0}
+      >
+        {showCompanion ? <StageCompanion /> : showFilesPane ? <StageFilesPane /> : null}
       </Panel>
     </Group>
-  ) : pageContentInner;
+  );
 
   // ONE right rail, and it is only ever the session list. A conversation
   // never renders inside it — selecting a session promotes it to the stage
@@ -1313,6 +1359,14 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <SettingsModal />
       </ErrorBoundary>
 
+      {/* The wall of faces, over the main window. Mounted here rather than on a
+          route because it is a gesture, not a place: you open it, hold somebody,
+          and it goes away. It renders nothing and subscribes to nothing while
+          shut. */}
+      <ErrorBoundary name="PeopleWallModal" level="panel">
+        <PeopleWallModal />
+      </ErrorBoundary>
+
       {/* Mobile sidebar overlay */}
       {isMobileSidebarOpen && (
         <>
@@ -1379,6 +1433,17 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           <CallDock />
         </ErrorBoundary>
       </div>
+      {/* The huddle the people window (or a detached tab) is hosting. The dock
+          above reads THIS window's call and correctly shows nothing, which
+          without a word left the main window looking as though no call were
+          running at all — and the first thing that invites is starting a second
+          one. It sits where the dock would, and says only where to look. */}
+      <div className="fixed bottom-20 right-4 z-[155] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt/95 px-3 py-2 shadow-xl">
+        <ElsewhereCallPill />
+      </div>
+      {/* A recording in progress, wherever the person has wandered to. It
+          portals to the body and renders nothing unless one is running. */}
+      <RecordingPill />
       <GlobalCloseGuardDialog />
       {s.compose.open && (
         <div

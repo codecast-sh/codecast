@@ -98,4 +98,18 @@ idle(() => {
   if (!onAppPath && !hasAuth) return;
   void import("@/app/inbox/page");
   void import("@/app/team/activity/page");
+  // The decision queue backs a header action ("answer all") — it must open
+  // instantly, so it warms with the hot set even in dev.
+  void import("@/app/questions/page");
+  // Then every other shell route (prod only — in dev this would make Vite
+  // transform the whole app at boot). A route left unimported reloads the
+  // whole window on first visit after a deploy: the SW swap purges old-hash
+  // chunks, the fetch fails, and ErrorBoundary heals with location.reload(),
+  // losing the destination. Importing everything while the manifest is fresh
+  // removes that class for this window.
+  if (import.meta.env.PROD) {
+    setTimeout(() => {
+      import("../components/TabContent").then((m) => m.warmTabRoutes()).catch(() => {});
+    }, 5_000);
+  }
 });

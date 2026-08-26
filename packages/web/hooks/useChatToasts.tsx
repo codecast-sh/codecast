@@ -208,7 +208,7 @@ export function useChatToasts(): void {
       // Every card gets the sound (Slack's rule: a banner is never silent).
       // The tier still decides the card's dwell and accent; the sound is one
       // sound so nobody learns to ignore the "ordinary" one.
-      soundChatMessage();
+      soundChatMessage(messageId);
       toast.custom(
         () => <ChatToast data={data} onOpen={open} onMuteChannel={mute} onSnooze={snooze} />,
         {

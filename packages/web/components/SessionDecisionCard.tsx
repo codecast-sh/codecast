@@ -26,6 +26,15 @@ import { PublishedPageEmbed } from "./PublishedPageEmbed";
 // The queue (/questions) renders the same conversation pane and only adds a
 // stepper through DecisionStepperContext (hooks/useDecisionQueue): position,
 // advance, skip, leave.
+//
+// VIEWING IS READ-ONLY. Rendering this card must never write to the store or
+// the server — a question leaves the queue only through an explicit gesture
+// (an answer, a dismissal, Approve/Deny) or through server truth flipping the
+// session row. A buffered AskUserQuestion is the case that makes this a hard
+// rule: Claude Code holds the question in memory until it is answered, so the
+// transcript has no poll and the permissions table has no row — the session
+// row's permission_blocked status is the ONLY evidence, and any "nothing
+// pending, must be resolved" inference on mount destroys a real question.
 
 type Size = "full" | "dock" | "line";
 
@@ -91,16 +100,6 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     [permissionsRaw]
   );
   const isPermissionCard = item.source === "permission" && permissions.length > 0;
-  const onNotADecision = stepper?.onNotADecision;
-  // Answered elsewhere (the conversation footer, another device) — it no
-  // longer holds a slot. The store mark makes the rail's QUESTIONS section
-  // drop it in the same commit; the stepper only moves the anchor along.
-  useEffect(() => {
-    if (item.source === "permission" && permissionsRaw !== undefined && permissions.length === 0) {
-      resolveSessionQuestion(item.conversationId);
-      onNotADecision?.();
-    }
-  }, [item.source, item.conversationId, permissionsRaw, permissions.length, resolveSessionQuestion, onNotADecision]);
 
   const poll = useMemo(() => (needsMessages ? openQuestionFromMessages(messages as any[]) : null), [needsMessages, messages]);
   const recentText = useMemo(() => (needsMessages ? lastAssistantText(messages as any[]) : undefined), [needsMessages, messages]);
@@ -114,11 +113,11 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     return n;
   }, [item.blocking, item.createdAt, messages]);
 
-  // The session title is WHO is asking, never WHAT. An ask card renders no
-  // question text until the poll payload is readable from the transcript —
-  // showing the title as the question and swapping it out a beat later is
-  // exactly the "question changed under me" report.
-  const question = poll?.question.question ?? (item.source === "ask" ? "" : item.question);
+  // The session title is WHO is asking, never WHAT. A poll-sourced card
+  // renders no question text until the poll payload is readable from the
+  // transcript — showing the title as the question and swapping it out a beat
+  // later is exactly the "question changed under me" report.
+  const question = poll?.question.question ?? (item.source === "decide" ? item.question : "");
   const options = useMemo(() => {
     if (item.source === "decide") return item.options.map((o, index) => ({ label: o.label, description: o.description, index }));
     return poll ? visibleOptions(poll.question) : [];
@@ -127,15 +126,9 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
 
   // A usage/billing interstitial is not a decision about the work, and its
   // options commit real money — exactly what a queue that advances on a digit
-  // must never put under your finger. Marked resolved in the store so the
-  // rail's QUESTIONS section drops it too (the NeedsAttention banner is the
-  // surface that owns infra parks).
+  // must never put under your finger. Rendered un-answerable (no digits, no
+  // option buttons); skip or dismiss it, or open the session to handle it.
   const isInfraDialog = item.source !== "decide" && isUsageLimitDialog(options.map((o) => o.label));
-  useEffect(() => {
-    if (!isInfraDialog) return;
-    resolveSessionQuestion(item.conversationId);
-    onNotADecision?.();
-  }, [isInfraDialog, item.conversationId, resolveSessionQuestion, onNotADecision]);
 
   const onDone = stepper?.onDone;
   const answer = useCallback((index: number) => {
@@ -154,13 +147,16 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     if (!trimmed) return;
     if (item.source === "decide" && item.decisionId) {
       answerDecision(item.decisionId, { text: trimmed });
-    } else if (poll) {
+    } else {
+      // No parsed poll needed: the free-text payload is the decline-then-type
+      // form, which the daemon can drive at any AskUserQuestion menu — this is
+      // how a buffered question (present in no transcript yet) gets answered.
       const content = buildFreeTextPayload(trimmed);
       const clientId = addOptimisticMessage(item.conversationId, content);
       sendMessage(item.conversationId, content, undefined, clientId);
     }
     onDone?.();
-  }, [item, poll, answerDecision, addOptimisticMessage, sendMessage, onDone]);
+  }, [item, answerDecision, addOptimisticMessage, sendMessage, onDone]);
 
   // "I am not going to answer this." A `cast decide` row resolves as dismissed
   // (the agent is not told); a poll/permission card is marked resolved in the
@@ -190,7 +186,8 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         editing: !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable),
         inOwnFreeTextBox: !!target && target === otherRef.current,
         isPermissionCard,
-        optionCount: options.length,
+        // An infra dialog's options commit money — no digit may reach them.
+        optionCount: isInfraDialog ? 0 : options.length,
         sheet: full ? "full" : "peek",
       });
       if (!action) return;
@@ -208,7 +205,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         case "open-session": if (stepper) openSession(); break;
         case "skip": onSkip?.(); break;
         case "dismiss": dismiss(); break;
-        case "open-free-text": setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); break;
+        case "open-free-text": if (!isPermissionCard && !isInfraDialog) { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); } break;
         case "peek": shrink(); break;
         case "full": grow(); break;
         case "restore-question": grow(); break;
@@ -221,7 +218,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     // list navigation and would eat them first.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [options, answer, answerFreeText, otherText, openSession, onSkip, dismiss, onExit, full, stepper, isPermissionCard, shrink, grow]);
+  }, [options, answer, answerFreeText, otherText, openSession, onSkip, dismiss, onExit, full, stepper, isPermissionCard, isInfraDialog, shrink, grow]);
 
   const tier = queueTier(item);
   const session = item.session;
@@ -307,8 +304,13 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
 
   const optionRow = (
     <div className={`px-6 shrink-0 ${full ? "pt-4 pb-4 border-t border-sol-border" : "pt-2 pb-3"}`}>
+      {isInfraDialog && (
+        <div className="text-[12px] text-sol-text-dim mb-1">
+          This is a usage prompt from the agent's harness, not a decision — open the session to handle it.
+        </div>
+      )}
       <div className="flex flex-wrap gap-2">
-        {options.map((o, n) => (
+        {!isInfraDialog && options.map((o, n) => (
           <button
             key={o.index}
             onClick={() => answer(o.index)}
@@ -324,16 +326,20 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
             {item.defaultOption === o.index && <span className="text-[10px] text-sol-text-dim">proceeding with this</span>}
           </button>
         ))}
-        <button
-          onClick={() => { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); }}
-          className="flex items-center gap-2 px-3 py-2 rounded border border-sol-border text-sm text-sol-text-muted hover:text-sol-text transition-colors"
-        >
-          <KeyCap size="xs">t</KeyCap>
-          <span>type an answer</span>
-        </button>
+        {/* A permission prompt is answered by Approve/Deny only; an infra
+            dialog is handled in the session. Neither takes typed answers. */}
+        {!isPermissionCard && !isInfraDialog && (
+          <button
+            onClick={() => { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); }}
+            className="flex items-center gap-2 px-3 py-2 rounded border border-sol-border text-sm text-sol-text-muted hover:text-sol-text transition-colors"
+          >
+            <KeyCap size="xs">t</KeyCap>
+            <span>type an answer</span>
+          </button>
+        )}
       </div>
 
-      {full && options.some((o) => o.description) && (
+      {full && !isInfraDialog && options.some((o) => o.description) && (
         <div className="mt-3 space-y-1">
           {options.filter((o) => o.description).map((o) => (
             <div key={o.index} className="text-[12px] text-sol-text-dim">
@@ -430,9 +436,10 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
               <PermissionStack permissions={permissions} />
             </div>
           )}
-          {needsMessages && !poll && !isPermissionCard && (
+          {needsMessages && !poll && !isPermissionCard && !isInfraDialog && (
             <div className="text-sm text-sol-text-dim mb-4">
-              This session is waiting on you, but its question has not reached the transcript yet.
+              This session is waiting on you, but its question is only visible in its terminal so far.
+              Open the session to read it, or type an answer below.
             </div>
           )}
         </div>

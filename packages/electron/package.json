@@ -26,6 +26,8 @@
     "productName": "Codecast",
     "files": [
       "main.js",
+      "callWindowPolicy.js",
+      "meetingDetector.js",
       "notificationRouter.js",
       "shortcutSettings.js",
       "updaterNet.js",

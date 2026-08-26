@@ -68,13 +68,38 @@ function crumbLabel(text: string): string {
   return clean.length > MAX_CRUMB ? `${clean.slice(0, MAX_CRUMB - 1)}…` : clean;
 }
 
-/** The name and (separately) the short id. Falls back to the raw route id so a
- *  crumb never renders blank while the store is still catching up. */
-function entityCrumb(row: Named, fallbackId: string): { label: string; shortId?: string } {
+/** What a crumb says about an entity the store has not named yet. */
+const KIND_LABELS: Record<NonNullable<CrumbSpec["kind"]>, string> = {
+  section: "",
+  project: "Project",
+  task: "Task",
+  doc: "Doc",
+  plan: "Plan",
+  session: "Session",
+  channel: "Channel",
+};
+
+/** A raw Convex document id: 32 lowercase alphanumerics. */
+const CONVEX_ID = /^[a-z0-9]{32}$/;
+
+/** The name and (separately) the short id. Falls back so a crumb never renders
+ *  blank while the store is still catching up — but never to a raw Convex id:
+ *  that is a handle, not a name. A session is named by its 7-char short form
+ *  (the id every `cast` command and link uses); other kinds have their own
+ *  short ids, so they show only what kind of thing this is until it loads. */
+function entityCrumb(
+  row: Named,
+  fallbackId: string,
+  kind: NonNullable<CrumbSpec["kind"]>,
+): { label: string; shortId?: string } {
   const name = row?.title || row?.name || "";
   const short = row?.short_id;
   if (name) return { label: crumbLabel(name), shortId: short };
-  return { label: crumbLabel(short || fallbackId) };
+  if (short) return { label: crumbLabel(short) };
+  if (CONVEX_ID.test(fallbackId)) {
+    return { label: kind === "session" ? fallbackId.slice(0, 7) : KIND_LABELS[kind] };
+  }
+  return { label: crumbLabel(fallbackId) };
 }
 
 /**
@@ -107,7 +132,7 @@ export function buildBreadcrumbs(pathname: string, lookups: BreadcrumbLookups = 
     lookup: ((id: string) => Named) | undefined,
     href?: string,
   ) => {
-    crumbs.push({ ...entityCrumb(lookup?.(id), id), kind, id, href });
+    crumbs.push({ ...entityCrumb(lookup?.(id), id, kind), kind, id, href });
   };
 
   switch (head) {

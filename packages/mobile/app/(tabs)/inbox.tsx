@@ -1574,6 +1574,23 @@ export default function InboxScreen() {
           </RNView>
         )}
         <RNView style={{ flex: 1 }} />
+        {/* The recorder lives here rather than on a tab of its own: the bar
+            already carries five and a sixth squeezes every label (the same
+            reason chat sits inside Team). The inbox is the landing screen, so
+            this is still one tap from opening the app. The route is cast for
+            the same reason the chat pushes are: expo's typed-route union only
+            regenerates when Metro runs, so a new route is unknown to tsc. */}
+        {!isSearching && (
+          <TouchableOpacity
+            style={styles.recordBtn}
+            onPress={() => router.push({ pathname: '/record' } as never)}
+            activeOpacity={0.7}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityLabel="Record a meeting"
+          >
+            <FontAwesome name="microphone" size={15} color={Theme.textMuted} />
+          </TouchableOpacity>
+        )}
         {!isSearching && (
           <TouchableOpacity style={styles.viewModeBtn} onPress={openViewModePicker} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
             <FontAwesome name={currentViewOption.icon} size={11} color={Theme.textMuted} />
@@ -1737,6 +1754,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: Theme.bg,
+  },
+  recordBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginRight: 4,
   },
   viewModeBtn: {
     flexDirection: 'row',

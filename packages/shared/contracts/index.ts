@@ -21,6 +21,7 @@ export * from "./vaultProtocol";
 export * from "./vaultMirror";
 export * from "./terminalStream";
 export * from "./callRoomKeys";
+export * from "./recordingAudio";
 export * from "./callPush";
 export * from "./transcriptChunk";
 export * from "./convexErrors";

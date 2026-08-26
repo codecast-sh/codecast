@@ -15,7 +15,7 @@
 import { useTeamFeature } from "../../lib/teamFeatures";
 import { TeamFeatureOff } from "../../components/TeamFeatureOff";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -23,7 +23,7 @@ import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { toast } from "sonner";
-import { humanizeConvexError } from "@codecast/shared/contracts";
+import { humanizeConvexError, isRecRoomKey } from "@codecast/shared/contracts";
 import { getRoom, joinCall } from "../../lib/calls/callManager";
 import { useInboxStore } from "../../store/inboxStore";
 import { Facepile } from "../../components/calls/OccupancyChip";
@@ -47,10 +47,14 @@ import {
   ListChecks,
   AlignLeft,
   MessageSquare,
+  Mic,
   Send,
   Sparkles,
   X,
 } from "lucide-react";
+import { getRecorderStatus, startRecording } from "../../lib/calls/recorder";
+import { useRecorderStatus } from "../../hooks/useRecorder";
+import "../../components/calls/recorder.css";
 
 function fmtWhen(ms: number): string {
   const d = new Date(ms);
@@ -70,6 +74,11 @@ function fmtDuration(startedAt: number, endedAt: number | null): string {
 
 function CallListRow({ call, selected }: { call: any; selected: boolean }) {
   const live = call.status === "live";
+  // A recording sits in the same list under the same idiom — it is a call
+  // object like any other — and the glyph is the whole difference: a
+  // microphone rather than a telephone, because one voice in a room is not
+  // the same thing as a huddle.
+  const recording = isRecRoomKey(call.room_key);
   const people: any[] = call.participants || [];
   return (
     <Link
@@ -84,11 +93,13 @@ function CallListRow({ call, selected }: { call: any; selected: boolean }) {
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sol-green opacity-60" />
             <span className="relative inline-flex h-2 w-2 rounded-full bg-sol-green" />
           </span>
+        ) : recording ? (
+          <Mic className="h-3 w-3 shrink-0 text-sol-text-dim" />
         ) : (
           <Phone className="h-3 w-3 shrink-0 text-sol-text-dim" />
         )}
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-sol-text">
-          {call.title || "Untitled huddle"}
+          {call.title || (recording ? "Untitled recording" : "Untitled huddle")}
         </span>
         <span className={`shrink-0 text-[11px] ${live ? "text-sol-green" : "text-sol-text-dim"}`}>
           {fmtDuration(call.started_at, call.ended_at)}
@@ -96,7 +107,17 @@ function CallListRow({ call, selected }: { call: any; selected: boolean }) {
       </div>
       <div className="mt-1 flex items-center gap-2 pl-4">
         <span className="shrink-0 text-[11px] text-sol-text-dim">{fmtWhen(call.started_at)}</span>
-        {people.length > 0 ? (
+        {people.length === 0 ? (
+          <span className="text-[11px] italic text-sol-text-dim">
+            {live
+              ? recording
+                ? "listening"
+                : "no one spoke yet"
+              : recording
+                ? "nothing was said"
+                : "no one spoke"}
+          </span>
+        ) : (
           <span className="min-w-0 truncate text-[11px]">
             {people.map((p: any, i: number) => (
               <span key={p.id} className={speakerColor(p.id)}>
@@ -105,8 +126,6 @@ function CallListRow({ call, selected }: { call: any; selected: boolean }) {
               </span>
             ))}
           </span>
-        ) : (
-          <span className="text-[11px] italic text-sol-text-dim">no one spoke yet</span>
         )}
       </div>
     </Link>
@@ -144,6 +163,9 @@ function CallDetail({ id }: { id: string }) {
   // in real time — segments appear as people speak.
   const call = useQuery(api.transcripts.webGetCall, { transcript_id: id as any });
   const myCall = useInboxStore((s) => s.call);
+  // A recording has no room: nobody can join it, nobody else can see it, and
+  // the room chat those affordances open would have no second person in it.
+  const recording = isRecRoomKey(call?.room_key);
   const sendExcerpt = useSendExcerpt();
   // Live-feed parity with the stage: on a LIVE call this page can point the
   // flowing words at a session/doc too — the transcript already runs (this
@@ -247,12 +269,17 @@ function CallDetail({ id }: { id: string }) {
         {/* Header: what this call was, who spoke, the ways in. */}
         <div className="shrink-0 border-b border-sol-border/20 px-6 py-4">
           <div className="flex items-center gap-2.5">
+            {recording && <Mic className="h-4 w-4 shrink-0 text-sol-text-dim" />}
             <h1 className="min-w-0 truncate text-[17px] font-medium text-sol-text">
-              {call.title || "Untitled huddle"}
+              {call.title || (recording ? "Untitled recording" : "Untitled huddle")}
             </h1>
             {live && (
-              <span className="flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-sol-green">
-                <Radio className="h-3.5 w-3.5" /> LIVE
+              <span
+                className={`flex shrink-0 items-center gap-1.5 text-[11px] font-medium ${
+                  recording ? "text-sol-red" : "text-sol-green"
+                }`}
+              >
+                <Radio className="h-3.5 w-3.5" /> {recording ? "RECORDING" : "LIVE"}
               </span>
             )}
           </div>
@@ -304,9 +331,9 @@ function CallDetail({ id }: { id: string }) {
             )}
             {sentTick && <span className="text-sol-green">{sentTick}</span>}
             <span className="flex-1" />
-            {live && !inThisRoom && (
+            {live && !recording && !inThisRoom && (
               <button
-                onClick={() => void joinCall(call.room_key)}
+                onClick={() => void joinCall(call.room_key, { intent: "deliberate" })}
                 className="flex shrink-0 items-center gap-1.5 rounded-md bg-sol-green/15 px-3 py-1.5 text-xs font-medium text-sol-green transition-colors hover:bg-sol-green/25"
               >
                 <PhoneCall className="h-3.5 w-3.5" /> Join
@@ -321,17 +348,20 @@ function CallDetail({ id }: { id: string }) {
             >
               <Sparkles className="h-3.5 w-3.5" /> Send to agent
             </button>
-            <button
-              onClick={() => setChatOpen((o) => !o)}
-              className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors ${
-                chatOpen
-                  ? "bg-sol-cyan/15 text-sol-cyan"
-                  : "text-sol-text-muted hover:bg-sol-base02 hover:text-sol-text"
-              }`}
-              title="Chat with the room"
-            >
-              <MessageSquare className="h-3.5 w-3.5" /> Chat
-            </button>
+            {/* No room, so no room chat: a recording has nobody else in it. */}
+            {!recording && (
+              <button
+                onClick={() => setChatOpen((o) => !o)}
+                className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors ${
+                  chatOpen
+                    ? "bg-sol-cyan/15 text-sol-cyan"
+                    : "text-sol-text-muted hover:bg-sol-base02 hover:text-sol-text"
+                }`}
+                title="Chat with the room"
+              >
+                <MessageSquare className="h-3.5 w-3.5" /> Chat
+              </button>
+            )}
           </div>
         </div>
 
@@ -369,9 +399,22 @@ function CallDetail({ id }: { id: string }) {
             </div>
           )}
 
+          {call.recording_url && (
+            <div className="mb-5">
+              <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-sol-text-dim">
+                <Mic className="h-3 w-3" /> Audio
+              </div>
+              <audio controls preload="none" src={call.recording_url} className="w-full max-w-lg" />
+            </div>
+          )}
+
           {turns.length === 0 ? (
             <div className="text-sm text-sol-text-dim">
-              {live ? "Listening — the transcript appears as people speak." : "Nothing was transcribed."}
+              {live
+                ? recording
+                  ? "Listening — the transcript appears as people speak. Your microphone hears the room."
+                  : "Listening — the transcript appears as people speak."
+                : "Nothing was transcribed."}
             </div>
           ) : (
             <>
@@ -498,6 +541,54 @@ function LiveNowSection({ transcribedRoomKeys }: { transcribedRoomKeys: Set<stri
   );
 }
 
+/**
+ * Start a recording. The only way one ever begins on this page, and it says in
+ * as many words where the sound comes from: a microphone in a room, not a tap
+ * on the meeting software. Once running, the pill takes over — this button
+ * points at the transcript instead of offering a second stop control that
+ * could disagree with the one people already found.
+ */
+function RecordMeetingButton() {
+  const status = useRecorderStatus();
+  const router = useRouter();
+  const running = status.phase === "recording" || status.phase === "stopping";
+  const starting = status.phase === "starting";
+
+  if (running) {
+    return (
+      <button
+        onClick={() => status.transcriptId && router.push(`/calls/${status.transcriptId}`)}
+        className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-md border border-sol-red/50 bg-sol-red/12 px-3 py-2 text-xs font-medium text-sol-red transition-colors hover:bg-sol-red/20"
+      >
+        <span className="rec-pill-dot" aria-hidden="true" />
+        Recording — open the transcript
+      </button>
+    );
+  }
+
+  return (
+    <button
+      onClick={() =>
+        void startRecording().then((id) => {
+          // A refused microphone is the common failure and the pill is not up
+          // to carry the news — nothing started, so nothing is showing.
+          if (id) router.push(`/calls/${id}`);
+          else if (getRecorderStatus().error) toast.error(getRecorderStatus().error!);
+        })
+      }
+      disabled={starting}
+      title="Records what your microphone hears — the room, and anything playing through your speakers"
+      className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-md bg-sol-red/15 px-3 py-2 text-xs font-medium text-sol-red transition-colors hover:bg-sol-red/25 disabled:opacity-50"
+    >
+      <Mic className="h-3.5 w-3.5" />
+      {/* The wait here is a person deciding, not a machine working: Chrome is
+          asking them for the microphone and nothing moves until they answer.
+          Saying "Starting…" made an unanswered prompt look like a hang. */}
+      {starting ? "Waiting for the microphone" : "Record a meeting"}
+    </button>
+  );
+}
+
 export default function CallsPage() {
   const params = useParams() as { id?: string };
   const selectedId = params?.id ?? null;
@@ -533,7 +624,13 @@ export default function CallsPage() {
             <div className="shrink-0 border-b border-sol-border/20 px-4 py-3">
               <h2 className="text-sm font-medium text-sol-text">Calls</h2>
               <p className="mt-0.5 text-[11px] text-sol-text-dim">
-                Transcribed huddles — also via <code className="text-sol-cyan">cast calls</code>
+                Transcribed huddles and recordings — also via{" "}
+                <code className="text-sol-cyan">cast calls</code>
+              </p>
+              <RecordMeetingButton />
+              <p className="mt-1.5 text-[10.5px] leading-snug text-sol-text-dim/80">
+                Records from your microphone. A recording is yours alone — no
+                one else on the team can open it.
               </p>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
@@ -542,8 +639,10 @@ export default function CallsPage() {
                 <div className="p-4 text-[12px] text-sol-text-dim">Loading…</div>
               ) : calls.length === 0 ? (
                 <div className="p-4 text-[12px] leading-relaxed text-sol-text-dim">
-                  No calls yet. Start a huddle and toggle Transcribe — the call
-                  lands here with a live transcript and, when it ends, a summary.
+                  Nothing here yet. Start a huddle and toggle Transcribe, or
+                  record the meeting in the room around you — either lands here
+                  with a live transcript and, when it ends, a summary and
+                  action items.
                 </div>
               ) : (
                 <>

@@ -15,7 +15,8 @@ import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilit
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, stableHostname } from "./remote/device.js";
 import { readInputIdleMs } from "./inputIdle.js";
-import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
+import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredential, type RemoteHost } from "./remote/session-move.js";
+import { listCloudRemoteHosts, sshReachable } from "./browser/cloudHost.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import { GIT_PLANE_REPORT_CAP, repoRootFor, sweepGitPlane, type RepoPlaneState } from "./gitPlane.js";
@@ -2015,20 +2016,42 @@ let remoteCredPushInFlight = false;
 let lastPushedCredHash: string | null = null;
 let lastCredSkipReason: string | null = null;
 
+/**
+ * Every transfer host worth pushing to right now: the Scaleway Macs plus any
+ * cloud (AWS) box that is actually AWAKE. Reachability is a TCP probe of port
+ * 22, never an AWS call and never a wake — a box that put itself to sleep must
+ * not be booted (and billed) just to receive a credential it will re-receive
+ * at the next move anyway (refreshRemoteCredential runs at move time, and
+ * provisioning pushes one too).
+ */
+async function reachableTransferHosts(): Promise<RemoteHost[]> {
+  const candidates = [...listScalewayHosts(), ...listCloudRemoteHosts()];
+  if (!candidates.length) return [];
+  const probes = await Promise.all(candidates.map((h) => sshReachable(h)));
+  return candidates.filter((_, i) => probes[i]);
+}
+
 async function pushCredentialToRemoteHosts(
   reason: string,
   opts: { onlyIfChanged?: boolean } = {},
 ): Promise<void> {
-  if (isRemoteDevice() || remoteCredPushInFlight || !remoteHostsRegistered()) return;
+  if (isRemoteDevice() || remoteCredPushInFlight) return;
   remoteCredPushInFlight = true;
   try {
-    const host = loadRemoteHost();
     if (opts.onlyIfChanged) {
       const gate = readPushableCredential();
       const hash = gate.cred ? createHash("sha256").update(gate.cred).digest("hex") : null;
       if (hash !== null && hash === lastPushedCredHash) return; // in step — the common case
     }
-    const res = await copyCredentialToRemoteAsync(host);
+    const hosts = await reachableTransferHosts();
+    if (!hosts.length) return;
+    let res: Awaited<ReturnType<typeof copyCredentialToRemoteAsync>> | null = null;
+    for (const host of hosts) {
+      res = await copyCredentialToRemoteAsync(host);
+      if (!res.pushed) break; // an unpushable credential is unpushable everywhere
+      log(`[REMOTE-AUTH] pushed fresh credential to ${host.user}@${host.address} (${reason})`);
+    }
+    if (!res) return;
     if (!res.pushed) {
       // Log a skip once per distinct reason, not every 60s tick: the state is
       // what matters ("local login is down"), not the polling.
@@ -2042,7 +2065,6 @@ async function pushCredentialToRemoteHosts(
     const hash = createHash("sha256").update(res.cred!).digest("hex");
     const changed = hash !== lastPushedCredHash;
     lastPushedCredHash = hash;
-    log(`[REMOTE-AUTH] pushed fresh credential to ${host.user}@${host.address} (${reason}${changed ? ", changed" : ""})`);
     // A changed credential is the recovery event for remote sessions parked on
     // "Login expired" (CC re-reads the store on its next turn) — nudge them.
     if (changed && syncServiceRef) {
@@ -2070,18 +2092,21 @@ function readLocalProviderKeysBlob(): string | null {
 }
 
 async function pushProviderKeysToRemoteHosts(reason: string, opts: { onlyIfChanged?: boolean } = {}): Promise<void> {
-  if (isRemoteDevice() || remoteKeysPushInFlight || !remoteHostsRegistered()) return;
+  if (isRemoteDevice() || remoteKeysPushInFlight) return;
   remoteKeysPushInFlight = true;
   try {
     const blob = readLocalProviderKeysBlob();
     const hash = blob === null ? "∅" : createHash("sha256").update(blob).digest("hex");
     if (opts.onlyIfChanged && hash === lastPushedKeysHash) return; // in step — the common case
-    const host = loadRemoteHost();
-    await copyProviderKeysToRemoteAsync(host, blob);
+    const hosts = await reachableTransferHosts();
+    if (!hosts.length) return;
+    for (const host of hosts) {
+      await copyProviderKeysToRemoteAsync(host, blob);
+    }
     const changed = hash !== lastPushedKeysHash;
     lastPushedKeysHash = hash;
     if (changed) {
-      log(`[REMOTE-KEYS] pushed provider keys to ${host.user}@${host.address} (${reason}${blob === null ? ", cleared" : ""})`);
+      log(`[REMOTE-KEYS] pushed provider keys to ${hosts.map((h) => `${h.user}@${h.address}`).join(", ")} (${reason}${blob === null ? ", cleared" : ""})`);
     }
   } catch (err) {
     log(`[REMOTE-KEYS] provider-key push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);

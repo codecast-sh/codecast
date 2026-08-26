@@ -189,6 +189,22 @@ export function TriggerContextPanel({
     (agentTaskId === primary._id ||
       primary.last_run_conversation_id === conversationId ||
       (!!sessionId && primary.last_run_session_uuid === sessionId));
+  // Where this trigger came from: the stamped creator session, else the
+  // session it injects into (triggers that predate the created_by stamp, or
+  // whose creator detection failed — e.g. `cast trigger add` run through
+  // tmux, where process ancestry ends at the tmux server). Never the page
+  // being viewed.
+  const creatorId =
+    (primary.created_by_conversation_id !== conversationId
+      ? primary.created_by_conversation_id
+      : undefined) ??
+    (primary.originating_conversation_id !== conversationId
+      ? primary.originating_conversation_id
+      : undefined);
+  const creatorTitle =
+    creatorId === primary.created_by_conversation_id
+      ? primary.created_by_conversation_title
+      : primary.originating_conversation_title;
   const cadence = isLoop ? "self-paced loop" : describeTaskCadence(primary);
   const msUntil = primary.run_at !== undefined ? primary.run_at - now : undefined;
   const extraCount = matched.length - 1;
@@ -284,28 +300,24 @@ export function TriggerContextPanel({
         {/* Provenance: the session that armed this trigger — visible without
             expanding, since on a run's page "where did this come from" is the
             first question. Hidden on the creator itself (the strip's presence
-            already says it). A span, not a button: the row is a <button> and
-            nested buttons are invalid HTML. */}
-        {primary.created_by_conversation_id &&
-          primary.created_by_conversation_id !== conversationId && (
-            <ShortcutTooltip label="Open the session that created this trigger">
-              <span
-                role="link"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  useInboxStore
-                    .getState()
-                    .requestNavigate(primary.created_by_conversation_id!);
-                }}
-                className="inline-flex items-center gap-0.5 min-w-0 flex-shrink text-sol-cyan hover:underline"
-              >
-                <span className="truncate">
-                  from {primary.created_by_conversation_title || "session"}
-                </span>
-                <ArrowUpRight className="w-3 h-3 flex-shrink-0" />
-              </span>
-            </ShortcutTooltip>
-          )}
+            already says it). A chip that never shrinks away: the title
+            truncates first, the way home never does. A span, not a button:
+            the row is a <button> and nested buttons are invalid HTML. */}
+        {creatorId && (
+          <ShortcutTooltip label="Open the session that created this trigger">
+            <span
+              role="link"
+              onClick={(e) => {
+                e.stopPropagation();
+                useInboxStore.getState().requestNavigate(creatorId);
+              }}
+              className="inline-flex items-center gap-1 flex-shrink-0 max-w-[18rem] px-1.5 py-px rounded border border-sol-cyan/40 bg-sol-cyan/10 text-sol-cyan hover:bg-sol-cyan/20 transition-colors"
+            >
+              <span className="truncate">from {creatorTitle || "session"}</span>
+              <ArrowUpRight className="w-3 h-3 flex-shrink-0" />
+            </span>
+          </ShortcutTooltip>
+        )}
         <div className="flex items-center gap-1.5 ml-auto flex-shrink-0">
           {rightStatus}
           {expanded ? (

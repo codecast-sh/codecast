@@ -14,6 +14,7 @@ import { ImageLightbox } from "./ImageGallery";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { shouldShowSession, isWarmupSession } from "../lib/sessionFilters";
 import { useInboxStore, useTrackedStore, sessionsWakeSig, isAgentActive, sortSessions, feedPagePersistence, type InboxSession } from "../store/inboxStore";
+import { feedCoverMetaKey, newestTs, oldestTs, planFeedCatchup, walkStep, FEED_CATCHUP_PAGE_LIMIT, FEED_CATCHUP_MAX_PAGES } from "../lib/feedCatchup";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
@@ -648,6 +649,87 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
   useEffect(() => {
     if (live) mergeFeed(key, live.conversations);
   }, [live, key, mergeFeed]);
+
+  // --- Absence-gap catch-up (lib/feedCatchup). The cache only ever grows at
+  // its ends (live head + deep "Load more" cursor), so time away opens a hole
+  // in the middle that no scroll can reach — the feed then shows "Today, then
+  // July" and looks exhaustive while silently missing weeks. On each app run,
+  // once per key: check the live page against the persisted covered watermark
+  // and, if they don't connect, walk pages from the head until they do. ---
+  const hydrated = useInboxStore((s) => s.clientStateInitialized);
+  const catchupState = useRef<Record<string, "pending" | "walking" | "contiguous">>({});
+  useEffect(() => {
+    if (!hydrated || !live) return;
+    const rows = (live.conversations ?? []) as Conversation[];
+    // An empty live page is indistinguishable from an auth blip — decide
+    // nothing from it (an empty team has no holes to miss).
+    if (rows.length === 0) return;
+    const top = newestTs(rows);
+    const state = catchupState.current[key] ?? "pending";
+    const stamp = () => {
+      const st = useInboxStore.getState();
+      const prev = st.syncMeta[feedCoverMetaKey(key)]?.cursor;
+      if (top != null && (prev === undefined || top > prev)) st.recordSyncMeta(feedCoverMetaKey(key), { cursor: top });
+    };
+    if (state === "contiguous") {
+      // The live subscription keeps the head covered while mounted — rows that
+      // fall off the newest page are already cached — so every push advances
+      // the watermark.
+      stamp();
+      return;
+    }
+    if (state === "walking") return;
+    const coveredTo = useInboxStore.getState().syncMeta[feedCoverMetaKey(key)]?.cursor;
+    const liveOldest = oldestTs(rows);
+    const cached = (useInboxStore.getState().feedConversations[key] ?? []) as Conversation[];
+    const plan = planFeedCatchup({
+      coveredTo,
+      livePageFull: rows.length >= FEED_PAGE_SIZE || live.nextCursor != null,
+      liveOldest,
+      cacheHasRowsBelowLive: liveOldest != null && cached.some((c) => (c.updated_at ?? 0) < liveOldest),
+    });
+    if (plan === "contiguous") {
+      catchupState.current[key] = "contiguous";
+      stamp();
+      return;
+    }
+    catchupState.current[key] = "walking";
+    (async () => {
+      try {
+        let cursor: string | null = live.nextCursor ?? null;
+        let settled = cursor === null; // full page + no continuation = nothing below
+        for (let hop = 0; hop < FEED_CATCHUP_MAX_PAGES && !settled && cursor !== null; hop++) {
+          const page: { conversations?: unknown[]; nextCursor?: string | null } =
+            await convex.query(api.conversations.listConversations, { ...queryArgs, cursor, limit: FEED_CATCHUP_PAGE_LIMIT });
+          const pageRows = (page.conversations ?? []) as Conversation[];
+          mergeFeed(key, pageRows);
+          const step = walkStep({ coveredTo, pageOldest: oldestTs(pageRows), nextCursor: page.nextCursor ?? null });
+          if (step === "abort") { catchupState.current[key] = "pending"; return; }
+          if (step === "end") {
+            // True end-of-history reached while filling the gap: the walk now
+            // covers everything — record honest end for the scroll pagination.
+            const persist = feedPagePersistence({ rowCount: pageRows.length, nextCursor: null });
+            if (persist.cursor !== undefined) setFeedCursor(key, persist.cursor);
+            setFeedHasMore(key, persist.hasMore);
+          }
+          if (step !== "continue") settled = true;
+          else cursor = page.nextCursor ?? null;
+        }
+        if (!settled && cursor !== null) {
+          // Budget spent above the covered band (giant gap, or a legacy cache
+          // with no watermark): adopt the walk frontier as the new deep cursor.
+          // Deeper cached rows stay visible, and scrolling re-examines
+          // everything below the frontier (dupes merge), so nothing is skipped.
+          setFeedCursor(key, cursor);
+          setFeedHasMore(key, true);
+        }
+        catchupState.current[key] = "contiguous";
+        stamp();
+      } catch {
+        catchupState.current[key] = "pending"; // transient — retry on the next live push
+      }
+    })();
+  }, [live, key, hydrated, convex, queryArgs, mergeFeed, setFeedCursor, setFeedHasMore]);
   // Seed "older pages remain" once; afterwards loadMore maintains it. A full
   // first page (or a non-null cursor) means older pages exist; < a full page
   // means we already have everything.
@@ -682,8 +764,10 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
     try {
       const seen = new Set(liveRows.map((c) => c._id));
       for (let hop = 0; hop < 5; hop++) {
+        // Bigger pages than the live query's 20: crossing a band the client
+        // already has (per-member cursor re-serves) costs hops, not pixels.
         const page: { conversations?: unknown[]; nextCursor?: string | null } =
-          await convex.query(api.conversations.listConversations, { ...queryArgs, cursor });
+          await convex.query(api.conversations.listConversations, { ...queryArgs, cursor, limit: FEED_CATCHUP_PAGE_LIMIT });
         const rows = (page.conversations ?? []) as Conversation[];
         mergeFeed(key, rows);
         const next = page.nextCursor ?? null;

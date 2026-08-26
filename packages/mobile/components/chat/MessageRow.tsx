@@ -40,6 +40,10 @@ export type ChatAuthorLite = {
   name: string;
   avatarUrl?: string;
   isAgent?: boolean;
+  /** A codecast session typed the line while running as its human: the row
+   *  personifies the session (name is the session title, agent identity for the
+   *  face) and credits the human in a dim "via". Mirrors web's ChatAuthor. */
+  session?: { agentType?: string; via?: string };
 };
 
 export type MobileChatMessage = {
@@ -160,8 +164,11 @@ export const MessageRow = memo(function MessageRow({
             <RNText style={styles.author} numberOfLines={1}>{author.name}</RNText>
             {author.isAgent && (
               <RNView style={styles.agentChip}>
-                <RNText style={styles.agentChipText}>AGENT</RNText>
+                <RNText style={styles.agentChipText}>{author.session ? 'SESSION' : 'AGENT'}</RNText>
               </RNView>
+            )}
+            {!!author.session?.via && (
+              <RNText style={styles.time} numberOfLines={1}>via {author.session.via}</RNText>
             )}
             <RNText style={styles.time}>{clock(message.createdAt)}</RNText>
           </RNView>
