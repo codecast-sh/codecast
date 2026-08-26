@@ -3,7 +3,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useCurrentUser } from "../hooks/useCurrentUser";
-import { useInboxStore, isConvexId, resolveComposeProjectPath } from "../store/inboxStore";
+import { useInboxStore, isConvexId, resolveComposeProjectPath, bucketProjectPath } from "../store/inboxStore";
 import { NewSessionView, MessageInput, ConversationData } from "./ConversationView";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { formatShortcutParts } from "../shortcuts";
@@ -93,7 +93,8 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef }: {
       context,
       conversation: ctx,
       activeProjectFilter: store.activeProjectFilter,
-      activeProjectPath: store.activeProjectPath,
+      // A label chip nulls activeProjectPath; derive its directory instead.
+      activeProjectPath: store.activeProjectPath ?? bucketProjectPath(store),
       chipFilterExclude: store.chipFilterExclude,
       recentProjects: store.recentProjects,
       machineRoster: store.machineRoster,
