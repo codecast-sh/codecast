@@ -17897,13 +17897,19 @@ function startLoopFreezeProbe(): NodeJS.Timeout {
   // else can observe. Draining the buffer every tick keeps it bounded; when a
   // tick arrives late, the drained traces cover the freeze and name the code.
   let drainTraces: (() => unknown) | null = null;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const jsc = require("bun:jsc");
-    jsc.startSamplingProfiler(process.env.TMPDIR || "/tmp");
-    drainTraces = () => jsc.samplingProfilerStackTraces();
-    drainTraces(); // discard everything sampled before the probe started
-  } catch {}
+  // darwin only: startSamplingProfiler SEGFAULTS bun on Linux (verified on
+  // 1.3.14 and 1.4.0, x64 — a native crash the try/catch cannot contain, which
+  // killed the remote daemon 300ms into every boot). The freeze probe below
+  // still runs without it; it just cannot name the code that pinned the loop.
+  if (process.platform === "darwin") {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const jsc = require("bun:jsc");
+      jsc.startSamplingProfiler(process.env.TMPDIR || "/tmp");
+      drainTraces = () => jsc.samplingProfilerStackTraces();
+      drainTraces(); // discard everything sampled before the probe started
+    } catch {}
+  }
   let lastProbe = Date.now();
   let lastCpu = process.cpuUsage();
   // Snapshot of lastLogLine at the previous tick: the newest line written

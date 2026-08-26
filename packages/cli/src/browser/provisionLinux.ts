@@ -13,7 +13,7 @@
  *   3. An idle watchdog. The box powers itself off after N minutes with no
  *      inbound SSH, no Chrome, no Claude and no viewer. EC2 turns an OS
  *      shutdown into a "stopped" instance, so idle time costs only the disk.
- *   4. A codecast daemon. A cross-compiled `cast` binary runs as a systemd
+ *   4. A codecast daemon. The bundled cast CLI runs under bun as a systemd
  *      service with CODECAST_REMOTE_DEVICE=1, registering the box as a remote
  *      device sessions can be moved to (`cast remote move`).
  *
@@ -28,7 +28,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RemoteHost } from "../remote/session-move.js";
-import { copyCredentialToRemote } from "../remote/session-move.js";
+import { copyCredentialToRemote, ensureRemoteClaudeReady } from "../remote/session-move.js";
 import { remoteExec, scpTo } from "./remote.js";
 import { decryptToken } from "../tokenEncryption.js";
 
@@ -211,30 +211,38 @@ echo DAEMON-UNIT-OK`;
 }
 
 /**
- * Cross-compile the cast CLI for the box.
+ * Build the cast bundles the box runs.
  *
- * Only possible when this cast runs from source (dev checkout) — a compiled
- * cast cannot rebuild itself. bun embeds the Linux runtime, so the box needs
- * no bun, no node, no npm: one file is the whole CLI + daemon.
+ * NOT a compiled standalone binary: bun's --compile output segfaults on Linux
+ * inside the daemon path (verified on both the modern and baseline x64
+ * targets — a JSC crash in the standalone runtime). The box instead gets the
+ * same shape the npm package ships — the bundled dist entrypoints — run under
+ * a real bun install. dist is self-contained (workspace deps inlined), so the
+ * box needs bun plus these two files, nothing else; ~8MB instead of a 95MB
+ * binary, which matters on a slow uplink.
+ *
+ * Only possible when this cast runs from a source checkout.
  */
-export function buildLinuxCast(onProgress: (m: string) => void): string {
+export function buildLinuxCast(onProgress: (m: string) => void): { indexJs: string; daemonJs: string } {
   const here = path.dirname(fileURLToPath(import.meta.url)); // .../packages/cli/src/browser
   const cliRoot = path.resolve(here, "..", "..");
   const entry = path.join(cliRoot, "src", "index.ts");
   if (!fs.existsSync(entry)) {
     throw new Error(
-      "cast is not running from a source checkout, so it cannot cross-compile itself.\n" +
-        "  Run provisioning from the dev checkout (bun src/index.ts), or scp a linux build to the host yourself.",
+      "cast is not running from a source checkout, so it cannot build itself for the box.\n" +
+        "  Run provisioning from the dev checkout (bun src/index.ts).",
     );
   }
-  const out = path.join(os.tmpdir(), "cast-linux-x64");
-  onProgress("cross-compiling cast for linux (bun --compile)…");
-  execFileSync("bun", ["build", entry, "--compile", "--target=bun-linux-x64", `--outfile=${out}`], {
+  onProgress("building cast bundles (dist)…");
+  execFileSync("bun", ["run", "build"], {
     cwd: cliRoot,
     stdio: ["ignore", "ignore", "pipe"],
     timeout: 300_000,
   });
-  return out;
+  return {
+    indexJs: path.join(cliRoot, "dist", "index.js"),
+    daemonJs: path.join(cliRoot, "dist", "daemon.js"),
+  };
 }
 
 /**
@@ -289,10 +297,29 @@ export async function provisionLinuxHost(
   const base = runScript(host, baseProvisionScript(opts.idleStopMinutes), 600_000);
   if (!base.includes("PROVISION-BASE-OK")) throw new Error(`base provisioning did not complete:\n${base.slice(-800)}`);
 
-  const bin = buildLinuxCast(onProgress);
-  onProgress("uploading cast binary…");
-  scpTo(host, bin, "/tmp/cast-linux");
-  remoteExec(host, "sudo install -m 755 /tmp/cast-linux /usr/local/bin/cast && rm -f /tmp/cast-linux", 60_000);
+  onProgress("installing bun runtime…");
+  remoteExec(
+    host,
+    "command -v ~/.bun/bin/bun >/dev/null 2>&1 || " +
+      "(sudo apt-get install -y -qq unzip >/dev/null 2>&1; curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1); " +
+      "~/.bun/bin/bun --version",
+    300_000,
+  );
+
+  const bundles = buildLinuxCast(onProgress);
+  onProgress("uploading cast bundles…");
+  scpTo(host, bundles.indexJs, "/tmp/cast-index.js");
+  scpTo(host, bundles.daemonJs, "/tmp/cast-daemon.js");
+  remoteExec(
+    host,
+    "sudo mkdir -p /usr/local/lib/codecast && " +
+      "sudo install -m 644 /tmp/cast-index.js /usr/local/lib/codecast/index.js && " +
+      "sudo install -m 644 /tmp/cast-daemon.js /usr/local/lib/codecast/daemon.js && " +
+      "rm -f /tmp/cast-index.js /tmp/cast-daemon.js && " +
+      `printf '#!/usr/bin/env bash\\nexec /home/${host.user}/.bun/bin/bun /usr/local/lib/codecast/index.js "$@"\\n' | sudo tee /usr/local/bin/cast >/dev/null && ` +
+      "sudo chmod 755 /usr/local/bin/cast",
+    60_000,
+  );
 
   onProgress("installing claude…");
   remoteExec(
@@ -306,6 +333,37 @@ export async function provisionLinuxHost(
   pushCodecastConfig(host);
   const cred = copyCredentialToRemote(host);
   if (!cred.pushed) onProgress(`  (claude credential not pushed: ${cred.reason} — sessions there will need a healthy local login)`);
+
+  // Accept claude's bypass-permissions dialog ONCE, so a moved session's
+  // resume never parks on it. The acceptance is not a config flag any more
+  // (verified on 2.1.246: the documented ~/.claude.json flag was set and the
+  // dialog appeared anyway; after one interactive accept it never returns) —
+  // so the only reliable pre-acceptance IS an interactive one, scripted:
+  // launch claude in tmux, wait for the dialog, choose "Yes, I accept", quit.
+  if (cred.pushed) {
+    onProgress("pre-accepting claude's bypass-permissions dialog…");
+    ensureRemoteClaudeReady(host, `${host.homeDir ?? `/home/${host.user}`}/work`);
+    const accept = remoteExec(
+      host,
+      `mkdir -p ~/work && tmux kill-session -t cast-accept 2>/dev/null; tmux new -d -s cast-accept &&
+       tmux send-keys -t cast-accept 'cd ~/work && env -u CLAUDECODE claude --permission-mode bypassPermissions' Enter
+       outcome=timeout
+       for i in $(seq 1 30); do
+         pane=$(tmux capture-pane -p -t cast-accept 2>/dev/null)
+         if echo "$pane" | grep -q "bypass permissions on"; then outcome=ready; break; fi
+         if echo "$pane" | grep -q "Yes, I accept"; then
+           sleep 1; tmux send-keys -t cast-accept Down; sleep 1; tmux send-keys -t cast-accept Enter
+         fi
+         sleep 2
+       done
+       tmux kill-session -t cast-accept 2>/dev/null
+       echo "accept=$outcome"`,
+      120_000,
+    );
+    if (!accept.includes("accept=ready")) {
+      onProgress("  (could not confirm the acceptance — the first moved session may need one manual Enter)");
+    }
+  }
 
   let device = "daemon skipped";
   if (!opts.skipDaemon) {
