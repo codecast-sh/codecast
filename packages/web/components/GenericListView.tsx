@@ -27,7 +27,10 @@ import {
   ArrowDown,
   RotateCcw,
   BookmarkPlus,
+  Forward,
 } from "lucide-react";
+import { openForwardToChat } from "../lib/forwardToChat";
+import { useTeamFeature } from "../lib/teamFeatures";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 
 export interface ListTab {
@@ -680,6 +683,7 @@ export function GenericListView<T>({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
+  const chatOn = useTeamFeature("chat");
   const copyViewLink = useCallback(async () => {
     if (!shareUrl) return;
     const url = shareUrl();
@@ -1334,6 +1338,16 @@ export function GenericListView<T>({
               >
                 <Link2 className="w-3 h-3 flex-shrink-0" />
                 <span className="cq-header-collapse">Link</span>
+              </button>
+            )}
+            {shareUrl && chatOn && (
+              <button
+                onClick={() => openForwardToChat({ url: shareUrl(), label: "view" })}
+                title="Send this view to chat"
+                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-[10px] text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors"
+              >
+                <Forward className="w-3 h-3 flex-shrink-0" />
+                <span className="cq-header-collapse">Send</span>
               </button>
             )}
             {/* You changed the filters while inside a saved view. Offer to fold

@@ -1,7 +1,10 @@
 import { useState } from "react";
+import { Forward } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { copyToClipboard } from "../lib/utils";
+import { openForwardToChat } from "../lib/forwardToChat";
+import { useTeamFeature } from "../lib/teamFeatures";
 import { toast } from "sonner";
 
 interface SharePopoverProps {
@@ -15,6 +18,10 @@ interface SharePopoverProps {
   shareUrl: string | null;
   /** Internal, auth-required page URL. When provided, a "Page link" row is shown above the public link. */
   pageUrl?: string;
+  /** Link a forward-to-chat sends; defaults to pageUrl. */
+  forwardUrl?: string;
+  /** What the forwarded thing is, for the picker title (e.g. "session"). */
+  forwardLabel?: string;
 }
 
 type VisibilityMode = "private" | "summary" | "full";
@@ -48,7 +55,10 @@ export function SharePopover({
   onGenerateShareLink,
   shareUrl,
   pageUrl,
+  forwardUrl,
+  forwardLabel,
 }: SharePopoverProps) {
+  const chatOn = useTeamFeature("chat");
   const [isOpen, setIsOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [isGeneratingLink, setIsGeneratingLink] = useState(false);
@@ -255,6 +265,19 @@ export function SharePopover({
               </div>
             )}
           </div>
+
+          {chatOn && (forwardUrl || pageUrl) && (
+            <button
+              onClick={() => {
+                setIsOpen(false);
+                openForwardToChat({ url: (forwardUrl || pageUrl)!, label: forwardLabel });
+              }}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs bg-sol-bg-alt hover:bg-sol-border text-sol-text-secondary rounded transition-colors"
+            >
+              <Forward className="w-3.5 h-3.5" />
+              Send to chat…
+            </button>
+          )}
         </div>
       </PopoverContent>
     </Popover>

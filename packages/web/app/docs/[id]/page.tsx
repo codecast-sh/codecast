@@ -274,6 +274,7 @@ function DocDetailContent() {
                 hasShareToken={!!(doc as any).share_token}
                 shareUrl={(doc as any).share_token ? `${shareOrigin()}/share/doc/${(doc as any).share_token}` : null}
                 pageUrl={canonicalUrl()}
+                forwardLabel="doc"
                 onGenerateShareLink={async () => {
                   const result = await generateShareLink({ id: doc._id as any });
                   return `${shareOrigin()}/share/doc/${result.share_token}`;

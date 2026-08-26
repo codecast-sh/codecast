@@ -187,6 +187,8 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
       onSetTeamVisibility={(mode) => { setTeamVisibility(convId, mode); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
       onGenerateShareLink={async () => { const token = await generateShareLink({ conversation_id: convId }); return `${shareOrigin()}/conversation/${convId}?share=${encodeURIComponent(token)}`; }}
       shareUrl={shareUrl}
+      forwardUrl={`${shareOrigin()}/conversation/${convId}`}
+      forwardLabel="session"
     />
   ) : null;
 

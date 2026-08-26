@@ -82,9 +82,17 @@ import { TriggerPromptView } from "./TriggerPromptView";
 import { CollapsibleBody, ExpandableLine } from "./CollapsibleBody";
 import { monitorRowsFor, effectiveMonitorStatus, isWatchHostDead, reportSaysDead, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, isOrphanSummaryNotification, monitorNotificationDescription, decodeEntities, type MonitorStatus } from "./monitorRows";
 
+function messageLink(conversationId: string | undefined, messageId: string) {
+  return `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;
+}
+
 function copyMessageLink(conversationId: string | undefined, messageId: string) {
-  const url = `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;
+  const url = messageLink(conversationId, messageId);
   setTimeout(() => { copyToClipboard(url).then(() => toast.success("Link copied!")).catch(() => toast.error("Failed to copy link")); });
+}
+
+function forwardMessageToChat(conversationId: string | undefined, messageId: string) {
+  openForwardToChat({ url: messageLink(conversationId, messageId), label: "message" });
 }
 
 function extractTextFromHast(node: any): string {
@@ -193,7 +201,9 @@ import { setupDesktopDrag, desktopHeaderClass, isDetachedTabWindow } from "../li
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward } from "lucide-react";
+import { openForwardToChat } from "../lib/forwardToChat";
+import { useTeamFeature } from "../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
 import { useDevices, useDeviceMoveStatus, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, type Device } from "./DeviceBadge";
 import { defaultMachineId, dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection, resolveScopedProjects } from "../lib/machinePicker";
@@ -7532,6 +7542,8 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   };
 
   const handleCopyLink = () => copyMessageLink(conversationId, messageId);
+  const chatOn = useTeamFeature("chat");
+  const handleForwardToChat = () => forwardMessageToChat(conversationId, messageId);
 
   const handleToggleExpand = () => {
     setIsExpanded(!isExpanded);
@@ -7548,6 +7560,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           <>
             <CtxItem icon={CopyIcon} onSelect={handleCopy}>Copy message</CtxItem>
             <CtxItem icon={Link2} onSelect={handleCopyLink}>Copy link to message</CtxItem>
+            {chatOn && <CtxItem icon={Forward} onSelect={handleForwardToChat}>Send to chat…</CtxItem>}
             <CtxItem icon={BookmarkIcon} onSelect={handleToggleBookmark}>
               {isBookmarked ? "Remove bookmark" : "Bookmark message"}
             </CtxItem>
@@ -7586,6 +7599,16 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
           </svg>
         </button>
+        {chatOn && (
+          <button
+            onClick={handleForwardToChat}
+            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+            title="Send to chat"
+            aria-label="Send to chat"
+          >
+            <Forward className="w-4 h-4" />
+          </button>
+        )}
         <button
           onClick={handleToggleBookmark}
           className={`p-1.5 rounded hover:bg-sol-bg-alt ${isBookmarked ? "text-amber-400" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
@@ -8369,6 +8392,8 @@ function AssistantBlockImpl({
   };
 
   const handleCopyLink = () => copyMessageLink(conversationId, messageId);
+  const chatOn = useTeamFeature("chat");
+  const handleForwardToChat = () => forwardMessageToChat(conversationId, messageId);
 
   // Show Claude header for first message in sequence (regardless of content type)
   const shouldShowHeader = showHeader;
@@ -8403,6 +8428,7 @@ function AssistantBlockImpl({
           <>
             <CtxItem icon={CopyIcon} onSelect={handleCopy}>Copy message</CtxItem>
             <CtxItem icon={Link2} onSelect={handleCopyLink}>Copy link to message</CtxItem>
+            {chatOn && <CtxItem icon={Forward} onSelect={handleForwardToChat}>Send to chat…</CtxItem>}
             <CtxItem icon={BookmarkIcon} onSelect={handleToggleBookmark}>
               {isBookmarked ? "Remove bookmark" : "Bookmark message"}
             </CtxItem>
@@ -8455,6 +8481,16 @@ function AssistantBlockImpl({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
             </svg>
           </button>
+          {chatOn && (
+            <button
+              onClick={handleForwardToChat}
+              className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+              title="Send to chat"
+              aria-label="Send to chat"
+            >
+              <Forward className="w-4 h-4" />
+            </button>
+          )}
           {onStartShareSelection && (
             <button
               onClick={() => onStartShareSelection(messageId)}
@@ -9008,6 +9044,8 @@ function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationI
   };
 
   const handleCopyLink = () => messageId && copyMessageLink(conversationId, messageId);
+  const chatOn = useTeamFeature("chat");
+  const handleForwardToChat = () => messageId && forwardMessageToChat(conversationId, messageId);
 
   const title = content.match(/^#\s+(.+)$/m)?.[1] || "Plan";
 
@@ -9047,6 +9085,11 @@ function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationI
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
               </svg>
+            </button>
+          )}
+          {chatOn && messageId && (
+            <button onClick={handleForwardToChat} className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors" title="Send to chat">
+              <Forward className="w-3.5 h-3.5" />
             </button>
           )}
           {isRealMessageId && conversationId && (
@@ -12079,6 +12122,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
   const [shareIncludeConversation, setShareIncludeConversation] = useState(false);
+  const chatOn = useTeamFeature("chat");
   const [isImageLightboxActive, setIsImageLightboxActive] = useState(false);
   const [stickyMsgVisible, setStickyMsgVisible] = useState(false);
   const [stickyExpanded, setStickyExpanded] = useState(false);
@@ -12498,7 +12542,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setShareIncludeConversation(false);
   }, []);
 
-  const handleConfirmShare = useCallback(async () => {
+  const handleConfirmShare = useCallback(async (destination?: "chat") => {
     if (selectedMessageIds.size === 0) return;
 
     setIsCreatingShareLink(true);
@@ -12518,8 +12562,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       });
 
       const url = `${shareOrigin()}/share/message/${token}`;
-      await copyToClipboard(url);
-      toast.success(shareIncludeConversation ? "Share link copied! The full conversation is now public via its link." : "Share link copied!");
+      if (destination === "chat") {
+        openForwardToChat({ url, label: selectedMessageIds.size > 1 ? "messages" : "message" });
+      } else {
+        await copyToClipboard(url);
+        toast.success(shareIncludeConversation ? "Share link copied! The full conversation is now public via its link." : "Share link copied!");
+      }
       setShareSelectionMode(false);
       setSelectedMessageIds(new Set());
       setShareIncludeConversation(false);
@@ -15948,6 +15996,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </button>
                 </ShortcutTooltip>
 
+                {chatOn && (
+                  <button
+                    onClick={() => openForwardToChat({ url: `${shareOrigin()}/conversation/${conversation?._id}`, label: "session" })}
+                    className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
+                    title="Send to chat"
+                  >
+                    <Forward className="w-3.5 h-3.5" />
+                  </button>
+                )}
+
                 {headerExtra}
 
                 <DropdownMenu>
@@ -16798,8 +16856,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           >
             Cancel
           </button>
+          {chatOn && (
+            <button
+              onClick={() => handleConfirmShare("chat")}
+              disabled={selectedMessageIds.size === 0 || isCreatingShareLink}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-sol-bg hover:bg-sol-border text-sol-text-secondary rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Forward className="w-4 h-4" />
+              Send to chat
+            </button>
+          )}
           <button
-            onClick={handleConfirmShare}
+            onClick={() => handleConfirmShare()}
             disabled={selectedMessageIds.size === 0 || isCreatingShareLink}
             className="px-4 py-1.5 text-sm bg-sol-cyan hover:bg-sol-cyan/80 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >

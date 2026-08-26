@@ -11,6 +11,7 @@ import {
   Cpu,
   ExternalLink,
   FileText,
+  Forward,
   Link as LinkIcon,
   Pencil,
   Pin,
@@ -43,6 +44,8 @@ import {
 import { closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
 import { undoableArchiveDoc, undoableHideSession, undoableDeferSession } from "../../store/undoActions";
 import { copyToClipboard, shareOrigin, cn } from "../../lib/utils";
+import { openForwardToChat } from "../../lib/forwardToChat";
+import { useTeamFeature } from "../../lib/teamFeatures";
 import { getLabelColor } from "../../lib/labelColors";
 import { canControlModel } from "../../lib/modelSwitch";
 
@@ -58,6 +61,18 @@ import { canControlModel } from "../../lib/modelSwitch";
 
 const openPaletteMode = (targets: any[], targetType: "task" | "doc" | "plan" | "session", mode: string) =>
   useInboxStore.getState().openPalette({ targets, targetType, mode });
+
+/** "Send to chat…" next to an object's Copy link — same URL, forwarded through
+ *  the palette's channel picker. Renders nothing when the team has chat off. */
+export function ForwardCtxItem({ url, label }: { url: string; label: string }) {
+  const chatOn = useTeamFeature("chat");
+  if (!chatOn) return null;
+  return (
+    <CtxItem icon={Forward} onSelect={() => openForwardToChat({ url, label })}>
+      Send to chat…
+    </CtxItem>
+  );
+}
 
 function OptionSubmenu({
   icon,
@@ -228,6 +243,7 @@ export function TaskMenuItems({
           >
             Copy link
           </CtxItem>
+          <ForwardCtxItem url={`${shareOrigin()}/tasks/${single._id}`} label="task" />
         </>
       )}
       <CtxSeparator />
@@ -305,6 +321,7 @@ export function DocMenuItems({
           >
             Copy link
           </CtxItem>
+          <ForwardCtxItem url={`${shareOrigin()}/docs/${single._id}`} label="doc" />
         </>
       )}
       <CtxSeparator />
@@ -366,6 +383,7 @@ export function PlanMenuItems({
       >
         Copy link
       </CtxItem>
+      <ForwardCtxItem url={`${shareOrigin()}/plans/${plan._id}`} label="plan" />
     </>
   );
 }
@@ -415,6 +433,7 @@ export function SessionMenuItems({
           Copy session ID
         </CtxItem>
         <CtxItem icon={LinkIcon} shortcut="conv.copyLink" onSelect={copyLink}>Copy link</CtxItem>
+      <ForwardCtxItem url={`${shareOrigin()}/conversation/${id}`} label="session" />
       </>
     );
   }
@@ -495,6 +514,7 @@ export function SessionMenuItems({
         Copy session ID
       </CtxItem>
       <CtxItem icon={LinkIcon} shortcut="conv.copyLink" onSelect={copyLink}>Copy link</CtxItem>
+      <ForwardCtxItem url={`${shareOrigin()}/conversation/${id}`} label="session" />
       <CtxSeparator />
       <CtxItem
         icon={Archive}
