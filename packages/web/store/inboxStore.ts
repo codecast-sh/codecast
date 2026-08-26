@@ -998,6 +998,8 @@ export type TaskViewPrefs = {
   project?: string;
   hide_agent?: boolean;
   source?: string;
+  /** Kanban column order (status ids), set by dragging column headers. */
+  kanban_order?: string[];
 };
 
 export type DocViewPrefs = {
