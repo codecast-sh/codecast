@@ -16,6 +16,7 @@ import {
   CALL_PUSH_TYPE_MISSED,
   CALL_PUSH_TYPE_RING,
   parseCallRingPush,
+  parseRecordingSummaryPush,
 } from '@codecast/shared/contracts';
 
 Notifications.setNotificationHandler({
@@ -114,6 +115,17 @@ export function usePushNotifications() {
           void acceptInvite(ringPush.invite_id, ringPush.room_key);
           router.push('/call');
         }
+        return;
+      }
+      const recordingPush = parseRecordingSummaryPush(data);
+      if (recordingPush) {
+        // The one push whose whole point is that nobody was looking at the
+        // app when the work finished: the recording was stopped minutes ago
+        // and the words arrived since. Open it.
+        router.push({
+          pathname: '/recording/[id]',
+          params: { id: recordingPush.recordingId },
+        } as never);
         return;
       }
       if (data.type === CALL_PUSH_TYPE_MISSED) {

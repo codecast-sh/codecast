@@ -30,7 +30,16 @@ for (const dir of ["downloads", "temp"]) {
   app.setPath(dir, p);
 }
 
-const { pickWindow, chooseLeader, RecentKeys } = require("./notificationRouter");
+const { pickWindow, pickOfferWindow, chooseLeader, RecentKeys } = require("./notificationRouter");
+const { shouldHandBackCall } = require("./callWindowPolicy");
+const {
+  mergeMeetingDetect,
+  meetingAppList,
+  meetingAppName,
+  detectMeetingApps,
+  startedApps,
+  decideOffer,
+} = require("./meetingDetector");
 
 let notificationRefs = [];
 
@@ -384,6 +393,641 @@ ipcMain.handle("attach-tab", (e, navPath) => {
 });
 
 // ---------------------------------------------------------------------------
+// The people window: a compact floating buddy list (route /people) carrying the
+// roster, status and calling. Singleton — one per app, focused rather than
+// duplicated. It is the phone: while it exists it is the notification leader
+// for sounds and every call/walkie banner lands in it (notificationRouter.js).
+// Its size, position and always-on-top pin persist across launches; the pin is
+// the only window control the renderer may drive, and only from this window.
+// ---------------------------------------------------------------------------
+
+const PEOPLE_PATH = "/people";
+const PEOPLE_SIZE = { width: 320, height: 640, minWidth: 280, minHeight: 420 };
+
+let peopleWindow = null;
+let peopleBoundsTimer = null;
+
+function loadPeopleState() {
+  const saved = loadFullSettings().peopleWindow;
+  return saved && typeof saved === "object" ? saved : {};
+}
+
+function updatePeopleState(patch) {
+  updateSettings({ peopleWindow: { ...loadPeopleState(), ...patch } });
+}
+
+// A saved rectangle only helps if it is still on screen: displays get unplugged
+// and resolutions change. getDisplayMatching gives us the display it overlaps
+// most (the nearest one when it overlaps none), and we clamp into that display's
+// work area — so a window saved on a monitor that is gone reopens on a real one.
+function clampToVisibleDisplay(saved, size = PEOPLE_SIZE) {
+  if (!saved || typeof saved.x !== "number" || typeof saved.y !== "number") return null;
+  const area = screen.getDisplayMatching({
+    x: saved.x,
+    y: saved.y,
+    width: Math.round(saved.width) || size.width,
+    height: Math.round(saved.height) || size.height,
+  }).workArea;
+  const width = Math.min(Math.max(size.minWidth, Math.round(saved.width) || size.width), area.width);
+  const height = Math.min(Math.max(size.minHeight, Math.round(saved.height) || size.height), area.height);
+  return {
+    width,
+    height,
+    x: Math.min(Math.max(Math.round(saved.x), area.x), area.x + area.width - width),
+    y: Math.min(Math.max(Math.round(saved.y), area.y), area.y + area.height - height),
+  };
+}
+
+function savePeopleBounds(win) {
+  if (!win || win.isDestroyed() || win.isMinimized()) return;
+  updatePeopleState({ bounds: win.getBounds() });
+}
+
+function createPeopleWindow() {
+  if (peopleWindow && !peopleWindow.isDestroyed()) {
+    peopleWindow.show();
+    peopleWindow.focus();
+    return peopleWindow;
+  }
+  const state = loadPeopleState();
+  const bounds = clampToVisibleDisplay(state.bounds);
+  const zoom = getAutoZoomFactor();
+  const win = new BrowserWindow({
+    width: PEOPLE_SIZE.width,
+    height: PEOPLE_SIZE.height,
+    ...(bounds || {}),
+    minWidth: PEOPLE_SIZE.minWidth,
+    minHeight: PEOPLE_SIZE.minHeight,
+    // Same inset lights as every other window, so the web's one titlebar
+    // measurement (desktopHeaderClass / attachTitlebarHead, --titlebar-inset)
+    // clears them here too — the panel draws its own drag region from that.
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: { x: 16, y: 12 },
+    // Restored from the last session: a pinned buddy list stays pinned.
+    alwaysOnTop: state.alwaysOnTop === true,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      zoomFactor: zoom,
+      additionalArguments: [`--zoom-factor=${zoom}`, "--people-window"],
+      // It is the phone: rings, presence and walkie audio must keep arriving
+      // while it sits unfocused beside another app.
+      backgroundThrottling: false,
+    },
+    icon: path.join(__dirname, "assets", "icon.png"),
+    show: false,
+    backgroundColor: "#002b36",
+  });
+  peopleWindow = win;
+
+  win.loadURL(`${currentBaseUrl}${PEOPLE_PATH}`);
+  win.once("ready-to-show", () => win.show());
+  win.webContents.on("did-finish-load", () => {
+    if (win.isDestroyed()) return;
+    win.webContents.setZoomFactor(getAutoZoomFactor());
+    win.webContents.executeJavaScript(
+      "document.documentElement.classList.add('electron-desktop')"
+    );
+  });
+  // Same rule as every window: new-window links open in the default browser.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+
+  // Dragging and resizing fire continuously; save once the gesture settles.
+  const rememberBounds = () => {
+    clearTimeout(peopleBoundsTimer);
+    peopleBoundsTimer = setTimeout(() => savePeopleBounds(win), 400);
+  };
+  win.on("move", rememberBounds);
+  win.on("resize", rememberBounds);
+  win.on("close", () => {
+    clearTimeout(peopleBoundsTimer);
+    savePeopleBounds(win);
+  });
+  win.on("closed", () => {
+    if (peopleWindow === win) peopleWindow = null;
+    broadcastWindowRole();
+  });
+  broadcastWindowRole();
+  return win;
+}
+
+ipcMain.handle("open-people-window", () => {
+  createPeopleWindow();
+});
+
+// The pin. Only the people window may float above other apps — any other
+// renderer asking is answered with what it actually is (false), never granted.
+ipcMain.handle("set-always-on-top", (e, on) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win || win.isDestroyed() || win !== peopleWindow) return false;
+  const pinned = on === true;
+  win.setAlwaysOnTop(pinned);
+  updatePeopleState({ alwaysOnTop: pinned });
+  return pinned;
+});
+
+ipcMain.handle("get-always-on-top", (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  return !!win && !win.isDestroyed() && win.isAlwaysOnTop();
+});
+
+// ---------------------------------------------------------------------------
+// The call panel: a huddle in a window of its own (route /call-panel) — the
+// stage full bleed with its controls, and nothing else.
+//
+// A REAL window. The founder's screenshot was a call stage living in a Chrome
+// popup: no app chrome, the OS treating it as a browser, and a microphone
+// permission attached to a window nobody recognizes. This is the window that
+// makes that outcome impossible, and the web side refuses to fall back to
+// window.open for a call at all.
+//
+// Singleton, because the product allows ONE huddle at a time (calls.joinRoom
+// enforces it server-side): opening the panel onto another room moves the
+// window that exists rather than making a second.
+//
+// ── The handoff ───────────────────────────────────────────────────────────
+// The shell does not move the call; it only opens and closes the window. The
+// call moves because whichever window is showing /call-panel JOINS the room,
+// and LiveKit signs every window of one person with the same identity — so the
+// new window's join evicts the old window's participant, in that order. This
+// end of it therefore has exactly one job on the way out: tell the main window
+// the room is coming back.
+//
+// That message is sent on 'close', NOT on 'closed'. The panel is still
+// connected at that moment, so the main window's rejoin is what evicts it, and
+// the audio never has a hole in it. Waiting for the window to be destroyed
+// would open a real gap for no reason.
+// ---------------------------------------------------------------------------
+
+const CALL_PANEL_PATH = "/call-panel";
+const CALL_PANEL_SIZE = { width: 960, height: 640, minWidth: 520, minHeight: 380 };
+
+let callWindow = null;
+let callBoundsTimer = null;
+// What the panel says it is hosting: { room, mic, camera, scribe }. This IS the
+// handback payload — the main window has to arrive in the state the person was
+// already in, or closing the panel mutes them mid-sentence.
+let callWindowState = null;
+// The panel declared the call OVER (its hang-up button). Closing then hands
+// nothing back. Silence means the opposite: a window closed without a hang-up
+// is a call still going, so the safe reading is to hand it back.
+let callWindowEnded = false;
+// The app is going away. Every window gets `close` during a quit, including
+// this one, and a handback then would raise the main window on the way out and
+// ask it to join a room the process is about to stop existing for.
+let appIsQuitting = false;
+app.on("before-quit", () => {
+  appIsQuitting = true;
+});
+
+function loadCallPanelState() {
+  const saved = loadFullSettings().callPanelWindow;
+  return saved && typeof saved === "object" ? saved : {};
+}
+
+function saveCallPanelBounds(win) {
+  if (!win || win.isDestroyed() || win.isMinimized()) return;
+  updateSettings({ callPanelWindow: { ...loadCallPanelState(), bounds: win.getBounds() } });
+}
+
+function callPanelUrl(roomKey, opts) {
+  const q = new URLSearchParams({ room: String(roomKey) });
+  if (opts && opts.mic) q.set("mic", "1");
+  if (opts && opts.camera) q.set("cam", "1");
+  if (opts && opts.scribe) q.set("scribe", "1");
+  return `${currentBaseUrl}${CALL_PANEL_PATH}?${q.toString()}`;
+}
+
+function createCallWindow(roomKey, opts) {
+  if (!roomKey || typeof roomKey !== "string") return null;
+  callWindowEnded = false;
+  if (callWindow && !callWindow.isDestroyed()) {
+    // Already open. On a DIFFERENT room, point it at the new one — one call at
+    // a time means one panel, and the person asked for this room.
+    if (!callWindowState || callWindowState.room !== roomKey) {
+      callWindow.loadURL(callPanelUrl(roomKey, opts));
+    }
+    callWindow.show();
+    callWindow.focus();
+    return callWindow;
+  }
+  const bounds = clampToVisibleDisplay(loadCallPanelState().bounds, CALL_PANEL_SIZE);
+  const zoom = getAutoZoomFactor();
+  const win = new BrowserWindow({
+    width: CALL_PANEL_SIZE.width,
+    height: CALL_PANEL_SIZE.height,
+    ...(bounds || {}),
+    minWidth: CALL_PANEL_SIZE.minWidth,
+    minHeight: CALL_PANEL_SIZE.minHeight,
+    // Same inset lights as every other window, so the stage's own top row can
+    // measure itself into a titlebar (attachTitlebarHead) the way the buddy
+    // list's header does.
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: { x: 16, y: 12 },
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      zoomFactor: zoom,
+      additionalArguments: [`--zoom-factor=${zoom}`, "--call-panel-window"],
+      // It holds the call. Throttling this window would throttle the media.
+      backgroundThrottling: false,
+    },
+    icon: path.join(__dirname, "assets", "icon.png"),
+    show: false,
+    backgroundColor: "#002b36",
+  });
+  callWindow = win;
+  callWindowState = { room: roomKey, mic: !!(opts && opts.mic), camera: !!(opts && opts.camera), scribe: !!(opts && opts.scribe) };
+
+  win.loadURL(callPanelUrl(roomKey, opts));
+  win.once("ready-to-show", () => win.show());
+  win.webContents.on("did-finish-load", () => {
+    if (win.isDestroyed()) return;
+    win.webContents.setZoomFactor(getAutoZoomFactor());
+    win.webContents.executeJavaScript(
+      "document.documentElement.classList.add('electron-desktop')"
+    );
+  });
+  // Same rule as every window: new-window links open in the default browser.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+
+  const rememberBounds = () => {
+    clearTimeout(callBoundsTimer);
+    callBoundsTimer = setTimeout(() => saveCallPanelBounds(win), 400);
+  };
+  win.on("move", rememberBounds);
+  win.on("resize", rememberBounds);
+  win.on("close", () => {
+    clearTimeout(callBoundsTimer);
+    saveCallPanelBounds(win);
+    handBackCall({ ended: callWindowEnded, from: "panel" });
+  });
+  win.on("closed", () => {
+    if (callWindow === win) {
+      callWindow = null;
+      callWindowState = null;
+      callWindowEnded = false;
+    }
+    broadcastWindowRole();
+  });
+  broadcastWindowRole();
+  return win;
+}
+
+// Tell the main window the call is coming back. Sent while the leaving window
+// is still connected, so the main window's join is what ends its participation
+// and the two never both let go at once.
+//
+// `ended` is the leaving window's own account of why it closed; the guard below
+// it is the shell's, and only the shell can make it. A call can be handed to a
+// SECOND satellite — the panel minimizing into the floating faces, or the faces
+// window restoring the panel — and in that moment the window that is letting go
+// is closing while the call is very much alive. Handing it to the main window
+// then would put a third joiner in the room and evict the window that just took
+// it. So: hand it back only when no other call window exists.
+function handBackCall({ ended, from } = {}) {
+  const state = from === "faces" ? facesWindowState : callWindowState;
+  const hand = shouldHandBackCall({
+    ended: !!ended,
+    quitting: appIsQuitting,
+    otherCallWindow: otherCallWindowExists(from),
+    room: (state && state.room) || null,
+  });
+  if (!hand) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send("call-panel-handback", {
+    room: state.room,
+    mic: !!state.mic,
+    camera: !!state.camera,
+    scribe: !!state.scribe,
+  });
+  mainWindow.show();
+}
+
+// Is a window OTHER than the one closing still holding the call?
+function otherCallWindowExists(from) {
+  const panelLives = !!callWindow && !callWindow.isDestroyed();
+  const facesLive = !!facesWindow && !facesWindow.isDestroyed();
+  return from === "faces" ? panelLives : facesLive;
+}
+
+ipcMain.handle("open-call-panel", (_e, roomKey, opts) => {
+  createCallWindow(roomKey, opts && typeof opts === "object" ? opts : {});
+});
+
+// Only the panel may close the panel, and only it can say whether the call
+// ended — verified by sender identity, never by the renderer's claim.
+ipcMain.handle("close-call-panel", (e, opts) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win || win.isDestroyed() || win !== callWindow) return false;
+  callWindowEnded = !!(opts && opts.ended);
+  win.close();
+  return true;
+});
+
+ipcMain.on("report-call-panel-state", (e, state) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win || win.isDestroyed() || win !== callWindow) return;
+  if (!state || typeof state !== "object") return;
+  callWindowState = {
+    room: typeof state.room === "string" ? state.room : null,
+    mic: state.mic === true,
+    camera: state.camera === true,
+    scribe: state.scribe === true,
+  };
+});
+
+// ---------------------------------------------------------------------------
+// The floating faces (route /call-faces): the call minimized to the circle of
+// a person's face, transparent everywhere else, floating over the work.
+//
+// ── Why a second window and not the panel in another shape ────────────────
+// `transparent` and `frame` are BrowserWindow CONSTRUCTION options in Electron.
+// There is no runtime switch for either, so the panel cannot become this. That
+// is not a limitation to work around, though — the call panel already knows how
+// to give a call to another window, and this is another window. Minimizing
+// opens this one; it joins the room; LiveKit sees a duplicate identity (every
+// window of one person signs as the same user id) and evicts the panel, which
+// closes behind it. Un-minimizing is the same two moves with the roles swapped.
+// The shell never moves the call; it only opens and closes windows.
+//
+// ── What a see-through window needs from the shell ────────────────────────
+// Three things a normal window never asks for, all runtime-settable:
+//
+//   ignore mouse events  The window is a rectangle, the product is a few
+//                        circles. It ignores the mouse by default so a click
+//                        lands in whatever is underneath, and the renderer —
+//                        the only side that knows where the circles are — turns
+//                        that off while the pointer is over one.
+//   size                 It is sized to its circles, which changes with the
+//                        mode and with who is in the room.
+//   drag                 Held on a circle, the window follows the cursor. Not a
+//                        `-webkit-app-region: drag` region: over one of those
+//                        the window manager takes the mouse events, so the
+//                        renderer would never learn the pointer had left and
+//                        the window would stay stuck taking clicks that belong
+//                        to the application underneath.
+//
+// It shows with showInactive() and never takes focus. It is a thing you glance
+// at while working in something else; a floating face that stole the keyboard
+// every time it appeared would be worse than no face at all.
+// ---------------------------------------------------------------------------
+
+const CALL_FACES_PATH = "/call-faces";
+// One circle plus its ring, and the chrome row under it. The renderer resizes
+// this the moment it knows the mode and the room (setFacesSize); these are only
+// what the window is born as, so the first frame is not a full-screen sheet of
+// invisible glass.
+const FACES_SIZE = { width: 148, height: 182 };
+
+let facesWindow = null;
+// What the faces window says it is hosting: { room, mic, camera, scribe, mode }.
+// Same role as callWindowState — it IS the handback payload.
+let facesWindowState = null;
+let facesWindowEnded = false;
+let facesDragTimer = null;
+let facesMoveTimer = null;
+
+function loadFacesState() {
+  const saved = loadFullSettings().facesWindow;
+  return saved && typeof saved === "object" ? saved : {};
+}
+
+function saveFacesPosition(win) {
+  if (!win || win.isDestroyed() || win.isMinimized()) return;
+  const [x, y] = win.getPosition();
+  updateSettings({ facesWindow: { ...loadFacesState(), x, y } });
+}
+
+function facesUrl(roomKey, opts) {
+  const q = new URLSearchParams({ room: String(roomKey) });
+  if (opts && opts.mic) q.set("mic", "1");
+  if (opts && opts.camera) q.set("cam", "1");
+  if (opts && opts.scribe) q.set("scribe", "1");
+  if (opts && opts.mode === "everyone") q.set("mode", "everyone");
+  return `${currentBaseUrl}${CALL_FACES_PATH}?${q.toString()}`;
+}
+
+// Where the circles sit the first time: the top-right of the work area, out of
+// the way of most windows' content, indented enough to clear a menu bar.
+function defaultFacesPosition(width) {
+  const area = screen.getPrimaryDisplay().workArea;
+  return { x: Math.round(area.x + area.width - width - 28), y: Math.round(area.y + 28) };
+}
+
+function facesPosition(width) {
+  const saved = loadFacesState();
+  if (typeof saved.x !== "number" || typeof saved.y !== "number") return defaultFacesPosition(width);
+  // A display that is gone (an unplugged monitor) would otherwise put the
+  // window somewhere nobody can see, and this one has no taskbar entry to
+  // recover it from.
+  const area = screen.getDisplayMatching({ x: saved.x, y: saved.y, width, height: FACES_SIZE.height }).workArea;
+  return {
+    x: Math.min(Math.max(Math.round(saved.x), area.x), area.x + area.width - width),
+    y: Math.min(Math.max(Math.round(saved.y), area.y), area.y + area.height - FACES_SIZE.height),
+  };
+}
+
+function createFacesWindow(roomKey, opts) {
+  if (!roomKey || typeof roomKey !== "string") return null;
+  facesWindowEnded = false;
+  if (facesWindow && !facesWindow.isDestroyed()) {
+    if (!facesWindowState || facesWindowState.room !== roomKey) {
+      facesWindow.loadURL(facesUrl(roomKey, opts));
+    }
+    facesWindow.showInactive();
+    return facesWindow;
+  }
+  const pos = facesPosition(FACES_SIZE.width);
+  const win = new BrowserWindow({
+    width: FACES_SIZE.width,
+    height: FACES_SIZE.height,
+    x: pos.x,
+    y: pos.y,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    hasShadow: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      // It holds the call. Throttling this window would throttle the media —
+      // and this is the window most likely to be behind another, since being
+      // behind other windows is its whole purpose.
+      backgroundThrottling: false,
+      additionalArguments: ["--call-faces-window"],
+      // Face tracking needs the Shape Detection API's FaceDetector, and
+      // Chromium does not expose it by default any more — measured on Chrome
+      // 151: absent without a flag, present with `--enable-blink-features=
+      // FaceDetector` (the name is the interface's, not "ShapeDetection",
+      // which does nothing). Enabled HERE rather than app-wide, because this
+      // is the one window that uses it: a process-wide switch, or the
+      // experimental-web-platform-features flag that also turns it on, would
+      // hand every window in the app a pile of unfinished APIs.
+      //
+      // Without it nothing breaks — the circles show a center crop, which is a
+      // fine picture of somebody at their desk; it just does not follow them.
+      enableBlinkFeatures: "FaceDetector",
+    },
+  });
+  facesWindow = win;
+  facesWindowState = {
+    room: roomKey,
+    mic: !!(opts && opts.mic),
+    camera: !!(opts && opts.camera),
+    scribe: !!(opts && opts.scribe),
+    mode: opts && opts.mode === "everyone" ? "everyone" : "speaker",
+  };
+
+  // Above ordinary windows without being a screen-saver-level nuisance.
+  // `floating` is the level a palette or a picture-in-picture uses.
+  win.setAlwaysOnTop(true, "floating");
+  // Follow the person between desktops, and stay visible over a full-screen
+  // app — the two places a minimized call is most needed and least reachable.
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  // See-through until the renderer says the pointer is over a circle.
+  win.setIgnoreMouseEvents(true, { forward: true });
+
+  win.loadURL(facesUrl(roomKey, opts));
+  // showInactive, never show: this window must not take focus from whatever
+  // the person is working in. That is the entire point of it.
+  win.once("ready-to-show", () => {
+    if (!win.isDestroyed()) win.showInactive();
+  });
+  win.webContents.on("did-finish-load", () => {
+    if (win.isDestroyed()) return;
+    win.webContents.executeJavaScript(
+      "document.documentElement.classList.add('electron-desktop')"
+    );
+  });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+
+  // Debounced: a drag moves this window at the cursor's rate, and writing the
+  // settings file on every one of those would be sixty disk writes a second.
+  win.on("move", () => {
+    clearTimeout(facesMoveTimer);
+    facesMoveTimer = setTimeout(() => saveFacesPosition(win), 400);
+  });
+  win.on("close", () => {
+    stopFacesDrag();
+    clearTimeout(facesMoveTimer);
+    saveFacesPosition(win);
+    handBackCall({ ended: facesWindowEnded, from: "faces" });
+  });
+  win.on("closed", () => {
+    if (facesWindow === win) {
+      facesWindow = null;
+      facesWindowState = null;
+      facesWindowEnded = false;
+    }
+    broadcastWindowRole();
+  });
+  broadcastWindowRole();
+  return win;
+}
+
+// Only the faces window may drive its own click-through, size and drag, and
+// only while it exists — verified by sender identity, never by the claim.
+function senderIsFaces(e) {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  return win && !win.isDestroyed() && win === facesWindow ? win : null;
+}
+
+function stopFacesDrag() {
+  if (facesDragTimer) clearInterval(facesDragTimer);
+  facesDragTimer = null;
+}
+
+ipcMain.handle("open-faces-window", (_e, roomKey, opts) => {
+  createFacesWindow(roomKey, opts && typeof opts === "object" ? opts : {});
+});
+
+ipcMain.handle("close-faces-window", (e, opts) => {
+  const win = senderIsFaces(e);
+  if (!win) return false;
+  facesWindowEnded = !!(opts && opts.ended);
+  win.close();
+  return true;
+});
+
+ipcMain.on("report-faces-state", (e, state) => {
+  if (!senderIsFaces(e)) return;
+  if (!state || typeof state !== "object") return;
+  facesWindowState = {
+    room: typeof state.room === "string" ? state.room : null,
+    mic: state.mic === true,
+    camera: state.camera === true,
+    scribe: state.scribe === true,
+    mode: state.mode === "everyone" ? "everyone" : "speaker",
+  };
+});
+
+ipcMain.on("set-faces-interactive", (e, on) => {
+  const win = senderIsFaces(e);
+  if (!win) return;
+  // `forward: true` is what keeps the renderer receiving mouse MOVES while it
+  // ignores clicks — without it the window would go deaf the moment the pointer
+  // left a circle and could never learn that it came back.
+  win.setIgnoreMouseEvents(!on, { forward: true });
+});
+
+ipcMain.on("set-faces-size", (e, size) => {
+  const win = senderIsFaces(e);
+  if (!win || !size || typeof size !== "object") return;
+  const width = Math.round(Number(size.width));
+  const height = Math.round(Number(size.height));
+  if (!(width > 0) || !(height > 0) || width > 4000 || height > 4000) return;
+  const [curW, curH] = win.getSize();
+  if (curW === width && curH === height) return;
+  // A non-resizable window refuses setSize on macOS; lift the flag for the
+  // call and put it straight back, so the person still cannot drag an edge.
+  win.setResizable(true);
+  win.setSize(width, height);
+  win.setResizable(false);
+});
+
+ipcMain.on("set-faces-dragging", (e, on) => {
+  const win = senderIsFaces(e);
+  if (!win) return;
+  stopFacesDrag();
+  if (!on) return;
+  const cursor = screen.getCursorScreenPoint();
+  const [x, y] = win.getPosition();
+  const offset = { x: x - cursor.x, y: y - cursor.y };
+  // The shell follows the cursor rather than the renderer sending a message per
+  // mouse move: one timer instead of a hundred IPC hops a second, and it keeps
+  // moving smoothly even while the renderer is busy drawing video.
+  // The renderer ends the drag on pointer up. A renderer that died mid-drag
+  // never will, and a window silently following the cursor around the screen
+  // for the rest of the call has no way out short of hanging up — so the drag
+  // also expires on its own. Nobody holds a window for half a minute.
+  const until = Date.now() + 30_000;
+  facesDragTimer = setInterval(() => {
+    if (!facesWindow || facesWindow.isDestroyed() || Date.now() > until) return stopFacesDrag();
+    const p = screen.getCursorScreenPoint();
+    facesWindow.setPosition(p.x + offset.x, p.y + offset.y);
+  }, 16);
+});
+
+// ---------------------------------------------------------------------------
 // Multi-window notification routing. Every window runs the same web app and
 // would otherwise fire its own banner and sound for the same event. Main is
 // the one process that sees all windows, so it (a) collapses duplicates,
@@ -399,12 +1043,24 @@ const windowStates = new Map();
 const lastFocusedAt = new Map();
 const recentBanners = new RecentKeys();
 
-// The app windows that count for routing: main + detached tab windows. The
-// palette is a floating summon, never a place a banner should land or sound.
+// The app windows that count for routing: main + detached tab windows + the
+// people window. The palette is a floating summon, never a place a banner
+// should land or sound.
 function appWindows() {
   const out = [];
   if (mainWindow && !mainWindow.isDestroyed()) out.push(mainWindow);
   for (const w of tabWindows) if (!w.isDestroyed()) out.push(w);
+  if (peopleWindow && !peopleWindow.isDestroyed()) out.push(peopleWindow);
+  // The call panel counts: `anyInCall` is computed from these windows' reports,
+  // and it is what makes every OTHER window show "in a huddle in another
+  // window" instead of drawing a second dock for a call it does not hold.
+  if (callWindow && !callWindow.isDestroyed()) out.push(callWindow);
+  // The floating faces do NOT count, for the same reason the palette does not:
+  // it is a glance, not a place. It never takes focus, so it must not decide
+  // whether the app is focused; it has no surface to land a banner in; and it
+  // must never be elected the window that plays notification sounds, since it
+  // appears and disappears with a call. Other windows still learn a call window
+  // exists — that is the `callPanel` role flag, computed separately.
   return out;
 }
 
@@ -414,6 +1070,11 @@ function describeWindows() {
     return {
       id: win.id,
       isMain: win === mainWindow,
+      isPeople: win === peopleWindow,
+      // The call panel bypasses the dashboard layout, same as the buddy list.
+      // Routing that asks for a dashboard surface (pickOfferWindow) needs to
+      // tell it apart from an ordinary detached tab window.
+      isCallPanel: win === callWindow,
       focused: win.isFocused(),
       lastFocusedAt: lastFocusedAt.get(win.id) || 0,
       active: st.active || null,
@@ -438,11 +1099,31 @@ function broadcastWindowRole() {
     const leader = chooseLeader(windows);
     const anyInCall = windows.some((w) => w.inCall);
     const appFocused = windows.some((w) => w.focused);
+    // Whether a people window exists at all — every window needs it: the one
+    // that IS it renders the panel, the others stand down from the pumps and
+    // surfaces it owns.
+    const hasPeople = !!peopleWindow && !peopleWindow.isDestroyed();
+    // Whether a window of the call's own exists — the panel, or the floating
+    // faces it minimizes into. The call lives THERE, so no other window draws a
+    // dock for it. One flag for both because the question every other window is
+    // asking is the same one: is this call somebody else's to show?
+    const hasCallPanel =
+      (!!callWindow && !callWindow.isDestroyed()) || (!!facesWindow && !facesWindow.isDestroyed());
     for (const win of appWindows()) {
+      // A window can be past its render frame's disposal and not yet report
+      // isDestroyed(), and sending into that gap throws "Render frame was
+      // disposed before WebFrameMain could be accessed". The broadcast is
+      // deferred by a tick precisely because windows churn, so the gap is not
+      // rare — and the call panel, which is created and closed once per call,
+      // walks through it far more often than the windows this code was
+      // written for. Observed in a from-source run.
+      if (win.webContents.isDestroyed()) continue;
       win.webContents.send("window-role", {
         leader: !!leader && leader.id === win.id,
         appFocused,
         anyInCall,
+        peopleWindow: hasPeople,
+        callPanel: hasCallPanel,
       });
     }
   }, 30);
@@ -700,6 +1381,11 @@ function toggleEnvironment() {
     paletteWindow = null;
   }
   createPaletteWindow();
+  // The people window shows the same environment's roster; leaving it on the
+  // old origin would have it watching a different world than the main window.
+  if (peopleWindow && !peopleWindow.isDestroyed()) {
+    peopleWindow.loadURL(`${currentBaseUrl}${PEOPLE_PATH}`);
+  }
 }
 
 function createTray() {
@@ -1161,6 +1847,110 @@ ipcMain.handle("set-shortcut", (_e, key, accelerator) => {
   return loadSettings();
 });
 
+// ---------------------------------------------------------------------------
+// Meeting detection. The shell notices a meeting app starting and offers to
+// record it; the answer, and the recording itself, belong to the web layer.
+//
+// WHAT IT READS: the names of running programs, once every 20 seconds, and
+// nothing else. No window titles, no window contents, no calendar. The
+// setting's copy says exactly that, and meetingDetector.js is what makes the
+// sentence true.
+//
+// WHAT IT COSTS WHEN OFF: nothing. No timer, no `ps`, no memory of what is
+// running. The poller exists only while the setting asks for it.
+// ---------------------------------------------------------------------------
+
+function loadMeetingDetect() {
+  return mergeMeetingDetect(loadFullSettings().meetingDetect);
+}
+
+function saveMeetingDetect(patch) {
+  const next = mergeMeetingDetect({ ...loadMeetingDetect(), ...patch });
+  updateSettings({ meetingDetect: next });
+  syncMeetingWatch();
+  return next;
+}
+
+// macOS only: the table is mac app bundles and `ps -Ao comm=` is a mac
+// invocation. Elsewhere the setting is not offered rather than offered and
+// quietly dead.
+function canDetectMeetings() {
+  return process.platform === "darwin";
+}
+
+const MEETING_POLL_MS = 20_000;
+let meetingTimer = null;
+// The meeting apps seen on the last tick. `null` means nothing has been
+// observed yet, which startedApps reads as a baseline — whatever is already
+// open when the timer starts is the status quo, not a meeting beginning.
+let meetingRunning = null;
+let meetingPsInFlight = false;
+
+async function meetingTick() {
+  // One `ps` at a time, and one per tick. A loaded machine can take longer to
+  // answer than the interval, and stacking spawns is exactly how a poller
+  // becomes a bigger problem than the thing it watches for.
+  if (meetingPsInFlight) return;
+  meetingPsInFlight = true;
+  let out = "";
+  try {
+    const res = await execFileP("/bin/ps", ["-Ao", "comm="]);
+    if (!res.ok) return;
+    out = res.stdout;
+  } finally {
+    meetingPsInFlight = false;
+  }
+  const observed = detectMeetingApps(out);
+  const started = startedApps(meetingRunning, observed);
+  meetingRunning = observed;
+  if (!started.length) return;
+  const settings = loadMeetingDetect();
+  for (const id of started) {
+    const decision = decideOffer(settings, id);
+    if (decision !== "skip") offerToRecord(id, decision);
+  }
+}
+
+// The offer reaches ONE window and TAKES NO FOCUS — nothing is shown, raised
+// or sounded here. A card that jumps in front of somebody joining a meeting is
+// worse than a recording they had to start by hand.
+function offerToRecord(appId, decision) {
+  const pick = pickOfferWindow(describeWindows());
+  if (!pick) return;
+  const win = BrowserWindow.fromId(pick.id);
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
+  win.webContents.send("meeting-detected", {
+    app: appId,
+    name: meetingAppName(appId),
+    decision,
+    at: Date.now(),
+  });
+}
+
+// Start or stop the poller to match the setting. Idempotent, so a change from
+// ask to auto leaves the timer — and the running set — exactly as they were:
+// restarting would re-baseline, and re-baselining is silent, not noisy.
+function syncMeetingWatch() {
+  const on = canDetectMeetings() && loadMeetingDetect().mode !== "off";
+  if (on === !!meetingTimer) return;
+  if (!on) {
+    clearInterval(meetingTimer);
+    meetingTimer = null;
+    meetingRunning = null;
+    return;
+  }
+  meetingRunning = null;
+  meetingTimer = setInterval(() => { meetingTick(); }, MEETING_POLL_MS);
+  meetingTick();
+}
+
+ipcMain.handle("get-meeting-detect", () => ({
+  ...loadMeetingDetect(),
+  apps: meetingAppList(),
+  supported: canDetectMeetings(),
+}));
+ipcMain.handle("set-meeting-detect", (_e, patch) => saveMeetingDetect(patch || {}));
+
 const SHORTCUT_HANDLERS = {
   toggleWindow: () => {
     if (!mainWindow) return;
@@ -1335,6 +2125,8 @@ app.whenReady().then(() => {
     ]));
   }
   registerShortcuts();
+  // Starts the meeting poller only if the setting asks for it; off is free.
+  syncMeetingWatch();
 
   // No startup notification needed -- macOS registers the app when
   // Notification.show() is first called from any code path (idle, error, etc.).

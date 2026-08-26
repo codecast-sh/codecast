@@ -26,6 +26,29 @@ export const CALL_PUSH_SOUND = "huddle-ring.caf" as const;
  */
 export const CALL_RING_PERIOD_MS = 3_000;
 
+/**
+ * Push `data.type` for a recording whose summary just landed.
+ *
+ * Not a ring and not a huddle, but the same contract problem: the server
+ * writes the string, the phone matches it and opens the recording, and a
+ * rename that half-lands leaves a push that taps into nothing.
+ */
+export const RECORDING_SUMMARY_PUSH_TYPE = "recording_summary" as const;
+
+export type RecordingSummaryPush = {
+  type: typeof RECORDING_SUMMARY_PUSH_TYPE;
+  recordingId: string;
+};
+
+/** Parse untrusted push data into a finished recording, or null. */
+export function parseRecordingSummaryPush(data: unknown): RecordingSummaryPush | null {
+  if (!data || typeof data !== "object") return null;
+  const d = data as Record<string, unknown>;
+  if (d.type !== RECORDING_SUMMARY_PUSH_TYPE) return null;
+  if (typeof d.recordingId !== "string" || !d.recordingId) return null;
+  return { type: RECORDING_SUMMARY_PUSH_TYPE, recordingId: d.recordingId };
+}
+
 export type CallRingPush = {
   type: typeof CALL_PUSH_TYPE_RING;
   invite_id: string;

@@ -100,9 +100,16 @@ export type ChatMessageRow = {
   attachments?: ChatAttachment[];
   // Push-to-talk. Present only on a walkie burst; the recording itself rides
   // `attachments` like any other file, so playback is an attachment concern.
-  voice?: { status: ChatVoiceStatus; duration_ms?: number; room_key?: string };
+  voice?: { status: ChatVoiceStatus; duration_ms?: number; room_key?: string; transcribing?: boolean };
   client_id?: string;
   origin?: "agent";
+  // The session that typed an origin:"agent" line, plus the server's send-time
+  // snapshot of its title/agent. Render prefers the LIVE session row when the
+  // viewer can see it (lib/chatViews sessionAuthorFor); the snapshot is the
+  // fallback for viewers without access to the session.
+  origin_session_id?: string;
+  origin_session_title?: string;
+  origin_agent_type?: string;
   created_at: number;
   updated_at: number;
   edited_at?: number;

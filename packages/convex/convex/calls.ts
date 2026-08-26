@@ -65,6 +65,9 @@ function projectMember(m: Doc<"call_members">) {
     muted: m.muted,
     camera: m.camera,
     sharing: m.sharing,
+    // The one bit that turns a burst into a call, for everyone in the room.
+    // Bucketed like joined_at and set once, so it never re-pushes the roster.
+    walkie_joined_at: m.walkie_joined_at ? bucketTs(m.walkie_joined_at) : undefined,
   };
 }
 
@@ -224,6 +227,11 @@ export const joinRoom = mutation({
   args: {
     room_key: v.string(),
     muted: v.optional(v.boolean()),
+    // "I am stepping into this burst on purpose." Optional and additive: an
+    // older client never sends it and joins exactly as it always did. It is
+    // only ever set, never cleared — the seat itself is what ends a call, and
+    // leaving deletes the row and the stamp with it.
+    walkie_join: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
@@ -274,6 +282,12 @@ export const joinRoom = mutation({
       await ctx.db.patch(existing._id, {
         last_seen: now,
         muted: args.muted ?? existing.muted,
+        // The FIRST deliberate step in is the one that counts: joining live and
+        // then being re-seated by a heartbeat recovery must not keep moving the
+        // moment the conversation started.
+        walkie_joined_at: args.walkie_join
+          ? (existing.walkie_joined_at ?? now)
+          : existing.walkie_joined_at,
       });
       return { room_key: args.room_key };
     }
@@ -290,6 +304,7 @@ export const joinRoom = mutation({
       muted: args.muted ?? true,
       camera: false,
       sharing: false,
+      walkie_joined_at: args.walkie_join ? now : undefined,
     });
     return { room_key: args.room_key };
   },

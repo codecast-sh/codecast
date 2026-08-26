@@ -3,6 +3,7 @@ import { useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
   formatTranscriptChunk,
+  isRecRoomKey,
   transcriptChunkHeader,
 } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
@@ -215,7 +216,13 @@ export function useAddLiveFeed(opts: {
         }
         const room = getRoom();
         if (!room) {
-          throw new Error("Join the huddle to start its transcription");
+          // A recording has no room to fall back into: its transcript IS the
+          // run, so when that ended there is nothing left to point words at.
+          throw new Error(
+            isRecRoomKey(roomKey)
+              ? "That recording has ended — its words are already saved"
+              : "Join the huddle to start its transcription",
+          );
         }
         await startScribe({
           convex: convex as any,

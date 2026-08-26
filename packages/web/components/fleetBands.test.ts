@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { fleetBandFor, splitFleetBands, fleetTileMeta, fleetTileContext, fleetTileSummary, fleetProgress } from "./fleetBands";
+import { fleetBandFor, fleetSessionSig, fleetSessionsWakeSig, splitFleetBands, fleetTileMeta, fleetTileContext, fleetTileSummary, fleetProgress } from "./fleetBands";
 import type { InboxSession } from "../store/inboxStore";
 
 const NOW = 1_700_000_000_000;
@@ -210,5 +210,71 @@ describe("fleetProgress", () => {
     expect(fresh).toBe(1);
     expect(quiet).toBeLessThan(fresh);
     expect(dead).toBe(0.05);
+  });
+});
+
+describe("fleetSessionSig — the wake gate for always-mounted fleet surfaces", () => {
+  // The point of the signature: the people window's roster is open for hours,
+  // and every live session on the team heartbeats at it the whole time.
+  it("does NOT move on a heartbeat", () => {
+    const before = sess({ updated_at: NOW - 10_000 });
+    const after = { ...before, updated_at: NOW, last_heartbeat: NOW } as InboxSession;
+    expect(fleetSessionSig(after)).toBe(fleetSessionSig(before));
+  });
+
+  it("does NOT move while a reply streams in", () => {
+    // message_count climbs token by token. The band asks only whether there is
+    // ANY output, so 3 messages and 40 sign the same.
+    const before = sess({ message_count: 3 });
+    const after = { ...before, message_count: 40 } as InboxSession;
+    expect(fleetSessionSig(after)).toBe(fleetSessionSig(before));
+  });
+
+  it("DOES move when the first message lands, because that flips hasOutput", () => {
+    const before = sess({ message_count: 0 });
+    const after = { ...before, message_count: 1 } as InboxSession;
+    expect(fleetSessionSig(after)).not.toBe(fleetSessionSig(before));
+  });
+
+  it("DOES move when a pinned state goes stale from messages piling up", () => {
+    const before = sess({ thread_state: "x", thread_state_msg_count: 10, message_count: 12 });
+    const after = { ...before, message_count: 10 + 200 } as InboxSession;
+    expect(fleetSessionSig(after)).not.toBe(fleetSessionSig(before));
+  });
+
+  it("DOES move on every field the band actually branches on", () => {
+    const base = sess();
+    const changes: Array<Partial<InboxSession>> = [
+      { agent_status: "working" },
+      { is_idle: false },
+      { awaiting_input: true },
+      { session_error: "boom" },
+      { pending_api_error: true },
+      { is_unresponsive: true },
+      { has_pending: true },
+      { inbox_killed_at: NOW },
+      { user_id: "u2" },
+      { title: "other" },
+      { thread_state: "parked" },
+      { thread_state_at: NOW },
+      { thread_state_status: "blocked" },
+    ];
+    for (const change of changes) {
+      expect(fleetSessionSig({ ...base, ...change } as InboxSession)).not.toBe(
+        fleetSessionSig(base),
+      );
+    }
+  });
+
+  it("the collection signature is stable across a heartbeat on any member", () => {
+    const a = sess({ _id: "a" });
+    const b = sess({ _id: "b" });
+    const before = { a, b };
+    // A new collection ref with one row heartbeating — exactly what a mutative
+    // store push looks like, and exactly what must NOT wake the roster.
+    const after = { a, b: { ...b, updated_at: NOW, message_count: 99 } as InboxSession };
+    expect(fleetSessionsWakeSig(after)).toBe(fleetSessionsWakeSig(before));
+    const real = { a, b: { ...b, awaiting_input: true } as InboxSession };
+    expect(fleetSessionsWakeSig(real)).not.toBe(fleetSessionsWakeSig(before));
   });
 });

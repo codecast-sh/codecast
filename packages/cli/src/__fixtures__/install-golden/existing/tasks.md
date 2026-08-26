@@ -54,7 +54,7 @@ You operate within a structured work tracking system. A human monitors your prog
 
 **Create a plan** when the user describes work with multiple distinct parts — a feature with frontend and backend changes, a refactor that touches several subsystems, a bug that needs investigation then fixing. Run `cast plan create "Title" -g "goal"` and add tasks with `cast task create "Title" --plan <plan_id>`. Don't create plans for single-task work.
 
-**Bind before you build.** For any larger piece of work, default to working under a task or plan with your session bound to it — `cast task start <id>` claims a task, `cast plan bind <plan_id>` attaches to a plan. Binding is one command and it keeps your session, its progress, and the work item connected in the dashboard; sizable work done unbound is invisible to the human tracking it.
+**Bind before you build.** Whatever this session is working on right now should be a task or plan with your session bound to it — `cast task start <id>` claims a task, `cast plan bind <plan_id>` attaches to a plan. Binding is one command and it keeps your session, its progress, and the work item connected in the dashboard; work done unbound is invisible to the human tracking it. When the session's focus moves to a different piece of work, move the binding with it — claim the task you are actually advancing, not the one the session started on.
 
 **Check existing work first.** Your context includes an overview of active tasks and plans. Before creating new ones, check if your work already has a task or fits under an existing plan. When the user names a topic, search by it directly — `cast task ls -q "<topic>"` and `cast plan ls -q "<topic>"` filter by title/description so you don't have to scan a wall of IDs. Use `cast task ready` (optionally `-q`) for unclaimed work. Claim existing tasks with `cast task start <id>` rather than creating duplicates.
 
@@ -68,7 +68,10 @@ Once you have a task:
 3. `cast task comment <id> "progress" -t progress` — log milestones as you go
 4. `cast task done <id> -m "summary"` — mark complete with what you verified
 
+**Keep the bound item current — content and status.** The task is the human's view of your work, so it must describe what you are actually doing, not what you assumed at the start. When scope or approach shifts, rewrite the title and description to match (`cast task update <id> -t "..." -d "..."`); comment when you pass a milestone or change direction; move status the moment it changes, and mark done only what you verified. A task that still describes an hour-old understanding misleads everyone who reads the board — updating it is part of the work, not paperwork after it.
+
 If bound to a plan, keep the bigger picture coherent:
+- Advanced part of it? Post progress with `cast plan comment <plan_id> "..."` so the plan reads true without opening your session.
 - Task larger than expected? Suggest splitting it.
 - Your work creates a dependency? Flag it.
 - Making a directional decision? Record it with `cast plan comment <plan_id> "decision" -d -r "rationale"`.
@@ -102,6 +105,7 @@ cast task ls -p "<project>"                 # Tasks in one project (ID, short ID
 cast task create "Title" --project "<name>" # File a new task under a project
 cast task update <id> --project "<name>"    # File an existing task (--project '' unfiles it)
 cast task start/done/comment <id>           # Task lifecycle
+cast task update <id> -t "..." -d "..."     # Keep title/description matching what you're actually doing (-s for status)
 cast task create "Title" -t task -p high    # Create task (internal to agent work by default)
 cast task create "Title" --plan <plan_id>   # Create task bound to plan
 cast task create "Title" --human            # Put it on the human's board (rare — see above)

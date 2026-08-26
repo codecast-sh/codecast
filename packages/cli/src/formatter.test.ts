@@ -282,3 +282,58 @@ describe("feedFilePath", () => {
     expect(feedFilePath("/Users/ec2-user/work/repo/src/a.ts", "/Users/x/src/app")).toContain("/Users/ec2-user");
   });
 });
+
+import { formatReadResult } from "./formatter";
+
+// A StructuredOutput call's input IS the agent's deliverable, and a non-full
+// read collapses it to one summary line — which readers have mistaken for an
+// empty result. The collapsed line must carry the exact --full command; the
+// full view must not (it already shows everything).
+describe("formatReadResult surfaces collapsed StructuredOutput payloads", () => {
+  const readResult = {
+    conversation: {
+      id: "jx7abcd1234",
+      title: "Workflow run",
+      project_path: "/Users/x/code/proj",
+      message_count: 3,
+      updated_at: new Date().toISOString(),
+    },
+    messages: [
+      {
+        line: 2,
+        role: "assistant",
+        content: "",
+        timestamp: new Date().toISOString(),
+        tool_calls: [
+          { name: "StructuredOutput", input: JSON.stringify({ findings: [{ a: 1 }] }) },
+        ],
+      },
+    ],
+  };
+
+  test("the collapsed view points at the --full command", () => {
+    const out = strip(formatReadResult(readResult));
+    expect(out).toContain("StructuredOutput findings[1]");
+    expect(out).toContain("full payload: cast read jx7abcd 2 --full");
+  });
+
+  test("the full view prints the payload and no hint", () => {
+    const out = strip(formatReadResult(readResult, { full: true }));
+    expect(out).toContain('"findings"');
+    expect(out).not.toContain("full payload:");
+  });
+
+  test("ordinary tool calls get no hint", () => {
+    const out = strip(formatReadResult({
+      ...readResult,
+      messages: [{
+        line: 2,
+        role: "assistant",
+        content: "",
+        timestamp: new Date().toISOString(),
+        tool_calls: [{ name: "Bash", input: JSON.stringify({ command: "ls" }) }],
+      }],
+    }));
+    expect(out).not.toContain("--full");
+  });
+});

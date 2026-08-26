@@ -30,7 +30,7 @@ const manifestByHref = new Map(ROUTES.map((r) => [routeHref(r.path), r] as const
 //
 // App.tsx nests <Route path="x"> under layout <Route element={<Layout/>}> blocks. A child's
 // absolute path = parent path prefix (when the parent carries a `path`) + child path. Layout
-// routes that use `element` with no `path` (DashboardShell, PaletteLayout, MarketingLayout)
+// routes that use `element` with no `path` (DashboardShell, TransparentWindowLayout, MarketingLayout)
 // contribute no prefix; the only path-carrying parent is SettingsLayout (`path="settings"`).
 // We walk the JSX line by line, tracking a stack of (path-prefix, brace-depth) frames.
 

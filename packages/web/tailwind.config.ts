@@ -8,6 +8,14 @@ const config: Config = {
     "./src/**/*.{js,ts,jsx,tsx}",
     "./app/**/*.{js,ts,jsx,tsx,mdx}",
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
+    // hooks/ renders markup too — useCallRing draws the whole huddle ring
+    // toast and useChatToasts the whole chat card. Leaving it out meant any
+    // class used ONLY here was silently never generated, so those two files
+    // worked by coincidence: whatever they shared with a scanned file applied,
+    // and whatever they did not, did not. The ring toast's responsive layout
+    // was half-built for exactly this reason (`sm:flex-none` never existed, so
+    // its two buttons stayed flex-1 at desktop width and squeezed to 49px).
+    "./hooks/**/*.{js,ts,jsx,tsx}",
     "./lib/**/*.{js,ts}",
   ],
   theme: {
