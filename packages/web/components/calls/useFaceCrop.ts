@@ -60,42 +60,74 @@ export function useFaceCrop(opts: {
     paint();
 
     const detector = getFaceDetector();
-    // One question at a time, and a deadline on the first answer.
+    // One question at a time, a deadline on the answer, and a way back.
     //
-    // `detect()` is not merely slow, it can never settle: it crosses into a
-    // platform service (Vision on macOS), and where that service does not
-    // answer — measured in headless Chromium — the promise simply hangs. A
-    // sampler that fires regardless would stack an unresolved detection every
-    // third of a second for the length of a call, in the window that has the
-    // least room to waste. So: skip while one is outstanding, and if the very
-    // first one has not come back by `DETECT_DEADLINE_MS`, treat the detector
-    // as absent for this window and live on the center crop.
+    // `detect()` is not merely slow, it can fail to settle at all: it crosses
+    // into a platform service (Vision on macOS), and where that service does
+    // not answer — measured in headless Chromium — the promise simply hangs. A
+    // sampler that fired regardless would stack an unresolved detection every
+    // third of a second for the length of a call, in the window with the least
+    // room to waste. So only one question is ever outstanding, and a question
+    // that goes unanswered past `DETECT_DEADLINE_MS` is abandoned.
+    //
+    // Abandoned, not written off. The first attempt can be slow for reasons
+    // that pass — a cold platform service waking up, a busy moment as the call
+    // starts — and switching face tracking off for the rest of the call over
+    // one slow answer is a worse failure than a few seconds of center crop. So
+    // the sampler stands down and tries again, backing off each time it is
+    // disappointed, up to a ceiling. Only a detector that cannot be constructed
+    // is treated as permanently absent, because that one is structural.
     let inFlight = false;
-    let answered = false;
     let firstAskAt = 0;
+    let backoff = DETECT_RETRY_MS;
     let timer: ReturnType<typeof setInterval> | null = null;
-    const giveUp = () => {
-      detectorState = "absent";
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    // Answers from before a stand-down belong to a question we stopped waiting
+    // for; a late one must not be mistaken for the current attempt's.
+    let askGen = 0;
+
+    const standDown = () => {
       if (timer) clearInterval(timer);
       timer = null;
+      askGen++;
+      inFlight = false;
+      firstAskAt = 0;
+      retry = setTimeout(() => {
+        if (stopped) return;
+        backoff = Math.min(backoff * 2, DETECT_RETRY_MAX_MS);
+        timer = setInterval(() => void sample(), SAMPLE_MS);
+        void sample();
+      }, backoff);
     };
+
     const sample = async () => {
-      if (stopped || !detector || inFlight || video.videoWidth === 0) return;
-      if (!answered && firstAskAt && Date.now() - firstAskAt > DETECT_DEADLINE_MS) return giveUp();
-      if (!firstAskAt) firstAskAt = Date.now();
+      if (stopped || !detector) return;
+      // A question already outstanding. This is where the deadline is enforced,
+      // BEFORE the early return — a detection that hangs never comes back to
+      // check on itself, so the only thing that can notice it is the next tick.
+      if (inFlight) {
+        if (firstAskAt && Date.now() - firstAskAt > DETECT_DEADLINE_MS) standDown();
+        return;
+      }
+      if (video.videoWidth === 0) return;
+      firstAskAt = Date.now();
+      const gen = askGen;
       let faces: Array<{ boundingBox: FaceBox }> = [];
       inFlight = true;
       try {
         faces = await detector.detect(video);
-        answered = true;
       } catch {
-        // A detector that throws once throws every time (an unsupported build,
-        // a frame it cannot read). Stop asking and live on the center crop.
-        return giveUp();
+        // A frame it could not read, or a detector that is not really there.
+        // Same treatment as silence: stand down, come back later.
+        if (gen === askGen) standDown();
+        return;
       } finally {
-        inFlight = false;
+        if (gen === askGen) inFlight = false;
       }
-      if (stopped) return;
+      if (stopped || gen !== askGen) return;
+      // It answered, so this attempt is working: the backoff starts fresh and a
+      // slow patch later in the call gets the same patience the first one did.
+      backoff = DETECT_RETRY_MS;
       const box = faces[0]?.boundingBox;
       if (box) {
         lastFaceAt = Date.now();
@@ -125,14 +157,19 @@ export function useFaceCrop(opts: {
       stopped = true;
       cancelAnimationFrame(raf);
       if (timer) clearInterval(timer);
+      if (retry) clearTimeout(retry);
     };
   }, [videoRef, active, diameter, mirror]);
 }
 
 /** How often the face detector is asked where the face is. */
 const SAMPLE_MS = 320;
-/** How long the first detection may take before the detector is written off. */
+/** How long one detection may take before the sampler stops waiting for it. */
 const DETECT_DEADLINE_MS = 3000;
+/** How long it waits before asking again after an unanswered detection. */
+const DETECT_RETRY_MS = 5000;
+/** The ceiling that backoff climbs to — a detector this quiet is probably gone. */
+const DETECT_RETRY_MAX_MS = 60_000;
 /** How long a face may be missing before the circle drifts back to center. */
 const FACE_LOST_MS = 2000;
 /** How much of the remaining distance the crop covers each frame. */
@@ -152,6 +189,11 @@ let detector: Detector | null = null;
  * ordinary answer. Without it the circles show a center crop, which is a
  * perfectly good picture of somebody sitting at their desk; it just does not
  * follow them.
+ *
+ * This is the ONLY permanent verdict about the detector, and it is permanent
+ * because it is structural: an interface that is not on `globalThis` will not
+ * appear later in the same window. A detector that merely fails to ANSWER is a
+ * separate, temporary matter, handled by the sampler's backoff above.
  */
 export function getFaceDetector(): Detector | null {
   if (detectorState === "unknown") {
