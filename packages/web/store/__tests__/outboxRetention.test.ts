@@ -724,19 +724,29 @@ describe("receipt-aware asyncAction", () => {
     expect(outbox.size).toBe(0);
   });
 
-  it("uses a routing-aware reload and retires navigation only after the target boot", async () => {
+  it("navigates in-app on acknowledgement and retires the receipt at once", async () => {
     const { wrapped, outbox } = makeHarness();
     const originalWindow = (globalThis as any).window;
     const assigned: string[] = [];
     const location = {
       pathname: "/docs",
       assign(href: string) {
-        assigned.push(href);
-        location.pathname = href;
+        throw new Error(`full navigation to ${href} — creates must navigate in-app`);
       },
     };
+    const popped: string[] = [];
     (globalThis as any).window = {
       location,
+      history: {
+        pushState(_state: unknown, _title: string, href: string) {
+          assigned.push(href);
+          location.pathname = href;
+        },
+      },
+      dispatchEvent(e: { type: string }) {
+        popped.push(e.type);
+        return true;
+      },
     };
     try {
       outbox.set("create-doc", seedEntry({
@@ -756,10 +766,12 @@ describe("receipt-aware asyncAction", () => {
       await settle();
 
       expect(assigned).toEqual(["/docs/doc-server-id"]);
-      expect(outbox.size).toBe(1);
+      expect(popped).toEqual(["popstate"]);
+      // In-app navigation completes the acknowledgement synchronously: the
+      // pathname already proves the routing effect, so the row retires now.
+      expect(outbox.size).toBe(0);
 
-      // Simulate the target boot. The pathname proves the routing effect
-      // completed, so replay retires the exact receipt without navigating twice.
+      // A replay after a crash sees the target pathname and never navigates twice.
       wrapped._drainOutbox();
       await settle();
 
