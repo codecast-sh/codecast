@@ -18,6 +18,15 @@
  * like Claude Code) carries its own TCC identity: prompts name the agent,
  * and grants persist under the agent vendor's stable code signature.
  *
+ * One more piece is needed for that persistence: TCC keys a bare executable
+ * by its resolved PATH as well as its signature, and Claude Code's native
+ * installer gives every release a new path (~/.local/share/claude/versions/
+ * <version>), so a disclaimed launch straight from the install re-prompts on
+ * every update under the version's name ("2.1.241" would like to access...).
+ * launchBinary therefore starts claude from the fixed-path copy that
+ * stableClaudeBinary.ts maintains; the two halves together are what make a
+ * grant answer once and stay answered.
+ *
  * responsibility_spawnattrs_setdisclaim is private API (present in libSystem
  * since 10.14). Everything here degrades gracefully: if the symbol is missing
  * or FFI is unavailable, the wrapper falls back to a plain passthrough spawn

@@ -106,3 +106,10 @@ export const exec: typeof cp.exec = wrap(cp.exec);
 export const execSync: typeof cp.execSync = wrapSync("execSync", cp.execSync);
 export const execFile: typeof cp.execFile = wrap(cp.execFile);
 export const execFileSync: typeof cp.execFileSync = wrapSync("execFileSync", cp.execFileSync);
+
+/** Absolute path `name` resolves to on PATH, or null when it is not installed. */
+export function whichBin(name: string): string | null {
+  const r = spawnSync("which", [name], { encoding: "utf-8" });
+  const found = r.status === 0 ? r.stdout.trim() : "";
+  return found || null;
+}

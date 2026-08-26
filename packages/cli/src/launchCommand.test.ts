@@ -67,11 +67,16 @@ function oracle(input: LaunchArgsInput): { binaryArgs: string[]; notifyCodexBypa
 }
 
 describe("launchBinary is a registry lookup matching the old binary if/else", () => {
+  const noStable = { stable: () => null };
   test("codex/cursor-agent/gemini/claude", () => {
-    expect(launchBinary("codex")).toBe("codex");
-    expect(launchBinary("cursor")).toBe("cursor-agent");
-    expect(launchBinary("gemini")).toBe("gemini");
-    expect(launchBinary("claude")).toBe("claude");
+    expect(launchBinary("codex", noStable)).toBe("codex");
+    expect(launchBinary("cursor", noStable)).toBe("cursor-agent");
+    expect(launchBinary("gemini", noStable)).toBe("gemini");
+    expect(launchBinary("claude", noStable)).toBe("claude");
+  });
+  test("claude launches from its fixed-path copy when macOS has one", () => {
+    expect(launchBinary("claude", { stable: () => "/home/u/.codecast/bin/claude" })).toBe("/home/u/.codecast/bin/claude");
+    expect(launchBinary("codex", { stable: () => "/home/u/.codecast/bin/claude" })).toBe("codex");
   });
 });
 

@@ -3484,7 +3484,7 @@ async function executeRemoteCommand(
         // launchCommand.ts (buildLaunchArgs, unit-tested per client). The daemon
         // keeps the impure pieces: reading the config accessor + flag helpers, the
         // one-time codex-bypass notification, and the arg sanitizer.
-        const binary = launchBinary(agentType);
+        const binary = launchBinary(agentType, { warn: log });
         const requestedModelOpt = requestedModelKey ? findModelOption(agentType, requestedModelKey) : undefined;
         const { binaryArgs: rawLaunchArgs, notifyCodexBypass } = buildLaunchArgs({
           agentType,
@@ -4442,7 +4442,7 @@ async function executeRemoteCommand(
             // Registry-sourced binary (adds pi; cursor -> cursor-agent) — the same
             // launchBinary the fresh-start path uses, so no client is silently dropped
             // to claude here.
-            const blankBinary = launchBinary(blankAgentType);
+            const blankBinary = launchBinary(blankAgentType, { warn: log });
             // Inject the default permission flags exactly like start_session and
             // auto-resume. Building from config args alone here launched a bare
             // `claude` that fell into the project's dontAsk default — the agent
@@ -15203,7 +15203,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       const convEffort = (await syncServiceRef.getProjectInfo(conversationId).catch(() => null))?.effort;
       if (convEffort && /^[a-z]+$/.test(convEffort)) effortFlag = ` --effort ${convEffort}`;
     }
-    resumeCmd = `claude --resume ${resumeId}${modelFlag}${effortFlag}${extraFlags ? " " + extraFlags : ""}`;
+    resumeCmd = `${launchBinary("claude", { warn: log })} --resume ${resumeId}${modelFlag}${effortFlag}${extraFlags ? " " + extraFlags : ""}`;
   }
 
   const tmuxSession = resumeTmuxName(agentType, sessionId, slug);
@@ -20130,7 +20130,7 @@ async function main(): Promise<void> {
                 "CLAUDECODE",
                 "-u",
                 "CLAUDE_CODE_ENTRYPOINT",
-                launchBinary(target.requestedAgent),
+                launchBinary(target.requestedAgent, { warn: log }),
                 ...sanitizeBinaryArgs(binaryArgs),
               ];
               return { command: tokens.map(shellEscapeForSh).join(" ") };

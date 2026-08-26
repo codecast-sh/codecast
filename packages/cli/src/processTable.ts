@@ -13,6 +13,7 @@
 
 import { execFileSync, spawnSync } from "./proc.js";
 import { isRecognizedAgentComm } from "./sessionProcessMatcher.js";
+import { CLAUDE_VERSIONED_BINARY_RE } from "./stableClaudeBinary.js";
 
 export type ProcRow = { pid: number; ppid: number; command: string };
 
@@ -75,7 +76,7 @@ export function descendantPids(procs: ProcRow[], root: number): number[] {
  *  (`~/.local/share/claude/versions/2.1.237`), whose basename is a version. */
 export function isAgentCommand(command: string): boolean {
   const argv0 = command.trim().split(/\s+/)[0] ?? "";
-  if (/\/claude\/versions\/[^/]+$/.test(argv0)) return true;
+  if (CLAUDE_VERSIONED_BINARY_RE.test(argv0)) return true;
   const base = argv0.split("/").pop() ?? "";
   // interpreters (node/bun) are too generic for a whole-tree count
   if (/^(node|bun|deno)$/.test(base)) return false;
