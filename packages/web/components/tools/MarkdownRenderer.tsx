@@ -349,7 +349,16 @@ export const MD_COMPONENTS: Components = {
 // individual blocks (e.g. the quote/comment review rail) render this so the
 // blocks become direct children of their own container; everyone else uses
 // MarkdownRenderer, which wraps these in the prose container.
-export const MarkdownBlocks = memo(function MarkdownBlocks({ content }: { content: string }) {
+export const MarkdownBlocks = memo(function MarkdownBlocks({
+  content,
+  components = MD_COMPONENTS,
+}: {
+  content: string;
+  /** Component-map override for surfaces with their own type scale (the doc
+   *  reading view). Must be a module-level constant — a fresh object identity
+   *  per render defeats both this memo and react-markdown's caching. */
+  components?: Components;
+}) {
   // An all-HTML body renders as a sanitized canvas — the markdown pipeline
   // escapes raw tags into garbled source.
   const html = tryRenderHtmlMessage(content);
@@ -358,7 +367,7 @@ export const MarkdownBlocks = memo(function MarkdownBlocks({ content }: { conten
     <ReactMarkdown
       remarkPlugins={MD_REMARK_PLUGINS}
       rehypePlugins={MD_REHYPE_PLUGINS}
-      components={MD_COMPONENTS}
+      components={components}
     >
       {content}
     </ReactMarkdown>

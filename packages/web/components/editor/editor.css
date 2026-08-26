@@ -517,3 +517,50 @@
   background: color-mix(in srgb, var(--sol-cyan) 8%, transparent);
   border-radius: 2px;
 }
+
+/* ── Read-mode body parity ──────────────────────────────────────────────────
+   The doc reading view (DocumentDetailLayout) shares the editor's visual
+   language so toggling edit mode restyles nothing: same body color and
+   rhythm, same inline-code chip, same blockquote/hr treatment. Heading sizes
+   are matched in DOC_MD_COMPONENTS (they're Tailwind utilities there). */
+.doc-read-body {
+  color: var(--sol-text-muted);
+  line-height: 1.8;
+}
+
+.doc-read-body :not(pre) > code {
+  background: var(--sol-bg-highlight);
+  color: #2aa198;
+  padding: 0.15em 0.4em;
+  border-radius: 3px;
+  font-size: 0.9em;
+  font-weight: normal;
+}
+
+.doc-read-body :not(pre) > code::before,
+.doc-read-body :not(pre) > code::after {
+  content: none; /* the prose plugin's backtick pseudo-quotes */
+}
+
+.doc-read-body blockquote {
+  border-left: 3px solid var(--sol-border);
+  color: var(--sol-text-dim);
+}
+
+.doc-read-body blockquote p::before,
+.doc-read-body blockquote p::after {
+  content: none; /* the prose plugin's decorative curly quotes */
+}
+
+.doc-read-body hr {
+  border: none;
+  border-top: 1px solid var(--sol-border);
+  margin: 2em 0;
+  opacity: 0.4;
+}
+
+.doc-read-body a:not(.not-prose) {
+  color: #268bd2;
+  text-decoration-color: rgba(38, 139, 210, 0.3);
+  text-underline-offset: 2px;
+}
