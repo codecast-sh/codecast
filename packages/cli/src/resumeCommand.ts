@@ -37,9 +37,9 @@ const SHELL_SAFE_SESSION_ID_RE = /^[A-Za-z0-9._-]+$/;
  *    shell-safety alone is too loose; require the one real shape.
  *  - gemini: always true — its resume ignores the id (`gemini --resume latest`),
  *    so the id is never interpolated and there is nothing to inject through.
- *  - claude / codex / cursor / pi: the id IS interpolated, so require the
- *    shell-safe shape (covers UUIDs and claude's `agent-`/`forked-` ids, refuses
- *    every injection payload).
+ *  - claude / codex / cursor / pi / grok: the id IS interpolated, so require the
+ *    shell-safe shape (covers UUIDs — grok ids are always UUIDs — and claude's
+ *    `agent-`/`forked-` ids, refuses every injection payload).
  */
 export function isValidResumeSessionId(agentType: AgentClientId, sessionId: string): boolean {
   if (typeof sessionId !== "string" || sessionId.length === 0) return false;
@@ -231,19 +231,19 @@ export function buildNonClaudeResumeCommand(
 /**
  * Which agent a resume dispatches on, from the explicit hint plus whatever
  * findSessionFile returned for the local transcript. An explicit cursor, opencode,
- * or pi hint is trusted OVER the local file: cursor and opencode own their session
- * stores (SQLite) so there is no local JSONL to detect, and a pi transcript may be
- * absent on a fresh device (cross-device resume) — in all cases the file is either
- * missing or, after a bogus reconstitution, claude-labeled, and without trusting
- * the hint the resume falls through to `claude --resume` and runs Claude's repair
- * machinery against a session that never had a Claude transcript. (codex/gemini
- * hints and everything else keep the old behavior.)
+ * pi, or grok hint is trusted OVER the local file: cursor and opencode own their
+ * session stores (SQLite) so there is no local JSONL to detect, and a pi or grok
+ * transcript may be absent on a fresh device (cross-device resume) — in all cases
+ * the file is either missing or, after a bogus reconstitution, claude-labeled, and
+ * without trusting the hint the resume falls through to `claude --resume` and runs
+ * Claude's repair machinery against a session that never had a Claude transcript.
+ * (codex/gemini hints and everything else keep the old behavior.)
  */
 export function resolveResumeAgentType(
   agentTypeHint: AgentClientId | undefined,
   sessionFileAgentType: AgentClientId | undefined,
 ): AgentClientId {
-  if (agentTypeHint === "cursor" || agentTypeHint === "opencode" || agentTypeHint === "pi") return agentTypeHint;
+  if (agentTypeHint === "cursor" || agentTypeHint === "opencode" || agentTypeHint === "pi" || agentTypeHint === "grok") return agentTypeHint;
   return sessionFileAgentType ?? "claude";
 }
 

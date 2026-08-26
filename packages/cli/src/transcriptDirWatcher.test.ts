@@ -15,6 +15,8 @@ import {
   expandTranscriptRoot,
   encodePiCwdSlug,
   decodePiCwdSlug,
+  encodeGrokCwdSlug,
+  decodeGrokCwdSlug,
   type TranscriptDirEvent,
 } from "./transcriptDirWatcher.js";
 
@@ -285,6 +287,154 @@ describe("TranscriptDirWatcher — live behavior via the pi config", () => {
   });
 });
 
+// ── grok (pl-438) ───────────────────────────────────────────────────────────
+describe("transcriptDirWatcherConfig — grok config", () => {
+  const cfg = transcriptDirWatcherConfig("grok");
+  const uuid = "c3f8a1b2-4d5e-4f60-8a9b-0c1d2e3f4a5b";
+
+  test("base path is ~/.grok/sessions (from the registry descriptor)", () => {
+    expect(cfg.basePath).toBe(path.join(process.env.HOME || "", ".grok", "sessions"));
+    expect(cfg.basePath).toBe(expandTranscriptRoot(AGENT_CLIENTS.grok.transcriptRoots[0]));
+  });
+
+  test("watches ONLY updates.jsonl — never the session dir's churning siblings", () => {
+    expect(cfg.watchFilter(`%2Ftmp%2Fdemo/${uuid}/updates.jsonl`)).toBe(true);
+    // chat_history.jsonl is a rewriteable cache (compaction replaces it) and the
+    // rest churn during a turn — matching any of them double-fires per session.
+    for (const sibling of [
+      "chat_history.jsonl",
+      "chat_history.jsonl.pre-strip",
+      "summary.json",
+      "plan.json",
+      "signals.json",
+      "updates.jsonl.lock",
+      "updates.jsonl.tmp",
+    ]) {
+      expect(cfg.watchFilter(`%2Ftmp%2Fdemo/${uuid}/${sibling}`)).toBe(false);
+    }
+    // a bare updates.jsonl at the root has no session dir -> not a session file
+    expect(cfg.watchFilter("updates.jsonl")).toBe(false);
+    expect(cfg.scanMatch("/x", "updates.jsonl")).toBe(true);
+    expect(cfg.scanMatch("/x", "chat_history.jsonl")).toBe(false);
+    expect(cfg.maxDepth).toBe(3);
+  });
+
+  test("session id is the containing dir's FULL uuid", () => {
+    expect(cfg.extractSessionId(`/root/%2Ftmp%2Fdemo/${uuid}/updates.jsonl`)).toBe(uuid);
+  });
+
+  // Ingest-boundary RCE guard (same contract as pi): the id flows into a resume
+  // shell command, so a non-UUID dir name must be REFUSED (null) — which also
+  // skips the sessions root's non-session entries by construction.
+  test("REFUSES a non-uuid containing dir (cruft and crafted names) with null", () => {
+    for (const dir of [
+      "x; touch pwned #",
+      "not-a-uuid",
+      "session_search.sqlite",
+      ".cwd",
+      `${"c3f8a1b2-4d5e-4f60-8a9b-0c1d2e3f4a5b"}-extra`,
+    ]) {
+      expect(cfg.extractSessionId(`/root/%2Ftmp%2Fdemo/${dir}/updates.jsonl`)).toBeNull();
+    }
+  });
+});
+
+describe("grok cwd-slug encode/decode", () => {
+  // Encoder verbatim to grok's encode_cwd_dirname (the Rust `urlencoding` crate):
+  // percent-encode every byte outside [A-Za-z0-9_.~-], uppercase hex.
+  test("encodes real cwds to the exact on-disk dir names", () => {
+    expect(encodeGrokCwdSlug("/Users/ashot/src/codecast")).toBe("%2FUsers%2Fashot%2Fsrc%2Fcodecast");
+    expect(encodeGrokCwdSlug("/private/tmp")).toBe("%2Fprivate%2Ftmp");
+  });
+
+  test("is STRICTER than encodeURIComponent: !'()* are percent-encoded too", () => {
+    // encodeURIComponent leaves these bare — a naive delegation would compute a
+    // dir name grok never writes and the session lookup would miss.
+    expect(encodeGrokCwdSlug("/tmp/a!b'c(d)e*f")).toBe("%2Ftmp%2Fa%21b%27c%28d%29e%2Af");
+    expect(encodeURIComponent("/tmp/a!b'c(d)e*f")).not.toBe(encodeGrokCwdSlug("/tmp/a!b'c(d)e*f"));
+  });
+
+  test("round-trips losslessly (unlike pi's dash-collapsing slug)", () => {
+    for (const cwd of [
+      "/Users/ashot/src/codecast",
+      "/private/tmp",
+      "/Users/dev/footage-app",
+      "/tmp/a!b'c(d)e*f",
+      "/tmp/with space/übung",
+    ]) {
+      expect(decodeGrokCwdSlug(encodeGrokCwdSlug(cwd))).toBe(cwd);
+    }
+  });
+
+  test("decode accepts only absolute results — hash dirs and malformed %-seqs -> null", () => {
+    // Long cwds (>255 encoded bytes) use `{slug}-{blake3_16}` dir names, which
+    // decode to relative text; there the dir's `.cwd` file / summary.json cwd is
+    // the source of truth, so the decoder must refuse rather than guess.
+    expect(decodeGrokCwdSlug("codecast-0123456789abcdef")).toBeNull();
+    expect(decodeGrokCwdSlug("%ZZbroken")).toBeNull();
+    expect(decodeGrokCwdSlug("%2Fok")).toBe("/ok");
+  });
+});
+
+describe("TranscriptDirWatcher — live behavior via the grok config", () => {
+  test("emits a session two dirs deep, id = uuid dir name; siblings never fire", async () => {
+    const root = path.join(os.tmpdir(), `.grok-watcher-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    const sessionId = "a7c9c0e2-1d82-4d42-b342-f59fefc7b9f5";
+    const sessionDir = path.join(root, encodeGrokCwdSlug("/tmp/grok-demo"), sessionId);
+    const filePath = path.join(sessionDir, "updates.jsonl");
+    fs.mkdirSync(sessionDir, { recursive: true });
+
+    const emitted: string[] = [];
+    const watcher = new TranscriptDirWatcher(transcriptDirWatcherConfig("grok", root));
+    watcher.on("session", (e: TranscriptDirEvent) => emitted.push(e.filePath));
+    watcher.start();
+    await new Promise((r) => setTimeout(r, 200));
+
+    const addPromise = waitForSessionEvent(watcher, (e) => e.filePath === filePath);
+    // The real dir's churning siblings land beside the transcript — none may fire.
+    fs.writeFileSync(path.join(sessionDir, "chat_history.jsonl"), "{}\n");
+    fs.writeFileSync(path.join(sessionDir, "summary.json"), "{}");
+    fs.writeFileSync(path.join(sessionDir, "updates.jsonl.lock"), "");
+    fs.writeFileSync(filePath, '{"timestamp":0,"method":"session/update","params":{"sessionId":"' + sessionId + '","update":{"sessionUpdate":"available_commands_update","availableCommands":[]}}}\n');
+    const addEvent = await addPromise;
+    expect(addEvent.sessionId).toBe(sessionId);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(emitted.every((p) => p.endsWith(`${path.sep}updates.jsonl`))).toBe(true);
+
+    watcher.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test("skips the sessions root's non-session entries and non-uuid dirs on scan", async () => {
+    const root = path.join(os.tmpdir(), `.grok-watcher-skip-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    const goodId = "b1946ac9-2d0e-4f3a-9c11-000000000001";
+    const cwdDir = path.join(root, encodeGrokCwdSlug("/tmp/grok-demo"));
+    const goodPath = path.join(cwdDir, goodId, "updates.jsonl");
+    // Poison: an updates.jsonl inside a NON-uuid dir (crafted name) + root cruft.
+    const poisonPath = path.join(cwdDir, "x; touch pwned #", "updates.jsonl");
+    fs.mkdirSync(path.dirname(goodPath), { recursive: true });
+    fs.mkdirSync(path.dirname(poisonPath), { recursive: true });
+    fs.writeFileSync(path.join(root, "session_search.sqlite"), "");
+    fs.writeFileSync(path.join(cwdDir, ".cwd"), "/tmp/grok-demo");
+    fs.writeFileSync(poisonPath, "{}\n");
+    fs.writeFileSync(goodPath, "{}\n");
+
+    const emitted: string[] = [];
+    const watcher = new TranscriptDirWatcher(transcriptDirWatcherConfig("grok", root));
+    watcher.on("session", (e: TranscriptDirEvent) => emitted.push(e.sessionId));
+    const sawGood = waitForSessionEvent(watcher, (e) => e.sessionId === goodId);
+    watcher.start();
+    await sawGood;
+    await new Promise((r) => setTimeout(r, 150));
+
+    expect(emitted).toContain(goodId);
+    expect(emitted.some((id) => id.includes("touch") || id.includes(";"))).toBe(false);
+
+    watcher.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+});
+
 // ── Spawner identification: transcript path → agent session ─────────────────
 // A `claude -p` child launched from a CODEX session's exec tool has no pid
 // registry entry anywhere in its ancestor chain (only Claude Code writes those),
@@ -309,6 +459,17 @@ describe("agentSessionFromTranscriptPath", () => {
       .toEqual({ agentType: "gemini", sessionId: "session-1" });
     expect(agentSessionFromTranscriptPath(path.join(HOME, ".pi/agent/sessions/-Users-j-code/2026-08-02T11-10-00_019fbf23-9395-7c32-9946-f420e4f967b4.jsonl")))
       .toEqual({ agentType: "pi", sessionId: "019fbf23-9395-7c32-9946-f420e4f967b4" });
+  });
+
+  test("names a grok session from its uuid DIRECTORY (the file itself is always updates.jsonl)", () => {
+    expect(agentSessionFromTranscriptPath(path.join(HOME, ".grok/sessions/%2FUsers%2Fj%2Fcode/c3f8a1b2-4d5e-4f60-8a9b-0c1d2e3f4a5b/updates.jsonl")))
+      .toEqual({ agentType: "grok", sessionId: "c3f8a1b2-4d5e-4f60-8a9b-0c1d2e3f4a5b" });
+    // sibling files in the same session dir are not the transcript
+    expect(agentSessionFromTranscriptPath(path.join(HOME, ".grok/sessions/%2FUsers%2Fj%2Fcode/c3f8a1b2-4d5e-4f60-8a9b-0c1d2e3f4a5b/chat_history.jsonl")))
+      .toBeNull();
+    // an updates.jsonl outside a uuid session dir names nothing
+    expect(agentSessionFromTranscriptPath(path.join(HOME, ".grok/sessions/%2FUsers%2Fj%2Fcode/updates.jsonl")))
+      .toBeNull();
   });
 
   test("refuses a claude subagent transcript: it names the child, not the process's session", () => {

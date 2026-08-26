@@ -178,6 +178,52 @@ export function decodePiCwdSlug(slug: string): string {
   return inner ? `/${inner.replace(/-/g, "/")}` : "/";
 }
 
+// A grok session dir is named by the session's FULL uuid; anything else in an
+// encoded-cwd dir (`.cwd`, `*.lock`, `*.tmp`, `session_search.sqlite` at the
+// root) is cruft the watcher must refuse. Anchored full-match on purpose — the
+// dir name flows into a resume shell command (see extractSessionId's contract).
+const GROK_SESSION_DIR_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Encode a working directory into grok's session-directory name, verbatim to
+ * grok's `encode_cwd_dirname` (xai-grok-config paths.rs): the Rust `urlencoding`
+ * crate percent-encodes every UTF-8 byte outside `[A-Za-z0-9_.~-]` with
+ * uppercase hex. STRICTER than JS `encodeURIComponent`, which leaves `!'()*`
+ * bare — hence the byte loop instead of a delegation.
+ * `/Users/ashot/src/codecast` -> `%2FUsers%2Fashot%2Fsrc%2Fcodecast`.
+ *
+ * Long-path branch NOT implemented on purpose: when the encoded form exceeds 255
+ * bytes grok names the dir `{slugify(leaf,40)}-{blake3_hex16}` (a hash we can't
+ * reproduce without a blake3 dep). Callers that miss with this encoding must
+ * fall back to scanning the cwd dirs for the session-uuid DIRECTORY instead.
+ */
+export function encodeGrokCwdSlug(cwd: string): string {
+  let out = "";
+  for (const byte of Buffer.from(cwd, "utf8")) {
+    const ch = String.fromCharCode(byte);
+    out += /[A-Za-z0-9_.~-]/.test(ch) ? ch : `%${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+  }
+  return out;
+}
+
+/**
+ * Inverse of encodeGrokCwdSlug, mirroring grok's `decode_cwd_from_dirname`:
+ * URL-decode and accept ONLY a result that starts with `/` (an absolute cwd).
+ * Returns null for the long-path hash dirs (`{slug}-{blake3_16}` decodes to
+ * relative text) and malformed percent sequences — there grok keeps the original
+ * path in a `.cwd` file inside the dir, and the session's summary.json `info.cwd`
+ * (parser.extractGrokCwd) is authoritative anyway, including across cwd
+ * relocation; this decoder is only the sibling-less fallback.
+ */
+export function decodeGrokCwdSlug(slug: string): string | null {
+  try {
+    const decoded = decodeURIComponent(slug);
+    return decoded.startsWith("/") ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The per-client config for a jsonl-dir transcript watcher, sourced from the
  * client's registry descriptor (base path) plus its transcript-format specifics.
@@ -185,10 +231,36 @@ export function decodePiCwdSlug(slug: string): string {
  * sessionWatcher and cursor a SQLite watcher (different watcherKinds).
  */
 export function transcriptDirWatcherConfig(
-  clientId: Extract<AgentClientId, "codex" | "gemini" | "pi">,
+  clientId: Extract<AgentClientId, "codex" | "gemini" | "pi" | "grok">,
   basePathOverride?: string,
 ): TranscriptDirWatcherConfig {
   const basePath = basePathOverride ?? expandTranscriptRoot(AGENT_CLIENTS[clientId].transcriptRoots[0]);
+
+  if (clientId === "grok") {
+    // grok transcripts sit exactly two directories deep:
+    // sessions/<url-encoded-cwd>/<session-uuid>/updates.jsonl. Watch ONE file per
+    // session dir: the dir holds ~10 siblings that churn during a turn
+    // (chat_history.jsonl, summary.json, plan.json, signals.json, *.lock,
+    // *.pre-strip, *.tmp) — matching more than updates.jsonl would double-fire
+    // per session, and chat_history.jsonl is a rewriteable cache we deliberately
+    // never watch. The session id is the CONTAINING DIRECTORY's uuid name.
+    return {
+      basePath,
+      watchFilter: (rel) => /[\\/]updates\.jsonl$/.test(rel),
+      scanMatch: (_dir, name) => name === "updates.jsonl",
+      extractSessionId: (filePath) => {
+        const dirname = path.basename(path.dirname(filePath));
+        // A real grok session dir IS the session's full uuid. Anything else
+        // (`.cwd`, lock/tmp cruft, `session_search.sqlite` at the root, or a
+        // crafted name) must be refused rather than tracked under raw dir text,
+        // which would become the session_id and, unescaped, a resume-command
+        // injection vector (the same guard as pi's filename rule).
+        return GROK_SESSION_DIR_UUID_RE.test(dirname) ? dirname : null;
+      },
+      maxDepth: 3,
+      debounceMs: 100,
+    };
+  }
 
   if (clientId === "pi") {
     // pi transcripts sit exactly one directory deep: sessions/<cwd-slug>/<file>.jsonl.
@@ -246,8 +318,10 @@ export function transcriptDirWatcherConfig(
 /** Clients that give every session its own transcript FILE, so a process holding
  *  one open can be named from the path alone. opencode and cursor keep all their
  *  sessions in a single SQLite store and are absent by construction — an open
- *  handle on that store says "an agent", never "which session". */
-const FILE_PER_SESSION_CLIENTS = ["claude", "codex", "gemini", "pi"] as const;
+ *  handle on that store says "an agent", never "which session". For grok the
+ *  per-session identity is the uuid DIRECTORY holding updates.jsonl, which its
+ *  extractSessionId already returns from the file path. */
+const FILE_PER_SESSION_CLIENTS = ["claude", "codex", "gemini", "pi", "grok"] as const;
 
 /**
  * Which agent session (if any) a transcript path belongs to — the registry-driven

@@ -35,7 +35,7 @@ import { whichBin } from "./proc.js";
 import { AGENT_CLIENTS, type AgentClientId, type AgentClientDescriptor } from "@codecast/shared/contracts";
 import { parseTranscriptFor } from "./parser.js";
 import { SessionWatcher } from "./sessionWatcher.js";
-import { TranscriptDirWatcher, transcriptDirWatcherConfig, expandTranscriptRoot } from "./transcriptDirWatcher.js";
+import { TranscriptDirWatcher, transcriptDirWatcherConfig, expandTranscriptRoot, encodeGrokCwdSlug } from "./transcriptDirWatcher.js";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -119,6 +119,19 @@ export function clientFixture(id: AgentClientId): ClientFixture {
         // uuid is the session id.
         watchRelPath: path.join("--tmp-doctor--", `2026-01-01T00-00-00-000Z_${uuid()}.jsonl`),
       };
+    case "grok":
+      return {
+        // updates.jsonl envelopes: a user chunk, an assistant chunk, and the
+        // turn's terminal marker (timestamps in unix SECONDS by design).
+        transcript:
+          `{"timestamp":1,"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":${JSON.stringify(PROBE)}},"_meta":{"promptIndex":0}}}}\n` +
+          `{"timestamp":2,"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"pong"}}}}\n` +
+          `{"timestamp":3,"method":"_x.ai/session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","prompt_id":"p-0","stop_reason":"end_turn"}}}\n`,
+        readySample: "❯ ",
+        // grok: <url-encoded-cwd>/<session-uuid>/updates.jsonl, two dirs deep; the
+        // session id is the uuid DIRECTORY name.
+        watchRelPath: path.join(encodeGrokCwdSlug("/tmp/doctor"), uuid(), "updates.jsonl"),
+      };
     case "cursor":
       return {
         transcript: `user:\n${PROBE}\nassistant:\npong\n`,
@@ -176,12 +189,12 @@ export async function watcherFires(id: AgentClientId, fixture: ClientFixture, ti
   const filePath = path.join(root, fixture.watchRelPath);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 
-  // claude has its own SessionWatcher (projectsPath override); codex/gemini/pi share
-  // the generic TranscriptDirWatcher (basePath override from the registry config).
+  // claude has its own SessionWatcher (projectsPath override); codex/gemini/pi/grok
+  // share the generic TranscriptDirWatcher (basePath override from the registry config).
   const watcher =
     id === "claude"
       ? new SessionWatcher(root)
-      : new TranscriptDirWatcher(transcriptDirWatcherConfig(id as "codex" | "gemini" | "pi", root));
+      : new TranscriptDirWatcher(transcriptDirWatcherConfig(id as "codex" | "gemini" | "pi" | "grok", root));
 
   try {
     return await new Promise<boolean>((resolve) => {

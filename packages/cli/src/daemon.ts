@@ -42,7 +42,7 @@ import { buildDisclaimShellPrefix } from "./disclaim.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
 import { getCodexAccountsHeartbeatPayload, refreshCodexUsageSnapshots, autoSaveActiveCodexProfile, migrateLegacyCodexProfileNames } from "./codexAccounts.js";
-import { TranscriptDirWatcher, transcriptDirWatcherConfig, agentSessionFromTranscriptPath, decodePiCwdSlug, type TranscriptDirEvent, type DirEventWatcher } from "./transcriptDirWatcher.js";
+import { TranscriptDirWatcher, transcriptDirWatcherConfig, agentSessionFromTranscriptPath, decodePiCwdSlug, decodeGrokCwdSlug, type TranscriptDirEvent, type DirEventWatcher } from "./transcriptDirWatcher.js";
 import {
   OpencodeStorageWatcher,
   opencodeDbPath,
@@ -93,7 +93,7 @@ import {
   type ProcessOwnership,
   type ProcessSessionClaim,
 } from "./sessionProcessMatcher.js";
-import { parseSessionFile, parseTranscriptFor, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractGeminiProjectHash, extractPiCwd, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
+import { parseSessionFile, parseTranscriptFor, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractGeminiProjectHash, extractPiCwd, extractGrokCwd, isGrokInternalSession, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
@@ -746,6 +746,15 @@ function getPermissionFlags(agentType: AgentClientId, config?: Config | null): s
     if (modes?.codex === "default") return null;
     // Default to bypass when no explicit config is set
     return "--dangerously-bypass-approvals-and-sandbox";
+  } else if (agentType === "grok") {
+    // Managed grok is driven from the web and can't answer TUI permission
+    // prompts (panePromptMonitoring: false), so it launches in bypass — grok
+    // uses claude's exact --permission-mode spelling (verified on v1.0.5:
+    // default|acceptEdits|auto|dontAsk|bypassPermissions|plan). Honor a
+    // user-pinned mode in agent_args.grok, codex-style, so it can't double up.
+    const existing = getAgentArgs(config, "grok") || "";
+    if (existing.includes("--permission-mode") || existing.includes("--always-approve")) return null;
+    return "--permission-mode bypassPermissions";
   } else if (agentType === "gemini") {
     // gemini flags TBD
   }
@@ -788,6 +797,14 @@ export function buildBlankLaunchArgs(
     const args = configured ? configured.split(/\s+/).filter(Boolean) : [];
     if (!args.includes("--auto")) args.push("--auto");
     return args;
+  }
+  if (agentType === "grok") {
+    // Same codex shape: getPermissionFlags returns null when agent_args.grok pins
+    // a permission mode, so concatenating can't double up. Without this branch a
+    // blank grok launched in its default permission mode and parked on TUI
+    // prompts nobody can answer.
+    const flags = [getAgentArgs(config, "grok") || "", permFlags || ""].filter(Boolean).join(" ");
+    return flags ? flags.split(/\s+/).filter(Boolean) : [];
   }
   // cursor/gemini/pi: no configured args or permission flags yet.
   return [];
@@ -4399,11 +4416,13 @@ async function executeRemoteCommand(
           log(`[REMOTE] Resume failed for ${sessionId.slice(0, 8)}, reconstituting session from DB in ${cwd}...`);
           let reconstituted = false;
 
-          // cursor-agent and opencode own their session stores (SQLite), and pi owns
-          // its JSONL tree under ~/.pi — none of them may have a Claude JSONL
-          // fabricated for them. Skip DB reconstitution for all three and fall
-          // through to the fresh spawn below.
-          if (config?.convex_url && config?.auth_token && resumeAgentType !== "cursor" && resumeAgentType !== "opencode" && resumeAgentType !== "pi") {
+          // cursor-agent and opencode own their session stores (SQLite), and
+          // pi/grok own their JSONL trees under ~/.pi and ~/.grok — none of them
+          // may have a Claude JSONL fabricated for them. Skip DB reconstitution
+          // for every store-owning client (mayReconstituteResumeTranscript is
+          // the single predicate both resume sites share) and fall through to
+          // the fresh spawn below.
+          if (config?.convex_url && config?.auth_token && mayReconstituteResumeTranscript(resumeAgentType)) {
             try {
               const siteUrl = config.convex_url.replace(".cloud", ".site");
               const exportData = await fetchExport(siteUrl, config.auth_token!, conversationId);
@@ -8353,6 +8372,9 @@ async function processOpencodeSession(
 // skipped), and orphans are synced uuids that dropped off the active branch (the
 // abandoned branch). Keyed by file path; in-memory only (a daemon restart resets to
 // empty, which re-syncs the full active branch idempotently via uuid upsert).
+// Shared by pi AND grok (processTranscriptDeltaSession): grok's rewind_marker
+// drops accumulated turns exactly the way a pi branch switch does, and the two
+// clients' transcript roots are disjoint so one path-keyed map serves both.
 const piSyncedUuids = new Map<string, Set<string>>();
 
 // Pure delta between the parser's current active branch and the uuids already
@@ -8382,7 +8404,46 @@ export function computePiSyncDelta<T extends { uuid?: string }>(
   return { newMessages, orphanUuids, nextSynced: activeUuids };
 }
 
-async function processPiSession(
+// ── grok transcript-path helpers ─────────────────────────────────────────────
+// updates.jsonl carries no cwd. The authoritative source is the sibling
+// summary.json (`info.cwd`, unencoded — and correct across session-dir
+// relocation); the %-encoded grandparent dir name is the fallback (lossless
+// except for grok's long-path hash dirs, where decode returns null).
+export function grokSessionCwdFromTranscriptPath(updatesPath: string): string | undefined {
+  try {
+    const summaryPath = path.join(path.dirname(updatesPath), "summary.json");
+    if (fs.existsSync(summaryPath)) {
+      const cwd = extractGrokCwd(fs.readFileSync(summaryPath, "utf-8"));
+      if (cwd) return cwd;
+    }
+  } catch {}
+  return decodeGrokCwdSlug(path.basename(path.dirname(path.dirname(updatesPath)))) ?? undefined;
+}
+
+// True when the session dir's summary.json marks it grok-internal (a subagent /
+// subagent_fork child, or hidden). Such sessions must never surface as top-level
+// codecast conversations — grok runs its own subagents and each writes a full
+// sibling session dir. A missing or unreadable summary means "not internal":
+// summary.json can land moments after the first updates, and skipping on absence
+// would drop the opening messages of every real session.
+export function isGrokInternalSessionDir(updatesPath: string): boolean {
+  try {
+    const summaryPath = path.join(path.dirname(updatesPath), "summary.json");
+    if (!fs.existsSync(summaryPath)) return false;
+    return isGrokInternalSession(fs.readFileSync(summaryPath, "utf-8"));
+  } catch {
+    return false;
+  }
+}
+
+// pi and grok share this whole-file delta sync pipeline: both are file-per-session
+// JSONL clients whose parser rebuilds the ACTIVE branch each pass (pi's parentId
+// chain, grok's rewind filter), so sync is the same computePiSyncDelta diff —
+// upsert the new turns, delete the orphaned ones. Everything client-specific is
+// parameterized here; the wrappers below (processPiSession / processGrokSession)
+// are what the watcher registrations bind.
+async function processTranscriptDeltaSession(
+  client: Extract<AgentClientId, "pi" | "grok">,
   filePath: string,
   sessionId: string,
   syncService: SyncService,
@@ -8395,6 +8456,10 @@ async function processPiSession(
   updateStateCallback: () => void
 ): Promise<void> {
   try {
+    // grok-internal children (subagents, hidden sessions) sync through their
+    // parent's transcript; ingesting them here would mint a top-level codecast
+    // conversation per subagent.
+    if (client === "grok" && isGrokInternalSessionDir(filePath)) return;
     let content: string;
     try {
       content = fs.readFileSync(filePath, "utf-8");
@@ -8404,13 +8469,13 @@ async function processPiSession(
         return;
       }
       if (err.code === "ENOENT") {
-        log(`pi transcript ${filePath} no longer exists; nothing to sync.`);
+        log(`${client} transcript ${filePath} no longer exists; nothing to sync.`);
         return;
       }
       throw err;
     }
 
-    const allMessages = parseTranscriptFor("pi", content);
+    const allMessages = parseTranscriptFor(client, content);
     // A transient empty/corrupt parse must be a no-op, never a signal to delete the
     // synced conversation (orphan detection below would treat every synced uuid as
     // abandoned).
@@ -8423,19 +8488,22 @@ async function processPiSession(
 
     if (!conversationId) {
       try {
-        // Authoritative project path is the session header's cwd; the containing
-        // slug dir decodes back to it only lossily (see decodePiCwdSlug).
-        const projectPath = extractPiCwd(content)
-          ?? decodePiCwdSlug(path.basename(path.dirname(filePath)));
+        // Authoritative project path is the transcript's own record of its cwd
+        // (pi: the session header; grok: the sibling summary.json); the containing
+        // slug dir decodes back to it only lossily (see decodePiCwdSlug — and
+        // grok's long-path hash dirs don't decode at all).
+        const projectPath = client === "pi"
+          ? extractPiCwd(content) ?? decodePiCwdSlug(path.basename(path.dirname(filePath)))
+          : grokSessionCwdFromTranscriptPath(filePath);
 
-        // Bind a daemon-launched pi to its start_session stub (codex pattern): find
-        // the live process's tmux pane and match it against the pending started
+        // Bind a daemon-launched agent to its start_session stub (codex pattern):
+        // find the live process's tmux pane and match it against the pending started
         // conversations; fall back to a unique cwd match when the process isn't found.
         let matchedStartedConversation: string | null = null;
         if (startedSessionTmux.size > 0) {
           const startedPiEntries = Array.from(startedSessionTmux.entries())
-            .filter(([, entry]) => entry.agentType === "pi");
-          const proc = await findSessionProcess(sessionId, "pi").catch(() => null);
+            .filter(([, entry]) => entry.agentType === client);
+          const proc = await findSessionProcess(sessionId, client).catch(() => null);
           let tmuxSessionName: string | null = null;
           if (proc) {
             tmuxSessionName = sessionProcessCache.get(sessionId)?.tmuxTarget?.split(":")[0] ?? null;
@@ -8467,7 +8535,7 @@ async function processPiSession(
             }
           }
           deleteStartedSession(matchedStartedConversation);
-          log(`Linked pi session ${sessionId.slice(0, 8)} to started conversation ${conversationId.slice(0, 12)}`);
+          log(`Linked ${client} session ${sessionId.slice(0, 8)} to started conversation ${conversationId.slice(0, 12)}`);
         } else {
           const firstUserMessage = allMessages.find((msg) => msg.role === "user");
           const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
@@ -8475,7 +8543,7 @@ async function processPiSession(
             userId,
             teamId,
             sessionId,
-            agentType: "pi",
+            agentType: client,
             projectPath,
             slug: undefined,
             title,
@@ -8485,7 +8553,7 @@ async function processPiSession(
           });
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
-          log(`Created conversation ${conversationId} for pi session ${sessionId}`);
+          log(`Created conversation ${conversationId} for ${client} session ${sessionId}`);
 
           if ((global as any).activeSessions) {
             (global as any).activeSessions.set(conversationId, { sessionId, conversationId, projectPath: "" });
@@ -8505,7 +8573,7 @@ async function processPiSession(
           }
         }
         const errMsg = err instanceof Error ? err.message : String(err);
-        log(`Failed to create pi conversation, queueing for retry: ${errMsg}`);
+        log(`Failed to create ${client} conversation, queueing for retry: ${errMsg}`);
 
         if (!pendingMessages[sessionId]) pendingMessages[sessionId] = [];
         for (const msg of newMessages) {
@@ -8527,7 +8595,7 @@ async function processPiSession(
         const firstUserMessage = allMessages.find((msg) => msg.role === "user");
         const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
         retryQueue.add("createConversation", {
-          userId, teamId, sessionId, agentType: "pi", title, startedAt: allMessages[0]?.timestamp,
+          userId, teamId, sessionId, agentType: client, title, startedAt: allMessages[0]?.timestamp,
         }, errMsg);
         piSyncedUuids.set(filePath, nextSynced);
         return;
@@ -8553,17 +8621,17 @@ async function processPiSession(
         const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
         try {
           conversationId = await syncService.createConversation({
-            userId, teamId, sessionId, agentType: "pi", title, startedAt: allMessages[0]?.timestamp,
+            userId, teamId, sessionId, agentType: client, title, startedAt: allMessages[0]?.timestamp,
           });
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
-          log(`Recreated conversation ${conversationId} for pi session ${sessionId}`);
+          log(`Recreated conversation ${conversationId} for ${client} session ${sessionId}`);
           // Fresh conversation: rebuild it from the FULL active branch, not just the
           // delta (the shared prefix isn't there anymore). No orphans to clean.
           await syncService.addMessages({ conversationId, messages: allMessages.map(prepMessageForSync) });
         } catch (retryErr) {
           const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-          log(`Failed to recreate pi conversation and add messages: ${retryErrMsg}`);
+          log(`Failed to recreate ${client} conversation and add messages: ${retryErrMsg}`);
         }
       }
     }
@@ -8576,7 +8644,7 @@ async function processPiSession(
     if (orphanUuids.length > 0 && !conversationRecreated) {
       try {
         await syncService.deleteMessagesByUuid(conversationId, orphanUuids);
-        log(`Deleted ${orphanUuids.length} orphaned pi message(s) after branch switch for session ${sessionId}`);
+        log(`Deleted ${orphanUuids.length} orphaned ${client} message(s) after branch switch for session ${sessionId}`);
       } catch (err) {
         logConvexFailure(err);
         finalSynced = new Set([...nextSynced, ...orphanUuids]);
@@ -8584,10 +8652,10 @@ async function processPiSession(
     }
 
     piSyncedUuids.set(filePath, finalSynced);
-    log(`Synced ${newMessages.length} pi messages for session ${sessionId}`);
+    log(`Synced ${newMessages.length} ${client} messages for session ${sessionId}`);
     syncStats.messagesSynced += newMessages.length;
     syncStats.sessionsActive.add(sessionId);
-    tryRegisterSessionProcess(sessionId, "pi");
+    tryRegisterSessionProcess(sessionId, client);
 
     if (conversationId) {
       sendAgentStatus(syncService, conversationId, sessionId, "working");
@@ -8596,9 +8664,12 @@ async function processPiSession(
     updateStateCallback();
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    log(`Error processing pi session file ${filePath}: ${errMsg}`);
+    log(`Error processing ${client} session file ${filePath}: ${errMsg}`);
   }
 }
+
+const processPiSession = processTranscriptDeltaSession.bind(null, "pi");
+const processGrokSession = processTranscriptDeltaSession.bind(null, "grok");
 
 interface ActiveSession {
   sessionId: string;
@@ -8780,7 +8851,10 @@ const findSessionProcessInflight = new Map<string, Promise<ClaudeSessionInfo | n
  * claude pattern stays a parameter rather than a descriptor field.
  */
 export function sessionProcessGrepToken(agentType: AgentClientId, claudePattern: string): string {
-  if (agentType === "codex" || agentType === "gemini") return AGENT_CLIENTS[agentType].binary;
+  // grok is a compiled Rust binary whose ps comm/argv is its registry binary name
+  // (verified live on v1.0.5) — same rule as codex/gemini. Falling through to the
+  // claude pattern would grep for claude processes and never find a grok session.
+  if (agentType === "codex" || agentType === "gemini" || agentType === "grok") return AGENT_CLIENTS[agentType].binary;
   // pi runs as `node …/@mariozechner/pi-coding-agent/dist/cli.js`, so its registry
   // binary "pi" is far too generic for `ps … | grep` (would match python/pip/…). Match
   // the distinctive package path that always appears in the process command line.
@@ -10067,17 +10141,22 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   return "unknown";
 }
 
-// Clients whose settled TUI carries NO ❯/› input glyph — the marker
-// classifyTmuxLiveState whitelists "idle" on. opencode (footer `ctrl+p commands`,
-// placeholder `Ask anything…`) and pi (status-bar context-budget segment, e.g.
-// `0.0%/200k`) advertise readiness through their registry promptReadyPattern
-// instead. Without this the injection pre-flight read their idle prompt as
-// "unknown" and refused to paste — a fresh opencode/pi launch's FIRST message
-// never delivered (ct-39174): tryStartedTmux reached the pane and logged "ready
-// (prompt visible)", then ensureTmuxReady threw AGENT_UNKNOWN_STATE and delivery
-// fell through to materialize/fresh-start, which both fail for a store-owned
-// client that has no session row until it has processed a turn.
-const GLYPHLESS_PROMPT_CLIENTS: ReadonlySet<AgentClientId> = new Set(["opencode", "pi"]);
+// Clients whose tmux readiness is classified WHOLE-PANE from their registry
+// promptReadyPattern, with busy-detection checked first — not the claude-chrome
+// ❯/›-glyph whitelist in classifyTmuxLiveState. Two ways in:
+//  - No glyph at all: opencode (footer `ctrl+p commands`, placeholder `Ask
+//    anything…`) and pi (status-bar context-budget segment, e.g. `0.0%/200k`).
+//    Without this the injection pre-flight read their idle prompt as "unknown"
+//    and refused to paste — a fresh opencode/pi launch's FIRST message never
+//    delivered (ct-39174): tryStartedTmux reached the pane and logged "ready
+//    (prompt visible)", then ensureTmuxReady threw AGENT_UNKNOWN_STATE and
+//    delivery fell through to materialize/fresh-start, which both fail for a
+//    store-owned client that has no session row until it has processed a turn.
+//  - Glyph that LIES while busy: grok keeps its ❯ composer visible for the whole
+//    turn (live pane capture, v1.0.5), so the glyph-whitelist path would read a
+//    mid-turn pane "idle" and the paste's leading Escape would cancel the running
+//    turn. grok needs the busy-first order this classifier guarantees.
+const GLYPHLESS_PROMPT_CLIENTS: ReadonlySet<AgentClientId> = new Set(["opencode", "pi", "grok"]);
 
 // Injection-readiness for a glyph-less client, tested against the WHOLE pane (not
 // extractTmuxLiveRegion's tight live-region tail — opencode has no ─/━ separator,
@@ -10093,7 +10172,14 @@ export function classifyGlyphlessClientPaneState(
   readyPattern: RegExp,
 ): TmuxLiveState {
   if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(paneContent)) return "exited";
-  if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt/i.test(paneContent)) return "busy";
+  // Busy before ready, always. Braille spinner frames + "esc to interrupt" cover
+  // opencode/pi; `Esc:cancel` / `Waiting for response` / `[stop]` are grok's busy
+  // chrome (live pane capture, v1.0.5 — the spinner sits in grok's HEADER, which a
+  // short capture window can crop, so the footer/status text must count too).
+  // CAUTION: keep these markers literal — grok's IDLE states contain the words
+  // "send a message to interrupt", so a generic /interrupt/ heuristic would read
+  // an idle grok pane as busy forever.
+  if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt|Esc:cancel|Waiting for response|\[stop\]/i.test(paneContent)) return "busy";
   if (readyPattern.test(paneContent)) return "idle";
   return "unknown";
 }
@@ -10791,6 +10877,73 @@ export function classifyPiTranscriptTail(tailContent: string): TranscriptTurnSta
   return "unknown";
 }
 
+// Grok's updates.jsonl marks turn boundaries with the xAI `turn_completed` update
+// — upstream calls it "the durable, replayable signal that a turn reached its
+// terminal outcome" — instead of a per-message stop_reason. We read the tail back
+// to front (mirroring classifyCodexTranscriptTail) and decide on the first
+// meaningful update:
+//   - turn_completed (ANY stop_reason: end_turn/cancelled/error/…)  -> idle
+//   - pending_interaction with no later interaction_resolved        -> active
+//     (the agent is parked on a question/permission — same convention as claude's
+//     pending AskUserQuestion: never idle; the needs-input path owns surfacing it)
+//   - user_message_chunk / tool_call / tool_call_update             -> active
+//   - a streaming agent_message/thought chunk with no terminal mark -> unknown
+//     (a crashed stream must defer, never read as active — claude convention)
+// Housekeeping kinds appended AFTER turn_completed (last_turn_summary,
+// session_summary_generated, session_recap, rewind_marker) and UI/meta kinds are
+// scanned past. An unparsable line is the expected torn tail (buffered appends +
+// healing) — skip it, never fail.
+export function classifyGrokTranscriptTail(tailContent: string): TranscriptTurnState {
+  const lines = tailContent.split("\n");
+  // interaction_resolved lines sit AFTER the pending_interaction they answer, so
+  // scanning backward we collect resolutions first and match them off by id
+  // (falling back to a counter when the id fields are absent).
+  const resolvedIds = new Set<string>();
+  let resolvedAnon = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let d: { params?: { update?: Record<string, unknown> }; update?: Record<string, unknown> };
+    try {
+      d = JSON.parse(line);
+    } catch {
+      continue; // torn/partial line (mid-write tail) -> skip
+    }
+    const update = d.params?.update ?? d.update;
+    const kind = update?.sessionUpdate;
+    if (typeof kind !== "string") continue;
+    switch (kind) {
+      case "turn_completed":
+        return "idle";
+      case "interaction_resolved": {
+        const key = update?.interaction_id ?? update?.id;
+        if (typeof key === "string") resolvedIds.add(key);
+        else resolvedAnon++;
+        break; // keep scanning
+      }
+      case "pending_interaction": {
+        const key = update?.interaction_id ?? update?.id;
+        if (typeof key === "string" && resolvedIds.has(key)) break;
+        if (typeof key !== "string" && resolvedAnon > 0) {
+          resolvedAnon--;
+          break;
+        }
+        return "active";
+      }
+      case "user_message_chunk":
+      case "tool_call":
+      case "tool_call_update":
+        return "active";
+      case "agent_message_chunk":
+      case "agent_thought_chunk":
+        return "unknown"; // streaming with no terminal marker -> defer
+      default:
+        break; // plan / meta / post-turn housekeeping -> keep scanning
+    }
+  }
+  return "unknown";
+}
+
 // The single client -> transcript-tail classifier mapping. claude, codex and pi have
 // a tail classifier; cursor/gemini return undefined, which every caller treats as
 // "this client's transcript format isn't classified — defer" (the old
@@ -10805,6 +10958,7 @@ const CLASSIFY_TRANSCRIPT_TAIL_BY_CLIENT: Partial<
   codex: classifyCodexTranscriptTail,
   opencode: classifyOpencodeTranscriptTail,
   pi: classifyPiTranscriptTail,
+  grok: classifyGrokTranscriptTail,
 };
 
 export function classifyTranscriptTailFor(
@@ -12276,6 +12430,25 @@ export function findSessionFile(sessionId: string): SessionFileInfo | null {
           if (entry.isFile() && entry.name.endsWith(".jsonl") && entry.name.includes(sessionId)) {
             return { path: path.join(dirPath, entry.name), agentType: "pi" };
           }
+        }
+      }
+    } catch {}
+  }
+
+  // grok sessions: ~/.grok/sessions/<url-encoded-cwd>/<sessionId>/updates.jsonl.
+  // The session DIRECTORY is named by the full uuid, so scan every cwd-slug dir
+  // for a child dir with that exact name (one existsSync per slug dir — this also
+  // covers grok's long-path hash dirs and sessions relocated between cwd dirs,
+  // which an encodeGrokCwdSlug lookup would miss).
+  const grokSessionsDir = path.join(process.env.HOME || "", ".grok", "sessions");
+  if (fs.existsSync(grokSessionsDir)) {
+    try {
+      const slugDirs = fs.readdirSync(grokSessionsDir, { withFileTypes: true })
+        .filter(d => d.isDirectory());
+      for (const slugDir of slugDirs) {
+        const updatesPath = path.join(grokSessionsDir, slugDir.name, sessionId, "updates.jsonl");
+        if (fs.existsSync(updatesPath)) {
+          return { path: updatesPath, agentType: "grok" };
         }
       }
     } catch {}
@@ -15039,18 +15212,18 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   let sessionFile = findSessionFile(sessionId);
   const config = readConfig();
   // cursor-agent and opencode each own their session store (SQLite: ~/.cursor,
-  // ~/.local/share/opencode/opencode.db), and pi owns its JSONL tree under ~/.pi;
-  // resume needs no local JSONL transcript for any of them. Trust the store-owned
-  // agent type HERE — via the hint, else what findSessionFile detected — before the
-  // reconstitution below (claude/codex only) can mislabel the session as claude and
-  // materialize a bogus Claude JSONL for it, and before the transcript-cwd read
-  // (which would parse binary DB bytes). A missing pi file falls through to the
-  // refuse branch — an honest failure, not a fabricated claude session.
+  // ~/.local/share/opencode/opencode.db), and pi/grok own their JSONL trees under
+  // ~/.pi and ~/.grok; resume needs no local Claude JSONL for any of them. Trust
+  // the store-owned agent type HERE — via the hint, else what findSessionFile
+  // detected — before the reconstitution below (mayReconstituteResumeTranscript)
+  // can mislabel the session as claude and materialize a bogus Claude JSONL for
+  // it, and before the transcript-cwd read (which would parse binary DB bytes).
+  // A missing pi/grok file falls through to the refuse branch — an honest
+  // failure, not a fabricated claude session.
   const storeOwnedResumeType = agentTypeHint ?? sessionFile?.agentType;
   const isStoreOwnedResume = storeOwnedResumeType === "cursor" || storeOwnedResumeType === "opencode";
   const isCursorResume = agentTypeHint === "cursor";
-  const isPiResume = agentTypeHint === "pi";
-  if (!isStoreOwnedResume && !isPiResume && !sessionFile && conversationId && config?.auth_token && config?.convex_url) {
+  if (mayReconstituteResumeTranscript(storeOwnedResumeType) && !sessionFile && conversationId && config?.auth_token && config?.convex_url) {
     logDelivery(`Session ${sessionId.slice(0, 8)} not found locally, reconstituting from codecast...`);
     try {
       const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -15152,6 +15325,9 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     const recordedCwd =
       agentType === "codex" ? (extractCodexCwd(jsonlContent) || undefined)
       : agentType === "gemini" ? undefined
+      // grok's updates.jsonl carries no cwd — the sibling summary.json (info.cwd)
+      // is authoritative, with the encoded dir name as fallback.
+      : agentType === "grok" ? grokSessionCwdFromTranscriptPath(jsonlPath)
       : (extractCwd(jsonlContent) || undefined);
     const resolvedCwd = await resolveResumeCwdOrRefuse({ recordedCwd, cwdOverride, conversationId });
     if (resolvedCwd) {
@@ -15317,14 +15493,14 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       "is not an object",
       "ENOENT",
     ];
-        // The glyph-prompt clients settle on ❯/›; opencode and pi render no such
-        // glyph (opencode's TUI has its own footer, pi's composer is a box + status
-        // bar), so their resumes watch their registry readiness patterns instead.
-        const promptPattern = agentType === "opencode"
-          ? AGENT_CLIENTS.opencode.promptReadyPattern
-          : agentType === "pi"
-            ? AGENT_CLIENTS.pi.promptReadyPattern
-            : /[❯›]/;
+        // The glyph-prompt clients settle on ❯/›; the GLYPHLESS_PROMPT_CLIENTS
+        // (opencode's footer, pi's box + status bar, grok's persistent-glyph
+        // composer) watch their registry readiness patterns instead — one lookup,
+        // not a per-client ternary, so a new registry client is never silently
+        // classified with claude's glyphs.
+        const promptPattern = GLYPHLESS_PROMPT_CLIENTS.has(agentType)
+          ? AGENT_CLIENTS[agentType].promptReadyPattern
+          : /[❯›]/;
     // Scale readiness poll based on JSONL file size — large sessions take much longer to resume
     let jsonlSize = 0;
     try { jsonlSize = fs.statSync(jsonlPath).size; } catch {}
@@ -15449,15 +15625,31 @@ const repairInFlight = new Map<string, Promise<boolean>>();
 
 // codecast owns a transcript GENERATOR for exactly two clients — claude and codex
 // (generateClaudeCodeJsonl / generateCodexJsonl). Every other client keeps its
-// session in a store we do NOT produce: cursor/opencode in SQLite, pi/gemini in
-// their own JSONL dialects. So repairing/materializing/reconstituting a Claude-or-
-// Codex JSONL for them is invalid, and when the write targets the client's own
-// file it is DESTRUCTIVE — the opencode repair path copied opencode.db → .bak then
-// wrote a Claude JSONL over the shared ~/.local/share/opencode/opencode.db,
-// clobbering every session in it (ct-39174 / ct-39178). These clients recover by a
-// plain re-resume; never regenerate a transcript for them.
+// session in a store we do NOT produce: cursor/opencode in SQLite, pi/gemini/grok
+// in their own JSONL dialects (grok: ~/.grok/sessions/<enc-cwd>/<uuid>/). So
+// repairing/materializing/reconstituting a Claude-or-Codex JSONL for them is
+// invalid, and when the write targets the client's own file it is DESTRUCTIVE —
+// the opencode repair path copied opencode.db → .bak then wrote a Claude JSONL
+// over the shared ~/.local/share/opencode/opencode.db, clobbering every session
+// in it (ct-39174 / ct-39178). These clients recover by a plain re-resume; never
+// regenerate a transcript for them.
 export function clientOwnsSessionStore(agentType: AgentClientId | undefined | null): boolean {
   return agentType != null && agentType !== "claude" && agentType !== "codex";
+}
+
+// The resume paths' twin of clientOwnsSessionStore: may a resume with NO local
+// transcript fabricate one from the convex export? Only for the clients whose
+// missing-transcript recovery has always been a local reconstitution — claude,
+// codex, and an unhinted resume (which defaults to claude downstream). gemini is
+// grandfathered: its reconstitution has always produced a claude-labeled JSONL
+// and changing that is not this guard's job. Everything else (cursor, opencode,
+// pi, grok) owns its session store: a missing transcript falls to the refuse /
+// fresh-spawn branch — an honest failure, never a fabricated Claude JSONL. Both
+// enumeration sites (autoResumeSessionInner and the resume_session handler) call
+// THIS predicate, so a new client is excluded by default instead of silently
+// joining the claude fallback.
+export function mayReconstituteResumeTranscript(agentType: AgentClientId | undefined | null): boolean {
+  return agentType == null || agentType === "claude" || agentType === "codex" || agentType === "gemini";
 }
 
 async function repairAndResumeSession(
@@ -20317,6 +20509,23 @@ async function main(): Promise<void> {
     new TranscriptDirWatcher(transcriptDirWatcherConfig("pi")),
     "pi",
     (event) => processPiSession(
+      event.filePath,
+      event.sessionId,
+      syncService,
+      config.user_id!,
+      config.team_id,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      titleCache,
+      updateState
+    ),
+  );
+
+  registerJsonlDirWatcher(
+    new TranscriptDirWatcher(transcriptDirWatcherConfig("grok")),
+    "grok",
+    (event) => processGrokSession(
       event.filePath,
       event.sessionId,
       syncService,

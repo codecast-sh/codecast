@@ -1564,6 +1564,338 @@ export function extractPiSessionId(content: string): string | undefined {
   return undefined;
 }
 
+// ── Grok Build (xai-org/grok-build) ─────────────────────────────────────────
+// Grok stores each session under ~/.grok/sessions/<url-encoded cwd>/<uuid>/. The
+// canonical transcript is updates.jsonl: an APPEND-ONLY stream of session updates
+// (the sibling chat_history.jsonl is a rewriteable model-context cache that
+// compaction replaces wholesale — never parse it as history). Each line is an
+// envelope {timestamp: <unix-SECONDS>, method, params} where method selects the
+// payload dialect:
+//   - "session/update"       → an ACP SessionNotification (camelCase fields:
+//     toolCallId, _meta.promptIndex), update tagged by `sessionUpdate` with
+//     snake_case variant names (user_message_chunk, agent_message_chunk,
+//     agent_thought_chunk, tool_call, tool_call_update, plan, …).
+//   - "_x.ai/session/update" → the xAI extension notification (variant FIELDS are
+//     snake_case: prompt_id, stop_reason, target_prompt_index) carrying turn
+//     lifecycle (turn_completed), rewind_marker, and housekeeping kinds.
+// Legacy lines have no method wrapper and parse as raw ACP notifications, so both
+// {params: {update}} and a bare {update} are accepted uniformly.
+//
+// Three grok-specific hard rules (upstream: filter_rewind_lines + the append/heal
+// machinery in xai-grok-shell session storage):
+//   1. A torn LAST line is expected (buffered appends heal on the next write) —
+//      skip unparsable lines silently, never fail the parse.
+//   2. Rewind never truncates the file: a rewind_marker with target_prompt_index N
+//      is APPENDED and superseded lines REMAIN, so the parser must drop every
+//      already-accumulated message with promptIndex >= N (last marker wins) or it
+//      resurrects rewound-away turns.
+//   3. Envelope timestamps are unix SECONDS — multiply by 1000.
+// Chunks are streaming deltas: consecutive same-role chunks coalesce into ONE
+// ParsedMessage, keyed by the line that opened it so uuids stay stable as the
+// file grows and the daemon's upsert-by-uuid sync patches messages in place.
+
+interface GrokContentBlock {
+  type?: string;
+  text?: string;
+  // image blocks (ACP): inline base64 + mimeType
+  data?: string;
+  mimeType?: string;
+}
+
+interface GrokUpdate {
+  sessionUpdate?: string;
+  // message/thought chunks — content is a single block (the streamed delta);
+  // tolerate an array too.
+  content?: GrokContentBlock | GrokContentBlock[] | unknown;
+  _meta?: { promptIndex?: number; modelId?: string };
+  // tool_call / tool_call_update (ACP camelCase)
+  toolCallId?: string;
+  title?: string;
+  status?: string;
+  rawInput?: unknown;
+  // xAI extension variants (snake_case fields)
+  stop_reason?: string;
+  agent_result?: string;
+  target_prompt_index?: number;
+  model_id?: string;
+  modelId?: string;
+  interaction_id?: string;
+  id?: string;
+}
+
+interface GrokEnvelope {
+  timestamp?: number; // unix SECONDS (u64)
+  method?: string;
+  params?: { sessionId?: string; update?: GrokUpdate };
+  // legacy raw-ACP line (no method wrapper)
+  sessionId?: string;
+  update?: GrokUpdate;
+}
+
+/** The update payload of one updates.jsonl line, whichever envelope dialect the
+ *  line uses (wrapped `params.update` or a legacy bare `update`). */
+function grokLineUpdate(parsed: GrokEnvelope): GrokUpdate | undefined {
+  return parsed.params?.update ?? parsed.update;
+}
+
+/** Fold a chunk's `content` (one block or an array) into text + images. Non-text
+ *  block types other than image are skipped — they carry no renderable body. */
+function extractGrokChunk(content: GrokUpdate["content"]): { text: string; images: ImageBlock[] } {
+  const out = { text: "", images: [] as ImageBlock[] };
+  const blocks = Array.isArray(content) ? content : content && typeof content === "object" ? [content] : [];
+  for (const b of blocks as GrokContentBlock[]) {
+    if (b.type === "text" && typeof b.text === "string") {
+      out.text += b.text;
+    } else if (b.type === "image" && typeof b.data === "string") {
+      out.images.push({ mediaType: b.mimeType ?? "image/png", data: b.data });
+    }
+  }
+  return out;
+}
+
+/** Result text of a tool_call_update: `content` items are either bare content
+ *  blocks ({type:"text"}) or ACP ToolCallContent wrappers ({type:"content",
+ *  content: {type:"text"}}); both shapes appear upstream. */
+function extractGrokToolResultText(content: GrokUpdate["content"]): string {
+  const blocks = Array.isArray(content) ? content : content && typeof content === "object" ? [content] : [];
+  let text = "";
+  for (const b of blocks as (GrokContentBlock & { content?: GrokContentBlock })[]) {
+    if (b.type === "text" && typeof b.text === "string") text += b.text;
+    else if (b.type === "content" && b.content?.type === "text" && typeof b.content.text === "string") {
+      text += b.content.text;
+    }
+  }
+  return text;
+}
+
+export function parseGrokSessionFile(content: string): ParsedMessage[] {
+  const lines = content.split("\n");
+  // Each produced message rides with its turn index so a rewind_marker can drop
+  // whole turns (rule 2) without re-walking the file.
+  const tracked: { msg: ParsedMessage; promptIndex: number }[] = [];
+  // The message still accepting streamed chunks (always the last tracked entry).
+  let open: ParsedMessage | null = null;
+  let currentModel: string | undefined;
+  let promptIndex = -1;
+  let lastTs = 0;
+  // Whether the current turn produced assistant text — gates the turn_completed
+  // `agent_result` fallback (used only when chunks were empty).
+  let turnHasAssistantText = false;
+  // In-flight tool calls by toolCallId: result text accumulates across
+  // tool_call_update records and is emitted once the status turns terminal.
+  const pendingTools = new Map<string, { resultText: string; emitted: boolean }>();
+
+  const push = (msg: ParsedMessage) => {
+    tracked.push({ msg, promptIndex });
+    return msg;
+  };
+  const close = () => {
+    open = null;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let parsed: GrokEnvelope;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue; // torn/corrupt line (rule 1) -> skip, never fail
+    }
+    const update = grokLineUpdate(parsed);
+    const kind = update?.sessionUpdate;
+    if (!update || !kind) continue;
+    if (typeof parsed.timestamp === "number") lastTs = parsed.timestamp * 1000; // rule 3
+    const ts = lastTs;
+
+    switch (kind) {
+      case "user_message_chunk": {
+        if (update._meta?.modelId) currentModel = update._meta.modelId;
+        const metaIndex = update._meta?.promptIndex;
+        const newTurn =
+          open?.role !== "user" || (metaIndex != null && metaIndex !== promptIndex);
+        if (newTurn) {
+          close();
+          promptIndex = metaIndex ?? promptIndex + 1;
+          turnHasAssistantText = false;
+          open = push({ uuid: `grok-u${i}`, role: "user", content: "", timestamp: ts });
+        }
+        const { text, images } = extractGrokChunk(update.content);
+        open!.content += text;
+        if (images.length > 0) open!.images = [...(open!.images ?? []), ...images];
+        break;
+      }
+      case "agent_message_chunk":
+      case "agent_thought_chunk": {
+        if (open?.role !== "assistant") {
+          close();
+          open = push({
+            uuid: `grok-a${i}`,
+            role: "assistant",
+            content: "",
+            timestamp: ts,
+            model: currentModel,
+          });
+        }
+        const { text } = extractGrokChunk(update.content);
+        if (kind === "agent_thought_chunk") {
+          open!.thinking = (open!.thinking ?? "") + text;
+        } else {
+          open!.content += text;
+          if (text) turnHasAssistantText = true;
+        }
+        break;
+      }
+      case "tool_call": {
+        if (open?.role !== "assistant") {
+          close();
+          open = push({
+            uuid: `grok-a${i}`,
+            role: "assistant",
+            content: "",
+            timestamp: ts,
+            model: currentModel,
+          });
+        }
+        const id = update.toolCallId ?? "";
+        const input =
+          update.rawInput && typeof update.rawInput === "object"
+            ? (update.rawInput as Record<string, unknown>)
+            : {};
+        open!.toolCalls = [...(open!.toolCalls ?? []), { id, name: update.title ?? "", input }];
+        if (id) pendingTools.set(id, { resultText: "", emitted: false });
+        break;
+      }
+      case "tool_call_update": {
+        const id = update.toolCallId ?? "";
+        const pending = pendingTools.get(id);
+        if (!pending || pending.emitted) break; // unknown id (fork/rewind edge) -> ignore
+        pending.resultText += extractGrokToolResultText(update.content);
+        if (update.status === "completed" || update.status === "failed") {
+          pending.emitted = true;
+          close();
+          push({
+            uuid: `grok-t-${id}`,
+            role: "assistant",
+            content: "",
+            timestamp: ts,
+            toolResults: [
+              {
+                toolUseId: id,
+                content: pending.resultText,
+                isError: update.status === "failed" ? true : undefined,
+              },
+            ],
+          });
+        }
+        break;
+      }
+      case "turn_completed": {
+        // Not a message: the turn's terminal outcome. Stamp stop_reason on the
+        // turn's last assistant message; if chunks produced no assistant text,
+        // `agent_result` finalizes the reply.
+        close();
+        const lastAssistant = [...tracked]
+          .reverse()
+          .find((t) => t.promptIndex === promptIndex && t.msg.role === "assistant" && !t.msg.toolResults);
+        if (lastAssistant && update.stop_reason) lastAssistant.msg.stopReason = update.stop_reason;
+        if (!turnHasAssistantText && typeof update.agent_result === "string" && update.agent_result.trim()) {
+          push({
+            uuid: `grok-r${i}`,
+            role: "assistant",
+            content: update.agent_result,
+            timestamp: ts,
+            model: currentModel,
+            stopReason: update.stop_reason,
+          });
+        }
+        pendingTools.clear();
+        turnHasAssistantText = false;
+        break;
+      }
+      case "rewind_marker": {
+        // Rule 2, last-marker-wins: drop every accumulated message of a rewound
+        // turn; the superseding turns re-arrive as later lines.
+        const target = update.target_prompt_index;
+        if (typeof target === "number") {
+          for (let k = tracked.length - 1; k >= 0; k--) {
+            if (tracked[k].promptIndex >= target) tracked.splice(k, 1);
+          }
+          close();
+          pendingTools.clear();
+          turnHasAssistantText = false;
+          promptIndex = Math.min(promptIndex, target - 1);
+        }
+        break;
+      }
+      case "model_changed":
+      case "model_auto_switched": {
+        const model = update.model_id ?? update.modelId;
+        if (typeof model === "string" && model) currentModel = model;
+        break;
+      }
+      default:
+        // plan / available_commands_update / current_mode_update / subagent_* /
+        // pending_interaction / housekeeping — no message content.
+        break;
+    }
+  }
+
+  return tracked.map((t) => t.msg).filter(
+    (m) =>
+      m.content.trim().length > 0 ||
+      (m.thinking?.length ?? 0) > 0 ||
+      (m.toolCalls?.length ?? 0) > 0 ||
+      (m.toolResults?.length ?? 0) > 0 ||
+      (m.images?.length ?? 0) > 0,
+  );
+}
+
+/** cwd of a grok session, from its summary.json sibling (`info.cwd`) —
+ *  updates.jsonl itself carries no cwd. summary.info.cwd stays authoritative
+ *  across cwd relocation (a session dir can MOVE between encoded-cwd dirs);
+ *  decodeGrokCwdSlug on the grandparent dir name is only the fallback when the
+ *  sibling is missing. */
+export function extractGrokCwd(summaryContent: string): string | undefined {
+  try {
+    const summary = JSON.parse(summaryContent);
+    const cwd = summary?.info?.cwd;
+    return typeof cwd === "string" && cwd ? cwd : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** True when a session's summary.json marks it grok-internal: subagent children
+ *  are SIBLING session dirs under the same encoded-cwd dir, carrying
+ *  session_kind "subagent"/"subagent_fork" (and/or hidden: true), and grok hides
+ *  them from its own list — without this filter every subagent would surface as
+ *  a top-level codecast session. */
+export function isGrokInternalSession(summaryContent: string): boolean {
+  try {
+    const summary = JSON.parse(summaryContent);
+    if (summary?.hidden === true) return true;
+    return summary?.session_kind === "subagent" || summary?.session_kind === "subagent_fork";
+  } catch {
+    return false;
+  }
+}
+
+/** Session id from an updates.jsonl blob (the envelope's params.sessionId; legacy
+ *  lines carry it at the top level). The uuid DIRECTORY name is the on-disk
+ *  identity — this is the in-band cross-check. */
+export function extractGrokSessionId(content: string): string | undefined {
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line) as GrokEnvelope;
+      const id = parsed.params?.sessionId ?? parsed.sessionId;
+      if (typeof id === "string" && id) return id;
+    } catch {}
+  }
+  return undefined;
+}
+
 /**
  * Parse a transcript blob into the daemon's ParsedMessage[] using the parser for
  * `clientId`. The per-client parsers above stay the transcript-format authorities;
@@ -1586,6 +1918,8 @@ export function parseTranscriptFor(clientId: AgentClientId, content: string): Pa
       return parseOpencodeSessionFile(content);
     case "pi":
       return parsePiSessionFile(content);
+    case "grok":
+      return parseGrokSessionFile(content);
     default:
       return parseSessionFile(content);
   }

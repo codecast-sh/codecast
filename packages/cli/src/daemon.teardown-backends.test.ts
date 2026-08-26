@@ -86,6 +86,21 @@ describe("teardownConversationBackends", () => {
     expect(d.calls.interrupted).toEqual([]);
   });
 
+  test("grok tmux (gk- pane) tears down like any other started backend", async () => {
+    // Teardown is agent-agnostic by contract ("drop EVERY bound backend
+    // regardless of agent type") — this pins that a grok started session's
+    // tmux is killed and its started entry dropped, so a re-start can never
+    // split-brain a grok conversation.
+    const d = makeDeps();
+    d.startedTmux.set("conv-gk", { tmuxSession: "gk-grok-convgk" });
+
+    const r = await teardownConversationBackends("conv-gk", d.deps);
+
+    expect(r).toMatchObject({ killedAppServer: false, killedTmux: true });
+    expect(d.calls.killedTmux).toEqual(["gk-grok-convgk"]);
+    expect(d.calls.deletedStarted).toEqual(["conv-gk"]);
+  });
+
   test("nothing bound: pure no-op (first start of a fresh conversation)", async () => {
     const d = makeDeps();
     const r = await teardownConversationBackends("conv-new", d.deps);

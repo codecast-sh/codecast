@@ -4,6 +4,7 @@ import {
   classifyTmuxLiveState,
   clientOwnsSessionStore,
   extractTmuxLiveRegion,
+  mayReconstituteResumeTranscript,
 } from "./daemon.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 
@@ -79,15 +80,42 @@ describe("clientOwnsSessionStore (ct-39178 opencode.db corruption guard)", () =>
     expect(clientOwnsSessionStore("codex")).toBe(false);
   });
 
-  test("opencode/pi/cursor/gemini own their store — never regenerate a transcript", () => {
+  test("opencode/pi/cursor/gemini/grok own their store — never regenerate a transcript", () => {
     expect(clientOwnsSessionStore("opencode")).toBe(true);
     expect(clientOwnsSessionStore("pi")).toBe(true);
     expect(clientOwnsSessionStore("cursor")).toBe(true);
     expect(clientOwnsSessionStore("gemini")).toBe(true);
+    // grok owns ~/.grok/sessions/<enc-cwd>/<uuid>/ — this is what routes its
+    // repair (repairAndResumeSession) and delivery materialization to plain
+    // re-resume instead of writing a fabricated Claude JSONL (the exact path
+    // that corrupted opencode.db, ct-39178).
+    expect(clientOwnsSessionStore("grok")).toBe(true);
   });
 
   test("an unknown type defaults to the safe (regenerable) claude path", () => {
     expect(clientOwnsSessionStore(undefined)).toBe(false);
     expect(clientOwnsSessionStore(null)).toBe(false);
+  });
+});
+
+// The resume paths' twin guard: with NO local transcript, may the resume
+// fabricate one from the convex export? Both enumeration sites
+// (autoResumeSessionInner and the resume_session handler) dispatch on this one
+// predicate, so a store-owning client — grok included — falls to the honest
+// refuse / fresh-spawn branch instead of a fabricated `claude --resume`.
+describe("mayReconstituteResumeTranscript (missing-transcript resume guard)", () => {
+  test("claude/codex/gemini and the unhinted default may reconstitute", () => {
+    expect(mayReconstituteResumeTranscript("claude")).toBe(true);
+    expect(mayReconstituteResumeTranscript("codex")).toBe(true);
+    expect(mayReconstituteResumeTranscript("gemini")).toBe(true); // grandfathered
+    expect(mayReconstituteResumeTranscript(undefined)).toBe(true);
+    expect(mayReconstituteResumeTranscript(null)).toBe(true);
+  });
+
+  test("cursor/opencode/pi/grok are refused — a missing transcript never becomes a Claude JSONL", () => {
+    expect(mayReconstituteResumeTranscript("cursor")).toBe(false);
+    expect(mayReconstituteResumeTranscript("opencode")).toBe(false);
+    expect(mayReconstituteResumeTranscript("pi")).toBe(false);
+    expect(mayReconstituteResumeTranscript("grok")).toBe(false);
   });
 });
