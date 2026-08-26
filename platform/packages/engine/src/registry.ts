@@ -19,6 +19,7 @@ export type RegistryMaps = {
   hydrationMergeStrategy: (key: string) => HydrationMerge;
   isPersistedStoreKey: (key: string) => boolean;
   isProtectedSyncCollection: (key: string) => boolean;
+  isUnprotectedField: (key: string, field: string) => boolean;
   collectionRowValidator: (key: string) => ((row: any) => boolean) | undefined;
 };
 
@@ -69,6 +70,12 @@ export function deriveRegistryMaps(
 
   const protectedKeys = new Set(protectedCollectionKeys);
 
+  const unprotectedFieldSets = new Map<string, Set<string>>(
+    entries.flatMap(([key, entry]) =>
+      entry.unprotectedFields?.length ? [[key, new Set(entry.unprotectedFields)] as const] : [],
+    ),
+  );
+
   return {
     collectionStoreKeys,
     metaStoreKeys,
@@ -87,6 +94,9 @@ export function deriveRegistryMaps(
     },
     isProtectedSyncCollection(key: string): boolean {
       return protectedKeys.has(key);
+    },
+    isUnprotectedField(key: string, field: string): boolean {
+      return unprotectedFieldSets.get(key)?.has(field) ?? false;
     },
     collectionRowValidator(key: string) {
       return registry[key]?.validRow;

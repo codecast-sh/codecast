@@ -482,6 +482,7 @@ export function generateAutoPending(
   currentPending: Record<string, any>,
   isProtectedSyncCollection: (key: string) => boolean,
   hideAckFields: ReadonlySet<string>,
+  isUnprotectedField?: (key: string, field: string) => boolean,
 ): Record<string, any> | null {
   let result: Record<string, any> | null = null;
   const now = Date.now();
@@ -520,11 +521,21 @@ export function generateAutoPending(
       // Record added to collection → include (keep until server acknowledges)
       if (!result) result = { ...currentPending };
       result[`${storeKey}:${recordId}`] = { type: "include", ts: now };
-    } else if ((patch.op === "replace" || patch.op === "add" || patch.op === "remove") && path.length >= 3) {
+    } else if ((patch.op === "replace" || patch.op === "add" || patch.op === "remove") && path.length === 3) {
       // Field modified (or cleared — remove op) on a collection record →
       // protect field value; a cleared field protects as undefined, which
       // matches the server echo once the null tombstone lands.
+      //
+      // Exactly depth 3, never deeper: a deeper patch's value is a LEAF of the
+      // field (one pushed array element, one nested key), and recording it
+      // under the field's pending key would re-assert that leaf AS the whole
+      // field on every server push — an array field then degrades into a bare
+      // element object, permanently (the mismatched shape never echoes, so the
+      // lock never retires). Assigning the whole field is the protection
+      // gesture; a deep mutation is an optimistic-only write the server's next
+      // authoritative payload reconciles.
       const field = String(path[2]);
+      if (isUnprotectedField?.(storeKey, field)) continue;
       if (!result) result = { ...currentPending };
       result[`${storeKey}:${recordId}:${field}`] = {
         type: "field",
@@ -1032,6 +1043,7 @@ export function mutativeMiddleware(
             nextState.pending ?? {},
             maps.isProtectedSyncCollection,
             hideAckFields,
+            maps.isUnprotectedField,
           );
           if (newPending) {
             finalState = { ...nextState, pending: newPending };

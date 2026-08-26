@@ -154,7 +154,7 @@ export function createKVCache(
       });
 
       if (result.pending && typeof result.pending === "object") {
-        result.pending = expireExcludeTombstones(result.pending, Date.now(), tombstoneTtl);
+        result.pending = expireExcludeTombstones(result.pending, Date.now(), tombstoneTtl, maps.isUnprotectedField);
       }
 
       return hasData ? result : null;
