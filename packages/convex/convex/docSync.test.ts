@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isRacyEmptyOverwrite } from "./docSync";
+import { isRacyEmptyOverwrite, toMarkdown } from "./docSync";
 
 // Regression for the two doc-content wipes: opening a content-bearing doc in
 // the web editor before its markdown prop loaded either (a) seeded an empty v1
@@ -114,5 +114,81 @@ describe("isRacyEmptyOverwrite", () => {
         cliEditedAt: 1784105015602,
       }),
     ).toBe(true);
+  });
+});
+
+// The markdown mirror (doc.content) is derived from the collab snapshot by
+// toMarkdown. Every editor atom that stands in for authored text must write
+// back the exact markdown it came from — entityId nodes used to fall through
+// to "" (a ct-/pl- id vanished from doc.content on the first web edit), and
+// mentions serialized as bare `@label`, dropping the object id.
+describe("toMarkdown entity round-trip", () => {
+  const para = (...content: any[]) => ({
+    type: "doc",
+    content: [{ type: "paragraph", content }],
+  });
+  const text = (t: string) => ({ type: "text", text: t });
+
+  test("entityId atoms write their short id back", () => {
+    const doc = para(text("fix filed under "), {
+      type: "entityId",
+      attrs: { shortId: "ct-4102" },
+    });
+    expect(toMarkdown(doc).trim()).toBe("fix filed under ct-4102");
+  });
+
+  test("entityRef link form writes [label](href), bare href when label is the href", () => {
+    const labeled = para({
+      type: "entityRef",
+      attrs: {
+        form: "link",
+        label: "session",
+        href: "https://codecast.sh/conversation/jx7c6zk",
+        refId: null,
+      },
+    });
+    expect(toMarkdown(labeled).trim()).toBe(
+      "[session](https://codecast.sh/conversation/jx7c6zk)",
+    );
+    const bare = para({
+      type: "entityRef",
+      attrs: {
+        form: "link",
+        label: "https://codecast.sh/tasks/ct-1",
+        href: "https://codecast.sh/tasks/ct-1",
+        refId: null,
+      },
+    });
+    expect(toMarkdown(bare).trim()).toBe("https://codecast.sh/tasks/ct-1");
+  });
+
+  test("entityRef mention form writes @[label id]", () => {
+    const doc = para({
+      type: "entityRef",
+      attrs: { form: "mention", label: "Fix the auth race", refId: "ct-4102", href: null },
+    });
+    expect(toMarkdown(doc).trim()).toBe("@[Fix the auth race ct-4102]");
+  });
+
+  test("object mentions keep their id; person mentions stay @Name", () => {
+    const session = para({
+      type: "mention",
+      attrs: { type: "session", id: "jd7abc", shortId: "jx7c6zk", label: "Call brief bug fix" },
+    });
+    expect(toMarkdown(session).trim()).toBe("@[Call brief bug fix jx7c6zk]");
+
+    const docMention = para({
+      type: "mention",
+      attrs: { type: "doc", id: "jd7abcdefabcdefabcdefabcdefabcde", label: "Approvals Board" },
+    });
+    expect(toMarkdown(docMention).trim()).toBe(
+      "@[Approvals Board doc:jd7abcdefabcdefabcdefabcdefabcde]",
+    );
+
+    const person = para({
+      type: "mention",
+      attrs: { type: "person", id: "user123", label: "Samvit" },
+    });
+    expect(toMarkdown(person).trim()).toBe("@Samvit");
   });
 });

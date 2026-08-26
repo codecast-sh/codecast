@@ -250,11 +250,38 @@ function wrapMarks(text: string, marks?: any[]): string {
   return out;
 }
 
-function toMarkdown(node: any, ctx: { indent: string; ordered: boolean; itemIndex: number } = { indent: "", ordered: false, itemIndex: 0 }): string {
+// Entity-typed mentions serialize to the canonical `@[Title id]` vocabulary so
+// the reference survives into doc.content — read mode and the CLI render it as
+// a live pill. Bare `@label` (the old form) dropped the id, so a doc edited on
+// web lost its object references. Person mentions keep `@Name`.
+const MENTION_REF_TYPES = new Set(["task", "plan", "session", "doc"]);
+
+function mentionToMarkdown(attrs: any): string {
+  const label = attrs?.label || attrs?.id || "";
+  if (attrs?.type && MENTION_REF_TYPES.has(attrs.type) && attrs?.id) {
+    const ref = attrs.type === "doc" ? `doc:${attrs.id}` : attrs.shortId || attrs.id;
+    return `@[${label} ${ref}]`;
+  }
+  return `@${label}`;
+}
+
+export function toMarkdown(node: any, ctx: { indent: string; ordered: boolean; itemIndex: number } = { indent: "", ordered: false, itemIndex: 0 }): string {
   if (node.type === "text") return wrapMarks(node.text || "", node.marks);
   if (node.type === "hardBreak") return "\n";
   if (node.type === "horizontalRule") return "\n---\n\n";
-  if (node.type === "mention") return `@${node.attrs?.label || node.attrs?.id || ""}`;
+  if (node.type === "mention") return mentionToMarkdown(node.attrs);
+  // The editor's entity pill atoms (EntityIdExtension / EntityRefExtension).
+  // Each must write back the exact markdown it was converted from — before
+  // these cases, entityId nodes fell through to "" and every ct-/pl- id was
+  // silently wiped from doc.content on the first web edit.
+  if (node.type === "entityId") return node.attrs?.shortId || "";
+  if (node.type === "entityRef") {
+    const a = node.attrs || {};
+    if (a.form === "mention") return `@[${a.label} ${a.refId}]`;
+    const href = a.href || "";
+    if (!a.label || a.label === href) return href;
+    return `[${a.label}](${href})`;
+  }
   if (node.type === "image") {
     const alt = node.attrs?.alt || "";
     const src = node.attrs?.src || "";
