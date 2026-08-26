@@ -147,7 +147,11 @@ export function CallFaces() {
   const scribe = useSyncExternalStore(subscribeScribe, getScribeStatus, getScribeStatus).active;
   useWatchEffect(() => {
     reportFacesState({
-      room: call.phase === "idle" ? null : call.roomKey,
+      // The room this window is FOR, which it knows from its own URL before it
+      // knows anything about a call. Reporting null while the join is still
+      // getting started would overwrite the room the shell was created with,
+      // and a handback needs a room to carry — the failure path depends on it.
+      room: call.roomKey ?? roomKey,
       mic: !call.muted,
       camera: !!call.camera,
       scribe,
@@ -157,7 +161,7 @@ export function CallFaces() {
       // being handed back to the main window.
       joined: call.phase === "connected",
     });
-  }, [call.phase, call.roomKey, call.muted, call.camera, scribe, mode]);
+  }, [call.phase, call.roomKey, roomKey, call.muted, call.camera, scribe, mode]);
 
   // ── Closing ─────────────────────────────────────────────────────────────
   //
