@@ -34,6 +34,7 @@ import { SlashCommandExtension } from "./SlashCommandExtension";
 import { DateMentionExtension } from "./DateMentionExtension";
 import { TabIndentExtension } from "./TabIndentExtension";
 import { EntityIdExtension } from "./EntityIdExtension";
+import { EntityRefExtension } from "./EntityRefExtension";
 import { BubbleToolbar } from "./BubbleToolbar";
 import { ImageUploadPlaceholder, uploadImageWithPlaceholder } from "./ImageUploadPlugin";
 import { createWikiLinkExtension } from "./WikiLinkExtension";
@@ -267,6 +268,7 @@ function buildExtensions(onMentionQuery: MentionQueryFn, placeholder: string) {
     DateMentionExtension,
     TabIndentExtension,
     EntityIdExtension,
+    EntityRefExtension,
     Typography,
     Highlight.configure({ HTMLAttributes: { class: "editor-highlight" } }),
     ImageExtension.configure({ HTMLAttributes: { class: "editor-image" } }),
