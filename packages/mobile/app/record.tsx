@@ -80,8 +80,7 @@ export default function RecordScreen() {
   // team's shared record behind the calls feature; a recording is one person's
   // and is exempt from it, so mixing them here would put rows in the list that
   // half the app cannot open.
-  const recordings = (calls ?? []); // TEMP screenshot probe
-  console.log('[PROBE] calls=', calls === undefined ? 'undefined' : JSON.stringify((calls as any[]).length));
+  const recordings = (calls ?? []).filter((c: any) => isRecRoomKey(c.room_key));
 
   const onPress = useCallback(async () => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
