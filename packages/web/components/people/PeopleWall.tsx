@@ -1,6 +1,6 @@
 // The wall: everyone at once, sized by how present they are, and each face is
 // the key you hold to talk to them.
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useInboxStore } from "../../store/inboxStore";
 import { navigateMainWindow } from "../../lib/desktop";
 import { dmRoomKey } from "@codecast/shared/contracts";
@@ -180,8 +180,35 @@ function WallFaceButton({
 
   const unread = dm?.unread ?? 0;
 
+  // GROWING A FACE WITHOUT MOVING ANYBODY ELSE.
+  //
+  // The seat's width and height are the new size from this render on, so the
+  // wrapping row re-solves exactly once. What makes it look like growth rather
+  // than a jump is the scale handed to CSS here: old size over new, so the face
+  // starts the frame visually where it was and the compositor walks it to full
+  // size. A transform is not layout, so the neighbours hold still throughout.
+  //
+  // A LAYOUT effect, not an ordinary one, because it must land before the
+  // browser paints. One frame at the new size followed by a snap back to the
+  // old one is a flash of the very thing this avoids.
+  //
+  // The parity flip is what makes a SECOND change restart the growth: an
+  // element already running an animation ignores being told to run the same one
+  // again, so the two identical keyframes take turns. The equality guard makes
+  // the effect safe to run twice, which React does in development.
+  const seatRef = useRef<HTMLSpanElement | null>(null);
+  const drawnPx = useRef(px);
+  useLayoutEffect(() => {
+    const el = seatRef.current;
+    if (!el || drawnPx.current === px) return;
+    el.style.setProperty("--from-scale", String(drawnPx.current / px));
+    el.dataset.grow = el.dataset.grow === "a" ? "b" : "a";
+    drawnPx.current = px;
+  }, [px]);
+
   return (
     <span
+      ref={seatRef}
       className="people-face-seat"
       style={{ ["--face" as string]: `${px}px` }}
       data-hold={ptt.holding ? "1" : undefined}

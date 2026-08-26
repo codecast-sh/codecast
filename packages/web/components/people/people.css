@@ -118,18 +118,49 @@
   gap: 8px 10px;
 }
 
-/* One face's seat. It holds the circle at whatever size presence says, and the
-   floating name that hangs under it. Sized from --face so a presence change
-   animates the box and the avatar inside it together. */
+/* One face's seat: the LAYOUT box, at whatever size presence says.
+ *
+ * THE SIZE STEPS, THE LOOK SLIDES, and keeping those two apart is the whole
+ * point of this block.
+ *
+ * The obvious way to grow a face is to transition width and height. It is also
+ * the expensive way, and the cost lands on everybody else: these seats are
+ * flex items in a wrapping row, so an animated width is a layout the browser
+ * redoes every frame, and in a WRAPPING container one face growing can push a
+ * neighbour onto the next line — which pushes the one after it, and so on. At
+ * a team of thirty that is thirty boxes re-solved sixty times a second, and it
+ * does not merely cost: it LOOKS wrong, because faces two rows away twitch
+ * while somebody sits down at their desk.
+ *
+ * So the box takes its new size in ONE frame, with no transition, and the
+ * smoothness comes from a transform that scales the face back to the size it
+ * just left and releases it. A transform is not layout — nothing reflows, the
+ * neighbours never move, and the compositor does the whole 280ms. The face
+ * overlaps its gap slightly while it grows, which is exactly the loose,
+ * organic thing this cluster is supposed to be.
+ *
+ * `--from-scale` is old size over new, written once per presence change by the
+ * component (never per frame). The two names below are the same animation
+ * twice: flipping between them is what makes a second change RESTART the
+ * growth rather than be ignored as the animation already running. */
 .people-face-seat {
   position: relative;
   display: inline-flex;
   width: var(--face);
   height: var(--face);
-  transition:
-    width 280ms cubic-bezier(0.2, 0.8, 0.3, 1),
-    height 280ms cubic-bezier(0.2, 0.8, 0.3, 1),
-    opacity 180ms ease;
+  transition: opacity 180ms ease;
+}
+
+.people-face-seat[data-grow="a"] { animation: people-face-grow-a 280ms cubic-bezier(0.2, 0.8, 0.3, 1); }
+.people-face-seat[data-grow="b"] { animation: people-face-grow-b 280ms cubic-bezier(0.2, 0.8, 0.3, 1); }
+
+@keyframes people-face-grow-a {
+  from { transform: scale(var(--from-scale, 1)); }
+  to   { transform: scale(1); }
+}
+@keyframes people-face-grow-b {
+  from { transform: scale(var(--from-scale, 1)); }
+  to   { transform: scale(1); }
 }
 
 /* Pointed at, the face and its name come to the front of the cluster: the
@@ -170,14 +201,11 @@
   border-radius: 999px;
 }
 
-/* The avatar inside follows the same clock as its seat, so a face growing when
-   somebody sits down grows as one thing rather than as a circle catching up
-   with its own box. */
-.people-face-av {
-  transition:
-    width 280ms cubic-bezier(0.2, 0.8, 0.3, 1),
-    height 280ms cubic-bezier(0.2, 0.8, 0.3, 1);
-}
+/* The avatar takes its new size in the same single frame the seat does, and
+   deliberately does NOT transition. It is inside the seat's transform, so the
+   scale above already carries it: a width transition here would be the same
+   per-frame layout cost re-introduced one level down, racing the transform it
+   is meant to match. The face grows as one thing because ONE thing is moving. */
 
 /* THE LEVEL RING, once per direction.
  *
@@ -389,6 +417,13 @@
     transition: none;
   }
   .people-face-seat[data-refused] .people-face {
+    animation: none;
+  }
+  /* The face arrives at its new size instantly. Nothing is lost: the SIZE is
+     the information here, and it is already correct on the first frame — the
+     growth was only ever the pleasant way to get there. */
+  .people-face-seat[data-grow="a"],
+  .people-face-seat[data-grow="b"] {
     animation: none;
   }
   /* The ring stops sweeping and becomes brightness alone. The level is still
