@@ -47,6 +47,13 @@ export type RegistryEntry = {
   // documents persisted under the wrong collection, which would otherwise
   // linger in the never-pruned cache forever as phantoms.
   validRow?: (row: any) => boolean;
+  // Fields on a localFirst collection that auto pending protection must skip.
+  // For an append-stream field (a row's comment list) the optimistic local
+  // value contains stub content the server echo can never match, so a field
+  // lock would freeze the field forever; instead the optimistic write renders
+  // until the server's authoritative set reconciles it. Stale locks on these
+  // fields are also dropped at cache hydration.
+  unprotectedFields?: readonly string[];
 };
 
 // ---------------------------------------------------------------------------

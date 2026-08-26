@@ -29,12 +29,25 @@ export function expireExcludeTombstones(
   pending: Record<string, any>,
   now: number,
   ttlMs: number = DEFAULT_EXCLUDE_TOMBSTONE_TTL_MS,
+  isUnprotectedField?: (key: string, field: string) => boolean,
 ): Record<string, any> {
   const cleaned: Record<string, any> = {};
   for (const [key, entry] of Object.entries(pending)) {
     if (entry?.type === "exclude") {
       if (!entry.ts) { cleaned[key] = { ...entry, ts: now }; continue; }
       if (now - entry.ts > ttlMs) continue;
+    }
+    // A field the registry now declares unprotected can hold no lock — drop
+    // stale entries persisted by older builds (including corrupted ones whose
+    // value shape can never echo), or they would keep overriding every server
+    // push forever.
+    if (entry?.type === "field" && isUnprotectedField) {
+      const first = key.indexOf(":");
+      const second = key.indexOf(":", first + 1);
+      if (
+        first !== -1 && second !== -1 &&
+        isUnprotectedField(key.slice(0, first), key.slice(second + 1))
+      ) continue;
     }
     cleaned[key] = entry;
   }
@@ -188,7 +201,7 @@ export function createIdbCache(
       }
 
       if (result.pending && typeof result.pending === "object") {
-        result.pending = expireExcludeTombstones(result.pending, Date.now(), tombstoneTtl);
+        result.pending = expireExcludeTombstones(result.pending, Date.now(), tombstoneTtl, maps.isUnprotectedField);
       }
 
       return hasData ? result : null;
