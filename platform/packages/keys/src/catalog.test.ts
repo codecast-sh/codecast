@@ -221,3 +221,43 @@ describe("formatting", () => {
     expect(catalog.formatShortcutLabel("missing" as Action)).toBeNull();
   });
 });
+
+describe("conflicts", () => {
+  type C = "search" | "favorite" | "prevTab" | "openNote" | "findPage";
+
+  test("two actions on one combo in one scope are reported; spellings and scopes separate", () => {
+    // Modeled on the donor catalog: one chord deliberately shared by two
+    // surfaces (decline semantics pick the winner), a second spelling of one
+    // chord, and the same letter in two different contexts.
+    const defs: ShortcutDef<C>[] = [
+      { key: "ctrl+shift+f", action: "search", description: "Search files" },
+      { key: "ctrl+shift+f", action: "favorite", when: "conversation", description: "Toggle favorite" },
+      { key: "ctrl+shift+f", action: "findPage", description: "Find in page" },
+      { key: "ctrl+shift+[", action: "prevTab", description: "Previous tab" },
+      { key: "ctrl+shift+{", action: "prevTab", description: "Previous tab" },
+    ];
+    const c = createShortcutCatalog(defs, { isMac: false });
+    const found = c.conflicts();
+    expect(found.length).toBe(1);
+    expect(found[0].combo).toBe("ctrl+shift+f");
+    expect(found[0].when).toBeUndefined();
+    expect(found[0].defs.map(d => d.action)).toEqual(["search", "findPage"]);
+  });
+
+  test("modifier order never hides a collision", () => {
+    const defs: ShortcutDef<C>[] = [
+      { key: "shift+ctrl+p", action: "search", description: "A" },
+      { key: "ctrl+shift+p", action: "favorite", description: "B" },
+    ];
+    expect(createShortcutCatalog(defs, { isMac: false }).conflicts().length).toBe(1);
+  });
+
+  test("a mac variant collides only on the platform where it resolves", () => {
+    const defs: ShortcutDef<C>[] = [
+      { key: "ctrl+o", mac: "meta+o", action: "openNote", description: "Open note" },
+      { key: "meta+o", action: "search", description: "Search" },
+    ];
+    expect(createShortcutCatalog(defs, { isMac: true }).conflicts().length).toBe(1);
+    expect(createShortcutCatalog(defs, { isMac: false }).conflicts().length).toBe(0);
+  });
+});
