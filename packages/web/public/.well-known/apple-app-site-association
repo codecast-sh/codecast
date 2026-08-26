@@ -1,0 +1,23 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["KHZ74QAPB7.com.ashotp.codecast"],
+        "components": [
+          { "/": "/session/*" },
+          { "/": "/sessions/*" },
+          { "/": "/conversation/*" },
+          { "/": "/conversations/*" },
+          { "/": "/task/*" },
+          { "/": "/tasks/*" },
+          { "/": "/plan/*" },
+          { "/": "/plans/*" },
+          { "/": "/doc/*" },
+          { "/": "/docs/*" },
+          { "/": "/share/*" },
+          { "/": "/join/*" }
+        ]
+      }
+    ]
+  }
+}

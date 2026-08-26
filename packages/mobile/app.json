@@ -44,18 +44,42 @@
       "deploymentTarget": "16.0"
     },
     "android": {
+      "package": "com.ashotp.codecast",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            { "scheme": "https", "host": "codecast.sh", "pathPrefix": "/session" },
+            { "scheme": "https", "host": "codecast.sh", "pathPrefix": "/conversation" },
+            { "scheme": "https", "host": "codecast.sh", "pathPrefix": "/task" },
+            { "scheme": "https", "host": "codecast.sh", "pathPrefix": "/plan" },
+            { "scheme": "https", "host": "codecast.sh", "pathPrefix": "/doc" },
+            { "scheme": "https", "host": "codecast.sh", "pathPrefix": "/share" },
+            { "scheme": "https", "host": "codecast.sh", "pathPrefix": "/join" },
+            { "scheme": "https", "host": "www.codecast.sh", "pathPrefix": "/session" },
+            { "scheme": "https", "host": "www.codecast.sh", "pathPrefix": "/conversation" },
+            { "scheme": "https", "host": "www.codecast.sh", "pathPrefix": "/task" },
+            { "scheme": "https", "host": "www.codecast.sh", "pathPrefix": "/plan" },
+            { "scheme": "https", "host": "www.codecast.sh", "pathPrefix": "/doc" },
+            { "scheme": "https", "host": "www.codecast.sh", "pathPrefix": "/share" },
+            { "scheme": "https", "host": "www.codecast.sh", "pathPrefix": "/join" }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
+      "googleServicesFile": "./google-services.json",
       "permissions": [
         "android.permission.USE_BIOMETRIC",
         "android.permission.USE_FINGERPRINT",
         "android.permission.POST_NOTIFICATIONS"
-      ],
-      "googleServicesFile": "./google-services.json"
+      ]
     },
     "web": {
       "bundler": "metro",
