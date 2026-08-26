@@ -27,6 +27,9 @@ const CONFIG: PlatformConfig = {
       persistence: { kind: "collection", key: "items" },
       localFirst: true,
       dispatchTable: { table: "item_rows", kind: "collection" },
+      // An append-stream field: optimistic writes render instantly, the
+      // server's full set reconciles them — never field-locked.
+      unprotectedFields: ["comments"],
     },
     // A projection of another table: only a few fields are real server state.
     cards: {
@@ -97,6 +100,15 @@ function makeHarness(opts?: { config?: PlatformConfig; retryDelays?: number[] })
       }),
       rename: action(function (this: any, id: string, title: string) {
         this.items[id].title = title;
+      }),
+      seedRow: action(function (this: any, id: string, row: any) {
+        this.items[id] = { _id: id, ...row };
+      }),
+      appendTag: action(function (this: any, id: string, tag: any) {
+        this.items[id].tags.push(tag);
+      }),
+      setComments: action(function (this: any, id: string, cs: any[]) {
+        this.items[id].comments = cs;
       }),
       hide: action(function (this: any, id: string, at: number) {
         this.items[id].hidden_at = at;
@@ -249,6 +261,30 @@ describe("auto-generated pending protection", () => {
 
     h.wrapped.drop(SERVER_ID);
     expect(h.state.pending[`items:${SERVER_ID}`]).toMatchObject({ type: "exclude" });
+  });
+
+  it("never records a deep mutation's leaf value as a field pending", () => {
+    const h = makeHarness();
+    h.wrapped.seedRow(SERVER_ID, { tags: ["a"] });
+    h.wrapped.appendTag(SERVER_ID, "b");
+    // The optimistic write lands...
+    expect(h.state.items[SERVER_ID].tags).toEqual(["a", "b"]);
+    // ...but plants no field lock: a deep patch's value is the LEAF ("b"),
+    // and re-asserting it as the whole field on every server push would
+    // corrupt the array into a scalar. Field protection requires assigning
+    // the whole field; deep mutations are optimistic-only.
+    expect(h.state.pending[`items:${SERVER_ID}:tags`]).toBeUndefined();
+  });
+
+  it("skips fields the registry declares unprotected", () => {
+    const h = makeHarness();
+    h.wrapped.seedRow(SERVER_ID, {});
+    h.wrapped.setComments(SERVER_ID, [{ _id: "temp_1" }]);
+    expect(h.state.items[SERVER_ID].comments).toEqual([{ _id: "temp_1" }]);
+    expect(h.state.pending[`items:${SERVER_ID}:comments`]).toBeUndefined();
+    // A protected field on the same row still locks.
+    h.wrapped.rename(SERVER_ID, "renamed");
+    expect(h.state.pending[`items:${SERVER_ID}:title`]).toMatchObject({ type: "field", value: "renamed" });
   });
 
   it("stamps the exact acknowledgement value onto sibling fields of a hide", () => {

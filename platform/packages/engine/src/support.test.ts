@@ -155,6 +155,25 @@ describe("expireExcludeTombstones", () => {
     expect(cleaned["items:a:title"]).toBeDefined();
     expect(cleaned["items:stub"]).toBeDefined();
   });
+
+  it("drops stale field locks on fields the registry declares unprotected", () => {
+    const cleaned = expireExcludeTombstones(
+      {
+        // Persisted by an older build before the field was unprotected — a
+        // corrupted single-element value that can never echo.
+        "items:a:comments": { type: "field", value: { _id: "temp_1" }, ts: now },
+        "items:a:title": { type: "field", value: "mine", ts: now },
+        "items:a": { type: "include", ts: now },
+      },
+      now,
+      ttl,
+      (key, field) => key === "items" && field === "comments",
+    );
+
+    expect(cleaned["items:a:comments"]).toBeUndefined();
+    expect(cleaned["items:a:title"]).toBeDefined();
+    expect(cleaned["items:a"]).toBeDefined();
+  });
 });
 
 describe("undo stack", () => {
