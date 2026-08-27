@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { ChevronRight, Headphones, MessageSquare, Pin, Volume2, VolumeX } from "lucide-react";
+import { ChevronRight, Headphones, LayoutGrid, List, MessageSquare, Pin, Volume2, VolumeX } from "lucide-react";
 import { PeopleStrip } from "./PeopleStrip";
 import { TeamPulseLine, useTeamPulse } from "./TeamPulseLine";
 import { usePeopleDensity } from "./usePeopleDensity";
@@ -177,6 +177,7 @@ function PanelHeader({ density }: { density: PeopleDensity }) {
           >
             {status}
           </button>
+          <ViewSwitch compact />
           <PinButton />
         </div>
         {choosing && (
@@ -192,10 +193,7 @@ function PanelHeader({ density }: { density: PeopleDensity }) {
             {callsEnabled && <WalkieDoorToggle compact />}
           </div>
         )}
-        <div className="flex items-center gap-2 pb-2 pl-3 pr-2">
-          <TeamPulseLine pulse={pulse} wrap className="flex-1 text-[10.5px]" />
-          <ViewSwitch />
-        </div>
+        <TeamPulseLine pulse={pulse} max={4} className="px-3 pb-2 text-[10.5px]" />
         <ElsewhereCallPill className="border-t border-sol-border/60 px-3 py-1.5" />
       </div>
     );
@@ -263,8 +261,24 @@ function usePeopleView(): PeopleView {
   return useInboxStore((s) => (s.clientState.ui?.people_view === "list" ? "list" : "wall"));
 }
 
-function ViewSwitch() {
+function ViewSwitch({ compact = false }: { compact?: boolean }) {
   const view = usePeopleView();
+  if (compact) {
+    // One button, showing the view you would GET: a narrow header has no
+    // room for two words, and a toggle that names its other side is enough.
+    const other = view === "wall" ? "list" : "wall";
+    return (
+      <button
+        type="button"
+        onClick={() => useInboxStore.getState().updateClientUI({ people_view: other })}
+        title={other === "wall" ? "Show faces, sized by presence" : "Show one row per person"}
+        aria-label={other === "wall" ? "Show the wall" : "Show the list"}
+        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
+      >
+        {other === "wall" ? <LayoutGrid className="h-3.5 w-3.5" /> : <List className="h-3.5 w-3.5" />}
+      </button>
+    );
+  }
   return (
     <div className="people-view-switch" role="group" aria-label="How to show the team">
       {(["wall", "list"] as const).map((v) => (
