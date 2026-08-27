@@ -7782,7 +7782,7 @@ async function enrichInboxSessionRow(
   }
 
   let active_task: { _id: string; short_id: string; title: string; status: string } | undefined;
-  if (conv.active_task_id) {
+  if (!skip?.refs && conv.active_task_id) {
     const t = await ctx.db.get(conv.active_task_id);
     if (t) active_task = { _id: t._id, short_id: t.short_id, title: t.title, status: t.status };
   }
@@ -7796,7 +7796,7 @@ async function enrichInboxSessionRow(
   let workflow_run_agents_total: number | null = null;
   let workflow_run_activity: string | null = null;
   let workflow_run_started_at: number | null = null;
-  if (conv.workflow_run_id) {
+  if (!skip?.refs && conv.workflow_run_id) {
     const run = await ctx.db.get(conv.workflow_run_id);
     if (run) {
       workflow_run_status = run.status;
@@ -7813,7 +7813,7 @@ async function enrichInboxSessionRow(
   // Anchor identity: a personal anchor's bot isn't in the team roster, so the
   // client can't resolve it — stamp the bot's name/avatar here (self-guarded:
   // returns null for ordinary rows) so the sidebar shows the bot chip.
-  const acting = await resolveActingAuthor(ctx, conv);
+  const acting = skip?.refs ? null : await resolveActingAuthor(ctx, conv);
 
   // Open teammate-comment threads (message, code-line, or global anchors) so
   // the card can surface "someone flagged this" without the conversation being
@@ -8292,6 +8292,8 @@ export async function computeInboxSessions(
     // Inbox "team mode": also fold in every teammate's team-visible session from
     // this team (superset of the personal inbox). See scanInboxConversations.
     teamScope?: Id<"teams">;
+    // Debug-only (timing harness) — see InboxEnrichSkip.
+    _skip?: InboxEnrichSkip;
   },
 ): Promise<{ sessions: any[]; hidden_count: number }> {
   // Liveness (agent_status/is_idle/...) is heartbeat-derived and is the reason this
@@ -8333,7 +8335,7 @@ export async function computeInboxSessions(
     // handed over on Friday is silently gone by Monday while `cast sessions`
     // with explicit ids still lists it as needs input.
     const cutoff = deliberateIds.has(conv._id.toString()) ? 0 : clusterCutoff;
-    const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, cutoff);
+    const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, cutoff, opts._skip);
     if (conv.user_id.toString() !== userId.toString()) {
       const author = await getUserDoc(conv.user_id);
       row.author_name = author?.name ?? author?.email ?? null;
