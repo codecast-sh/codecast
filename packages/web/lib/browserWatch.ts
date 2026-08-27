@@ -14,7 +14,8 @@ export interface WatchTabInfo {
 }
 
 export interface WatchHandlers {
-  onReady: (tab: WatchTabInfo) => void;
+  /** `control` is true when the daemon granted two-way input on this socket. */
+  onReady: (tab: WatchTabInfo, control: boolean) => void;
   /** A JPEG the driven page just painted, ready for an <img> src. */
   onFrame: (dataUrl: string, w: number, h: number) => void;
   onTab: (tab: WatchTabInfo) => void;
@@ -24,8 +25,27 @@ export interface WatchHandlers {
   onExit: (reason: string) => void;
 }
 
+/** A viewer input event; mirrors WatchInput in the CLI's watchSource.ts.
+ * Mouse coordinates are normalized 0..1 across the page viewport. */
+export type WatchInputEvent =
+  | {
+      kind: "mouse";
+      type: "mousePressed" | "mouseReleased" | "mouseMoved" | "mouseWheel";
+      nx: number;
+      ny: number;
+      button?: "left" | "right" | "middle" | "none";
+      clickCount?: number;
+      deltaX?: number;
+      deltaY?: number;
+      modifiers?: number;
+    }
+  | { kind: "key"; type: "keyDown" | "keyUp"; key: string; code?: string; text?: string; modifiers?: number }
+  | { kind: "insertText"; text: string };
+
 export interface WatchConnection {
   close: () => void;
+  /** Send input events (control mode). No-op before ready or after close. */
+  sendInput: (events: WatchInputEvent[]) => void;
 }
 
 export function watchWsUrl(ep: TerminalEndpoint): string {
@@ -36,7 +56,7 @@ export function watchWsUrl(ep: TerminalEndpoint): string {
 
 export function connectBrowserWatch(
   ep: TerminalEndpoint,
-  session: { sessionUuid?: string | null; tmuxSession?: string | null },
+  session: { sessionUuid?: string | null; tmuxSession?: string | null; control?: boolean },
   handlers: WatchHandlers,
 ): WatchConnection {
   const ws = new WebSocket(watchWsUrl(ep));
@@ -49,6 +69,7 @@ export function connectBrowserWatch(
         token: ep.token,
         ...(session.sessionUuid ? { session_uuid: session.sessionUuid } : {}),
         ...(session.tmuxSession ? { tmux_session: session.tmuxSession } : {}),
+        ...(session.control ? { control: true } : {}),
         fps: 3,
       }),
     );
@@ -64,7 +85,7 @@ export function connectBrowserWatch(
     }
     switch (msg.type) {
       case "ready":
-        handlers.onReady({ title: msg.title ?? "", url: msg.url ?? "" });
+        handlers.onReady({ title: msg.title ?? "", url: msg.url ?? "" }, msg.control === true);
         break;
       case "frame":
         handlers.onFrame(`data:image/jpeg;base64,${msg.data}`, msg.w ?? 0, msg.h ?? 0);
@@ -101,6 +122,10 @@ export function connectBrowserWatch(
       try {
         ws.close();
       } catch {}
+    },
+    sendInput(events) {
+      if (done || ws.readyState !== WebSocket.OPEN || events.length === 0) return;
+      ws.send(JSON.stringify({ type: "input", events }));
     },
   };
 }
