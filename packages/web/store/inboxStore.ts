@@ -1273,8 +1273,6 @@ export function stampedTabPath(tab: AppTab): string {
 
 export type ClientState = {
   current_conversation_id?: string;
-  show_dismissed?: boolean;
-  show_stashed?: boolean;
   dismissed_ids?: string[];
 
   ui?: ClientUI;
@@ -2390,6 +2388,30 @@ export function resolveComposeProjectPath(opts: {
   return context?.projectPath || context?.gitRoot || convPath || activeProjectPath || recentProjects?.[0]?.path || undefined;
 }
 
+// The directory a label filter implies for a NEW session. Labels carry no
+// project of their own (inbox_buckets has no path), so derive one from the
+// label's members: the most recently updated session filed under it whose
+// checkout lives on one of my machines. Only an INCLUDE chip seeds — an
+// exclude chip ("everything but X") is a hide, not a place to start work.
+export function bucketProjectPath(state: {
+  activeBucketFilter: string | null;
+  chipFilterExclude: boolean;
+  sessions: Record<string, InboxSession>;
+  bucketAssignments: Record<string, BucketAssignmentItem>;
+  machineRoster?: Array<Pick<MachineCandidate, "local_project_roots">>;
+}): string | undefined {
+  if (!state.activeBucketFilter || state.chipFilterExclude) return undefined;
+  const bucketByConv = convBucketMap(state.bucketAssignments);
+  let best: InboxSession | undefined;
+  for (const s of Object.values(state.sessions)) {
+    if (bucketByConv[s._id] !== state.activeBucketFilter) continue;
+    const p = s.git_root || s.project_path;
+    if (!p || (state.machineRoster && !pathOnMyMachines(state.machineRoster, p))) continue;
+    if (!best || s.updated_at > best.updated_at) best = s;
+  }
+  return best ? best.git_root || best.project_path : undefined;
+}
+
 // Find a checkout of a project by name among everything we know about —
 // recent projects first (the user's own machines, freshest), then session
 // rows, then the machine roster's project roots. Paths a machine of mine
@@ -3451,9 +3473,6 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   thawRecentOrder: () => void;
   setCurrentSession: (id: string, source?: ViewNavSource) => void;
   clearSelection: () => void;
-  setShowDismissed: (show: boolean) => void;
-  toggleShowDismissed: () => void;
-  toggleShowStashed: () => void;
   toggleCollapsedSection: (key: string) => void;
   // Publish the schedule projection (standing sessions, runs grouped under a
   // schedule row) for keyboard nav. Ephemeral raw-set state — the schedule data
@@ -4373,7 +4392,6 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       ui: mergeStampedBagLww,
       layouts: "local_wins",
       dismissed: mergeStampedBagLww,
-      show_dismissed: "local_wins",
       drafts: "local_wins",
       tabs: "deep_merge",
       activeTabId: "deep_merge",
@@ -7339,20 +7357,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   clearSelection: action(function (this: Draft) {
     this.viewingDismissedId = null;
-  }),
-
-  setShowDismissed: action(function (this: Draft, show: boolean) {
-    this.clientState.show_dismissed = show;
-  }),
-
-  // Both hidden buckets are CLOSED by default (unset/undefined = closed):
-  // open only while the flag is explicitly true.
-  toggleShowDismissed: action(function (this: Draft) {
-    this.clientState.show_dismissed = this.clientState.show_dismissed !== true;
-  }),
-
-  toggleShowStashed: action(function (this: Draft) {
-    this.clientState.show_stashed = this.clientState.show_stashed !== true;
   }),
 
   toggleCollapsedSection: action(function (this: Draft, key: string) {

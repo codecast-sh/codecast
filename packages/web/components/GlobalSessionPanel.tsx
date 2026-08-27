@@ -3143,8 +3143,6 @@ export function SessionListPanel({
 }) {
   const s = useTrackedStore([
     s => s.clientState.ui,
-    s => s.clientState.show_dismissed,
-    s => s.clientState.show_stashed,
     s => s.liveInboxIds,
     // Team-mode active set + viewer identity — gate the scope pre-filter below.
     s => s.teamInboxIds,
@@ -3356,6 +3354,19 @@ export function SessionListPanel({
       ),
     [s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, bucketByConv],
   );
+
+  // The Stashed / Killed buckets' open state is ephemeral and CLOSED by
+  // default: closed on every load, and re-closed whenever the chip filter
+  // (label, layout, project) changes — filterByChip's identity is that filter.
+  // It used to live in the synced clientState (show_stashed / show_dismissed),
+  // so one auto-reveal left the bucket open on every device, forever.
+  const CLOSED_BUCKETS = { stashed: false, dismissed: false };
+  const [openBuckets, setOpenBuckets] = useState(CLOSED_BUCKETS);
+  const [bucketsFilter, setBucketsFilter] = useState(() => filterByChip);
+  if (bucketsFilter !== filterByChip) {
+    setBucketsFilter(filterByChip);
+    setOpenBuckets(CLOSED_BUCKETS);
+  }
 
   const filteredPinned = useMemo(() => filterByChip(pinned), [filterByChip, pinned]);
   const filteredNew = useMemo(() => filterByChip(newSessions), [filterByChip, newSessions]);
@@ -3999,14 +4010,14 @@ export function SessionListPanel({
         return;
       }
     }
-    if (inList(filteredStashed) && s.clientState.show_stashed !== true) {
-      s.toggleShowStashed();
+    if (inList(filteredStashed) && !openBuckets.stashed) {
+      setOpenBuckets((o) => ({ ...o, stashed: true }));
       return;
     }
-    if (inList(filteredDismissed) && s.clientState.show_dismissed !== true) {
-      s.toggleShowDismissed();
+    if (inList(filteredDismissed) && !openBuckets.dismissed) {
+      setOpenBuckets((o) => ({ ...o, dismissed: true }));
     }
-  }, [activeSessionId, sortedSessions, s.collapsedSections, s.clientState.show_dismissed, s.clientState.show_stashed, viewMode]);
+  }, [activeSessionId, sortedSessions, s.collapsedSections, openBuckets, viewMode]);
 
   // Shared renderer for the two hidden buckets at the bottom of the list —
   // Stashed (set aside, agent alive) above Killed (retired, agent torn down;
@@ -4790,8 +4801,8 @@ export function SessionListPanel({
         {renderHiddenBucket({
           label: "Stashed",
           items: filteredStashed,
-          expanded: s.clientState.show_stashed === true,
-          onToggle: s.toggleShowStashed,
+          expanded: openBuckets.stashed,
+          onToggle: () => setOpenBuckets((o) => ({ ...o, stashed: !o.stashed })),
           variant: "stashed",
           onKill: handleKillStashed,
           headerAction: (
@@ -4824,8 +4835,8 @@ export function SessionListPanel({
           // loses the one difference that matters operationally.
           label: "Killed",
           items: filteredDismissed,
-          expanded: s.clientState.show_dismissed === true,
-          onToggle: s.toggleShowDismissed,
+          expanded: openBuckets.dismissed,
+          onToggle: () => setOpenBuckets((o) => ({ ...o, dismissed: !o.dismissed })),
           variant: "dismissed",
           onKill: handleKillDismissed,
         })}

@@ -4,7 +4,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { packSnapshotContent, readSnapshotContent } from "./lib/docSnapshot";
-import { requireAccessibleDoc, canAccessConversation } from "./lib/access";
+import { requireAccessibleDoc } from "./lib/access";
 import { checkConversationAccess } from "./privacy";
 import { notFound } from "./lib/auth";
 
@@ -36,14 +36,10 @@ async function requireSyncableEntity(ctx: any, userId: Id<"users">, id: string):
     const convId = ctx.db.normalizeId("conversations", synthetic[2]);
     const conversation = convId ? await ctx.db.get(convId) : null;
     if (!conversation) notFound();
-    if (synthetic[1] === "comment") {
-      // Comment threads follow the conversation's full access ladder — a
-      // share-token holder may read and write comments, so their presence
-      // belongs on the thread too.
-      if ((await checkConversationAccess(ctx, userId, conversation)) === "denied") notFound();
-      return;
-    }
-    if (!(await canAccessConversation(ctx, userId, conversation))) notFound();
+    // Both namespaces follow the conversation's full access ladder: a
+    // share-link redeemer or an assigned session owner co-writes in the collab
+    // composer and comments on threads, so their presence belongs there too.
+    if ((await checkConversationAccess(ctx, userId, conversation)) === "denied") notFound();
     return;
   }
   notFound();

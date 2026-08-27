@@ -660,6 +660,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await applyPatches(ctx, userId, {
       client_state: { _: { drafts: { [conversationId]: null } } },
     });
+    // The conversation row is the draft's second durable home (mobile persists
+    // straight to conversations.draft_message). Clear it here too, so a send
+    // doesn't depend on a fire-and-forget patchConversation that a live push
+    // can race — or that throws outright on a session the user doesn't own.
+    const convId = ctx.db.normalizeId("conversations", conversationId);
+    const conv = convId ? await ctx.db.get(convId) : null;
+    if (conv && conv.user_id === userId && conv.draft_message != null) {
+      await ctx.db.patch(conv._id, { draft_message: undefined });
+    }
   },
 
   switchProject: async (ctx, userId, [convId, path]: [string, string]) => {

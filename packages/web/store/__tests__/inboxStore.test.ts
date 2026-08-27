@@ -3600,27 +3600,6 @@ describe("killSessions — bulk kill from the Stashed bucket", () => {
   });
 });
 
-describe("hidden buckets are closed by default", () => {
-  // Open ONLY while the flag is explicitly true: unset (fresh user / cleared
-  // state) must read as closed, and the first toggle must OPEN. The panel
-  // renders `expanded: flag === true`, so these toggles are the whole contract.
-  it("toggleShowStashed: unset -> open -> closed", () => {
-    useInboxStore.setState({ clientState: {} } as any);
-    useInboxStore.getState().toggleShowStashed();
-    expect(useInboxStore.getState().clientState.show_stashed).toBe(true);
-    useInboxStore.getState().toggleShowStashed();
-    expect(useInboxStore.getState().clientState.show_stashed).toBe(false);
-  });
-
-  it("toggleShowDismissed: unset -> open -> closed", () => {
-    useInboxStore.setState({ clientState: {} } as any);
-    useInboxStore.getState().toggleShowDismissed();
-    expect(useInboxStore.getState().clientState.show_dismissed).toBe(true);
-    useInboxStore.getState().toggleShowDismissed();
-    expect(useInboxStore.getState().clientState.show_dismissed).toBe(false);
-  });
-});
-
 describe("applyStashedReconcile — cross-device stash propagation", () => {
   const realId = "a1".repeat(16);
 
