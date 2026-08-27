@@ -4,6 +4,7 @@ import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
 import { TabParamsCtx } from "../lib/tabParams";
 import { isPrewarmTab, clearPrewarmTab } from "../lib/openIntent";
 import { tabSessionId } from "../lib/tabTitle";
+import { tabNeedsUrlRestore } from "../lib/pathLabel";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 
 // -- Route map: path pattern → lazy component --
@@ -192,10 +193,17 @@ function TabPane({ tab, isActive, children }: { tab: AppTab; isActive: boolean; 
     };
   }, [tab.id, tab.path, matched, isActive]);
 
-  // Sync browser URL when this tab is active
+  // Sync browser URL when this tab is active. tabNeedsUrlRestore stands down
+  // when the live URL is this tab's own content in the other spelling — an
+  // inbox tab's session select canonicalizes the URL to /conversation/<id> and
+  // PUSHES a { inboxId } history entry (QueuePageClient), then updates the
+  // tab's /inbox?s=<id> path (syncActiveInboxTabPath). Rewriting the URL here
+  // on that path change was clobbering the just-pushed entry (null state, ?s=
+  // spelling), which collapsed browser back/forward across viewed sessions.
   useEffect(() => {
     if (!isActive) return;
     if (window.location.pathname !== ctxValue.pathname) {
+      if (!tabNeedsUrlRestore(window.location.pathname, tab.path)) return;
       window.history.replaceState(null, "", tab.path);
     }
   }, [isActive, tab.path, ctxValue.pathname]);

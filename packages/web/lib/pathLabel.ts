@@ -72,3 +72,22 @@ export function conversationTabPath(path: string): string {
   const conv = path.match(/^\/conversation\/([^/?#]+)$/);
   return conv ? `/inbox?s=${conv[1]}` : path;
 }
+
+/** The session id a live URL shows, in either spelling: the inbox canonical
+ *  `/conversation/<id>` or the tab deep-link `/inbox?s=<id>`. Null when the
+ *  URL shows no session (bare /inbox, any other route). */
+export function urlSessionId(pathname: string, search: string): string | null {
+  const conv = pathname.match(/^\/conversation\/([^/?#]+)$/);
+  return conv ? conv[1] : inboxTabSessionId(pathname + search);
+}
+
+/** Whether an active tab must rewrite the address bar to its own stored path.
+ *  False when the live URL is this tab's own content in the other spelling:
+ *  the inbox canonicalizes its URL to `/conversation/<id>` while its tab keeps
+ *  the equivalent `/inbox?s=<id>` (see stampedTabPath). Rewriting that URL
+ *  back would clobber the `{ inboxId }` history entry the inbox pushed for
+ *  the select — and with it browser back/forward across viewed sessions. */
+export function tabNeedsUrlRestore(livePathname: string, tabPath: string): boolean {
+  if (livePathname === tabPath.split("?")[0].split("#")[0]) return false;
+  return conversationTabPath(livePathname) !== tabPath;
+}
