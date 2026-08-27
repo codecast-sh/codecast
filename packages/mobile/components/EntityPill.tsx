@@ -28,14 +28,14 @@ const TYPE_LABEL: Record<EntityType, string> = {
   trigger: 'Trigger',
 };
 
-// Web pill palette: session=blue, plan=cyan, task=magenta, doc=green,
-// project=violet, trigger=orange.
+// Web pill palette: session=blue, plan=cyan, task=violet, doc=green,
+// project=neutral, trigger=orange. (Magenta is reserved for chat.)
 const TYPE_COLOR: Record<EntityType, string> = {
   session: Theme.blue,
   plan: Theme.cyan,
-  task: Theme.magenta,
+  task: Theme.violet,
   doc: Theme.green,
-  project: Theme.violet,
+  project: Theme.textMuted,
   trigger: Theme.orange,
 };
 
