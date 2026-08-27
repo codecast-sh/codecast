@@ -1,14 +1,15 @@
 // Grok Build (xai-org/grok-build) transcript parsing + tail classification.
-// Fixtures under __fixtures__/grok are FULLY SYNTHETIC — hand-composed to the
-// updates.jsonl envelope schema researched from the grok-build source and its own
-// test fixtures (session/storage/jsonl tests), then written from scratch with
-// throwaway /tmp paths and fabricated tool output, no real user data. The sandbox
-// CLI is logged out (login needs a paid account), so no real transcript exists to
-// capture — the fixtures pin the researched byte shape instead: envelope
-// timestamps in unix SECONDS, ACP camelCase payload fields (toolCallId,
-// _meta.promptIndex), xAI extension snake_case variant fields (prompt_id,
-// stop_reason, target_prompt_index), a legacy method-less line, a rewind_marker,
-// and a torn final line.
+// Fixtures under __fixtures__/grok are hand-composed (throwaway /tmp paths,
+// fabricated tool output, no real user data) to the updates.jsonl schema from
+// the grok-build source, then corrected field-for-field against a LIVE
+// logged-in v1.0.5 capture (2026-08-26): envelope timestamps in unix SECONDS,
+// ACP camelCase payload fields (toolCallId, _meta.promptIndex), xAI extension
+// snake_case variant fields (prompt_id, stop_reason, target_prompt_index),
+// tool results as ToolCallContent wrappers ({type:"content"}) for commands and
+// {type:"diff"} blocks for edits, an in_progress update carrying the tool
+// DESCRIPTION (the terminal update's content replaces it), camelCase
+// turn_completed usage, _meta["x.ai/tool"] on tool_call, a legacy method-less
+// line, a rewind_marker, and a torn final line.
 import { test, expect, describe } from "bun:test";
 import * as fs from "fs";
 import * as path from "path";
@@ -72,6 +73,24 @@ describe("parseGrokSessionFile — linear turn with a bash tool call", () => {
     expect(result.toolUseId).toBe("call_synthbash01");
     expect(result.content).toBe("README.md\npackage.json\nsrc\n");
     expect(result.isError).toBeUndefined();
+  });
+
+  test("the terminal update's content REPLACES the in_progress description (ACP update semantics)", () => {
+    // The live-captured in_progress update carries the tool DESCRIPTION in a
+    // ToolCallContent wrapper; appending it prefixed every command result with
+    // its description.
+    const result = messages
+      .flatMap((m) => m.toolResults ?? [])
+      .find((r) => r.toolUseId === "call_synthbash01");
+    expect(result!.content).not.toContain("List the files");
+  });
+
+  test("renders {type:'diff'} edit results as path + diff lines (live edit-tool shape)", () => {
+    const result = messages
+      .flatMap((m) => m.toolResults ?? [])
+      .find((r) => r.toolUseId === "call_synthwrite02");
+    expect(result).toBeDefined();
+    expect(result!.content).toBe("/tmp/demo/notes.txt\n+ hello\n");
   });
 
   test("tracks the model from _meta.modelId on user chunks", () => {

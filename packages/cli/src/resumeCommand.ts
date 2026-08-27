@@ -35,15 +35,22 @@ const SHELL_SAFE_SESSION_ID_RE = /^[A-Za-z0-9._-]+$/;
  *
  *  - opencode: exact `ses_<base62>` — its DB row is externally writable, so
  *    shell-safety alone is too loose; require the one real shape.
+ *  - grok: exact UUID. Shell-safety alone is too loose here for a REASON beyond
+ *    injection: `grok --resume <non-UUID>` matches session TITLES for the cwd
+ *    case-insensitively, so a title-shaped id (a poisoned or foreign store row —
+ *    the watcher and spawn both mint UUIDs) would silently resume a DIFFERENT
+ *    session on a unique title match. Only the one real shape may reach the
+ *    command.
  *  - gemini: always true — its resume ignores the id (`gemini --resume latest`),
  *    so the id is never interpolated and there is nothing to inject through.
- *  - claude / codex / cursor / pi / grok: the id IS interpolated, so require the
- *    shell-safe shape (covers UUIDs — grok ids are always UUIDs — and claude's
- *    `agent-`/`forked-` ids, refuses every injection payload).
+ *  - claude / codex / cursor / pi: the id IS interpolated, so require the
+ *    shell-safe shape (covers UUIDs and claude's `agent-`/`forked-` ids,
+ *    refuses every injection payload).
  */
 export function isValidResumeSessionId(agentType: AgentClientId, sessionId: string): boolean {
   if (typeof sessionId !== "string" || sessionId.length === 0) return false;
   if (agentType === "opencode") return OPENCODE_SESSION_ID_RE.test(sessionId);
+  if (agentType === "grok") return CLAUDE_UUID_RE.test(sessionId);
   if (agentType === "gemini") return true;
   return SHELL_SAFE_SESSION_ID_RE.test(sessionId);
 }
@@ -206,25 +213,37 @@ export function combineClaudeResumeFlags(
  * resumes a chat by id — instead of building a `claude --resume` and running
  * Claude's repair machinery against a cursor transcript.
  *
- * codexArgs/codexPermFlags are the raw config values; the codex resume appends
- * both. gemini and cursor take no configured flags today.
+ * codexArgs/codexPermFlags and grokArgs/grokPermFlags are the raw config values;
+ * those two clients' resumes append them. Grok's permission mode is a LAUNCH
+ * flag, not per-session state (nothing in the session dir records it), so a
+ * resume that drops the flags restarts the session in grok's default Ask mode —
+ * and a managed grok cannot answer TUI permission prompts (panePromptMonitoring:
+ * false), so the first tool call would park it forever. gemini and cursor take
+ * no configured flags today.
  *
  * The base command per client is the single source of truth in the registry
- * (AGENT_CLIENTS[agentType].resumeCmd); this function only layers the codex
+ * (AGENT_CLIENTS[agentType].resumeCmd); this function only layers the codex/grok
  * config flags on top and gates claude out.
  */
 export function buildNonClaudeResumeCommand(
   agentType: AgentClientId,
   sessionId: string,
-  opts: { codexArgs?: string | null; codexPermFlags?: string | null } = {},
+  opts: {
+    codexArgs?: string | null;
+    codexPermFlags?: string | null;
+    grokArgs?: string | null;
+    grokPermFlags?: string | null;
+  } = {},
 ): string | null {
   if (agentType === "claude") return null;
   const base = AGENT_CLIENTS[agentType].resumeCmd(sessionId);
-  if (agentType === "codex") {
-    let extra = opts.codexArgs || "";
-    if (opts.codexPermFlags) extra = extra ? extra + " " + opts.codexPermFlags : opts.codexPermFlags;
+  const withFlags = (args?: string | null, permFlags?: string | null): string => {
+    let extra = args || "";
+    if (permFlags) extra = extra ? extra + " " + permFlags : permFlags;
     return `${base}${extra ? " " + extra : ""}`;
-  }
+  };
+  if (agentType === "codex") return withFlags(opts.codexArgs, opts.codexPermFlags);
+  if (agentType === "grok") return withFlags(opts.grokArgs, opts.grokPermFlags);
   return base;
 }
 

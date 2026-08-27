@@ -682,15 +682,19 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // deliberately not watched.
     transcriptRoots: ["~/.grok/sessions"],
     watcherKind: "jsonl-dir",
-    // Derived from the TUI source, not a captured logged-in pane (the sandbox is
-    // logged out; login needs a paid account): the main composer renders the
-    // prompt arrow `❯ ` (U+276F + space) — prompt_widget/mod.rs:3160-3180 +
-    // pager-render glyphs.rs:22 `prompt_arrow`, show_prefix: true. The shared
-    // /[❯›]/ readiness path matches it too, so resume readiness needs no special
-    // case. Busy chrome uses braille spinner frames ⠋⠙⠹… (already in the busy
-    // regex). CAUTION from source: grok has NO "esc to interrupt" string, and
-    // its IDLE states contain the words "send a message to interrupt" — never
-    // add a generic /interrupt/ busy heuristic for grok.
+    // Live-verified on a logged-in v1.0.5 pane (2026-08-26): the composer
+    // renders the prompt arrow `❯ ` (U+276F + space; source: prompt_widget/
+    // mod.rs:3160-3180 + glyphs.rs:22 `prompt_arrow`) — but the composer STAYS
+    // VISIBLE for the whole turn, so a bare ❯ check false-positives mid-turn
+    // and an injection's leading Escape would cancel the running turn. That is
+    // why grok sits in the daemon's GLYPHLESS_PROMPT_CLIENTS despite having a
+    // glyph: every readiness/pane site classifies it whole-pane with
+    // busy-detection FIRST (spinner in the header, "Esc:cancel" / "Waiting for
+    // response" / "[stop]" in the footer chrome — all from the live capture)
+    // before trusting this pattern. Never move grok to the shared /[❯›]/ path.
+    // CAUTION: grok has NO "esc to interrupt" string, and its IDLE states
+    // contain the words "send a message to interrupt" — never add a generic
+    // /interrupt/ busy heuristic for grok.
     promptReadyPattern: /❯/,
     // `gk-` — free: cc/cx/cu/gm/oc/pi taken.
     tmuxPrefix: "gk",
