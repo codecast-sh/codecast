@@ -421,3 +421,75 @@ describe("engine adapter", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Control mode: input rides back on the same socket, only when asked for.
+
+describe("control mode", () => {
+  test("input is dispatched through CDP, scaled by the page viewport", async () => {
+    const c = connect({ session_uuid: "u1", control: true });
+    const ready = await c.waitFor("ready");
+    expect(ready.control).toBe(true);
+    // The fake accumulates sessions across tests — take THIS connection's.
+    const cdpSession = cdp.calls.filter((call) => call.method === "Page.startScreencast").pop()!.sessionId!;
+
+    // No frame yet → no viewport → a click has nowhere to land and is dropped.
+    const before = cdp.calls.length;
+    c.ws.send(JSON.stringify({ type: "input", events: [{ kind: "mouse", type: "mousePressed", nx: 0.5, ny: 0.5, button: "left", clickCount: 1 }] }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(cdp.calls.filter((x) => x.method === "Input.dispatchMouseEvent").length).toBe(0);
+    expect(cdp.calls.length).toBe(before);
+
+    // A frame teaches the viewport; normalized coordinates scale by it.
+    cdp.emit({
+      method: "Page.screencastFrame",
+      params: { data: "aGVsbG8=", metadata: { deviceWidth: 1000, deviceHeight: 500 }, sessionId: 7 },
+      sessionId: cdpSession,
+    });
+    await c.waitFor("frame");
+    c.ws.send(
+      JSON.stringify({
+        type: "input",
+        events: [
+          { kind: "mouse", type: "mousePressed", nx: 0.25, ny: 0.5, button: "left", clickCount: 1 },
+          { kind: "key", type: "keyDown", key: "Enter", code: "Enter" },
+          { kind: "insertText", text: "hello" },
+        ],
+      }),
+    );
+    const deadline = Date.now() + 2000;
+    while (!cdp.calls.some((x) => x.method === "Input.insertText") && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const mouse = cdp.calls.find((x) => x.method === "Input.dispatchMouseEvent")!;
+    expect(mouse.sessionId).toBe(cdpSession);
+    expect(mouse.params).toMatchObject({ type: "mousePressed", x: 250, y: 250, button: "left", clickCount: 1 });
+    const key = cdp.calls.find((x) => x.method === "Input.dispatchKeyEvent")!;
+    // Enter carries the virtual key code and a CR — without them Chrome
+    // delivers the event but never submits the form.
+    expect(key.params).toMatchObject({ type: "keyDown", key: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+    expect(cdp.calls.find((x) => x.method === "Input.insertText")!.params).toEqual({ text: "hello" });
+
+    c.ws.close();
+    await c.closed;
+  });
+
+  test("a watch-only viewer's input is ignored and ready says so", async () => {
+    const c = connect({ session_uuid: "u1" });
+    const ready = await c.waitFor("ready");
+    expect(ready.control).toBe(false);
+    const cdpSession = cdp.calls.filter((call) => call.method === "Page.startScreencast").pop()!.sessionId!;
+    cdp.emit({
+      method: "Page.screencastFrame",
+      params: { data: "aGVsbG8=", metadata: { deviceWidth: 1000, deviceHeight: 500 }, sessionId: 8 },
+      sessionId: cdpSession,
+    });
+    await c.waitFor("frame");
+    const before = cdp.calls.filter((x) => x.method.startsWith("Input.")).length;
+    c.ws.send(JSON.stringify({ type: "input", events: [{ kind: "insertText", text: "nope" }] }));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(cdp.calls.filter((x) => x.method.startsWith("Input.")).length).toBe(before);
+    c.ws.close();
+    await c.closed;
+  });
+});

@@ -13,7 +13,12 @@
  * screenshot instead. This file only knows the wire protocol, who owns which
  * tab, and when to stop.
  *
- * Read-only by construction: nothing here ever sends input to a page.
+ * Read-only unless the viewer asks for control. A hello with `control: true`
+ * lets the SAME authenticated socket carry input back (mouse/keys, dispatched
+ * through CDP by the frame source) — this is how a human signs into an OAuth
+ * page inside the agent's browser, including a browser running on a cloud
+ * box whose CDP is tunneled here. The token/origin gate is the terminal's:
+ * whoever may attach the integrated terminal may drive the browser.
  */
 
 import type http from "http";
@@ -55,6 +60,9 @@ interface WatchHello {
   tmux_session?: string;
   /** Requested max frames/second (only honored downward). */
   fps?: number;
+  /** Ask to send input back (mouse/keys). Granted when the frame source can
+   * dispatch it; the viewer is told via the ready message. */
+  control?: boolean;
 }
 
 /**
@@ -121,6 +129,7 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: Watc
   let ownerTimer: NodeJS.Timeout | null = null;
   let lifeTimer: NodeJS.Timeout | null = null;
   let minInterval = MIN_FRAME_INTERVAL_MS;
+  let controlWanted = false;
   let closed = false;
   // Guards the async open(): the viewer may leave mid-dial, and a source that
   // finishes opening after cleanup would have no owner to stop it.
@@ -169,6 +178,23 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: Watc
     if (!tokenMatches(hello.token, opts)) return fail("forbidden", "forbidden");
     if (typeof hello.fps === "number" && hello.fps > 0) {
       minInterval = Math.max(minInterval, Math.floor(1000 / hello.fps));
+    }
+    controlWanted = hello.control === true;
+    if (controlWanted) {
+      // After the hello the socket stays two-way: batches of input events
+      // ride back on it. Dropped silently between tabs (source === null) —
+      // a click into a tab that just died has nowhere meaningful to land.
+      ws.on("message", (raw2, isBinary2) => {
+        if (closed || isBinary2) return;
+        let m: any;
+        try {
+          m = JSON.parse(raw2.toString("utf8"));
+        } catch {
+          return;
+        }
+        if (m?.type !== "input" || !Array.isArray(m.events) || m.events.length > 64) return;
+        for (const ev of m.events) void source?.input?.(ev);
+      });
     }
 
     candidates = ownerCandidates(hello, deps.paneIdFor);
@@ -233,7 +259,13 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: Watc
       return;
     }
     source = next;
-    sendJson({ type: "ready", targetId: next.tab.id, title: next.tab.title, url: next.tab.url });
+    sendJson({
+      type: "ready",
+      targetId: next.tab.id,
+      title: next.tab.title,
+      url: next.tab.url,
+      control: controlWanted && typeof next.input === "function",
+    });
     if (first) {
       lifeTimer = setTimeout(() => exit("timeout"), MAX_WATCH_MS);
       lifeTimer.unref?.();
