@@ -17,6 +17,7 @@ import { common, createLowlight } from "lowlight";
 import tippy, { type Instance as TippyInstance } from "tippy.js";
 import { MentionList, type MentionItem } from "./MentionList";
 import { MentionNodeView } from "./MentionNodeView";
+import { CodeBlockNodeView } from "./CodeBlockNodeView";
 import { SlashCommandExtension } from "./SlashCommandExtension";
 import { DateMentionExtension } from "./DateMentionExtension";
 import { TabIndentExtension } from "./TabIndentExtension";
@@ -114,7 +115,11 @@ export function createBaseExtensions(opts: {
     Typography,
     Highlight.configure({ HTMLAttributes: { class: "editor-highlight" } }),
     ImageExtension.configure({ HTMLAttributes: { class: "editor-image" } }),
-    CodeBlockLowlight.configure({ lowlight }),
+    CodeBlockLowlight.extend({
+      addNodeView() {
+        return ReactNodeViewRenderer(CodeBlockNodeView);
+      },
+    }).configure({ lowlight }),
     Markdown.configure({
       html: true,
       transformPastedText: true,
