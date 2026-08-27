@@ -14,6 +14,7 @@ import {
   classifyApiErrorBanner,
   CLIENT_ERROR_BANNER_PREFIX,
   apiErrorBatchAction,
+  nextPendingApiError,
   classifyWorkState,
   classifyRetirement,
   normalizeWorkStateFilter,
@@ -564,6 +565,26 @@ describe("apiErrorBatchAction", () => {
 
   test("a still-erroring session (pending, banner-only) does not supersede", () => {
     expect(apiErrorBatchAction({ batchHasRealTurn: false, batchHasBanner: true, conversationPending: true })).toBe("mark_pending");
+  });
+});
+
+describe("nextPendingApiError", () => {
+  test("a banner as the newest message parks the session", () => {
+    expect(nextPendingApiError({ newestIsBanner: true, batchHasRealTurn: false, conversationPending: false })).toBe(true);
+  });
+
+  test("a real turn releases a parked session", () => {
+    expect(nextPendingApiError({ newestIsBanner: false, batchHasRealTurn: true, conversationPending: true })).toBe(false);
+  });
+
+  test("a system notice after a banner keeps the session parked", () => {
+    // e.g. "Remote Control disconnected" landing after "Usage limit reached":
+    // not a turn, so the block did not lift and the card must not read resolved.
+    expect(nextPendingApiError({ newestIsBanner: false, batchHasRealTurn: false, conversationPending: true })).toBe(true);
+  });
+
+  test("a system notice on an unparked session leaves it unparked", () => {
+    expect(nextPendingApiError({ newestIsBanner: false, batchHasRealTurn: false, conversationPending: false })).toBe(false);
   });
 });
 

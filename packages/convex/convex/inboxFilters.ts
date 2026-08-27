@@ -241,6 +241,23 @@ export function apiErrorBatchAction(input: {
   return "none";
 }
 
+// The next value of conversations.pending_api_error after a write. A banner as
+// the newest message parks the session; a real turn (assistant text/tool call,
+// user text/tool result/image) releases it. Anything else — a system notice
+// such as "Remote Control disconnected", an empty meta row — says nothing about
+// whether the block lifted, so the flag keeps its current value. Clearing it
+// on such traffic made a still-parked session render "resolved".
+export function nextPendingApiError(input: {
+  newestIsBanner: boolean;
+  batchHasRealTurn: boolean;
+  conversationPending: boolean;
+}): boolean {
+  const { newestIsBanner, batchHasRealTurn, conversationPending } = input;
+  if (newestIsBanner) return true;
+  if (batchHasRealTurn) return false;
+  return conversationPending;
+}
+
 export interface SessionIdleInput {
   /** managed_sessions.agent_status, coerced for heartbeat staleness by the caller. */
   agentStatus?: string;

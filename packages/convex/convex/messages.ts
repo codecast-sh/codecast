@@ -23,7 +23,7 @@ import {
 } from "./smallViewContracts";
 import { onFreshApiErrorPark } from "./accountSwitch";
 import { batchHasLoopEvent, deriveLoopState } from "./loopState";
-import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
+import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction, nextPendingApiError, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
 import {
   classifyDocContent,
   extractTitleFromContent,
@@ -1356,14 +1356,20 @@ export const addMessage = mutation({
     if (msgEffort && msgEffort !== conversation.effort) {
       convPatch.effort = msgEffort;
     }
-    if (msgIsBanner !== wasPendingApiError) {
-      convPatch.pending_api_error = msgIsBanner;
+    const nextPending = nextPendingApiError({
+      newestIsBanner: msgIsBanner,
+      batchHasRealTurn: msgIsRealTurn,
+      conversationPending: wasPendingApiError,
+    });
+    if (nextPending !== wasPendingApiError) {
+      convPatch.pending_api_error = nextPending;
     }
-    const nextBannerKind = msgIsBanner ? msgBannerKind : undefined;
+    // A kept flag keeps its kind and stamp; only a fresh banner rewrites them.
+    const nextBannerKind = msgIsBanner ? msgBannerKind : nextPending ? conversation.pending_api_error_kind ?? undefined : undefined;
     if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
       convPatch.pending_api_error_kind = nextBannerKind;
     }
-    const nextBannerAt = msgIsBanner ? msgTimestamp : undefined;
+    const nextBannerAt = msgIsBanner ? msgTimestamp : nextPending ? conversation.pending_api_error_at ?? undefined : undefined;
     if ((conversation.pending_api_error_at ?? undefined) !== nextBannerAt) {
       convPatch.pending_api_error_at = nextBannerAt;
     }
@@ -1884,24 +1890,32 @@ export const addMessages = mutation({
         convPatch.effort = batchEffort;
       }
       // Keep the gate flag in lockstep with "newest message is a banner".
-      const nextPendingApiError = isBannerMsg(newestMsg);
-      if (nextPendingApiError !== wasPendingApiError) {
-        convPatch.pending_api_error = nextPendingApiError;
+      const newestIsBanner = isBannerMsg(newestMsg);
+      const nextPending = nextPendingApiError({
+        newestIsBanner,
+        batchHasRealTurn,
+        conversationPending: wasPendingApiError,
+      });
+      if (nextPending !== wasPendingApiError) {
+        convPatch.pending_api_error = nextPending;
       }
-      const nextBannerKind = nextPendingApiError
+      // A kept flag keeps its kind and stamp; only a fresh banner rewrites them.
+      const nextBannerKind = newestIsBanner
         ? classifyApiErrorBanner(newestMsg.content) ?? undefined
-        : undefined;
+        : nextPending ? conversation.pending_api_error_kind ?? undefined : undefined;
       if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
         convPatch.pending_api_error_kind = nextBannerKind;
       }
-      const nextBannerAt = nextPendingApiError ? newestMsg.timestamp || Date.now() : undefined;
+      const nextBannerAt = newestIsBanner
+        ? newestMsg.timestamp || Date.now()
+        : nextPending ? conversation.pending_api_error_at ?? undefined : undefined;
       if ((conversation.pending_api_error_at ?? undefined) !== nextBannerAt) {
         convPatch.pending_api_error_at = nextBannerAt;
       }
       // A fresh blocked-kind park triggers the debounced reactions (see
       // addMessage): auto-switch check + aggregated incident notification.
       if (
-        nextPendingApiError &&
+        newestIsBanner &&
         nextBannerKind &&
         nextBannerKind !== "error" &&
         (!wasPendingApiError || conversation.pending_api_error_kind !== nextBannerKind)
