@@ -39,6 +39,8 @@ export interface PeopleRosterData {
   sendingRoomKey: string | null;
   /** The active workspace pointer names a team the viewer has left. */
   strayWorkspace: boolean;
+  /** How many huddles are open right now, for the team pulse. */
+  huddles: number;
 }
 
 export function usePeopleRoster(): PeopleRosterData {
@@ -83,5 +85,6 @@ export function usePeopleRoster(): PeopleRosterData {
     talkingId: String(walkie.incoming?.fromUserId ?? ""),
     sendingRoomKey: walkie.sending?.roomKey ?? null,
     strayWorkspace,
+    huddles: rooms.length,
   };
 }

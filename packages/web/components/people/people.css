@@ -438,3 +438,100 @@
     opacity: calc(0.25 + var(--level) * 0.5);
   }
 }
+
+/* ── Density ──────────────────────────────────────────────────────────────────
+ *
+ * The panel's root carries data-density (peopleDensity.ts): "strip" is one row
+ * of faces, "compact" a folded header over tight rows, "full" the buddy list.
+ * The shape is chosen from the window's own measured box, never by hand. */
+
+/* The strip's text slot replaces the label that would hang under a face — a
+   56px window has nowhere below a face to put it. */
+.people-panel[data-density="strip"] .people-face-label {
+  display: none;
+}
+
+.people-strip-rule {
+  width: 1px;
+  height: 18px;
+  flex: none;
+  background: var(--sol-border);
+}
+
+/* The faces scroll sideways when the team outgrows the window, with no
+   scrollbar of their own — a strip has no height to give one — and a soft
+   edge that says there is more. */
+.people-strip-faces {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  padding: 6px 4px;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent);
+}
+.people-strip-faces::-webkit-scrollbar {
+  display: none;
+}
+
+/* The people who are not there, as one dim count. */
+.people-strip-gone {
+  flex: none;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px dashed color-mix(in srgb, var(--sol-border) 90%, transparent);
+  color: var(--sol-text-dim);
+  font-size: 10px;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* One person is being talked to, so the rest of the strip steps back — the
+   wall's rule, at the strip's scale. */
+.people-strip[data-holding] .people-face-seat:not([data-hold]) {
+  opacity: 0.34;
+}
+
+/* The compact header's status word: the pill, folded to its word. */
+.people-status-word {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  text-transform: capitalize;
+  transition: background 120ms ease;
+}
+.people-status-word:hover,
+.people-status-word[aria-expanded="true"] {
+  background: var(--sol-bg-highlight);
+}
+
+/* The pulse's live dot breathes: the one moving thing on the line is the one
+   thing that is actually moving. */
+.people-pulse-dot[data-live] {
+  animation: people-pulse-breathe 2.4s ease-in-out infinite;
+}
+@keyframes people-pulse-breathe {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.45; transform: scale(0.8); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .people-pulse-dot[data-live] {
+    animation: none;
+  }
+}
+
+/* In the strip a face has no label to light up, so the face itself answers
+   the pointer: a small lift, the same the wall gives a face being spoken to. */
+.people-panel[data-density="strip"] .people-face:hover {
+  transform: scale(1.08);
+}
+/* The compact row's actions cover the activity line rather than the badge
+   slot: the slot is one mic wide, and the line is what a pointer can spare. */
+.people-panel[data-density="compact"] .people-row-actions {
+  right: 34px;
+  padding-left: 8px;
+  background: linear-gradient(to right, transparent, var(--sol-bg-highlight) 8px);
+}
