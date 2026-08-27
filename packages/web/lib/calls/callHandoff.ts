@@ -116,3 +116,52 @@ export function facesLeaveGesture(held: boolean): WindowExit & { hangUp: boolean
     ? { close: true, ended: true, hangUp: true }
     : { close: true, ended: false, hangUp: false };
 }
+
+/**
+ * What a call window tells the shell it is hosting.
+ *
+ * The shell keeps the LAST report as the handback payload, replacing it whole,
+ * so every field here has to be right at every moment — including the moments
+ * before there is a call to describe. Both satellite windows report the same
+ * five facts, and they are assembled once, here, for the reason the rest of
+ * this file exists: two windows answering the same question differently is how
+ * a call goes missing.
+ */
+export type CallWindowReport = {
+  room: string | null;
+  mic: boolean;
+  camera: boolean;
+  scribe: boolean;
+  joined: boolean;
+};
+
+/**
+ * `windowRoom` is the room this window was OPENED for, read from its own URL.
+ * It is the answer before the join starts and the answer if the join fails,
+ * and it is why `room` is never null in a window that has a room in its
+ * address: the first report fires at phase `idle`, and reporting null there
+ * would overwrite the room the shell seeded the window with. A close in that
+ * instant — the traffic light, a moment after the window opened — then hands
+ * back nothing, and the call is stranded in a window that is going away.
+ *
+ * `joined` is the other fact the shell cannot work out for itself: whether
+ * this window HAS the call, which is not the same question as which room it is
+ * pointed at. The handback arbiter reads it so that a window whose join failed
+ * is never mistaken for one holding a call.
+ */
+export function callWindowReport(s: {
+  phase: CallWindowPhase;
+  roomKey: string | null;
+  windowRoom: string | null;
+  muted: boolean;
+  camera: boolean;
+  scribe: boolean;
+}): CallWindowReport {
+  return {
+    room: s.roomKey ?? s.windowRoom,
+    mic: !s.muted,
+    camera: !!s.camera,
+    scribe: !!s.scribe,
+    joined: s.phase === "connected",
+  };
+}

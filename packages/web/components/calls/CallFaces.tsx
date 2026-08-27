@@ -14,7 +14,12 @@ import {
   type ParticipantTile,
 } from "../../lib/calls/callManager";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
-import { callHandoffState, facesLeaveGesture, facesWindowExit } from "../../lib/calls/callHandoff";
+import {
+  callHandoffState,
+  callWindowReport,
+  facesLeaveGesture,
+  facesWindowExit,
+} from "../../lib/calls/callHandoff";
 import {
   closeFacesWindow,
   isFacesWindow,
@@ -147,19 +152,18 @@ export function CallFaces() {
   const scribe = useSyncExternalStore(subscribeScribe, getScribeStatus, getScribeStatus).active;
   useWatchEffect(() => {
     reportFacesState({
-      // The room this window is FOR, which it knows from its own URL before it
-      // knows anything about a call. Reporting null while the join is still
-      // getting started would overwrite the room the shell was created with,
-      // and a handback needs a room to carry — the failure path depends on it.
-      room: call.roomKey ?? roomKey,
-      mic: !call.muted,
-      camera: !!call.camera,
-      scribe,
+      // The same five facts the panel reports, assembled in the same place —
+      // including the room this window knows from its own URL before it knows
+      // anything about a call. Plus the one fact only this window has.
+      ...callWindowReport({
+        phase: call.phase,
+        roomKey: call.roomKey,
+        windowRoom: roomKey,
+        muted: call.muted,
+        camera: call.camera,
+        scribe,
+      }),
       mode,
-      // The shell's handback arbiter reads this. A window that exists is not a
-      // window that has the call, and only the second one may stop the call
-      // being handed back to the main window.
-      joined: call.phase === "connected",
     });
   }, [call.phase, call.roomKey, roomKey, call.muted, call.camera, scribe, mode]);
 
