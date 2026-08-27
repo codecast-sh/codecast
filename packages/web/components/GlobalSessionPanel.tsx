@@ -3364,7 +3364,7 @@ export function SessionListPanel({
   const [openBuckets, setOpenBuckets] = useState(CLOSED_BUCKETS);
   const [bucketsFilter, setBucketsFilter] = useState(() => filterByChip);
   if (bucketsFilter !== filterByChip) {
-    setBucketsFilter(filterByChip);
+    setBucketsFilter(() => filterByChip);
     setOpenBuckets(CLOSED_BUCKETS);
   }
 
