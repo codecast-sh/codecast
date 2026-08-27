@@ -98,6 +98,7 @@ export const agentNames: Record<string, string> = {
   gemini: "gemini",
   opencode: "opencode",
   pi: "pi",
+  grok: "grok",
 };
 
 /** Display label for the session a notification belongs to: title, else project basename. */

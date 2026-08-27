@@ -1,6 +1,7 @@
 import { View as RNView } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import Svg, { Path } from 'react-native-svg';
+import { Theme } from '@/constants/Theme';
 
 export function agentLogoBg(agentType?: string): string {
   if (agentType === 'codex') return '#0f0f0f';
@@ -8,6 +9,7 @@ export function agentLogoBg(agentType?: string): string {
   if (agentType === 'gemini') return '#1a73e8';
   if (agentType === 'opencode') return '#f97316';
   if (agentType === 'pi') return '#14b8a6';
+  if (agentType === 'grok') return Theme.text;
   return '#cb4b16';
 }
 
@@ -28,6 +30,16 @@ export function AgentLogoSvg({ agentType, size = 16 }: { agentType?: string; siz
     return (
       <RNView style={{ width: size, height: size, borderRadius: size * 0.2, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
         <RNText style={{ color: 'white', fontSize: size * 0.6, fontWeight: '700', lineHeight: size * 0.85, textAlign: 'center' }}>π</RNText>
+      </RNView>
+    );
+  }
+  if (agentType === 'grok') {
+    // xAI mark — same path as web's AgentTypeIcon (grok).
+    return (
+      <RNView style={{ width: size, height: size, borderRadius: 3, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
+        <Svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="none">
+          <Path d="M3 3l18 18M21 3l-7.5 7.5M3 21l7.5-7.5" stroke="white" strokeWidth={2.5} strokeLinecap="round" />
+        </Svg>
       </RNView>
     );
   }

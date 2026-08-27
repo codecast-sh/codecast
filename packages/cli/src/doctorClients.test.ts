@@ -12,7 +12,7 @@ import { parseTranscriptFor } from "./parser.js";
 import { clientFixture, watcherFires, probeClient, probeAllClients } from "./doctorClients.js";
 
 const ALL_CLIENTS = Object.keys(AGENT_CLIENTS) as AgentClientId[];
-const JSONL_CLIENTS: AgentClientId[] = ["claude", "codex", "gemini", "pi"];
+const JSONL_CLIENTS: AgentClientId[] = ["claude", "codex", "gemini", "pi", "grok"];
 const SQLITE_CLIENTS: AgentClientId[] = ["opencode", "cursor"];
 
 describe("clientFixture — the synthetic transcript round-trips the PRODUCTION parser", () => {
