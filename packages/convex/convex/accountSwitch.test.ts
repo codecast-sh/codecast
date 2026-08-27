@@ -8,6 +8,8 @@ import {
   isValidProfileName,
   shouldSweepStaleFlag,
   decideAutoSwitch,
+  resolveDeviceProfile,
+  targetAccountEmail,
   isExhaustionCurrent,
   isUsageExhausted,
   isWindowRolled,
@@ -542,5 +544,40 @@ describe("actedBlockedConversations", () => {
     // were in-process workflow agents; auto-including them resumed 53 copies.
     expect(actedBlockedConversations([worker, flagged], false)).toEqual([]);
     expect(actedBlockedConversations([], true)).toEqual([]);
+  });
+});
+
+describe("per-device account resolution", () => {
+  const macA = {
+    profiles: [
+      { name: "personal", email: "a@x.com" },
+      { name: "work", email: "w@x.com" },
+    ],
+  };
+  const macB = { profiles: [{ name: "main", email: "w@x.com" }] };
+  const oldDaemon = { profiles: [{ name: "work" }] };
+
+  test("resolves by email to the device's own name, never the caller's alias", () => {
+    expect(resolveDeviceProfile(macA, { email: "w@x.com" })).toBe("work");
+    expect(resolveDeviceProfile(macB, { email: "w@x.com" })).toBe("main");
+    expect(resolveDeviceProfile(macB, { profile: "work", email: "w@x.com" })).toBe("main");
+  });
+
+  test("a device without the account is unresolvable, not a foreign name", () => {
+    expect(resolveDeviceProfile(macB, { email: "a@x.com" })).toBeUndefined();
+    expect(resolveDeviceProfile(macB, { profile: "personal" })).toBeUndefined();
+    expect(resolveDeviceProfile(undefined, { email: "a@x.com" })).toBeUndefined();
+  });
+
+  test("falls back to exact name for inventories with no emails", () => {
+    expect(resolveDeviceProfile(oldDaemon, { profile: "work", email: "w@x.com" })).toBe("work");
+    expect(resolveDeviceProfile(oldDaemon, { profile: "personal" })).toBeUndefined();
+  });
+
+  test("targetAccountEmail lifts a pinned-device name to an identity", () => {
+    expect(targetAccountEmail(macA, { profile: "work" })).toBe("w@x.com");
+    expect(targetAccountEmail(macA, { email: "z@x.com", profile: "work" })).toBe("z@x.com");
+    expect(targetAccountEmail(oldDaemon, { profile: "work" })).toBeUndefined();
+    expect(targetAccountEmail(macA, {})).toBeUndefined();
   });
 });
