@@ -320,43 +320,48 @@ function truncateGitDiff(s: string | undefined): string | undefined {
   return s && s.length > MAX_GIT_DIFF_SIZE ? s.slice(0, MAX_GIT_DIFF_SIZE) : s;
 }
 
-// Upsert the git-diff side row for a conversation. The blobs live off the
-// conversations hot doc (see conversation_git_diffs in schema.ts); only
-// getConversationGitDiff reads them. Deletes the row when both are empty.
-async function setConvGitDiff(
+// Upsert the git side row for a conversation. The diff blobs and the status
+// text live off the conversations hot doc (see conversation_git_diffs in
+// schema.ts): the inbox scan reads every candidate doc in full, so any bytes a
+// list never renders are paid on every recompute. Only getConversationGitDiff
+// reads them. Deletes the row when everything is empty.
+export async function setConvGitDiff(
   ctx: MutationCtx,
   conversationId: Id<"conversations">,
   gitDiff: string | undefined,
   gitDiffStaged: string | undefined,
+  gitStatus?: string,
 ) {
   const diff = truncateGitDiff(gitDiff);
   const staged = truncateGitDiff(gitDiffStaged);
+  const status = truncateGitDiff(gitStatus);
   const existing = await ctx.db
     .query("conversation_git_diffs")
     .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversationId))
     .first();
-  if (!diff && !staged) {
+  if (!diff && !staged && !status) {
     if (existing) await ctx.db.delete(existing._id);
     return;
   }
   if (existing) {
-    await ctx.db.patch(existing._id, { git_diff: diff, git_diff_staged: staged, updated_at: Date.now() });
+    await ctx.db.patch(existing._id, { git_diff: diff, git_diff_staged: staged, git_status: status, updated_at: Date.now() });
   } else {
     await ctx.db.insert("conversation_git_diffs", {
       conversation_id: conversationId,
       git_diff: diff,
       git_diff_staged: staged,
+      git_status: status,
       updated_at: Date.now(),
     });
   }
 }
 
-// Read the git-diff side row (conversation_git_diffs). Blobs no longer live on
-// the conversation doc.
+// Read the git side row (conversation_git_diffs). Blobs no longer live on the
+// conversation doc.
 async function getConvGitDiff(
   ctx: QueryCtx,
   conversationId: Id<"conversations">,
-): Promise<{ git_diff: string | null; git_diff_staged: string | null }> {
+): Promise<{ git_diff: string | null; git_diff_staged: string | null; git_status: string | null }> {
   const row = await ctx.db
     .query("conversation_git_diffs")
     .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversationId))
@@ -364,6 +369,7 @@ async function getConvGitDiff(
   return {
     git_diff: row?.git_diff ?? null,
     git_diff_staged: row?.git_diff_staged ?? null,
+    git_status: row?.git_status ?? null,
   };
 }
 
@@ -961,7 +967,6 @@ export const createConversation = mutation({
       git_commit_hash: args.git_commit_hash,
       git_branch: args.git_branch,
       git_remote_url: args.git_remote_url,
-      git_status: args.git_status,
       git_root: args.git_root,
       cli_flags: args.cli_flags,
       worktree_name: args.worktree_name,
@@ -985,8 +990,8 @@ export const createConversation = mutation({
         properties: { agent_type: args.agent_type },
       });
     }
-    // git_diff blobs live off the hot doc in conversation_git_diffs.
-    await setConvGitDiff(ctx, conversationId, args.git_diff, args.git_diff_staged);
+    // git_diff blobs and git_status live off the hot doc in conversation_git_diffs.
+    await setConvGitDiff(ctx, conversationId, args.git_diff, args.git_diff_staged, args.git_status);
     // Terminal-started sessions: the SessionStart hook usually reports the
     // injected stable context before this registration — attach the parked record.
     await consumeStableContextSpool(ctx, args.user_id, args.session_id, conversationId);
@@ -4752,12 +4757,11 @@ export const setAvailableSkills = mutation({
     if (user.available_skills !== undefined) {
       await ctx.db.patch(authUserId, { available_skills: undefined });
     }
-    if (args.conversation_id) {
-      const conversation = await ctx.db.get(args.conversation_id);
-      if (conversation && conversation.user_id.toString() === authUserId.toString()) {
-        await ctx.db.patch(args.conversation_id, { available_skills: args.skills });
-      }
-    }
+    // Deliberately NOT stamped on the conversation doc: nothing reads
+    // conversations.available_skills (getConversationWithMeta strips it, the
+    // web reads currentUser.available_skills), and at ~10KB per session it was
+    // 60% of every inbox scan's bytes. conversation_id stays accepted so older
+    // daemons keep working; the legacy field is shed by the doc diet sweep.
   },
 });
 
@@ -5452,7 +5456,6 @@ export const forkFromMessage = mutation({
       git_commit_hash: original.git_commit_hash,
       git_branch: original.git_branch,
       git_remote_url: original.git_remote_url,
-      git_status: original.git_status,
       git_root: original.git_root,
       cli_flags: original.cli_flags,
       worktree_name: original.worktree_name,
@@ -5516,13 +5519,14 @@ export const forkFromMessage = mutation({
     // above.
     await inheritLabelAssignment(ctx, userId, original._id, newConversationId);
 
-    // Carry the original's git_diff over to the fork's side row (off the hot doc).
+    // Carry the original's git side row (diff + status) over to the fork's.
     const originalGitDiff = await getConvGitDiff(ctx, original._id);
     await setConvGitDiff(
       ctx,
       newConversationId,
       originalGitDiff.git_diff ?? undefined,
       originalGitDiff.git_diff_staged ?? undefined,
+      originalGitDiff.git_status ?? original.git_status ?? undefined,
     );
 
     if (!isAgentSwitch) {
@@ -8088,10 +8092,17 @@ export async function scanInboxConversations(
   // Recent window is bounded by both the row cap AND the 30d activity window:
   // the index range stops the scan at the cutoff so old sessions are never read.
   // Pinned/dismissed have their own (separate) queries below and stay exempt.
-  const recentConversationsQ = ctx.db
+  //
+  // Subagent rows are excluded AT THE INDEX. shouldShowInInbox drops them
+  // anyway, but a busy account has more subagents than sessions in its recent
+  // window (331 of 631 candidates on one census), so reading them cost more
+  // than the rows that survive — and they crowded real sessions out of the
+  // 200-row cap. is_subagent is written as both `false` and absent, so the
+  // top-level set is the union of two index ranges.
+  const recentWindow = (isSubagent: false | undefined) => ctx.db
     .query("conversations")
-    .withIndex("by_user_updated", (q: any) =>
-      q.eq("user_id", userId).gte("updated_at", sessionWindowCutoff)
+    .withIndex("by_user_subagent_updated", (q: any) =>
+      q.eq("user_id", userId).eq("is_subagent", isSubagent).gte("updated_at", sessionWindowCutoff)
     )
     .order("desc")
     .filter((q: any) => q.or(
@@ -8099,6 +8110,8 @@ export async function scanInboxConversations(
       q.eq(q.field("status"), "completed")
     ))
     .take(200);
+  const recentConversationsQ = Promise.all([recentWindow(undefined), recentWindow(false)])
+    .then(([a, b]: [any[], any[]]) => [...a, ...b].sort((x, y) => y.updated_at - x.updated_at).slice(0, 200));
 
   const pinnedConversationsQ = ctx.db
     .query("conversations")
@@ -8107,10 +8120,14 @@ export async function scanInboxConversations(
     )
     .take(20);
 
+  // Killed rows are excluded at the index for the same reason: a kill stamps
+  // inbox_dismissed_at alongside inbox_killed_at (applyHideTransition), so the
+  // dismissed window was mostly retired rows the filter throws away. A pinned
+  // killed row still shows, and the pinned window below covers it.
   const dismissedConversationsQ = ctx.db
     .query("conversations")
-    .withIndex("by_user_dismissed", (q: any) =>
-      q.eq("user_id", userId).gte("inbox_dismissed_at", dismissedCutoff)
+    .withIndex("by_user_live_dismissed", (q: any) =>
+      q.eq("user_id", userId).eq("inbox_killed_at", undefined).gte("inbox_dismissed_at", dismissedCutoff)
     )
     .order("desc")
     .take(200);
@@ -8119,8 +8136,8 @@ export async function scanInboxConversations(
   // Stashed bucket is populated even for rows older than the recent window.
   const stashedConversationsQ = ctx.db
     .query("conversations")
-    .withIndex("by_user_stashed", (q: any) =>
-      q.eq("user_id", userId).gte("inbox_stashed_at", dismissedCutoff)
+    .withIndex("by_user_live_stashed", (q: any) =>
+      q.eq("user_id", userId).eq("inbox_killed_at", undefined).gte("inbox_stashed_at", dismissedCutoff)
     )
     .order("desc")
     .take(200);
