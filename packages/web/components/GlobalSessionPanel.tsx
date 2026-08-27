@@ -268,7 +268,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
           autoFocusInput
           backHref={backHref}
           onBack={onBack}
-          fallbackStickyContent={cleanUserMessage(lastUserMessage)}
+          fallbackStickyContent={lastUserMessage}
           targetMessageId={targetMessageId}
           isJumpingToTarget={isJumpingToTarget}
           subHeaderContent={<>
@@ -961,7 +961,10 @@ function BlockedSessionsBanner({
               disabled={busy !== null}
               className="max-w-[220px] rounded border border-amber-500/25 bg-sol-bg px-1.5 py-0.5 text-[11px] text-sol-text outline-none hover:border-amber-500/50 focus:border-amber-500 disabled:opacity-60"
             >
-              <option value="">{activeEmails.length > 1 ? "current accounts" : "this account"}{usageNote(activeUsage)}</option>
+              <option value="">
+                {activeEmail ? `this account (${activeEmail})` : activeEmails.length > 1 ? `current accounts (${activeEmails.join(" / ")})` : "this account"}
+                {usageNote(activeUsage)}
+              </option>
               {rankedAccounts.map((t) => (
                 <option key={t.key} value={t.key}>
                   {t.email ?? t.name}{usageNote(t.usage)}{t.missingOn.length > 0 ? ` — not on ${t.missingOn.join(", ")}` : ""}
@@ -3038,7 +3041,7 @@ const needsAttentionRowSig = (t: any) =>
 
 // Structural signature for the decision rows the Questions section branches on.
 const decisionsSectionSig = makeCollectionSig((d: any) =>
-  d.status === "pending" ? `${d._id}|${d.conversation_id}` : "");
+  d.status === "pending" ? `${d._id}|${d.conversation_id}|${d.updated_at ?? 0}` : "");
 
 function NeedsAttentionSection() {
   // Workspace-scoped rows, with a field signature so this always-mounted

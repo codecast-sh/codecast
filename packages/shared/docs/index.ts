@@ -25,6 +25,27 @@ export type DocSource =
 export type DocOrigin = "human" | "agent";
 
 /**
+ * The three classes a person tells apart, mirroring tasks (human board /
+ * agent-internal / mined suggestions):
+ *
+ * - `human` — a person created the doc in the UI (or `cast doc create`
+ *   outside a session).
+ * - `agent` — an agent deliberately filed it: `cast doc create` in a session,
+ *   a plan body, a plan-mode capture.
+ * - `mined` — nobody filed it; machinery collected it: session extracts,
+ *   synced files, bulk imports.
+ */
+export type DocOriginClass = "human" | "agent" | "mined";
+
+const MINED_SOURCES = new Set(["file_sync", "inline_extract", "import"]);
+
+export function docOriginClass(doc: { source?: string | null }): DocOriginClass {
+  if (doc.source === "human") return "human";
+  if (doc.source && MINED_SOURCES.has(doc.source)) return "mined";
+  return "agent";
+}
+
+/**
  * Only an explicit `human` stamp counts as human. Everything else — including
  * a source literal added later — is machine origin, so a new writer is quiet
  * by default and never leaks onto the human shelf unlabeled.

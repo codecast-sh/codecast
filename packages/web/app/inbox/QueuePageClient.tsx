@@ -11,7 +11,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { KeyCap } from "../../components/KeyboardShortcutsHelp";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
-import { AppLoader } from "../../components/AppLoader";
+import { ConversationPlaceholder } from "../../components/ConversationPlaceholder";
 import { ConversationDiffLayout } from "../../components/ConversationDiffLayout";
 import { ConversationData } from "../../components/ConversationView";
 import { shareOrigin } from "../../lib/utils";
@@ -27,7 +27,6 @@ import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { TriggerContextPanel } from "../../components/TriggerContextPanel";
 import { toast } from "sonner";
 import { animatedHideSession } from "../../store/undoActions";
-import { cleanUserMessage } from "../../components/sessionMessage";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 
@@ -118,9 +117,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   }, [sessionId, convCommand]);
 
   if (!conversation) {
-    return (
-      <AppLoader className="min-h-0 h-full bg-transparent" size={32} />
-    );
+    return <ConversationPlaceholder id={sessionId} />;
   }
 
   const convId = conversation._id as Id<"conversations">;
@@ -209,7 +206,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
           isJumpingToTarget={isJumpingToTarget}
           highlightQuery={highlightQuery}
           onClearHighlight={onClearHighlight}
-          fallbackStickyContent={isOwnSession ? cleanUserMessage(lastUserMessage) : undefined}
+          fallbackStickyContent={isOwnSession ? lastUserMessage : undefined}
           subHeaderContent={<>
             {isOwnSession && (
               <TriggerContextPanel
@@ -662,7 +659,7 @@ export function QueuePageClient() {
             onClearHighlight={handleClearHighlight}          />
         </ErrorBoundary>
       ) : pendingInjectId ? (
-        <AppLoader className="min-h-0 h-full bg-transparent" size={32} />
+        <ConversationPlaceholder id={pendingInjectId} />
       ) : unavailableId ? (
         <div className="h-full flex items-center justify-center">
           <div className="text-center max-w-sm px-4">

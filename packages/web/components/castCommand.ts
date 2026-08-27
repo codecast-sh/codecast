@@ -360,6 +360,102 @@ export function extractStateArgs(args: string): StateArgs {
   return { status, headline: headline || null };
 }
 
+// ── cast decide ─────────────────────────────────────────────────────────────
+// `cast decide "<question>" -o … -o … --context - <<'EOF' …` posts a decision;
+// `cast decide edit [id] …` changes it; `cast decide cancel [id]` withdraws it;
+// `cast decide ls` lists them. The transcript renders the first three as a
+// decision card — the same card the queue shows — so the agent never has to
+// restate the question in prose. What is parsed here is the recorded argv; the
+// live row in the store (status, the answer, an edited text) overrides it when
+// the conversation view can find it.
+export interface DecideArgs {
+  verb: "ask" | "edit" | "cancel" | "ls";
+  /** Positional id on edit/cancel, when given. */
+  decisionId?: string;
+  /** The question (ask positional, or edit --question). Null when absent or shell-expanded. */
+  question: string | null;
+  options: Array<{ label: string; description?: string }>;
+  /** Literal/heredoc context. Null when absent or a recipe (`"$(cat f)"`, piped `-`). */
+  context: string | null;
+  report?: string;
+  advisory: boolean;
+  /** 0-based, mirrors the row's default_option. */
+  defaultOption?: number;
+  /** edit --blocking: an advisory ask made blocking. */
+  blocking: boolean;
+}
+
+const DECIDE_VERBS: Record<string, DecideArgs["verb"]> = {
+  edit: "edit", cancel: "cancel", rm: "cancel", withdraw: "cancel", ls: "ls", list: "ls",
+};
+const DECIDE_VALUE_FLAGS = new Set(["-o", "--option", "--context", "--report", "--default", "--session", "--question"]);
+
+// Mirrors the CLI's "Label :: what happens if chosen" split (decideCommand.ts).
+export function splitDecideOption(raw: string): { label: string; description?: string } {
+  const idx = raw.indexOf("::");
+  if (idx === -1) return { label: raw.trim() };
+  const label = raw.slice(0, idx).trim();
+  const description = raw.slice(idx + 2).trim();
+  return description ? { label, description } : { label };
+}
+
+export function extractDecideArgs(subcommand: string, args: string): DecideArgs {
+  // The parser puts a bare first word in the subcommand slot; a quoted
+  // question lands in args. Fold a non-verb word back so both shapes parse.
+  const verb = DECIDE_VERBS[subcommand];
+  const rest = verb ? args : subcommand ? `${subcommand} ${args}`.trim() : args;
+  const out: DecideArgs = { verb: verb ?? "ask", question: null, options: [], context: null, advisory: false, blocking: false };
+  if (out.verb === "ls") return out;
+
+  const tokens = tokenizeShellArgs(rest);
+  const positional: ShellToken[] = [];
+  let contextToken: ShellToken | null = null;
+  let questionFlag: ShellToken | null = null;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const t = tokens[i];
+    if (!t.quoted && FLAG_RE.test(t.value)) {
+      if (t.value === "--advisory") { out.advisory = true; continue; }
+      if (t.value === "--blocking") { out.blocking = true; continue; }
+      if (!DECIDE_VALUE_FLAGS.has(t.value)) continue;
+      const next = tokens[i + 1];
+      if (!next) continue;
+      i += 1;
+      if (t.value === "-o" || t.value === "--option") out.options.push(splitDecideOption(next.value));
+      else if (t.value === "--context") contextToken = next;
+      else if (t.value === "--report") out.report = next.value;
+      else if (t.value === "--question") questionFlag = next;
+      else if (t.value === "--default") {
+        const n = parseInt(next.value, 10);
+        if (!isNaN(n)) out.defaultOption = n - 1;
+      }
+      continue;
+    }
+    positional.push(t);
+  }
+
+  if (out.verb === "ask") {
+    const q = positional[0];
+    out.question = q && !q.dynamic ? q.value : null;
+  } else {
+    const id = positional[0];
+    if (id && /^[a-z0-9]{20,}$/i.test(id.value)) out.decisionId = id.value;
+    out.question = questionFlag && !questionFlag.dynamic ? questionFlag.value : null;
+  }
+
+  if (contextToken) {
+    if (contextToken.value === "-" && !contextToken.quoted) {
+      // `--context -  <<'EOF' …`: the body is the heredoc after the marker.
+      const dash = rest.match(/--context\s+(-)(?=\s|$)/);
+      const body = dash && dash.index !== undefined ? extractSendBody(rest.slice(dash.index + dash[0].lastIndexOf("-"))) : null;
+      out.context = body && body.kind === "heredoc" ? body.body : null;
+    } else {
+      out.context = contextToken.dynamic ? null : contextToken.value;
+    }
+  }
+  if (!out.advisory) out.defaultOption = undefined;
+  return out;
+}
+
 // "t"/"p"/"d" are the short spellings, "sched"/"schedule" the pre-rename name of
 // `cast trigger` — old transcripts replay them forever, so every reader resolves
 // a category through here and sees one name per object kind.

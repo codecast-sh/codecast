@@ -10,13 +10,13 @@ import {
   sync,
   type DurableCreateContinuation,
 } from "./mutativeMiddleware";
-import { createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, promote as wsPromotePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
+import { adoptWorkspaceSnapshot, createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, promote as wsPromotePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
 import { applyWorkbench as applyWorkbenchPure, captureWorkbench, chipFilterOf, resolveWorkbenchFilter, type WorkbenchSnapshot } from "./workbench";
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { isDraft, original } from "mutative";
 import { soundDismiss, soundKill } from "../lib/sounds";
-import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox, salvageLocalFirstV2Data, PERSISTENCE_AVAILABLE } from "./idbCache";
+import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, writeConversationUserMessages, enqueueDispatch, removeDispatch, loadOutbox, salvageLocalFirstV2Data, PERSISTENCE_AVAILABLE } from "./idbCache";
 import {
   DISPATCH_TABLE_MAP,
   HYDRATION_CRITICAL_KEYS,
@@ -96,6 +96,7 @@ export type CreateModalKind = 'task' | 'plan' | 'doc' | 'chat' | 'huddle';
 import { isConvexId } from "../lib/entityLinks";
 import { pathOnMyMachines, type MachineCandidate } from "../lib/machinePicker";
 import { conversationTabPath } from "../lib/pathLabel";
+import { healTabPaths, isNonTabRoute, shellTabPath } from "../lib/tabRoutes";
 import { divertSessionOpen } from "../lib/openIntent";
 import type { PalettePick } from "../lib/palettePick";
 export { isConvexId };
@@ -891,10 +892,13 @@ export type SessionDecisionItem = {
   report_slug?: string;
   blocking: boolean;
   default_option?: number;
-  status: "pending" | "answered" | "dismissed";
+  // withdrawn: the agent took its question back (`cast decide cancel`).
+  status: "pending" | "answered" | "dismissed" | "withdrawn";
   answer_index?: number;
   answer_text?: string;
   created_at: number;
+  // Last `cast decide edit`; created_at is the ask time (queue age).
+  updated_at?: number;
   resolved_at?: number;
 };
 
@@ -1242,17 +1246,23 @@ export type ClientTips = {
   _inlineSuppressed?: boolean;
 };
 
-// Tabs carry CONTENT identity only (path, session). The panel arrangement —
-// which rails are open, their widths, the dock — is global chrome shared by
-// every tab: switching tabs must reveal another page under the exact same
-// frame, never reshape the frame. (Tabs used to snapshot/restore a per-tab
-// workspace; that made the right rail open/close and resize on every switch.)
+// A tab freezes its WHOLE view, frame included. Content identity (path,
+// session) says what the stage shows; `workspace` carries the panel
+// arrangement — left nav, list, right rail, dock: each slot's pane,
+// presentation and size — exactly as the tab last showed it. Switching away
+// stamps the live arrangement onto the tab; switching back restores it, the
+// same way the tab restores its columns and scroll. A tab with no snapshot
+// yet (a fresh tab) inherits the frame it was opened under.
 export type AppTab = {
   id: string;
   title: string;
   path: string;
   sessionId?: string;
   createdAt: number;
+  /** The full panel arrangement as of the last switch away from this tab. */
+  workspace?: WorkspaceState;
+  /** The right rail's conversation at stamp time (sidePanelSessionId). */
+  railSessionId?: string | null;
 };
 
 // The path to stamp onto a tab from the live browser URL when switching away.
@@ -1271,7 +1281,40 @@ export function stampedTabPath(tab: AppTab): string {
   const live = window.location.pathname + window.location.search;
   const conv = window.location.pathname.match(/^\/conversation\/([^/?#]+)$/);
   if (conv && tab.path.split("?")[0] === "/inbox") return `/inbox?s=${conv[1]}`;
+  // A live URL outside the shell (the app root during boot, a marketing page,
+  // the palette window) is not this tab's content: keep what the tab held, or
+  // the stamp pins the tab to a path the shell cannot render (lib/tabRoutes).
+  if (isNonTabRoute(window.location.pathname)) return tab.path;
   return live;
+}
+
+// Stamp the active tab with everything a later switch back must restore: its
+// live path, the panel arrangement, and the right rail's conversation.
+function stampActiveTab(draft: { activeTabId: string | null; tabs: AppTab[]; workspace: WorkspaceState; sidePanelSessionId: string | null }, patch?: Partial<AppTab>) {
+  if (!draft.activeTabId) return;
+  draft.tabs = draft.tabs.map((t: AppTab) => t.id === draft.activeTabId ? {
+    ...t,
+    path: stampedTabPath(t),
+    workspace: draft.workspace,
+    railSessionId: draft.sidePanelSessionId,
+    ...patch,
+  } : t);
+}
+
+// The other half of the freeze: put a tab's stamped frame back on screen.
+// Adoption is slot-validated (adoptWorkspaceSnapshot) so a legacy or partial
+// snapshot can never leave the workspace missing a slot, and the persistence
+// mirror is refreshed so a reload paints the frame that is actually visible.
+function restoreTabWorkspace(draft: any, tab: AppTab | undefined) {
+  if (!tab) return;
+  const next = adoptWorkspaceSnapshot(draft.workspace as WorkspaceState, tab.workspace);
+  if (next !== draft.workspace) {
+    draft.workspace = next;
+    persistWorkspace(draft);
+  }
+  if (tab.railSessionId !== undefined && tab.railSessionId !== draft.sidePanelSessionId) {
+    draft.sidePanelSessionId = tab.railSessionId;
+  }
 }
 
 export type ClientState = {
@@ -4350,12 +4393,13 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   tasks: {
     isDelta: true,
     altKey: "client_key",
-    // Activity (comments + history) rides only the detail queries
-    // (webGetTaskDetail live while a task is open, webGetByIds on the change
-    // feed); the list channels (webList, webListPaginated) never carry it.
-    // Preserve it across their deltas so a fetched task's activity renders
-    // instantly from cache on the next open instead of reloading async.
-    preserveFields: ["comments", "history"],
+    // The detail joins (activity, linked sessions, related docs, source
+    // insight) ride only webGetTaskDetail, live while a task is open; the list
+    // channels (webList, webListPaginated, webGetByIds) never carry them.
+    // Preserve them across list deltas so a fetched task's detail renders
+    // instantly from cache on the next open instead of reloading async. Fields
+    // the list DOES carry (creator, assignee_info, plan) stay list-authoritative.
+    preserveFields: ["comments", "history", "linked_conversations", "related_docs", "source_insight"],
   },
   // The decision queue. NOT delta: listForUser returns the complete visible
   // window (pending + 24h of resolved) on every push, so absence means the
@@ -4423,7 +4467,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       }
       // Hydrate tabs from server on first sync
       if (incoming.tabs && Array.isArray(incoming.tabs) && draft.tabs.length === 0) {
-        draft.tabs = incoming.tabs;
+        draft.tabs = healTabPaths(incoming.tabs);
       }
       if (incoming.activeTabId && !draft.activeTabId) {
         draft.activeTabId = incoming.activeTabId;
@@ -4625,6 +4669,28 @@ function notePendingMessageSendRequested(clientId?: string): void {
   }
 }
 
+// The send args a pending optimistic row stands for, for any path that re-issues
+// its send (rekey redrive, boot redrive, the bubble's Retry). Replays the exact
+// bytes the original send dispatched: the server dedupes this client id by
+// argument fingerprint, so a rebuilt payload (raw content without the
+// mention-expansion context, or the same text without its images) is refused
+// as COMMAND_ID_REUSED. `uploading` means an image has no storage id yet: the
+// detached upload task that owns the row sends it once the upload settles, so
+// no other path may send first — the server keeps the first row per client id,
+// and a send that beats the upload lands the message without its image for good.
+export function pendingRowSendArgs(message: Message): { content: string; imageIds: string[] | undefined; uploading: boolean } {
+  const content = message._dispatchContent || message.content || "";
+  const images = message.images || [];
+  const imageIds = images
+    .map((image: any) => image?.storage_id)
+    .filter((id: unknown): id is string => typeof id === "string");
+  return {
+    content,
+    imageIds: imageIds.length ? imageIds : undefined,
+    uploading: images.some((image: any) => image?.uploading),
+  };
+}
+
 function redrivePendingMessagesFor(convexId: string): void {
   const store = useInboxStore.getState();
   for (const message of store.pendingMessages[convexId] || []) {
@@ -4632,15 +4698,10 @@ function redrivePendingMessagesFor(convexId: string): void {
     const clientId = message._clientId || message._id;
     const requestedAt = recentlyRequestedPendingMessages.get(clientId);
     if (requestedAt && Date.now() - requestedAt < PENDING_MESSAGE_REDRIVE_COALESCE_MS) continue;
-    // Replay the exact bytes the original send dispatched: the server dedupes
-    // this client id by argument fingerprint, so a rebuilt payload (raw content
-    // without the mention-expansion context) is refused as COMMAND_ID_REUSED.
-    const content = message._dispatchContent || message.content || "";
-    const imageIds = (message.images || [])
-      .map((image: any) => image?.storage_id)
-      .filter((id: unknown): id is string => typeof id === "string");
-    if (!content.trim() && imageIds.length === 0) continue;
-    store.sendMessage(convexId, content, imageIds.length ? imageIds : undefined, clientId);
+    const { content, imageIds, uploading } = pendingRowSendArgs(message);
+    if (uploading) continue;
+    if (!content.trim() && !imageIds) continue;
+    store.sendMessage(convexId, content, imageIds, clientId);
   }
 }
 
@@ -6974,14 +7035,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // feed, just like store.sessions backs the personal feed). Both the live query
   // (newest page) and "Load more" (older pages) dump here; we overlay by _id so
   // updates and paginated pages merge without ever losing a row, then keep it
-  // sorted newest-first. Bounded only to keep the persisted blob sane. sync() =
-  // local draft + IDB write, no server dispatch.
+  // sorted newest-first. UNBOUNDED on purpose: every row a page ever fetched
+  // stays cached. The feed's exhaustiveness rests on this — a cap silently
+  // dropped the oldest rows once a deep scroll crossed it, and the catch-up
+  // walk (lib/feedCatchup) counts on cached rows below the watermark staying
+  // put. sync() = local draft + IDB write, no server dispatch.
   mergeFeedConversations: sync(function (this: Draft, key: string, convs: any[]) {
     const byId = new Map((this.feedConversations[key] ?? []).map((c: any) => [c._id, c]));
     for (const c of convs ?? []) byId.set(c._id, c);
     this.feedConversations[key] = [...byId.values()]
-      .sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0))
-      .slice(0, 2000);
+      .sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
   }),
 
   // Whether older pages remain for this feed key (persisted so the "Load more"
@@ -7684,6 +7747,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
       return;
     }
     this.userMessages[convId] = msgs;
+    // Persisted beside the message pages so a reopen (or a reload) paints the
+    // message navigator from disk instead of a skeleton while getUserMessages
+    // is in flight; ensureHydrated restores it.
+    writeConversationUserMessages(convId, msgs);
   }),
 
   addOptimisticMessage: sync(function (this: Draft, convId: string, content: string, images?: Array<OptimisticImage>, clientId?: string) {
@@ -7753,12 +7820,18 @@ const inboxStoreConfig = (set: any, get: any) => ({
     else this.pendingMessages[convId] = kept;
   }),
 
+  // Lands settled uploads on the row by client id, under whichever key holds it
+  // now: the upload task captured the STUB id at send time, and a parked create
+  // may have rekeyed the row to its real id while the upload was in flight. A
+  // miss would leave the row `uploading` forever and every redrive would skip it.
   resolvePendingUploads: sync(function (this: Draft, convId: string, clientId: string, images: Array<OptimisticImage>) {
-    const pending = this.pendingMessages[convId];
-    if (!pending) return;
-    this.pendingMessages[convId] = pending.map((m) =>
-      m._clientId === clientId || m._id === clientId ? { ...m, images } : m
-    );
+    const isRow = (m: Message) => m._clientId === clientId || m._id === clientId;
+    const keys = this.pendingMessages[convId]?.some(isRow)
+      ? [convId]
+      : Object.keys(this.pendingMessages).filter((key) => this.pendingMessages[key]?.some(isRow));
+    for (const key of keys) {
+      this.pendingMessages[key] = this.pendingMessages[key].map((m) => (isRow(m) ? { ...m, images } : m));
+    }
   }),
 
   stampPendingDispatchContent: sync(function (this: Draft, convId: string, clientId: string, dispatchContent: string) {
@@ -9117,12 +9190,19 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const tab: AppTab = {
       id,
       title: opts.title,
-      path: opts.path,
+      // Only a shell route: the desktop boots at `/`, and a first tab seeded
+      // from that URL rendered a blank stage on every launch (lib/tabRoutes).
+      path: shellTabPath(opts.path),
       sessionId: opts.sessionId,
       createdAt: Date.now(),
     };
     this.tabs = [...this.tabs, tab];
-    if (opts.makeActive !== false) this.activeTabId = id;
+    if (opts.makeActive !== false) {
+      // The tab being left behind keeps its frame; the new tab has no
+      // snapshot yet, so it inherits the frame it was opened under.
+      stampActiveTab(this);
+      this.activeTabId = id;
+    }
     return id;
   }),
 
@@ -9145,27 +9225,35 @@ const inboxStoreConfig = (set: any, get: any) => ({
           t.id === nextTab.id ? { ...t, path: conversationTabPath(t.path) } : t,
         );
       }
+      this.tabs = newTabs;
+      // Close promotes the survivor without a switchTab, so restore its
+      // frozen frame here — the dying tab's frame dies with it.
+      restoreTabWorkspace(this, nextTab);
+      return;
     }
     this.tabs = newTabs;
   }),
 
-  // Switching tabs changes ONLY what the stage shows. The workspace (rails,
-  // sizes, dock) is global chrome — it never rides along, so the frame is
-  // pixel-identical across tabs.
+  // Switching tabs swaps the WHOLE frozen view: the outgoing tab is stamped
+  // with the live frame (panes, presentations, sizes, rail subject), and the
+  // incoming tab's stamped frame is put back on screen. A tab that never
+  // stamped one keeps the current frame.
   switchTab: action(function (this: Draft, id: string) {
     if (this.activeTabId === id) return;
-    if (this.activeTabId) {
-      this.tabs = this.tabs.map((t: AppTab) => t.id === this.activeTabId ? {
-        ...t,
-        path: stampedTabPath(t),
-      } : t);
-    }
+    stampActiveTab(this);
     this.activeTabId = id;
+    restoreTabWorkspace(this, this.tabs.find((t: AppTab) => t.id === id));
   }),
 
   updateTab: action(function (this: Draft, id: string, patch: Partial<AppTab>) {
     const current = this.tabs.find((t: AppTab) => t.id === id);
     if (!current) return;
+    // A path outside the shell never lands in a tab (lib/tabRoutes); the tab
+    // keeps what it showed rather than taking a path no pane renders.
+    if (patch.path !== undefined && isNonTabRoute(patch.path)) {
+      const { path: _dropped, ...rest } = patch;
+      patch = rest;
+    }
     let changed = false;
     for (const k in patch) {
       if ((current as any)[k] !== (patch as any)[k]) { changed = true; break; }
@@ -9176,11 +9264,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   saveCurrentTabState: action(function (this: Draft, patch?: Partial<AppTab>) {
     if (!this.activeTabId) return;
-    this.tabs = this.tabs.map((t: AppTab) => t.id === this.activeTabId ? {
-      ...t,
-      path: stampedTabPath(t),
-      ...patch,
-    } : t);
+    stampActiveTab(this, patch);
   }),
 
   // =====================
@@ -9412,24 +9496,33 @@ export function useTrackedStore(deps: Array<(s: InboxStoreState) => any>): Inbox
 // listMessages for every row it didn't hold in MEMORY, which on a relaunch was
 // all of them, even though IDB had the tail for nearly every one.
 const _idbHydrating = new Map<string, Promise<boolean>>();
+// Conversations whose messages were already in memory when we went to disk
+// for the navigator list alone. Probed once: ensureHydrated runs on every
+// ConversationView render, and a conversation with no persisted list must not
+// cost an IDB read per render. Eviction drops messages and the list together,
+// so the next full hydration re-reads both regardless of this set.
+const _userMsgsProbed = new Set<string>();
 export function ensureHydrated(convId: string): Promise<boolean> {
   const store = useInboxStore.getState();
+  const hasMessages = store.messages[convId]?.length > 0;
   // Already in memory — nothing to hydrate
-  if (store.messages[convId]?.length > 0) return Promise.resolve(true);
+  if (hasMessages && (store.userMessages[convId] || _userMsgsProbed.has(convId))) return Promise.resolve(true);
   // In-flight hydration — don't double-load
   const inflight = _idbHydrating.get(convId);
   if (inflight) return inflight;
+  if (hasMessages) _userMsgsProbed.add(convId);
   const p = loadConversationMessages(convId).then((cached) => {
     _idbHydrating.delete(convId);
-    if (!cached || cached.messages.length === 0) return false;
-    const current = useInboxStore.getState().messages[convId];
-    if (current?.length > 0) return true;
-    useInboxStore.getState().setMessages(convId, cached.messages, cached.pagination);
+    const s = useInboxStore.getState();
+    if (cached?.userMessages && !s.userMessages[convId]) s.setUserMessages(convId, cached.userMessages);
+    if (!cached || cached.messages.length === 0) return hasMessages;
+    if (s.messages[convId]?.length > 0) return true;
+    s.setMessages(convId, cached.messages, cached.pagination);
     return true;
   }).catch(() => {
     _idbHydrating.delete(convId);
     // Never reinterpret a storage error as an authoritative empty conversation.
-    return false;
+    return hasMessages;
   });
   _idbHydrating.set(convId, p);
   return p;
@@ -9712,6 +9805,10 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
     // sessions after every dev reload (ct-36951; the round-1 fix gated the
     // server-sync pull but this hydration path was the live door).
     const st = useInboxStore.getState();
+    // A tab persisted with a path the shell cannot render (older builds
+    // stamped the live URL unchecked) heals to the inbox before first paint.
+    const healedTabs = healTabPaths(st.tabs);
+    if (healedTabs !== st.tabs) useInboxStore.setState({ tabs: healedTabs });
     const ownId = (cached.lastFocusedConversationId ?? null) as string | null;
     if (ownId && !st.lastFocusedConversationId) {
       useInboxStore.setState({ lastFocusedConversationId: ownId });
