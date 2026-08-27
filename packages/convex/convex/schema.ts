@@ -3440,6 +3440,12 @@ export default defineSchema({
     team_id: v.id("teams"),
     locked: v.boolean(),
     locked_by: v.id("users"),
+    // The huddle's opt-out from transcription. Every huddle transcribes by
+    // default (any deliberate participant's client becomes the scribe), so
+    // "stop transcribing" has to be a fact about the ROOM or the next client
+    // to look would simply start again. Same lifetime as the lock: it belongs
+    // to this huddle and dies with it.
+    transcribe_off: v.optional(v.boolean()),
     updated_at: v.number(),
   }).index("by_room", ["room_key"]),
 

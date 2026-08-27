@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { useConvex, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useConvexSync } from "./useConvexSync";
-import { bindConvex } from "../lib/calls/callManager";
+import { autoScribe, bindConvex, isDeliberateRoom } from "../lib/calls/callManager";
+import { getScribeStatus, stopScribe, subscribeScribe } from "../lib/calls/transcription";
+import { decideAutoScribe } from "../lib/calls/autoScribe";
 import { channelRoomKey, sessionRoomKey } from "@codecast/shared/contracts";
 import { channelRowRoomKey } from "../lib/chatViews";
 import { soundRoomKnock } from "../lib/sounds";
@@ -103,6 +105,40 @@ export function useCallSync(): void {
     api.calls.getRoomKnocks,
     enabled && seatedRoomKey ? { room_key: seatedRoomKey } : "skip",
   );
+  // Every huddle transcribes. While seated, watch who is running the room's
+  // transcript and ask to scribe when nobody is (or when the scribe's seat is
+  // gone); yield a run that was adopted away from us. The server arbitrates
+  // (transcripts.start), so two clients asking at once cannot both win.
+  const { data: liveTranscript } = useQueryNoThrow(
+    api.transcripts.getLive,
+    enabled && seatedRoomKey ? { room_key: seatedRoomKey, tail: 1 } : "skip",
+  );
+  const scribeActive = useSyncExternalStore(subscribeScribe, () => getScribeStatus().active, () => false);
+  const roster = useTrackedStore([
+    (st: any) => (seatedRoomKey ? (st.callOccupancy[seatedRoomKey] ?? []) : []).map((m: any) => String(m.user_id)).sort().join("|"),
+    (st: any) => !!(st.liveRooms as any[]).find((r) => r.room_key === seatedRoomKey)?.transcribe_off,
+  ]);
+  const rosterSig = seatedRoomKey
+    ? (roster.callOccupancy[seatedRoomKey] ?? []).map((m: any) => String(m.user_id)).sort().join("|")
+    : "";
+  const transcribeOff = !!(roster.liveRooms as any[]).find((r) => r.room_key === seatedRoomKey)?.transcribe_off;
+  const meId = s.currentUser?._id ? String(s.currentUser._id) : null;
+  const liveStartedBy = liveTranscript === undefined ? undefined : liveTranscript ? String(liveTranscript.started_by) : null;
+  useEffect(() => {
+    const verdict = decideAutoScribe({
+      roomKey: seatedRoomKey,
+      connected: !!seatedRoomKey,
+      deliberate: isDeliberateRoom(seatedRoomKey),
+      transcribeOff,
+      rosterIds: rosterSig ? rosterSig.split("|") : [],
+      meId,
+      live: liveStartedBy === undefined ? undefined : liveStartedBy === null ? null : { startedBy: liveStartedBy },
+      scribeActive,
+    });
+    if (verdict === "start" && seatedRoomKey) autoScribe(seatedRoomKey);
+    else if (verdict === "yield") void stopScribe({ keepLive: true });
+  }, [seatedRoomKey, transcribeOff, rosterSig, meId, liveStartedBy, scribeActive]);
+
   useConvexSync(seatedRoomKey ? knocks : NO_KNOCKS, useCallback((d: any) => {
     // The sound belongs to the knock ARRIVING, not to a surface being
     // mounted: someone at the door must be audible whether or not the dock

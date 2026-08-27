@@ -246,14 +246,52 @@ export async function expireRoomGrants(ctx: any, roomKey: string): Promise<void>
   }
 }
 
-/** Is this room's door shut? One row per room, absent for the ordinary open
- *  case, so the common path costs one empty index read. */
-export async function isRoomLocked(ctx: any, roomKey: string): Promise<boolean> {
-  const row = await ctx.db
+/** The room's one state row (lock, transcription opt-out), or null for the
+ *  ordinary case, so the common path costs one empty index read. */
+export async function readRoomState(ctx: any, roomKey: string): Promise<any | null> {
+  return await ctx.db
     .query("call_room_state")
     .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
     .first();
-  return !!row?.locked;
+}
+
+/** Is this room's door shut? */
+export async function isRoomLocked(ctx: any, roomKey: string): Promise<boolean> {
+  return !!(await readRoomState(ctx, roomKey))?.locked;
+}
+
+/** Has this huddle turned transcription off? */
+export async function isRoomTranscribeOff(ctx: any, roomKey: string): Promise<boolean> {
+  return !!(await readRoomState(ctx, roomKey))?.transcribe_off;
+}
+
+/** Write to the room's one state row, creating it on first use. `seat` is
+ *  the caller's live seat: only someone inside writes room state, and the
+ *  row bills to the seat's team. */
+export async function upsertRoomState(
+  ctx: any,
+  roomKey: string,
+  seat: { team_id: Id<"teams">; user_id: Id<"users"> },
+  patch: { locked?: boolean; transcribe_off?: boolean },
+  now: number,
+): Promise<void> {
+  const existing = await readRoomState(ctx, roomKey);
+  if (existing) {
+    await ctx.db.patch(existing._id, {
+      ...patch,
+      ...(patch.locked !== undefined ? { locked_by: seat.user_id } : {}),
+      updated_at: now,
+    });
+    return;
+  }
+  await ctx.db.insert("call_room_state", {
+    room_key: roomKey,
+    team_id: seat.team_id,
+    locked: patch.locked ?? false,
+    locked_by: seat.user_id,
+    transcribe_off: patch.transcribe_off,
+    updated_at: now,
+  });
 }
 
 // The open door: a live huddle admits any member of the team it bills to.

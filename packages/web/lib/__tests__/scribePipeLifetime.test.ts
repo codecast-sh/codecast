@@ -148,3 +148,39 @@ describe("the scribe hands back what it opened", () => {
     expect(FakeAudioContext.open()).toBe(0);
   });
 });
+
+// Every huddle transcribes, so several seated clients ask to scribe the same
+// room. The server answers one of them "scribe" and the rest "observer"; an
+// observer must open NOTHING — a pipe per track here would append every word
+// a second time, and hold a recognizer for the length of the call.
+describe("an observer opens no pipe", () => {
+  test("the server's observer verdict leaves the scribe idle and the microphone alone", async () => {
+    const convex = {
+      mutation: async () => ({ transcript_id: "tr-1", existing: true, role: "observer" }),
+      action: async () => ({ error: "must not be called" }),
+    } as any;
+    const started = await startScribe({ convex, room: fakeRoom("sid-1"), roomKey: "room:1", auto: true });
+    expect(started).toBe(false);
+    expect(getScribeStatus().active).toBe(false);
+    expect(FakeAudioContext.made.length).toBe(0);
+  });
+
+  test("the room's opt-out answers an auto start the same way", async () => {
+    const convex = {
+      mutation: async () => ({ transcript_id: null, existing: false, role: "off" }),
+      action: async () => ({ error: "must not be called" }),
+    } as any;
+    expect(await startScribe({ convex, room: fakeRoom("sid-1"), roomKey: "room:1", auto: true })).toBe(false);
+    expect(FakeAudioContext.made.length).toBe(0);
+  });
+
+  test("a scribe verdict arms the run", async () => {
+    const convex = {
+      mutation: async () => ({ transcript_id: "tr-1", existing: false, role: "scribe" }),
+      action: () => new Promise(() => {}),
+    } as any;
+    expect(await startScribe({ convex, room: fakeRoom("sid-1"), roomKey: "room:1", auto: true })).toBe(true);
+    expect(getScribeStatus().active).toBe(true);
+    expect(getScribeStatus().trackCount).toBe(1);
+  });
+});

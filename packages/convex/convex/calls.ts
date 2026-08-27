@@ -24,8 +24,9 @@ import {
   authorizeRoomMembership,
   clearRoomState,
   expireRoomGrants,
-  isRoomLocked,
   liveMembers,
+  readRoomState,
+  upsertRoomState,
   liveSeat,
   openRoomDoor,
   parseRoomKey,
@@ -759,25 +760,7 @@ export const setRoomLocked = mutation({
     const userId = await requireUser(ctx);
     const now = Date.now();
     const seat = await requireSeated(ctx, userId, args.room_key, now);
-    const existing = await ctx.db
-      .query("call_room_state")
-      .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
-      .first();
-    if (existing) {
-      await ctx.db.patch(existing._id, {
-        locked: args.locked,
-        locked_by: userId,
-        updated_at: now,
-      });
-    } else {
-      await ctx.db.insert("call_room_state", {
-        room_key: args.room_key,
-        team_id: seat.team_id,
-        locked: args.locked,
-        locked_by: userId,
-        updated_at: now,
-      });
-    }
+    await upsertRoomState(ctx, args.room_key, seat, { locked: args.locked }, now);
     // Unlocking answers every knock at once: the door is simply open now, and
     // a leftover knock would ask the room to admit someone already inside it.
     const waiting = await sweepKnocks(ctx, args.room_key, now);
@@ -785,6 +768,23 @@ export const setRoomLocked = mutation({
       for (const k of waiting) await ctx.db.delete(k._id);
     }
     return { locked: args.locked };
+  },
+});
+
+// The huddle's transcription switch. Every huddle transcribes unless someone
+// inside says otherwise: the scribe is whichever deliberate participant's
+// client got there first (transcripts.start arbitrates), so stopping has to
+// be written on the room — a flag one client holds would just be overruled by
+// the next client to look. Anyone seated may flip it either way; turning it
+// back on is what a manual Transcribe toggle does before it starts.
+export const setRoomTranscribeOff = mutation({
+  args: { room_key: v.string(), off: v.boolean() },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    const now = Date.now();
+    const seat = await requireSeated(ctx, userId, args.room_key, now);
+    await upsertRoomState(ctx, args.room_key, seat, { transcribe_off: args.off }, now);
+    return { transcribe_off: args.off };
   },
 });
 
@@ -934,10 +934,14 @@ export const getLiveRooms = query({
       // it. Byte-stable like `locked`: it moves only when a lock, a
       // membership or the room's occupancy does, never with the clock.
       const canJoin = (await authorizeRoom(ctx, userId, roomKey)).ok;
+      const state = await readRoomState(ctx, roomKey);
       out.push({
         room_key: roomKey,
         team_id: live[0].team_id,
-        locked: await isRoomLocked(ctx, roomKey),
+        locked: !!state?.locked,
+        // The huddle said "don't transcribe": what keeps every seated client's
+        // auto-scribe from starting it again.
+        transcribe_off: !!state?.transcribe_off,
         can_join: canJoin,
         redacted,
         title,
