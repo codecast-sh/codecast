@@ -53,9 +53,33 @@ export interface FrameSourceOptions {
   signal: AbortSignal;
 }
 
+/**
+ * A viewer-originated input event, in the page's own coordinate space made
+ * scale-free: nx/ny are 0..1 across the page viewport, so neither side needs
+ * to know what size the other renders at. The server multiplies by the CSS
+ * viewport it learns from the screencast metadata.
+ */
+export type WatchInput =
+  | {
+      kind: "mouse";
+      type: "mousePressed" | "mouseReleased" | "mouseMoved" | "mouseWheel";
+      nx: number;
+      ny: number;
+      button?: "left" | "right" | "middle" | "none";
+      clickCount?: number;
+      deltaX?: number;
+      deltaY?: number;
+      modifiers?: number;
+    }
+  | { kind: "key"; type: "keyDown" | "keyUp"; key: string; code?: string; text?: string; modifiers?: number }
+  | { kind: "insertText"; text: string };
+
 /** A running stream of frames for one tab. */
 export interface FrameSource {
   readonly tab: WatchTab;
+  /** Deliver a viewer input event to the page (control mode). Absent on
+   * sources that cannot dispatch input. Fire-and-forget. */
+  input?(msg: WatchInput): void;
   /** Stop delivering frames and release the underlying resources. Idempotent. */
   stop(): void;
 }
@@ -92,7 +116,10 @@ export interface CdpEngineDeps {
 
 const realCdpDeps: CdpEngineDeps = {
   getState: readState,
-  connect: (port) => CdpConnection.fromPort(port),
+  // A loaded Chrome answers /json/version slowly (8s measured with three
+  // busy renderers); the default 10s dial then fails the watch on the very
+  // machines where someone most wants to see what the agent is doing.
+  connect: (port) => CdpConnection.fromPort(port, 30_000),
   listTargets,
 };
 
@@ -181,11 +208,20 @@ export async function openCdpScreencast(
     ackTimer.unref?.();
   };
 
+  // The CSS viewport the page renders at, learned from screencast metadata
+  // (and refreshed by it on every real frame — resizes follow automatically).
+  // Input events arrive normalized 0..1 and scale by this.
+  const viewport = { w: 0, h: 0 };
+
   conn.on((ev) => {
     if (stopped) return;
     if (ev.method === "Page.screencastFrame" && ev.sessionId === cdpSessionId) {
       const p = ev.params as { data: string; metadata: Record<string, number>; sessionId: number };
       lastFrameAt = Date.now();
+      if (p.metadata?.deviceWidth && p.metadata?.deviceHeight) {
+        viewport.w = p.metadata.deviceWidth;
+        viewport.h = p.metadata.deviceHeight;
+      }
       handlers.onFrame({ data: p.data, width: p.metadata?.deviceWidth ?? 0, height: p.metadata?.deviceHeight ?? 0 });
       scheduleAck(p.sessionId);
     } else if (ev.method === "Target.detachedFromTarget" && (ev.params as any).sessionId === cdpSessionId) {
@@ -193,6 +229,53 @@ export async function openCdpScreencast(
       handlers.onGone();
     }
   });
+
+  // Keys Chrome only acts on when the event carries its Windows virtual key
+  // code — a bare {key: "Enter"} reaches the page's listeners but never
+  // submits a form or moves a caret, which makes control feel broken exactly
+  // on the keys an OAuth form needs most.
+  const VIRTUAL_KEYS: Record<string, number> = {
+    Enter: 13, Backspace: 8, Tab: 9, Escape: 27, Delete: 46,
+    ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
+    Home: 36, End: 35, PageUp: 33, PageDown: 34,
+  };
+
+  const input = (msg: WatchInput): void => {
+    if (stopped || !cdpSessionId) return;
+    const send = (method: string, params: Record<string, unknown>) =>
+      void conn.send(method, params, cdpSessionId!, 5000).catch(() => {});
+    if (msg.kind === "mouse") {
+      if (!viewport.w || !viewport.h) return; // no frame yet — nowhere to aim
+      send("Input.dispatchMouseEvent", {
+        type: msg.type,
+        x: Math.round(msg.nx * viewport.w),
+        y: Math.round(msg.ny * viewport.h),
+        button: msg.button ?? "none",
+        clickCount: msg.clickCount ?? 0,
+        deltaX: msg.deltaX ?? 0,
+        deltaY: msg.deltaY ?? 0,
+        modifiers: msg.modifiers ?? 0,
+        pointerType: "mouse",
+      });
+    } else if (msg.kind === "key") {
+      const vk = VIRTUAL_KEYS[msg.key];
+      const text = msg.type === "keyDown" ? (msg.key === "Enter" ? "\r" : msg.text) : undefined;
+      send("Input.dispatchKeyEvent", {
+        // keyDown without text is a rawKeyDown in CDP terms; sending the
+        // right subtype keeps IME/autofill listeners from double-firing.
+        type: msg.type === "keyDown" && !text ? "rawKeyDown" : msg.type,
+        key: msg.key,
+        code: msg.code ?? "",
+        ...(text ? { text } : {}),
+        ...(vk ? { windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk } : {}),
+        modifiers: msg.modifiers ?? 0,
+      });
+    } else if (msg.kind === "insertText") {
+      if (typeof msg.text === "string" && msg.text.length <= 8192) {
+        send("Input.insertText", { text: msg.text });
+      }
+    }
+  };
 
   // The screencast rides the compositor, and Chrome only composites VISIBLE
   // tabs — a background tab, or the active tab of an occluded or minimized
@@ -278,7 +361,7 @@ export async function openCdpScreencast(
     stop();
     throw err;
   }
-  return { tab, stop };
+  return { tab, stop, input };
 }
 
 export function cdpWatchEngine(deps: CdpEngineDeps = realCdpDeps): WatchEngine {
