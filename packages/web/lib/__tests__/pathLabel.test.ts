@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { pathLabel, inboxTabSessionId } from "../pathLabel";
+import { pathLabel, inboxTabSessionId, urlSessionId, tabNeedsUrlRestore } from "../pathLabel";
 
 // A tab is labeled by its ROUTE, never its query string. The regression here:
 // stampedTabPath normalizes a conversation tab to /inbox?s=<id>, and the raw
@@ -62,5 +62,46 @@ describe("inboxTabSessionId — the session a stamped inbox tab is pinned to", (
   it("returns null off the inbox or without the param", () => {
     expect(inboxTabSessionId("/inbox")).toBeNull();
     expect(inboxTabSessionId("/chat?s=x")).toBeNull();
+  });
+});
+
+// Back/forward across inbox session selects depends on two URL spellings of
+// the same content staying equivalent: the inbox canonicalizes to
+// /conversation/<id> (and pushes a history entry per select) while its tab
+// stores /inbox?s=<id>. The regression: TabPane's URL-restore effect treated
+// the canonical spelling as drift and replaceState'd it away, so every select
+// overwrote its own history entry and Back jumped straight to the boot session.
+describe("urlSessionId — the session a live URL shows, either spelling", () => {
+  it("reads the canonical conversation path", () => {
+    expect(urlSessionId("/conversation/jx7abc", "")).toBe("jx7abc");
+  });
+
+  it("reads the inbox deep-link param", () => {
+    expect(urlSessionId("/inbox", "?s=jx7abc")).toBe("jx7abc");
+  });
+
+  it("shows no session on the bare inbox or other routes", () => {
+    expect(urlSessionId("/inbox", "")).toBeNull();
+    expect(urlSessionId("/tasks", "?s=jx7abc")).toBeNull();
+  });
+});
+
+describe("tabNeedsUrlRestore — inbox/conversation spellings are the same content", () => {
+  it("stands down when the live URL is the tab's session in canonical spelling", () => {
+    expect(tabNeedsUrlRestore("/conversation/jx7abc", "/inbox?s=jx7abc")).toBe(false);
+  });
+
+  it("stands down when the live URL already matches the tab's route", () => {
+    expect(tabNeedsUrlRestore("/inbox", "/inbox?s=jx7abc")).toBe(false);
+    expect(tabNeedsUrlRestore("/tasks", "/tasks?focus=1")).toBe(false);
+  });
+
+  it("restores when the live URL shows a different session than the tab holds", () => {
+    expect(tabNeedsUrlRestore("/conversation/jx7abc", "/inbox?s=jx7zzz")).toBe(true);
+  });
+
+  it("restores when the live URL belongs to another surface entirely", () => {
+    expect(tabNeedsUrlRestore("/tasks", "/inbox?s=jx7abc")).toBe(true);
+    expect(tabNeedsUrlRestore("/conversation/jx7abc", "/tasks")).toBe(true);
   });
 });

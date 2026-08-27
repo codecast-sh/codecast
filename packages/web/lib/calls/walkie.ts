@@ -114,6 +114,11 @@ export type WalkieIncoming = {
   roomKey: string;
   fromUserId: string;
   fromName: string;
+  /** When the sender's key went down, by the server's clock. Carried because
+   *  it is the only thing that can bound a hot listen: the burst's row stops
+   *  changing the moment it starts, so age is the one fact that keeps moving
+   *  (see the ceiling below). */
+  createdAt: number;
 };
 
 export type WalkieStatus = {
@@ -264,6 +269,94 @@ function walkieRoomKey(): string | undefined {
 /** Recompute what the UI may offer. Called whenever the world moves. */
 function refresh() {
   emit({ unavailable: walkieBlockedFor(walkieRoomKey()) });
+  reconcileHotListenCeiling();
+}
+
+// ── the hot listen's hard ceiling ──────────────────────────────────────────
+//
+// AN OPEN MICROPHONE NEEDS A CLOCK OF ITS OWN, because nothing else in this
+// path has one.
+//
+// Auto-listen now joins unmuted, so a burst holds the receiver's microphone
+// open. What closes it is `applyReport` noticing the burst is over — and
+// `applyReport` runs only when the server pushes or the call plane moves.
+// Neither happens if the sender's tab dies mid-word:
+//
+//   The row stays `voice.status: "live"` forever. The server's sweep is not a
+//   cron — it runs as a side effect of the NEXT burst in that channel, and
+//   nobody is coming back to talk. `chat.listLiveVoiceBursts` returns only
+//   message id, channel, sender, room and created_at, every one of them frozen
+//   for the life of a burst, precisely so a transcript patch cannot re-push it
+//   to every watcher; so the result is byte-identical and the client is never
+//   woken. `pickLiveBurst` holds the staleness rule that is supposed to bound
+//   this, and it was simply never asked.
+//
+// So the receiver arms its own timer. It is a CEILING, not a heartbeat: one
+// timeout at a deadline computed from the burst's own age, cleared when the
+// burst ends the ordinary way. Nothing here re-arms on a push, because during
+// a healthy burst there are no pushes to re-arm on — that is the same fact
+// that makes the ceiling necessary.
+//
+// IT DOES NOT DECIDE ANYTHING. All it does is make the question get asked;
+// `shouldReleaseRoom` still answers it, and that is what keeps a call somebody
+// deliberately joined from being hung up by a timer — the ceiling fires there
+// too, clears a burst that really is over, and hands back nothing. Putting a
+// second "unless they joined" test in here as well would be a second lock on
+// one door, and the kind that drifts out of step with the first.
+
+// Room for a full-length burst to finish and report itself: the sender's own
+// cap (MAX_BURST_MS) is the same 120s as the staleness window, so a legitimate
+// monologue reaches the line at the very moment it stops, and its upload and
+// finalize still have to land after that. Slack is what keeps the ceiling from
+// cutting off the last word of an honest two-minute hold.
+const HOT_LISTEN_SLACK_MS = 30_000;
+
+/** When a hot listen must end whatever the server has said — 2.5 minutes after
+ *  the key went down, and the outer bound on any microphone this feature opens
+ *  without being asked. */
+export function hotListenDeadline(createdAt: number): number {
+  return createdAt + BURST_STALE_MS + HOT_LISTEN_SLACK_MS;
+}
+
+let ceilingTimer: ReturnType<typeof setTimeout> | null = null;
+/** The burst the armed ceiling belongs to, so re-arming is idempotent. */
+let ceilingFor: string | null = null;
+
+function clearHotListenCeiling() {
+  if (ceilingTimer) clearTimeout(ceilingTimer);
+  ceilingTimer = null;
+  ceilingFor = null;
+}
+
+/** Arm, keep or drop the ceiling to match the world. Called from `refresh`,
+ *  which every state change already goes through, so there is one place this
+ *  can be got wrong rather than one per transition. */
+function reconcileHotListenCeiling() {
+  const inc = status.incoming;
+  if (!inc) {
+    clearHotListenCeiling();
+    return;
+  }
+  if (ceilingFor === inc.messageId) return;
+  clearHotListenCeiling();
+  ceilingFor = inc.messageId;
+  ceilingTimer = setTimeout(
+    () => {
+      ceilingTimer = null;
+      ceilingFor = null;
+      // The same question a push would have asked, asked by the clock instead.
+      // `applyReport` re-reads `pickLiveBurst` against a fresh now, finds the
+      // burst too old to be live, and takes the end-of-burst path.
+      applyReport();
+    },
+    // FLOORED, not just clamped at zero. `applyReport` re-arms whatever it
+    // does not resolve, so a ceiling that fired while `pickLiveBurst` still
+    // judged the burst fresh would re-arm at zero and spin the main thread.
+    // That cannot happen while the slack is positive — the deadline is past
+    // the staleness window by construction — and this is what keeps a future
+    // edit to either constant a slow poll rather than a hot loop.
+    Math.max(1_000, hotListenDeadline(inc.createdAt) - Date.now()),
+  );
 }
 
 function localMicTrack(): MediaStreamTrack | null {
@@ -1476,6 +1569,7 @@ function applyReport(): void {
         roomKey: current.roomKey!,
         fromUserId: current.fromUserId,
         fromName: current.fromName,
+        createdAt: current.createdAt,
       };
       incomingSince = Date.now();
       emit({ incoming });
@@ -1527,8 +1621,17 @@ function applyReport(): void {
     // strip claiming a conversation was still open.
     const was = status.incoming;
     const heardMs = Date.now() - incomingSince;
+    // NOBODY ENDED THIS ONE. A burst still marked live long after the sender's
+    // own cap could have stopped it is a tab that died mid-word, not a hold
+    // that finished — this is the ceiling above arriving, or a push that
+    // happened to re-ask the question. Either way there is no half
+    // conversation to hold a room open for and nobody left to answer, so the
+    // seat goes back now rather than after another half minute of open
+    // microphone. Same judgement the engine already makes about a brushed key,
+    // for the same reason.
+    const stale = Date.now() - was.createdAt >= BURST_STALE_MS;
     emit({ incoming: null });
-    if (heardMs < MIN_BURST_MS) abandonRoom(was.roomKey);
+    if (heardMs < MIN_BURST_MS || stale) abandonRoom(was.roomKey);
     else {
       // The tail closes what soundWalkieOpen opened. Under the same threshold
       // as the linger, so a key somebody brushed makes no sound at either end.

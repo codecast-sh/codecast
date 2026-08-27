@@ -98,7 +98,7 @@ idle(() => {
   if (!onAppPath && !hasAuth) return;
   void import("@/app/inbox/page");
   void import("@/app/team/activity/page");
-  // The decision queue backs a header action ("answer all") — it must open
+  // The decision queue opens on every Questions-card click — it must open
   // instantly, so it warms with the hot set even in dev.
   void import("@/app/questions/page");
   // Then every other shell route (prod only — in dev this would make Vite

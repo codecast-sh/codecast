@@ -7782,7 +7782,7 @@ async function enrichInboxSessionRow(
   }
 
   let active_task: { _id: string; short_id: string; title: string; status: string } | undefined;
-  if (conv.active_task_id) {
+  if (!skip?.refs && conv.active_task_id) {
     const t = await ctx.db.get(conv.active_task_id);
     if (t) active_task = { _id: t._id, short_id: t.short_id, title: t.title, status: t.status };
   }
@@ -7796,7 +7796,7 @@ async function enrichInboxSessionRow(
   let workflow_run_agents_total: number | null = null;
   let workflow_run_activity: string | null = null;
   let workflow_run_started_at: number | null = null;
-  if (conv.workflow_run_id) {
+  if (!skip?.refs && conv.workflow_run_id) {
     const run = await ctx.db.get(conv.workflow_run_id);
     if (run) {
       workflow_run_status = run.status;

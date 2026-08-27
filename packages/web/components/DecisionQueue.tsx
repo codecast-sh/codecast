@@ -21,13 +21,21 @@ import { KeyCap } from "./KeyboardShortcutsHelp";
 // by key, never by index: a live re-sort (a session's tier flipping, a new
 // ask arriving) can reorder the array under you, and an index would silently
 // swap the question mid-read.
-export function DecisionQueue({ onExit }: { onExit?: () => void }) {
+export function DecisionQueue({ onExit, initialConversationId }: { onExit?: () => void; initialConversationId?: string | null }) {
   const queue = useDecisionQueue();
   const [anchorKey, setAnchorKey] = useState<string | null>(null);
   // How many were resolved in this visit — only for the empty screen's copy.
   const [resolvedCount, setResolvedCount] = useState(0);
 
-  const anchorIdx = anchorKey ? queue.findIndex((i) => i.key === anchorKey) : -1;
+  // Entering from a specific card (the rail's Questions section) starts on
+  // THAT session's question; answering then walks the rest of the queue.
+  // Only a fallback: the moment the user answers or skips, anchorKey owns
+  // the position, so a resolved entry question can't drag us back to it.
+  const anchorIdx = anchorKey
+    ? queue.findIndex((i) => i.key === anchorKey)
+    : initialConversationId
+      ? queue.findIndex((i) => i.conversationId === initialConversationId)
+      : -1;
   const position = anchorIdx >= 0 ? anchorIdx : 0;
   const current = queue[position];
 

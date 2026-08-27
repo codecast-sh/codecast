@@ -5,9 +5,11 @@ import {
   attachRecording,
   beat,
   finishRecordingTranscript,
+  huddleDigestTarget,
   needsServerTranscription,
   parseTranscriptionSegments,
   recLeaseExpired,
+  setSummary,
 } from "./transcripts";
 import { makeFakeDb } from "./testDb";
 import {
@@ -352,5 +354,125 @@ describe("the recording length ceiling", () => {
 
   test("it covers a meeting nobody would call short", () => {
     expect(MAX_RECORDING_MS).toBeGreaterThan(2 * 60 * 60 * 1000);
+  });
+});
+
+// A finished huddle leaves one row where it was held: a chat message in a
+// channel or DM room, a turn for the agent in a session room. The agent gets
+// the summary and the command that reads the transcript — never the words.
+describe("the huddle digest", () => {
+  test("a room key says where the digest goes", () => {
+    expect(huddleDigestTarget("channel:chan1")).toEqual({ kind: "chat" });
+    expect(huddleDigestTarget("dm:ua:ub")).toEqual({ kind: "chat" });
+    expect(huddleDigestTarget("session:conv1")).toEqual({ kind: "session", conversationId: "conv1" });
+    expect(huddleDigestTarget("rec:0123456789ab")).toBeNull();
+    expect(huddleDigestTarget("garbage")).toBeNull();
+  });
+
+  const huddle = (over: Record<string, unknown> = {}) => ({
+    _id: "t1",
+    room_key: "channel:chan1",
+    team_id: "team1",
+    started_by: "ua",
+    status: "ended",
+    started_at: 1_000,
+    ended_at: 1_000 + 12 * 60_000,
+    summary_status: "pending",
+    participants: [{ id: "ua", name: "Alice" }, { id: "ub", name: "Bob" }],
+    routes: [],
+    last_seq: 3,
+    ...over,
+  });
+  const ctx = (rows: any[], segments: any[] = []) => {
+    const scheduled: { name: string; args: any }[] = [];
+    return {
+      db: makeFakeDb({ transcripts: rows, transcript_segments: segments, users: [], push_outbox: [] }),
+      scheduler: {
+        async runAfter(_d: number, reference: unknown, args: any) {
+          scheduled.push({ name: getFunctionName(reference as any), args });
+        },
+      },
+      _scheduled: scheduled,
+    };
+  };
+  const call = (fn: any, c: any, args: any) => (fn as any)._handler(c, args);
+  const verdict = {
+    transcript_id: "t1",
+    summary_status: "done" as const,
+    title: "Auth rollout",
+    summary: "Alice and Bob agreed to ship the fix behind a flag.",
+    action_items: ["Bob: ship the fix behind a flag"],
+  };
+
+  test("a channel huddle posts its summary into the channel as the scribe", async () => {
+    const c = ctx([huddle()]);
+    await call(setSummary, c, verdict);
+    expect(c._scheduled.map((s) => s.name)).toEqual(["chat:postCallDigest"]);
+    const { args } = c._scheduled[0];
+    expect(args.transcript_id).toBe("t1");
+    expect(args.room_key).toBe("channel:chan1");
+    expect(args.team_id).toBe("team1");
+    expect(args.author).toBe("ua");
+    expect(args.content).toContain("**Auth rollout** · 12 min huddle with Alice and Bob");
+    expect(args.content).toContain("agreed to ship the fix behind a flag");
+    expect(args.content).toContain("- Bob: ship the fix behind a flag");
+  });
+
+  test("a people room posts too — the DM is resolved from the member set later", async () => {
+    const c = ctx([huddle({ room_key: "dm:ua:ub" })]);
+    await call(setSummary, c, verdict);
+    expect(c._scheduled.map((s) => s.name)).toEqual(["chat:postCallDigest"]);
+    expect(c._scheduled[0].args.room_key).toBe("dm:ua:ub");
+  });
+
+  test("a session huddle wakes the agent with the summary and the transcript command, not the words", async () => {
+    const c = ctx([huddle({ room_key: "session:conv1" })]);
+    await call(setSummary, c, verdict);
+    expect(c._scheduled.map((s) => s.name)).toEqual(["transcripts:deliverToSession"]);
+    const { args } = c._scheduled[0];
+    expect(args.as_user).toBe("ua");
+    expect(args.to).toBe("conv1");
+    expect(args.body.startsWith('<huddle-summary transcript="t1" title="Auth rollout" minutes="12" speakers="Alice, Bob">')).toBe(true);
+    expect(args.body).toContain("agreed to ship the fix behind a flag");
+    expect(args.body).toContain("cast call t1 --transcript");
+    expect(args.body.endsWith("</huddle-summary>")).toBe(true);
+  });
+
+  test("the digest posts once: a second verdict on a settled row is not a second row", async () => {
+    const c = ctx([huddle({ summary_status: "done" })]);
+    await call(setSummary, c, verdict);
+    expect(c._scheduled).toEqual([]);
+  });
+
+  test("a huddle nobody spoke in leaves nothing behind", async () => {
+    const c = ctx([huddle({ last_seq: 0 })]);
+    await call(setSummary, c, { transcript_id: "t1", summary_status: "skipped" });
+    expect(c._scheduled).toEqual([]);
+  });
+
+  test("too few words to summarize: the words themselves are the digest", async () => {
+    const c = ctx(
+      [huddle({ last_seq: 2 })],
+      [
+        { _id: "s1", transcript_id: "t1", seq: 1, speaker_id: "ua", speaker_name: "Alice", text: "ship it", t0: 0, t1: 1 },
+        { _id: "s2", transcript_id: "t1", seq: 2, speaker_id: "ub", speaker_name: "Bob", text: "done", t0: 1, t1: 2 },
+      ],
+    );
+    await call(setSummary, c, { transcript_id: "t1", summary_status: "skipped" });
+    expect(c._scheduled.map((s) => s.name)).toEqual(["chat:postCallDigest"]);
+    expect(c._scheduled[0].args.content).toContain("**Alice**: ship it\n**Bob**: done");
+  });
+
+  test("a failed summary still posts, and says the summary is missing", async () => {
+    const c = ctx([huddle()]);
+    await call(setSummary, c, { transcript_id: "t1", summary_status: "failed" });
+    expect(c._scheduled.map((s) => s.name)).toEqual(["chat:postCallDigest"]);
+    expect(c._scheduled[0].args.content).toContain("The summary could not be generated.");
+  });
+
+  test("a recording has no room to report into", async () => {
+    const c = ctx([huddle({ room_key: REC_KEY })]);
+    await call(setSummary, c, verdict);
+    expect(c._scheduled).toEqual([]);
   });
 });
