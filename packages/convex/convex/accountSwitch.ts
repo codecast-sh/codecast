@@ -15,7 +15,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { getAuthenticatedUserId, enqueuePendingMessage } from "./pendingMessages";
-import { classifyApiErrorBanner, blockedContinueClientId, CONTINUE_BANNER_KINDS } from "./inboxFilters";
+import { classifyApiErrorBanner, blockedContinueClientId, CONTINUE_BANNER_KINDS, newestSignificantMessage, isBannerTurn } from "./inboxFilters";
 import {
   actedBlockedConversations,
   ccAccountsValidator,
@@ -1100,13 +1100,15 @@ export const restampApiErrorFlags = internalMutation({
       // Already-flagged rows are re-checked too: a kind split (e.g. statusless
       // connection drops moving out of "error") leaves them stamped with the
       // old kind, outside the blocked set, until re-classified here.
-      if (conv.last_message_role !== "assistant") continue;
-      const newest = await ctx.db
+      // Newest banner-or-turn, not newest row: a trailing system notice
+      // ("Remote Control disconnected") must not hide the banner behind it.
+      const tail = await ctx.db
         .query("messages")
         .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conv._id))
         .order("desc")
-        .first();
-      if (!newest || newest.role !== "assistant") continue;
+        .take(8);
+      const newest = newestSignificantMessage(tail);
+      if (!newest || !isBannerTurn(newest)) continue;
       const kind = classifyApiErrorBanner(newest.content);
       if (!kind) continue;
       if (conv.pending_api_error === true && conv.pending_api_error_kind === kind && conv.pending_api_error_at != null) continue;

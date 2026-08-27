@@ -15,6 +15,9 @@ import {
   CLIENT_ERROR_BANNER_PREFIX,
   apiErrorBatchAction,
   nextPendingApiError,
+  newestSignificantMessage,
+  isBannerTurn,
+  isRealTurn,
   classifyWorkState,
   classifyRetirement,
   normalizeWorkStateFilter,
@@ -585,6 +588,64 @@ describe("nextPendingApiError", () => {
 
   test("a system notice on an unparked session leaves it unparked", () => {
     expect(nextPendingApiError({ newestIsBanner: false, batchHasRealTurn: false, conversationPending: false })).toBe(false);
+  });
+});
+
+describe("newestSignificantMessage", () => {
+  type M = { role: string; content: string; timestamp: number };
+  const BANNER = "You've hit your session limit · resets 2:10am (America/New_York)";
+
+  test("a system notice newer than the banner does not outrank it", () => {
+    // The daemon's retry flush: older tool results, the limit banner, then
+    // "Remote Control disconnected" — all in one batch. The banner must win.
+    const batch: M[] = [
+      { role: "user", content: "tool result", timestamp: 100 },
+      { role: "assistant", content: BANNER, timestamp: 200 },
+      { role: "system", content: "Remote Control disconnected", timestamp: 260 },
+    ];
+    const newest = newestSignificantMessage(batch);
+    expect(newest?.timestamp).toBe(200);
+    expect(newest && isBannerTurn(newest)).toBe(true);
+  });
+
+  test("a real turn newer than the banner outranks it", () => {
+    const batch: M[] = [
+      { role: "assistant", content: BANNER, timestamp: 200 },
+      { role: "user", content: "continue", timestamp: 300 },
+    ];
+    expect(newestSignificantMessage(batch)?.timestamp).toBe(300);
+  });
+
+  test("a batch of only notices and empty rows has no significant row", () => {
+    const batch: M[] = [
+      { role: "system", content: "Remote Control disconnected", timestamp: 260 },
+      { role: "user", content: "", timestamp: 270 },
+    ];
+    expect(newestSignificantMessage(batch)).toBeUndefined();
+  });
+
+  test("ties keep the later row", () => {
+    const batch: M[] = [
+      { role: "user", content: "a", timestamp: 100 },
+      { role: "user", content: "b", timestamp: 100 },
+    ];
+    expect(newestSignificantMessage(batch)?.content).toBe("b");
+  });
+});
+
+describe("isRealTurn", () => {
+  test("assistant text, tool calls, user text, tool results and images are turns", () => {
+    expect(isRealTurn({ role: "assistant", content: "hi" })).toBe(true);
+    expect(isRealTurn({ role: "assistant", content: "", tool_calls: [{}] })).toBe(true);
+    expect(isRealTurn({ role: "user", content: "go" })).toBe(true);
+    expect(isRealTurn({ role: "user", tool_results: [{}] })).toBe(true);
+    expect(isRealTurn({ role: "user", images: [{}] })).toBe(true);
+  });
+
+  test("banners, system notices and empty rows are not turns", () => {
+    expect(isRealTurn({ role: "assistant", content: "You've hit your session limit" })).toBe(false);
+    expect(isRealTurn({ role: "system", content: "Remote Control disconnected" })).toBe(false);
+    expect(isRealTurn({ role: "user", content: "  " })).toBe(false);
   });
 });
 

@@ -23,7 +23,7 @@ import {
 } from "./smallViewContracts";
 import { onFreshApiErrorPark } from "./accountSwitch";
 import { batchHasLoopEvent, deriveLoopState } from "./loopState";
-import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction, nextPendingApiError, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
+import { nextAgentStatusOnAddMessages, classifyApiErrorBanner, apiErrorBatchAction, nextPendingApiError, newestSignificantMessage, isBannerTurn, isRealTurn, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
 import {
   classifyDocContent,
   extractTitleFromContent,
@@ -1326,11 +1326,13 @@ export const addMessage = mutation({
     // retry path so a banner inserted here is cleared once a real turn lands.
     const msgBannerKind = args.role === "assistant" ? classifyApiErrorBanner(contentToStore) : null;
     const msgIsBanner = msgBannerKind !== null;
-    const msgIsRealTurn =
-      !msgIsBanner &&
-      ((args.role === "assistant" && (!!contentToStore?.trim() || (safeToolCalls?.length ?? 0) > 0)) ||
-        (args.role === "user" &&
-          (!!contentToStore?.trim() || (safeToolResults?.length ?? 0) > 0 || (images?.length ?? 0) > 0)));
+    const msgIsRealTurn = isRealTurn({
+      role: args.role,
+      content: contentToStore,
+      tool_calls: safeToolCalls,
+      tool_results: safeToolResults,
+      images,
+    });
     const wasPendingApiError = conversation.pending_api_error === true;
     let supersededBanners = 0;
     if (
@@ -1499,7 +1501,7 @@ export async function supersedeApiErrorBanners(
     .take(12);
   let deleted = 0;
   for (const r of recent) {
-    if (r.timestamp < beforeTs && r.role === "assistant" && isApiErrorBanner(r.content)) {
+    if (r.timestamp < beforeTs && isBannerTurn(r)) {
       await ctx.db.delete(r._id);
       deleted++;
     }
@@ -1849,20 +1851,13 @@ export const addMessages = mutation({
       // banner-only batch just flips the gate flag so a later turn can clear it.
       // The deletion scan only runs on the rare recovery batch — ordinary
       // traffic skips it entirely.
-      type IncomingMsg = (typeof args.messages)[number];
-      const isBannerMsg = (m: IncomingMsg) => m.role === "assistant" && isApiErrorBanner(m.content);
-      const isRealTurn = (m: IncomingMsg) =>
-        !isBannerMsg(m) &&
-        ((m.role === "assistant" && (!!m.content?.trim() || (m.tool_calls?.length ?? 0) > 0)) ||
-          (m.role === "user" &&
-            (!!m.content?.trim() || (m.tool_results?.length ?? 0) > 0 || (m.images?.length ?? 0) > 0)));
-      const batchHasBanner = args.messages.some(isBannerMsg);
+      const batchHasBanner = args.messages.some(isBannerTurn);
       const batchHasRealTurn = args.messages.some(isRealTurn);
       const maxRealTurnTs = args.messages.reduce(
         (max, m) => (isRealTurn(m) ? Math.max(max, m.timestamp || 0) : max),
         0,
       );
-      const newestMsg = args.messages.reduce((a, b) => ((b.timestamp || 0) >= (a.timestamp || 0) ? b : a));
+      const newestSignificant = newestSignificantMessage(args.messages);
       const wasPendingApiError = conversation.pending_api_error === true;
 
       let supersededBanners = 0;
@@ -1889,8 +1884,8 @@ export const addMessages = mutation({
       if (batchEffort && batchEffort !== conversation.effort) {
         convPatch.effort = batchEffort;
       }
-      // Keep the gate flag in lockstep with "newest message is a banner".
-      const newestIsBanner = isBannerMsg(newestMsg);
+      // Keep the gate flag in lockstep with "newest banner-or-turn is a banner".
+      const newestIsBanner = newestSignificant != null && isBannerTurn(newestSignificant);
       const nextPending = nextPendingApiError({
         newestIsBanner,
         batchHasRealTurn,
@@ -1901,13 +1896,13 @@ export const addMessages = mutation({
       }
       // A kept flag keeps its kind and stamp; only a fresh banner rewrites them.
       const nextBannerKind = newestIsBanner
-        ? classifyApiErrorBanner(newestMsg.content) ?? undefined
+        ? classifyApiErrorBanner(newestSignificant!.content) ?? undefined
         : nextPending ? conversation.pending_api_error_kind ?? undefined : undefined;
       if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
         convPatch.pending_api_error_kind = nextBannerKind;
       }
       const nextBannerAt = newestIsBanner
-        ? newestMsg.timestamp || Date.now()
+        ? newestSignificant!.timestamp || Date.now()
         : nextPending ? conversation.pending_api_error_at ?? undefined : undefined;
       if ((conversation.pending_api_error_at ?? undefined) !== nextBannerAt) {
         convPatch.pending_api_error_at = nextBannerAt;
