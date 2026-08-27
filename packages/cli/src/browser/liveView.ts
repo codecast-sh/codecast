@@ -20,7 +20,44 @@ import * as path from "node:path";
 import { spawn } from "../proc.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { RemoteHost } from "../remote/session-move.js";
-import { HLS_PORT, RTSP_PORT } from "./provisionLinux.js";
+import { HLS_PORT, NOVNC_PORT, RTSP_PORT, VNC_PORT } from "./provisionLinux.js";
+
+/**
+ * Bring the machine-level VNC to local loopback and return the noVNC URL.
+ *
+ * This is the fallback below the in-app browser control: it shows the whole
+ * X display, so anything outside the agent's tab — a popup window, a Chrome
+ * dialog, a second window — is reachable. Same shape as the view tunnel:
+ * idempotent, reuses a tunnel that already answers.
+ */
+export async function ensureVncTunnel(host: RemoteHost): Promise<{ url: string; tunnelPid?: number }> {
+  const url = `http://127.0.0.1:${NOVNC_PORT}/vnc.html?autoconnect=1&resize=scale&path=`;
+  if (await portAnswers(NOVNC_PORT)) return { url };
+  const tunnel = spawn(
+    "ssh",
+    ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
+     "-o", "ConnectTimeout=20", "-o", "BatchMode=yes",
+     "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
+     "-o", "ExitOnForwardFailure=yes",
+     "-N",
+     // Only noVNC crosses the tunnel: websockify on the box proxies to the
+     // VNC port there. Forwarding 5900 too collided with macOS Screen
+     // Sharing, which owns that port locally, and ExitOnForwardFailure then
+     // took the whole tunnel down with it.
+     "-L", `127.0.0.1:${NOVNC_PORT}:127.0.0.1:${NOVNC_PORT}`,
+     `${host.user}@${host.address}`],
+    { stdio: ["ignore", "ignore", "ignore"], detached: true },
+  );
+  tunnel.unref();
+  if (!tunnel.pid) throw new Error("could not start the VNC tunnel");
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    if (await portAnswers(NOVNC_PORT)) return { url, tunnelPid: tunnel.pid };
+    await sleep(400);
+  }
+  try { process.kill(tunnel.pid, "SIGTERM"); } catch { /* gone */ }
+  throw new Error("the VNC tunnel never came up — re-run `cast browser hosts provision` to install it");
+}
 
 export interface ViewUrls {
   rtsp: string;
