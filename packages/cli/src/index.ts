@@ -12301,6 +12301,14 @@ trigger
           ", each linked back to this trigger" +
           (creatorSessionUuid ? " and to this session as its creator" : "")
       );
+      // Creator detection walks process ancestry to the agent binary; a
+      // command sent through tmux ancestors to the tmux server instead. Say
+      // so — the run's page can't link home, and nothing else will surface it.
+      if (!creatorSessionUuid) {
+        console.error(
+          "warning: could not detect the session creating this trigger — runs will not link back to it. Run `cast trigger add` from the agent's own shell, not through tmux."
+        );
+      }
     } else if (!originating_conversation_id && !options.for) {
       console.error(
         "note: could not link this trigger to a session — runs will spawn fresh agents in " +
