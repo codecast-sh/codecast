@@ -38,6 +38,7 @@ import {
   type TeamFeatureKey,
   fromConvexAgentType,
   toConvexAgentType,
+  AGENT_CLIENTS,
   PROVIDER_KEYS,
   getProviderKeySpec,
   maskProviderKey,
@@ -264,7 +265,11 @@ function findCurrentSessionFromProcess(projectRoot: string): string | null {
         if (debug) console.error(`[DEBUG] PID ${pid}: comm=${comm} args=${args.slice(0, 60)}...`);
 
         const bin = comm.split("/").pop() || "";
-        if (["claude", "codex", "gemini-cli", "opencode"].includes(bin)) {
+        // Every registry client's binary counts as a host-agent process — a
+        // hand-rolled list here silently excluded pi and grok (and matched
+        // gemini by the wrong name). "gemini-cli" stays as a legacy alias for
+        // installs whose ps comm still reports it.
+        if (Object.values(AGENT_CLIENTS).some((d) => d.binary === bin) || bin === "gemini-cli") {
           claudePid = pid;
           claudeArgs = args;
           if (debug) console.error(`[DEBUG] Found ${bin} at PID ${pid}`);
