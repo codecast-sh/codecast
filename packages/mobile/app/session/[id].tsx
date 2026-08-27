@@ -3022,6 +3022,11 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
 
   const draftRef = useRef(useInboxStore.getState().getDraft(conversationId)?.draft_message ?? draft ?? '');
+  // The debounced server write of the draft. handleSend cancels it directly:
+  // the effect cleanup only runs on the next React commit, and on a streaming
+  // session a contended JS thread can let the timer fire first — persisting the
+  // just-sent text AFTER the send's clear, so it reappears on the next mount.
+  const draftPatchTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => {
     if (!message && !draftRef.current) return;
     if (message === draftRef.current) return;
@@ -3033,14 +3038,15 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
     const store = useInboxStore.getState();
     if (message) store.setDraft(conversationId, { draft_message: message });
     else store.clearDraft(conversationId);
-    const t = setTimeout(() => {
+    clearTimeout(draftPatchTimerRef.current);
+    draftPatchTimerRef.current = setTimeout(() => {
       // Server persistence only once the id is real; the store-resolved draft
       // is dispatched through the outbox on rekey regardless.
       if (isConvexId(conversationId as string)) {
         patchConversation({ id: conversationId, fields: { draft_message: message || null } }).catch(() => {});
       }
     }, 1000);
-    return () => clearTimeout(t);
+    return () => clearTimeout(draftPatchTimerRef.current);
   }, [message, conversationId]);
 
   const uploadToStorage = async (uri: string) => {
@@ -3135,14 +3141,19 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
     const content = trimmedMessage || (storageIds.length > 0 ? '[image]' : '');
 
     // Clear the input immediately so the screen never feels blocked.
+    clearTimeout(draftPatchTimerRef.current);
     setMessage('');
     draftRef.current = '';
     setSelectedImages([]);
     // Clear the draft both locally and on the server. Without the local clear,
     // a restart-right-after-send would re-hydrate the stale draft (cache-first).
     // clearDraft resolves stub ids; the server patch is gated on a real id.
+    // clearDraftFinal (not clearDraft) — the web send path: it dispatches the
+    // clear through the outbox (client_state draft + the durable conversation
+    // row), so a cached-row push can't re-seed the composer on the next mount.
+    // syncRecord covers stub ids, which clearDraftFinal's row-clear skips.
     const store = useInboxStore.getState();
-    store.clearDraft(conversationId);
+    store.clearDraftFinal(conversationId);
     store.syncRecord('conversations', conversationId, { draft_message: null });
     if (isConvexId(conversationId as string)) {
       patchConversation({ id: conversationId, fields: { draft_message: null } }).catch(() => {});
@@ -4340,7 +4351,12 @@ export default function SessionDetailScreen() {
       <Stack.Screen options={{ headerShown: false }} />
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        // 'padding' on both platforms. Edge-to-edge Android does NOT resize the
+        // window for the IME (with no KAV behavior the composer sits hidden under
+        // the keyboard), and 'height' — which re-derives the container height
+        // from a cached initial frame on every layout — oscillated by about a
+        // row while the list re-laid out during streaming.
+        behavior="padding"
         keyboardVerticalOffset={0}
       >
         {/* Compact custom title bar — back + title + actions in one slim band,

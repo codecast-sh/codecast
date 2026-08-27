@@ -27,6 +27,7 @@ const TEAM_DOC = "doc_team";
 const PRIVATE_DOC = "doc_private_linked";
 const PRIVATE_CONV = "conv_private";
 const SHARED_CONV = "conv_shared";
+const LINKED_CONV = "conv_linked";
 
 const DOC_JSON = JSON.stringify({
   type: "doc",
@@ -48,6 +49,11 @@ function tables(): Record<string, any[]> {
     conversations: [
       { _id: PRIVATE_CONV, user_id: OWNER, team_id: TEAM, is_private: true },
       { _id: SHARED_CONV, user_id: OWNER, team_id: TEAM, is_private: false },
+      // Private, but the stranger redeemed its share link (opened /share/<token>).
+      { _id: LINKED_CONV, user_id: OWNER, team_id: TEAM, is_private: true, share_token: "tok" },
+    ],
+    share_redemptions: [
+      { _id: "red_1", conversation_id: LINKED_CONV, user_id: STRANGER, token: "tok" },
     ],
     docs: [
       // Plain team doc: whole team may sync it.
@@ -171,6 +177,11 @@ describe("docSync presence requires access too", () => {
     await expect(
       run(updatePresence, STRANGER, { doc_id: `compose:${PRIVATE_CONV}`, draft_text: "hi" }),
     ).rejects.toThrow();
+  });
+
+  test("a share-link redeemer outside the team reads composer presence", async () => {
+    const rows = await run(getPresence, STRANGER, { doc_id: `compose:${LINKED_CONV}` });
+    expect(Array.isArray(rows)).toBe(true);
   });
 
   test("a teammate reads presence on a team doc", async () => {

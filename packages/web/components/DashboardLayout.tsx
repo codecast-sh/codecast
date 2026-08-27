@@ -43,7 +43,7 @@ import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp
 import { AppLoader } from "./AppLoader";
 import { SettingsModal } from "./settings/SettingsModal";
 import { PeopleWallModal } from "./people/PeopleWallModal";
-import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, sessionsWakeSig, pendingSendWakeSig, isSessionHidden, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, sessionsWakeSig, pendingSendWakeSig, isSessionHidden, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, bucketProjectPath } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { pathOnMyMachines } from "../lib/machinePicker";
 import { liveMachineRoster } from "../hooks/useSyncDevices";
@@ -664,7 +664,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     // An exclude chip ("everything but X") expresses no project preference for
     // new sessions — only include mode constrains/seeds below.
     const activeProjectFilter = store.chipFilterExclude ? null : store.activeProjectFilter;
-    const activeProjectPath = store.chipFilterExclude ? null : store.activeProjectPath;
+    // A label chip nulls activeProjectPath — derive the label's directory instead.
+    const activeProjectPath = store.chipFilterExclude ? null : store.activeProjectPath ?? bucketProjectPath(store);
     // Ctrl+N clones the selected session's project path (preserving its worktree /
     // subdirectory) — the session the user sees highlighted (sessionListActiveId).
     // But a project-filter chip is an explicit "I'm working in this project": when

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { resolveComposeProjectPath, findProjectPathByName } from "../inboxStore";
+import { resolveComposeProjectPath, findProjectPathByName, bucketProjectPath } from "../inboxStore";
 import type { InboxSession } from "../inboxStore";
 
 const recentProjects = [{ path: "/Users/j/code/recent" }];
@@ -119,5 +119,36 @@ describe("resolveComposeProjectPath", () => {
         recentProjects,
       }),
     ).toBe("/Users/samvit/dev/codecast");
+  });
+});
+
+describe("bucketProjectPath", () => {
+  const sessions = {
+    a: { _id: "a", updated_at: 1, git_root: "/Users/j/code/old" },
+    b: { _id: "b", updated_at: 5, git_root: "/Users/j/code/codex-proj" },
+    c: { _id: "c", updated_at: 9, git_root: "/Users/j/code/other" },
+  } as unknown as Record<string, InboxSession>;
+  const bucketAssignments = {
+    a: { conversation_id: "a", bucket_id: "codex" },
+    b: { conversation_id: "b", bucket_id: "codex" },
+    c: { conversation_id: "c", bucket_id: "misc" },
+  } as never;
+
+  it("picks the most recently updated session filed under the active label", () => {
+    expect(bucketProjectPath({ activeBucketFilter: "codex", chipFilterExclude: false, sessions, bucketAssignments })).toBe(
+      "/Users/j/code/codex-proj",
+    );
+  });
+
+  it("seeds nothing for an exclude chip or no label", () => {
+    expect(bucketProjectPath({ activeBucketFilter: "codex", chipFilterExclude: true, sessions, bucketAssignments })).toBeUndefined();
+    expect(bucketProjectPath({ activeBucketFilter: null, chipFilterExclude: false, sessions, bucketAssignments })).toBeUndefined();
+  });
+
+  it("skips checkouts none of my machines have", () => {
+    const machineRoster = [{ local_project_roots: ["/Users/j/code/old"] }];
+    expect(
+      bucketProjectPath({ activeBucketFilter: "codex", chipFilterExclude: false, sessions, bucketAssignments, machineRoster }),
+    ).toBe("/Users/j/code/old");
   });
 });
