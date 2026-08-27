@@ -125,4 +125,61 @@ describe("createRecoveryController", () => {
     await c.tick();
     expect(calls).toBe(2);
   });
+
+  it("backs off while probes keep missing (no live push between them)", async () => {
+    // Models the cold-open case: the live subscription's first payload is
+    // pending on a slow server, and each probe is a full recompute on top.
+    let calls = 0;
+    let lastSync = 0;
+    let nowMs = 0;
+    const c = createRecoveryController({
+      getLastSync: () => lastSync,
+      staleMs: 100,
+      maxStaleMs: 400,
+      now: () => nowMs,
+      fetchAndApply: async () => {
+        calls++;
+        lastSync = nowMs; // the probe itself refreshes the watermark
+      },
+    });
+
+    nowMs = 100; await c.tick(); expect(calls).toBe(1);   // base cadence
+    nowMs = 200; await c.tick(); expect(calls).toBe(2);   // first miss only known now
+    nowMs = 300; await c.tick(); expect(calls).toBe(2);   // one miss → needs 200ms
+    nowMs = 400; await c.tick(); expect(calls).toBe(3);
+    nowMs = 700; await c.tick(); expect(calls).toBe(3);   // two misses → 400ms
+    nowMs = 800; await c.tick(); expect(calls).toBe(4);
+    nowMs = 1200; await c.tick(); expect(calls).toBe(5);  // capped at maxStaleMs
+    expect(c.requiredStaleMs()).toBe(400);
+
+    // A live push moves the watermark without a probe → back to base cadence.
+    lastSync = 1250;
+    nowMs = 1360; await c.tick(); expect(calls).toBe(6);
+    expect(c.requiredStaleMs()).toBe(100);
+  });
+
+  it("wake defers the probe past the resubscribe grace and skips it if a push landed", async () => {
+    let calls = 0;
+    let lastSync = 0;
+    const c = createRecoveryController({
+      getLastSync: () => lastSync,
+      staleMs: 10_000,
+      wakeGraceMs: 30,
+      fetchAndApply: async () => {
+        calls++;
+      },
+    });
+    c.wake();
+    c.wake(); // coalesces into the pending one
+    expect(calls).toBe(0);
+    lastSync = Date.now(); // the resubscribe delivered inside the grace window
+    await sleep(50);
+    expect(calls).toBe(0);
+
+    lastSync = 0;
+    c.wake();
+    await sleep(50);
+    expect(calls).toBe(1); // nothing arrived → the deferred probe fires
+    c.dispose();
+  });
 });
