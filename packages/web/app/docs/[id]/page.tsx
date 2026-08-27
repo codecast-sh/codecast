@@ -10,7 +10,6 @@ import { AuthGuard } from "../../../components/AuthGuard";
 import { AppLoader } from "../../../components/AppLoader";
 import { DocListContent } from "../page";
 import { shareOrigin, canonicalUrl } from "../../../lib/utils";
-import { isFreshDoc } from "../../../lib/docSyncCache";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
@@ -259,7 +258,6 @@ function DocDetailContent() {
           placeholder="Start typing or insert using /"
           cliEditedAt={(doc as any).cli_edited_at}
           contentReady={!!detail}
-          defaultEditing={isFreshDoc(doc._id)}
           topBarLeft={
             <>
               <DocTypeSelector value={doc.doc_type} onChange={handleTypeChange} />

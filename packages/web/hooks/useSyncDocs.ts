@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, usePaginatedQuery, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, DocDetail } from "../store/inboxStore";
@@ -86,6 +86,58 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
       syncTable("docs", docs, { isDelta: true });
     }, [syncTable])
   );
+
+  // BODY PREFETCH for the recent page: the list channels are thin (bodies
+  // stripped server-side), so without this a doc's first open always spins on
+  // the detail round trip. Backfill content into the persisted docDetails
+  // cache for any recent doc whose cached body is missing or stale, so opening
+  // a recent doc paints synchronously. Small paced batches — the server loads
+  // full rows into its isolate heap, so one big batch is the outage shape.
+  // Steady-state cost is zero: an up-to-date body (updated_at match) is
+  // skipped, and each (id, updated_at) is attempted once per session.
+  const attemptedRef = useRef(new Map<string, number>());
+  const prefetchHydrated = useInboxStore((s) => s.clientStateInitialized);
+  const wsSkip = wsArgs === "skip";
+  useEffect(() => {
+    if (!prefetchHydrated || wsSkip || !results?.length) return;
+    const { docDetails } = useInboxStore.getState();
+    const rowById = new Map<string, any>();
+    for (const row of results as any[]) {
+      const cached = docDetails[row._id];
+      if (cached?.content !== undefined && (cached.updated_at ?? 0) >= row.updated_at) continue;
+      if (attemptedRef.current.get(row._id) === row.updated_at) continue;
+      rowById.set(row._id, row);
+    }
+    if (rowById.size === 0) return;
+    for (const [id, row] of rowById) attemptedRef.current.set(id, row.updated_at);
+    let cancelled = false;
+    (async () => {
+      const ids = [...rowById.keys()];
+      for (let i = 0; i < ids.length && !cancelled; i += 6) {
+        const batch = ids.slice(i, i + 6);
+        try {
+          const { bodies } = await convex.query(api.docs.webGetBodies, { ids: batch });
+          if (cancelled) return;
+          const store = useInboxStore.getState();
+          for (const body of bodies ?? []) {
+            // Compose a list-shaped row + body so the cached detail can carry
+            // the whole read view (title, dates, labels come from the thin
+            // row); the live detail query enriches with joins on open.
+            store.syncRecord("docDetails", body._id, {
+              ...rowById.get(body._id),
+              ...body,
+              _cachedAt: Date.now(),
+            });
+          }
+        } catch {
+          // transient — the ids stay marked attempted; the next updated_at
+          // change (or the doc's own open) retries
+        }
+        if (i + 6 < ids.length) await new Promise((r) => setTimeout(r, 150));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [convex, results, prefetchHydrated, wsSkip]);
 
   // Header SyncStatusChip: spin only while the LIVE first page is loading on a
   // cold open. The background reconcile crawl below is housekeeping (it pages
@@ -205,6 +257,11 @@ export function useSyncMentionDocs() {
 //   null      → resolved, but no accessible doc for this id (e.g. a stale or
 //               cross-table id from a malformed /docs/<id> link)
 //   object    → the doc detail
+// A fresh _cachedAt on every live push would defeat syncRecord's no-op bail
+// (and re-persist the row each time the subscription re-runs); day-grain
+// recency is all the LRU retention needs.
+const CACHED_AT_GRAIN_MS = 6 * 60 * 60 * 1000;
+
 export function useSyncDocDetail(id?: string) {
   const data = useQuery(
     api.taskMining.webGetDocDetail,
@@ -213,9 +270,20 @@ export function useSyncDocDetail(id?: string) {
   const syncRecord = useInboxStore((s) => s.syncRecord);
 
   useConvexSync(data, useCallback((d: any) => {
-    // Don't write a null result into the store — it would clobber a doc that the
-    // list query may have already provided, and the null is surfaced via the return.
-    if (id && d) syncRecord("docDetails", id, d as unknown as DocDetail);
+    if (!id) return;
+    if (d) {
+      // The detail row spreads the whole doc, embedding included — dead weight
+      // for a cache that now persists (the registry hydrateRow sheds it at
+      // boot; shedding here keeps it out of memory and disk in the first place).
+      const { embedding: _m, ...row } = d;
+      const prev = useInboxStore.getState().docDetails[id]?._cachedAt ?? 0;
+      row._cachedAt = Date.now() - prev < CACHED_AT_GRAIN_MS ? prev : Date.now();
+      syncRecord("docDetails", id, row as unknown as DocDetail);
+    } else if (d === null && useInboxStore.getState().docDetails[id]) {
+      // Deleted or access revoked — a persisted body must not outlive the
+      // server's answer, or the page renders stale content forever.
+      useInboxStore.getState().dropDocDetail(id);
+    }
   }, [id, syncRecord]));
 
   return data as DocDetail | null | undefined;

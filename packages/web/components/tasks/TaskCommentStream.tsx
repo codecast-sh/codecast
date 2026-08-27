@@ -130,11 +130,14 @@ export function TaskCommentComposer({
   shortId,
   dropFilesRef,
   autoOpen,
+  autoFocus,
 }: {
   shortId: string | undefined;
   dropFilesRef?: MutableRefObject<((files: File[]) => void) | null>;
-  /** Start with the box open and focused (the Threads card). */
+  /** Start with the box open and keep it open (the Threads card). */
   autoOpen?: boolean;
+  /** Grab keyboard focus on mount — only on the user's own gesture. */
+  autoFocus?: boolean;
 }) {
   const addTaskComment = useInboxStore((s) => s.addTaskComment);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
@@ -172,8 +175,8 @@ export function TaskCommentComposer({
   }, [dropFilesRef, uploadCommentImage]);
 
   useEffect(() => {
-    if (autoOpen) setTimeout(() => commentRef.current?.focus(), 0);
-  }, [autoOpen]);
+    if (autoFocus) setTimeout(() => commentRef.current?.focus(), 0);
+  }, [autoFocus]);
 
   const clearCommentImage = useCallback((idx: number) => {
     setCommentImages(prev => {
@@ -304,11 +307,13 @@ export function TaskCommentStream({
   shortId,
   comments,
   composerAutoOpen,
+  composerAutoFocus,
   initialLimit,
 }: {
   shortId: string | undefined;
   comments: TaskCommentRow[];
   composerAutoOpen?: boolean;
+  composerAutoFocus?: boolean;
   /** Render only the newest N comments, the rest behind a "show earlier"
    *  reveal (the Threads card). Unset renders the whole stream. */
   initialLimit?: number;
@@ -337,7 +342,7 @@ export function TaskCommentStream({
           ))}
         </div>
       )}
-      <TaskCommentComposer shortId={shortId} autoOpen={composerAutoOpen} />
+      <TaskCommentComposer shortId={shortId} autoOpen={composerAutoOpen} autoFocus={composerAutoFocus} />
     </div>
   );
 }

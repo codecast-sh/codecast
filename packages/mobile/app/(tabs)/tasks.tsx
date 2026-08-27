@@ -25,6 +25,7 @@ import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing } from "@/constants/Theme";
 import { useInboxStore, type TaskItem, type PlanItem, type DocItem } from "@codecast/web/store/inboxStore";
 import { buildTaskTree, isOnHumanBoard, taskFamilyIndex } from "@codecast/shared/tasks";
+import { isOnHumanShelf } from "@codecast/shared/docs";
 import { filterToWorkspace } from "@codecast/web/lib/workspaceScope";
 import { useSyncTasks } from "@/hooks/useSyncTasks";
 import { useSyncPlans } from "@/hooks/useSyncPlans";
@@ -222,12 +223,19 @@ export default function TasksScreen() {
   // "human" = the human's board (isOnHumanBoard, shared with web): human or
   // meeting origin, promoted (cast task create --human, triage accept), or
   // assigned to a person. "bot" = machine-created tasks that stay internal to
-  // agent work. Plans/docs have no promoted/assignee field or meeting source,
-  // so for them this degrades to a plain source split.
+  // agent work. Plans have no promoted/assignee field or meeting source, so
+  // for them this degrades to a plain source split.
   const onBoard = isOnHumanBoard;
   const applySourceFilter = useCallback(<T extends { source?: string; promoted?: boolean; assignee?: string | null }>(list: T[]): T[] => {
     if (sourceFilter === "human") return list.filter(onBoard);
     if (sourceFilter === "bot") return list.filter((i) => !onBoard(i));
+    return list;
+  }, [sourceFilter]);
+  // Docs have their own shared shelf rule (human origin or pinned), so the
+  // split can't drift from the web docs list.
+  const applyDocSourceFilter = useCallback(<T extends { source?: string; pinned?: boolean }>(list: T[]): T[] => {
+    if (sourceFilter === "human") return list.filter(isOnHumanShelf);
+    if (sourceFilter === "bot") return list.filter((d) => !isOnHumanShelf(d));
     return list;
   }, [sourceFilter]);
 
@@ -370,7 +378,7 @@ export default function TasksScreen() {
   }, [filteredPlans]);
 
   const filteredDocs = useMemo(() => {
-    let list = applySourceFilter(docsList);
+    let list = applyDocSourceFilter(docsList);
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       list = list.filter(
@@ -381,7 +389,7 @@ export default function TasksScreen() {
       );
     }
     return list;
-  }, [docsList, searchQuery, applySourceFilter]);
+  }, [docsList, searchQuery, applyDocSourceFilter]);
 
   const groupedDocs = useMemo(() => {
     const groups: Record<string, DocItem[]> = {};

@@ -982,6 +982,9 @@ export type DocDetail = DocItem & {
   conversation?: any;
   related_tasks?: any[];
   related_sessions?: any[];
+  // Last time this client opened (or body-prefetched) the doc — drives the
+  // persisted docDetails cache's LRU retention (partitionDocDetailRetention).
+  _cachedAt?: number;
 };
 
 export type TaskViewPrefs = {
@@ -3439,6 +3442,10 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // -- Generic sync --
   syncTable: (field: string, incoming: any, opts?: SyncOpts) => void;
   syncRecord: (field: string, id: string, record: any) => void;
+  // The detail query answered null for a doc we have cached: it was deleted or
+  // access was revoked — drop the cached body so the page shows "not found"
+  // instead of stale content forever.
+  dropDocDetail: (id: string) => void;
   // Local-first clear of a row's "assigned to you" ping (paired with the
   // ackSessionAssignment mutation, which the caller fires separately).
   clearAssignedPing: (conversationId: string) => void;
@@ -7243,6 +7250,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
         }
       }
     }
+  }),
+
+  dropDocDetail: sync(function (this: Draft, id: string) {
+    if (this.docDetails[id]) delete this.docDetails[id];
   }),
 
   // Local-first retire of the "assigned to you" ping: the UI clears it the

@@ -9,7 +9,7 @@ import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
 import { DocMenuItems } from "../../components/menus/ObjectContextMenus";
-import { SegmentedToggle } from "../../components/SegmentedToggle";
+import { docOrigin, isOnHumanShelf } from "@codecast/shared/docs";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import { docMatchesProjectFilter } from "../../lib/docFilters";
 import { useWorkspaceArgs, workspaceStamp } from "../../hooks/useWorkspaceArgs";
@@ -23,6 +23,7 @@ import {
   Tag,
   User,
   Bot,
+  Layers,
 } from "lucide-react";
 
 const api = _api as any;
@@ -56,6 +57,9 @@ export function DocRow({ doc }: { doc: DocItem; state: ItemRowState }) {
       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${cfg.dot}`} />
       {doc.pinned && <Pin className="w-3 h-3 text-sol-yellow flex-shrink-0" />}
       <span className="flex-1 text-sol-text truncate min-w-0">{title}</span>
+      {docOrigin(doc) === "agent" && (
+        <span className="flex-shrink-0 cq-hide-compact" title={`${doc.source} created`}><Bot className="w-3.5 h-3.5 text-sol-text-dim/60" /></span>
+      )}
       {doc.plan_short_id && (
         <Link
           href={`/plans/${doc.plan_short_id}`}
@@ -235,17 +239,25 @@ export function DocListContent() {
   }, [docsList]);
 
   // Source filtering applied before other filters.
-  // Default ("") shows ALL docs. "human" narrows to human-created only.
+  // The default view is the human's shelf: docs a person wrote, plus anything
+  // pinned. Machine output (agent plan bodies, session-mined notes, file
+  // syncs) sits behind the Agent-internal source filter; "all" shows both.
+  // Same shape as the tasks board, via the shared @codecast/shared/docs rule,
+  // so web and mobile can't drift. Legacy "human"/"bot" links map onto the
+  // new values.
+  const onShelf = isOnHumanShelf;
   const sourceFilteredDocs = useMemo(() => {
-    if (sourceFilter === "human") return docsList.filter((d) => d.source === "human");
-    if (sourceFilter === "bot") return docsList.filter((d) => d.source !== "human");
-    return docsList; // Default: show everything
+    if (sourceFilter === "agent" || sourceFilter === "bot") return docsList.filter((d) => !onShelf(d));
+    if (sourceFilter === "all") return docsList;
+    // "" (default) and legacy "human" links both mean the human's shelf.
+    return docsList.filter(onShelf);
   }, [docsList, sourceFilter]);
 
+  const isShelfView = sourceFilter !== "agent" && sourceFilter !== "bot" && sourceFilter !== "all";
   const hiddenAgentCount = useMemo(() => {
-    if (sourceFilter !== "human") return 0;
-    return docsList.filter((d) => d.source !== "human").length;
-  }, [docsList, sourceFilter]);
+    if (!isShelfView) return 0;
+    return docsList.filter((d) => !onShelf(d)).length;
+  }, [docsList, isShelfView]);
 
   const filteredDocs = useMemo(() => {
     let list = sourceFilteredDocs;
@@ -254,14 +266,6 @@ export function DocListContent() {
     if (projectFilter) list = list.filter((d) => docMatchesProjectFilter(d, projectFilter));
     return list;
   }, [sourceFilteredDocs, docType, labelFilter, projectFilter]);
-
-  const filteredDocsIgnoringSource = useMemo(() => {
-    let list = docsList;
-    if (docType) list = list.filter((d) => d.doc_type === docType);
-    if (labelFilter) list = list.filter((d) => d.labels?.includes(labelFilter));
-    if (projectFilter) list = list.filter((d) => docMatchesProjectFilter(d, projectFilter));
-    return list;
-  }, [docsList, docType, labelFilter, projectFilter]);
 
   // Search corpus that ignores the active type TAB (but keeps explicit source/
   // project/label scope), so typing a query finds a doc whose type isn't the
@@ -273,16 +277,6 @@ export function DocListContent() {
     if (projectFilter) list = list.filter((d) => docMatchesProjectFilter(d, projectFilter));
     return [...list].sort((a, b) => b.updated_at - a.updated_at);
   }, [sourceFilteredDocs, labelFilter, projectFilter]);
-
-  useEffect(() => {
-    if (
-      sourceFilter === "human" &&
-      filteredDocs.length === 0 &&
-      filteredDocsIgnoringSource.some((d) => d.source !== "human")
-    ) {
-      setParam({ source: "" });
-    }
-  }, [sourceFilter, filteredDocs, filteredDocsIgnoringSource, setParam]);
 
   const typeCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -389,7 +383,7 @@ export function DocListContent() {
       paletteTargetType="doc"
       title="Documents"
       tabs={[
-        { key: "", label: "All", count: docsList.length },
+        { key: "", label: "All", count: sourceFilteredDocs.length },
         ...DOC_TYPES.map((t) => ({
           key: t,
           label: DOC_TYPE_CONFIG[t].label,
@@ -417,28 +411,28 @@ export function DocListContent() {
       listFooter={hiddenAgentCount > 0 ? (
         <div className="px-6 py-2.5 border-t border-sol-border/15 flex items-center gap-2 text-xs text-sol-text-dim">
           <Bot className="w-3.5 h-3.5 opacity-40" />
-          <span>{hiddenAgentCount} agent {hiddenAgentCount === 1 ? "item" : "items"} not shown</span>
+          <span>{hiddenAgentCount} agent {hiddenAgentCount === 1 ? "doc" : "docs"} not shown</span>
           <button onClick={() => setParam({ source: "all" })} className="text-sol-cyan hover:underline ml-0.5">
             Show all
           </button>
         </div>
       ) : undefined}
       syncScope="docs"
-      headerExtra={
-        <SegmentedToggle
-          collapse
-          value={sourceFilter}
-          onChange={(v) => setParam({ source: v })}
-          items={[
-            { key: "", label: "All", title: "All docs" },
-            { key: "human", icon: User, title: "Human-created docs" },
-            { key: "bot", icon: Bot, title: "Bot-created docs" },
-          ]}
-        />
-      }
       filters={{
         hasActive: !!(projectFilter || labelFilter || sourceFilter || docType),
         defs: [
+          // Agent output and the combined view live here, tucked in the filter
+          // popover — the shelf is the default and gets no header control of
+          // its own (mirrors the tasks board).
+          {
+            key: "source", label: "Source", icon: <Bot className="w-3 h-3" />, value: sourceFilter, showEmptyOption: true,
+            options: [
+              { key: "", label: "Your docs (default)", icon: User },
+              { key: "agent", label: "Agent-internal", icon: Bot, color: "text-sol-cyan" },
+              { key: "all", label: "All docs", icon: Layers },
+            ],
+            onChange: (v: string) => setParam({ source: v }),
+          },
           {
             key: "project", label: "Project", icon: <FolderOpen className="w-3 h-3" />, value: projectFilter,
             options: [

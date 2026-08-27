@@ -184,6 +184,29 @@ export const CLIENT_SYNC_REGISTRY = {
       return rest;
     },
   },
+  // Doc bodies + detail joins, keyed by doc id — the local-first half of the
+  // thin-list split above: `docs` rows shed their bodies, so this cache is
+  // what lets a doc PAGE paint synchronously after a reload instead of
+  // spinning on webGetDocDetail. Fed by the detail query on open and by the
+  // recent-page body prefetch (useSyncDocs); bounded at hydration by
+  // partitionDocDetailRetention (last-open LRU), so it holds what the user
+  // reads, never the corpus. NOT localFirst: writes to real doc fields ride
+  // the `docs` collection (updateDoc), which owns the pending locks — this is
+  // a paint cache the live detail query reconciles.
+  docDetails: {
+    persistence: { kind: "collection", key: "docDetails" },
+    hydration: { phase: "deferred" },
+    localFirst: false,
+    feeds: ["taskMining.webGetDocDetail"],
+    // The detail query spreads the whole doc row, which includes the vector
+    // embedding — dead weight for rendering; shed it on the way in like the
+    // docs list does.
+    hydrateRow: (row: any) => {
+      if (row?.embedding === undefined) return row;
+      const { embedding: _m, ...rest } = row;
+      return rest;
+    },
+  },
   // The decision queue (cast decide). Answering is local-first: the action
   // flips status on the draft and the resolution fields ride the generic
   // patch rail to the session_decisions table. Everything structural

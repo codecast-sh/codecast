@@ -23,7 +23,7 @@ import {
   isPersistedClientStoreKey,
 } from "./clientSyncRegistry";
 import { diffCollection } from "./idbCollectionDiff";
-import { partitionSessionRetention, expireExcludeTombstones } from "./cacheRetention";
+import { partitionSessionRetention, partitionDocDetailRetention, expireExcludeTombstones } from "./cacheRetention";
 import { isConvexId } from "../lib/entityLinks";
 
 let Storage: any = null;
@@ -174,6 +174,13 @@ export async function loadCache(): Promise<Record<string, any> | null> {
         rows = keep;
         // Whole-blob engine: the trim rewrite below (Object.values(map), which
         // the dropped rows never enter) is how the prune reaches disk.
+        if (drop.length) anyTrimmed = true;
+        if (drop.length && rows.length === 0) Storage.setItem(COLLECTION_PREFIX + key, "[]").catch(() => {});
+      }
+      // Opened-docs body cache: bound by last-open recency (see idbCache.ts).
+      if (key === "docDetails" && rows.length > 0) {
+        const { keep, drop } = partitionDocDetailRetention(rows, Date.now());
+        rows = keep;
         if (drop.length) anyTrimmed = true;
         if (drop.length && rows.length === 0) Storage.setItem(COLLECTION_PREFIX + key, "[]").catch(() => {});
       }

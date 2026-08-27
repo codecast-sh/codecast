@@ -1002,6 +1002,34 @@ export const webGetByIds = query({
   },
 });
 
+// Body backfill for the client's persisted docDetails cache: content + entries
+// for a small batch of ids the viewer can access (the list channels strip
+// bodies — see stripDoc). One-shot, not a live subscription. The batch is
+// clamped hard because Convex loads each doc's FULL row into the isolate heap
+// before we project it (the same per-doc memory limit that forced
+// webListPaginated's page down to 12) — callers chunk and pace.
+export const webGetBodies = query({
+  args: { ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { bodies: [] };
+    const bodies: any[] = [];
+    for (const raw of args.ids.slice(0, 6)) {
+      const id = ctx.db.normalizeId("docs", raw);
+      if (!id) continue;
+      const doc = await ctx.db.get(id);
+      if (!doc || !(await canAccessDoc(ctx, userId, doc))) continue;
+      bodies.push({
+        _id: doc._id,
+        content: doc.content ?? "",
+        entries: (doc as any).entries,
+        updated_at: doc.updated_at,
+      });
+    }
+    return { bodies };
+  },
+});
+
 export const webListPaginated = query({
   args: {
     doc_type: v.optional(v.string()),
@@ -1325,6 +1353,49 @@ export const debugList = internalQuery({
       }
     }
     return { total: docs.length, bySource, byType, byTeam, inlineSamples: samples };
+  },
+});
+
+// One-time restamp for plan-body docs mislabeled "human" (2026-08-26).
+// `cast plan create` stamped source "human" even when an agent session ran it,
+// and plans.* hardcoded "human" onto the plan-body doc, so thousands of agent
+// plans sat on the human docs shelf. A doc flips to "agent" when its plan
+// shows machine provenance: a non-human plan source, a creating conversation,
+// or bound agent sessions. Paged — call repeatedly with the returned cursor
+// until isDone. Does not bump updated_at: the docs full crawl re-reads rows
+// fresh, so clients converge without a sync storm.
+export const restampPlanDocOrigins = internalMutation({
+  args: {
+    cursor: v.optional(v.string()),
+    numItems: v.optional(v.number()),
+    dryRun: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("docs")
+      .paginate({ numItems: args.numItems ?? 100, cursor: args.cursor ?? null });
+    let scanned = 0;
+    let restamped = 0;
+    const planCache = new Map<string, any>();
+    for (const d of page.page) {
+      scanned++;
+      if (!d.plan_id || d.source !== "human") continue;
+      const key = String(d.plan_id);
+      let plan = planCache.get(key);
+      if (plan === undefined) {
+        plan = (await ctx.db.get(d.plan_id)) ?? null;
+        planCache.set(key, plan);
+      }
+      if (!plan) continue;
+      const machineBorn =
+        plan.source !== "human" ||
+        !!plan.created_from_conversation_id ||
+        (plan.session_ids?.length ?? 0) > 0;
+      if (!machineBorn) continue;
+      restamped++;
+      if (!args.dryRun) await ctx.db.patch(d._id, { source: "agent" });
+    }
+    return { scanned, restamped, isDone: page.isDone, continueCursor: page.continueCursor };
   },
 });
 

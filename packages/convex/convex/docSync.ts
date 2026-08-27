@@ -266,6 +266,12 @@ export function toMarkdown(node: any, ctx: { indent: string; ordered: boolean; i
   if (node.type === "hardBreak") return "\n";
   if (node.type === "horizontalRule") return "\n---\n\n";
   if (node.type === "mention") return mentionToMarkdown(node.attrs);
+  // Date pills round-trip as `@[<label> date:<iso>]` — before this case they
+  // fell through to "" and the date was wiped from doc.content on every edit.
+  if (node.type === "dateMention") {
+    const iso = node.attrs?.dateValue || node.attrs?.id || "";
+    return `@[${node.attrs?.label || iso} date:${iso}]`;
+  }
   // The editor's entity pill atoms (EntityIdExtension / EntityRefExtension).
   // Each must write back the exact markdown it was converted from — before
   // these cases, entityId nodes fell through to "" and every ct-/pl- id was

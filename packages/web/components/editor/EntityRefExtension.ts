@@ -64,7 +64,13 @@ function buildConversionTr(
   refType: NodeType,
   cursorPos: number | null,
 ): Transaction | null {
-  const replacements: { from: number; to: number; attrs: Record<string, unknown> }[] = [];
+  const replacements: {
+    from: number;
+    to: number;
+    attrs: Record<string, unknown>;
+    // Defaults to the entityRef type; a date mention rebuilds its own node.
+    nodeType?: NodeType;
+  }[] = [];
 
   state.doc.descendants((node, pos, parent, index) => {
     if (!node.isText || !node.text) return;
@@ -94,6 +100,23 @@ function buildConversionTr(
     const re = mentionWithIdRegex();
     let match;
     while ((match = re.exec(node.text)) !== null) {
+      // `@[<label> date:<iso>]` is a serialized date pill, not an object ref —
+      // rebuild the dateMention node so it round-trips to the same rich pill
+      // it was written as (schema lookup: editors without DateMentionExtension
+      // leave the text alone).
+      const dateIso = match[2].match(/^date:(\d{4}-\d{2}-\d{2})$/i)?.[1];
+      if (dateIso) {
+        const dateType = state.schema.nodes.dateMention;
+        if (dateType) {
+          replacements.push({
+            from: pos + match.index,
+            to: pos + match.index + match[0].length,
+            attrs: { id: dateIso, label: match[1].trim() || dateIso, type: "date", dateValue: dateIso },
+            nodeType: dateType,
+          });
+        }
+        continue;
+      }
       if (!isPillableRef(match[2])) continue;
       replacements.push({
         from: pos + match.index,
@@ -111,8 +134,8 @@ function buildConversionTr(
 
   const tr = state.tr;
   for (let i = eligible.length - 1; i >= 0; i--) {
-    const { from, to, attrs } = eligible[i];
-    tr.replaceWith(from, to, refType.create(attrs));
+    const { from, to, attrs, nodeType } = eligible[i];
+    tr.replaceWith(from, to, (nodeType ?? refType).create(attrs));
   }
   return tr;
 }

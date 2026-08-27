@@ -150,9 +150,9 @@ export function TaskExpanded({ card, seen, focusComposer }: { card: ThreadCardMo
           it: the card leads with what the task IS, then its conversation. */}
       <TaskDescription task={task} />
       <div ref={pinRef} className="th-card-open th-card-open-task">
-        {/* Auto-open (and its focus grab) only on the user's own expand: fifty
-            default-open cards each opening a composer would fight over focus. */}
-        <TaskCommentStream shortId={task?.short_id} comments={comments} composerAutoOpen={focusComposer} initialLimit={CARD_COMMENT_LIMIT} />
+        {/* The input is always ready; the focus grab still rides only the
+            user's own expand, so default-open cards never fight over focus. */}
+        <TaskCommentStream shortId={task?.short_id} comments={comments} composerAutoOpen composerAutoFocus={focusComposer} initialLimit={CARD_COMMENT_LIMIT} />
       </div>
     </>
   );

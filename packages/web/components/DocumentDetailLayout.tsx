@@ -14,7 +14,7 @@ import { DocReviewBar } from "./DocReviewBar";
 import { PeekLayoutControls } from "./DetailSplitLayout";
 import { SlotActions } from "./workspace/Slot";
 import { useInboxStore } from "../store/inboxStore";
-import { ArrowLeft, Edit3, MoreHorizontal, Copy, Check, X } from "lucide-react";
+import { ArrowLeft, Edit3, MoreHorizontal, Copy, Check, MessageSquareQuote } from "lucide-react";
 import Link from "next/link";
 import { copyToClipboard } from "../lib/utils";
 import { toast } from "sonner";
@@ -69,7 +69,8 @@ interface DocumentDetailLayoutProps {
   /** The session this doc came from, if any — the default target when sending
    *  review annotations to an agent. */
   ownerConversationId?: string;
-  /** Mount in edit mode (a doc just created empty has nothing to read). */
+  /** Mount in edit mode. Defaults true: editing IS the doc surface; the
+   *  quotable read view is the opt-in Review mode. */
   defaultEditing?: boolean;
 }
 
@@ -92,12 +93,14 @@ export function DocumentDetailLayout({
   cliEditedAt,
   contentReady = true,
   ownerConversationId,
-  defaultEditing = false,
+  defaultEditing = true,
 }: DocumentDetailLayoutProps) {
   const router = useRouter();
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
-  // Read mode is the default: the body renders as quotable review blocks
-  // (hover any block to annotate). Editing is an explicit pencil toggle.
+  // Edit mode is the default: the doc opens as the live collaborative editor
+  // (rich pills, dates, checkboxes in place). Review mode is the opt-in
+  // toggle — the body re-renders as quotable blocks (hover any block to
+  // annotate and send to the agent).
   const [isEditing, setIsEditing] = useState(defaultEditing && initialEditable);
   const reviewKey = `doc:${docId}`;
   // The review submit bar replaces the context chat only while a batch of
@@ -166,20 +169,21 @@ export function DocumentDetailLayout({
             {copied ? <Check className="w-3.5 h-3.5 text-sol-green" /> : <Copy className="w-3.5 h-3.5" />}
           </button>
           {initialEditable && (
-            // Labeled, not an icon glyph: the surface opens read-only, and this
-            // button is what says so — and is the obvious way in. While editing
-            // it flips to an accent-filled Done so the mode is unmistakable.
+            // Editing is the default state, so the button offers the opt-in:
+            // Review renders the body as quotable blocks to annotate and send
+            // to the agent. While reviewing it flips to an accent-filled state
+            // so the departure from the default is unmistakable.
             <button
               onClick={() => setIsEditing(!isEditing)}
               className={`px-2 py-1 mx-0.5 rounded-md text-xs font-medium flex items-center gap-1.5 border transition-colors ${
                 isEditing
-                  ? "bg-sol-cyan/15 text-sol-cyan border-sol-cyan/40 hover:bg-sol-cyan/25"
-                  : "text-sol-text-muted border-sol-border/40 hover:text-sol-text hover:border-sol-border hover:bg-sol-bg-alt/60"
+                  ? "text-sol-text-muted border-sol-border/40 hover:text-sol-text hover:border-sol-border hover:bg-sol-bg-alt/60"
+                  : "bg-sol-cyan/15 text-sol-cyan border-sol-cyan/40 hover:bg-sol-cyan/25"
               }`}
-              title={isEditing ? "Done editing" : "Edit this document"}
+              title={isEditing ? "Review mode — quote blocks to the agent" : "Back to editing"}
             >
-              {isEditing ? <Check className="w-3.5 h-3.5" /> : <Edit3 className="w-3.5 h-3.5" />}
-              <span>{isEditing ? "Done" : "Edit"}</span>
+              {isEditing ? <MessageSquareQuote className="w-3.5 h-3.5" /> : <Edit3 className="w-3.5 h-3.5" />}
+              <span>{isEditing ? "Review" : "Edit"}</span>
               <KeyCap size="xs">{isMac ? "⌘E" : "Ctrl+E"}</KeyCap>
             </button>
           )}
