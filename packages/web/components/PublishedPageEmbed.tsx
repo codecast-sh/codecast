@@ -143,7 +143,7 @@ export function PublishedPagePill({
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="group inline-flex max-w-xs items-center gap-1 rounded-full border border-sol-border bg-sol-bg-alt py-0 pl-[3px] pr-1.5 align-baseline text-[11px] font-medium leading-[1.4] text-sol-text-secondary no-underline transition-colors hover:border-sol-violet/50 hover:text-sol-text"
+      className="group inline-flex max-w-xs items-center gap-1.5 rounded-full border border-sol-border bg-sol-bg-alt py-px pl-1 pr-2 align-baseline text-[11px] font-medium leading-[1.4] text-sol-text-secondary no-underline transition-colors hover:border-sol-violet/50 hover:text-sol-text"
       title={meta?.title || href}
     >
       <PageFavicon />
