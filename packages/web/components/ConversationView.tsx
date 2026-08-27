@@ -2924,12 +2924,23 @@ function PiIcon() {
   );
 }
 
+function GrokIcon() {
+  return (
+    <div className="w-6 h-6 rounded bg-sol-text flex items-center justify-center shrink-0">
+      <svg className="w-3.5 h-3.5 text-sol-bg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+        <path d="M3 3l18 18M21 3l-7.5 7.5M3 21l7.5-7.5" />
+      </svg>
+    </div>
+  );
+}
+
 function AssistantIcon({ agentType }: { agentType?: string }) {
   if (agentType === "codex") return <CodexIcon />;
   if (agentType === "cursor") return <CursorIcon />;
   if (agentType === "gemini") return <GeminiIcon />;
   if (agentType === "opencode") return <OpencodeIcon />;
   if (agentType === "pi") return <PiIcon />;
+  if (agentType === "grok") return <GrokIcon />;
   return <ClaudeIcon />;
 }
 
@@ -2939,6 +2950,7 @@ function assistantLabel(agentType?: string): string {
   if (agentType === "gemini") return "Gemini";
   if (agentType === "opencode") return "OpenCode";
   if (agentType === "pi") return "pi";
+  if (agentType === "grok") return "Grok";
   return "Claude";
 }
 

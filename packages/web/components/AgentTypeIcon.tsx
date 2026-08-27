@@ -38,6 +38,13 @@ export function AgentTypeIcon({ agentType, className = "w-3 h-3" }: { agentType:
         π
       </span>
     );
+  } else if (agentType === "grok") {
+    // xAI mark: a full diagonal crossed by a broken counter-diagonal.
+    return (
+      <svg className={`${className} text-sol-text`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+        <path d="M3 3l18 18M21 3l-7.5 7.5M3 21l7.5-7.5" />
+      </svg>
+    );
   }
   return null;
 }
@@ -50,6 +57,7 @@ export function formatAgentType(agentType?: string): string {
   if (agentType === "gemini") return "Gemini";
   if (agentType === "opencode") return "OpenCode";
   if (agentType === "pi") return "pi";
+  if (agentType === "grok") return "Grok";
 
   return agentType;
 }

@@ -85,8 +85,8 @@ function AgentIcon({ agentType, className = "w-10 h-10" }: { agentType: string; 
         <GeminiIcon className="w-4.5 h-4.5 text-white" />
       </span>
     );
-  } else if (agentType === "opencode" || agentType === "pi") {
-    // Reuse the canonical AgentTypeIcon so opencode/pi don't fall through to the
+  } else if (agentType === "opencode" || agentType === "pi" || agentType === "grok") {
+    // Reuse the canonical AgentTypeIcon so opencode/pi/grok don't fall through to the
     // Claude badge below.
     return (
       <span className={`${className} rounded-full bg-sol-bg-alt flex items-center justify-center shrink-0`}>

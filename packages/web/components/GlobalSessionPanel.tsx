@@ -372,11 +372,13 @@ function AuthErrorBadge({ kind, agentType }: { kind?: string | null; agentType?:
       </span>
     );
   }
-  // opencode re-auths via its own CLI in a terminal; pi / Claude / Codex via /login
-  // in the session — name the right one in the tooltip.
+  // opencode and grok re-auth via their own CLI in a terminal; pi / Claude / Codex
+  // via /login in the session — name the right one in the tooltip.
   const authTip = agentType === "opencode"
     ? "Provider not authenticated — run `opencode auth login` in a terminal, then retry"
-    : "Signed out — run /login in the terminal to re-authenticate";
+    : agentType === "grok"
+      ? "Signed out — run `grok login` in a terminal (browser OAuth), then retry"
+      : "Signed out — run /login in the terminal to re-authenticate";
   return (
     <span
       className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30"

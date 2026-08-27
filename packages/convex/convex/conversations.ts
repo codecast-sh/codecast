@@ -813,7 +813,8 @@ export const createConversation = mutation({
       v.literal("cursor"),
       v.literal("gemini"),
       v.literal("opencode"),
-      v.literal("pi")
+      v.literal("pi"),
+      v.literal("grok")
     ),
     session_id: v.string(),
     project_hash: v.optional(v.string()),
@@ -1068,7 +1069,8 @@ export const createQuickSession = mutation({
       v.literal("cursor"),
       v.literal("gemini"),
       v.literal("opencode"),
-      v.literal("pi")
+      v.literal("pi"),
+      v.literal("grok")
     )),
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
@@ -5256,7 +5258,8 @@ export const forkFromMessage = mutation({
       v.literal("cursor"),
       v.literal("gemini"),
       v.literal("opencode"),
-      v.literal("pi")
+      v.literal("pi"),
+      v.literal("grok")
     )),
   },
   handler: async (ctx, args) => {
@@ -7611,12 +7614,22 @@ function stripInboxLiveness(row: any): void {
 // Enrich one conversation into the inbox session row, including the AskUserQuestion
 // scrape, idle/grace classification, and plan/task/workflow context. `clusterCutoff`
 // of 0 disables the stale-cluster hide (the crawl passes 0 — completeness wins).
+// Debug-only cost knobs for the temporary timing harness (debugTmp.ts): each
+// flag skips one class of per-row reads so their cost can be measured from
+// outside (Date.now() is frozen inside a query). Production callers pass none.
+export type InboxEnrichSkip = {
+  children?: boolean;
+  auq?: boolean;
+  refs?: boolean;
+};
+
 async function enrichInboxSessionRow(
   ctx: any,
   conv: any,
   maps: InboxSessionMaps,
   now: number,
   clusterCutoff: number,
+  skip?: InboxEnrichSkip,
 ): Promise<{ row: any; subagentChildren: any[]; dismissed: boolean; stashed: boolean; hidden: boolean }> {
   let hasPending = !!conv.has_pending_messages;
   let lastMsgRole = conv.last_message_role;
@@ -7701,7 +7714,7 @@ async function enrichInboxSessionRow(
   // would miss exactly the blocked sessions we care about. The order("desc")
   // read below is authoritative.
   let awaitingInput = false;
-  if (!isIdle && conv.message_count > 0) {
+  if (!skip?.auq && !isIdle && conv.message_count > 0) {
     const lastMsg = await ctx.db
       .query("messages")
       .withIndex("by_conversation_timestamp", (q: any) =>
@@ -7719,7 +7732,7 @@ async function enrichInboxSessionRow(
 
   let implementationSession: { _id: string; title?: string } | undefined;
   const subagentChildren: any[] = [];
-  if (conv.message_count > 0) {
+  if (!skip?.children && conv.message_count > 0) {
     // Newest-first: a workflow orchestrator can have dozens of finished
     // children (jx70xxy stood at 72 across four runs); ascending order fills
     // the cap with the oldest wave and never reaches the agents running NOW,
@@ -7763,7 +7776,7 @@ async function enrichInboxSessionRow(
   }
 
   let active_plan: { _id: string; short_id: string; title: string; status: string } | undefined;
-  if (conv.active_plan_id) {
+  if (!skip?.refs && conv.active_plan_id) {
     const p = await ctx.db.get(conv.active_plan_id);
     if (p) active_plan = { _id: p._id, short_id: p.short_id, title: p.title, status: p.status };
   }
@@ -10012,7 +10025,8 @@ export const reconfigureSession = mutation({
       v.literal("cursor"),
       v.literal("gemini"),
       v.literal("opencode"),
-      v.literal("pi")
+      v.literal("pi"),
+      v.literal("grok")
     )),
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
@@ -11183,7 +11197,7 @@ export const switchSessionProject = mutation({
 export const switchSessionAgent = mutation({
   args: {
     conversation_id: v.id("conversations"),
-    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini"), v.literal("opencode"), v.literal("pi")),
+    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini"), v.literal("opencode"), v.literal("pi"), v.literal("grok")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);

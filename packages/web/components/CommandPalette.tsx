@@ -138,6 +138,7 @@ const AGENT_OPTIONS = [
   { key: "agent:gemini", label: "Gemini" },
   { key: "agent:opencode", label: "OpenCode" },
   { key: "agent:pi", label: "pi" },
+  { key: "agent:grok", label: "Grok" },
 ];
 
 const AGENT_COLORS: Record<string, string> = {
@@ -146,6 +147,7 @@ const AGENT_COLORS: Record<string, string> = {
   "agent:gemini": "text-amber-400",
   "agent:opencode": "text-orange-400",
   "agent:pi": "text-teal-400",
+  "agent:grok": "text-sol-text",
 };
 
 // Ranked by expected use. `secondary` pages are reachable only by typing —
