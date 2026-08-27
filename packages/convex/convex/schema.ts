@@ -704,8 +704,8 @@ export default defineSchema({
     // Inbox scan indexes (scanInboxConversations): exclude subagent / killed
     // rows at the index so the scan never reads docs the inbox filter drops.
     .index("by_user_subagent_updated", ["user_id", "is_subagent", "updated_at"])
-    .index("by_user_live_dismissed", ["user_id", "inbox_killed_at", "inbox_dismissed_at"])
-    .index("by_user_live_stashed", ["user_id", "inbox_killed_at", "inbox_stashed_at"])
+    .index("by_user_live_dismissed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_dismissed_at"])
+    .index("by_user_live_stashed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_stashed_at"])
     .index("by_user_profile_pinned", ["user_id", "profile_pinned_at"])
     .index("by_user_dismissed", ["user_id", "inbox_dismissed_at"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
