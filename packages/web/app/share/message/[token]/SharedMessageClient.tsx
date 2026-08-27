@@ -13,6 +13,7 @@ import {
   toolSummary as sharedToolSummary,
 } from "@codecast/shared/render";
 import { AppLoader } from "@/components/AppLoader";
+import { readSharePreload } from "@/lib/sharePreload";
 
 function formatRelativeTime(ts: number): string {
   const now = Date.now();
@@ -294,7 +295,10 @@ export default function SharedMessageClient() {
   const params = useParams();
   const token = params.token as string;
 
-  const data = useQuery(api.messages.getSharedMessage, { share_token: token });
+  const live = useQuery(api.messages.getSharedMessage, { share_token: token });
+  // Server-inlined payload paints first; the live query replaces it once the
+  // socket answers (undefined = nothing inlined, so the loader shows as before).
+  const data = live !== undefined ? live : readSharePreload<typeof live>("message", token);
 
   if (data === undefined) {
     return (

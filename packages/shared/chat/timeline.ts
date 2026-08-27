@@ -18,6 +18,11 @@ export type TimelineMessage = {
    *  header above reads as a continuation of that person's sentence rather than
    *  as its own event. */
   deleted?: boolean;
+  /** A system row wearing message clothes (a huddle digest). Never grouped in
+   *  either direction: it renders under its own header rather than its author's,
+   *  and folding the next message under it would leave that message with no
+   *  header at all. */
+  standalone?: boolean;
 };
 
 export type TimelineRow<M extends TimelineMessage> =
@@ -76,6 +81,7 @@ export type BuildTimelineOptions = {
  *   - a different author wrote it
  *   - more than GROUP_WINDOW_MS separates it from the previous one
  *   - either it or the message above is an agent placeholder mid-answer
+ *   - either it or the message above is a standalone system row
  */
 export function buildChatTimeline<M extends TimelineMessage>(
   messages: M[],
@@ -123,6 +129,8 @@ export function buildChatTimeline<M extends TimelineMessage>(
       !m.pendingAgent &&
       !prev.deleted &&
       !m.deleted &&
+      !prev.standalone &&
+      !m.standalone &&
       m.createdAt - prev.createdAt <= GROUP_WINDOW_MS;
 
     rows.push({ kind: "message", key: m.id, message: m, grouped });

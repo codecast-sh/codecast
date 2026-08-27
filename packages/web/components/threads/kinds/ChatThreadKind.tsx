@@ -69,6 +69,7 @@ export function ChatTimelineRows({
           createdAt: m.createdAt,
           pendingAgent: m.agentStatus === "thinking" || m.agentStatus === "streaming",
           deleted: !!m.deletedAt,
+          standalone: !!m.call,
           view: m,
         })),
         { now, lastReadAt: frozenReadAt, viewerId, withoutDays: true },
