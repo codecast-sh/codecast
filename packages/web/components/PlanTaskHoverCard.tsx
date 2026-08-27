@@ -9,14 +9,9 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import Link from "next/link";
 import { Target } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
-import { TASK_STATUS, type TaskStatus } from "./TaskStatusBadge";
+import { taskVisual } from "./TaskStatusBadge";
 
 const api = _api as any;
-
-// Status glyph/color from the canonical TASK_STATUS vocabulary — the
-// StatusCircle "fill" icons, so tasks read the same here as on the board.
-const taskVisual = (status?: string | null) =>
-  TASK_STATUS[(status || "open") as TaskStatus] ?? TASK_STATUS.open;
 
 function PlanHoverContent({ planId }: { planId: Id<"plans"> }) {
   const queryPlan = useQuery(api.plans.webPlanContext, { plan_id: planId });

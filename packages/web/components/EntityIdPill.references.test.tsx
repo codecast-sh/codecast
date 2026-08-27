@@ -302,3 +302,50 @@ describe("local-first seeding", () => {
     expect(html).toContain("ct-99999");
   });
 });
+
+describe("ids that resolve to no entity type", () => {
+  // A 32-char Convex id belongs to a table only if `entities.resolveIdType`
+  // says so. Until it answers — and forever, for a message id or a random hash
+  // — the pill has NO type, and the whole component has to survive that state:
+  // it renders on the way to the guard that degrades it to plain text.
+  //
+  // The regression: the icon was picked with `taskV!.icon`, and `taskV` is set
+  // only for a task. A typeless reference took that branch and threw
+  // "Cannot read properties of null (reading 'icon')", which killed the whole
+  // conversation view rather than one pill.
+  const UNKNOWN_CONVEX_ID = "zx72qtvpbmmrmwcjqmhzawejsx8bq9gm";
+
+  test("a Convex id belonging to no table degrades to plain text", () => {
+    const html = render(`Look at \`${UNKNOWN_CONVEX_ID}\` in the log.`);
+    expect(html).toContain(UNKNOWN_CONVEX_ID);
+    expect(html).toContain("in the log.");
+  });
+
+  test("a typeless id inside a list renders without taking the list down", () => {
+    // The reported shape: the reference sat in a markdown bullet, so the throw
+    // unmounted the list and the conversation around it.
+    const html = render(`- first\n- see ${UNKNOWN_CONVEX_ID}\n- third`);
+    expect(html).toContain("first");
+    expect(html).toContain("third");
+  });
+});
+
+describe("pill chrome", () => {
+  // The status tint belongs to the disc on a TASK pill and nowhere else — a
+  // session or plan glyph takes its colour from the pill chrome instead. This
+  // pins that split, because the icon and the tint are now resolved from the
+  // same always-defined status vocabulary and it would be easy to leak the
+  // task colour onto every type.
+  test("a task pill tints its disc with the status colour", () => {
+    // ct-38940 is in_progress → the yellow disc.
+    const html = render("Ticks up on ct-38940 now.");
+    expect(html).toContain("text-sol-yellow");
+    expect(html).toContain("bg-sol-violet/10");
+  });
+
+  test("a plan pill carries no task status colour", () => {
+    const html = render("Rolled into pl-88 this week.");
+    expect(html).toContain("bg-sol-cyan/10");
+    expect(html).not.toContain("text-sol-yellow");
+  });
+});
