@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { MarkdownRenderer } from "../../../../components/tools/MarkdownRenderer";
 import { AppLoader } from "../../../../components/AppLoader";
 import { AvatarImg } from "../../../../lib/avatarCache";
+import { readSharePreload } from "@/lib/sharePreload";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   draft: { label: "Draft", color: "text-sol-text-dim", bg: "bg-sol-base02" },
@@ -51,7 +52,8 @@ export default function SharedPlanClient() {
   const params = useParams();
   const token = params.token as string;
 
-  const plan = useQuery((api as any).plans.getShared, { share_token: token });
+  const livePlan = useQuery((api as any).plans.getShared, { share_token: token });
+  const plan = livePlan !== undefined ? livePlan : readSharePreload<typeof livePlan>("plan", token);
 
   if (plan === undefined) {
     return (
