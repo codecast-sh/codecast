@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { parseSessionMessage, parseInboundSessionMessage, isSessionMessage, formatSessionMessage, isTeammateMessage, stripTeammateFraming, isTeammateFramingOnly, isMachineDeliveredMessage, parseMachineDeliveredMessage, parseSpawnedTaskPrompt, isSpawnedTaskPrompt, cleanUserMessage, parseChatWakePrompt, isChatWakePrompt } from "./sessionMessage";
+import { formatHuddleSummaryTag } from "@codecast/shared/contracts";
 
 // A real inter-agent broadcast as the multi-agent harness delivers it: a lead-in line, one
 // or more <teammate-message> blocks (the second a JSON status event), and the trailing
@@ -393,5 +394,25 @@ describe("parseChatWakePrompt", () => {
   test("ignores ordinary prompts", () => {
     expect(parseChatWakePrompt("chat with me about #foo")).toBeNull();
     expect(isChatWakePrompt("[codecast team chat]")).toBe(false);
+  });
+});
+
+describe("huddle digest over the session rail", () => {
+  test("parseMachineDeliveredMessage shows the summary, not the wire tag", () => {
+    const wire = formatSessionMessage("unknown", formatHuddleSummaryTag("t1", {
+      title: "Standup",
+      startedAt: 0,
+      endedAt: 5 * 60_000,
+      speakers: ["Alice", "Bob"],
+      summary: "Ship it.",
+      actionItems: [],
+      summaryStatus: "done",
+    }));
+    const parsed = parseMachineDeliveredMessage(wire)!;
+    expect(parsed.kind).toBe("session");
+    expect(parsed.source).toBe("Standup");
+    expect(parsed.body).toContain("Ship it.");
+    expect(parsed.body).not.toContain("<huddle-summary");
+    expect(parsed.body).not.toContain("Read the whole transcript");
   });
 });

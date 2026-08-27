@@ -90,6 +90,10 @@ export type ChatMessageView = {
      *  file tiles was diagnosis 7 of pl-431. */
     inferred?: boolean;
   };
+  /** A huddle digest: `content` is the summary the server wrote when the call
+   *  ended, and this names the transcript so the row can unfold the whole
+   *  speaker-attributed conversation under it. */
+  call?: { transcriptId: string };
   /** Optimistic, not yet echoed by the server. Renders like a sent row; the
    *  flag is kept for callers that reason about the outbox. */
   pending?: boolean;
