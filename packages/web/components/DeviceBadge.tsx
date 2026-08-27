@@ -58,9 +58,20 @@ export type Device = {
   online: boolean;
 };
 
-/** A clean display name: "Remote Mac" for the box, hostname for a laptop/desktop. */
+/**
+ * Can this device be woken by a move? True for the cloud Linux class: an EC2
+ * box whose idle state is "stopped" — the source daemon's move command boots
+ * it before transferring. A remote Mac cannot stop (so "offline" means gone),
+ * and a laptop can only be opened by a human.
+ */
+export function deviceWakesOnUse(d: Device): boolean {
+  return d.is_remote && /linux/i.test(d.platform);
+}
+
+/** A clean display name: the cloud box by kind, hostname for a laptop/desktop. */
 export function deviceDisplayName(d: Device | undefined | null): string {
   if (!d) return "Unknown device";
+  if (d.is_remote && /linux/i.test(d.platform)) return "Cloud Linux";
   if (d.is_remote) return "Remote Mac";
   // "macOS - MacBook-Pro-4.local" → "MacBook-Pro-4";
   // "macOS - ip-172-31-29-96.us-east-2.compute.internal" → "ip-172-31-29-96"
@@ -308,16 +319,20 @@ export function RunOnDeviceItems({
       {remotes.length > 0 && <DropdownMenuSeparator />}
       {remotes.map((d) => {
         const isOwner = d.device_id === ownerDeviceId;
+        // An asleep cloud box is still a valid destination — the move wakes
+        // it. Only a remote that CANNOT wake (a remote Mac gone dark) is dead.
+        const usable = d.online || deviceWakesOnUse(d);
+        const name = deviceDisplayName(d);
         return (
           <DropdownMenuItem
             key={d.device_id}
-            disabled={isOwner || !d.online}
-            onSelect={() => !isOwner && d.online && toRemote(d)}
+            disabled={isOwner || !usable}
+            onSelect={() => !isOwner && usable && toRemote(d)}
           >
             <DeviceIcon d={d} className="w-3 h-3 mr-1.5" />
-            <span className="flex-1 truncate">{isOwner ? "Remote Mac" : "Move to remote Mac"}</span>
+            <span className="flex-1 truncate">{isOwner ? name : `Move to ${name}`}</span>
             <span className="ml-2 flex items-center gap-1 text-[10px] text-gray-400">
-              {isOwner ? "running here" : d.online ? "" : "offline"}
+              {isOwner ? "running here" : d.online ? "" : usable ? "asleep — wakes on move" : "offline"}
               <DeviceDot online={d.online} />
             </span>
           </DropdownMenuItem>

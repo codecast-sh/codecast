@@ -284,8 +284,9 @@ export default function DevicesSettingsPage() {
         <h1 className="text-lg font-semibold">Devices</h1>
         <p className="text-sm text-gray-400 mt-1">
           Machines running the codecast daemon. A session runs on exactly one device. New sessions and
-          messages from your phone route to your most-recently-active laptop or desktop — the{" "}
-          <span className="text-sol-violet">remote Mac</span> only runs a session you explicitly move there.
+          messages from your phone route to your most-recently-active laptop or desktop — a{" "}
+          <span className="text-sol-violet">cloud box</span> only runs a session you explicitly move there,
+          and wakes from sleep when you do.
         </p>
         <p className="text-[11px] text-gray-500 mt-2">
           {onlineCount} of {sorted.length} online
