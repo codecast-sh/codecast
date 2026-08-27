@@ -1,34 +1,30 @@
-import { useState, type RefObject } from "react";
-import { useMountEffect } from "../../hooks/useMountEffect";
+import { type RefObject } from "react";
+import { useDerivedSize } from "../../hooks/useDerivedSize";
+import { desktopHeaderClass } from "../../lib/desktop";
 import { densityFor, type PeopleDensity } from "./peopleDensity";
 
 /**
  * Which shape the panel takes, measured from the panel's own box.
  *
- * One ResizeObserver on the root, and a state that only changes when the
- * DENSITY changes — a window being dragged by a corner fires this every frame,
- * and the panel must not re-render for a pixel that changes nothing it draws.
  * The first paint uses the window's inner size so the right shape is there
  * before the observer's first callback: a strip window must never flash the
  * full header for one frame.
  */
 export function usePeopleDensity(ref: RefObject<HTMLElement | null>): PeopleDensity {
-  const [density, setDensity] = useState<PeopleDensity>(() =>
+  return useDerivedSize(ref, densityFor, () =>
     typeof window === "undefined" ? "full" : densityFor(window.innerWidth, window.innerHeight),
   );
-  useMountEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const ro = new ResizeObserver((entries) => {
-      const box = entries[0]?.contentRect;
-      if (!box) return;
-      setDensity((prev) => {
-        const next = densityFor(box.width, box.height);
-        return next === prev ? prev : next;
-      });
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  });
-  return density;
+}
+
+/**
+ * The top row's left edge, said once. On the desktop this is the drag region
+ * plus the declared traffic-light inset — declared, not measured, because the
+ * people window's top row is at the window's corner by construction (a
+ * measured inset once left "PEOPLE" drawn under the lights for a session).
+ * Off the desktop it is the row's own padding. Tailwind resolves duplicate
+ * padding classes by stylesheet order, so the caller must use ONE of these,
+ * never pl-3 beside it.
+ */
+export function peopleHeadClass(): string {
+  return desktopHeaderClass() || "pl-3";
 }

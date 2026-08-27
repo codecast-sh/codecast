@@ -129,6 +129,9 @@ export function buildWall<T>(
   fleetOf: (m: T) => FleetSummary | null,
   idOf: (m: T) => string,
   nameOf: (m: T) => string,
+  /** Pixel size per tier — the wall's own by default; the strip hands in its
+   *  shrunken table and everything else about the layout stays shared. */
+  sizes: Record<WallTier, number> = WALL_FACE_PX,
 ): Wall<T> {
   const present: WallFace<T>[] = [];
   const gone: WallFace<T>[] = [];
@@ -137,7 +140,7 @@ export function buildWall<T>(
     const id = idOf(member);
     if (!id) continue;
     const tier = wallTier(visualOf(member), fleetOf(member));
-    const face: WallFace<T> = { id, member, tier, px: WALL_FACE_PX[tier] };
+    const face: WallFace<T> = { id, member, tier, px: sizes[tier] };
     (tier === "gone" ? gone : present).push(face);
   }
   const byTierThenName = (a: WallFace<T>, b: WallFace<T>) => {

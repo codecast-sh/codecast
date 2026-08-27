@@ -297,8 +297,18 @@
 /* One person is being talked to, so the rest of the wall steps back. Slight —
    the others are still there and still readable — but enough that the eye is
    in no doubt where the voice is going. */
-.people-wall[data-holding] .people-face-seat:not([data-hold]) {
+.people-wall[data-holding] .people-face-seat:not([data-hold]),
+.people-strip[data-holding] .people-face-seat:not([data-hold]) {
   opacity: 0.34;
+}
+
+/* A session of theirs is waiting on a PERSON. The one fact this window exists
+   to surface, so it is the one decoration a face may carry: a thin warm ring.
+   Steady, not animated — a pinned window must not blink at the corner of the
+   eye all day. */
+.people-face-seat[data-ask] .people-face-av {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sol-orange) 75%, transparent);
+  border-radius: 999px;
 }
 
 /* The unread count, in the corner the presence badge does not use. */
@@ -455,7 +465,7 @@
   width: 1px;
   height: 18px;
   flex: none;
-  background: var(--sol-border);
+  background: color-mix(in srgb, var(--sol-border) 60%, transparent);
 }
 
 /* The faces scroll sideways when the team outgrows the window, with no
@@ -465,15 +475,24 @@
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
-  padding: 6px 4px;
+  /* The right padding ends the CONTENT before the fade starts, so the last
+     face (and a focus ring at 3px offset + 2px outline) renders whole when
+     the row fits, and scroll-padding lets a focused face scroll clear of the
+     fade when it does not. */
+  padding: 6px 20px 6px 4px;
+  scroll-padding-inline-end: 20px;
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent);
   mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent);
+  /* The strip row is the window's drag surface, but a drag region eats the
+     pointer events the hover words live on (the window manager takes the
+     mouse and the renderer never sees it leave). The faces opt back out. */
+  -webkit-app-region: no-drag;
 }
 .people-strip-faces::-webkit-scrollbar {
   display: none;
 }
 
-/* The people who are not there, as one dim count. */
+/* The people who are not there, as one dim count that opens on a click. */
 .people-strip-gone {
   flex: none;
   min-width: 20px;
@@ -481,22 +500,41 @@
   padding: 0 5px;
   border-radius: 999px;
   border: 1px dashed color-mix(in srgb, var(--sol-border) 90%, transparent);
+  background: none;
+  cursor: pointer;
   color: var(--sol-text-dim);
   font-size: 10px;
   line-height: 18px;
   text-align: center;
   font-variant-numeric: tabular-nums;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.people-strip-gone:hover,
+.people-strip-gone[aria-expanded="true"] {
+  color: var(--sol-text);
+  border-color: var(--sol-border);
 }
 
-/* One person is being talked to, so the rest of the strip steps back — the
-   wall's rule, at the strip's scale. */
-.people-strip[data-holding] .people-face-seat:not([data-hold]) {
-  opacity: 0.34;
+
+
+/* The strip's text slot measures itself, and below the width of one short
+   segment it shows nothing: a mid-word sliver ("1 nee") is worse than quiet,
+   and the faces are the strip's real content. */
+.people-strip-words {
+  container-type: inline-size;
+}
+@container (max-width: 84px) {
+  .people-strip-words > * {
+    visibility: hidden;
+  }
 }
 
-/* The compact header's status word: the pill, folded to its word. */
+/* The compact header's status word: the pill, folded to its word. It is the
+   row's one flexible text, so it shrinks (and truncates) before the icons at
+   the row's end are pushed past the window edge. */
 .people-status-word {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 10.5px;
@@ -524,8 +562,10 @@
 }
 
 /* In the strip a face has no label to light up, so the face itself answers
-   the pointer: a small lift, the same the wall gives a face being spoken to. */
-.people-panel[data-density="strip"] .people-face:hover {
+   the pointer: a small lift. Never while held or receiving — the press-down
+   and the incoming lift are the walkie's own words, and a hover rule that
+   outranked them made a held key rise instead of sink. */
+.people-panel[data-density="strip"] .people-face:hover:not([data-tx]):not([data-rx]) {
   transform: scale(1.08);
 }
 /* The compact row's actions cover the activity line rather than the badge
@@ -534,10 +574,4 @@
   right: 34px;
   padding-left: 8px;
   background: linear-gradient(to right, transparent, var(--sol-bg-highlight) 8px);
-}
-
-/* A pulse that cannot wrap fades out instead of chopping a word in half. */
-.people-pulse:not(.flex-wrap) {
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
-  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
 }

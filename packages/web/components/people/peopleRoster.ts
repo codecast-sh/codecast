@@ -120,3 +120,10 @@ export function isStrayWorkspace(
  * window as pointing anywhere.
  */
 export const STRAY_WORKSPACE = "You are not in this workspace.";
+
+/** The empty roster, said once for every shape of the window. `short` drops
+ *  the fix-it sentence for a surface (the strip) with one line to spend. */
+export function emptyRosterText(stray: boolean, short = false): string {
+  if (!stray) return "No teammates yet.";
+  return short ? STRAY_WORKSPACE : `${STRAY_WORKSPACE} Switch workspace in the main window.`;
+}

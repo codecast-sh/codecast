@@ -406,7 +406,7 @@ const PEOPLE_PATH = "/people";
 // components/people/peopleDensity.ts — the renderer picks its shape from the
 // box it is given). A buddy list pinned above other apps earns its place by
 // costing almost none of the screen.
-const PEOPLE_SIZE = { width: 320, height: 640, minWidth: 180, minHeight: 56 };
+const PEOPLE_SIZE = { width: 320, height: 640, minWidth: 240, minHeight: 56 };
 
 let peopleWindow = null;
 let peopleBoundsTimer = null;
@@ -462,9 +462,10 @@ function createPeopleWindow() {
     ...(bounds || {}),
     minWidth: PEOPLE_SIZE.minWidth,
     minHeight: PEOPLE_SIZE.minHeight,
-    // Same inset lights as every other window, so the web's one titlebar
-    // measurement (desktopHeaderClass / attachTitlebarHead, --titlebar-inset)
-    // clears them here too — the panel draws its own drag region from that.
+    // Same inset lights as every other window. The panel DECLARES the inset
+    // (desktopHeaderClass / --titlebar-inset) rather than measuring it — its
+    // top row is at the window's corner by construction — and draws its own
+    // drag region from the same class.
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 12 },
     // Restored from the last session: a pinned buddy list stays pinned.

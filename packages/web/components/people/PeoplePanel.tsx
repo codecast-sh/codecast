@@ -1,8 +1,9 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { ChevronRight, Headphones, LayoutGrid, List, MessageSquare, Pin, Volume2, VolumeX } from "lucide-react";
 import { PeopleStrip } from "./PeopleStrip";
-import { TeamPulseLine, useTeamPulse } from "./TeamPulseLine";
-import { usePeopleDensity } from "./usePeopleDensity";
+import { TeamPulseLine, usePulseFrom } from "./TeamPulseLine";
+import { type TeamPulse } from "./teamPulse";
+import { peopleHeadClass, usePeopleDensity } from "./usePeopleDensity";
 import type { PeopleDensity } from "./peopleDensity";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -10,7 +11,6 @@ import { type LiveRoomRow } from "../../hooks/useLiveRooms";
 import { useCallsAvailable } from "../../lib/teamFeatures";
 import {
   canPin,
-  desktopHeaderClass,
   getAlwaysOnTop,
   navigateMainWindow,
   setAlwaysOnTop,
@@ -34,9 +34,9 @@ import {
   presenceLabel,
   type FleetSummary,
 } from "../presence/memberPresence";
-import { STRAY_WORKSPACE, rosterSig, unreadBadgeText, type DmBadge } from "./peopleRoster";
-import { PeopleWall } from "./PeopleWall";
-import { usePeopleRoster } from "./usePeopleRoster";
+import { emptyRosterText, unreadBadgeText, type DmBadge } from "./peopleRoster";
+import { PeopleWallView } from "./PeopleWall";
+import { usePeopleRoster, type PeopleRosterData } from "./usePeopleRoster";
 import { useWalkieDoor } from "../../hooks/useWalkie";
 import "./people.css";
 
@@ -71,6 +71,11 @@ export function PeoplePanel() {
   // is the full buddy list. Nothing here is a setting — see peopleDensity.ts.
   const rootRef = useRef<HTMLElement | null>(null);
   const density = usePeopleDensity(rootRef);
+  // THE ONE ROSTER READ. Every shape draws from this object — a second call
+  // site is a second full set of store subscriptions and timers in a window
+  // that never unmounts, which is exactly the bug class this window documents.
+  const data = usePeopleRoster();
+  const pulse = usePulseFrom(data);
   return (
     // `main`, not a div: this window's whole content is this panel, and axe
     // was right to say so — with no landmark, everything on the page sat
@@ -78,15 +83,22 @@ export function PeoplePanel() {
     <main
       ref={rootRef}
       data-density={density}
+      aria-labelledby="people-heading"
       className="people-panel flex flex-col bg-sol-bg text-sol-text"
     >
+      {/* The heading lives HERE, above the density branch, so dragging the
+          window into a shape whose header has no room for the word does not
+          strip the window of its name. The full header shows it visibly. */}
+      <h1 id="people-heading" className="sr-only">
+        People
+      </h1>
       {density === "strip" ? (
         <ErrorBoundary name="People strip" level="inline" fallback={null}>
-          <PeopleStrip callsEnabled={callsEnabled} pin={<PinButton />} />
+          <PeopleStrip callsEnabled={callsEnabled} data={data} pulse={pulse} pin={<PinButton />} />
         </ErrorBoundary>
       ) : (
         <>
-          <PanelHeader density={density} />
+          <PanelHeader density={density} me={data.me} pulse={pulse} />
           <div className="people-scroll min-h-0 flex-1 overflow-y-auto">
             {callsEnabled && (
               <ErrorBoundary name="Live now" level="inline" fallback={null}>
@@ -94,9 +106,9 @@ export function PeoplePanel() {
               </ErrorBoundary>
             )}
             {view === "list" ? (
-              <Roster callsEnabled={callsEnabled} compact={density === "compact"} />
+              <Roster callsEnabled={callsEnabled} compact={density === "compact"} data={data} />
             ) : (
-              <PeopleWall callsEnabled={callsEnabled} />
+              <PeopleWallView callsEnabled={callsEnabled} data={data} />
             )}
           </div>
         </>
@@ -117,63 +129,48 @@ export function PeoplePanel() {
 // Header: who you are, what you are, and the window's own controls.
 // ---------------------------------------------------------------------------
 
-function PanelHeader({ density }: { density: PeopleDensity }) {
-  const s = useTrackedStore([
-    (st: any) => st.currentUser?._id,
-    (st: any) => st.currentUser?.name,
-    (st: any) => st.currentUser?.email,
-    (st: any) => st.currentUser?.image,
-    (st: any) => st.currentUser?.github_avatar_url,
-    (st: any) => st.currentUser?.status,
-    (st: any) => rosterSig(st.teamMembers),
-  ]);
-  const viewerId = String(s.currentUser?._id ?? "");
-  // Your own face comes from the ROSTER row, not from the user doc.
-  //
-  // `currentUser` is the raw user document; the presence fields the badge reads
-  // (presence_state, presence_input_at, in_room_key) are derived by
-  // teams.getTeamMembers and exist only on the roster row. Reading the user doc
-  // made the panel call its owner "Offline" while every teammate saw them
-  // active. The row is also what setMyStatus patches, so this stays local-first.
-  const me: any = useMemo(
-    () =>
-      (s.teamMembers ?? []).find((m: any) => String(m?._id) === viewerId) ??
-      s.currentUser ??
-      null,
-    [s.teamMembers, viewerId, s.currentUser],
-  );
+function PanelHeader({
+  density,
+  me,
+  pulse,
+}: {
+  density: PeopleDensity;
+  /** Your roster row (or the user doc until it lands) — resolved once by
+   *  usePeopleRoster, never looked up here. */
+  me: any;
+  pulse: TeamPulse;
+}) {
   const callsEnabled = useCallsAvailable();
-  const pulse = useTeamPulse();
   const status = (me?.status ?? "available") as (typeof STATUSES)[number];
 
   // The compact header folds the three status pills behind the status word;
-  // they unfold for one choice and fold again.
+  // they unfold for one choice and fold again, handing focus back to the word
+  // so a keyboard is not dropped at the top of the window.
   const [choosing, setChoosing] = useState(false);
+  const wordRef = useRef<HTMLButtonElement | null>(null);
+  const closeChooser = useCallback(() => {
+    setChoosing(false);
+    wordRef.current?.focus();
+  }, []);
 
-  // The window's top row IS the titlebar. It always sits at the window's
-  // top-left corner, so the traffic-light inset is DECLARED rather than
-  // measured: `desktopHeaderClass` is the drag region plus the inset, and it is
-  // empty off the desktop. (A measured inset once left "PEOPLE" drawn under
-  // the lights for a whole session.)
-  // Tailwind resolves two padding-left classes by stylesheet order, not by
-  // which came last in the string, so the inset REPLACES the row's own left
-  // padding rather than sitting beside it.
-  const head = desktopHeaderClass() || "pl-3";
+  const head = peopleHeadClass();
 
   if (density === "compact") {
     return (
-      <div className="people-head shrink-0 border-b border-sol-border">
+      <div className="people-head shrink-0 border-b border-sol-border/60">
+        {/* No name in this row: your own name is the least informative text in
+            the window, and at these widths it was an ellipsis fighting the
+            controls. The face carries it as a tooltip. */}
         <div className={`flex h-9 items-center gap-2 pr-2 ${head}`}>
-          <MemberFace member={me ?? {}} size={22} title="" />
-          <div className="min-w-0 flex-1 truncate text-[12px] font-medium text-sol-text">
-            {me ? memberDisplayName(me) : "Signing in"}
-          </div>
+          <MemberFace member={me ?? {}} size={22} title={me ? `${memberDisplayName(me)} · ${presenceLabel(memberPresenceVisual(me))}` : ""} />
           <button
+            ref={wordRef}
             type="button"
-            onClick={() => setChoosing((v) => !v)}
+            onClick={() => (choosing ? closeChooser() : setChoosing(true))}
             aria-expanded={choosing}
-            title="Change your status"
-            className={`people-status-word ${STATUS_TONE[status]}`}
+            aria-controls="people-status-picker"
+            aria-label={`Your status: ${status}. Change it`}
+            className={`people-status-word mr-auto truncate ${STATUS_STYLE[status].text}`}
           >
             {status}
           </button>
@@ -181,31 +178,39 @@ function PanelHeader({ density }: { density: PeopleDensity }) {
           <PinButton />
         </div>
         {choosing && (
-          <div className="flex gap-1 px-2 pb-2">
+          <div
+            id="people-status-picker"
+            role="group"
+            aria-label="Your status"
+            className="flex gap-1 px-2 pb-2"
+            onKeyDown={(e) => {
+              if (e.key !== "Escape") return;
+              e.stopPropagation();
+              closeChooser();
+            }}
+          >
             {STATUSES.map((st) => (
-              <StatusPill
-                key={st}
-                status={st}
-                active={status === st}
-                onPick={() => setChoosing(false)}
-              />
+              <StatusPill key={st} status={st} active={status === st} onPick={closeChooser} />
             ))}
             {callsEnabled && <WalkieDoorToggle compact />}
           </div>
         )}
-        <TeamPulseLine pulse={pulse} max={4} className="px-3 pb-2 text-[10.5px]" />
+        <TeamPulseLine pulse={pulse} className="px-3 pb-2 text-[10.5px]" />
         <ElsewhereCallPill className="border-t border-sol-border/60 px-3 py-1.5" />
       </div>
     );
   }
 
   return (
-    <div className="people-head shrink-0 border-b border-sol-border">
+    <div className="people-head shrink-0 border-b border-sol-border/60">
       <div
         className={`flex h-9 items-center justify-between gap-2 pr-3 text-[11px] font-medium uppercase tracking-wider text-sol-text-dim ${head}`}
       >
-        {/* The window's only title, so it is its heading. */}
-        <h1 className="text-[11px] font-medium uppercase tracking-wider">People</h1>
+        {/* The visible title. The document's h1 is the always-present hidden
+            one on the panel, so this is presentation only. */}
+        <div aria-hidden="true" className="text-[11px] font-medium uppercase tracking-wider">
+          People
+        </div>
         <div className="flex items-center gap-1.5">
           <ViewSwitch />
           <PinButton />
@@ -236,11 +241,12 @@ function PanelHeader({ density }: { density: PeopleDensity }) {
   );
 }
 
-/** The colour a status WORD takes, matching its pill. */
-const STATUS_TONE: Record<(typeof STATUSES)[number], string> = {
-  available: "text-sol-cyan",
-  busy: "text-sol-red",
-  away: "text-sol-text-muted",
+/** One table for the three statuses, so the compact header's word and the
+ *  pills can never colour the same status two ways. */
+const STATUS_STYLE: Record<(typeof STATUSES)[number], { text: string; activeBg: string }> = {
+  available: { text: "text-sol-cyan", activeBg: "bg-sol-cyan/15" },
+  busy: { text: "text-sol-red", activeBg: "bg-sol-red/15" },
+  away: { text: "text-sol-text-muted", activeBg: "bg-sol-bg-highlight" },
 };
 
 /**
@@ -264,18 +270,20 @@ function usePeopleView(): PeopleView {
 function ViewSwitch({ compact = false }: { compact?: boolean }) {
   const view = usePeopleView();
   if (compact) {
-    // One button, showing the view you would GET: a narrow header has no
-    // room for two words, and a toggle that names its other side is enough.
+    // One button, modelled as STATE — fixed name, aria-pressed, the icon of
+    // the view you are in — because an action-named toggle renames itself
+    // under a focused screen reader, which announces nothing.
     const other = view === "wall" ? "list" : "wall";
     return (
       <button
         type="button"
         onClick={() => useInboxStore.getState().updateClientUI({ people_view: other })}
         title={other === "wall" ? "Show faces, sized by presence" : "Show one row per person"}
-        aria-label={other === "wall" ? "Show the wall" : "Show the list"}
+        aria-label="List view"
+        aria-pressed={view === "list"}
         className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
       >
-        {other === "wall" ? <LayoutGrid className="h-3.5 w-3.5" /> : <List className="h-3.5 w-3.5" />}
+        {view === "wall" ? <LayoutGrid className="h-3.5 w-3.5" /> : <List className="h-3.5 w-3.5" />}
       </button>
     );
   }
@@ -319,11 +327,7 @@ function StatusPill({
       aria-pressed={active}
       className={`flex-1 rounded px-1.5 py-1 text-[11px] capitalize transition-colors ${
         active
-          ? status === "busy"
-            ? "bg-sol-red/15 text-sol-red"
-            : status === "away"
-              ? "bg-sol-bg-highlight text-sol-text"
-              : "bg-sol-cyan/15 text-sol-cyan"
+          ? `${STATUS_STYLE[status].activeBg} ${status === "away" ? "text-sol-text" : STATUS_STYLE[status].text}`
           : "text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text"
       }`}
     >
@@ -415,12 +419,16 @@ function PinButton() {
 // The roster.
 // ---------------------------------------------------------------------------
 
-function Roster({ callsEnabled, compact }: { callsEnabled: boolean; compact: boolean }) {
-  // Every read this list makes is the wall's too, so they share one hook. Two
-  // views each doing their own signature-gating is two chances to get the wake
-  // discipline wrong, in a window that never unmounts.
-  const { now, viewerId, members, fleets, roomFor, dmFor, talkingId, strayWorkspace } =
-    usePeopleRoster();
+function Roster({
+  callsEnabled,
+  compact,
+  data,
+}: {
+  callsEnabled: boolean;
+  compact: boolean;
+  data: PeopleRosterData;
+}) {
+  const { now, viewerId, members, fleets, roomFor, dmFor, talkingId, strayWorkspace } = data;
 
   const groups = useMemo(() => groupMembersByBand(members), [members]);
 
@@ -428,17 +436,11 @@ function Roster({ callsEnabled, compact }: { callsEnabled: boolean; compact: boo
 
   if (members.length === 0) {
     // An empty roster has two very different causes, and saying the wrong one
-    // is worse than saying nothing. teams.getTeamMembers returns [] rather than
-    // an error when the viewer is not in the team it was asked about, so a
-    // stale active_team_id — a pointer at a workspace they have left, which
-    // survives in this origin's cache — produces exactly the same silence as a
-    // team of one. Once the real team list has arrived we can tell them apart,
-    // and until then we claim neither.
+    // is worse than saying nothing — emptyRosterText tells them apart once the
+    // real team list has arrived, and claims neither before.
     return (
       <div className="px-3 py-6 text-[12px] text-sol-text-dim">
-        {strayWorkspace
-          ? `${STRAY_WORKSPACE} Switch workspace in the main window.`
-          : "No teammates yet."}
+        {emptyRosterText(strayWorkspace)}
       </div>
     );
   }
@@ -551,15 +553,18 @@ function RosterRow({
       onClick={message}
       title={compact ? `${name} · ${line}` : undefined}
     >
-      <MemberFace member={member} size={compact ? 20 : 28} title="" />
+      <MemberFace member={member} size={compact ? 24 : 28} title="" showHuddle={!compact} />
       {compact ? (
-        // One line: the name holds its ground, the activity takes what is
-        // left and gives way first — a name is the thing you click.
+        // One line. The activity keeps a floor of a few characters and the
+        // name yields past it: a one-letter activity line reads as a glitch,
+        // and the row's title already carries both in full.
         <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
-          <span className="max-w-full shrink-0 truncate text-[12px] leading-tight text-sol-text">
+          <span className="min-w-0 shrink truncate text-[12px] leading-tight text-sol-text">
             {name}
           </span>
-          <span className={`min-w-0 truncate text-[10.5px] leading-tight ${PRESENCE_META[visual].text}`}>
+          <span
+            className={`min-w-[6ch] max-w-[50%] shrink-0 truncate text-[10.5px] leading-tight ${PRESENCE_META[visual].text}`}
+          >
             {line}
           </span>
         </div>

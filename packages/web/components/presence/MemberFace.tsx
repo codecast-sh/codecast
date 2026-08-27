@@ -25,6 +25,7 @@ export function MemberFace({
   badgeSize,
   title,
   className = "",
+  showHuddle = true,
 }: {
   member: any;
   /** Pixel diameter of the face. */
@@ -33,12 +34,15 @@ export function MemberFace({
   badgeSize?: "sm" | "md";
   title?: string;
   className?: string;
+  /** Off where the surface already says "in a huddle" in words and the face
+   *  is too small to carry two badges (the compact roster row). */
+  showHuddle?: boolean;
 }) {
   const visual = memberPresenceVisual(member);
   const name = memberDisplayName(member);
   const avatar = member?.image || member?.github_avatar_url;
   const initial = (member?.name || member?.email || "?").charAt(0).toUpperCase();
-  const inHuddle = !!(member?.in_huddle || member?.in_room_key);
+  const inHuddle = showHuddle && !!(member?.in_huddle || member?.in_room_key);
   const badge = badgeSize ?? (size >= 36 ? "md" : "sm");
   return (
     <span className={`relative block shrink-0 ${className}`} style={{ width: size, height: size }}>
