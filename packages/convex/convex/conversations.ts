@@ -8093,13 +8093,20 @@ export async function scanInboxConversations(
   // the index range stops the scan at the cutoff so old sessions are never read.
   // Pinned/dismissed have their own (separate) queries below and stay exempt.
   //
-  // Subagent rows are excluded AT THE INDEX. shouldShowInInbox drops them
-  // anyway, but a busy account has more subagents than sessions in its recent
-  // window (331 of 631 candidates on one census), so reading them cost more
-  // than the rows that survive — and they crowded real sessions out of the
-  // 200-row cap. is_subagent is written as both `false` and absent, so the
-  // top-level set is the union of two index ranges.
-  const recentWindow = (isSubagent: false | undefined) => ctx.db
+  // Subagent rows are excluded AT THE INDEX for every window. shouldShowInInbox
+  // drops them anyway, but a busy account has more subagents than sessions in
+  // its windows (320 of 621 candidates on one census — dismiss/stash cascade
+  // to children, so the hide windows were mostly subagents), so reading them
+  // cost more than the rows that survive, and they crowded real sessions out of
+  // the 200-row caps. is_subagent is written as both `false` and absent, so a
+  // top-level window is the union of two index ranges, merged newest-first.
+  const topLevelWindow = (
+    rangeFor: (isSubagent: false | undefined) => Promise<any[]>,
+    sortKey: string,
+  ) => Promise.all([rangeFor(undefined), rangeFor(false)])
+    .then(([a, b]: [any[], any[]]) => [...a, ...b].sort((x, y) => y[sortKey] - x[sortKey]).slice(0, 200));
+
+  const recentConversationsQ = topLevelWindow((isSubagent) => ctx.db
     .query("conversations")
     .withIndex("by_user_subagent_updated", (q: any) =>
       q.eq("user_id", userId).eq("is_subagent", isSubagent).gte("updated_at", sessionWindowCutoff)
@@ -8109,9 +8116,7 @@ export async function scanInboxConversations(
       q.eq(q.field("status"), "active"),
       q.eq(q.field("status"), "completed")
     ))
-    .take(200);
-  const recentConversationsQ = Promise.all([recentWindow(undefined), recentWindow(false)])
-    .then(([a, b]: [any[], any[]]) => [...a, ...b].sort((x, y) => y.updated_at - x.updated_at).slice(0, 200));
+    .take(200), "updated_at");
 
   const pinnedConversationsQ = ctx.db
     .query("conversations")
@@ -8124,23 +8129,23 @@ export async function scanInboxConversations(
   // inbox_dismissed_at alongside inbox_killed_at (applyHideTransition), so the
   // dismissed window was mostly retired rows the filter throws away. A pinned
   // killed row still shows, and the pinned window below covers it.
-  const dismissedConversationsQ = ctx.db
+  const dismissedConversationsQ = topLevelWindow((isSubagent) => ctx.db
     .query("conversations")
     .withIndex("by_user_live_dismissed", (q: any) =>
-      q.eq("user_id", userId).eq("inbox_killed_at", undefined).gte("inbox_dismissed_at", dismissedCutoff)
+      q.eq("user_id", userId).eq("is_subagent", isSubagent).eq("inbox_killed_at", undefined).gte("inbox_dismissed_at", dismissedCutoff)
     )
     .order("desc")
-    .take(200);
+    .take(200), "inbox_dismissed_at");
 
   // Stashed (set aside, agent still alive) mirror the dismissed window so the
   // Stashed bucket is populated even for rows older than the recent window.
-  const stashedConversationsQ = ctx.db
+  const stashedConversationsQ = topLevelWindow((isSubagent) => ctx.db
     .query("conversations")
     .withIndex("by_user_live_stashed", (q: any) =>
-      q.eq("user_id", userId).eq("inbox_killed_at", undefined).gte("inbox_stashed_at", dismissedCutoff)
+      q.eq("user_id", userId).eq("is_subagent", isSubagent).eq("inbox_killed_at", undefined).gte("inbox_stashed_at", dismissedCutoff)
     )
     .order("desc")
-    .take(200);
+    .take(200), "inbox_stashed_at");
 
   // Sessions this user OWNS — run by another member's account (e.g. Mr Bot) but
   // assigned to them — surface in the OWNER's inbox alongside their own.
