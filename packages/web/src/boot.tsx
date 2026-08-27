@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router";
-import { initAnalytics, setupErrorToasts } from "../lib/analytics";
+import { initAnalytics, reportRecoverableRenderError, setupErrorToasts } from "../lib/analytics";
 import { armChunkReloadGuardReset } from "../lib/chunkReloadGuard";
 import { installIdleAnimationPause, isDesktop } from "../lib/desktop";
 import { hasStoredAuthToken } from "../lib/localAuth";
@@ -28,7 +28,13 @@ const app = (
     <App />
   </BrowserRouter>
 );
-ReactDOM.createRoot(document.getElementById("root")!).render(
+ReactDOM.createRoot(document.getElementById("root")!, {
+  // A render that threw and that React re-ran successfully. React's default
+  // handler rethrows a wrapper whose message is only the error code, with the
+  // real failure hidden in `cause` — that is where "Uncaught: Minified React
+  // error #520" came from. Take the callback so the report names the throw.
+  onRecoverableError: reportRecoverableRenderError,
+}).render(
   isDesktop() ? app : <React.StrictMode>{app}</React.StrictMode>
 );
 

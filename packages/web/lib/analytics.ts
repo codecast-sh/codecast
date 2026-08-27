@@ -1,5 +1,6 @@
 import * as Sentry from "@sentry/react";
 import posthog from "posthog-js";
+import { describeError, errorChain, errorSummary, rootError } from "./errorCause";
 import { showErrorToast } from "./errorToast";
 
 // Indirect access so this file also TYPECHECKS inside the mobile program (its
@@ -136,38 +137,67 @@ function isIgnoredError(message: string | undefined): boolean {
   return !!message && IGNORED_ERROR_PATTERNS.some((re) => re.test(message));
 }
 
+// One report per distinct error per 30s, shared by every reporting path, so a
+// tearing race that re-throws on every heartbeat doesn't stack toasts.
+function claimErrorKey(key: string): boolean {
+  if (_seenGlobalErrors.has(key)) return false;
+  _seenGlobalErrors.add(key);
+  setTimeout(() => _seenGlobalErrors.delete(key), 30_000);
+  return true;
+}
+
+// A render that threw and that React then re-ran successfully. Nothing is
+// visibly broken — React recovered — but a component did throw, so it is a real
+// bug and stays reportable. Wired into createRoot in src/boot.tsx: React's own
+// default rethrows its code-only wrapper at window.onerror, which is how this
+// arrived as an unreadable "Uncaught: Minified React error #520" with the
+// failure that actually happened stripped off.
+export function reportRecoverableRenderError(
+  error: unknown,
+  info?: { componentStack?: string | null }
+) {
+  const key = errorSummary(error);
+  if (isIgnoredError(key)) return;
+  if (!claimErrorKey(key)) return;
+
+  const componentStack = info?.componentStack ?? "";
+  const trace = `${describeError(error)}\n\nComponent:${componentStack}`;
+  console.error("[react:recoverable]", key, error, componentStack);
+  captureError(rootError(error), {
+    source: "react.onRecoverableError",
+    // The wrapper's message names WHICH recovery React performed (concurrent
+    // re-render vs hydration fallback) — context the cause alone doesn't carry.
+    reactRecovery: errorChain(error)[0]?.message,
+    componentStack,
+  });
+  showErrorToast(`Recovered render error: ${key}`, trace);
+}
+
 export function setupErrorToasts() {
   window.addEventListener("error", (e) => {
-    const ignoreKey = e.error?.message || e.message;
-    if (isIgnoredError(ignoreKey)) {
+    const key = e.error ? errorSummary(e.error) : e.message;
+    if (isIgnoredError(key)) {
       // Suppress the browser's default "Uncaught" console logging too.
       e.preventDefault();
       return;
     }
     if (!e.error) return;
-    const key = e.error?.message || e.message;
-    if (_seenGlobalErrors.has(key)) return;
-    _seenGlobalErrors.add(key);
-    setTimeout(() => _seenGlobalErrors.delete(key), 30_000);
+    if (!claimErrorKey(key)) return;
 
-    const stack = e.error?.stack || "";
-    captureError(e.error, { source: "window.onerror" });
-    showErrorToast(`Uncaught: ${key}`, `${key}\n\n${stack}`);
+    captureError(rootError(e.error), { source: "window.onerror" });
+    showErrorToast(`Uncaught: ${key}`, describeError(e.error));
   });
 
   window.addEventListener("unhandledrejection", (e) => {
-    const err = e.reason instanceof Error ? e.reason : new Error(String(e.reason));
-    const key = err.message;
+    const key = errorSummary(e.reason);
     if (isIgnoredError(key)) {
       e.preventDefault();
       return;
     }
-    if (_seenGlobalErrors.has(key)) return;
-    _seenGlobalErrors.add(key);
-    setTimeout(() => _seenGlobalErrors.delete(key), 30_000);
+    if (!claimErrorKey(key)) return;
 
-    captureError(err, { source: "unhandledrejection" });
-    showErrorToast(`Unhandled rejection: ${key}`, `${key}\n\n${err.stack || ""}`);
+    captureError(rootError(e.reason), { source: "unhandledrejection" });
+    showErrorToast(`Unhandled rejection: ${key}`, describeError(e.reason));
   });
 }
 

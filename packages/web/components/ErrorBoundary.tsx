@@ -1,6 +1,7 @@
 import { Component, ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import { captureError } from "@/lib/analytics";
+import { describeError, errorSummary, rootError } from "@/lib/errorCause";
 import { showErrorToast } from "@/lib/errorToast";
 import { RELOAD_COUNT_KEY, MAX_AUTO_RELOADS } from "../lib/chunkReloadGuard";
 
@@ -37,7 +38,7 @@ const CHUNK_LOAD_ERROR_PATTERNS = [
 ];
 
 function isChunkLoadError(msg: string): boolean {
-  return CHUNK_LOAD_ERROR_PATTERNS.some((p) => msg.includes(p));
+  return !!msg && CHUNK_LOAD_ERROR_PATTERNS.some((p) => msg.includes(p));
 }
 
 const _recentErrors = new Set<string>();
@@ -46,24 +47,29 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   state: ErrorBoundaryState = { error: null, showDetails: false, isChunk: false };
 
   static getDerivedStateFromError(error: Error) {
-    return { error, isChunk: !!error.message && isChunkLoadError(error.message) };
+    // Read through `cause`: a stale-chunk rejection reaches a boundary wrapped
+    // by whatever rethrew it, and only the innermost message names it.
+    return { error, isChunk: isChunkLoadError(errorSummary(error)) };
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     const label = this.props.name || "Component";
+    // A thrown error may only wrap the real one (React's recovery wrappers, and
+    // any `new Error(msg, { cause })` rethrow) — report what actually failed.
+    const summary = errorSummary(error);
     console.error(`[ErrorBoundary:${label}]`, error, info.componentStack);
-    captureError(error, { component: this.props.name, componentStack: info.componentStack ?? undefined });
+    captureError(rootError(error), { component: this.props.name, componentStack: info.componentStack ?? undefined });
 
-    const dedupKey = `${label}:${error.message}`;
+    const dedupKey = `${label}:${summary}`;
     if (!_recentErrors.has(dedupKey)) {
       _recentErrors.add(dedupKey);
       setTimeout(() => _recentErrors.delete(dedupKey), 30_000);
 
-      const fullTrace = `${error.message}\n\n${error.stack || ""}\n\nComponent: ${label}${info.componentStack || ""}`;
-      showErrorToast(`${label}: ${error.message}`, fullTrace);
+      const fullTrace = `${describeError(error)}\n\nComponent: ${label}${info.componentStack || ""}`;
+      showErrorToast(`${label}: ${summary}`, fullTrace);
     }
 
-    if (error.message && isChunkLoadError(error.message)) {
+    if (isChunkLoadError(summary)) {
       try {
         const count = Number(sessionStorage.getItem(RELOAD_COUNT_KEY) ?? "0");
         if (count < MAX_AUTO_RELOADS) {
@@ -127,12 +133,10 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                 <button onClick={this.toggleDetails} className="text-gray-500 hover:text-gray-300 text-xs">x</button>
               </div>
               <div className="p-3 max-h-64 overflow-auto">
-                <p className="text-xs text-sol-red font-mono break-all mb-2">{this.state.error.message}</p>
-                {this.state.error.stack && (
-                  <pre className="text-[10px] text-gray-500 font-mono whitespace-pre-wrap break-all">
-                    {this.state.error.stack}
-                  </pre>
-                )}
+                <p className="text-xs text-sol-red font-mono break-all mb-2">{errorSummary(this.state.error)}</p>
+                <pre className="text-[10px] text-gray-500 font-mono whitespace-pre-wrap break-all">
+                  {describeError(this.state.error)}
+                </pre>
               </div>
             </div>
           )}
