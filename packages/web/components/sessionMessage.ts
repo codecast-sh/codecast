@@ -15,6 +15,7 @@
 // itself mention `</session-message>`. The formatter's final close tag is the
 // framing boundary.
 import {
+  parseHuddleSummaryTag,
   stripInjectionNoise,
   isSessionMessage,
   isTeammateMessage,
@@ -24,8 +25,11 @@ import {
   isMachineDeliveredMessage,
   CHAT_WAKE_HEADER,
 } from "@codecast/shared/contracts";
+export type { HuddleSummaryTag } from "@codecast/shared/contracts";
 
 export {
+  isHuddleSummaryTag,
+  parseHuddleSummaryTag,
   stripInjectionNoise,
   isSessionMessage,
   isTeammateMessage,
@@ -191,7 +195,13 @@ export function parseMachineDeliveredMessage(
   }
   if (isSessionMessage(rawContent)) {
     const parsed = parseInboundSessionMessage(rawContent);
-    if (parsed) return { kind: "session", source: parsed.name || parsed.from, body: parsed.body };
+    if (parsed) {
+      // A huddle digest rides the session-message rail; previews should show
+      // the summary, never the wire tag.
+      const huddle = parseHuddleSummaryTag(parsed.body);
+      if (huddle) return { kind: "session", source: huddle.title, body: huddle.body };
+      return { kind: "session", source: parsed.name || parsed.from, body: parsed.body };
+    }
     const open = rawContent.match(/<session-message\s+from="([^"]*)"(?:\s+name="([^"]*)")?[^>]*>([\s\S]*)$/);
     const body = removeLeadingFramingNewline(
       (open?.[3] ?? "").replace(/<\/session-message>[\s\S]*$/, ""),

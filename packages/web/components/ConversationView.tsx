@@ -156,7 +156,8 @@ import remarkBreaks from "remark-breaks";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK, renderMarkdownPre } from "./messageMarkdown";
 import { FilePathLink } from "./FilePathLink";
 import { FilePathContext } from "../lib/filePathLinks";
-import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, type ChatWakePrompt } from "./sessionMessage";
+import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
+import { CallTranscriptDisclosure } from "./calls/TranscriptTurns";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
@@ -201,7 +202,7 @@ import { setupDesktopDrag, desktopHeaderClass, isDetachedTabWindow } from "../li
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall } from "lucide-react";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useTeamFeature } from "../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
@@ -2701,6 +2702,7 @@ type UserMessageKind =
   | { kind: 'scheduled_task' }
   | { kind: 'machine_move'; destination?: string; machineChanged: boolean }
   | { kind: 'session_message'; from: string; body: string; name?: string }
+  | { kind: 'huddle_summary'; huddle: HuddleSummaryTag }
   | { kind: 'chat_wake'; wake: ChatWakePrompt };
 
 const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Your task is to create a detailed summary", "Full transcript available at:", "[Codecast import]"];
@@ -2745,7 +2747,17 @@ function classifyUserMessage(
   // taskScheduler.buildPrompt) gets the same rich block as injected schedules.
   if (isSpawnedTaskPrompt(tNoReminders)) return { kind: 'scheduled_task' };
   const sessionMsg = parseInboundSessionMessage(t);
-  if (sessionMsg) return { kind: 'session_message', from: sessionMsg.from, body: sessionMsg.body, name: sessionMsg.name };
+  if (sessionMsg) {
+    // A huddle that ended in this session's room: the digest rides the
+    // session-message rail, but it is a call artifact, not a teammate's words.
+    const huddle = parseHuddleSummaryTag(sessionMsg.body);
+    if (huddle) return { kind: 'huddle_summary', huddle };
+    return { kind: 'session_message', from: sessionMsg.from, body: sessionMsg.body, name: sessionMsg.name };
+  }
+  {
+    const huddle = parseHuddleSummaryTag(tNoReminders);
+    if (huddle) return { kind: 'huddle_summary', huddle };
+  }
   const chatWake = parseChatWakePrompt(t);
   if (chatWake) return { kind: 'chat_wake', wake: chatWake };
   if (t.startsWith('{') && t.includes('__cc_poll')) {
@@ -6965,6 +6977,40 @@ function ChatChannelPill({ name, href }: { name: string; href: string | null }) 
     <Link href={href} className={`${cls} hover:bg-sol-magenta/20 hover:underline underline-offset-2`} title="Open in team chat">{inner}</Link>
   ) : (
     <span className={cls}>{inner}</span>
+  );
+}
+
+// A huddle that ended in this session's room. The same turn woke the agent
+// with the summary and the `cast call` pointer; this renders it the way the
+// human should read it — the digest, and the transcript unfoldable under it.
+function HuddleSummaryBlock({ huddle, timestamp }: { huddle: HuddleSummaryTag; timestamp?: number }) {
+  // The header already names the call and who was on it; drop the digest's own
+  // lead line so the card doesn't say it twice.
+  const body = huddle.body.replace(/^\*\*[^\n]*\n+/, "");
+  return (
+    <div className="mb-2 mx-1 rounded border-l-2 border-sol-green/60 bg-sol-green/5">
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1 flex-wrap">
+        <PhoneCall className="w-3.5 h-3.5 shrink-0 text-sol-green/70" />
+        <span className="text-[11px] font-medium tracking-wide uppercase shrink-0 text-sol-green/70">Huddle</span>
+        <span className="text-xs font-medium text-sol-text truncate">{huddle.title}</span>
+        <span className="text-[11px] text-sol-text-dim truncate">
+          {huddle.minutes > 0 ? `${huddle.minutes} min` : ""}
+          {huddle.minutes > 0 && huddle.speakers.length > 0 ? " · " : ""}
+          {huddle.speakers.join(", ")}
+        </span>
+        {timestamp != null && timestamp > 0 && (
+          <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        )}
+      </div>
+      <CollapsibleBody className="px-3" toggleClassName="mt-1">
+        <div className="text-sm text-sol-text prose prose-invert prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
+            components={MESSAGE_MD_COMPONENTS}
+          >{body}</ReactMarkdown>
+        </div>
+      </CollapsibleBody>
+      <CallTranscriptDisclosure transcriptId={huddle.transcriptId} className="px-3 pb-2 pt-1" />
+    </div>
   );
 }
 
@@ -15429,6 +15475,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
         case 'session_message':
           return <SessionMessageBlock key={msg._id} from={kind.from} name={kind.name} body={kind.body} timestamp={msg.timestamp} pendingStatus={(msg as any)._serverPendingStatus} recipientActive={conversation?.status === "active"} />;
+        case 'huddle_summary':
+          return <HuddleSummaryBlock key={msg._id} huddle={kind.huddle} timestamp={msg.timestamp} />;
         case 'chat_wake':
           return <ChatWakeBlock key={msg._id} wake={kind.wake} timestamp={msg.timestamp} />;
         case 'task_prompt':

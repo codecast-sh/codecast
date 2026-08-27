@@ -4037,6 +4037,14 @@ export default defineSchema({
       // finished voice note that looks like it was said in silence.
       transcribing: v.optional(v.boolean()),
     })),
+    // A huddle digest: the row a finished huddle leaves in the room it was held
+    // in (transcripts.setSummary → chat.postCallDigest). `content` holds the
+    // summary markdown so every client paints it from the row; this names the
+    // transcript so the web can unfold the whole speaker-attributed transcript
+    // inline. Written by the server only, as the scribe, once per transcript.
+    call: v.optional(v.object({
+      transcript_id: v.id("transcripts"),
+    })),
     // Optimistic altKey AND the server's send-dedupe key: a retried send with the
     // same client_id returns the existing row instead of inserting a twin (and,
     // critically, does not wake the anchor a second time).

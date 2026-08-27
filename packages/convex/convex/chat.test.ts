@@ -26,6 +26,7 @@ import {
   listChannelMembers,
   removeChannelMember,
   patchChat,
+  postCallDigest,
   purgeChatMembership,
   replyAsAnchor,
   searchMessages,
@@ -49,6 +50,7 @@ import {
   plainPreview,
 } from "./chatText";
 import schema from "./schema";
+import { dmKeyFor } from "@codecast/shared/chat";
 import { listMine, markAllRead, markRead as markThreadReadMine, unreadCount } from "./threads";
 import { backfillThreadReads } from "./threadReads";
 import { ENTITY_TYPE, NOTIFICATION_TYPE, PREFERENCE_MAP } from "./notificationRouter";
@@ -2883,5 +2885,67 @@ describe("voice bursts", () => {
     expect(rowFor(ctx, silent.message_id).voice.status).toBe("canceled");
     // And the burst doing the sweeping is left alone.
     expect(rowFor(ctx, fresh.message_id).voice.status).toBe("live");
+  });
+});
+
+// The row a finished huddle leaves in its chat room (transcripts.setSummary
+// schedules it). The room key names a channel or a member set; the digest
+// lands in that channel as an ordinary message from the scribe, carrying the
+// transcript id so a reader can unfold the words under it.
+describe("postCallDigest", () => {
+  const DM = "chat_channels_dm" as any;
+  const dmRoom = () => ({
+    _id: DM,
+    team_id: TEAM,
+    name: "",
+    kind: "dm",
+    dm_key: dmKeyFor(String(TEAM), [ALICE, BOB]),
+    created_by: ALICE,
+    created_at: 1_000,
+    updated_at: 1_000,
+  });
+  const digest = (room_key: string) => ({
+    transcript_id: "transcripts_1" as any,
+    room_key,
+    team_id: TEAM,
+    author: ALICE,
+    content: "**Standup** · 5 min huddle with Alice and Bob\n\nShip it.",
+  });
+
+  test("a channel room posts the digest into that channel as the scribe", async () => {
+    const ctx = context(null);
+    const out = await call(postCallDigest, ctx, digest(`channel:${CHANNEL}`));
+    expect(out.posted).toBe(true);
+    const row = messagesIn(ctx)[0];
+    expect(row.channel_id).toBe(CHANNEL);
+    expect(row.user_id).toBe(ALICE);
+    expect(row.author_kind).toBe("user");
+    expect(row.call).toEqual({ transcript_id: "transcripts_1" });
+    expect(row.content).toContain("Ship it.");
+    expect(row.thread_root_id).toBeUndefined();
+  });
+
+  test("a people room resolves to the team's DM for that member set", async () => {
+    const ctx = context(null, { chat_channels: [...channels(), dmRoom()] });
+    const out = await call(postCallDigest, ctx, digest(`dm:${[ALICE, BOB].sort().join(":")}`));
+    expect(out.posted).toBe(true);
+    expect(messagesIn(ctx)[0].channel_id).toBe(DM);
+  });
+
+  test("one transcript, one row — a retried schedule finds the row it wrote", async () => {
+    const ctx = context(null);
+    const first = await call(postCallDigest, ctx, digest(`channel:${CHANNEL}`));
+    const second = await call(postCallDigest, ctx, digest(`channel:${CHANNEL}`));
+    expect(second.posted).toBe(false);
+    expect(second.message_id).toBe(first.message_id);
+    expect(messagesIn(ctx).length).toBe(1);
+  });
+
+  test("a room with no channel behind it posts nothing", async () => {
+    const ctx = context(null);
+    expect((await call(postCallDigest, ctx, digest("dm:nobody:noone"))).posted).toBe(false);
+    expect((await call(postCallDigest, ctx, digest("session:conv"))).posted).toBe(false);
+    expect((await call(postCallDigest, ctx, digest("channel:chat_channels_missing"))).posted).toBe(false);
+    expect(messagesIn(ctx)).toEqual([]);
   });
 });

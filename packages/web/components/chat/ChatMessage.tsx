@@ -12,6 +12,7 @@ import type { ChatAttachmentView, ChatMessageView } from "./chatTypes";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { useStorageImageUrl } from "../../hooks/useStorageImageUrl";
 import { ChatVoiceBubble, VoicePlayButton } from "./ChatVoiceBubble";
+import { CallTranscriptDisclosure } from "../calls/TranscriptTurns";
 import { ImageLightbox } from "../ImageGallery";
 import "./chat.css";
 import "../editor/editor.css";
@@ -237,7 +238,10 @@ export const ChatMessage = memo(function ChatMessage({
   // A voice burst has no typed text to correct: its content is a transcript of
   // something already said out loud, and editing it would put words in the
   // speaker's mouth. Delete stays — you can take a voice note back.
-  const canEdit = !!mine && !!onEdit && !message.deletedAt && !author.isAgent && !message.voice;
+  // A huddle digest's content is the server's summary of what was said, not
+  // something its author typed — like a voice transcript, there is nothing of
+  // theirs to correct.
+  const canEdit = !!mine && !!onEdit && !message.deletedAt && !author.isAgent && !message.voice && !message.call;
   const canDelete = !!mine && !!onDelete && !message.deletedAt;
 
   const react = (emoji: string) => {
@@ -403,6 +407,9 @@ export const ChatMessage = memo(function ChatMessage({
             </ReactMarkdown>
             {message.attachments && message.attachments.length > 0 && (
               <ChatAttachments messageId={message.id} attachments={message.attachments} />
+            )}
+            {message.call && (
+              <CallTranscriptDisclosure transcriptId={message.call.transcriptId} className="mt-1.5" />
             )}
             {message.editedAt && (
               <span className="ch-msg-edited" title={FULL_TIME.format(new Date(message.editedAt))}>

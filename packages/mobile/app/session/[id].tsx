@@ -15,7 +15,7 @@ import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from '@codecast/web/lib/sessionImages';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
 import { isTrustedImageSrc } from '@/lib/convex';
-import { parseInboundSessionMessage, isScheduledTaskMessage, parseChatWakePrompt, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
+import { parseInboundSessionMessage, isScheduledTaskMessage, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
 import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
 import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { PermissionCard } from '@/components/PermissionCard';
@@ -4641,6 +4641,12 @@ export default function SessionDetailScreen() {
             if (item.role === 'user' && item.content) {
               const sessionMsg = parseInboundSessionMessage(item.content);
               if (sessionMsg) {
+                // A huddle digest rides the session-message rail: show the
+                // summary under the call's title, never the wire tag.
+                const huddle = parseHuddleSummaryTag(sessionMsg.body);
+                if (huddle) {
+                  return <SessionMessageBlock from="unknown" name={`Huddle — ${huddle.title}`} body={huddle.body} timestamp={item.timestamp} />;
+                }
                 return <SessionMessageBlock from={sessionMsg.from} name={sessionMsg.name} body={sessionMsg.body} timestamp={item.timestamp} />;
               }
               if (isScheduledTaskMessage(item.content)) {

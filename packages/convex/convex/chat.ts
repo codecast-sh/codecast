@@ -30,6 +30,7 @@ import { isConversationOwner, isTeamAdmin, isTeamMember } from "./privacy";
 import { requireTeamFeature, teamHasFeature } from "./teamFeatures";
 import { canAccessChannel, channelMemberIds, isChannelMember, isRestricted } from "./chatAccess";
 import { dmKeyFor, isAgentTurnInFlight, isLiveVoiceRow, isSilentAgentRow, isVisibleAgentPending } from "@codecast/shared/chat";
+import { HUDDLE_DIGEST_CLIENT_ID_PREFIX, parseRoomKey } from "@codecast/shared/contracts";
 import { RateLimitError, checkRateLimit } from "./rateLimit";
 import { purgeUserTeam, touchThread } from "./threadReads";
 // `userCanAccessAnchor` is the WAKE permission (any member of a team anchor's
@@ -1839,6 +1840,64 @@ async function findByClientId(
     .first();
 }
 
+// The room a huddle was held in, as a chat channel: a channel room names its
+// channel; a people room is the member set, which is the DM room's identity
+// (dm_key, team-scoped like every DM). A session room has no channel and
+// answers null — its digest goes to the agent instead (transcripts.setSummary).
+export async function channelForRoom(
+  ctx: ReadCtx,
+  roomKey: string,
+  teamId: Id<"teams">,
+): Promise<Doc<"chat_channels"> | null> {
+  const parsed = parseRoomKey(roomKey);
+  if (!parsed) return null;
+  if (parsed.kind === "channel") {
+    const id = ctx.db.normalizeId("chat_channels", parsed.channelId);
+    return id ? await ctx.db.get(id) : null;
+  }
+  if (parsed.kind === "dm") {
+    return await ctx.db
+      .query("chat_channels")
+      .withIndex("by_dm_key", (q: any) => q.eq("dm_key", dmKeyFor(String(teamId), parsed.users)))
+      .first();
+  }
+  return null;
+}
+
+// The row a finished huddle leaves in its chat room: the summary as an
+// ordinary message from the scribe, carrying `call` so a reader can unfold the
+// transcript under it. Scheduled by transcripts.setSummary once the summary
+// lands. Idempotent on the transcript — the client_id is derived from it, so a
+// retried schedule finds the row it already wrote. The scribe is the author
+// because the transcript is theirs (they hold every audio track), the same way
+// a walkie burst belongs to whoever spoke it.
+export const postCallDigest = internalMutation({
+  args: {
+    transcript_id: v.id("transcripts"),
+    room_key: v.string(),
+    team_id: v.id("teams"),
+    author: v.id("users"),
+    content: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ posted: boolean; message_id?: Id<"chat_messages"> }> => {
+    const channel = await channelForRoom(ctx, args.room_key, args.team_id);
+    if (!channel || channel.archived_at) return { posted: false };
+    const clientId = `${HUDDLE_DIGEST_CLIENT_ID_PREFIX}${args.transcript_id}`;
+    const already = await findByClientId(ctx, channel._id, clientId);
+    if (already) return { posted: false, message_id: already._id };
+    const { messageId } = await postChatMessage(ctx, {
+      channel,
+      root: null,
+      authorId: args.author,
+      content: args.content,
+      attachments: [],
+      clientId,
+      call: { transcript_id: args.transcript_id },
+    });
+    return { posted: true, message_id: messageId };
+  },
+});
+
 export const sendMessage = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -2011,6 +2070,8 @@ async function postChatMessage(
     // Set when the author is an anchor's bot identity: the row renders as the
     // agent, is edit-locked, and names the anchor that may act on it.
     agent?: { anchorId: Id<"anchors"> };
+    // A huddle digest names the transcript it summarizes (schema `call`).
+    call?: { transcript_id: Id<"transcripts"> };
   },
 ): Promise<{
   messageId: Id<"chat_messages">;
@@ -2058,6 +2119,7 @@ async function postChatMessage(
     mentions: mentions.length > 0 ? mentions : undefined,
     mention_scope: here ? "here" : undefined,
     attachments: attachments.length > 0 ? attachments : undefined,
+    call: opts.call,
     client_id: opts.clientId,
     origin: opts.origin,
     origin_session_id: opts.origin === "agent" ? opts.originSessionId : undefined,
