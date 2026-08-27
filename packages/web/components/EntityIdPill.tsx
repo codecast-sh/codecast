@@ -17,7 +17,7 @@ import {
   Folder,
   Zap,
 } from "lucide-react";
-import { TASK_STATUS, type TaskStatus } from "./TaskStatusBadge";
+import { taskVisual } from "./TaskStatusBadge";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
 import { stripMarkdown, docContentPreview } from "../lib/notificationText";
 import {
@@ -47,10 +47,9 @@ const api = _api as any;
 export { isEntityId };
 
 // Task status glyph/color/label come from the canonical TASK_STATUS vocabulary
-// (TaskStatusBadge) — the StatusCircle "fill" icons, so a task reads the same
-// here as on the board. These maps cover PLAN statuses only.
-const taskVisual = (status?: string | null) =>
-  TASK_STATUS[(status || "open") as TaskStatus] ?? TASK_STATUS.open;
+// (TaskStatusBadge, via `taskVisual`) — the StatusCircle "fill" icons, so a
+// task reads the same here as on the board. The maps below cover PLAN statuses
+// only.
 
 const STATUS_COLOR: Record<string, string> = {
   draft: "text-gray-400",
@@ -730,8 +729,15 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
 
   // A task pill's icon is the StatusCircle at the task's status, in the
   // status's own color — the pill chrome stays one consistent task color
-  // (magenta) while the disc's fill and tint say where the work stands.
-  const taskV = isTask ? taskVisual(status) : null;
+  // (violet) while the disc's fill and tint say where the work stands.
+  //
+  // Resolved unconditionally, because it is also the LAST branch of the icon
+  // chain below, and that branch catches more than tasks: a reference whose
+  // type is still null (a Convex id waiting on resolveIdType, or one belonging
+  // to no entity table) lands there too. Those renders are thrown away by the
+  // `!type` guard further down, but the guard sits below the hooks and so runs
+  // after this — every value it protects has to stand on its own until then.
+  const taskV = taskVisual(status);
   const Icon = isSession
     ? MessageSquare
     : isPlan
@@ -742,7 +748,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
           ? FileText
           : type === "project"
             ? Folder
-            : taskV!.icon;
+            : taskV.icon;
 
   const colors = isSession
     ? "bg-sol-blue/10 text-sol-blue border-sol-blue/20 hover:bg-sol-blue/20"
@@ -839,7 +845,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
             {isSession && (session?.author_name || session?.author_avatar) ? (
               <AuthorAvatar name={session.author_name} avatar={session.author_avatar} size={14} />
             ) : (
-              <Icon className={`w-3 h-3 ${taskV ? taskV.color : ""}`} />
+              <Icon className={`w-3 h-3 ${isTask ? taskV.color : ""}`} />
             )}
             {((isSession && status === "active") || (isTrigger && status === "running")) && (
               <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />
