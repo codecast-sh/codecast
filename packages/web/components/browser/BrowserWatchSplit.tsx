@@ -24,6 +24,7 @@ import type { SessionMachine } from "../tmuxAttach";
 import { getTerminalEndpoint } from "../../lib/terminal/endpoint";
 import {
   connectBrowserWatch,
+  mapToFrame,
   type WatchConnection,
   type WatchInputEvent,
   type WatchTabInfo,
@@ -380,20 +381,12 @@ function ControlSurface({
     (clientX: number, clientY: number): { nx: number; ny: number } | null => {
       const img = imgRef.current;
       if (!img) return null;
-      const box = img.getBoundingClientRect();
-      const iw = img.naturalWidth;
-      const ih = img.naturalHeight;
-      if (!iw || !ih || !box.width || !box.height) return null;
-      // object-contain: the content rect is the image aspect fit inside the box.
-      const scale = Math.min(box.width / iw, box.height / ih);
-      const w = iw * scale;
-      const h = ih * scale;
-      const left = box.left + (box.width - w) / 2;
-      const top = box.top + (box.height - h) / 2;
-      const nx = (clientX - left) / w;
-      const ny = (clientY - top) / h;
-      if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return null; // letterbox band
-      return { nx, ny };
+      // object-contain: the content rect is the image aspect fit inside the
+      // box; the geometry lives in mapToFrame (unit-tested).
+      return mapToFrame(clientX, clientY, img.getBoundingClientRect(), {
+        width: img.naturalWidth,
+        height: img.naturalHeight,
+      });
     },
     [imgRef],
   );

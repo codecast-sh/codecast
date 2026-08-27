@@ -13,7 +13,7 @@ import { SYNTHETIC_POLL_OPTION, type PollQuestion } from "../lib/pollPayload";
 // branches on, nothing that churns. Rows only change on ask/answer, so this
 // is cheap, but it keeps the queue from re-rendering on unrelated store work.
 const decisionsWakeSig = makeCollectionSig<any>(
-  (d) => `${d._id}:${d.status}:${d.created_at}:${d.options?.length ?? 0}`
+  (d) => `${d._id}:${d.status}:${d.created_at}:${d.updated_at ?? 0}:${d.options?.length ?? 0}`
 );
 
 // listMessages pages newest-first; every other caller works oldest-first.
@@ -175,7 +175,7 @@ export function usePendingDecisionItem(conversationId: string | null | undefined
       if (!conversationId) return "";
       let sig = "";
       for (const d of Object.values(st.sessionDecisions) as any[]) {
-        if (d.conversation_id === conversationId && d.status === "pending") sig += `${d._id}:${d.created_at}|`;
+        if (d.conversation_id === conversationId && d.status === "pending") sig += `${d._id}:${d.created_at}:${d.updated_at ?? 0}|`;
       }
       return sig;
     },

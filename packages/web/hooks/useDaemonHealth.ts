@@ -132,6 +132,9 @@ export interface DaemonDeviceRow {
   oldest_pending_ms?: number | null;
   pending_sync_messages?: number | null;
   pending_sync_conversations?: number | null;
+  // A cloud host (`cast browser --remote`, a remote Mac) rather than a machine
+  // the user sits at.
+  is_remote?: boolean | null;
 }
 
 export function deviceHealthInput(d: DaemonDeviceRow): DaemonHealthInput {
@@ -153,6 +156,13 @@ export const ROSTER_CONSIDER_MS = ONE_DAY_MS;
 // The health worth showing for a fleet: the worst machine among those seen
 // recently. `device` names the machine when the roster has more than one, so
 // "daemon under load" reads as "MacBook: daemon under load".
+//
+// Remote hosts stay out of the verdict. A cloud box sleeps when idle and wakes
+// on demand, so its daemon going silent for hours is its parked state, not an
+// outage — and the user is never sitting at it, so "restart with cast restart"
+// is advice they cannot act on from where they are. A session that lives on a
+// remote host still reports that host's health through useDaemonHealth(owner
+// device id) on its own pending messages, which is where it matters.
 export type FleetDaemonHealth = DaemonHealth & { device?: string };
 
 export function worstDaemonHealth(
@@ -160,7 +170,7 @@ export function worstDaemonHealth(
   now: number,
   opts?: { recentlyWoke?: boolean },
 ): FleetDaemonHealth | null {
-  const recent = rows.filter((d) => (d.last_seen ?? 0) > now - ROSTER_CONSIDER_MS);
+  const recent = rows.filter((d) => !d.is_remote && (d.last_seen ?? 0) > now - ROSTER_CONSIDER_MS);
   if (recent.length === 0) return null;
   let worst: FleetDaemonHealth | null = null;
   for (const d of recent) {
@@ -288,6 +298,7 @@ const getServerClock = () => clock;
 const ROSTER_SIG_FIELDS: Array<keyof DaemonDeviceRow> = [
   "device_id", "label", "last_seen", "daemon_started_at", "loop_freeze_ms",
   "pending_sync_count", "oldest_pending_ms", "pending_sync_messages", "pending_sync_conversations",
+  "is_remote",
 ];
 
 // Health of the daemon on `deviceId` (a session's owner_device_id), or — with
@@ -300,7 +311,7 @@ export function useDaemonHealth(deviceId?: string | null): FleetDaemonHealth {
   // reasons this hook does not care about.
   const rosterSig = useInboxStore((s) => {
     const rows = (s.machineRoster ?? []) as DaemonDeviceRow[];
-    return rows.map((d) => ROSTER_SIG_FIELDS.map((f) => d[f] ?? "").join("|")).join("\n");
+    return rows.map((d) => ROSTER_SIG_FIELDS.map((f) => (d[f] === true ? "1" : d[f] || "")).join("|")).join("\n");
   });
   const roster = useMemo<DaemonDeviceRow[]>(() => {
     if (!rosterSig) return [];
@@ -311,6 +322,7 @@ export function useDaemonHealth(deviceId?: string | null): FleetDaemonHealth {
         device_id: v[0], label: v[1] || undefined, last_seen: num(2), daemon_started_at: num(3),
         loop_freeze_ms: num(4), pending_sync_count: num(5), oldest_pending_ms: num(6),
         pending_sync_messages: num(7), pending_sync_conversations: num(8),
+        is_remote: v[9] === "1",
       };
     });
   }, [rosterSig]);

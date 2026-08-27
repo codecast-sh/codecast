@@ -56,10 +56,12 @@ export function CommentAvatar({
   }
   const initialsFallback = (
     <span
-      className={`cc-cmt-avatar grid place-items-center shrink-0 rounded-full font-semibold text-white ${className}`}
+      className={`cc-cmt-avatar grid place-items-center shrink-0 rounded-full font-semibold text-white leading-none ${className}`}
       // The initials must scale with the box. Leaving the size in CSS makes a
       // 16px face in a reply stack render 10px text, which collides into an
-      // unreadable smudge once the faces overlap.
+      // unreadable smudge once the faces overlap. leading-none matters too:
+      // an inherited 20px line height in a 14px box overflows the grid cell
+      // and drops the letter below center.
       style={{
         width: size,
         height: size,

@@ -319,7 +319,16 @@ export function handoffTookOverBoot(): boolean {
  * exactly as parallel as it was before the entry was split, while a handoff
  * skips them entirely and fetches nothing.
  */
-export function runPreBootHandoff(appPreloadUrls: string[]): void {
+/**
+ * Share pages that boot standalone (src/shareBoot.tsx) instead of the app:
+ * /share/message|doc|plan/<token>. /share/<token> is NOT one — it resolves to
+ * a conversation and needs the app.
+ */
+export function isStandaloneSharePath(path: string): boolean {
+  return /^\/share\/(message|doc|plan)\/[^/]+\/?$/.test(path);
+}
+
+export function runPreBootHandoff(appPreloadUrls: string[], sharePreloadUrls: string[] = []): void {
   if (typeof window === "undefined" || typeof document === "undefined") return;
 
   let handoff = false;
@@ -338,7 +347,7 @@ export function runPreBootHandoff(appPreloadUrls: string[]): void {
   } catch {}
 
   if (!handoff) {
-    preloadApp(appPreloadUrls);
+    preloadApp(isStandaloneSharePath(window.location.pathname) ? sharePreloadUrls : appPreloadUrls);
     return;
   }
 
