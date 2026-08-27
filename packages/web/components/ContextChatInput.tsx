@@ -5,7 +5,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { soundNewSession } from "../lib/sounds";
 import { AgentTypeIcon } from "./AgentTypeIcon";
-import type { AgentClientId } from "@codecast/shared/contracts";
+import { fromConvexAgentType, type AgentClientId } from "@codecast/shared/contracts";
 
 type AgentKey = AgentClientId;
 const escapeContext = (value: string) =>
@@ -21,6 +21,7 @@ const AGENT_TYPES: { key: AgentKey; convex: string; label: string; active: strin
   { key: "gemini", convex: "gemini", label: "Gemini", active: "bg-blue-500/20 text-blue-400 border-blue-500/50" },
   { key: "opencode", convex: "opencode", label: "OpenCode", active: "bg-orange-500/20 text-orange-400 border-orange-500/50" },
   { key: "pi", convex: "pi", label: "pi", active: "bg-teal-500/20 text-teal-400 border-teal-500/50" },
+  { key: "grok", convex: "grok", label: "Grok", active: "bg-sol-text/15 text-sol-text border-sol-text/40" },
 ];
 
 interface ContextChatInputProps {
@@ -48,7 +49,9 @@ export function ContextChatInput({
   const currentAgent = useInboxStore((s) => s.currentConversation.agentType || "claude_code");
   const [selectedAgent, setSelectedAgent] = useState<AgentKey | null>(null);
 
-  const agentKey = selectedAgent || (currentAgent === "claude_code" ? "claude" : currentAgent === "codex" ? "codex" : currentAgent === "cursor" ? "cursor" : currentAgent === "opencode" ? "opencode" : currentAgent === "pi" ? "pi" : "gemini") as AgentKey;
+  // Registry chokepoint, never a hand-rolled ternary: a client missing from a
+  // ternary silently collapses to the fallback branch.
+  const agentKey: AgentKey = selectedAgent || fromConvexAgentType(currentAgent);
   const isExpanded = isFocused || message.length > 0;
 
   const resetHeight = useCallback(() => {

@@ -2880,7 +2880,7 @@ export const webAddComment = mutation({
 export const assignToAgent = mutation({
   args: {
     short_id: v.string(),
-    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini"), v.literal("opencode"), v.literal("pi")),
+    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini"), v.literal("opencode"), v.literal("pi"), v.literal("grok")),
     // Optional lead-in the user types before launch (defaults to "lets do this
     // task" in the palette). Prepended to the structured task prompt below.
     initial_message: v.optional(v.string()),

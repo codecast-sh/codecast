@@ -103,6 +103,7 @@ const agentAccents: Record<AgentClientId, string> = {
   gemini: Theme.blue,
   opencode: Theme.accentAmber,
   pi: Theme.cyan,
+  grok: Theme.text,
 };
 
 // Web's MODE_ITEMS (StableContextCards), verbatim: same four stops, same
