@@ -3405,7 +3405,9 @@ export function SessionListPanel({
   const [openBuckets, setOpenBuckets] = useState(CLOSED_BUCKETS);
   const [bucketsFilter, setBucketsFilter] = useState(() => filterByChip);
   if (bucketsFilter !== filterByChip) {
-    setBucketsFilter(filterByChip);
+    // The state holds a FUNCTION: pass it through a thunk, or React runs it
+    // as an updater with the previous filter as its argument.
+    setBucketsFilter(() => filterByChip);
     setOpenBuckets(CLOSED_BUCKETS);
   }
 
