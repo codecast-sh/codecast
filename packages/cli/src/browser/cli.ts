@@ -349,6 +349,29 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     });
 
   hosts
+    .command("vnc [id]")
+    .description("Interactive view of the host's whole screen (noVNC in your browser) — for anything outside the agent's tab")
+    .option("--no-open", "Print the URL without opening it")
+    .action(async (id: string | undefined, o: { open: boolean }) => {
+      const rows = readHosts();
+      const h = id ? rows.find((r) => r.id === id) : rows.find((r) => r.provider === "aws");
+      if (!h) die(id ? `no host ${id}` : "no linux host registered");
+      const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
+      const { ensureVncTunnel } = await import("./liveView.js");
+      try {
+        const v = await ensureVncTunnel(toRemoteHost(up));
+        console.log(`${OK} VNC is up${v.tunnelPid ? ` (tunnel pid ${v.tunnelPid})` : " (reusing the existing tunnel)"}`);
+        console.log(`  ${fmt.highlight(v.url)}`);
+        console.log(fmt.muted("  the whole display, with mouse and keyboard — for a page's own sign-in, prefer the CONTROL button in the session's browser view"));
+        if (o.open) {
+          try { execFileSync("open", [v.url], { stdio: "ignore", timeout: 10_000 }); } catch { /* headless shell */ }
+        }
+      } catch (err) {
+        die((err as Error).message);
+      }
+    });
+
+  hosts
     .command("shot [id]")
     .description("One screenshot of the host's screen, saved locally")
     .action(async (id: string | undefined) => {
