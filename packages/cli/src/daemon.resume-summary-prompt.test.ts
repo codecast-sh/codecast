@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildResumeEnvPrefix } from "./daemon.js";
+import { AGENT_ENV_SCRUB, buildResumeEnvPrefix } from "./daemon.js";
 
 // Regression coverage for the auto-resume wedge: `claude --resume` on an old/large
 // session (>70min AND >100k tokens) pops an interactive "Resume from summary?" menu.
@@ -16,14 +16,27 @@ describe("buildResumeEnvPrefix", () => {
     expect(prefix).toContain("CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999");
   });
 
-  test("codex resume keeps only the CLAUDECODE strip (no Claude-only env)", () => {
+  test("codex resume keeps only the env scrub (no Claude-only env)", () => {
     const prefix = buildResumeEnvPrefix("codex");
-    expect(prefix).toBe("env -u CLAUDECODE");
+    expect(prefix).toBe(AGENT_ENV_SCRUB);
     expect(prefix).not.toContain("CLAUDE_CODE_RESUME");
   });
 
-  test("gemini resume keeps only the CLAUDECODE strip", () => {
-    expect(buildResumeEnvPrefix("gemini")).toBe("env -u CLAUDECODE");
+  test("gemini resume keeps only the env scrub", () => {
+    expect(buildResumeEnvPrefix("gemini")).toBe(AGENT_ENV_SCRUB);
+  });
+
+  // 2026-08-27: the tmux server carried CLAUDE_CODE_CHILD_SESSION=1 from the
+  // Claude session that started it. Every daemon-launched claude inherited it,
+  // treated itself as a subagent, and turned transcript saving off — no JSONL,
+  // discovery timed out, six threads stuck at 0 messages. The scrub must drop
+  // the child marker and the foreign session id, not just CLAUDECODE.
+  test("scrub drops the child-session marker and foreign session id", () => {
+    for (const v of ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID"]) {
+      expect(AGENT_ENV_SCRUB).toContain(`-u ${v}`);
+    }
+    // Pane-content detection keys off this literal prefix (daemon.ts findLaunchLine).
+    expect(AGENT_ENV_SCRUB.startsWith("env -u CLAUDECODE")).toBe(true);
   });
 
   test("prefix prepends cleanly to a resume command", () => {

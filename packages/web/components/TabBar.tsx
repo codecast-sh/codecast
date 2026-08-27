@@ -4,6 +4,7 @@ import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore
 import { useShortcutAction, formatShortcutLabel } from "../shortcuts";
 import { tabTitle, tabSessionId, chatTabTitle } from "../lib/tabTitle";
 import { pathLabel } from "../lib/pathLabel";
+import { detachTab } from "../lib/openIntent";
 import { bridge, isDesktop, isDetachedTabWindow } from "../lib/desktop";
 import { PageIcon } from "./RecentlyViewedMenu";
 import { LivenessDot } from "./LivenessDot";
@@ -141,17 +142,9 @@ export function TabBar() {
     state.saveCurrentTabState();
     state.openTab({ path: tab.path, title: tab.title, makeActive: true });
   }, []);
-  // Desktop: break the tab out into its own OS window. The new window loads
-  // this path directly (no tab shell), and the tab leaves this strip — a move,
-  // not a copy. Available only when the desktop bridge knows the verb.
+  // Desktop: break the tab out into its own OS window (lib/openIntent
+  // detachTab, shared with Cmd+N). Available only when the shell knows the verb.
   const canDetach = isDesktop() && !!bridge("detachTab");
-  const detachTab = useCallback((tab: AppTab) => {
-    const fn = bridge("detachTab");
-    if (!fn) return;
-    void fn(tab.path);
-    const state = useInboxStore.getState();
-    if (state.tabs.length > 1) state.closeTab(tab.id);
-  }, []);
 
   if (detached) return null;
   // Only show tab bar when there are 2+ tabs

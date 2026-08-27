@@ -72,23 +72,31 @@ function render(props: Partial<Parameters<typeof DocumentDetailLayout>[0]>) {
   );
 }
 
-describe("DocumentDetailLayout read-mode body", () => {
-  test("content not yet synced → loader, never a blank or 'empty' body", () => {
-    const html = render({ markdownContent: "", contentReady: false });
+describe("DocumentDetailLayout body modes", () => {
+  test("editable docs mount the collab editor by default (edit-first)", () => {
+    const html = render({ markdownContent: "## The idea", contentReady: true });
+    expect(html).toContain('data-stub="collab-editor"');
+    expect(html).not.toContain('data-stub="message-review"');
+  });
+
+  // The review body's three empty-content states (opted out of edit mode).
+  test("review: content not yet synced → loader, never a blank or 'empty' body", () => {
+    const html = render({ markdownContent: "", contentReady: false, defaultEditing: false });
     expect(html).toContain("app-loader-bar");
     expect(html).not.toContain("Empty document");
   });
 
-  test("confirmed-empty doc → the empty-document affordance, no loader", () => {
-    const html = render({ markdownContent: "", contentReady: true });
+  test("review: confirmed-empty doc → the empty-document affordance, no loader", () => {
+    const html = render({ markdownContent: "", contentReady: true, defaultEditing: false });
     expect(html).toContain("Empty document");
     expect(html).not.toContain("app-loader-bar");
   });
 
-  test("loaded content renders through the review blocks", () => {
+  test("review: loaded content renders through the review blocks", () => {
     const html = render({
       markdownContent: "## The idea",
       contentReady: true,
+      defaultEditing: false,
     });
     expect(html).toContain("The idea");
     expect(html).not.toContain("app-loader-bar");

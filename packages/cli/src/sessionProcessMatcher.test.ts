@@ -17,6 +17,7 @@ import {
   parsePsEtimeSeconds,
   processDeclaredSessionId,
   judgeProcessIdentity,
+  agentBinaryFromPsRow,
 } from "./sessionProcessMatcher.js";
 
 describe("isRecognizedAgentComm", () => {
@@ -515,5 +516,34 @@ describe("processDeclaredSessionId / judgeProcessIdentity", () => {
   test("no signal at all: unknown, so callers keep their current answer", () => {
     expect(judgeProcessIdentity({ sessionId: S, argvId: null, claims: [], processStartSec: start }))
       .toEqual({ verdict: "unknown", declared: null });
+  });
+});
+
+describe("agentBinaryFromPsRow", () => {
+  // Real row from `ps -o ppid=,comm=,args= -p <claude pid>` on macOS 2026-08-27:
+  // comm is clipped to 16 chars when it shares the row with other columns.
+  test("names claude from argv when macOS clips comm to 16 chars", () => {
+    expect(
+      agentBinaryFromPsRow(
+        "/Users/ashot/.co",
+        "/Users/ashot/.codecast/bin/claude --permission-mode bypassPermissions --session-id e14247b2-23f2-4d66-b2c0-f6013b29334c",
+      ),
+    ).toBe("claude");
+  });
+
+  test("names a script client through its interpreter (codex under node)", () => {
+    expect(agentBinaryFromPsRow("node", "node /Users/ashot/.bun/bin/codex")).toBe("codex");
+  });
+
+  test("falls back to comm when argv says nothing", () => {
+    expect(agentBinaryFromPsRow("claude", "")).toBe("claude");
+    expect(agentBinaryFromPsRow("gemini-cli", "gemini-cli")).toBe("gemini-cli");
+  });
+
+  test("is null for shells, tmux, the daemon and a bare interpreter", () => {
+    expect(agentBinaryFromPsRow("/bin/bash", "/bin/bash -c source snapshot.sh")).toBeNull();
+    expect(agentBinaryFromPsRow("tmux", "tmux new-session -d -s x")).toBeNull();
+    expect(agentBinaryFromPsRow("bun", "bun /Users/ashot/src/codecast/packages/cli/dist/daemon.js")).toBeNull();
+    expect(agentBinaryFromPsRow("node", "node")).toBeNull();
   });
 });

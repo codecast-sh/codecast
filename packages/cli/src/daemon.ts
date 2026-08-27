@@ -3576,8 +3576,8 @@ async function executeRemoteCommand(
         if (conversationId && /^[a-z0-9]+$/i.test(conversationId)) stableEnvParts.push(`${STABLE_ENV_CONVERSATION_ID}=${conversationId}`);
         const stableEnv = stableEnvParts.length ? ` ${stableEnvParts.join(" ")}` : "";
         const envPrefix = worktreeResult
-          ? `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}${stableEnv}`
-          : `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT${stableEnv}`;
+          ? `${AGENT_ENV_SCRUB} AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}${stableEnv}`
+          : `${AGENT_ENV_SCRUB}${stableEnv}`;
         // Managed provider keys (opencode/pi) are sourced from a 0600 file so the
         // key never lands in `ps`/the pane; "" when nothing is managed (pl-207).
         const keyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
@@ -4506,7 +4506,7 @@ async function executeRemoteCommand(
             // `claude` that fell into the project's dontAsk default — the agent
             // came back stranded with every tool denied.
             const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs(blankAgentType, config));
-            const blankCmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${[blankBinary, ...safeBlankArgs].join(" ")}`;
+            const blankCmdText = `${AGENT_ENV_SCRUB} ${[blankBinary, ...safeBlankArgs].join(" ")}`;
             try {
               tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
               // Tag like the other creation paths so this session is discoverable
@@ -14989,10 +14989,37 @@ export function resumeReuseCandidates(
 // and trip the web stuck-banner into a kill+restart loop. There is no CLI flag for it, only
 // these env gates (read by Claude Code as process.env.CLAUDE_CODE_RESUME_THRESHOLD_*).
 export function buildResumeEnvPrefix(agentType: string): string {
-  const base = "env -u CLAUDECODE";
   return agentType === "claude"
-    ? `${base} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
-    : base;
+    ? `${AGENT_ENV_SCRUB} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
+    : AGENT_ENV_SCRUB;
+}
+
+// Env a daemon-launched agent must NOT inherit from the shell it is typed into.
+// The tmux server (and so every pane it opens) carries the env of whoever
+// started it; when that was a shell inside a Claude Code session, the pane
+// holds Claude's own session markers. CLAUDECODE / CLAUDE_CODE_ENTRYPOINT make
+// claude refuse to launch "inside another session". CLAUDE_CODE_CHILD_SESSION
+// is worse: claude starts fine but treats itself as a subagent and turns
+// transcript saving OFF, so no JSONL is ever written, discovery times out,
+// and the web thread stays at 0 messages forever (2026-08-27: six panes).
+// CLAUDE_CODE_SESSION_ID would make `cast` inside the agent report the
+// parent's session instead of its own.
+export const AGENT_SCRUBBED_ENV_VARS = [
+  "CLAUDECODE",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_CODE_SESSION_ID",
+] as const;
+export const AGENT_ENV_SCRUB = `env ${AGENT_SCRUBBED_ENV_VARS.map((v) => `-u ${v}`).join(" ")}`;
+
+// The same markers persisted in the tmux server's global environment seed every
+// new pane before our `env -u` prefix runs. Clearing them there is idempotent
+// and protects panes people open by hand too.
+function scrubTmuxGlobalEnv(): void {
+  if (!hasTmux()) return;
+  for (const v of AGENT_SCRUBBED_ENV_VARS) {
+    try { tmuxExecSync(["set-environment", "-gu", v], { timeout: 3000 }); } catch {}
+  }
 }
 
 interface ResolvedLiveSession {
@@ -16117,7 +16144,7 @@ async function startFreshSessionForDelivery(
   // default (which silently denies every tool until the user manually opens
   // permissions). This is the path that strands "started without bypass" threads.
   const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs("claude", config));
-  const blankCmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${["claude", ...safeBlankArgs].join(" ")}`;
+  const blankCmdText = `${AGENT_ENV_SCRUB} ${["claude", ...safeBlankArgs].join(" ")}`;
 
   try {
     tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
@@ -18580,6 +18607,11 @@ async function main(): Promise<void> {
       installAllStableHooks();
     }
   } catch {}
+
+  // The tmux server may have been started from inside a Claude Code session
+  // and be seeding every new pane with that session's markers (see
+  // AGENT_SCRUBBED_ENV_VARS). Clear them once per boot.
+  scrubTmuxGlobalEnv();
 
   // Exit guard: respawn with backoff if crash looping.
   // Skip self-respawn when running under launchd (KeepAlive handles restarts).

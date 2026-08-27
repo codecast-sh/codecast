@@ -313,7 +313,7 @@ export function useQuestionThreadCards(): import("../lib/threadCards").ThreadCar
       let sig = "";
       for (const id in s.sessionDecisions) {
         const d = s.sessionDecisions[id];
-        if (d?.status === "pending") sig += `${d._id}|${d.created_at};`;
+        if (d?.status === "pending") sig += `${d._id}|${d.created_at}|${d.updated_at ?? 0};`;
       }
       return sig;
     },
@@ -322,7 +322,7 @@ export function useQuestionThreadCards(): import("../lib/threadCards").ThreadCar
     let out = "";
     for (const id in (s as any).sessionDecisions) {
       const d = (s as any).sessionDecisions[id];
-      if (d?.status === "pending") out += `${d._id}|${d.created_at};`;
+      if (d?.status === "pending") out += `${d._id}|${d.created_at}|${d.updated_at ?? 0};`;
     }
     return out;
   })();

@@ -4,7 +4,7 @@ import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { openConversationAsCompanion } from "../hooks/useOpenLinkedSession";
-import { installOpenIntent } from "../lib/openIntent";
+import { installOpenIntent, detachCurrentView } from "../lib/openIntent";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
 import { isNonTabRoute } from "../src/compat/tabRouting";
@@ -756,8 +756,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     const open = () => newFullSessionRef.current();
     (window as any).__CODECAST_NEW_SESSION = open;
     window.addEventListener(NEW_SESSION_EVENT, open);
+    // File › New Window (Cmd+N): the shell asks this window to pop its current
+    // view out; the answer to "which view" lives here, not in the shell.
+    (window as any).__CODECAST_DETACH_VIEW = detachCurrentView;
     return () => {
       delete (window as any).__CODECAST_NEW_SESSION;
+      delete (window as any).__CODECAST_DETACH_VIEW;
       window.removeEventListener(NEW_SESSION_EVENT, open);
     };
   });

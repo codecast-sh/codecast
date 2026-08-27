@@ -37,6 +37,38 @@ export function isRecognizedAgentComm(comm: string): boolean {
   return AGENT_INTERPRETERS.some((i) => lower.includes(i));
 }
 
+// Legacy alias: installs whose ps comm still reports gemini's old binary name.
+const AGENT_BINARY_ALIASES = new Set(["gemini-cli"]);
+
+/**
+ * The agent client an ancestor process IS, from one `ps -o ppid=,comm=,args=`
+ * row — or null for any other process (a shell, tmux, the daemon, a bare node).
+ *
+ * `args` is the primary witness, `comm` only the fallback. When comm shares the
+ * row with other columns, macOS ps clips it to 16 characters, so a long install
+ * path ("/Users/x/.codecast/bin/claude") arrives as "/Users/x/.co" and its
+ * basename ".co" matches nothing. That silently unlinked every trigger created
+ * from the fixed-path claude copy (304 of 796 rows had no parent on 2026-08-27).
+ * argv[0] is never clipped. Script clients run under an interpreter
+ * (args "node /x/bin/codex"), so argv[1] is checked when argv[0] is one.
+ * Exact basename matches only: this names the process, it must not treat a
+ * plain interpreter as an agent the way isRecognizedAgentComm does.
+ */
+export function agentBinaryFromPsRow(comm: string, args: string): string | null {
+  const argv = args.trim().split(/\s+/);
+  const candidates = [argv[0] ?? ""];
+  if (AGENT_INTERPRETERS.includes(basename(argv[0] ?? "").toLowerCase()) && argv[1]) {
+    candidates.push(argv[1]);
+  }
+  candidates.push(comm);
+  for (const c of candidates) {
+    const bin = basename(c.trim()).toLowerCase();
+    if (!bin) continue;
+    if (AGENT_BINARY_BASENAMES.has(bin) || AGENT_BINARY_ALIASES.has(bin)) return bin;
+  }
+  return null;
+}
+
 export interface CodexProcessCandidate {
   pid: number;
   tty: string;

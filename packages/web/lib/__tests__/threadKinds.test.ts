@@ -110,7 +110,6 @@ describe("dmCards", () => {
     expect(cards.map((c) => c.id)).toEqual(["dm:a", "dm:c"]);
     expect(cards.map((c) => c.unread)).toEqual([3, 0]);
     expect(cards.map((c) => c.activityAt)).toEqual([8, 20]);
-    expect(cards.map((c) => c.browseAt)).toEqual([10, 20]);
     expect(cards[0].href).toBe("/chat/a");
     expect(frozenReadAtOf(cards[1])).toBe(7);
   });

@@ -25,7 +25,7 @@
 // already consumed and is swallowed, so nothing moves in the current view.
 
 import { useInboxStore } from "../store/inboxStore";
-import { bridge, isDesktop } from "./desktop";
+import { bridge, isDesktop, isDetachedTabWindow } from "./desktop";
 import { pathLabel, conversationTabPath, inboxTabSessionId } from "./pathLabel";
 import { isNonTabRoute, shouldUseTabRouting } from "../src/compat/tabRouting";
 
@@ -143,6 +143,32 @@ export function openIn(target: OpenTarget, path: string): void {
   const detach = bridge("detachTab");
   if (detach) { void detach(path); return; }
   window.open(path, "_blank");
+}
+
+/** Break a tab out into its own OS window: the window loads the tab's path and
+ *  the tab leaves this strip — a move, not a copy (the last tab stays, since a
+ *  window with no tab is unrenderable). False when the shell lacks the verb. */
+export function detachTab(tab: { id: string; path: string }): boolean {
+  const fn = bridge("detachTab");
+  if (!fn) return false;
+  void fn(tab.path);
+  const state = useInboxStore.getState();
+  if (state.tabs.length > 1) state.closeTab(tab.id);
+  return true;
+}
+
+/** Pop the current view out (Cmd+N / File › New Window): the active tab in a
+ *  windowed shell, or the page itself in a detached window, which has no strip. */
+export function detachCurrentView(): boolean {
+  if (isDetachedTabWindow()) {
+    const fn = bridge("detachTab");
+    if (!fn) return false;
+    void fn(window.location.pathname + window.location.search + window.location.hash);
+    return true;
+  }
+  const state = useInboxStore.getState();
+  const tab = state.tabs.find((t) => t.id === state.activeTabId);
+  return tab ? detachTab(tab) : false;
 }
 
 /** An anchor's href as an in-app path, or null when the browser should keep

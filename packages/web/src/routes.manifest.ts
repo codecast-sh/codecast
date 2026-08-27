@@ -9,7 +9,7 @@ import type { LazyExoticComponent, ComponentType } from "react";
  *   1. src/App.tsx                — the React Router <Route> table (what URL renders what).
  *   2. components/TabContent.tsx  — the tab-shell pattern→component table (what the
  *                                   persistent dashboard tab system can render in place).
- *   3. src/compat/tabRouting.ts   — NON_TAB_EXACT / NON_TAB_PREFIXES (which routes live
+ *   3. lib/tabRoutes.ts           — NON_TAB_EXACT / NON_TAB_PREFIXES (which routes live
  *                                   OUTSIDE the tab shell; intercepting them rewrites the
  *                                   URL without navigating).
  *   4. components/DashboardLayout — the isOnXPage booleans that compose isFullWidthPage
@@ -165,6 +165,8 @@ const PublicProfile = lazy(() => import("@/app/u/[username]/page"));
 // Sharing
 const Share = lazy(() => import("@/app/share/[token]/page"));
 const ShareMessage = lazy(() => import("@/app/share/message/[token]/page"));
+const ShareDoc = lazy(() => import("@/app/share/doc/[token]/page"));
+const SharePlan = lazy(() => import("@/app/share/plan/[token]/page"));
 
 // Code review
 const CommitView = lazy(() => import("@/app/commit/[owner]/[repo]/[sha]/page"));
@@ -292,6 +294,8 @@ export const ROUTES: RouteEntry[] = [
   // -- Sharing (no AuthGuard → public) --
   { path: "share/:token", component: cast(Share), layout: "share", guestOk: true, guestKind: "public" },
   { path: "share/message/:token", component: cast(ShareMessage), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/doc/:token", component: cast(ShareDoc), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "share/plan/:token", component: cast(SharePlan), layout: "share", guestOk: true, guestKind: "public" },
 
   // -- Code review --
   { path: "commit/:owner/:repo/:sha", component: cast(CommitView), layout: "codeReview", fullWidth: true },
