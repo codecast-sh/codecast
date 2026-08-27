@@ -64,9 +64,9 @@ export type ThreadCardModel = {
   /** dm only: the rail's own stamp (sortAt, either direction). The DMs chip —
    *  a browsing surface — ranks by this; everything else reads activityAt. */
   browseAt?: number;
-  /** dm only: nothing awaits the viewer — the counterpart has never spoken,
-   *  or the viewer already answered their last message. Listed under the DMs
-   *  chip, absent from the All view. */
+  /** Nothing awaits the viewer: the newest message is their own (or, for a
+   *  DM, the counterpart has never spoken). A dm card stays listed under the
+   *  DMs chip; every other browse-only card is absent from every view. */
   browseOnly?: boolean;
   /** Server: row.unread. dm: the rail count (0 when muted). session: 0 or 1. */
   unread: number;
@@ -178,14 +178,26 @@ export function summaryCount(n: number, noun: string, plural = `${noun}s`): stri
 
 // ── Row sources ─────────────────────────────────────────────────────────────
 
-/** Server rows (chat, comment, task) as cards. `channelKindOf` answers a chat
- *  row's room kind so a thread in a DM files under DMs; `taskShortIdOf` gives
- *  the canonical /tasks/<short_id> link when the task row is cached. */
+/** A thread the viewer answered: its newest reply is the viewer's own, typed
+ *  by a person (an agent row carries the asker's id on some kinds, and an
+ *  agent's answer is still news). Nothing awaits them, so the card retires
+ *  until someone else replies. */
+export function answeredByViewer(row: ThreadInboxRow, viewerId: string | undefined): boolean {
+  const last = row.last_reply;
+  if (!last || !viewerId) return false;
+  return last.author_kind !== "agent" && String(last.user_id ?? "") === String(viewerId);
+}
+
+/** Server rows (chat, comment, task, page) as cards. `channelKindOf` answers a
+ *  chat row's room kind so a thread in a DM files under DMs; `taskShortIdOf`
+ *  gives the canonical /tasks/<short_id> link when the task row is cached;
+ *  `viewerId` retires the threads the viewer answered (answeredByViewer). */
 export function serverCards(
   rows: ThreadInboxRow[],
   channelKindOf: (channelId: string) => string | undefined,
   taskShortIdOf: (taskId: string) => string | undefined,
   pageSlugOf: (artifactId: string) => string | undefined = () => undefined,
+  viewerId?: string,
 ): ThreadCardModel[] {
   const out: ThreadCardModel[] = [];
   for (const row of rows) {
@@ -213,6 +225,7 @@ export function serverCards(
       kind: row.kind,
       chip,
       activityAt: row.last_activity_at,
+      browseOnly: answeredByViewer(row, viewerId),
       unread: row.unread ?? 0,
       unreadCapped: !!row.unread_capped,
       href,
@@ -305,12 +318,18 @@ export function questionCards(decisions: SessionDecisionItem[]): ThreadCardModel
 
 // ── Views ───────────────────────────────────────────────────────────────────
 
+/** Whether a chip lists a card. The DMs chip is the one browsing surface: it
+ *  keeps browse-only rooms. Every other view drops a card nothing awaits on. */
+function listedUnder(c: ThreadCardModel, chip: ChipKey): boolean {
+  return chip === "dm" || !c.browseOnly;
+}
+
 /** The cards one chip shows. Sessions appear only under All, and only when
  *  the toggle is on; browse-only DM rooms appear only under their own chip;
  *  every other chip is exact. */
 export function cardsForChip(cards: ThreadCardModel[], chip: ChipKey, includeSessions: boolean): ThreadCardModel[] {
-  if (chip === "all") return cards.filter((c) => !c.browseOnly && (includeSessions || c.chip !== "session"));
-  return cards.filter((c) => c.chip === chip);
+  if (chip === "all") return cards.filter((c) => listedUnder(c, chip) && (includeSessions || c.chip !== "session"));
+  return cards.filter((c) => c.chip === chip && listedUnder(c, chip));
 }
 
 /** The default view is an inbox: a card earns its place by carrying unread.
@@ -348,7 +367,7 @@ export function unreadByChip(cards: ThreadCardModel[]): Record<ChipKey, number> 
     // badge-counting kinds roll up into the default view's number (which is
     // what the sidebar shows).
     if (c.unread <= 0) continue;
-    if (c.chip !== "session") out[c.chip]++;
+    if (c.chip !== "session" && listedUnder(c, c.chip)) out[c.chip]++;
     // A browse-only card is not in the All view, so it must not tick the
     // default view's number either.
     if (meta.countsTowardBadge && !c.browseOnly) out.all++;
@@ -366,9 +385,10 @@ export function frozenReadAtOf(card: ThreadCardModel): number {
 
 // ── Open by default ─────────────────────────────────────────────────────────
 
-/** The default: unread cards render already expanded, read cards collapsed. */
+/** The default: every card renders expanded, composer and all, so the page
+ *  reads and answers in place. The user's collapse is the only way down. */
 export function defaultOpenEntry(card: ThreadCardModel): ThreadCardOpenEntry {
-  return { expanded: card.unread > 0, by: "auto", at: card.activityAt, frozenReadAt: frozenReadAtOf(card) };
+  return { expanded: true, by: "auto", at: card.activityAt, frozenReadAt: frozenReadAtOf(card) };
 }
 
 /** A collapsed entry expires when NEWER unread lands: the reader closed the
