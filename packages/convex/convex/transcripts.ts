@@ -36,6 +36,7 @@ import {
   CALL_MEMBER_STALE_MS,
   authorizeRoom,
   authorizeRoomNoGrant,
+  isRoomTranscribeOff,
   liveMembers,
 } from "./callRooms";
 import { isTeamMember } from "./privacy";
@@ -79,12 +80,33 @@ async function requireOwnLiveTranscript(
   return t;
 }
 
+/** Who runs the room's transcript, decided here so every client agrees.
+ *
+ *  Every huddle transcribes: each deliberate participant's client asks to
+ *  scribe when it joins, and this is the arbiter. One live transcript per
+ *  room; the caller either owns it ("scribe" — a fresh run, their own run
+ *  resumed after a reload, or an orphaned run adopted because its scribe's
+ *  seat lease died), or somebody else is running it ("observer" — open no
+ *  pipes, or the room would hear every word twice), or the huddle turned
+ *  transcription off ("off", auto starts only — a manual toggle clears the
+ *  flag first). Adoption reassigns `started_by`, which is what the append and
+ *  flush paths authorize on: the new scribe must be able to write. */
 export const start = mutation({
   args: {
     room_key: v.string(),
     routes: v.optional(v.array(ROUTE_VALIDATOR)),
+    // The client is starting on its own because it joined a huddle, not
+    // because a person pressed Transcribe. Honors the room's opt-out.
+    auto: v.optional(v.boolean()),
   },
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    transcript_id: Id<"transcripts"> | null;
+    existing: boolean;
+    role: "scribe" | "observer" | "off";
+  }> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
     // `{ rec: true }`: this is one of the five paths a recording is allowed
@@ -93,14 +115,31 @@ export const start = mutation({
     // starts it here.
     const auth = await authorizeRoom(ctx, userId, args.room_key, { rec: true });
     if (!auth.ok) throw new Error(`Cannot transcribe this room: ${auth.reason}`);
-    // One live transcript per room: a second Transcribe toggle joins the
-    // existing run rather than forking the record.
+    if (args.auto && (await isRoomTranscribeOff(ctx, args.room_key))) {
+      return { transcript_id: null, existing: false, role: "off" };
+    }
     const existing = await ctx.db
       .query("transcripts")
       .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
       .collect();
     const live = existing.find((t) => t.status === "live");
-    if (live) return { transcript_id: live._id, existing: true };
+    if (live) {
+      if (String(live.started_by) === String(userId)) {
+        return { transcript_id: live._id, existing: true, role: "scribe" };
+      }
+      // A recording never reaches here (only its creator may start on its
+      // key), so the seat check reads the room the huddle is actually in.
+      const seated = await ctx.db
+        .query("call_members")
+        .withIndex("by_room", (q: any) => q.eq("room_key", args.room_key))
+        .collect();
+      const scribeSeated = liveMembers(seated, Date.now()).some(
+        (m: any) => String(m.user_id) === String(live.started_by),
+      );
+      if (scribeSeated) return { transcript_id: live._id, existing: true, role: "observer" };
+      await ctx.db.patch(live._id, { started_by: userId });
+      return { transcript_id: live._id, existing: true, role: "scribe" };
+    }
     const id = await ctx.db.insert("transcripts", {
       room_key: args.room_key,
       team_id: auth.teamId,
@@ -110,7 +149,7 @@ export const start = mutation({
       routes: (args.routes ?? []).map((r) => ({ ...r, added_by: userId })),
       last_seq: 0,
     });
-    return { transcript_id: id, existing: false };
+    return { transcript_id: id, existing: false, role: "scribe" };
   },
 });
 

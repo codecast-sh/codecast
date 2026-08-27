@@ -49,6 +49,9 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 // the newer call. Without this, join A → join B while A awaits connects TWO
 // SFU rooms and leaks A's live mic.
 let callGen = 0;
+// The room a PERSON joined on purpose (JoinOpts.intent), if any. Auto-scribe
+// reads it: a walkie's background seat never transcribes.
+let deliberateRoomKey: string | null = null;
 let audioHost: HTMLElement | null = null;
 const audioEls = new Map<string, HTMLMediaElement>();
 
@@ -350,9 +353,13 @@ export async function joinCall(roomKey: string, opts?: JoinOpts): Promise<void> 
     // seat is taken and the room is connected — and everything the gesture
     // means is still ahead of it: open the mic, restore the camera, and tell
     // the room that a person walked in on purpose.
-    if (opts?.intent === "deliberate") await applyDeliberateJoin(roomKey, opts);
+    if (opts?.intent === "deliberate") {
+      deliberateRoomKey = roomKey;
+      await applyDeliberateJoin(roomKey, opts);
+    }
     return;
   }
+  deliberateRoomKey = opts?.intent === "deliberate" ? roomKey : null;
   if (opts?.intent === "deliberate") setCall({ muted: false });
   if (room) teardownMedia();
   const gen = ++callGen;
@@ -544,6 +551,7 @@ export function setCallOutlivesWindow(on: boolean): void {
 // stays live on the server so the window taking over rejoins the same run.
 async function yieldRoomToOtherWindow(): Promise<void> {
   callGen++;
+  deliberateRoomKey = null;
   await stopScribe({ keepLive: true });
   teardownMedia();
   setCall({
@@ -560,10 +568,14 @@ async function yieldRoomToOtherWindow(): Promise<void> {
 export async function leaveCall(): Promise<void> {
   const roomKey = currentRoomKey ?? useInboxStore.getState().call.roomKey;
   callGen++;
-  // Hanging up ends our scribe run: its audio pipes ride this room, so the
-  // transcript is over the moment we leave (the server also ends it when the
-  // room empties — this makes the common case instant and no-ops otherwise).
-  await stopScribe();
+  deliberateRoomKey = null;
+  // Hanging up releases our scribe run but never ENDS the transcript: the
+  // huddle may go on without us, and the people still in it are the record.
+  // Somebody seated adopts the run (transcripts.start, via auto-scribe) once
+  // our seat lease is gone; if we were the last one out, `leaveRoom` below
+  // ends it server-side the moment the room empties, and the orphan sweep
+  // backstops a tab that never got to say goodbye.
+  await stopScribe({ keepLive: true });
   teardownMedia();
   setCall({
     phase: "idle",
@@ -873,6 +885,52 @@ export async function cancelOutgoing(inviteId: string): Promise<void> {
 
 // Lock or unlock the room I'm in. Local-first: the glyph flips in this tick
 // and callLockPending protects it until getLiveRooms echoes the same state.
+// ── Transcription entry points ────────────────────────────────────────────
+// Every huddle transcribes; the server decides which seated client scribes
+// (transcripts.start). Three ways in, one engine: the auto path a connected
+// window takes on its own, the manual toggle, and "stop" — which is written
+// on the ROOM (calls.setRoomTranscribeOff) so the next client to look does
+// not start it straight back up.
+
+export function isDeliberateRoom(roomKey: string | null): boolean {
+  return !!roomKey && deliberateRoomKey === roomKey;
+}
+
+let autoScribeInFlight: Promise<unknown> | null = null;
+
+/** Ask to scribe the room this window is connected to. Idempotent and quiet:
+ *  the server answers observer/off with no pipes opened, and a refusal is
+ *  not this window's news (the huddle works without a transcript). */
+export function autoScribe(roomKey: string): void {
+  if (!convex || !room || currentRoomKey !== roomKey || autoScribeInFlight) return;
+  autoScribeInFlight = startScribe({ convex, room, roomKey, routes: [], auto: true })
+    .catch(() => false)
+    .finally(() => {
+      autoScribeInFlight = null;
+    });
+}
+
+/** The manual Transcribe toggle (and "feed an agent", which needs words):
+ *  reopens the room's opt-out, then scribes. */
+export async function startTranscribing(
+  roomKey: string,
+  routes: Array<{ kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after" }> = [],
+): Promise<boolean> {
+  if (!convex || !room) return false;
+  await convex.mutation(api.calls.setRoomTranscribeOff, { room_key: roomKey, off: false }).catch(() => {});
+  return await startScribe({ convex, room, roomKey, routes });
+}
+
+/** "Stop transcribing", for the whole huddle: the room opts out first, so no
+ *  seated client's auto-scribe restarts it, then this run ends — which posts
+ *  the digest of what was said so far. */
+export async function stopTranscribing(roomKey: string): Promise<void> {
+  if (convex) {
+    await convex.mutation(api.calls.setRoomTranscribeOff, { room_key: roomKey, off: true }).catch(() => {});
+  }
+  await stopScribe();
+}
+
 export async function setRoomLock(roomKey: string, locked: boolean): Promise<void> {
   if (!convex) return;
   const store = useInboxStore.getState();

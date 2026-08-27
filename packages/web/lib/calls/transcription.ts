@@ -78,16 +78,27 @@ function attachRoomTracks() {
   }
 }
 
+/** Become the room's scribe, if the server says this client is it. Resolves
+ *  true when a run is now live here; false when somebody else's run already
+ *  covers the room, the huddle opted out (`auto` only), or the server
+ *  refused — in which case no track was attached and nothing is held. */
 export async function startScribe(opts: {
   convex: ConvexHandle;
   room: Room;
   roomKey: string;
   routes?: Array<{ kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after" }>;
-}): Promise<void> {
-  if (engine.getStatus().active) return;
+  auto?: boolean;
+}): Promise<boolean> {
+  if (engine.getStatus().active) return true;
+  const id = await engine.start({
+    convex: opts.convex,
+    roomKey: opts.roomKey,
+    routes: opts.routes,
+    auto: opts.auto,
+  });
+  if (!id) return false;
   room = opts.room;
   keysBySid.clear();
-  await engine.start({ convex: opts.convex, roomKey: opts.roomKey, routes: opts.routes });
 
   attachRoomTracks();
   const onTrack = () => attachRoomTracks();
@@ -106,6 +117,7 @@ export async function startScribe(opts: {
     room?.off(RoomEvent.LocalTrackPublished, onTrack);
     room?.off(RoomEvent.TrackUnsubscribed, onGone as any);
   };
+  return true;
 }
 
 /**

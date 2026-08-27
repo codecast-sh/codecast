@@ -34,14 +34,13 @@ import {
   setScreenShare,
   subscribeCallTiles,
   switchDevice,
-  type ParticipantTile,
-} from "../../lib/calls/callManager";
+  type ParticipantTile, stopTranscribing } from "../../lib/calls/callManager";
 import { humanizeConvexError, parseRoomKey } from "@codecast/shared/contracts";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { getScribeStatus, stopScribe, subscribeScribe } from "../../lib/calls/transcription";
+import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
 import { TranscribeControls } from "./TranscribePanel";
 import { AddPeopleButton } from "./AddPeople";
 import { RoomKnocks } from "./RoomDoor";
@@ -978,9 +977,9 @@ function TranscriptRail({
           </button>
           {scribe.active && (
             <button
-              onClick={() => void stopScribe()}
+              onClick={() => roomKey && void stopTranscribing(roomKey)}
               className="ml-auto rounded-full px-2 py-0.5 font-mono text-[10.5px] text-sol-text-muted transition-colors hover:bg-sol-red/10 hover:text-sol-red"
-              title="Stop transcribing (you are the scribe)"
+              title="Stop transcribing this huddle (for everyone)"
             >
               stop
             </button>
@@ -1101,7 +1100,7 @@ function ControlBar({ call }: { call: any }) {
             align="center"
           />
         )}
-        <TranscribeControls getRoom={getRoom} />
+        <TranscribeControls />
         <span className="relative">
           <button
             onClick={() => setDevicesOpen((o) => !o)}

@@ -7,7 +7,7 @@ import {
   transcriptChunkHeader,
 } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
-import { startScribe } from "../../lib/calls/transcription";
+import { startTranscribing } from "../../lib/calls/callManager";
 import type { PalettePickTarget, PalettePickResult } from "../../lib/palettePick";
 
 // The two gestures that connect a huddle's words to the rest of the product:
@@ -224,12 +224,9 @@ export function useAddLiveFeed(opts: {
               : "Join the huddle to start its transcription",
           );
         }
-        await startScribe({
-          convex: convex as any,
-          room,
-          roomKey,
-          routes: [{ ...route, mode: "live" }],
-        });
+        if (!(await startTranscribing(roomKey, [{ ...route, mode: "live" }]))) {
+          throw new Error("Somebody else is transcribing this huddle — pick the feed again once their words show here");
+        }
       };
       try {
         await attach();

@@ -3085,6 +3085,9 @@ export type LiveRoom = {
   team_id: string;
   /** The room's door, as a fact about the ROOM: what the lock glyph paints. */
   locked: boolean;
+  /** The huddle turned transcription off (calls.setRoomTranscribeOff) — what
+   *  keeps every seated client's auto-scribe from starting it again. */
+  transcribe_off?: boolean;
   /** May THIS viewer walk in right now — the server's own authorizeRoom answer.
    *  A lock shuts the open door only, so a member of the room or a guest
    *  holding a live grant is still true here while `locked` is too. This, never
