@@ -55,11 +55,15 @@ const IDLE: ScribeStatus = {
 export type ScribeEngine = {
   subscribe(cb: () => void): () => void;
   getStatus(): ScribeStatus;
-  /** Open the transcript. Returns its id, or null if the server refused. */
+  /** Open the transcript. Returns its id, or null when this client is not
+   *  the scribe: the server refused, somebody else's run is live in the room
+   *  ("observer"), or the huddle turned transcription off and this was an
+   *  `auto` start. Null means nothing was armed — attach nothing. */
   start(opts: {
     convex: ConvexHandle;
     roomKey: string;
     routes?: Array<{ kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after" }>;
+    auto?: boolean;
   }): Promise<string | null>;
   /** Put a microphone on the run. `key` is the caller's handle for it and the
    *  only thing `detach` needs; a repeat attach on a live key is ignored. */
@@ -174,8 +178,17 @@ export function createScribeEngine(): ScribeEngine {
       const res = await opts.convex.mutation(api.transcripts.start, {
         room_key: opts.roomKey,
         routes: (opts.routes ?? []).map((r) => ({ ...r, sent_seq: 0 })),
+        ...(opts.auto ? { auto: true } : {}),
       });
-      transcriptId = res?.transcript_id ? String(res.transcript_id) : null;
+      // The server is the arbiter of who scribes (transcripts.start). Any
+      // answer but "you" leaves this engine idle: opening pipes as an observer
+      // would append every word a second time.
+      if (!res?.transcript_id || (res.role && res.role !== "scribe")) {
+        convex = null;
+        roomKey = "";
+        return null;
+      }
+      transcriptId = String(res.transcript_id);
       startedAt = Date.now();
       lastSpeechEndMs = 0;
       anySegmentsSinceFlush = false;

@@ -911,3 +911,100 @@ describe("team strip inherits the open door", () => {
     expect(ann.in_room_key).toBeUndefined();
   });
 });
+
+// Every huddle transcribes, so several seated clients ask to scribe one room
+// and transcripts.start is the arbiter. One live run per room: the first
+// asker owns it, the rest are observers, a scribe whose seat lease died is
+// replaced, and "stop transcribing" is a fact about the room.
+describe("who scribes", () => {
+  async function fn(mod: "./calls" | "./transcripts", name: string) {
+    const m: any = await import(mod);
+    return m[name]._handler ?? m[name].handler;
+  }
+  const as = (ctx: any, user: string) => {
+    ctx.auth = { getUserIdentity: async () => ({ subject: `${user}|sess`, tokenIdentifier: "x" }) };
+  };
+  function seat(rows: Record<string, any[]>, user: string, lastSeen: number) {
+    rows.call_members.push({
+      _id: `cm-${user}`, room_key: "channel:ch1", team_id: "t1", user_id: user,
+      user_name: user, joined_at: lastSeen, last_seen: lastSeen,
+      muted: true, camera: false, sharing: false,
+    });
+  }
+  function room(rows: Record<string, any[]>) {
+    rows.chat_channels = [{ _id: "ch1", team_id: "t1", name: "design" }];
+    rows.transcripts = [];
+    rows.call_room_state = [];
+  }
+
+  test("the first asker scribes; the next seated asker observes", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    room(rows); seat(rows, "ua", now); seat(rows, "ub", now);
+    const start = await fn("./transcripts", "start");
+    const first = await start(ctx, { room_key: "channel:ch1", auto: true });
+    expect(first.role).toBe("scribe");
+    expect(first.existing).toBe(false);
+    as(ctx, "ub");
+    const second = await start(ctx, { room_key: "channel:ch1", auto: true });
+    expect(second).toEqual({ transcript_id: first.transcript_id, existing: true, role: "observer" });
+    expect(rows.transcripts).toHaveLength(1);
+    expect(rows.transcripts[0].started_by).toBe("ua");
+  });
+
+  test("the scribe's own run resumes after a reload", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    room(rows); seat(rows, "ua", now); seat(rows, "ub", now);
+    const start = await fn("./transcripts", "start");
+    const first = await start(ctx, { room_key: "channel:ch1" });
+    const again = await start(ctx, { room_key: "channel:ch1", auto: true });
+    expect(again).toEqual({ transcript_id: first.transcript_id, existing: true, role: "scribe" });
+  });
+
+  test("a scribe whose seat lease died is replaced, and the run continues under the new scribe", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    room(rows); seat(rows, "ua", now - STALE - 1000); seat(rows, "ub", now);
+    rows.transcripts = [{
+      _id: "tr1", room_key: "channel:ch1", team_id: "t1", started_by: "ua",
+      status: "live", started_at: now - 60_000, routes: [], last_seq: 4,
+    }];
+    as(ctx, "ub");
+    const res = await (await fn("./transcripts", "start"))(ctx, { room_key: "channel:ch1", auto: true });
+    expect(res).toEqual({ transcript_id: "tr1", existing: true, role: "scribe" });
+    // The row was adopted, not forked: same run, same numbering, new owner —
+    // which is what lets ub's appends through requireOwnLiveTranscript.
+    expect(rows.transcripts).toHaveLength(1);
+    expect(rows.transcripts[0].started_by).toBe("ub");
+    expect(rows.transcripts[0].last_seq).toBe(4);
+  });
+
+  test("the room's opt-out answers an auto start with off, and a manual start still runs", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    room(rows); seat(rows, "ua", now); seat(rows, "ub", now);
+    await (await fn("./calls", "setRoomTranscribeOff"))(ctx, { room_key: "channel:ch1", off: true });
+    expect(rows.call_room_state[0]).toMatchObject({ transcribe_off: true, locked: false, team_id: "t1" });
+    const start = await fn("./transcripts", "start");
+    expect(await start(ctx, { room_key: "channel:ch1", auto: true })).toEqual({
+      transcript_id: null, existing: false, role: "off",
+    });
+    expect(rows.transcripts).toHaveLength(0);
+    expect((await start(ctx, { room_key: "channel:ch1" })).role).toBe("scribe");
+  });
+
+  test("only someone in the huddle may turn its transcription off", async () => {
+    const { ctx, rows } = fakeCtx();
+    room(rows);
+    await expect((await fn("./calls", "setRoomTranscribeOff"))(ctx, { room_key: "channel:ch1", off: true }))
+      .rejects.toThrow(/in the huddle/);
+  });
+
+  test("the opt-out shares the lock's row and shows in the live-room list", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    room(rows); seat(rows, "ua", now);
+    await (await fn("./calls", "setRoomLocked"))(ctx, { room_key: "channel:ch1", locked: true });
+    await (await fn("./calls", "setRoomTranscribeOff"))(ctx, { room_key: "channel:ch1", off: true });
+    expect(rows.call_room_state).toHaveLength(1);
+    expect(rows.call_room_state[0]).toMatchObject({ locked: true, transcribe_off: true });
+    const list = await (await fn("./calls", "getLiveRooms"))(ctx, {});
+    expect(list.find((r: any) => r.room_key === "channel:ch1")).toMatchObject({ locked: true, transcribe_off: true });
+  });
+});

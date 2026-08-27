@@ -1,13 +1,8 @@
 import { useSyncExternalStore } from "react";
 import { Captions, CaptionsOff } from "lucide-react";
-import { useConvex } from "convex/react";
 import { useInboxStore } from "../../store/inboxStore";
-import {
-  getScribeStatus,
-  startScribe,
-  stopScribe,
-  subscribeScribe,
-} from "../../lib/calls/transcription";
+import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
+import { startTranscribing, stopTranscribing } from "../../lib/calls/callManager";
 
 // The transcribe toggle for the call stage's control bar. The person who
 // toggles it becomes the scribe (their client streams every audio track to
@@ -15,8 +10,7 @@ import {
 // rail manages feeds (sessions, docs, Slack) via the palette pick mode — and adding a
 // feed there auto-starts transcription, so this button is just the plain
 // on/off for people who only want the record.
-export function TranscribeControls({ getRoom }: { getRoom: () => any }) {
-  const convex = useConvex();
+export function TranscribeControls() {
   const scribe = useSyncExternalStore(subscribeScribe, getScribeStatus, () => ({
     active: false,
     transcriptId: null,
@@ -26,14 +20,12 @@ export function TranscribeControls({ getRoom }: { getRoom: () => any }) {
   }));
   const roomKey = useInboxStore((s) => s.call.roomKey);
 
+  // Every huddle transcribes on its own; this is the way to say no (for the
+  // whole room, not just this window) and the way back.
   const toggle = async () => {
-    if (scribe.active) {
-      await stopScribe();
-      return;
-    }
-    const room = getRoom();
-    if (!room || !roomKey) return;
-    await startScribe({ convex: convex as any, room, roomKey, routes: [] });
+    if (!roomKey) return;
+    if (scribe.active) await stopTranscribing(roomKey);
+    else await startTranscribing(roomKey);
   };
 
   return (
