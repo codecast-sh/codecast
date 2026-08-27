@@ -1,14 +1,17 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { ChevronRight, Headphones, MessageSquare, Pin, Volume2, VolumeX } from "lucide-react";
+import { PeopleStrip } from "./PeopleStrip";
+import { TeamPulseLine, useTeamPulse } from "./TeamPulseLine";
+import { usePeopleDensity } from "./usePeopleDensity";
+import type { PeopleDensity } from "./peopleDensity";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { type LiveRoomRow } from "../../hooks/useLiveRooms";
 import { useCallsAvailable } from "../../lib/teamFeatures";
 import {
-  attachTitlebarHead,
   canPin,
+  desktopHeaderClass,
   getAlwaysOnTop,
-  isPeopleWindow,
   navigateMainWindow,
   setAlwaysOnTop,
 } from "../../lib/desktop";
@@ -63,24 +66,41 @@ export function PeoplePanel() {
   // they are what this window is for.
   useHandCallToPanel();
   const view = usePeopleView();
+  // THE WINDOW'S SIZE PICKS THE SHAPE. Dragged down to a sliver it becomes one
+  // row of faces; narrowed, the header folds to a line; at its default size it
+  // is the full buddy list. Nothing here is a setting — see peopleDensity.ts.
+  const rootRef = useRef<HTMLElement | null>(null);
+  const density = usePeopleDensity(rootRef);
   return (
     // `main`, not a div: this window's whole content is this panel, and axe
     // was right to say so — with no landmark, everything on the page sat
     // outside one and a screen reader had no way to skip to the roster.
-    <main className="people-panel flex flex-col bg-sol-bg text-sol-text">
-      <PanelHeader />
-      <div className="people-scroll min-h-0 flex-1 overflow-y-auto">
-        {callsEnabled && (
-          <ErrorBoundary name="Live now" level="inline" fallback={null}>
-            <LiveNowRail isNarrow={false} />
-          </ErrorBoundary>
-        )}
-        {view === "list" ? (
-          <Roster callsEnabled={callsEnabled} />
-        ) : (
-          <PeopleWall callsEnabled={callsEnabled} />
-        )}
-      </div>
+    <main
+      ref={rootRef}
+      data-density={density}
+      className="people-panel flex flex-col bg-sol-bg text-sol-text"
+    >
+      {density === "strip" ? (
+        <ErrorBoundary name="People strip" level="inline" fallback={null}>
+          <PeopleStrip callsEnabled={callsEnabled} pin={<PinButton />} />
+        </ErrorBoundary>
+      ) : (
+        <>
+          <PanelHeader density={density} />
+          <div className="people-scroll min-h-0 flex-1 overflow-y-auto">
+            {callsEnabled && (
+              <ErrorBoundary name="Live now" level="inline" fallback={null}>
+                <LiveNowRail isNarrow={false} />
+              </ErrorBoundary>
+            )}
+            {view === "list" ? (
+              <Roster callsEnabled={callsEnabled} compact={density === "compact"} />
+            ) : (
+              <PeopleWall callsEnabled={callsEnabled} />
+            )}
+          </div>
+        </>
+      )}
       {/* The phone's own ringer and strip live HERE, in the window that hosts
           the audio. CallDock portals to the body and decides for itself whether
           it is a call dock, the walkie strip, or nothing at all — and once a
@@ -97,7 +117,7 @@ export function PeoplePanel() {
 // Header: who you are, what you are, and the window's own controls.
 // ---------------------------------------------------------------------------
 
-function PanelHeader() {
+function PanelHeader({ density }: { density: PeopleDensity }) {
   const s = useTrackedStore([
     (st: any) => st.currentUser?._id,
     (st: any) => st.currentUser?.name,
@@ -123,26 +143,70 @@ function PanelHeader() {
     [s.teamMembers, viewerId, s.currentUser],
   );
   const callsEnabled = useCallsAvailable();
+  const pulse = useTeamPulse();
+  const status = (me?.status ?? "available") as (typeof STATUSES)[number];
 
-  // The window's top row IS the titlebar: it becomes the drag surface while it
-  // sits in the band, and indents past the traffic lights when it also sits at
-  // the left edge. Measured rather than declared, which is why this is a ref
-  // and not a class — the same idiom the shell's other windows use.
-  const dragRef = useRef<HTMLDivElement | null>(null);
-  useMountEffect(() => {
-    const el = dragRef.current;
-    if (!el || !isPeopleWindow()) return;
-    return attachTitlebarHead(el);
-  });
+  // The compact header folds the three status pills behind the status word;
+  // they unfold for one choice and fold again.
+  const [choosing, setChoosing] = useState(false);
+
+  // The window's top row IS the titlebar. It always sits at the window's
+  // top-left corner, so the traffic-light inset is DECLARED rather than
+  // measured: `desktopHeaderClass` is the drag region plus the inset, and it is
+  // empty off the desktop. (A measured inset once left "PEOPLE" drawn under
+  // the lights for a whole session.)
+  // Tailwind resolves two padding-left classes by stylesheet order, not by
+  // which came last in the string, so the inset REPLACES the row's own left
+  // padding rather than sitting beside it.
+  const head = desktopHeaderClass() || "pl-3";
+
+  if (density === "compact") {
+    return (
+      <div className="people-head shrink-0 border-b border-sol-border">
+        <div className={`flex h-9 items-center gap-2 pr-2 ${head}`}>
+          <MemberFace member={me ?? {}} size={22} title="" />
+          <div className="min-w-0 flex-1 truncate text-[12px] font-medium text-sol-text">
+            {me ? memberDisplayName(me) : "Signing in"}
+          </div>
+          <button
+            type="button"
+            onClick={() => setChoosing((v) => !v)}
+            aria-expanded={choosing}
+            title="Change your status"
+            className={`people-status-word ${STATUS_TONE[status]}`}
+          >
+            {status}
+          </button>
+          <PinButton />
+        </div>
+        {choosing && (
+          <div className="flex gap-1 px-2 pb-2">
+            {STATUSES.map((st) => (
+              <StatusPill
+                key={st}
+                status={st}
+                active={status === st}
+                onPick={() => setChoosing(false)}
+              />
+            ))}
+            {callsEnabled && <WalkieDoorToggle compact />}
+          </div>
+        )}
+        <div className="flex items-center gap-2 pb-2 pl-3 pr-2">
+          <TeamPulseLine pulse={pulse} wrap className="flex-1 text-[10.5px]" />
+          <ViewSwitch />
+        </div>
+        <ElsewhereCallPill className="border-t border-sol-border/60 px-3 py-1.5" />
+      </div>
+    );
+  }
 
   return (
-    <div className="shrink-0 border-b border-sol-border">
+    <div className="people-head shrink-0 border-b border-sol-border">
       <div
-        ref={dragRef}
-        className="flex h-9 items-center justify-between gap-2 px-3 text-[11px] font-medium uppercase tracking-wider text-sol-text-dim"
+        className={`flex h-9 items-center justify-between gap-2 pr-3 text-[11px] font-medium uppercase tracking-wider text-sol-text-dim ${head}`}
       >
-        {/* The window's only title, so it is its heading. Styled exactly as
-            before — the type here was never a span's doing. */}
+        {/* The window's only title, so it is its heading. */}
         <h1 className="text-[11px] font-medium uppercase tracking-wider">People</h1>
         <div className="flex items-center gap-1.5">
           <ViewSwitch />
@@ -161,15 +225,25 @@ function PanelHeader() {
         </div>
         {callsEnabled && <WalkieDoorToggle />}
       </div>
-      <div className="flex gap-1 px-3 pb-2.5">
+      <div className="flex gap-1 px-3 pb-2">
         {STATUSES.map((st) => (
-          <StatusPill key={st} status={st} active={(me?.status ?? "available") === st} />
+          <StatusPill key={st} status={st} active={status === st} />
         ))}
       </div>
+      {/* The team in one line, under your own row: the reason to glance at a
+          pinned window at all is to learn this without reading the list. */}
+      <TeamPulseLine pulse={pulse} wrap className="px-3 pb-2.5 text-[11px]" />
       <ElsewhereCallPill className="border-t border-sol-border/60 px-3 py-1.5" />
     </div>
   );
 }
+
+/** The colour a status WORD takes, matching its pill. */
+const STATUS_TONE: Record<(typeof STATUSES)[number], string> = {
+  available: "text-sol-cyan",
+  busy: "text-sol-red",
+  away: "text-sol-text-muted",
+};
 
 /**
  * Which of the two views this window shows.
@@ -211,14 +285,19 @@ function ViewSwitch() {
 function StatusPill({
   status,
   active,
+  onPick,
 }: {
   status: (typeof STATUSES)[number];
   active: boolean;
+  onPick?: () => void;
 }) {
   // Local-first: the store action flips the roster row in the same tick and
   // dispatches the authoritative profile write through the outbox. The pill
   // must not wait on a round trip to show what you just declared.
-  const set = () => useInboxStore.getState().setMyStatus(status);
+  const set = () => {
+    useInboxStore.getState().setMyStatus(status);
+    onPick?.();
+  };
   return (
     <button
       type="button"
@@ -242,7 +321,7 @@ function StatusPill({
 /** The walkie door. It gates LIVE playback on this machine and nothing else: a
  *  closed door mutes a speaker, it never silences them — so the words say what
  *  still happens, not only what stops. */
-function WalkieDoorToggle() {
+function WalkieDoorToggle({ compact = false }: { compact?: boolean }) {
   const { open, snoozed, setOpen } = useWalkieDoor();
   return (
     <button
@@ -271,7 +350,7 @@ function WalkieDoorToggle() {
           teammate's voice PLAYS here, and the two gestures must not share a
           glyph when they sit six pixels apart. */}
       {open ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
-      {open ? "Open" : "Shut"}
+      {!compact && (open ? "Open" : "Shut")}
     </button>
   );
 }
@@ -322,7 +401,7 @@ function PinButton() {
 // The roster.
 // ---------------------------------------------------------------------------
 
-function Roster({ callsEnabled }: { callsEnabled: boolean }) {
+function Roster({ callsEnabled, compact }: { callsEnabled: boolean; compact: boolean }) {
   // Every read this list makes is the wall's too, so they share one hook. Two
   // views each doing their own signature-gating is two chances to get the wake
   // discipline wrong, in a window that never unmounts.
@@ -391,6 +470,7 @@ function Roster({ callsEnabled }: { callsEnabled: boolean }) {
                     room={roomFor.get(id) ?? null}
                     dm={dmFor.get(id) ?? null}
                     talking={!!id && id === talkingId}
+                    compact={compact}
                   />
                 );
               })}
@@ -410,6 +490,7 @@ function RosterRow({
   room,
   dm,
   talking,
+  compact,
 }: {
   member: any;
   viewerId: string;
@@ -419,6 +500,8 @@ function RosterRow({
   room: LiveRoomRow | null;
   dm: DmBadge | null;
   talking: boolean;
+  /** One line per person: the name and what they are doing side by side. */
+  compact: boolean;
 }) {
   const id = String(member._id);
   const name = memberDisplayName(member);
@@ -448,21 +531,40 @@ function RosterRow({
     // would nest interactive elements and promise a keyboard affordance the
     // div never had.
     <div
-      className="people-row group flex cursor-pointer items-center gap-2 px-3 py-1.5 transition-colors hover:bg-sol-bg-highlight/60"
+      className={`people-row group flex cursor-pointer items-center gap-2 transition-colors hover:bg-sol-bg-highlight/60 ${
+        compact ? "px-2 py-[3px]" : "px-3 py-1.5"
+      }`}
       onClick={message}
+      title={compact ? `${name} · ${line}` : undefined}
     >
-      <MemberFace member={member} size={28} title="" />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[12.5px] leading-tight text-sol-text">{name}</div>
-        <div className={`truncate text-[11px] leading-tight ${PRESENCE_META[visual].text}`}>
-          {line}
+      <MemberFace member={member} size={compact ? 20 : 28} title="" />
+      {compact ? (
+        // One line: the name holds its ground, the activity takes what is
+        // left and gives way first — a name is the thing you click.
+        <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <span className="max-w-full shrink-0 truncate text-[12px] leading-tight text-sol-text">
+            {name}
+          </span>
+          <span className={`min-w-0 truncate text-[10.5px] leading-tight ${PRESENCE_META[visual].text}`}>
+            {line}
+          </span>
         </div>
-      </div>
+      ) : (
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12.5px] leading-tight text-sol-text">{name}</div>
+          <div className={`truncate text-[11px] leading-tight ${PRESENCE_META[visual].text}`}>
+            {line}
+          </div>
+        </div>
+      )}
       {/* One slot, three layers: the unread count at rest, the other gestures
           under a pointer or a focus ring, and the mic — which is never hidden,
           because it is the gesture this window exists for. They share the box
           so the name column never reflows as the pointer crosses the list. */}
-      <div className="relative flex h-7 shrink-0 items-center justify-end gap-1" style={{ width: 92 }}>
+      <div
+        className="relative flex h-7 shrink-0 items-center justify-end gap-1"
+        style={{ width: compact ? 34 : 92 }}
+      >
         <div className="people-row-idle flex items-center transition-opacity">
           {unread > 0 && (
             <span
@@ -483,7 +585,7 @@ function RosterRow({
           className="people-row-actions absolute inset-y-0 right-[30px] flex items-center gap-0.5"
           onClick={(e) => e.stopPropagation()}
         >
-          {callsEnabled && (
+          {callsEnabled && !compact && (
             <button
               type="button"
               onClick={huddle.go}
