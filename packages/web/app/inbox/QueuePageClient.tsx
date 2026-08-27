@@ -5,6 +5,7 @@ import { useShortcutContext } from "../../shortcuts";
 import { useQuery, useMutation } from "convex/react";
 import { useSearchParams } from "next/navigation";
 import { useTabContext } from "../../lib/tabParams";
+import { urlSessionId } from "../../lib/pathLabel";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DashboardLayout } from "../../components/DashboardLayout";
@@ -550,12 +551,15 @@ export function QueuePageClient() {
     if (!targetId) return;
     const targetPath = `/conversation/${targetId}`;
     if (window.location.pathname !== targetPath) {
-      // Switching from one session to another (URL already points at a session) is a
-      // real navigation — push so browser back/forward cycles through viewed sessions.
-      // The first resolution from the bare inbox (or a deep-link param) only
-      // canonicalizes the URL, so replace it to avoid a dead bare-inbox entry that
-      // would just auto-select again on back.
-      const switchingSessions = window.location.pathname.startsWith("/conversation/");
+      // Switching from one session to another (URL already shows a DIFFERENT
+      // session, in either spelling — /conversation/<id> or /inbox?s=<id>) is a
+      // real navigation — push so browser back/forward cycles through viewed
+      // sessions. Anything else only canonicalizes the URL: the first resolution
+      // from the bare inbox (replace avoids a dead bare-inbox entry that would
+      // just auto-select again on back), or respelling /inbox?s=<id> of the SAME
+      // session (pushing would stack a duplicate entry per select).
+      const shownId = urlSessionId(window.location.pathname, window.location.search);
+      const switchingSessions = !!shownId && shownId !== targetId;
       window.history[switchingSessions ? "pushState" : "replaceState"]({ inboxId: targetId }, "", targetPath);
     }
   }, [currentSession?._id, viewingDismissedId, isActiveTab]);
