@@ -1,7 +1,8 @@
 // TEMPORARY debug query — safe to delete. Inspects why a conversation keeps
 // reappearing after dismiss: dumps dismiss-relevant fields + recent activity.
-import { internalQuery, internalMutation } from "./functions";
-import { scanInboxConversations, computeSessionsLiveness, computeInboxSessions } from "./conversations";
+import { internalQuery, internalMutation, internalAction } from "./functions";
+import { anyApi } from "convex/server";
+import { scanInboxConversations, computeSessionsLiveness, computeInboxSessions, setConvGitDiff } from "./conversations";
 import { shouldShowInInbox } from "./inboxFilters";
 import { v } from "convex/values";
 import { BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY } from "./buckets";
@@ -736,7 +737,7 @@ export const livenessOpCensus = internalQuery({
 // TEMPORARY: time the REAL sessionsLiveness path for a user (full enrichment,
 // AUQ probes and all) + count owner rows. Safe to delete.
 export const timeSessionsLiveness = internalQuery({
-  args: { who: v.string() },
+  args: { who: v.string(), _n: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const user =
       (await ctx.db.query("users").withIndex("email", (q: any) => q.eq("email", args.who)).first()) ??
@@ -771,8 +772,8 @@ async function debugResolveUser(ctx: any, who: string) {
 
 const inboxVariant = (skip: { children?: boolean; auq?: boolean; refs?: boolean } | null, scanOnly = false) =>
   internalQuery({
-    args: { who: v.string() },
-    handler: async (ctx: any, args: { who: string }) => {
+    args: { who: v.string(), _n: v.optional(v.number()) },
+    handler: async (ctx: any, args: { who: string; _n?: number }) => {
       const user = await debugResolveUser(ctx, args.who);
       if (!user) return { error: "no user" };
       if (scanOnly) {
@@ -793,3 +794,139 @@ export const timeInboxNoChildren = inboxVariant({ children: true });
 export const timeInboxNoAuq = inboxVariant({ auq: true });
 export const timeInboxNoRefs = inboxVariant({ refs: true });
 export const timeInboxBare = inboxVariant({ children: true, auq: true, refs: true });
+
+// TEMPORARY: in-process timing matrix. Actions have a live clock, so timing
+// each variant via runQuery isolates backend cost from CLI startup. Reports
+// min/median over N reps per variant. Safe to delete.
+export const timeInboxMatrix = internalAction({
+  args: { who: v.string(), reps: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const reps = args.reps ?? 5;
+    const variants = [
+      "timeInboxScanOnly", "timeInboxBare", "timeInboxNoChildren", "timeInboxNoAuq",
+      "timeInboxNoRefs", "timeInboxFull", "timeSessionsLiveness",
+    ] as const;
+    const out: Record<string, { min: number; median: number; all: number[] }> = {};
+    for (const name of variants) {
+      const samples: number[] = [];
+      for (let i = 0; i < reps; i++) {
+        const t0 = Date.now();
+        // Fresh args per rep so Convex can't serve the previous rep's cached result.
+        await ctx.runQuery(anyApi.debugTmp[name], { who: args.who, _n: Date.now() + i });
+        samples.push(Date.now() - t0);
+      }
+      const sorted = [...samples].sort((a, b) => a - b);
+      out[name] = { min: sorted[0], median: sorted[Math.floor(sorted.length / 2)], all: samples };
+    }
+    const census = await ctx.runQuery(anyApi.debugTmp.managedSessionCensus, { who: args.who });
+    return { ...out, census };
+  },
+});
+
+export const managedSessionCensus = internalQuery({
+  args: { who: v.string() },
+  handler: async (ctx, args) => {
+    const user = await debugResolveUser(ctx, args.who);
+    if (!user) return { error: "no user" };
+    const rows = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
+      .collect();
+    const now = Date.now();
+    const alive = rows.filter((r: any) => now - r.last_heartbeat < 6 * 60 * 1000).length;
+    const withConv = rows.filter((r: any) => r.conversation_id).length;
+    const bytes = JSON.stringify(rows).length;
+    return { managed_sessions_total: rows.length, alive_6m: alive, with_conversation: withConv, approx_bytes: bytes };
+  },
+});
+
+// TEMPORARY: what the inbox scan reads vs what survives the filter. Safe to delete.
+export const inboxScanCensus = internalQuery({
+  args: { who: v.string(), _n: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const user = await debugResolveUser(ctx, args.who);
+    if (!user) return { error: "no user" };
+    const now = Date.now();
+    const { conversations } = await scanInboxConversations(ctx, user._id, now, { includeLiveness: false });
+    const c = { candidates: 0, shown: 0, subagent: 0, workflow_sub: 0, orphan: 0, killed: 0, noise: 0, empty_completed: 0, dismissed: 0, stashed: 0, bytes_all: 0, bytes_shown: 0, max_doc_bytes: 0 };
+    const big: Array<{ id: string; bytes: number; title: string }> = [];
+    for (const conv of conversations) {
+      const bytes = JSON.stringify(conv).length;
+      c.candidates++; c.bytes_all += bytes;
+      if (bytes > c.max_doc_bytes) c.max_doc_bytes = bytes;
+      big.push({ id: conv._id.toString(), bytes, title: (conv.title ?? "").slice(0, 40) });
+      if (conv.is_subagent) c.subagent++;
+      else if (conv.is_workflow_sub) c.workflow_sub++;
+      else if (conv.parent_conversation_id && !conv.parent_message_uuid) c.orphan++;
+      if (conv.inbox_killed_at && !conv.inbox_pinned_at) c.killed++;
+      if (conv.status === "completed" && conv.message_count === 0) c.empty_completed++;
+      if (shouldShowInInbox(conv)) {
+        c.shown++; c.bytes_shown += bytes;
+        if (conv.inbox_dismissed_at) c.dismissed++;
+        else if (conv.inbox_stashed_at) c.stashed++;
+      }
+    }
+    big.sort((a, b) => b.bytes - a.bytes);
+    // Field-size histogram across all candidate docs: which fields carry the bytes.
+    const fieldBytes: Record<string, number> = {};
+    for (const conv of conversations) {
+      for (const [k, val] of Object.entries(conv)) {
+        fieldBytes[k] = (fieldBytes[k] ?? 0) + JSON.stringify(val ?? null).length;
+      }
+    }
+    const topFields = Object.entries(fieldBytes).sort((a, b) => b[1] - a[1]).slice(0, 12);
+    return { ...c, top_docs: big.slice(0, 5), top_fields: topFields };
+  },
+});
+
+
+// TEMPORARY: conversation doc diet. Sheds the two legacy blobs the inbox scan
+// paid for on every recompute but nothing reads — available_skills (dropped;
+// user_skills is the source) and git_status (moved to the conversation_git_diffs
+// side row). Paced: one page per mutation, resumable by cursor. Safe to delete
+// once every row has been swept.
+export const dietConversationPage = internalMutation({
+  args: { cursor: v.union(v.string(), v.null()), numItems: v.number(), dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.query("conversations").paginate({ cursor: args.cursor, numItems: args.numItems });
+    let patched = 0;
+    let bytesShed = 0;
+    for (const conv of page.page) {
+      const hasSkills = conv.available_skills !== undefined;
+      const hasStatus = conv.git_status !== undefined;
+      if (!hasSkills && !hasStatus) continue;
+      bytesShed += (conv.available_skills?.length ?? 0) + (conv.git_status?.length ?? 0);
+      patched++;
+      if (args.dryRun) continue;
+      if (hasStatus && conv.git_status) {
+        const row = await ctx.db
+          .query("conversation_git_diffs")
+          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+          .first();
+        await setConvGitDiff(ctx, conv._id, row?.git_diff, row?.git_diff_staged, row?.git_status ?? conv.git_status);
+      }
+      await ctx.db.patch(conv._id, { available_skills: undefined, git_status: undefined });
+    }
+    return { scanned: page.page.length, patched, bytesShed, continueCursor: page.continueCursor, isDone: page.isDone };
+  },
+});
+
+export const dietConversationDocs = internalAction({
+  args: { cursor: v.optional(v.string()), maxPages: v.optional(v.number()), dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    let cursor: string | null = args.cursor ?? null;
+    const maxPages = args.maxPages ?? 300;
+    const totals = { pages: 0, scanned: 0, patched: 0, bytesShed: 0 };
+    let isDone = false;
+    for (let i = 0; i < maxPages; i++) {
+      const r: any = await ctx.runMutation(anyApi.debugTmp.dietConversationPage, { cursor, numItems: 100, dryRun: args.dryRun });
+      totals.pages++; totals.scanned += r.scanned; totals.patched += r.patched; totals.bytesShed += r.bytesShed;
+      cursor = r.continueCursor;
+      isDone = r.isDone;
+      if (isDone) break;
+      // Pacing: leave room between pages so live-session patches don't OCC-storm.
+      await new Promise((res) => setTimeout(res, 40));
+    }
+    return { ...totals, isDone, resumeCursor: isDone ? null : cursor };
+  },
+});
