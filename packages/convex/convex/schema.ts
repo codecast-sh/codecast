@@ -387,6 +387,8 @@ export default defineSchema({
     git_commit_hash: v.optional(v.string()),
     git_branch: v.optional(v.string()),
     git_remote_url: v.optional(v.string()),
+    // LEGACY: now written to conversation_git_diffs.git_status (off the hot
+    // doc). Still declared so pre-diet rows validate; unread everywhere.
     git_status: v.optional(v.string()),
     git_root: v.optional(v.string()),
     fork_count: v.optional(v.number()),
@@ -602,6 +604,9 @@ export default defineSchema({
         prompt: v.optional(v.string()),
       })
     ),
+    // LEGACY: never read (skills live in user_skills; getConversationWithMeta
+    // strips this). Declared only so pre-diet rows validate; setAvailableSkills
+    // no longer writes it and the doc diet sweep sheds it.
     available_skills: v.optional(v.string()),
     subagent_description: v.optional(v.string()),
     icon: v.optional(v.string()),
@@ -696,6 +701,11 @@ export default defineSchema({
     .index("by_spawned_by", ["spawned_by_conversation_id"])
     .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
     .index("by_user_stashed", ["user_id", "inbox_stashed_at"])
+    // Inbox scan indexes (scanInboxConversations): exclude subagent / killed
+    // rows at the index so the scan never reads docs the inbox filter drops.
+    .index("by_user_subagent_updated", ["user_id", "is_subagent", "updated_at"])
+    .index("by_user_live_dismissed", ["user_id", "inbox_killed_at", "inbox_dismissed_at"])
+    .index("by_user_live_stashed", ["user_id", "inbox_killed_at", "inbox_stashed_at"])
     .index("by_user_profile_pinned", ["user_id", "profile_pinned_at"])
     .index("by_user_dismissed", ["user_id", "inbox_dismissed_at"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
@@ -841,6 +851,10 @@ export default defineSchema({
     conversation_id: v.id("conversations"),
     git_diff: v.optional(v.string()),
     git_diff_staged: v.optional(v.string()),
+    // `git status` text captured at session start. Lives here, not on the
+    // conversation doc, for the same reason as the diffs: the inbox scan reads
+    // every candidate doc in full and never renders this.
+    git_status: v.optional(v.string()),
     updated_at: v.number(),
   }).index("by_conversation_id", ["conversation_id"]),
 
