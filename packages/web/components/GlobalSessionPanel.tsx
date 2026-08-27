@@ -4189,10 +4189,10 @@ export function SessionListPanel({
       // of the uppercased status caption. For long mixed-case identifiers like a
       // plan heading ("pl-114 · Union Outreach — …") where uppercasing reads badly.
       monoLabel?: boolean;
-      // A single action rendered inside the header row (Questions puts its
-      // "answer all" there). One header, one action — never a second banner
-      // above the section competing with the cards below it.
-      headerAction?: React.ReactNode;
+      // Route a card's click somewhere other than the inbox pane (Questions
+      // opens the full-width answer view anchored on the clicked session).
+      // Sub-session rows keep the default select — they aren't the question.
+      onSelect?: (session: InboxSession) => void;
     },
   ) => {
     if (items.length === 0) return null;
@@ -4229,30 +4229,7 @@ export function SessionListPanel({
         className={isDragOverSection ? "ring-1 ring-inset ring-sol-cyan/70 bg-sol-cyan/[0.04] transition-colors" : isDropTarget ? "transition-colors" : undefined}
       >
         {/* The section color rides on the header element itself so simple view
-            can tint the divider rule with currentColor; children set their own.
-            With a headerAction the header becomes a row of sibling buttons
-            (same shape as renderHiddenBucket) — a button can't nest a button. */}
-        {opts?.headerAction ? (
-          <div
-            data-sv-sec
-            className={`w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center gap-2 ${color}`}
-          >
-            <button
-              onClick={() => s.toggleCollapsedSection(key)}
-              className="flex-1 min-w-0 text-left"
-            >
-              <span className={`text-[10px] font-semibold uppercase tracking-wider ${color}`}>
-                {label} ({items.length})
-              </span>
-            </button>
-            {opts.headerAction}
-            <button onClick={() => s.toggleCollapsedSection(key)} className="shrink-0">
-              <svg className={`w-3 h-3 transition-transform ${color} ${collapsed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-          </div>
-        ) : (
+            can tint the divider rule with currentColor; children set their own. */}
         <button
           data-sv-sec
           onClick={() => s.toggleCollapsedSection(key)}
@@ -4272,7 +4249,6 @@ export function SessionListPanel({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
           </svg>
         </button>
-        )}
         {!collapsed && (() => {
           const sectionCap = sectionLimits[key] ?? SECTION_RENDER_CAP;
           // Take from the shared global budget (consumed in render order, so the
@@ -4345,7 +4321,7 @@ export function SessionListPanel({
                   session={session}
                   isActive={session._id === activeSessionId}
                   globalIndex={0}
-                  onSelect={handleSelect}
+                  onSelect={opts?.onSelect ?? handleSelect}
                   onCardContextMenu={handleCardContextMenu}
                   onDismiss={handleAnimatedDismiss}
                   onStash={handleAnimatedStash}
@@ -4769,20 +4745,12 @@ export function SessionListPanel({
             failed/blocked banner must not vanish behind it. */}
         {(s.chipFilterExclude || (!s.activeProjectFilter && !s.activeBucketFilter)) && <NeedsAttentionSection />}
         {/* Questions lead: a session that asked you something is your move
-            before anything else, pinned or not. One header, two clear moves:
-            the header action answers them all in one full-width pass; a card
-            below opens that session, same as any other section. */}
+            before anything else, pinned or not. One move: clicking a card
+            opens the full-width answer view anchored on that question, and
+            answering advances to the next — same flow for one or many. */}
         {renderSection("Questions", statusQuestions, "text-sol-violet", undefined, undefined, {
           key: "questions",
-          headerAction: (
-            <button
-              onClick={() => router.push("/questions")}
-              className="shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5 -my-0.5 text-[10px] font-semibold text-sol-violet hover:bg-sol-violet/15 transition-colors"
-              title="Answer them one at a time, full width"
-            >
-              answer all →
-            </button>
-          ),
+          onSelect: (session) => router.push(`/questions?s=${session._id}`),
         })}
         {renderSection("Pinned", statusPinned, "text-sol-magenta")}
         {renderSection("New", statusNew, "text-sol-blue")}
