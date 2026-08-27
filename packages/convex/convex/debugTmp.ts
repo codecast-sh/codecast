@@ -1,7 +1,7 @@
 // TEMPORARY debug query — safe to delete. Inspects why a conversation keeps
 // reappearing after dismiss: dumps dismiss-relevant fields + recent activity.
 import { internalQuery, internalMutation } from "./functions";
-import { scanInboxConversations, computeSessionsLiveness } from "./conversations";
+import { scanInboxConversations, computeSessionsLiveness, computeInboxSessions } from "./conversations";
 import { shouldShowInInbox } from "./inboxFilters";
 import { v } from "convex/values";
 import { BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY } from "./buckets";
@@ -756,3 +756,40 @@ export const timeSessionsLiveness = internalQuery({
     };
   },
 });
+
+// TEMPORARY: cost-attribution harness for the inbox enrichment. Date.now() is
+// frozen inside a query, so timing happens OUTSIDE (wall-clock around
+// `npx convex run`). Each variant skips one class of per-row reads; comparing
+// wall times attributes the cost. Safe to delete.
+async function debugResolveUser(ctx: any, who: string) {
+  return (
+    (await ctx.db.query("users").withIndex("email", (q: any) => q.eq("email", who)).first()) ??
+    (await ctx.db.query("users").withIndex("by_username", (q: any) => q.eq("username", who)).first()) ??
+    (await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", who)).first())
+  );
+}
+
+const inboxVariant = (skip: { children?: boolean; auq?: boolean; refs?: boolean } | null, scanOnly = false) =>
+  internalQuery({
+    args: { who: v.string() },
+    handler: async (ctx: any, args: { who: string }) => {
+      const user = await debugResolveUser(ctx, args.who);
+      if (!user) return { error: "no user" };
+      if (scanOnly) {
+        const { conversations } = await scanInboxConversations(ctx, user._id, Date.now(), { includeLiveness: false });
+        return { candidates: conversations.length };
+      }
+      const { sessions } = await computeInboxSessions(ctx, user._id, {
+        includeLiveness: false,
+        ...(skip ? { _skip: skip } : {}),
+      });
+      return { rows: sessions.length };
+    },
+  });
+
+export const timeInboxScanOnly = inboxVariant(null, true);
+export const timeInboxFull = inboxVariant(null);
+export const timeInboxNoChildren = inboxVariant({ children: true });
+export const timeInboxNoAuq = inboxVariant({ auq: true });
+export const timeInboxNoRefs = inboxVariant({ refs: true });
+export const timeInboxBare = inboxVariant({ children: true, auq: true, refs: true });
