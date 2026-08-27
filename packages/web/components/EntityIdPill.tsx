@@ -742,7 +742,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
           ? FileText
           : type === "project"
             ? Folder
-            : taskV!.icon;
+            : taskVisual(status).icon; // task — or type not yet resolved (the `!type` early return below wins)
 
   const colors = isSession
     ? "bg-sol-blue/10 text-sol-blue border-sol-blue/20 hover:bg-sol-blue/20"
