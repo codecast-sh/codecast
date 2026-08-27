@@ -266,6 +266,22 @@ describe("buildNonClaudeResumeCommand", () => {
     expect(cmd).not.toContain("claude");
     expect(cmd).not.toContain("--full-auto");
   });
+
+  test("grok resume appends grok args + permission flags (mode is a launch flag, not session state)", () => {
+    // A bare `grok --resume <id>` restarts in grok's default Ask mode; a
+    // managed grok can't answer TUI permission prompts, so auto-resume must
+    // carry the same flags the launch paths apply.
+    const id = "01a04000-4d49-70f3-88b4-316e8f48a5fb";
+    expect(
+      buildNonClaudeResumeCommand("grok", id, {
+        grokArgs: "--reasoning-effort high",
+        grokPermFlags: "--permission-mode bypassPermissions",
+      }),
+    ).toBe(`grok --resume ${id} --reasoning-effort high --permission-mode bypassPermissions`);
+    expect(
+      buildNonClaudeResumeCommand("grok", id, { grokPermFlags: "--permission-mode bypassPermissions" }),
+    ).toBe(`grok --resume ${id} --permission-mode bypassPermissions`);
+  });
 });
 
 // Both `cast resume --as` and `cast fork --resume --as` reconstitute into a fresh
@@ -443,8 +459,16 @@ describe("isValidResumeSessionId — shell-injection ids are refused before comm
     expect(isValidResumeSessionId("codex", "12345678-1234-1234-1234-123456789abc")).toBe(true);
     expect(isValidResumeSessionId("cursor", "chat-abc123")).toBe(true);
     expect(isValidResumeSessionId("pi", "a7c9c0e2-1d82-4d42-b342-f59fefc7b9f5")).toBe(true);
-    // grok ids are UUIDs (v7-style observed live) — shell-safe branch.
+    // grok ids are UUIDs (v7-style observed live).
     expect(isValidResumeSessionId("grok", "01a04000-4d49-70f3-88b4-316e8f48a5fb")).toBe(true);
+  });
+
+  test("grok refuses a title-shaped id: `grok --resume <non-UUID>` matches session TITLES", () => {
+    // Shell-safe but not a UUID — grok would resolve it as a case-insensitive
+    // title match and silently resume a DIFFERENT session on a unique hit.
+    expect(isValidResumeSessionId("grok", "fix-auth")).toBe(false);
+    expect(isValidResumeSessionId("grok", "mysession")).toBe(false);
+    expect(isValidResumeSessionId("grok", "01a04000-4d49-70f3-88b4")).toBe(false);
   });
 
   test("gemini is exempt — its resume ignores the id (`gemini --resume latest`)", () => {
