@@ -1,5 +1,6 @@
 "use client";
-import { useMemo, useState, useRef, useEffect } from "react";
+import { useMemo, useState, useRef } from "react";
+import { useDerivedSize } from "../hooks/useDerivedSize";
 import { createPortal } from "react-dom";
 import { useTheme } from "./ThemeProvider";
 
@@ -19,16 +20,7 @@ export function heatColor(value: number, max: number, colors: string[]): string 
 
 export function useContainerWidth(initial = 800) {
   const ref = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(initial);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const measure = () => setWidth(el.clientWidth);
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  const width = useDerivedSize(ref, (w) => Math.round(w), () => initial);
   return { ref, width };
 }
 
