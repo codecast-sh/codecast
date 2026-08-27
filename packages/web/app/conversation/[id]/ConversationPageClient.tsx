@@ -6,7 +6,7 @@ import { useMountEffect } from "../../../hooks/useMountEffect";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { setGuestImageScope } from "../../../hooks/useStorageImageUrl";
 import { DashboardLayout } from "../../../components/DashboardLayout";
-import { AppLoader } from "../../../components/AppLoader";
+import { ConversationPlaceholder } from "../../../components/ConversationPlaceholder";
 import { ConversationDiffLayout } from "../../../components/ConversationDiffLayout";
 import { ConversationData } from "../../../components/ConversationView";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
@@ -74,7 +74,7 @@ function RedirectToInbox({
     // instant path for sessions already in the queue.
     router.replace(`/inbox?s=${id}`);
   });
-  return <ConversationLoadingSkeleton />;
+  return <ConversationLoadingSkeleton id={id} />;
 }
 
 /**
@@ -128,7 +128,7 @@ function GuestConversationView({
     isJumpingToTarget,
   } = useConversationMessages(id, jumpTargetId ?? targetMessageId, highlightQuery);
 
-  if (!conversation) return <ConversationLoadingSkeleton />;
+  if (!conversation) return <ConversationLoadingSkeleton id={id} />;
 
   return (
     <DashboardLayout>
@@ -164,12 +164,13 @@ function GuestConversationView({
   );
 }
 
-/** The single app loader, inside the shell so the sidebar and rails are
- *  already in place when the inbox takes over — no hand-rolled skeleton. */
-function ConversationLoadingSkeleton() {
+/** The conversation's own header (name in place, actions inert) over the app
+ *  loader, inside the shell so the sidebar and rails are already in place when
+ *  the inbox takes over — no hand-rolled skeleton. */
+function ConversationLoadingSkeleton({ id }: { id?: string }) {
   return (
     <DashboardLayout>
-      <AppLoader className="min-h-0 h-full bg-transparent" size={32} />
+      <ConversationPlaceholder id={id} />
     </DashboardLayout>
   );
 }
@@ -265,13 +266,13 @@ export default function ConversationPage() {
         />
       );
     }
-    return <ConversationLoadingSkeleton />;
+    return <ConversationLoadingSkeleton id={id} />;
   }
   if (effective.access_level === "denied") {
     if (!isAuthLoading && !treatAsAuthed) {
       const returnTo = `/conversation/${id}${window.location.search}${window.location.hash}`;
       router.replace(`/login?return_to=${encodeURIComponent(returnTo)}`);
-      return <ConversationLoadingSkeleton />;
+      return <ConversationLoadingSkeleton id={id} />;
     }
     return <DeniedView />;
   }
@@ -284,7 +285,7 @@ export default function ConversationPage() {
   // Wait for auth to settle before committing to a render path: while loading,
   // resolveConversation may have answered with the anonymous identity, and we
   // don't want to flash the guest view at a signed-in owner (or vice versa).
-  if (isAuthLoading) return <ConversationLoadingSkeleton />;
+  if (isAuthLoading) return <ConversationLoadingSkeleton id={id} />;
 
   // Unauthenticated visitor on a shared link: the inbox is behind AuthGuard
   // (it would bounce them to the marketing root), so render read-only in place.
@@ -353,7 +354,7 @@ function RedeemThenRedirect({
     // shows denied, which is the honest outcome.
     redeem({ share_token: shareToken }).catch(() => {}).finally(() => setRedeemed(true));
   });
-  if (!redeemed) return <ConversationLoadingSkeleton />;
+  if (!redeemed) return <ConversationLoadingSkeleton id={id} />;
   return (
     <RedirectToInbox
       id={id}

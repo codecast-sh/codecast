@@ -1,5 +1,5 @@
 "use client";
-import { memo, useCallback, useEffect, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, type MouseEvent as ReactMouseEvent } from "react";
 import {
   useInboxStore,
   useTrackedStore,
@@ -23,6 +23,11 @@ import { animatedHideSession } from "../store/undoActions";
 import { getSessionRenderKey } from "../store/inboxStore";
 import { splitFleetBands, fleetTileMeta, fleetTileContext, fleetTileSummary, fleetProgress, type FleetBand, type FleetBands } from "./fleetBands";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
+import { overlayConversationId } from "../store/workspace";
+import { useContextMenu, ContextMenu } from "./ui/context-menu";
+import { SessionMenuItems } from "./menus/ObjectContextMenus";
+import { isForeignSession } from "../lib/liveEntities";
+import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 
 // The fleet board: the inbox home surface when clientState.ui.inbox_home is
 // "board" (the default). Every visible session as a dense two-line tile,
@@ -97,11 +102,13 @@ const FleetTile = memo(function FleetTile({
   band,
   now,
   onOpen,
+  onContextMenu,
 }: {
   session: InboxSession;
   band: FleetBand;
   now: number;
   onOpen: (id: string) => void;
+  onContextMenu?: (e: ReactMouseEvent, session: InboxSession) => void;
 }) {
   const meta = fleetTileMeta(session, band, now);
   const tone = TONE[meta.tone];
@@ -114,6 +121,7 @@ const FleetTile = memo(function FleetTile({
   return (
     <button
       onClick={() => onOpen(session._id)}
+      onContextMenu={onContextMenu ? (e) => onContextMenu(e, session) : undefined}
       title={`${title}\n${context}\n${meta.text}${summary ? `\n${summary}` : ""}`}
       className={`group relative flex min-w-0 flex-col items-stretch overflow-hidden rounded-md border text-left transition-colors ${
         band === "needsYou"
@@ -169,11 +177,13 @@ function BandSection({
   rows,
   now,
   onOpen,
+  onTileContextMenu,
 }: {
   band: FleetBand;
   rows: InboxSession[];
   now: number;
   onOpen: (id: string) => void;
+  onTileContextMenu?: (e: ReactMouseEvent, session: InboxSession) => void;
 }) {
   const m = BAND_META[band];
   if (rows.length === 0 && band !== "needsYou") return null;
@@ -190,7 +200,7 @@ function BandSection({
       ) : (
         <div className="grid items-stretch gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))" }}>
           {rows.map((s) => (
-            <FleetTile key={s._id} session={s} band={band} now={now} onOpen={onOpen} />
+            <FleetTile key={s._id} session={s} band={band} now={now} onOpen={onOpen} onContextMenu={onTileContextMenu} />
           ))}
         </div>
       )}
@@ -206,20 +216,15 @@ function BandSection({
  */
 function FleetDrillIn() {
   const s = useTrackedStore([
-    (st) => {
-      const sec = st.workspace.secondary;
-      return sec.pane?.kind === "conversation" && sec.presentation === "overlay" ? sec.pane.ref : null;
-    },
+    (st) => overlayConversationId(st.workspace),
     // Only this row — the whole map would re-render the overlay on every
     // other session's heartbeat (same rule as StageCompanion).
     (st) => {
-      const sec = st.workspace.secondary;
-      const id = sec.pane?.kind === "conversation" && sec.presentation === "overlay" ? sec.pane.ref : null;
+      const id = overlayConversationId(st.workspace);
       return id ? st.sessions[id] : null;
     },
   ]);
-  const sec = s.workspace.secondary;
-  const id = sec.pane?.kind === "conversation" && sec.presentation === "overlay" ? sec.pane.ref : null;
+  const id = overlayConversationId(s.workspace);
   const session = id ? (s.sessions[id] ?? null) : null;
 
   const handleClose = useCallback(() => {
@@ -252,9 +257,11 @@ function FleetDrillIn() {
       const t = e.target;
       // Escape inside an input means "leave the field", not "leave the visit".
       if (t instanceof HTMLElement && t.closest("input, textarea, [contenteditable='true'], [contenteditable=true]")) return;
-      // Capture phase + stopPropagation: while the drill-in is up it is modal,
-      // so its Escape outranks the global shortcut registry (which otherwise
-      // consumes the key before a bubble-phase listener ever sees it).
+      // Capture phase + stopPropagation: the key must not also drive whatever
+      // sits under the overlay. The global shortcut registry (also capture,
+      // registered at boot, so it runs first) keeps its one Escape claim —
+      // clearing a message selection — and declines otherwise, which is the
+      // right order: first Esc clears the selection, the next one closes.
       e.preventDefault();
       e.stopPropagation();
       handleClose();
@@ -267,7 +274,14 @@ function FleetDrillIn() {
   if (!open || !id || !session) return null;
 
   return (
-    <div className="absolute inset-0 z-30 flex" role="dialog" aria-modal="true">
+    // Deliberately NOT aria-modal: hasOpenModal() keys on that attribute, and
+    // it would stand down the global shortcut dispatcher (the triage chords —
+    // stash/defer/dormant/kill — target exactly this drilled-in session via
+    // focusedActionSessionId) AND the hosted ConversationView's own key
+    // handlers and composer autofocus. The drill-in is the conversation
+    // surface itself, presented as an overlay — not a dialog that owns the
+    // keyboard against it. Escape/backdrop dismissal is handled above.
+    <div className="absolute inset-0 z-30 flex" role="dialog">
       <div className="absolute inset-0 bg-sol-bg/70 backdrop-blur-[2px]" onClick={handleClose} />
       <div className="relative m-auto flex h-[94%] w-[min(1100px,96%)] flex-col overflow-hidden rounded-lg border border-sol-border bg-sol-bg shadow-2xl">
         <ErrorBoundary name="FleetDrillIn" level="panel">
@@ -348,6 +362,20 @@ export function FleetBoard() {
     useInboxStore.getState().wsShow("secondary", { kind: "conversation", ref: id }, { presentation: "overlay" });
   }, []);
 
+  // Right-click triage on a tile: the same shared session menu every list row
+  // renders (pin/label/stash/defer/dormant/kill), so the board is a first-class
+  // triage surface, not just a launcher.
+  const tileMenu = useContextMenu<{ session: InboxSession; isForeign: boolean }>();
+  const openTileMenu = tileMenu.open;
+  const handleTileContextMenu = useCallback(
+    (e: ReactMouseEvent, session: InboxSession) => {
+      const meId = useInboxStore.getState().currentUser?._id?.toString?.();
+      openTileMenu(e, { session, isForeign: isForeignSession(session, undefined, meId) });
+    },
+    [openTileMenu],
+  );
+  const { killWithNotice } = useTriggerKillNotice();
+
   const total = bands.needsYou.length + bands.running.length + bands.finished.length;
 
   return (
@@ -372,13 +400,23 @@ export function FleetBoard() {
             </div>
           ) : (
             <div className="flex flex-col gap-3">
-              <BandSection band="needsYou" rows={bands.needsYou} now={coarseNow} onOpen={handleOpen} />
-              <BandSection band="running" rows={bands.running} now={coarseNow} onOpen={handleOpen} />
-              <BandSection band="finished" rows={bands.finished} now={coarseNow} onOpen={handleOpen} />
+              <BandSection band="needsYou" rows={bands.needsYou} now={coarseNow} onOpen={handleOpen} onTileContextMenu={handleTileContextMenu} />
+              <BandSection band="running" rows={bands.running} now={coarseNow} onOpen={handleOpen} onTileContextMenu={handleTileContextMenu} />
+              <BandSection band="finished" rows={bands.finished} now={coarseNow} onOpen={handleOpen} onTileContextMenu={handleTileContextMenu} />
             </div>
           )}
         </div>
       </div>
+      <ContextMenu state={tileMenu}>
+        {({ session, isForeign }) => (
+          <SessionMenuItems
+            session={session}
+            isForeign={isForeign}
+            onOpen={() => handleOpen(session._id)}
+            onKill={() => killWithNotice(session._id)}
+          />
+        )}
+      </ContextMenu>
       <FleetDrillIn />
     </div>
   );

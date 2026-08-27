@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { awaitTrackedSessionCreateResult, categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, selectSessionRailOpen, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { awaitTrackedSessionCreateResult, categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, selectNavCollapsed, selectSessionRailOpen, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
 import { DispatchNotWiredError } from "../mutativeMiddleware";
 import { declareViewNav } from "../viewNav";
@@ -1505,6 +1505,51 @@ describe("preserveFields — base sync must not clobber the liveness overlay", (
     // A base sync carrying a REAL liveness value (crawl path) still applies.
     store.syncTable("sessions", [{ ...baseSession, _id: id, session_id: "s", title: "changed", agent_status: "idle", is_idle: true }]);
     expect(useInboxStore.getState().sessions[id].agent_status).toBe("idle");
+  });
+});
+
+describe("preserveFields — task list deltas must not strip cached detail joins", () => {
+  // webGetTaskDetail is the only channel carrying comments/history/
+  // linked_conversations/related_docs/source_insight. The list channels push
+  // the same row without them on every delta; if that stripped the cached
+  // joins, every re-open of a task would reload its activity, origin chip and
+  // Sessions list async instead of painting from the store.
+  const id = "task0000000000000000000000000077";
+  const listRow = { _id: id, short_id: "ct-77", title: "t", status: "open", priority: "high", created_at: 1, updated_at: 1, creator: { name: "a" }, plan: null };
+  const detailRow = {
+    ...listRow,
+    comments: [{ _id: "c1", created_at: 2, content: "hi" }],
+    history: [{ _id: "h1", created_at: 1, action: "created" }],
+    linked_conversations: [{ _id: "conv1", session_id: "s1", title: "origin" }],
+    related_docs: [{ _id: "d1", title: "doc" }],
+    source_insight: { summary: "why" },
+  };
+
+  beforeEach(() => {
+    useInboxStore.setState({ tasks: {}, pending: {} } as any);
+  });
+
+  it("a list delta keeps every detail join and applies the fields it does carry", () => {
+    const store = useInboxStore.getState();
+    store.syncRecord("tasks", id, detailRow);
+    store.syncTable("tasks", [{ ...listRow, title: "renamed", updated_at: 5, creator: { name: "b" } }], { isDelta: true });
+    const after = (useInboxStore.getState().tasks as any)[id];
+    expect(after.title).toBe("renamed");
+    expect(after.creator).toEqual({ name: "b" }); // list-authoritative
+    expect(after.comments).toEqual(detailRow.comments);
+    expect(after.history).toEqual(detailRow.history);
+    expect(after.linked_conversations).toEqual(detailRow.linked_conversations);
+    expect(after.related_docs).toEqual(detailRow.related_docs);
+    expect(after.source_insight).toEqual(detailRow.source_insight);
+  });
+
+  it("a fresh detail push still replaces the joins", () => {
+    const store = useInboxStore.getState();
+    store.syncRecord("tasks", id, detailRow);
+    store.syncRecord("tasks", id, { ...detailRow, linked_conversations: [], comments: [] });
+    const after = (useInboxStore.getState().tasks as any)[id];
+    expect(after.linked_conversations).toEqual([]);
+    expect(after.comments).toEqual([]);
   });
 });
 
@@ -3876,11 +3921,11 @@ describe("closeTab — promoted tab must not be a redirect-page route", () => {
   });
 });
 
-// The workspace (rails, widths, dock) is global chrome: switching tabs reveals
-// another page under the exact same frame. Tabs used to snapshot and restore a
-// per-tab workspace, which made the right rail open/close and change width on
-// every switch — this pins the contract that a switch never touches it.
-describe("switchTab — panel layout is global chrome, tabs never carry it", () => {
+// A tab freezes its WHOLE view, frame included: the panel arrangement (nav
+// collapse, rail open/closed, every width) and the right rail's conversation
+// ride the tab. Switching away stamps the live frame onto the tab; switching
+// back restores it. A tab that never stamped a frame inherits the current one.
+describe("switchTab — each tab freezes and restores its own frame", () => {
   const tabA = { id: "tab_a", title: "inbox", path: "/inbox", createdAt: 1 };
   const tabB = { id: "tab_b", title: "chat", path: "/chat", createdAt: 2 };
 
@@ -3888,36 +3933,69 @@ describe("switchTab — panel layout is global chrome, tabs never carry it", () 
     useInboxStore.setState({ tabs: [tabA, tabB], activeTabId: "tab_a", sidePanelSessionId: null });
   });
 
-  it("keeps the workspace and rail selection identical across a switch", () => {
+  it("restores each tab's frame — rail state, widths, nav collapse, rail subject", () => {
+    // Tab A's frame: rail open at 342, nav expanded, rail on conv-a.
     const st = useInboxStore.getState();
     if (!selectSessionRailOpen(st)) st.toggleSidePanel();
     st.wsSetSize("context", 342);
-    useInboxStore.setState({ sidePanelSessionId: "conv-rail" });
-    const before = useInboxStore.getState().workspace;
+    st.setNavCollapsed(false);
+    useInboxStore.setState({ sidePanelSessionId: "conv-a" });
+    const frameA = useInboxStore.getState().workspace;
 
     useInboxStore.getState().switchTab("tab_b");
+    // B has no snapshot yet: it inherits A's frame untouched (same ref)…
+    let s = useInboxStore.getState();
+    expect(s.workspace).toBe(frameA);
+    // …then diverges: rail closed, nav collapsed, narrower context.
+    s.toggleSidePanel();
+    useInboxStore.getState().setNavCollapsed(true);
+    useInboxStore.getState().wsSetSize("context", 18);
+    useInboxStore.setState({ sidePanelSessionId: null });
 
-    const s = useInboxStore.getState();
-    expect(s.activeTabId).toBe("tab_b");
-    // Same ref: the switch wrote nothing into the workspace at all.
-    expect(s.workspace).toBe(before);
+    useInboxStore.getState().switchTab("tab_a");
+    s = useInboxStore.getState();
     expect(selectSessionRailOpen(s)).toBe(true);
     expect(s.workspace.context.size).toBe(342);
-    expect(s.sidePanelSessionId).toBe("conv-rail");
+    expect(selectNavCollapsed(s)).toBe(false);
+    expect(s.sidePanelSessionId).toBe("conv-a");
+
+    useInboxStore.getState().switchTab("tab_b");
+    s = useInboxStore.getState();
+    expect(selectSessionRailOpen(s)).toBe(false);
+    expect(selectNavCollapsed(s)).toBe(true);
+    expect(s.workspace.context.size).toBe(18);
+    expect(s.sidePanelSessionId).toBe(null);
   });
 
-  it("ignores a legacy per-tab workspace snapshot persisted on the target tab", () => {
-    // Old clients stamped tab.workspace; persisted tabs still carry it. It
-    // must be inert — switching onto such a tab must not restore it.
+  it("a malformed legacy snapshot is inert — no slot may go missing", () => {
+    // Old clients persisted partial shapes ({ context: { presentation } },
+    // no pane key). Adopting one wholesale would leave workspace slots
+    // undefined and crash the layout; such slots must be skipped.
     const legacy = { ...tabB, workspace: { context: { presentation: "split" } } } as any;
     useInboxStore.setState({ tabs: [tabA, legacy], activeTabId: "tab_a" });
-    const st = useInboxStore.getState();
-    if (!selectSessionRailOpen(st)) st.toggleSidePanel();
     const before = useInboxStore.getState().workspace;
 
     useInboxStore.getState().switchTab("tab_b");
 
     expect(useInboxStore.getState().workspace).toBe(before);
+  });
+
+  it("closing the active tab restores the promoted tab's frame", () => {
+    const st = useInboxStore.getState();
+    if (!selectSessionRailOpen(st)) st.toggleSidePanel();
+    st.wsSetSize("context", 342);
+    useInboxStore.setState({ sidePanelSessionId: "conv-a" });
+
+    // Switch to B (stamps A), close B while its rail is shut.
+    useInboxStore.getState().switchTab("tab_b");
+    useInboxStore.getState().toggleSidePanel();
+    useInboxStore.getState().closeTab("tab_b");
+
+    const s = useInboxStore.getState();
+    expect(s.activeTabId).toBe("tab_a");
+    expect(selectSessionRailOpen(s)).toBe(true);
+    expect(s.workspace.context.size).toBe(342);
+    expect(s.sidePanelSessionId).toBe("conv-a");
   });
 });
 
