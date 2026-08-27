@@ -99,6 +99,18 @@ export function remarkEntityIds() {
       [
         MENTION_RE,
         (_match: string, name: string, entityId?: string) => {
+          // A serialized date pill (`@[<label> date:<iso>]`, written by the doc
+          // editor). The text node carries `date:<iso>|<label>` — as with
+          // entity:// below, react-markdown strips the href, so the text is
+          // the payload EntityAwareLink parses into a DatePill.
+          if (entityId && /^date:\d{4}-\d{2}-\d{2}$/i.test(entityId)) {
+            const payload = `${entityId.toLowerCase()}|${name.trim()}`;
+            return {
+              type: "link",
+              url: `entity://${payload}`,
+              children: [{ type: "text", value: payload }],
+            };
+          }
           if (entityId && !/^doc:/i.test(entityId) && (entityTypeFromId(entityId) || isConvexId(entityId))) {
             return {
               type: "link",

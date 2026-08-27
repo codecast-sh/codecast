@@ -1,7 +1,8 @@
 import { NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
 import { AvatarImg } from "../../lib/avatarCache";
-import { User, Calendar } from "lucide-react";
+import { User } from "lucide-react";
 import { EntityIdPill } from "../EntityIdPill";
+import { DatePill } from "../DatePill";
 import type { EntityType } from "../../lib/entityLinks";
 
 const ROUTE_MAP: Record<string, string> = {
@@ -29,59 +30,11 @@ function PersonMention({ attrs }: { attrs: Record<string, any> }) {
   );
 }
 
-const RELATIVE_DATE_LABELS = new Set([
-  "today", "yesterday", "tomorrow",
-  "this week", "last week", "next week",
-  "this month", "last month", "next month",
-]);
-
-function recomputeRelativeLabel(dateValue: string): string | null {
-  const parts = dateValue.split("-");
-  if (parts.length !== 3) return null;
-  const target = new Date(+parts[0], +parts[1] - 1, +parts[2]);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  target.setHours(0, 0, 0, 0);
-  const diffDays = Math.round((target.getTime() - today.getTime()) / 86400000);
-  if (diffDays === 0) return "Today";
-  if (diffDays === -1) return "Yesterday";
-  if (diffDays === 1) return "Tomorrow";
-  return null;
-}
-
+// The chip itself lives in components/DatePill so the read-mode markdown
+// pipeline renders the identical pill without importing tiptap.
 function DateMention({ attrs }: { attrs: Record<string, any> }) {
-  const dateValue = attrs.dateValue || attrs.id;
-  const storedLabel: string = attrs.label || dateValue;
-
-  // If the stored label is a relative term (e.g. "Today" from when the doc
-  // was written), recompute it against the current date so old docs don't
-  // claim to be from "today" forever.
-  const isRelative = RELATIVE_DATE_LABELS.has(String(storedLabel).toLowerCase());
-  const recomputed = isRelative && dateValue ? recomputeRelativeLabel(dateValue) : null;
-  const label = isRelative ? (recomputed ?? dateValue) : storedLabel;
-
-  let resolvedDisplay = "";
-  if (dateValue) {
-    const parts = dateValue.split("-");
-    if (parts.length === 3) {
-      const d = new Date(+parts[0], +parts[1] - 1, +parts[2]);
-      const SHORT_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-      const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-      resolvedDisplay = `${DAYS[d.getDay()]}, ${SHORT_MONTHS[d.getMonth()]} ${d.getDate()}`;
-    }
-  }
-
-  const showResolved = resolvedDisplay && resolvedDisplay !== label;
-
-  return (
-    <span className="mention-inline mention-inline-date">
-      <Calendar className="w-[14px] h-[14px] flex-shrink-0 text-[#cb4b16]" />
-      <span className="mention-inline-label">{label}</span>
-      {showResolved && (
-        <span className="mention-date-resolved">{resolvedDisplay}</span>
-      )}
-    </span>
-  );
+  const iso = attrs.dateValue || attrs.id || "";
+  return <DatePill iso={iso} label={attrs.label} />;
 }
 
 export { PersonMention, DateMention };

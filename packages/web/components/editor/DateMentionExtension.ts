@@ -213,6 +213,22 @@ export const DateMentionExtension = Mention.extend({
   addNodeView() {
     return ReactNodeViewRenderer(MentionNodeView);
   },
+  // Without this, tiptap-markdown serialized the node to NOTHING and every
+  // date pill silently vanished from doc.content (read mode, the CLI, agents).
+  // `@[<label> date:<iso>]` is the shared mention vocabulary — the server
+  // deriver (convex/docSync.ts toMarkdown) and EntityRefExtension's reverse
+  // conversion both know this exact form.
+  addStorage() {
+    return {
+      markdown: {
+        serialize(state: any, node: any) {
+          const iso = node.attrs.dateValue || node.attrs.id || "";
+          state.write(`@[${node.attrs.label || iso} date:${iso}]`);
+        },
+        parse: {},
+      },
+    };
+  },
 }).configure({
   HTMLAttributes: { class: "editor-date-pill" },
   suggestion: {

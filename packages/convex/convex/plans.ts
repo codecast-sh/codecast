@@ -26,6 +26,7 @@ import {
   workspacesMatch,
 } from "./lib/access";
 import { notFound } from "./lib/auth";
+import { docSourceForPlanSource } from "@codecast/shared/docs";
 import { listLiveManagedSessions, liveConversationIdSet } from "./lib/liveSessions";
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
@@ -194,7 +195,9 @@ export const create = mutation({
       title: args.title,
       content: args.body || "",
       doc_type: "plan",
-      source: "human",
+      // The plan-body doc inherits the plan's origin: an agent's plan is agent
+      // output in the docs list, not a doc the human wrote.
+      source: docSourceForPlanSource(args.source || "human"),
       plan_id: id,
       project_id,
     });
@@ -457,7 +460,7 @@ export const update = mutation({
           title: args.title || plan.title,
           content: args.body,
           doc_type: "plan",
-          source: "human",
+          source: docSourceForPlanSource((plan as any).source),
           plan_id: plan._id,
           project_id: plan.project_id,
         });
@@ -1442,7 +1445,7 @@ export const ensureDoc = mutation({
       title: plan.title,
       content: "",
       doc_type: "plan" as any,
-      source: "human" as any,
+      source: docSourceForPlanSource((plan as any).source) as any,
       plan_id: plan._id,
       project_id: plan.project_id,
       user_id: plan.user_id,

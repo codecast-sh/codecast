@@ -14260,6 +14260,12 @@ plan
     if (options.fromSession) {
       body.source = "promoted";
       if (sessionId) body.session_id = sessionId;
+    } else if (sessionId) {
+      // An agent session filing a plan is agent work, same as doc/task create:
+      // stamp it truthfully and bind the creating conversation so the plan
+      // (and its body doc) stay off the human shelf until promoted.
+      body.source = "agent";
+      body.conversation_id = sessionId;
     } else {
       body.source = "human";
     }

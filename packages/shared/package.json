@@ -15,6 +15,7 @@
     "./entities": "./entities/index.ts",
     "./render": "./render/index.ts",
     "./tasks": "./tasks/index.ts",
+    "./docs": "./docs/index.ts",
     "./vault": "./vault/index.ts",
     "./chat": "./chat/index.ts",
     "./comments": "./comments/index.ts"

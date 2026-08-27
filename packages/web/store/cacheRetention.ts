@@ -51,6 +51,30 @@ export function partitionSessionRetention(
   });
 }
 
+// Retention for the persisted docDetails collection (doc bodies + detail
+// joins), applied at hydration. Rows enter only when a doc is OPENED (the
+// detail query) or body-prefetched for the recent list page, so growth tracks
+// what the user actually reads — but nothing ever removed rows, and bodies are
+// the heavy bytes the thin `docs` list cache deliberately sheds. Cap by
+// last-open recency (`_cachedAt`, stamped by the sync hook) with the doc's own
+// updated_at as the fallback for rows from older builds. A dropped body stays
+// one round-trip away: opening the doc re-fetches and re-seeds it.
+export const DOC_DETAIL_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const MAX_CACHED_DOC_DETAILS = 200;
+
+export function partitionDocDetailRetention(
+  rows: any[],
+  now: number,
+): { keep: any[]; drop: string[] } {
+  return partitionCacheRetention(rows, now, {
+    ttlMs: DOC_DETAIL_CACHE_TTL_MS,
+    maxRows: MAX_CACHED_DOC_DETAILS,
+    alwaysKeep: (row) => !isConvexId(row._id) || !!row.pinned,
+    stampedAt: (row) => Math.max(row._cachedAt ?? 0, row.updated_at ?? 0),
+    sortStamp: (row) => Math.max(row._cachedAt ?? 0, row.updated_at ?? 0),
+  });
+}
+
 // Exclude tombstones never clear for delta tables (absence ≠ deletion in
 // applySyncTable), so every kill/dismiss adds a permanent `pending` entry —
 // measured at 1,832 entries after a heavy agent fan-out, and each one rides

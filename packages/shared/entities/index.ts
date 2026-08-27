@@ -169,7 +169,7 @@ const PREFIX_ALT = Object.keys(SHORT_ID_PREFIX).join("|");
 export const BARE_ID_SOURCE = `(?:${PREFIX_ALT})-[a-z0-9]+|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32}`;
 
 /** Ids as they appear inside an `@[Title id]` mention (a label is not an object). */
-export const MENTION_ID_SOURCE = `(?:${PREFIX_ALT})-\\w+|jx\\w+|doc:\\w+|label:\\w+|[a-z0-9]{32}`;
+export const MENTION_ID_SOURCE = `(?:${PREFIX_ALT})-\\w+|jx\\w+|doc:\\w+|label:\\w+|date:\\d{4}-\\d{2}-\\d{2}|[a-z0-9]{32}`;
 
 /** Scans prose for bare object ids. Word-bounded so it can't split a longer token. */
 export function bareEntityIdRegex(): RegExp {

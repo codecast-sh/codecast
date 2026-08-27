@@ -206,8 +206,8 @@ export function combineClaudeResumeFlags(
 
 /**
  * Resume command for the agents whose resume is a single self-contained CLI
- * invocation with no transcript surgery: codex, gemini, cursor. Returns null for
- * claude, whose resume needs the UUID-rewrite / JSONL-relocation / model+effort
+ * invocation with no transcript surgery: every client but claude. Returns null
+ * for claude, whose resume needs the UUID-rewrite / JSONL-relocation / model+effort
  * recovery machinery the daemon runs inline. Cursor lives here (not the claude
  * fall-through) so a cursor session resumes with its own binary — cursor-agent
  * resumes a chat by id — instead of building a `claude --resume` and running

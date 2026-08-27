@@ -34,6 +34,7 @@ import {
 import { findEntityInStore, resolveAssigneeInfo } from "../lib/liveEntities";
 import { useInboxStore } from "../store/inboxStore";
 import { DocEmbed } from "./DocEmbed";
+import { DatePill } from "./DatePill";
 import { FilePathLink } from "./FilePathLink";
 import { filePathMention, parseFilePathHref } from "../lib/filePathLinks";
 import { PublishedPageEmbed, PublishedPagePill } from "./PublishedPageEmbed";
@@ -45,6 +46,14 @@ import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
 const api = _api as any;
 
 export { isEntityId };
+
+// `date:<iso>` optionally trailed by `|<label>` — the payload remarkEntityIds
+// writes for a serialized date pill (`@[<label> date:<iso>]`).
+function parseDateRef(text: string): { iso: string; label?: string } | null {
+  const m = text.match(/^date:(\d{4}-\d{2}-\d{2})(?:\|(.*))?$/i);
+  if (!m) return null;
+  return { iso: m[1], label: m[2] || undefined };
+}
 
 // Task status glyph/color/label come from the canonical TASK_STATUS vocabulary
 // (TaskStatusBadge, via `taskVisual`) — the StatusCircle "fill" icons, so a
@@ -482,6 +491,10 @@ function MentionPill({ name, entityId }: { name: string; entityId?: string }) {
   if (entityId?.startsWith("doc:") && entityId.length > 4) {
     return <EntityIdPill type="doc" id={entityId.slice(4)} />;
   }
+  if (entityId?.startsWith("date:")) {
+    const date = parseDateRef(entityId);
+    if (date) return <DatePill iso={date.iso} label={name} />;
+  }
   if (entityId?.startsWith("label:")) {
     return (
       <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[11px] font-medium leading-[1.4] bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 align-baseline">
@@ -557,6 +570,8 @@ export function EntityAwareLink({ href, children, ...props }: any) {
   if (href?.startsWith("entity://")) {
     const ref = href.slice(9);
     if (ref.startsWith("doc:")) return <EntityIdPill type="doc" id={ref.slice(4)} />;
+    const date = parseDateRef(ref);
+    if (date) return <DatePill iso={date.iso} label={date.label} />;
     return <EntityIdPill shortId={ref} />;
   }
   // A file mention remarkEntityIds turned into a /files?path= link: re-resolve
@@ -577,6 +592,12 @@ export function EntityAwareLink({ href, children, ...props }: any) {
   // sanitizer). This is the markdown twin of the entity:// branch above.
   if (text.startsWith("doc:") && text.length > 4) {
     return <EntityIdPill type="doc" id={text.slice(4)} />;
+  }
+  // A date pill's text payload (`date:<iso>|<label>`), same stripped-href
+  // convention as doc refs above.
+  {
+    const date = parseDateRef(text);
+    if (date) return <DatePill iso={date.iso} label={date.label} />;
   }
   if (isEntityId(text)) {
     // Fallback preserves the original link for a Convex-shaped id that turns
