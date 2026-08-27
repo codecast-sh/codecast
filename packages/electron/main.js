@@ -402,7 +402,11 @@ ipcMain.handle("attach-tab", (e, navPath) => {
 // ---------------------------------------------------------------------------
 
 const PEOPLE_PATH = "/people";
-const PEOPLE_SIZE = { width: 320, height: 640, minWidth: 280, minHeight: 420 };
+// The minimums are a STRIP: one row of faces beside the traffic lights (see
+// components/people/peopleDensity.ts — the renderer picks its shape from the
+// box it is given). A buddy list pinned above other apps earns its place by
+// costing almost none of the screen.
+const PEOPLE_SIZE = { width: 320, height: 640, minWidth: 180, minHeight: 56 };
 
 let peopleWindow = null;
 let peopleBoundsTimer = null;

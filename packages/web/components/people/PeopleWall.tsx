@@ -94,7 +94,7 @@ export function PeopleWall({ callsEnabled }: { callsEnabled: boolean }) {
  *  the hand comes back. */
 const REFUSAL_MS = 2200;
 
-function WallFaceButton({
+export function WallFaceButton({
   face,
   data,
   callsEnabled,
