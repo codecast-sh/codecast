@@ -159,7 +159,7 @@ export function TaskBadge({
   return (
     <button
       onClick={() => router.push(`/tasks/${task._id}`)}
-      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 hover:bg-sol-magenta/20 transition-colors max-w-[200px] ${className || ""}`}
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-violet/10 text-sol-violet border border-sol-violet/20 hover:bg-sol-violet/20 transition-colors max-w-[200px] ${className || ""}`}
     >
       <Icon className={`w-2.5 h-2.5 flex-shrink-0 ${color}`} />
       <span className="truncate">{task.title}</span>

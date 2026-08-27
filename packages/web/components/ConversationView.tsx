@@ -4778,7 +4778,7 @@ function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "
     : `${Math.round(age / 86400000)}d`;
 
   const borderColor = type === "plan" ? "border-sol-cyan/20 bg-sol-cyan/5 hover:bg-sol-cyan/10"
-    : type === "task" ? "border-sol-magenta/20 bg-sol-magenta/5 hover:bg-sol-magenta/10"
+    : type === "task" ? "border-sol-violet/20 bg-sol-violet/5 hover:bg-sol-violet/10"
     : "border-sol-blue/20 bg-sol-blue/5 hover:bg-sol-blue/10";
 
   const DOC_TYPE_LABELS: Record<string, { label: string; color: string }> = {
@@ -7175,7 +7175,7 @@ function parseContextBlocks(text: string): { contexts: ParsedContextBlock[]; rem
 }
 
 const CONTEXT_TYPE_CONFIG: Record<string, { icon: typeof ListChecks; colorClass: string }> = {
-  task: { icon: ListChecks, colorClass: "bg-sol-magenta/10 text-sol-magenta border-sol-magenta/20 hover:bg-sol-magenta/20" },
+  task: { icon: ListChecks, colorClass: "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20" },
   plan: { icon: Target, colorClass: "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/20 hover:bg-sol-cyan/20" },
   doc: { icon: FileText, colorClass: "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20" },
 };
@@ -11548,7 +11548,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           {acTrigger && (acItems.length > 0 || (acTrigger.type === "@" && acServerLoading && !acQuery.includes(" "))) && (() => {
             const typeConfig: Record<string, { icon: typeof User; color: string; label: string }> = {
               person: { icon: User, color: "text-sol-green", label: "People" },
-              task: { icon: CheckSquare, color: "text-sol-magenta", label: "Tasks" },
+              task: { icon: CheckSquare, color: "text-sol-violet", label: "Tasks" },
               doc: { icon: FileText, color: "text-sol-cyan", label: "Docs" },
               session: { icon: MessageSquare, color: "text-sol-blue", label: "Sessions" },
               plan: { icon: MapIcon, color: "text-sol-violet", label: "Plans" },
