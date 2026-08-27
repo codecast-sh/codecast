@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { fleetBandFor, fleetSessionSig, fleetSessionsWakeSig, splitFleetBands, fleetTileMeta, fleetTileContext, fleetTileSummary, fleetProgress } from "./fleetBands";
+import { fleetBandFor, fleetCountedSessions, fleetSessionSig, fleetSessionsWakeSig, splitFleetBands, fleetTileMeta, fleetTileContext, fleetTileSummary, fleetProgress } from "./fleetBands";
 import type { InboxSession } from "../store/inboxStore";
 
 const NOW = 1_700_000_000_000;
@@ -253,6 +253,10 @@ describe("fleetSessionSig — the wake gate for always-mounted fleet surfaces", 
       { is_unresponsive: true },
       { has_pending: true },
       { inbox_killed_at: NOW },
+      { inbox_dismissed_at: NOW },
+      { inbox_stashed_at: NOW },
+      { is_pinned: true },
+      { is_anchor: true } as Partial<InboxSession>,
       { user_id: "u2" },
       { title: "other" },
       { thread_state: "parked" },
@@ -276,5 +280,65 @@ describe("fleetSessionSig — the wake gate for always-mounted fleet surfaces", 
     expect(fleetSessionsWakeSig(after)).toBe(fleetSessionsWakeSig(before));
     const real = { a, b: { ...b, awaiting_input: true } as InboxSession };
     expect(fleetSessionsWakeSig(real)).not.toBe(fleetSessionsWakeSig(before));
+  });
+});
+
+describe("fleetCountedSessions", () => {
+  // Convex-shaped ids (32 lowercase alphanumerics) so the old-row partition
+  // actually engages — a non-Convex id is an optimistic stub, always visible.
+  const cid = (n: number) => `c${String(n).padStart(31, "0")}`;
+  const byId = (rows: InboxSession[]) => Object.fromEntries(rows.map((r) => [r._id, r]));
+  const ids = (rows: InboxSession[]) => rows.map((r) => r._id).sort();
+  const countOpts = (
+    live: string[],
+    team: string[] = [],
+  ) => ({ ...noQueue, liveInboxIds: new Set(live), teamInboxIds: new Set(team) });
+
+  it("never counts a row the user set aside, even with a live agent", () => {
+    const working = sess({ _id: cid(1), is_idle: false, agent_status: "working" });
+    const stashed = sess({ _id: cid(2), is_idle: false, agent_status: "working", inbox_stashed_at: NOW });
+    const dismissed = sess({ _id: cid(3), awaiting_input: true, inbox_dismissed_at: NOW });
+    const killed = sess({ _id: cid(4), awaiting_input: true, inbox_killed_at: NOW });
+    const rows = fleetCountedSessions(byId([working, stashed, dismissed, killed]), countOpts([cid(1)]));
+    expect(ids(rows)).toEqual([cid(1)]);
+  });
+
+  it("counts a needs-input row still in the inbox window regardless of age", () => {
+    // The 21-hour-old triggered-task session on another machine/project: the
+    // inbox shows it, so the card must count it — this is what the old 6h
+    // recency filter silently dropped.
+    const old = sess({ _id: cid(1), awaiting_input: true, updated_at: NOW - 21 * 3600_000 });
+    const rows = fleetCountedSessions(byId([old]), countOpts([cid(1)]));
+    expect(ids(rows)).toEqual([cid(1)]);
+    expect(fleetBandFor(old, noQueue)).toBe("needsYou");
+  });
+
+  it("hides a row aged out of the live inbox window, pinned exempt", () => {
+    const aged = sess({ _id: cid(1), awaiting_input: true });
+    const pinnedAged = sess({ _id: cid(2), awaiting_input: true, is_pinned: true });
+    const inWindow = sess({ _id: cid(3), is_idle: false, agent_status: "working" });
+    const rows = fleetCountedSessions(byId([aged, pinnedAged, inWindow]), countOpts([cid(3)]));
+    expect(ids(rows)).toEqual([cid(2), cid(3)]);
+  });
+
+  it("counts teammate rows only while the team subscription reports them", () => {
+    const mine = sess({ _id: cid(1), user_id: "me", is_idle: false, agent_status: "working" });
+    const teammate = sess({ _id: cid(2), user_id: "them", is_idle: false, agent_status: "working" });
+    // Team scope: their row rides teamInboxIds.
+    expect(ids(fleetCountedSessions(byId([mine, teammate]), countOpts([cid(1)], [cid(2)]))))
+      .toEqual([cid(1), cid(2)]);
+    // Mine scope (team set cleared): the cached teammate row has frozen
+    // liveness and must not be counted.
+    expect(ids(fleetCountedSessions(byId([mine, teammate]), countOpts([cid(1)]))))
+      .toEqual([cid(1)]);
+  });
+
+  it("drops never-engaged blank stubs; a spawn counts once its first message lands", () => {
+    // Same rule as the board: a pre-warm blank isn't work, and a remote spawn
+    // enters via the working bucket the moment it carries a message.
+    const spawned = sess({ _id: cid(1), message_count: 1, is_idle: false, agent_status: "working" });
+    const stub = sess({ _id: cid(2), message_count: 0 });
+    const rows = fleetCountedSessions(byId([spawned, stub]), countOpts([cid(1), cid(2)]));
+    expect(ids(rows)).toEqual([cid(1)]);
   });
 });

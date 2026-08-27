@@ -8,6 +8,8 @@ import { Copy, Check, Maximize2, X, Code2, Eye, ChevronDown, ChevronUp } from "l
 import { CodeBlock } from "./CodeBlock";
 import { hasCharts, hydrateCharts } from "../lib/castChart";
 import { hydrateWidgets, WIDGET_BASE_CSS } from "../lib/castWidgets";
+import { canvasHrefToRoute } from "../lib/canvasLinks";
+import { useRouter } from "next/navigation";
 
 // Inline visual canvas. The agent emits a ```cast-canvas fenced block holding
 // static HTML/CSS/SVG; we sanitize it (DOMPurify strips scripts, event handlers,
@@ -90,12 +92,29 @@ function useDebounced(value: string, ms: number): string {
 function ShadowCanvas({ html, className = "" }: { html: string; className?: string }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<ShadowRoot | null>(null);
+  const router = useRouter();
+  const routerRef = useRef(router);
+  routerRef.current = router;
 
   useWatchEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     if (!rootRef.current) {
       rootRef.current = host.shadowRoot ?? host.attachShadow({ mode: "open" });
+      // Links to codecast's own objects (conversations, tasks, docs, …)
+      // navigate the SPA. The sanitizer forces target="_blank" on every canvas
+      // anchor, which is right for external links but bounces our own deep
+      // links out to a browser tab — in the desktop app, out of the app
+      // entirely. Modified clicks keep the browser's new-tab default.
+      rootRef.current.addEventListener("click", (e: Event) => {
+        const me = e as MouseEvent;
+        if (me.defaultPrevented || me.button !== 0 || me.metaKey || me.ctrlKey || me.shiftKey || me.altKey) return;
+        const anchor = (me.target as Element | null)?.closest?.("a[href]");
+        const route = canvasHrefToRoute(anchor?.getAttribute("href"));
+        if (!route) return;
+        me.preventDefault();
+        routerRef.current.push(route);
+      });
     }
     const root = rootRef.current;
     root.innerHTML = `<style>${SHADOW_BASE}</style>${html}`;
