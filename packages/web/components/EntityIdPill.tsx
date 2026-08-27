@@ -753,8 +753,8 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
         : type === "doc"
           ? "bg-sol-green/10 text-sol-green border-sol-green/20 hover:bg-sol-green/20"
           : type === "project"
-            ? "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20"
-            : "bg-sol-magenta/10 text-sol-magenta border-sol-magenta/20 hover:bg-sol-magenta/20";
+            ? "bg-sol-text-dim/10 text-sol-text-muted border-sol-text-dim/20 hover:bg-sol-text-dim/20"
+            : "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20";
 
   // One label rule for every type, shared with mobile: the pill reads as the
   // object's NAME, and the id moves to the hover card. A trigger prefers its

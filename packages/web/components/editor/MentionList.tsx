@@ -45,7 +45,7 @@ export type MentionItem = {
 
 const TYPE_CONFIG: Record<string, { icon: typeof User; color: string; label: string }> = {
   person: { icon: User, color: "text-sol-green", label: "People" },
-  task: { icon: CheckSquare, color: "text-sol-magenta", label: "Tasks" },
+  task: { icon: CheckSquare, color: "text-sol-violet", label: "Tasks" },
   doc: { icon: FileText, color: "text-sol-cyan", label: "Docs" },
   session: { icon: MessageSquare, color: "text-sol-blue", label: "Sessions" },
   plan: { icon: Target, color: "text-sol-violet", label: "Plans" },
