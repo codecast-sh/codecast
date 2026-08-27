@@ -8375,33 +8375,55 @@ async function processOpencodeSession(
 // Shared by pi AND grok (processTranscriptDeltaSession): grok's rewind_marker
 // drops accumulated turns exactly the way a pi branch switch does, and the two
 // clients' transcript roots are disjoint so one path-keyed map serves both.
-const piSyncedUuids = new Map<string, Set<string>>();
+// The value maps each synced uuid to its messageSyncSig — grok STREAMS chunks
+// into a message whose uuid stays stable (the parser coalesces them, keyed by
+// the opening line), so uuid membership alone would freeze every message at
+// whatever prefix the first watcher pass caught.
+const piSyncedSigs = new Map<string, Map<string, string>>();
 
-// Pure delta between the parser's current active branch and the uuids already
-// synced. `newMessages` are active messages not yet synced (sent via addMessages,
-// which upserts by uuid so a re-sent shared prefix patches in place). `orphanUuids`
-// are synced uuids no longer on the active branch — the abandoned branch's turns,
-// deleted so the synced conversation equals the active branch exactly (never a
-// splice). `nextSynced` is the active branch's uuid set, stored after a clean sync.
+// One message's sync signature: the whole serialized message. A grok assistant
+// message GROWS under an unchanged uuid across parses — content/thinking chunks
+// stream in, toolCalls attach, turn_completed stamps stopReason — so equality
+// must compare the payload, not just the uuid. pi messages land as complete
+// JSONL lines and never change, so for them this degrades to the old uuid-only
+// behavior (the signature compares equal on every later pass).
+export function messageSyncSig(m: unknown): string {
+  return JSON.stringify(m);
+}
+
+// Pure delta between the parser's current active branch and what was already
+// synced. `newMessages` are active messages not yet synced OR whose signature
+// changed since their last sync (sent via addMessages, which upserts by uuid and
+// patches a changed payload in place). `orphanUuids` are synced uuids no longer
+// on the active branch — the abandoned branch's turns, deleted so the synced
+// conversation equals the active branch exactly (never a splice). `nextSynced`
+// is the active branch's uuid -> signature map, stored after a clean sync.
 // Because pi's active branch is the unique parentId chain to the leaf, two branches
 // that share a uuid at any index share the whole prefix below it — so a set diff
 // catches every divergence (same-length, shrink, or mid-prefix), not just growth.
 export function computePiSyncDelta<T extends { uuid?: string }>(
   activeMessages: T[],
-  syncedUuids: ReadonlySet<string>,
-): { newMessages: T[]; orphanUuids: string[]; nextSynced: Set<string> } {
-  const activeUuids = new Set<string>();
+  syncedSigs: ReadonlyMap<string, string>,
+): { newMessages: T[]; orphanUuids: string[]; nextSynced: Map<string, string> } {
+  const nextSynced = new Map<string, string>();
+  const newMessages: T[] = [];
   for (const m of activeMessages) {
-    if (m.uuid) activeUuids.add(m.uuid);
+    // A message with no uuid can't be deduped or tracked; the pi/grok parsers
+    // always set one, so this branch only satisfies the optional type — treat it
+    // as new.
+    if (!m.uuid) {
+      newMessages.push(m);
+      continue;
+    }
+    const sig = messageSyncSig(m);
+    nextSynced.set(m.uuid, sig);
+    if (syncedSigs.get(m.uuid) !== sig) newMessages.push(m);
   }
-  // A message with no uuid can't be deduped or tracked; the pi parser always sets one
-  // from entry.id, so this branch only satisfies the optional type — treat it as new.
-  const newMessages = activeMessages.filter((m) => !m.uuid || !syncedUuids.has(m.uuid));
   const orphanUuids: string[] = [];
-  for (const uuid of syncedUuids) {
-    if (!activeUuids.has(uuid)) orphanUuids.push(uuid);
+  for (const uuid of syncedSigs.keys()) {
+    if (!nextSynced.has(uuid)) orphanUuids.push(uuid);
   }
-  return { newMessages, orphanUuids, nextSynced: activeUuids };
+  return { newMessages, orphanUuids, nextSynced };
 }
 
 // ── grok transcript-path helpers ─────────────────────────────────────────────
@@ -8480,8 +8502,8 @@ async function processTranscriptDeltaSession(
     // synced conversation (orphan detection below would treat every synced uuid as
     // abandoned).
     if (allMessages.length === 0) return;
-    const syncedUuids = piSyncedUuids.get(filePath) ?? new Set<string>();
-    const { newMessages, orphanUuids, nextSynced } = computePiSyncDelta(allMessages, syncedUuids);
+    const syncedSigs = piSyncedSigs.get(filePath) ?? new Map<string, string>();
+    const { newMessages, orphanUuids, nextSynced } = computePiSyncDelta(allMessages, syncedSigs);
     if (newMessages.length === 0 && orphanUuids.length === 0) return;
 
     let conversationId = conversationCache[sessionId];
@@ -8568,7 +8590,7 @@ async function processTranscriptDeltaSession(
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
             log("⚠️  Authentication expired - sync paused");
-            piSyncedUuids.set(filePath, nextSynced);
+            piSyncedSigs.set(filePath, nextSynced);
             return;
           }
         }
@@ -8597,7 +8619,7 @@ async function processTranscriptDeltaSession(
         retryQueue.add("createConversation", {
           userId, teamId, sessionId, agentType: client, title, startedAt: allMessages[0]?.timestamp,
         }, errMsg);
-        piSyncedUuids.set(filePath, nextSynced);
+        piSyncedSigs.set(filePath, nextSynced);
         return;
       }
     }
@@ -8647,18 +8669,28 @@ async function processTranscriptDeltaSession(
         log(`Deleted ${orphanUuids.length} orphaned ${client} message(s) after branch switch for session ${sessionId}`);
       } catch (err) {
         logConvexFailure(err);
-        finalSynced = new Set([...nextSynced, ...orphanUuids]);
+        finalSynced = new Map(nextSynced);
+        for (const uuid of orphanUuids) finalSynced.set(uuid, syncedSigs.get(uuid) ?? "");
       }
     }
 
-    piSyncedUuids.set(filePath, finalSynced);
+    piSyncedSigs.set(filePath, finalSynced);
     log(`Synced ${newMessages.length} ${client} messages for session ${sessionId}`);
     syncStats.messagesSynced += newMessages.length;
     syncStats.sessionsActive.add(sessionId);
     tryRegisterSessionProcess(sessionId, client);
 
     if (conversationId) {
-      sendAgentStatus(syncService, conversationId, sessionId, "working");
+      // Status is transcript-driven, like opencode's (8347): these clients'
+      // panes are excluded from reconcileStatusFromPane (grok's ❯ composer
+      // stays visible mid-turn and lies "idle"; pi/opencode have no glyph), so
+      // the transcript tail is the settle signal — turn_completed (grok) / a
+      // terminal stop (pi) flips the session out of "working" into its
+      // turn-end verdict. The final tail always reaches here: turn_completed
+      // stamps stopReason on the last assistant message, which changes its
+      // messageSyncSig and re-opens the delta.
+      const turn = classifyTranscriptTailFor(client)?.(content) ?? "unknown";
+      sendAgentStatus(syncService, conversationId, sessionId, turn === "idle" ? resolveTurnEndStatus(sessionId) : "working");
     }
 
     updateStateCallback();
@@ -10158,6 +10190,17 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
 //    turn. grok needs the busy-first order this classifier guarantees.
 const GLYPHLESS_PROMPT_CLIENTS: ReadonlySet<AgentClientId> = new Set(["opencode", "pi", "grok"]);
 
+// The registry promptReadyPattern for a client classified whole-pane (see
+// GLYPHLESS_PROMPT_CLIENTS above), null for the ❯/›-glyph clients. Every pane
+// classification site that knows its client routes through this instead of
+// re-testing set membership, so no site can fall back to the claude-chrome
+// whitelist for a client it cannot read.
+export function glyphlessPromptPattern(agentType: AgentClientId | undefined): RegExp | null {
+  return agentType && GLYPHLESS_PROMPT_CLIENTS.has(agentType)
+    ? AGENT_CLIENTS[agentType].promptReadyPattern
+    : null;
+}
+
 // Injection-readiness for a glyph-less client, tested against the WHOLE pane (not
 // extractTmuxLiveRegion's tight live-region tail — opencode has no ─/━ separator,
 // so that tail drops to the status bar and misses the footer marker). These
@@ -10182,6 +10225,19 @@ export function classifyGlyphlessClientPaneState(
   if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt|Esc:cancel|Waiting for response|\[stop\]/i.test(paneContent)) return "busy";
   if (readyPattern.test(paneContent)) return "idle";
   return "unknown";
+}
+
+// Whole-pane live-state for a KNOWN client — the reaper's idle gates go through
+// this. GLYPHLESS_PROMPT_CLIENTS classify with busy-first ordering against
+// their registry pattern: classifyTmuxLiveState would read grok's persistent ❯
+// composer as "idle" mid-turn (a busy grok must never look reapable), and read
+// pi/opencode as a permanent "unknown" (their idle terminals were never
+// reaped). Other clients keep the claude-chrome whitelist unchanged.
+export function classifyLivePaneFor(agentType: AgentClientId, paneContent: string): TmuxLiveState {
+  const glyphless = glyphlessPromptPattern(agentType);
+  return glyphless
+    ? classifyGlyphlessClientPaneState(paneContent, glyphless)
+    : classifyTmuxLiveState(paneContent);
 }
 
 // Pane-state status reconcile — the tmux-session counterpart to
@@ -10238,6 +10294,17 @@ function reconcileStatusFromPane(
   conversationId: string,
   syncService: SyncService,
 ): void {
+  // The claude-chrome classifier below cannot read GLYPHLESS_PROMPT_CLIENTS
+  // panes — worse than "unknown" for grok, whose ❯ composer stays visible for
+  // the whole turn while its busy chrome (header spinner, "Esc:cancel",
+  // "[stop]") sits OUTSIDE the live region: a mid-turn grok pane classifies
+  // "idle" here and this backstop would settle a working session every health
+  // check, flapping against the sync path's "working". These clients' turn
+  // state is transcript-driven instead (processTranscriptDeltaSession /
+  // processOpencodeSession classify the tail on every sync), so skipping the
+  // pane is a no-op, not a gap. pi/opencode already no-op'd here ("unknown");
+  // this makes the exclusion explicit and safe for glyphed liars.
+  if (GLYPHLESS_PROMPT_CLIENTS.has(detectSessionAgentType(sessionId))) return;
   const state = classifyTmuxLiveState(extractTmuxLiveRegion(paneContent));
   const stored = lastSentAgentStatus.get(sessionId);
   let target = paneReconcileTarget(state, stored);
@@ -11278,13 +11345,10 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId)
   let lastCorrectiveState: TmuxLiveState | null = null;
   let sameStateAttempts = 0;
 
-  // Glyph-less clients (opencode/pi) are classified from the WHOLE pane via their
-  // registry readiness pattern, not the ❯/›-glyph whitelist (see
+  // Glyph-less clients (opencode/pi/grok) are classified from the WHOLE pane via
+  // their registry readiness pattern, not the ❯/›-glyph whitelist (see
   // classifyGlyphlessClientPaneState / ct-39174).
-  const glyphlessPattern =
-    agentType && GLYPHLESS_PROMPT_CLIENTS.has(agentType)
-      ? AGENT_CLIENTS[agentType].promptReadyPattern
-      : undefined;
+  const glyphlessPattern = glyphlessPromptPattern(agentType);
 
   while (true) {
     let stdout: string;
@@ -14018,7 +14082,7 @@ async function reapBlockReason(
   let pane: string;
   try { ({ stdout: pane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmux + ":0.0", "-S", "-25"], { timeout: 4000 })); }
   catch { return { reason: "pane-capture-failed" }; }
-  const live = classifyTmuxLiveState(pane);
+  const live = classifyLivePaneFor(file.agentType, pane);
   if (live !== "idle") return { reason: `pane=${live}` };
   let tail: string;
   try { tail = readFileTailSync(file.path); } catch { return { reason: "tail-read-failed" }; }
@@ -14054,7 +14118,7 @@ async function reapOneTerminal(sessionId: string, tmux: string, convId: string |
   // TOCTOU guard: re-confirm the pane is still idle in the instant before the kill.
   try {
     const { stdout: pane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmux + ":0.0", "-S", "-25"], { timeout: 4000 });
-    const live = classifyTmuxLiveState(pane);
+    const live = classifyLivePaneFor(detectSessionAgentType(sessionId), pane);
     if (live !== "idle") { reaperLog(`SKIP ${tmux} (${sessionId.slice(0, 8)}): pane became "${live}" at kill time`); return; }
   } catch { reaperLog(`SKIP ${tmux} (${sessionId.slice(0, 8)}): recheck capture failed`); return; }
 
@@ -15340,9 +15404,16 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     }
   }
 
+  // grok gets its configured args + permission flags on resume too: its
+  // permission mode is a launch flag (never persisted in the session dir), so a
+  // bare `grok --resume <id>` would re-enter Ask mode and park on TUI prompts
+  // nobody can answer. getPermissionFlags already yields null when
+  // agent_args.grok pins a mode, so the flags can't double up.
   const nonClaudeResumeCmd = buildNonClaudeResumeCommand(agentType, sessionId, {
     codexArgs: getAgentArgs(config, "codex"),
     codexPermFlags: agentType === "codex" ? getPermissionFlags("codex", config) : null,
+    grokArgs: getAgentArgs(config, "grok"),
+    grokPermFlags: agentType === "grok" ? getPermissionFlags("grok", config) : null,
   });
   if (nonClaudeResumeCmd !== null) {
     // codex / gemini / cursor: a single self-contained resume invocation. The
@@ -15498,9 +15569,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         // composer) watch their registry readiness patterns instead — one lookup,
         // not a per-client ternary, so a new registry client is never silently
         // classified with claude's glyphs.
-        const promptPattern = GLYPHLESS_PROMPT_CLIENTS.has(agentType)
-          ? AGENT_CLIENTS[agentType].promptReadyPattern
-          : /[❯›]/;
+        const promptPattern = glyphlessPromptPattern(agentType) ?? /[❯›]/;
     // Scale readiness poll based on JSONL file size — large sessions take much longer to resume
     let jsonlSize = 0;
     try { jsonlSize = fs.statSync(jsonlPath).size; } catch {}

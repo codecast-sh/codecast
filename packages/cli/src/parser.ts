@@ -1592,7 +1592,10 @@ export function extractPiSessionId(content: string): string | undefined {
 //   3. Envelope timestamps are unix SECONDS — multiply by 1000.
 // Chunks are streaming deltas: consecutive same-role chunks coalesce into ONE
 // ParsedMessage, keyed by the line that opened it so uuids stay stable as the
-// file grows and the daemon's upsert-by-uuid sync patches messages in place.
+// file grows. A mid-turn parse therefore yields the SAME uuid with a shorter
+// payload than the final parse — the daemon's delta sync compares a per-message
+// signature (messageSyncSig, daemon.ts), not just uuid membership, and re-sends
+// the grown message so the server's upsert-by-uuid patches it in place.
 
 interface GrokContentBlock {
   type?: string;
@@ -1600,6 +1603,10 @@ interface GrokContentBlock {
   // image blocks (ACP): inline base64 + mimeType
   data?: string;
   mimeType?: string;
+  // diff blocks (edit-tool results): path + before/after text
+  path?: string;
+  oldText?: string;
+  newText?: string;
 }
 
 interface GrokUpdate {
@@ -1653,9 +1660,13 @@ function extractGrokChunk(content: GrokUpdate["content"]): { text: string; image
   return out;
 }
 
-/** Result text of a tool_call_update: `content` items are either bare content
- *  blocks ({type:"text"}) or ACP ToolCallContent wrappers ({type:"content",
- *  content: {type:"text"}}); both shapes appear upstream. */
+/** Result text of a tool_call_update. `content` items take three shapes (all
+ *  live-captured, v1.0.5 — /tmp/grok-support/real-session): bare content blocks
+ *  ({type:"text"}), ACP ToolCallContent wrappers ({type:"content", content:
+ *  {type:"text"}} — how command output arrives), and {type:"diff"} blocks —
+ *  how EVERY edit-tool result arrives (path + oldText/newText). A diff renders
+ *  as a minimal unified diff; dropping it left every file edit with an empty
+ *  result. */
 function extractGrokToolResultText(content: GrokUpdate["content"]): string {
   const blocks = Array.isArray(content) ? content : content && typeof content === "object" ? [content] : [];
   let text = "";
@@ -1663,6 +1674,12 @@ function extractGrokToolResultText(content: GrokUpdate["content"]): string {
     if (b.type === "text" && typeof b.text === "string") text += b.text;
     else if (b.type === "content" && b.content?.type === "text" && typeof b.content.text === "string") {
       text += b.content.text;
+    } else if (b.type === "diff") {
+      const prefixLines = (s: string, prefix: string) =>
+        s ? s.replace(/\n$/, "").split("\n").map((l) => `${prefix}${l}`).join("\n") + "\n" : "";
+      text += (typeof b.path === "string" && b.path ? `${b.path}\n` : "")
+        + prefixLines(typeof b.oldText === "string" ? b.oldText : "", "- ")
+        + prefixLines(typeof b.newText === "string" ? b.newText : "", "+ ");
     }
   }
   return text;
@@ -1681,8 +1698,11 @@ export function parseGrokSessionFile(content: string): ParsedMessage[] {
   // Whether the current turn produced assistant text — gates the turn_completed
   // `agent_result` fallback (used only when chunks were empty).
   let turnHasAssistantText = false;
-  // In-flight tool calls by toolCallId: result text accumulates across
-  // tool_call_update records and is emitted once the status turns terminal.
+  // In-flight tool calls by toolCallId: each tool_call_update's `content`
+  // REPLACES the call's result (ACP update semantics, live-verified: the
+  // in_progress update carries the tool DESCRIPTION, the terminal update the
+  // full output — accumulating across updates prefixed every command result
+  // with its description). The result is emitted once the status turns terminal.
   const pendingTools = new Map<string, { resultText: string; emitted: boolean }>();
 
   const push = (msg: ParsedMessage) => {
@@ -1770,7 +1790,9 @@ export function parseGrokSessionFile(content: string): ParsedMessage[] {
         const id = update.toolCallId ?? "";
         const pending = pendingTools.get(id);
         if (!pending || pending.emitted) break; // unknown id (fork/rewind edge) -> ignore
-        pending.resultText += extractGrokToolResultText(update.content);
+        // Replace, never append (see pendingTools above). An update with no
+        // `content` field keeps the last known result.
+        if (update.content !== undefined) pending.resultText = extractGrokToolResultText(update.content);
         if (update.status === "completed" || update.status === "failed") {
           pending.emitted = true;
           close();
