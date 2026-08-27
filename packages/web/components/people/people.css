@@ -535,3 +535,9 @@
   padding-left: 8px;
   background: linear-gradient(to right, transparent, var(--sol-bg-highlight) 8px);
 }
+
+/* A pulse that cannot wrap fades out instead of chopping a word in half. */
+.people-pulse:not(.flex-wrap) {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
+}
