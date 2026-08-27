@@ -356,6 +356,40 @@ export async function setConvGitDiff(
   }
 }
 
+// Upsert / read the stable-context side row (conversation_context). Same
+// hot-doc rationale as the git side row; the sweep in debugTmp moves legacy
+// on-doc values here.
+export async function setConvStableContext(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  data: string,
+) {
+  const existing = await ctx.db
+    .query("conversation_context")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))
+    .first();
+  if (existing) {
+    await ctx.db.patch(existing._id, { stable_context: data, updated_at: Date.now() });
+  } else {
+    await ctx.db.insert("conversation_context", {
+      conversation_id: conversationId,
+      stable_context: data,
+      updated_at: Date.now(),
+    });
+  }
+}
+
+async function getConvStableContext(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+): Promise<string | null> {
+  const row = await ctx.db
+    .query("conversation_context")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))
+    .first();
+  return row?.stable_context ?? null;
+}
+
 // Read the git side row (conversation_git_diffs). Blobs no longer live on the
 // conversation doc.
 async function getConvGitDiff(
@@ -1951,8 +1985,17 @@ export const getConversationWithMeta = query({
       ...conversationLight
     } = conversationForAccess(conversation, access);
 
+    // stable_context lives in the conversation_context side row (legacy rows
+    // still carry it on the doc until swept). Owner/team only — the same rule
+    // conversationForAccess applies to the legacy field.
+    const sideStableContext =
+      access === "owner" || access === "team"
+        ? await getConvStableContext(ctx, args.conversation_id)
+        : null;
+
     return sanitizeConvexObjectKeys({
       ...conversationLight,
+      stable_context: (conversationLight as any).stable_context ?? sideStableContext ?? undefined,
       is_own: !!isOwner,
       title,
       effective_team_visibility,
@@ -2947,6 +2990,9 @@ export const getSharedConversationMeta = query({
       description,
       author: user?.name || null,
       message_count: conversation.message_count || 0,
+      // The web server 302s /share/<token> straight to /conversation/<id>
+      // (skipping a full app boot whose only job was this same lookup).
+      conversation_id: conversation._id,
     };
   },
 });
@@ -8324,6 +8370,13 @@ export async function computeInboxSessions(
   // other callers (inboxForCLI, listInboxSessionsPaginated) default to true and are
   // unchanged. Default MUST stay true — inboxForCLI classifies work-state from it.
   const includeLiveness = opts.includeLiveness !== false;
+  // The AUQ probe (one last-message read per non-idle row) exists to compute
+  // awaiting_input / is_idle — fields stripInboxLiveness nulls when liveness is
+  // excluded, so on that path the read is pure waste. The web's live
+  // subscription gets those fields from the sessionsLiveness overlay instead.
+  const enrichSkip: InboxEnrichSkip | undefined = includeLiveness
+    ? opts._skip
+    : { ...(opts._skip ?? {}), auq: true };
   const now = Date.now();
   const { conversations, maps, deliberateIds, clusterCutoff, ownedByMeIds, myOwnerRowById } =
     await scanInboxConversations(ctx, userId, now, {
@@ -8357,7 +8410,7 @@ export async function computeInboxSessions(
     // handed over on Friday is silently gone by Monday while `cast sessions`
     // with explicit ids still lists it as needs input.
     const cutoff = deliberateIds.has(conv._id.toString()) ? 0 : clusterCutoff;
-    const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, cutoff, opts._skip);
+    const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, cutoff, enrichSkip);
     if (conv.user_id.toString() !== userId.toString()) {
       const author = await getUserDoc(conv.user_id);
       row.author_name = author?.name ?? author?.email ?? null;
@@ -10481,8 +10534,10 @@ export async function consumeStableContextSpool(
     .first();
   if (spooled) {
     const conv = await ctx.db.get(conversationId);
-    if (conv && !conv.stable_context) {
-      await ctx.db.patch(conversationId, { stable_context: spooled.data });
+    // Don't clobber an existing record (side row, or a legacy on-doc value not
+    // yet swept) — the direct recordStableContext write is fresher.
+    if (conv && !conv.stable_context && !(await getConvStableContext(ctx, conversationId))) {
+      await setConvStableContext(ctx, conversationId, spooled.data);
     }
     await ctx.db.delete(spooled._id);
   }
@@ -10523,7 +10578,7 @@ export const recordStableContext = mutation({
         conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
       } catch {}
       if (conv && conv.user_id.toString() === userId.toString()) {
-        await ctx.db.patch(conv._id, { stable_context: args.data });
+        await setConvStableContext(ctx, conv._id, args.data);
         return { recorded: "conversation" };
       }
     }
@@ -10535,7 +10590,7 @@ export const recordStableContext = mutation({
         .filter((q) => q.eq(q.field("user_id"), userId))
         .first();
       if (conv) {
-        await ctx.db.patch(conv._id, { stable_context: args.data });
+        await setConvStableContext(ctx, conv._id, args.data);
         return { recorded: "conversation" };
       }
       // No conversation yet (hook fired before the daemon registered the

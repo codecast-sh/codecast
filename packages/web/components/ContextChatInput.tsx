@@ -3,6 +3,7 @@ import { useState, useRef, useCallback } from "react";
 import { ArrowUp } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
+import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { soundNewSession } from "../lib/sounds";
 import { AgentTypeIcon } from "./AgentTypeIcon";
 import { fromConvexAgentType, type AgentClientId } from "@codecast/shared/contracts";
@@ -48,6 +49,10 @@ export function ContextChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const currentAgent = useInboxStore((s) => s.currentConversation.agentType || "claude_code");
   const [selectedAgent, setSelectedAgent] = useState<AgentKey | null>(null);
+  // Same gesture as clicking a card in the object's "Sessions" list: on a
+  // working page (task/doc) the session opens as the split companion beside
+  // the page, immediately and from the local stub; elsewhere it routes.
+  const openLinkedSession = useOpenLinkedSession();
 
   // Registry chokepoint, never a hand-rolled ternary: a client missing from a
   // ternary silently collapses to the fallback branch.
@@ -81,7 +86,7 @@ export function ContextChatInput({
     if (conversationId) {
       const clientId = store.addOptimisticMessage(conversationId, fullMessage);
       store.sendMessage(conversationId, fullMessage, undefined, clientId);
-      store.openSidePanel(conversationId);
+      openLinkedSession({ _id: conversationId });
       setMessage("");
       setSelectedAgent(null);
       if (textareaRef.current) textareaRef.current.style.height = "auto";
@@ -145,7 +150,11 @@ export function ContextChatInput({
       textareaRef.current.style.height = "auto";
     }
 
-    useInboxStore.getState().openSidePanel(sid);
+    // The stub row already exists (beginOptimisticSession wrote it), so this
+    // paints the new session with its optimistic message before any server
+    // round-trip; the companion follows the stub→convex rekey via the
+    // attended-conversation mirror in DashboardLayout.
+    openLinkedSession({ _id: sid });
 
     // Resolve through the shared tracked-create/by_session_id lifecycle, then
     // issue the durable send with the SAME client id as the optimistic bubble.
@@ -160,7 +169,7 @@ export function ContextChatInput({
         store.markOptimisticAsFailed(sid, clientId);
         console.error("Failed to create context session", error);
       });
-  }, [message, contextType, contextTitle, getContextBody, agentKey, linkedObjectId, projectPathProp, conversationId]);
+  }, [message, contextType, contextTitle, getContextBody, agentKey, linkedObjectId, projectPathProp, conversationId, openLinkedSession]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -172,14 +181,14 @@ export function ContextChatInput({
     [handleSubmit]
   );
 
-  const defaultPlaceholder = `Send a message...`;
+  const defaultPlaceholder = `Discuss or work on this ${contextType} with an agent...`;
   const hasText = message.trim().length > 0;
 
   return (
     <div className="shrink-0 pointer-events-none sticky bottom-0 z-10">
       <div className="h-16 bg-gradient-to-t from-sol-bg via-[color-mix(in_srgb,var(--sol-bg)_80%,transparent)] to-transparent -mt-16 relative" />
       <div className={`pb-4 pointer-events-auto bg-sol-bg`}>
-      <div className={`mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "conv-col" : "max-w-xs"}`}>
+      <div className={`mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "conv-col" : "max-w-sm"}`}>
       {isExpanded && (
         <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "conv-col" : "max-w-md"}`}>
           <div className="flex items-center gap-1">

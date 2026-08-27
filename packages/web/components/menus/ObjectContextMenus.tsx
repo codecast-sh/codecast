@@ -13,6 +13,7 @@ import {
   FileText,
   Forward,
   Link as LinkIcon,
+  Moon,
   Pencil,
   Pin,
   PinOff,
@@ -42,7 +43,7 @@ import {
   type DocItem,
 } from "../../store/inboxStore";
 import { closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
-import { undoableArchiveDoc, undoableHideSession, undoableDeferSession } from "../../store/undoActions";
+import { undoableArchiveDoc, undoableHideSession, undoableDeferSession, undoableDormantSession } from "../../store/undoActions";
 import { copyToClipboard, shareOrigin, cn } from "../../lib/utils";
 import { openForwardToChat } from "../../lib/forwardToChat";
 import { useTeamFeature } from "../../lib/teamFeatures";
@@ -529,6 +530,13 @@ export function SessionMenuItems({
         onSelect={onDefer ?? (() => undoableDeferSession(id))}
       >
         Defer
+      </CtxItem>
+      <CtxItem
+        icon={Moon}
+        shortcut="session.dormantAdvance"
+        onSelect={() => undoableDormantSession(id)}
+      >
+        Dormant — a machine wakes it
       </CtxItem>
       {onKill && (
         <CtxItem danger icon={Square} shortcut="session.kill" onSelect={onKill}>

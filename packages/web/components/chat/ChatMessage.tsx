@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { SmilePlus, MessageSquare, MoreHorizontal, RotateCw, AlertTriangle, Link2, Pencil, Trash2, Forward } from "lucide-react";
+import { SmilePlus, MessageSquare, MoreHorizontal, RotateCw, AlertTriangle, Link2, Pencil, Trash2, Forward, PhoneCall } from "lucide-react";
+import { parseHuddleDigestContent } from "@codecast/shared/contracts";
 import { openForwardToChat } from "../../lib/forwardToChat";
 import { remarkSanitizeInvisibleUnicode } from "../tools/MarkdownRenderer";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
@@ -235,6 +236,14 @@ export const ChatMessage = memo(function ChatMessage({
   }, [menuOpen, pickerOpen]);
 
   const permalink = channelId ? `/chat/${channelId}?m=${message.id}` : undefined;
+  // A huddle digest is a system row about the call, not something its author
+  // typed: the header names the huddle instead of the person who happened to
+  // start it, and the gutter wears a call badge instead of their face. The
+  // timeline builder already refuses to group anything under it (standalone).
+  const isCall = !!message.call && !message.deletedAt;
+  const callHead = isCall ? parseHuddleDigestContent(message.content) : null;
+  // An untitled huddle's title IS "Huddle" — the kicker already says it once.
+  const callTitle = callHead && callHead.title !== "Huddle" ? callHead.title : null;
   // A voice burst has no typed text to correct: its content is a transcript of
   // something already said out loud, and editing it would put words in the
   // speaker's mouth. Delete stays — you can take a voice note back.
@@ -273,7 +282,11 @@ export const ChatMessage = memo(function ChatMessage({
   return (
     <div className={rowClass} data-message-id={message.id} id={`chatmsg-${message.id}`} ref={rowRef}>
       <div className="ch-msg-gutter">
-        {grouped ? (
+        {isCall ? (
+          <span className="ch-call-badge" aria-hidden="true">
+            <PhoneCall className="w-3 h-3" />
+          </span>
+        ) : grouped ? (
           <span className="ch-msg-hovertime" aria-hidden="true">
             {clockTime(message.createdAt)}
           </span>
@@ -289,7 +302,20 @@ export const ChatMessage = memo(function ChatMessage({
       </div>
 
       <div className="min-w-0">
-        {!grouped && (
+        {isCall ? (
+          <div className="ch-msg-head">
+            <span className="ch-call-kicker">Huddle</span>
+            {callTitle && <span className="ch-msg-author">{callTitle}</span>}
+            {callHead?.lead && <span className="ch-call-lead">{callHead.lead}</span>}
+            <a
+              className="ch-msg-time"
+              href={permalink ?? `#chatmsg-${message.id}`}
+              title={FULL_TIME.format(new Date(message.createdAt))}
+            >
+              {headerTime(message.createdAt, now)}
+            </a>
+          </div>
+        ) : !grouped && (
           <div className="ch-msg-head">
             <span className="ch-msg-author">{author.name}</span>
             {/* A session persona wears a "session" chip and credits the human
@@ -403,7 +429,8 @@ export const ChatMessage = memo(function ChatMessage({
               rehypePlugins={MESSAGE_MD_REHYPE}
               components={MESSAGE_MD_COMPONENTS}
             >
-              {message.content}
+              {/* The digest's lead line moved into the header above. */}
+              {callHead ? callHead.body : message.content}
             </ReactMarkdown>
             {message.attachments && message.attachments.length > 0 && (
               <ChatAttachments messageId={message.id} attachments={message.attachments} />
