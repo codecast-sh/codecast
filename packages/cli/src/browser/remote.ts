@@ -79,6 +79,10 @@ function sshArgs(host: RemoteHost): string[] {
     "-o", "StrictHostKeyChecking=accept-new",
     "-o", "ConnectTimeout=20",
     "-o", "BatchMode=yes",
+    // Keepalives so a master whose link died is torn down instead of
+    // wedging every later client (see ensureUp in cloudHost.ts).
+    "-o", "ServerAliveInterval=15",
+    "-o", "ServerAliveCountMax=3",
     "-o", "ControlMaster=auto",
     "-o", `ControlPath=${socket}`,
     "-o", "ControlPersist=60",
@@ -126,13 +130,18 @@ function launchDetached(host: RemoteHost, command: string): void {
   child.unref();
 }
 
-/** Copy one local file to a path on the remote (used for the cast binary). */
+/**
+ * Copy one local file to a path on the remote (used for the cast bundles).
+ * Rides the multiplexed connection: on a lossy uplink a fresh scp handshake
+ * timed out at 5 minutes for an 8MB file, while the already-authenticated
+ * master moved the bytes fine. Ten minutes because the bundles are the only
+ * big thing that ever travels this way.
+ */
 export function scpTo(host: RemoteHost, localPath: string, remotePath: string): void {
   execFileSync(
     "scp",
-    ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
-     "-o", "BatchMode=yes", localPath, `${host.user}@${host.address}:${remotePath}`],
-    { timeout: 300_000, stdio: ["ignore", "ignore", "pipe"] },
+    [...sshArgs(host), localPath, `${host.user}@${host.address}:${remotePath}`],
+    { timeout: 600_000, stdio: ["ignore", "ignore", "pipe"] },
   );
 }
 
@@ -280,7 +289,11 @@ export async function startRemoteBrowser(
   tunnel.unref();
   if (!tunnel.pid) throw new Error("could not start the SSH tunnel");
 
-  const deadline = Date.now() + 40_000;
+  // Generous: the tunnel is a fresh SSH handshake, and on a lossy network one
+  // was measured at 36s — a 40s cap then reported "Chrome never answered"
+  // while Chrome's own log showed it listening. The wait costs nothing when
+  // the network is fine; CDP answers within a second or two.
+  const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
     if (await isCdpAlive(opts.localPort)) {
       return { localPort: opts.localPort, remotePort, sshPid: tunnel.pid, chromeVersion, os, display: display || undefined };
