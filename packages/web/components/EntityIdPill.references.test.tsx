@@ -193,6 +193,15 @@ describe("inline trigger references", () => {
     const html = render("Trigger `tr-99999` is gone.");
     expect(html).toContain("tr-99999");
   });
+
+  test("a Convex-shaped id that resolves to no entity table stays inline code", () => {
+    // Message ids, hashes, and ids whose resolveIdType is still in flight all
+    // reach the pill with type === null; it must fall back, not throw on the
+    // missing task glyph (prod: "Cannot read properties of null (reading 'icon')").
+    const unknown = "zz72qtvpbmmrmwcjqmhzawejsx8bq9gm";
+    const html = render(`See \`${unknown}\` for details.`);
+    expect(html).toMatch(new RegExp(`<code[^>]*>${unknown}<\/code>`));
+  });
 });
 
 describe("inline task and plan references", () => {
