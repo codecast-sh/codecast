@@ -216,6 +216,16 @@ export async function ensureUp(
   // that follow reuse the authenticated connection instead of re-rolling the
   // same dice.
   const socket = path.join(os.tmpdir(), `cast-ssh-${host.user}-${address.replace(/[^\w.]/g, "_")}`);
+  // Evict a wedged master first. A master whose link died silently (mobile
+  // network flap) still owns the socket, and every client that attaches to
+  // it hangs — measured: a fresh ssh took 2.6s while the multiplexed probe
+  // timed out at 60s against the same host. `-O exit` is a no-op when the
+  // master is healthy or absent.
+  try {
+    execFileSync("ssh", ["-o", `ControlPath=${socket}`, "-O", "exit", `${host.user}@${address}`], {
+      timeout: 5_000, stdio: "ignore",
+    });
+  } catch { /* no master to evict */ }
   const sshDeadline = Date.now() + 150_000;
   for (;;) {
     try {
@@ -223,6 +233,9 @@ export async function ensureUp(
         "ssh",
         ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
          "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
+         // Keepalives on the MASTER: without them a dead link is never
+         // noticed and the socket stays wedged for ControlPersist's lifetime.
+         "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
          "-o", "ControlMaster=auto", "-o", `ControlPath=${socket}`, "-o", "ControlPersist=120",
          `${host.user}@${address}`, "true"],
         { timeout: 60_000, stdio: "ignore" },
