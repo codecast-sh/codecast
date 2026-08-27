@@ -7,9 +7,9 @@ import {
   type ThreadCardModel,
 } from "./threadCards";
 
-// The open-by-default rules: unread cards render expanded, read cards
-// collapsed, the user's collapse holds until NEWER unread lands, and a fresh
-// visit re-derives `auto` entries without touching the user's own.
+// The open-by-default rules: every card renders expanded, the user's collapse
+// holds until NEWER unread lands, and a fresh visit re-derives `auto` entries
+// without touching the user's own.
 
 const T0 = 1_700_000_000_000;
 
@@ -26,16 +26,16 @@ function card(unread: number, activityAt = T0, lastReadAt = T0 - 1000): ThreadCa
 }
 
 describe("defaultOpenEntry", () => {
-  test("unread opens, read stays collapsed, boundary frozen from the row", () => {
+  test("every card opens, read or not, boundary frozen from the row", () => {
     expect(defaultOpenEntry(card(3))).toEqual({ expanded: true, by: "auto", at: T0, frozenReadAt: T0 - 1000 });
-    expect(defaultOpenEntry(card(0)).expanded).toBe(false);
+    expect(defaultOpenEntry(card(0)).expanded).toBe(true);
   });
 });
 
 describe("resolveOpenEntry", () => {
   test("no entry falls back to the default", () => {
     expect(resolveOpenEntry(card(2), undefined, false).expanded).toBe(true);
-    expect(resolveOpenEntry(card(0), undefined, false).expanded).toBe(false);
+    expect(resolveOpenEntry(card(0), undefined, false).expanded).toBe(true);
   });
 
   test("a user collapse of an unread card holds while nothing newer lands", () => {
@@ -51,16 +51,23 @@ describe("resolveOpenEntry", () => {
   });
 
   test("a fresh visit re-derives auto entries but honors user ones", () => {
-    // Read since last visit: the auto-expanded entry collapses again.
+    // Read since last visit: the auto entry re-derives, and still opens.
     const wasOpen = defaultOpenEntry(card(2));
-    expect(resolveOpenEntry(card(0), wasOpen, true).expanded).toBe(false);
+    expect(resolveOpenEntry(card(0), wasOpen, true).expanded).toBe(true);
     // Mid-visit, the same card marking itself read stays open under the reader.
     expect(resolveOpenEntry(card(0), wasOpen, false)).toBe(wasOpen);
-    // The user's expand of a read card survives the next visit.
+    // The user's collapse of a read card survives the next visit.
     const c = card(0);
-    const userOpen = toggledOpenEntry(c, defaultOpenEntry(c));
-    expect(userOpen.expanded).toBe(true);
-    expect(resolveOpenEntry(c, userOpen, true)).toBe(userOpen);
+    const userClosed = toggledOpenEntry(c, defaultOpenEntry(c));
+    expect(userClosed.expanded).toBe(false);
+    expect(resolveOpenEntry(c, userClosed, true)).toBe(userClosed);
+  });
+
+  test("a collapsed read card stays collapsed until newer unread lands", () => {
+    const c = card(0);
+    const closed = toggledOpenEntry(c, defaultOpenEntry(c));
+    expect(resolveOpenEntry(card(0, T0 + 5000), closed, false)).toBe(closed);
+    expect(resolveOpenEntry(card(1, T0 + 5000), closed, false).expanded).toBe(true);
   });
 
   test("expanding freezes the unread boundary at expand time", () => {

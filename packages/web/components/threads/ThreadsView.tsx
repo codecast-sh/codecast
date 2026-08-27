@@ -38,8 +38,9 @@ import "./threads.css";
 // The Threads page body: every conversation the viewer is in — chat threads,
 // DMs, session comment threads, task comment streams, and (toggle) inbox
 // sessions — one card list, newest activity first, filtered by a single
-// select chip. Unread cards render already expanded, read cards collapsed,
-// so one scrolling pass reads the inbox in place (lib/threadCards owns the
+// select chip. Every card renders expanded, composer included, so one
+// scrolling pass reads and answers the inbox in place; a thread the viewer
+// answered last retires until someone else replies (lib/threadCards owns the
 // rules; ThreadCard windows the heavy bodies and witnesses the read law). A
 // card's unread boundary is frozen at expansion so marking read cannot erase
 // it mid-read; reads happen only while the reader is present (tab active,
@@ -94,11 +95,11 @@ export function ThreadsView({ present }: { present: boolean }) {
     const st = useInboxStore.getState();
     const tasks = st.tasks as Record<string, { short_id?: string }>;
     const pages = st.pageThreads as Record<string, { slug?: string }>;
-    const server = serverCards(rows, (id) => railById.get(id)?.kind, (id) => tasks[id]?.short_id, (id) => pages[id]?.slug);
+    const server = serverCards(rows, (id) => railById.get(id)?.kind, (id) => tasks[id]?.short_id, (id) => pages[id]?.slug, viewerId);
     return [...server, ...dmCards(chatOn ? rail : []), ...sessionCardList, ...questionCardList];
     // taskShortSig / pageSlugSig are the wakes for the id lookups.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, rail, chatOn, sessionCardList, questionCardList, taskShortSig, pageSlugSig]);
+  }, [rows, rail, chatOn, sessionCardList, questionCardList, taskShortSig, pageSlugSig, viewerId]);
   const counts = useMemo(() => unreadByChip(allCards), [allCards]);
   const chipped = useMemo(
     () => sortCards(cardsForChip(allCards, chip, includeSessions), chip),
@@ -115,8 +116,8 @@ export function ThreadsView({ present }: { present: boolean }) {
   );
 
   // ── Open cards ────────────────────────────────────────────────────────────
-  // Unread cards render already expanded, read cards collapsed; the reader's
-  // toggles override, and a collapse holds until NEWER unread lands
+  // Cards render expanded by default; the reader's toggles override, and a
+  // collapse holds until NEWER unread lands
   // (lib/threadCards.resolveOpenEntry). Entries live in the store (ephemeral
   // UI) so choices survive leaving the page; `sighted` marks the cards this
   // visit has rendered — a card's first sight re-derives its `auto` entry
