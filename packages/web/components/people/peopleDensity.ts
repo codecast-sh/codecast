@@ -28,18 +28,23 @@ export function densityFor(width: number, height: number): PeopleDensity {
   return "full";
 }
 
+import type { WallTier } from "./peopleWallLayout";
+
 /** Face sizes for the strip: the wall's tiers, shrunk to fit one row. The
  *  ORDER of sizes is the wall's, so the biggest face is still the person most
- *  worth a word — only the scale changes. `gone` faces fold into a count. */
-export const STRIP_FACE_PX = {
+ *  worth a word — only the scale changes. `gone` is typed so the table is
+ *  total, and drawn only when the offline fold is opened. */
+export const STRIP_FACE_PX: Record<WallTier, number> = {
   loud: 34,
   here: 28,
   idle: 24,
   away: 20,
-} as const;
+  gone: 20,
+};
 
-export type StripTier = keyof typeof STRIP_FACE_PX;
-
-/** The strip's own height budget at each face size, so the row centres on the
- *  traffic lights (y 12..24 → centre 18) when the window is at its minimum. */
-export const STRIP_ROW_H = 44;
+/** The strip's row height: anchored to the TOP of the window rather than
+ *  centred in it, so a window dragged taller (but still under STRIP_MAX_H)
+ *  keeps its faces beside the traffic lights instead of floating mid-box.
+ *  48px holds the 34px loud face with its rings and roughly centres on the
+ *  lights (y 12..24). */
+export const STRIP_ROW_H = 48;

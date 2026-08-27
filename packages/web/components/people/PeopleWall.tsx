@@ -19,10 +19,47 @@ import {
   memberPresenceVisual,
   presenceActivityLine,
 } from "../presence/memberPresence";
-import { STRAY_WORKSPACE, unreadBadgeText } from "./peopleRoster";
-import { buildWall, isWallTap, type WallFace } from "./peopleWallLayout";
+import { emptyRosterText, unreadBadgeText } from "./peopleRoster";
+import {
+  WALL_FACE_PX,
+  buildWall,
+  isWallTap,
+  type Wall,
+  type WallFace,
+  type WallTier,
+} from "./peopleWallLayout";
 import { usePeopleRoster, type PeopleRosterData } from "./usePeopleRoster";
 import "./people.css";
+
+/** What a face tells the surface about itself as a pointer or focus arrives:
+ *  the words the wall would float under the circle, for shapes (the strip)
+ *  with nowhere under a circle to float them. */
+export interface FaceDescription {
+  id: string;
+  name: string;
+  /** The activity line — or the refusal reason while a refused press shows. */
+  text: string;
+  /** Tailwind text class for `text`, so the tone survives the trip. */
+  tone: string;
+}
+
+/** The wall, laid out from roster data — one memo shared by the wall and the
+ *  strip so the two can never sort or size a team differently. */
+export function useWall(data: PeopleRosterData, sizes: Record<WallTier, number> = WALL_FACE_PX): Wall<any> {
+  const { members, fleets } = data;
+  return useMemo(
+    () =>
+      buildWall(
+        members,
+        (m: any) => memberPresenceVisual(m),
+        (m: any) => fleets.get(String(m._id)) ?? null,
+        (m: any) => String(m._id ?? ""),
+        (m: any) => m?.name || m?.email || "",
+        sizes,
+      ),
+    [members, fleets, sizes],
+  );
+}
 
 /**
  * A WALL, not a list.
@@ -39,28 +76,26 @@ import "./people.css";
  * doubling is only safe because the engine discards bursts under 700ms, so a
  * click can never land a burst — see WALL_TAP_MS.
  */
+/** The wall with its own roster read — for the modal, which mounts only while
+ *  open. The always-mounted panel uses PeopleWallView with the data it already
+ *  holds, so the window never pays for a second subscription. */
 export function PeopleWall({ callsEnabled }: { callsEnabled: boolean }) {
-  const data = usePeopleRoster();
-  const { members, fleets } = data;
+  return <PeopleWallView callsEnabled={callsEnabled} data={usePeopleRoster()} />;
+}
 
-  const wall = useMemo(
-    () =>
-      buildWall(
-        members,
-        (m: any) => memberPresenceVisual(m),
-        (m: any) => fleets.get(String(m._id)) ?? null,
-        (m: any) => String(m._id ?? ""),
-        (m: any) => m?.name || m?.email || "",
-      ),
-    [members, fleets],
-  );
+export function PeopleWallView({
+  callsEnabled,
+  data,
+}: {
+  callsEnabled: boolean;
+  data: PeopleRosterData;
+}) {
+  const wall = useWall(data);
 
-  if (members.length === 0) {
+  if (data.members.length === 0) {
     return (
       <div className="px-3 py-6 text-[12px] text-sol-text-dim">
-        {data.strayWorkspace
-          ? `${STRAY_WORKSPACE} Switch workspace in the main window.`
-          : "No teammates yet."}
+        {emptyRosterText(data.strayWorkspace)}
       </div>
     );
   }
@@ -98,10 +133,15 @@ export function WallFaceButton({
   face,
   data,
   callsEnabled,
+  onDescribe,
 }: {
   face: WallFace<any>;
   data: PeopleRosterData;
   callsEnabled: boolean;
+  /** Called with the face's words as a pointer or focus arrives (and again if
+   *  a refusal changes them), null as it leaves. The strip renders these in
+   *  its text slot; the wall floats its own label and passes nothing. */
+  onDescribe?: (d: FaceDescription | null) => void;
 }) {
   const { id, member, px } = face;
   const { viewerId, now, fleets, roomFor, dmFor, talkingId } = data;
@@ -165,6 +205,36 @@ export function WallFaceButton({
   const hold = pttHoldProps(ptt);
   const blocked = callsEnabled ? ptt.reason : "Calls are not on for this team";
 
+  // The describe channel: the same words the label under the face shows, told
+  // to the surface. `attended` remembers a pointer or focus is on the face, so
+  // a refusal that expires mid-hover can put the ordinary line back.
+  const attended = useRef(false);
+  const describe = useCallback(
+    (refusedNow: boolean) => {
+      if (!onDescribe || !attended.current) return;
+      onDescribe({
+        id,
+        name,
+        text: refusedNow && blocked ? blocked : line,
+        tone: refusedNow && blocked ? "text-sol-red" : PRESENCE_META[visual].text,
+      });
+    },
+    [onDescribe, id, name, blocked, line, visual],
+  );
+  const attend = () => {
+    attended.current = true;
+    describe(refused);
+  };
+  const unattend = () => {
+    attended.current = false;
+    onDescribe?.(null);
+  };
+  // The words follow the refusal in and out while the face is attended.
+  useLayoutEffect(() => {
+    describe(refused);
+
+  }, [refused, describe]);
+
   const begin = () => {
     downAt.current = performance.now();
     // A press that cannot open a mic must never be a dead press. `press` itself
@@ -213,6 +283,7 @@ export function WallFaceButton({
       style={{ ["--face" as string]: `${px}px` }}
       data-hold={ptt.holding ? "1" : undefined}
       data-refused={refused ? "1" : undefined}
+      data-ask={fleet && fleet.needsYou > 0 ? "1" : undefined}
     >
       <button
         type="button"
@@ -224,7 +295,7 @@ export function WallFaceButton({
           // The count belongs IN the name: the badge that draws it is decorative
           // (aria-hidden), so this sentence is the whole of what a reader gets,
           // and "3 unread" is the reason to reach for a face at all.
-          `${name}.${unread > 0 ? ` ${unread} unread.` : ""} ${
+          `${name}.${unread > 0 ? ` ${unread} unread.` : ""}${line ? ` ${line}.` : ""} ${
             blocked ? blocked : "Hold to talk, click to open the conversation."
           }`
         }
@@ -251,7 +322,16 @@ export function WallFaceButton({
         // Focus still warms: tabbing onto a face is deliberate in a way that
         // passing over one is not. A pointer hold pays the device at press time
         // instead — tens of milliseconds on an already-granted mic.
-        onPointerEnter={undefined}
+        onPointerEnter={onDescribe ? attend : undefined}
+        onPointerLeave={(e) => {
+          hold.onPointerLeave?.(e as any);
+          unattend();
+        }}
+        onFocus={(e) => {
+          hold.onFocus?.(e as any);
+          attend();
+        }}
+        onBlur={unattend}
         onPointerDown={(e) => {
           begin();
           hold.onPointerDown(e);

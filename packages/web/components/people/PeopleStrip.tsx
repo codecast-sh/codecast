@@ -1,22 +1,23 @@
 // The window at its smallest: one row of faces you can hold, and the team in
 // a few words. This is what a buddy list pinned above other apps should cost.
-import { useMemo, useState, type ReactNode } from "react";
-import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
-import { desktopHeaderClass } from "../../lib/desktop";
+import { memo, useCallback, useRef, useState, type ReactNode } from "react";
 import { MemberFace } from "../presence/MemberFace";
-import {
-  memberDisplayName,
-  memberPresenceVisual,
-  presenceActivityLine,
-  PRESENCE_META,
-} from "../presence/memberPresence";
-import { STRAY_WORKSPACE } from "./peopleRoster";
-import { STRIP_FACE_PX, type StripTier } from "./peopleDensity";
-import { buildWall } from "./peopleWallLayout";
-import { WallFaceButton } from "./PeopleWall";
-import { TeamPulseLine, usePulseFrom } from "./TeamPulseLine";
-import { usePeopleRoster } from "./usePeopleRoster";
+import { LiveRoomAction } from "../calls/LiveNow";
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { emptyRosterText } from "./peopleRoster";
+import { STRIP_FACE_PX, STRIP_ROW_H } from "./peopleDensity";
+import { peopleHeadClass } from "./usePeopleDensity";
+import { WallFaceButton, useWall, type FaceDescription } from "./PeopleWall";
+import { TeamPulseLine } from "./TeamPulseLine";
+import { type PeopleRosterData } from "./usePeopleRoster";
+import { type TeamPulse } from "./teamPulse";
 import "./people.css";
+
+/** How long a pointer rests on a face before its name takes over the text
+ *  slot. A strip pinned above other apps is CROSSED constantly on the way to
+ *  whatever is behind it; without a dwell the slot flickers through three
+ *  names on every pass. Focus and a refusal are deliberate, so they skip it. */
+const HOVER_DWELL_MS = 150;
 
 /**
  * THE SAME FACES AS THE WALL, in a row.
@@ -26,119 +27,163 @@ import "./people.css";
  * (peopleDensity.ts). Presence still sets the size, so the biggest circle is
  * still the person most worth a word; it is only the scale that changes.
  *
- * There is no room under a face for its label in a 56px window, so the name
- * and the activity line of the face under the pointer take over the text
- * slot from the team pulse, and give it back when the pointer leaves. The
- * offline fold into one dim count: absentees must not cost a strip its row.
+ * There is no room under a face for its label in a 56px window, so each face
+ * DESCRIBES itself to the strip as a pointer or focus arrives (onDescribe),
+ * and those words — the activity line, or the refusal reason — take over the
+ * text slot from the team pulse, and give it back on leave. The offline fold
+ * into one count that opens on a click: absentees must not cost a strip its
+ * row, and must not be unreachable either.
  *
- * The whole row is the titlebar. The faces and the pin are buttons, which
- * the drag region rule already exempts, so a press on a face is a hold and
- * a press on the gap beside it moves the window.
+ * The row is anchored to the TOP of the window at a fixed height, beside the
+ * traffic lights, so a window dragged taller (but still a strip) keeps its
+ * faces at the titlebar instead of floating mid-box. The row is the drag
+ * surface; the faces scroller opts back out, because a drag region eats the
+ * pointer events the hover words depend on.
  */
 export function PeopleStrip({
   callsEnabled,
+  data,
+  pulse,
   pin,
 }: {
   callsEnabled: boolean;
+  data: PeopleRosterData;
+  pulse: TeamPulse;
   /** The window's pin, rendered by the panel that owns the window state. */
   pin?: ReactNode;
 }) {
-  const data = usePeopleRoster();
-  const pulse = usePulseFrom(data);
-  const { members, fleets, viewerId, now, roomFor, talkingId } = data;
-  const me = useTrackedStore([
-    (st: any) => st.currentUser?._id,
-    (st: any) => st.currentUser?.status,
-    (st: any) => st.currentUser?.image,
-  ]).currentUser;
-  const meRow = useMemo(
-    () =>
-      (useInboxStore.getState().teamMembers ?? []).find((m: any) => String(m?._id) === viewerId) ??
-      me ??
-      {},
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- members stands in for the roster array
-    [members, viewerId, me],
-  );
+  const wall = useWall(data, STRIP_FACE_PX);
 
-  const wall = useMemo(
-    () =>
-      buildWall(
-        members,
-        (m: any) => memberPresenceVisual(m),
-        (m: any) => fleets.get(String(m._id)) ?? null,
-        (m: any) => String(m._id ?? ""),
-        (m: any) => m?.name || m?.email || "",
-      ),
-    [members, fleets],
-  );
-
-  const [hoverId, setHoverId] = useState<string | null>(null);
-  const hovered = hoverId ? wall.present.find((f) => f.id === hoverId) ?? null : null;
-  const hoverLine = hovered
-    ? presenceActivityLine(hovered.member, {
-        now,
-        fleet: fleets.get(hovered.id) ?? null,
-        room: roomFor.get(hovered.id) ?? null,
-        talking: hovered.id === talkingId,
-        viewerId,
-      })
-    : "";
-
-  const goneNames = wall.gone.map((f) => memberDisplayName(f.member)).join(", ");
+  // The hovered face's words. A dwell timer debounces pointer arrivals; a
+  // null (leave) lands immediately; focus and refusals land immediately too,
+  // because WallFaceButton re-describes on refusal while attended.
+  const [desc, setDesc] = useState<FaceDescription | null>(null);
+  const dwell = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shown = useRef<string | null>(null);
+  const onDescribe = useCallback((d: FaceDescription | null) => {
+    if (dwell.current) clearTimeout(dwell.current);
+    if (d === null) {
+      shown.current = null;
+      setDesc(null);
+      return;
+    }
+    // Already showing this face (a refusal update, or focus after hover):
+    // update in place with no second dwell.
+    if (shown.current === d.id) {
+      setDesc(d);
+      return;
+    }
+    dwell.current = setTimeout(() => {
+      shown.current = d.id;
+      setDesc(d);
+    }, HOVER_DWELL_MS);
+  }, []);
+  useMountEffect(() => {
+    // A pointer that leaves the window over a drag gap never delivers its
+    // pointerleave; the window losing focus is the honest reset.
+    const clear = () => onDescribe(null);
+    window.addEventListener("blur", clear);
+    return () => {
+      window.removeEventListener("blur", clear);
+      if (dwell.current) clearTimeout(dwell.current);
+    };
+  });
 
   return (
     <div
-      className={`people-strip flex min-h-0 min-w-0 flex-1 items-center gap-2 pr-2 ${desktopHeaderClass() || "pl-3"}`}
+      className={`people-strip flex w-full min-w-0 shrink-0 items-center gap-2 pr-2 ${peopleHeadClass()}`}
+      style={{ height: STRIP_ROW_H }}
       data-holding={data.sendingRoomKey ? "1" : undefined}
     >
-      <MemberFace member={meRow} size={22} title="You" className="shrink-0" />
+      <MemberFace member={data.me ?? {}} size={22} title="You" className="shrink-0" />
       <span className="people-strip-rule" aria-hidden="true" />
-      <div
-        className="people-strip-faces people-scroll flex min-w-0 shrink items-center gap-2"
-        onPointerLeave={() => setHoverId(null)}
-      >
-        {members.length === 0 ? (
-          <span className="truncate text-[11px] text-sol-text-dim">
-            {data.strayWorkspace ? STRAY_WORKSPACE : "No teammates yet."}
-          </span>
-        ) : (
-          wall.present.map((face) => (
-            <span
-              key={face.id}
-              className="flex shrink-0"
-              onPointerEnter={() => setHoverId(face.id)}
-              onFocus={() => setHoverId(face.id)}
-              onBlur={() => setHoverId((cur) => (cur === face.id ? null : cur))}
-            >
-              <WallFaceButton
-                face={{ ...face, px: STRIP_FACE_PX[face.tier as StripTier] ?? STRIP_FACE_PX.away }}
-                data={data}
-                callsEnabled={callsEnabled}
-              />
-            </span>
-          ))
-        )}
-        {wall.gone.length > 0 && (
-          <span className="people-strip-gone" title={`Offline: ${goneNames}`}>
-            +{wall.gone.length}
-          </span>
-        )}
-      </div>
-      {/* The words keep a floor of their own, so a big team scrolls its faces
-          before it eats the sentence that says what the team is doing. */}
-      <div className="min-w-[120px] flex-1 overflow-hidden text-[11px]">
-        {hovered ? (
+      <StripFaces
+        wall={wall}
+        data={data}
+        callsEnabled={callsEnabled}
+        onDescribe={onDescribe}
+        emptyText={data.members.length === 0 ? emptyRosterText(data.strayWorkspace, true) : null}
+      />
+      {/* The huddle's join, in the one shape whose pulse can name a huddle it
+          would otherwise offer nothing about. */}
+      {callsEnabled &&
+        data.rooms.map((row) => (
+          <LiveRoomAction key={row.roomKey} row={row} className="shrink-0" />
+        ))}
+      <div className="min-w-0 flex-1 overflow-hidden text-[11px]">
+        {desc ? (
           <div className="flex min-w-0 items-baseline gap-1.5 whitespace-nowrap leading-none">
-            <span className="shrink-0 font-medium text-sol-text">{memberDisplayName(hovered.member)}</span>
-            <span className={`truncate ${PRESENCE_META[memberPresenceVisual(hovered.member)].text}`}>
-              {hoverLine}
-            </span>
+            <span className="shrink-0 font-medium text-sol-text">{desc.name}</span>
+            <span className={`truncate ${desc.tone}`}>{desc.text}</span>
           </div>
         ) : (
-          <TeamPulseLine pulse={pulse} max={3} />
+          <TeamPulseLine pulse={pulse} />
         )}
       </div>
       {pin}
     </div>
   );
 }
+
+/**
+ * The faces row, memoized behind stable props: a hover writes strip state,
+ * and re-rendering fourteen push-to-talk buttons to move one line of text is
+ * exactly the waste the wall's own rules forbid. `data` is referentially
+ * stable between roster wakes (usePeopleRoster memoizes it), `onDescribe` is
+ * a stable callback, and `wall` only changes when the roster does.
+ */
+const StripFaces = memo(function StripFaces({
+  wall,
+  data,
+  callsEnabled,
+  onDescribe,
+  emptyText,
+}: {
+  wall: ReturnType<typeof useWall>;
+  data: PeopleRosterData;
+  callsEnabled: boolean;
+  onDescribe: (d: FaceDescription | null) => void;
+  emptyText: string | null;
+}) {
+  const [showGone, setShowGone] = useState(false);
+  const goneNames = wall.gone.map((f) => f.member?.name || f.member?.email || "?").join(", ");
+  if (emptyText) {
+    return <span className="truncate text-[11px] text-sol-text-dim">{emptyText}</span>;
+  }
+  return (
+    <div className="people-strip-faces flex min-w-0 shrink items-center gap-2">
+      {wall.present.map((face) => (
+        <WallFaceButton
+          key={face.id}
+          face={face}
+          data={data}
+          callsEnabled={callsEnabled}
+          onDescribe={onDescribe}
+        />
+      ))}
+      {wall.gone.length > 0 && (
+        <button
+          type="button"
+          className="people-strip-gone"
+          aria-expanded={showGone}
+          aria-label={`${wall.gone.length} offline: ${goneNames}`}
+          title={`Offline: ${goneNames}`}
+          onClick={() => setShowGone((v) => !v)}
+        >
+          +{wall.gone.length}
+        </button>
+      )}
+      {showGone &&
+        wall.gone.map((face) => (
+          <span key={face.id} className="flex shrink-0 opacity-60">
+            <WallFaceButton
+              face={face}
+              data={data}
+              callsEnabled={callsEnabled}
+              onDescribe={onDescribe}
+            />
+          </span>
+        ))}
+    </div>
+  );
+});

@@ -1,21 +1,14 @@
 import { useMemo } from "react";
 import { pulseText, teamPulse, type PulseTone, type TeamPulse } from "./teamPulse";
-import { usePeopleRoster, type PeopleRosterData } from "./usePeopleRoster";
+import { type PeopleRosterData } from "./usePeopleRoster";
 
-/** The pulse from roster data a caller already holds — no second subscription. */
+/** The pulse from roster data the caller already holds — never a second
+ *  subscription. The panel reads the roster once and derives this from it. */
 export function usePulseFrom({ members, fleets, huddles }: PeopleRosterData): TeamPulse {
   return useMemo(
     () => teamPulse(members, (m: any) => fleets.get(String(m._id)), huddles),
     [members, fleets, huddles],
   );
-}
-
-/**
- * The team's pulse from the roster's own reads. The roster hook is already
- * signature-gated, so this wakes exactly when a face would.
- */
-export function useTeamPulse(): TeamPulse {
-  return usePulseFrom(usePeopleRoster());
 }
 
 /** Same colour language as the rest of the app: presence cyan for here,
@@ -33,42 +26,48 @@ const TONE: Record<PulseTone, { text: string; dot: string }> = {
 
 /**
  * One line, the count in its colour and the word dimmed after it, so the eye
- * reads the numbers first and the words only when it wants them. A running
- * fleet's dot breathes: the one thing on this line that is moving is the one
- * thing that IS moving.
+ * reads the numbers first and the words only when it wants them.
+ *
+ * A segment is shown WHOLE or not at all. When the line cannot wrap it still
+ * flex-wraps — onto a second row the container clips — so a segment that does
+ * not fit vanishes instead of shedding its word and leaving a bare count
+ * ("· 4" faded mid-phrase was worse than nothing). The title and aria-label
+ * always carry the full sentence.
+ *
+ * Only a person-needed dot breathes. Agents working is this team's all-day
+ * steady state, and a pinned window must not pulse in the corner of the eye
+ * for eight hours; a session waiting on a HUMAN is the one fact worth motion.
  */
 export function TeamPulseLine({
   pulse,
-  max = Infinity,
   wrap = false,
   className = "",
 }: {
   pulse: TeamPulse;
-  /** Cut to the first N segments for a narrow slot. */
-  max?: number;
-  /** Let the segments run onto a second line (a header has the height; a
-   *  strip does not). */
+  /** Let the segments genuinely run onto more lines (a header has the
+   *  height; a strip does not). */
   wrap?: boolean;
   className?: string;
 }) {
-  const segments = pulse.segments.slice(0, max);
   return (
     <div
-      className={`people-pulse flex min-w-0 items-center gap-x-2 whitespace-nowrap leading-none ${
-        wrap ? "flex-wrap gap-y-1.5" : "overflow-hidden"
+      role="group"
+      className={`people-pulse flex min-w-0 flex-wrap items-center gap-x-2 whitespace-nowrap leading-none ${
+        wrap ? "gap-y-1.5" : "max-h-[1.2em] gap-y-4 overflow-hidden"
       } ${className}`}
       title={pulseText(pulse)}
       aria-label={`Team: ${pulseText(pulse)}`}
     >
-      {segments.map((seg) => (
-        <span key={seg.key} className="flex shrink-0 items-center gap-1">
+      {pulse.segments.map((seg) => (
+        <span key={seg.key} className="flex shrink-0 items-center gap-1" aria-hidden="true">
           <span
-            aria-hidden="true"
             className={`people-pulse-dot h-1.5 w-1.5 rounded-full ${TONE[seg.tone].dot}`}
-            data-live={seg.tone === "working" || seg.tone === "needsInput" ? "1" : undefined}
+            data-live={seg.tone === "needsInput" ? "1" : undefined}
           />
           {seg.n > 0 && (
-            <span className={`font-semibold tabular-nums ${TONE[seg.tone].text}`}>{seg.n}</span>
+            <span className={`text-[1.15em] font-semibold tabular-nums ${TONE[seg.tone].text}`}>
+              {seg.n}
+            </span>
           )}
           <span className="text-sol-text-dim">{seg.word}</span>
         </span>
