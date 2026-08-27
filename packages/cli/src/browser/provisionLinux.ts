@@ -38,6 +38,9 @@ export const SCREEN_SIZE = { width: 1440, height: 900 };
 /** Loopback ports on the box; reached from here through an SSH tunnel. */
 export const RTSP_PORT = 8554;
 export const HLS_PORT = 8888;
+/** Machine-level VNC (x11vnc) and its browser client (noVNC via websockify). */
+export const VNC_PORT = 5900;
+export const NOVNC_PORT = 6080;
 
 const MEDIAMTX_VERSION = "v1.20.1";
 
@@ -126,6 +129,35 @@ RestartSec=2
 WantedBy=multi-user.target
 UNIT
 
+echo "[4b/6] vnc (x11vnc + noVNC, loopback only)"
+NEEDV=""
+for p in x11vnc novnc websockify; do dpkg -s "$p" >/dev/null 2>&1 || NEEDV="$NEEDV $p"; done
+if [ -n "$NEEDV" ]; then sudo apt-get install -y -qq $NEEDV; fi
+sudo tee /etc/systemd/system/cast-vnc.service >/dev/null <<'UNIT'
+[Unit]
+Description=codecast machine-level VNC (x11vnc on loopback)
+After=cast-display.service
+[Service]
+User=ubuntu
+ExecStart=/usr/bin/x11vnc -display ${SCREEN_DISPLAY} -localhost -nopw -shared -forever -noxdamage -quiet -rfbport ${VNC_PORT}
+Restart=always
+RestartSec=2
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo tee /etc/systemd/system/cast-novnc.service >/dev/null <<'UNIT'
+[Unit]
+Description=codecast noVNC web client (websockify on loopback)
+After=cast-vnc.service
+[Service]
+User=ubuntu
+ExecStart=/usr/bin/websockify --web /usr/share/novnc 127.0.0.1:${NOVNC_PORT} 127.0.0.1:${VNC_PORT}
+Restart=always
+RestartSec=2
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 echo "[5/6] idle watchdog (${idleStopMinutes}m)"
 echo "${idleStopMinutes}" | sudo tee /etc/cast-idle-minutes >/dev/null
 sudo tee /usr/local/bin/cast-idle-check >/dev/null <<'IDLE'
@@ -175,7 +207,8 @@ UNIT
 
 echo "[6/6] enable services"
 sudo systemctl daemon-reload
-sudo systemctl enable --now cast-display.service cast-stream.service cast-idle.timer
+sudo systemctl enable --now cast-display.service cast-stream.service cast-vnc.service cast-novnc.service cast-idle.timer
+sudo systemctl restart cast-vnc.service cast-novnc.service
 echo PROVISION-BASE-OK`;
   // Interpolation note: the \${...} constants above are filled in by THIS
   // template literal. The heredocs are quoted ('UNIT', 'MTX', 'IDLE') so the
@@ -379,7 +412,7 @@ export async function provisionLinuxHost(
     claude: remoteExec(host, "claude --version", 60_000),
     services: remoteExec(
       host,
-      "for s in cast-display cast-stream codecast-daemon; do printf '%s=%s ' $s $(systemctl is-active $s.service 2>/dev/null); done; printf 'idle-timer=%s' $(systemctl is-active cast-idle.timer)",
+      "for s in cast-display cast-stream cast-vnc cast-novnc codecast-daemon; do printf '%s=%s ' $s $(systemctl is-active $s.service 2>/dev/null); done; printf 'idle-timer=%s' $(systemctl is-active cast-idle.timer)",
       20_000,
     ),
     device,
