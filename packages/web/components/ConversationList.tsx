@@ -353,8 +353,8 @@ export function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: str
         <GeminiIcon className="w-2.5 h-2.5 text-white" />
       </span>
     );
-  } else if (agentType === "opencode" || agentType === "pi") {
-    // opencode/pi have no dedicated badge glyph here — reuse the canonical
+  } else if (agentType === "opencode" || agentType === "pi" || agentType === "grok") {
+    // opencode/pi/grok have no dedicated badge glyph here — reuse the canonical
     // AgentTypeIcon (its own accent color) inside the badge chrome so they never
     // fall through to the Claude icon.
     return (
@@ -718,6 +718,7 @@ function getAgentTypeLabel(agentType: string): string {
   if (agentType === "gemini") return "Gemini";
   if (agentType === "opencode") return "OpenCode";
   if (agentType === "pi") return "pi";
+  if (agentType === "grok") return "Grok";
   return agentType;
 }
 

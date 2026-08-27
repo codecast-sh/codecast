@@ -10,7 +10,7 @@ import { resolveTeamForPath, buildShareUpdate } from "./privacy";
 import { hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
 import { api, internal } from "./_generated/api";
-import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType } from "@codecast/shared/contracts";
+import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType, type ConvexAgentType } from "@codecast/shared/contracts";
 import { applyHideTransition } from "./cleanup";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
@@ -727,7 +727,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     }
     await checkRateLimit(ctx as any, userId, "createConversation");
     const now = Date.now();
-    const agentType = (opts.agent_type || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+    const agentType = (opts.agent_type || "claude_code") as ConvexAgentType;
 
     const mappings = await ctx.db
       .query("directory_team_mappings")

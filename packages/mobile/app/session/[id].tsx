@@ -456,6 +456,7 @@ function formatAgentType(agentType?: string): string {
   if (agentType === 'gemini') return 'Gemini';
   if (agentType === 'opencode') return 'OpenCode';
   if (agentType === 'pi') return 'pi';
+  if (agentType === 'grok') return 'Grok';
   return agentType.charAt(0).toUpperCase() + agentType.slice(1);
 }
 
@@ -465,6 +466,7 @@ function agentTypeColor(agentType?: string): string {
   if (agentType === 'gemini') return '#1a73e8';
   if (agentType === 'opencode') return '#f97316';
   if (agentType === 'pi') return '#14b8a6';
+  if (agentType === 'grok') return Theme.text;
   return Theme.accent;
 }
 
@@ -474,6 +476,7 @@ function agentTypeIcon(agentType?: string): string {
   if (agentType === 'gemini') return 'star';
   if (agentType === 'opencode') return 'code';
   if (agentType === 'pi') return 'bolt';
+  if (agentType === 'grok') return 'times';
   return 'bolt';
 }
 
@@ -2387,6 +2390,7 @@ function assistantLabel(agentType?: string): string {
   if (agentType === 'gemini') return 'Gemini';
   if (agentType === 'opencode') return 'OpenCode';
   if (agentType === 'pi') return 'pi';
+  if (agentType === 'grok') return 'Grok';
   return 'Claude';
 }
 
