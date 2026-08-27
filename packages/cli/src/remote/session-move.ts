@@ -97,17 +97,23 @@ export function slugToCwd(slug: string): string | null {
  * losslessly reversible).
  */
 function cwdFromTranscript(jsonlPath: string): string | null {
+  // The LAST cwd, not the first: a session that has travelled between
+  // machines carries entries stamped with every home it has had, and after a
+  // round trip the file can even BEGIN with the remote's path (observed live:
+  // first line /home/ubuntu/work/…, last line /Users/…). The newest entry is
+  // the only one that reflects where the session runs now.
+  let last: string | null = null;
   try {
     const text = fs.readFileSync(jsonlPath, "utf-8");
     for (const line of text.split("\n")) {
       if (!line.trim()) continue;
       try {
         const rec = JSON.parse(line) as { cwd?: string };
-        if (rec.cwd) return rec.cwd;
+        if (rec.cwd) last = rec.cwd;
       } catch { /* skip non-JSON line */ }
     }
   } catch { /* unreadable */ }
-  return null;
+  return last;
 }
 
 /** Locate a session's JSONL + cwd on this machine by session id. */
@@ -118,8 +124,13 @@ export function resolveLocalSession(sessionId: string): LocalSession {
   for (const slug of fs.readdirSync(CLAUDE_PROJECTS)) {
     const candidate = path.join(CLAUDE_PROJECTS, slug, `${sessionId}.jsonl`);
     if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-      // Prefer the cwd recorded in the transcript; fall back to slug decoding.
-      const cwd = cwdFromTranscript(candidate) ?? slugToCwd(slug);
+      // Prefer the cwd recorded in the transcript — but only if it exists on
+      // THIS machine. A transcript that has been to a remote and back records
+      // that machine's paths too, and pushing from a nonexistent cwd fails as
+      // a baffling rsync lstat error. The slug is by construction where this
+      // machine placed the project, so it is the safe fallback.
+      const cwd = [cwdFromTranscript(candidate), slugToCwd(slug)]
+        .find((c): c is string => !!c && fs.existsSync(c));
       if (!cwd) continue;
       return { sessionId, cwd, jsonlPath: candidate, projectDir: path.join(CLAUDE_PROJECTS, slug) };
     }
@@ -132,7 +143,24 @@ export function resolveLocalSession(sessionId: string): LocalSession {
 // --------------------------------------------------------------------------
 
 function sshBase(host: RemoteHost): string[] {
-  return ["-i", host.keyPath, "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=20"];
+  // Keepalives make a dead connection an ERROR instead of a forever-hang: on a
+  // lossy mobile network a post-push ssh sat for 12 minutes mid-connection
+  // (execFileSync has no timeout here — a transfer's legitimate duration is
+  // unbounded, so the connection's own liveness check is the right guard).
+  // The control socket reuses the authenticated connection ensureUp parked
+  // (same path formula), so each transfer command skips the handshake dice on
+  // networks where one handshake was measured at 36 seconds.
+  const socket = path.join(os.tmpdir(), `cast-ssh-${host.user}-${host.address.replace(/[^\w.]/g, "_")}`);
+  return [
+    "-i", host.keyPath,
+    "-o", "StrictHostKeyChecking=accept-new",
+    "-o", "ConnectTimeout=20",
+    "-o", "ServerAliveInterval=15",
+    "-o", "ServerAliveCountMax=4",
+    "-o", "ControlMaster=auto",
+    "-o", `ControlPath=${socket}`,
+    "-o", "ControlPersist=120",
+  ];
 }
 
 function ssh(host: RemoteHost, command: string): string {

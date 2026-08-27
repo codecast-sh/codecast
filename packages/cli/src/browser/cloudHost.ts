@@ -104,17 +104,24 @@ export function hostState(host: CloudHost): { state: HostState; address?: string
 }
 
 /**
- * Make sure the host's security group admits SSH from where we are NOW.
+ * Make sure the host's security group admits SSH from wherever we are.
  *
- * The group pins port 22 to a /32, which is right — but a laptop changes
- * networks, and the first symptom of a stale rule is an SSH timeout that reads
- * as "the host is broken". Discovered live: the registered host became
- * unreachable purely because the current IP was not the one recorded weeks
- * earlier. So reachability is healed, not assumed: add today's IP, and retire
- * the /32 entries this code added on past networks (manual entries — anything
- * without our description — are left alone).
+ * The group used to pin port 22 to the laptop's /32. That failed twice in one
+ * afternoon, and the second failure is the instructive one: on a mobile
+ * network the address a web probe reports (checkip: 172.56.161.83) was NOT
+ * the address the SSH flow left from (sshd saw 172.56.35.173) — carrier NAT
+ * hands out egress addresses per flow, so no probe can learn the right /32
+ * and the rule cannot be made to converge. Both times the symptom was an SSH
+ * timeout that read as "the host is broken".
+ *
+ * So the rule is key-only SSH from anywhere — the ordinary EC2 posture. The
+ * key is the boundary (the Ubuntu image ships with password auth off), and
+ * nothing else on the box listens publicly: CDP and the screen stream bind to
+ * loopback and are reached through that same SSH. Manual entries in the group
+ * are left alone; only our own tagged rules are managed.
  */
 const AUTO_RULE_TAG = "codecast-auto";
+const ANYWHERE = "0.0.0.0/0";
 
 export function healSecurityGroup(host: CloudHost, onProgress: (m: string) => void = () => {}): void {
   if (host.provider !== "aws") return;
@@ -123,27 +130,22 @@ export function healSecurityGroup(host: CloudHost, onProgress: (m: string) => vo
     const groupId = r?.Reservations?.[0]?.Instances?.[0]?.SecurityGroups?.[0]?.GroupId;
     if (!groupId) return;
 
-    const ip = execFileSync("curl", ["-s", "--max-time", "6", "https://checkip.amazonaws.com"], {
-      encoding: "utf-8", timeout: 10_000,
-    }).trim();
-    if (!/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return;
-    const myCidr = `${ip}/32`;
-
     const sg = aws(["ec2", "describe-security-groups", "--group-ids", groupId], host.region);
     const sshRules = (sg?.SecurityGroups?.[0]?.IpPermissions ?? []).filter(
       (p: any) => p.IpProtocol === "tcp" && p.FromPort === 22 && p.ToPort === 22,
     );
     const ranges: Array<{ CidrIp: string; Description?: string }> = sshRules.flatMap((p: any) => p.IpRanges ?? []);
-    if (ranges.some((x) => x.CidrIp === myCidr)) return;
 
-    onProgress(`this network is new to the host — allowing SSH from ${ip}`);
-    aws(
-      ["ec2", "authorize-security-group-ingress", "--group-id", groupId, "--ip-permissions",
-       JSON.stringify([{ IpProtocol: "tcp", FromPort: 22, ToPort: 22, IpRanges: [{ CidrIp: myCidr, Description: AUTO_RULE_TAG }] }])],
-      host.region,
-    );
-    // Retire the auto-added entries from networks we are no longer on.
-    const stale = ranges.filter((x) => x.Description === AUTO_RULE_TAG && x.CidrIp !== myCidr);
+    if (!ranges.some((x) => x.CidrIp === ANYWHERE)) {
+      onProgress("allowing key-only SSH from anywhere (a pinned address cannot follow a laptop across networks)");
+      aws(
+        ["ec2", "authorize-security-group-ingress", "--group-id", groupId, "--ip-permissions",
+         JSON.stringify([{ IpProtocol: "tcp", FromPort: 22, ToPort: 22, IpRanges: [{ CidrIp: ANYWHERE, Description: AUTO_RULE_TAG }] }])],
+        host.region,
+      );
+    }
+    // Retire the per-network /32s this code added before it learned better.
+    const stale = ranges.filter((x) => x.Description === AUTO_RULE_TAG && x.CidrIp !== ANYWHERE);
     if (stale.length) {
       aws(
         ["ec2", "revoke-security-group-ingress", "--group-id", groupId, "--ip-permissions",
@@ -205,14 +207,25 @@ export async function ensureUp(
   // Running is not the same as accepting SSH: sshd comes up seconds later, and
   // a connection attempted in that window fails in a way that reads as a key
   // problem rather than a timing one.
-  const sshDeadline = Date.now() + 120_000;
+  //
+  // The probe gets a LONG leash and opens a ControlMaster. On a lossy mobile
+  // network a handshake that normally takes two seconds was measured at 36 —
+  // a 20s kill made every probe "fail" while a bare ssh by hand worked, which
+  // is indistinguishable from the host being down. Paying the slow handshake
+  // once and parking it in a control socket also means the transfer commands
+  // that follow reuse the authenticated connection instead of re-rolling the
+  // same dice.
+  const socket = path.join(os.tmpdir(), `cast-ssh-${host.user}-${address.replace(/[^\w.]/g, "_")}`);
+  const sshDeadline = Date.now() + 150_000;
   for (;;) {
     try {
       execFileSync(
         "ssh",
         ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
-         "-o", "ConnectTimeout=8", "-o", "BatchMode=yes", `${host.user}@${address}`, "true"],
-        { timeout: 20_000, stdio: "ignore" },
+         "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
+         "-o", "ControlMaster=auto", "-o", `ControlPath=${socket}`, "-o", "ControlPersist=120",
+         `${host.user}@${address}`, "true"],
+        { timeout: 60_000, stdio: "ignore" },
       );
       break;
     } catch {
