@@ -374,6 +374,93 @@ export const resolveConversationBySession = query({
  * resume_session command (which only the owner device will execute, per the
  * daemon's single-owner guard). One mutation = atomic handoff of ownership.
  */
+/**
+ * Tell the machine that USED to run a conversation to tear its copy down.
+ *
+ * Every ownership flip needs this, whichever path flipped it: without it the
+ * old machine's tmux + agent keep running, answer delivered messages in
+ * parallel (split-brain), and — on a cloud box that stops itself when idle —
+ * hold the machine awake indefinitely, which is a bill. Found live: a session
+ * moved to EC2 and back left a claude running there after the return.
+ *
+ * The command goes in the PRE-MOVE runner's queue (`queueUserId`): a daemon
+ * only polls its own user's queue, and across an account boundary that user
+ * is not the caller. Best-effort: an offline previous owner never picks it up
+ * and the command expires after the TTL.
+ */
+async function releasePreviousOwner(
+  ctx: { db: any },
+  opts: {
+    queueUserId: Id<"users">;
+    conversationId: Id<"conversations">;
+    sessionId: string | undefined;
+    priorDeviceId: string | undefined;
+    newDeviceId: string;
+  },
+): Promise<void> {
+  if (!opts.priorDeviceId || opts.priorDeviceId === opts.newDeviceId) return;
+  await ctx.db.insert("daemon_commands", {
+    user_id: opts.queueUserId,
+    command: "release_session" as const,
+    args: JSON.stringify({
+      conversation_id: opts.conversationId,
+      ...(opts.sessionId ? { session_id: opts.sessionId } : {}),
+    }),
+    created_at: Date.now(),
+    target_device_id: opts.priorDeviceId,
+  });
+}
+
+/**
+ * The CLI transfer flip (`cast remote move` / `back`): the files are already
+ * on the destination, so this only re-homes ownership, resumes there, and
+ * releases the source. Exported for tests; the mutation below is the wrapper.
+ */
+export async function performMoveSessionToDevice(
+  ctx: { db: any },
+  userId: Id<"users">,
+  args: { conversation_id: Id<"conversations">; owner_device_id: string; project_path: string; resume?: boolean },
+): Promise<{ ok: true; command_id: string | undefined; owner_device_id: string }> {
+  const conv = await ctx.db.get(args.conversation_id);
+  if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
+  const priorDeviceId = conv.owner_device_id as string | undefined;
+
+  await ctx.db.patch(args.conversation_id, {
+    owner_device_id: args.owner_device_id,
+    project_path: args.project_path,
+    status: "active" as const,
+    updated_at: Date.now(),
+  });
+
+  let commandId: string | undefined;
+  if (args.resume !== false) {
+    const agentType = fromConvexAgentType(conv.agent_type);
+    const id = await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "resume_session" as const,
+      args: JSON.stringify({
+        session_id: conv.session_id,
+        agent_type: agentType,
+        conversation_id: args.conversation_id,
+        project_path: args.project_path,
+      }),
+      created_at: Date.now(),
+      // Targeted, so only the destination acts: untargeted, every daemon of
+      // the user's fetched it and had to decline via the owner guard.
+      target_device_id: args.owner_device_id,
+    });
+    commandId = id;
+  }
+  await releasePreviousOwner(ctx, {
+    queueUserId: userId,
+    conversationId: args.conversation_id,
+    sessionId: conv.session_id,
+    priorDeviceId,
+    newDeviceId: args.owner_device_id,
+  });
+  return { ok: true, command_id: commandId, owner_device_id: args.owner_device_id };
+}
+
 export const moveSessionToDevice = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -385,33 +472,7 @@ export const moveSessionToDevice = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication required");
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
-
-    await ctx.db.patch(args.conversation_id, {
-      owner_device_id: args.owner_device_id,
-      project_path: args.project_path,
-      status: "active" as const,
-      updated_at: Date.now(),
-    });
-
-    let commandId: string | undefined;
-    if (args.resume !== false) {
-      const agentType = fromConvexAgentType(conv.agent_type);
-      const id = await ctx.db.insert("daemon_commands", {
-        user_id: userId,
-        command: "resume_session" as const,
-        args: JSON.stringify({
-          session_id: conv.session_id,
-          agent_type: agentType,
-          conversation_id: args.conversation_id,
-          project_path: args.project_path,
-        }),
-        created_at: Date.now(),
-      });
-      commandId = id;
-    }
-    return { ok: true, command_id: commandId, owner_device_id: args.owner_device_id };
+    return performMoveSessionToDevice(ctx, userId, args);
   },
 });
 
@@ -585,25 +646,13 @@ export async function performReassignToDevice(
     target_device_id: args.device_id,
   });
 
-  // Tear down the PREVIOUS owner's local copy. Without this the old
-  // machine's tmux (and the agent inside it) keeps running after the move —
-  // "Copy tmux attach" still works there and a stale agent lingers.
-  // move_to_device does this teardown on the source daemon itself; reassign
-  // only ever talks to the destination, so the old owner needs its own
-  // targeted command. Best-effort: an offline previous owner never picks it
-  // up (the command expires after the TTL).
-  if (prevOwner && prevOwner !== args.device_id) {
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "release_session" as const,
-      args: JSON.stringify({
-        conversation_id: args.conversation_id,
-        ...(conv.session_id ? { session_id: conv.session_id } : {}),
-      }),
-      created_at: Date.now(),
-      target_device_id: prevOwner,
-    });
-  }
+  await releasePreviousOwner(ctx, {
+    queueUserId: userId,
+    conversationId: args.conversation_id,
+    sessionId: conv.session_id,
+    priorDeviceId: prevOwner,
+    newDeviceId: args.device_id,
+  });
   return { ok: true, command_id: commandId, device_id: args.device_id, label: device.label };
 }
 
@@ -814,21 +863,15 @@ export async function performReparentSessionToDevice(
     target_device_id: args.device_id,
   });
 
-  // Tear down the source machine's local copy (same gap as reassign: the row
-  // handover above hides the session but the source tmux + agent keep running).
-  // The command goes in the PRE-MOVE runner's queue — a daemon only polls its
-  // own user's queue, and across an account boundary that user is not the
-  // caller. conv is the pre-patch snapshot, so conv.user_id is that runner.
-  if (priorDeviceId && deviceChanged) {
-    await ctx.db.insert("daemon_commands", {
-      user_id: conv.user_id,
-      command: "release_session" as const,
-      args: JSON.stringify({
-        conversation_id: conv._id,
-        ...(conv.session_id ? { session_id: conv.session_id } : {}),
-      }),
-      created_at: Date.now(),
-      target_device_id: priorDeviceId,
+  // conv is the pre-patch snapshot, so conv.user_id is the pre-move runner —
+  // whose queue the release must land in.
+  if (deviceChanged) {
+    await releasePreviousOwner(ctx, {
+      queueUserId: conv.user_id,
+      conversationId: conv._id,
+      sessionId: conv.session_id,
+      priorDeviceId,
+      newDeviceId: args.device_id,
     });
   }
 
