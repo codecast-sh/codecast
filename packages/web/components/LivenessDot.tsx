@@ -40,6 +40,27 @@ export function LivenessDot({ state, size = "sm", className }: LivenessDotProps)
   );
 }
 
+interface LivePulseHaloProps {
+  children: React.ReactNode;
+  className?: string;
+}
+
+/** Live-session halo around a status glyph. The glyph keeps showing the item's
+ * status; the green ring expanding from behind it says an agent is working on
+ * it right now. Use this instead of swapping the glyph for a LivenessDot —
+ * replacing the glyph hides the status while a session runs. */
+export function LivePulseHalo({ children, className }: LivePulseHaloProps) {
+  return (
+    <span className={cn("relative inline-flex items-center justify-center flex-shrink-0", className)}>
+      {/* Rings sit just outside the glyph's own stroke: a resting ring so
+          "live" reads between pulses, and a ripple that expands from it. */}
+      <span aria-hidden className="absolute -inset-0.5 rounded-full border border-sol-green/50" />
+      <span aria-hidden className="absolute -inset-0.5 rounded-full border-2 border-sol-green animate-ping opacity-60" />
+      <span className="relative inline-flex">{children}</span>
+    </span>
+  );
+}
+
 interface ActiveSessionBadgeProps {
   // _id is the Convex conversation _id and is what the side panel keys off of.
   // session_id (the chat session string) is kept for back-compat with older callers.
