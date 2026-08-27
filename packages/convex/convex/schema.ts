@@ -525,11 +525,9 @@ export default defineSchema({
     last_user_message_at: v.optional(v.number()),
     is_subagent: v.optional(v.boolean()),
     cli_flags: v.optional(v.string()),
-    // JSON snapshot (StableContextData from shared/contracts) of the stable
-    // feed injected into this session at start — mode + the session cards the
-    // agent saw. Written by conversations.recordStableContext (the SessionStart
-    // hook / Codex launch report); rendered by the web as cards at the top of
-    // the conversation. Server-set only, never optimistically written.
+    // LEGACY: now written to conversation_context.stable_context (off the hot
+    // doc). Still declared so pre-diet rows validate; readers fall back to it
+    // until the doc diet sweep moves it.
     stable_context: v.optional(v.string()),
     last_message_role: v.optional(v.union(
       v.literal("user"),
@@ -847,6 +845,17 @@ export default defineSchema({
   // queries; keeping multi-MB diffs there inflated every read/write and worsened
   // OCC contention. These are written once at session creation (and on fork) and
   // read only on-demand by getConversationGitDiff.
+  // Large per-conversation blobs that no LIST ever renders, keyed off the hot
+  // doc so the inbox scan (which reads every candidate doc in full, on every
+  // recompute) never pays for them. Same rationale as conversation_git_diffs.
+  conversation_context: defineTable({
+    conversation_id: v.id("conversations"),
+    // StableContextData JSON snapshot — see conversations.stable_context
+    // (legacy location) and recordStableContext.
+    stable_context: v.optional(v.string()),
+    updated_at: v.number(),
+  }).index("by_conversation_id", ["conversation_id"]),
+
   conversation_git_diffs: defineTable({
     conversation_id: v.id("conversations"),
     git_diff: v.optional(v.string()),
@@ -2242,14 +2251,21 @@ export default defineSchema({
     // human's answer can override it later.
     blocking: v.boolean(),
     default_option: v.optional(v.number()),
+    // answered / dismissed are the human's verdicts; withdrawn is the agent
+    // taking its own question back (`cast decide cancel`) — the facts changed
+    // and there is nothing left to decide.
     status: v.union(
       v.literal("pending"),
       v.literal("answered"),
-      v.literal("dismissed")
+      v.literal("dismissed"),
+      v.literal("withdrawn")
     ),
     answer_index: v.optional(v.number()),
     answer_text: v.optional(v.string()),
     created_at: v.number(),
+    // Last `cast decide edit`. created_at stays the ask time because the queue
+    // ranks by age; this is what wakes a card whose text changed underneath it.
+    updated_at: v.optional(v.number()),
     resolved_at: v.optional(v.number()),
     resolved_by: v.optional(v.id("users")),
   })

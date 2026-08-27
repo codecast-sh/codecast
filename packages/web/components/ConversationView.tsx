@@ -159,9 +159,9 @@ import { FilePathContext } from "../lib/filePathLinks";
 import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
 import { CallTranscriptDisclosure } from "./calls/TranscriptTurns";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
-import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand } from "./castCommand";
+import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
-import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
 
 
@@ -5026,6 +5026,190 @@ function CastStateBlock({ subcommand, args, fullCmd, output, isError }: { subcom
   );
 }
 
+// `cast decide` — the agent handing its human a decision. The queue and the
+// docked SessionDecisionCard are where it gets ANSWERED; this row is the
+// record of it in the transcript, rendered as the same card so the agent never
+// has to restate the question in prose. The live row (store, fed by
+// listForUser) is the truth when present: an edit changes the text here, an
+// answer shows up as the chosen option, a withdrawal greys it out. Rows older
+// than the subscription window fall back to the recorded argv.
+const DECIDE_STATUS_META: Record<string, { label: string; chip: string; accent: string }> = {
+  waiting: { label: "waiting on you", chip: "border-sol-yellow/40 text-sol-yellow", accent: "border-sol-yellow/50" },
+  advisory: { label: "advisory", chip: "border-sol-blue/40 text-sol-blue", accent: "border-sol-blue/40" },
+  answered: { label: "answered", chip: "border-sol-green/40 text-sol-green", accent: "border-sol-green/40" },
+  dismissed: { label: "dismissed", chip: "border-sol-border text-sol-text-dim", accent: "border-sol-border" },
+  withdrawn: { label: "withdrawn", chip: "border-sol-border text-sol-text-dim", accent: "border-sol-border" },
+  posted: { label: "posted", chip: "border-sol-border text-sol-text-dim", accent: "border-sol-yellow/30" },
+};
+
+// The id this row's own CLI output named. Verb-specific: a compound command
+// (`cast decide cancel; cast decide "…"`) prints several ids, and the ask's
+// `id:` line must not be read as the cancel's target.
+function decideOutputId(output: string, verb: DecideArgs["verb"]): string | null {
+  const clean = output.replace(/\x1b\[[0-9;]*m/g, "");
+  const pattern = verb === "cancel"
+    ? /Decision withdrawn:\s*([a-z0-9]{20,})\b/
+    : verb === "edit"
+      ? /Decision updated:\s*([a-z0-9]{20,})\b/
+      : /^\s*id:\s*([a-z0-9]{20,})\b/m;
+  return clean.match(pattern)?.[1] ?? null;
+}
+
+function CastDecideBlock({ decide, fullCmd, output, isError, conversationId }: { decide: DecideArgs; fullCmd: string; output: string; isError: boolean; conversationId?: Id<"conversations"> }) {
+  const [expanded, setExpanded] = useState(false);
+  const convKey = conversationId?.toString();
+  const targetId = decide.decisionId ?? (output ? decideOutputId(output, decide.verb) : null);
+
+  // Wake on this conversation's decision rows only — they change on ask,
+  // edit and answer, never on heartbeat.
+  const s = useTrackedStore([
+    (st) => {
+      if (!convKey) return "";
+      let sig = "";
+      for (const d of Object.values(st.sessionDecisions)) {
+        if (d.conversation_id === convKey) sig += `${d._id}:${d.status}:${d.updated_at ?? 0}:${d.answer_index ?? ""}:${d.answer_text ?? ""}|`;
+      }
+      return sig;
+    },
+  ]);
+  const row = useMemo((): SessionDecisionItem | null => {
+    if (targetId) return s.sessionDecisions[targetId] ?? null;
+    if (!convKey) return null;
+    const mine = Object.values(s.sessionDecisions)
+      .filter((d) => d.conversation_id === convKey)
+      .sort((a, b) => b.created_at - a.created_at);
+    if (decide.verb === "ask") return mine.find((d) => d.question === decide.question) ?? null;
+    // edit/cancel with no id acted on the session's open decision at the time.
+    // A cancel left a withdrawn row behind; an edit most likely touched the row
+    // that is still open. Newest of that kind, else newest overall.
+    const wanted = decide.verb === "cancel" ? "withdrawn" : "pending";
+    return mine.find((d) => d.status === wanted) ?? mine[0] ?? null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.sessionDecisions, targetId, convKey, decide.verb, decide.question]);
+
+  // An edit row is a diff, not a second copy of the card: it shows the fields
+  // the command changed (from the recorded argv; the live row fills in a field
+  // whose argv was a recipe). The ask row is the card itself.
+  const isEdit = decide.verb === "edit";
+  const question = isEdit ? decide.question : row?.question ?? decide.question;
+  const options: Array<{ label: string; description?: string }> = isEdit ? decide.options : row?.options ?? decide.options;
+  const context = isEdit ? decide.context : row?.context_md ?? decide.context;
+  const editChanges = isEdit
+    ? [decide.question && "question", decide.options.length > 0 && "options", decide.context !== null && "context", decide.report && "report", decide.blocking && "now blocking", decide.advisory && "now advisory"].filter(Boolean).join(", ")
+    : "";
+  const blocking = row ? row.blocking : !decide.advisory;
+  const defaultOption = row ? row.default_option : decide.defaultOption;
+  const reportSlug = row?.report_slug;
+  const withdrawnHere = decide.verb === "cancel";
+
+  const statusKey = row
+    ? row.status === "pending" ? (blocking ? "waiting" : "advisory") : row.status
+    : withdrawnHere ? "withdrawn" : "posted";
+  const meta = DECIDE_STATUS_META[statusKey];
+  const answerLabel = row?.status === "answered"
+    ? row.answer_text ?? (row.answer_index !== undefined ? row.options[row.answer_index]?.label : undefined)
+    : undefined;
+  const muted = statusKey === "dismissed" || statusKey === "withdrawn";
+  const verbLabel = decide.verb === "edit" ? "decision edited" : decide.verb === "cancel" ? "decision withdrawn" : "decision";
+
+
+  return (
+    <div className="my-1">
+      <div
+        className="flex items-center gap-1.5 text-xs cursor-pointer group flex-wrap"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-yellow/80">
+          <Split className="w-3 h-3" strokeWidth={2.2} />
+          <span className="group-hover:underline">{verbLabel}</span>
+        </span>
+        {isEdit && <span className="text-sol-text-dim">{editChanges || "no readable change"}</span>}
+        {!isError && row && (
+          <span className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-[9px] font-semibold uppercase tracking-wide ${meta.chip}`}>
+            {statusKey === "waiting" && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />}
+            {meta.label}
+          </span>
+        )}
+        {!isEdit && answerLabel && <span className="text-sol-green truncate min-w-0">{answerLabel}</span>}
+        {isError && <span className="text-sol-red/80 text-[10px]">(error)</span>}
+      </div>
+
+      {!isError && (question || context || options.length > 0 || reportSlug || decide.report) && (
+        <div className={`mt-1 ml-1 border-l-2 pl-2.5 space-y-1.5 ${meta.accent} ${muted ? "opacity-60" : ""}`}>
+          {question && (
+            <div className={`text-[13px] text-sol-text leading-snug ${withdrawnHere || statusKey === "withdrawn" ? "line-through" : ""}`}>
+              {question}
+            </div>
+          )}
+          {!withdrawnHere && context && (
+            <CollapsibleBody collapsedHeight={96} toggleClassName="mt-1">
+              {(isOpen) => (
+                <div className="text-[13px] text-sol-text-muted prose prose-invert prose-sm max-w-none
+                  prose-code:text-sol-cyan prose-code:bg-sol-bg-highlight prose-code:px-1 prose-code:rounded prose-code:text-xs
+                  prose-code:before:content-none prose-code:after:content-none
+                  [&_pre]:overflow-x-auto [&_pre]:max-w-full">
+                  <MessageMarkdown content={isOpen ? context : clipBody(context)} userText />
+                </div>
+              )}
+            </CollapsibleBody>
+          )}
+          {!withdrawnHere && options.length > 0 && (
+            <div className="flex flex-col gap-1">
+              {options.map((o, i) => {
+                const chosen = row?.status === "answered" && row.answer_index === i;
+                const isDefault = statusKey === "advisory" && defaultOption === i;
+                return (
+                  <div key={i} className={`flex items-baseline gap-2 text-[12px] ${chosen ? "text-sol-green" : "text-sol-text-muted"}`}>
+                    <span className={`shrink-0 inline-flex items-center justify-center w-4 h-4 rounded border text-[10px] font-mono ${chosen ? "border-sol-green/60 text-sol-green" : "border-sol-border text-sol-text-dim"}`}>
+                      {chosen ? <Check className="w-3 h-3" strokeWidth={2.5} /> : i + 1}
+                    </span>
+                    <span className="min-w-0">
+                      <span className={chosen ? "text-sol-green" : "text-sol-text"}>{o.label}</span>
+                      {o.description && <span className="text-sol-text-dim"> — {o.description}</span>}
+                      {isDefault && <span className="ml-1.5 text-[10px] text-sol-blue">proceeding with this</span>}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {!isEdit && row?.status === "answered" && row.answer_text && (
+            <div className="text-[12px] text-sol-green">answered in their own words: {row.answer_text}</div>
+          )}
+          {!withdrawnHere && (decide.report || (!isEdit && reportSlug)) && (
+            <div className="text-[11px]">
+              {reportSlug ? (
+                <a href={`/a/${reportSlug}`} target="_blank" rel="noopener noreferrer" className="text-sol-blue hover:underline inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                  <FileText className="w-3 h-3" /> report
+                </a>
+              ) : (
+                <span className="text-sol-text-dim inline-flex items-center gap-1"><FileText className="w-3 h-3" /> {decide.report}</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {expanded && (
+        <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
+          <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
+            <pre className="text-[11px] sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
+              $ {fullCmd}
+            </pre>
+          </div>
+          {output && output.trim() ? (
+            <pre className={`p-1.5 sm:p-2 text-[11px] sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${isError ? "text-sol-red" : "text-sol-text-secondary"}`}>
+              {renderAnsi(output)}
+            </pre>
+          ) : (
+            <div className="p-2 text-xs text-sol-text-dim">No output</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CastCommandBlock({ tool, result, images, globalImageMap, conversationId }: { tool: ToolCall; result?: ToolResult; images?: ImageData[]; globalImageMap?: Record<string, ImageData[]>; conversationId?: Id<"conversations"> }) {
   const [expanded, setExpanded] = useState(false);
   const convex = useConvex();
@@ -5288,6 +5472,12 @@ function CastCommandBlock({ tool, result, images, globalImageMap, conversationId
   const chatSend = cat === "chat" ? extractChatSendArgs(subcommand, args) : null;
   if (chatSend) {
     return <CastChatSendBlock send={chatSend} isReply={subcommand === "reply"} isError={!!isError} />;
+  }
+  // `cast decide` — the decision card, live from the store row when it exists.
+  // `ls` is a plain read and keeps the generic row.
+  const decide = cat === "decide" ? extractDecideArgs(subcommand, args) : null;
+  if (decide && decide.verb !== "ls") {
+    return <CastDecideBlock decide={decide} fullCmd={cast.fullCmd} output={output} isError={!!isError} conversationId={conversationId} />;
   }
   // `cast state` — the pinned panel already shows the full text, so the row is
   // a one-line status + headline instead of the generic body render.
@@ -7560,12 +7750,17 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       // (messageId IS the optimistic clientId), so it creates the missing
       // pending row or no-ops against an existing one.
       if (isPending && isConvexId(conversationId) && content.trim()) {
-        // Replay the exact bytes the original send dispatched (if it fired):
-        // the server fingerprints this client id's args, and a rebuilt payload
-        // is refused as COMMAND_ID_REUSED instead of deduping.
+        // Replay the row's own send args (dispatched bytes + image ids): the
+        // server fingerprints this client id's args, and a rebuilt payload is
+        // refused as COMMAND_ID_REUSED instead of deduping. While an image is
+        // still uploading the upload task owns the send; a re-send now would
+        // land the message without its image.
         const pendingRow = (useInboxStore.getState().pendingMessages[conversationId] || [])
           .find((m) => m._clientId === messageId || m._id === messageId);
-        useInboxStore.getState().sendMessage(conversationId, pendingRow?._dispatchContent || content, undefined, messageId);
+        const send = pendingRow ? pendingRowSendArgs(pendingRow) : { content, imageIds: undefined, uploading: false };
+        if (!send.uploading) {
+          useInboxStore.getState().sendMessage(conversationId, send.content || content, send.imageIds, messageId);
+        }
       }
       // If the session is alive (any heartbeating agent_status — idle, working,
       // blocked, booting), the re-sent message delivers through the normal
