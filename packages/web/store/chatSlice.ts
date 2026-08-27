@@ -101,6 +101,9 @@ export type ChatMessageRow = {
   // Push-to-talk. Present only on a walkie burst; the recording itself rides
   // `attachments` like any other file, so playback is an attachment concern.
   voice?: { status: ChatVoiceStatus; duration_ms?: number; room_key?: string; transcribing?: boolean };
+  // A huddle digest row: the summary is `content`, this names the transcript
+  // the reader can unfold under it.
+  call?: { transcript_id: string };
   client_id?: string;
   origin?: "agent";
   // The session that typed an origin:"agent" line, plus the server's send-time
