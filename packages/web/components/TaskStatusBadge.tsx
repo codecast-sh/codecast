@@ -33,6 +33,14 @@ export const TASK_STATUS: Record<TaskStatus, { icon: StatusIcon; label: string; 
   dropped: { icon: circle("dropped"), label: "Dropped", color: "text-sol-text-dim", bg: "bg-sol-text-dim/10", border: "border-sol-text-dim/30" },
 };
 
+/** The status vocabulary for a surface that must always draw something: an
+ *  unknown or missing status reads as `open` rather than as a hole. Use this
+ *  where the glyph is not optional (a pill, an inline row); use
+ *  `getTaskStatusConfig` where the caller wants to know the status was
+ *  unrecognised and render nothing. */
+export const taskVisual = (status?: string | null) =>
+  TASK_STATUS[(status || "open") as TaskStatus] ?? TASK_STATUS.open;
+
 /** Work-first ordering: what you are doing, then what you could pick up, then
  *  what is finished. Drives status group order and the sort tie-breaker. */
 export const TASK_STATUS_ORDER: TaskStatus[] = ["in_progress", "in_review", "open", "backlog", "done", "dropped"];
