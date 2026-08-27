@@ -502,10 +502,19 @@ export const moveToRemote = mutation({
       .collect();
     const online = devices.filter((d: any) => now - d.last_seen < DEVICE_ONLINE_MS);
 
+    // The destination may be ASLEEP: a cloud box's normal idle state is
+    // "stopped, costs only its disk", and the SOURCE daemon's move command
+    // wakes it (ensureUp) before transferring — so requiring the destination
+    // to be online here would make the cheapest configuration unusable. Only
+    // remotes get this grace; a local laptop cannot be woken by anyone.
+    const mostRecent = (a: any, b: any) => b.last_seen - a.last_seen;
     const dest = args.to_device_id
-      ? online.find((d: any) => d.device_id === args.to_device_id)
-      : online.find((d: any) => d.is_remote);
-    if (!dest) throw new Error("No online destination device (start the remote daemon)");
+      ? devices.find((d: any) => d.device_id === args.to_device_id)
+      : online.find((d: any) => d.is_remote) ??
+        [...devices].sort(mostRecent).find((d: any) => d.is_remote);
+    if (!dest) throw new Error("No destination device (provision one: cast browser hosts provision)");
+    const destOnline = online.some((d: any) => d.device_id === dest.device_id);
+    if (!destOnline && !dest.is_remote) throw new Error("That device is offline and cannot be woken remotely");
 
     const ownerOnline = (conv as any).owner_device_id && online.some((d: any) => d.device_id === (conv as any).owner_device_id);
     const source = ownerOnline ? (conv as any).owner_device_id : (online.find((d: any) => !d.is_remote)?.device_id ?? null);

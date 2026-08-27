@@ -166,6 +166,52 @@ export interface AutoSwitchProfile {
   usage?: CcUsage;
 }
 
+// ---------------------------------------------------------------------------
+// Per-device account resolution
+// ---------------------------------------------------------------------------
+
+// A profile NAME is a machine-local alias (a keychain snapshot saved under
+// whatever name that machine chose); the account's EMAIL is its identity.
+// Accounts are device-specific: an account exists on a device only if that
+// device's reported inventory carries it. A cross-device switch therefore
+// carries the identity and each executing device resolves its own alias —
+// sending machine A's profile name to machine B's daemon fails there with
+// "No saved profile", after the UI already claimed success.
+
+/** The device's own name for the target account: email match first (the
+ * identity), exact name as fallback (old daemons report no emails). Returns
+ * undefined when the device does not have the account — the caller must treat
+ * that device as unable to switch, not send the foreign name anyway. */
+export function resolveDeviceProfile(
+  accounts: { profiles: Array<{ name: string; email?: string }> } | undefined | null,
+  target: { profile?: string; email?: string },
+): string | undefined {
+  const profiles = accounts?.profiles ?? [];
+  if (target.email) {
+    const byEmail = profiles.find((p) => p.email && p.email === target.email);
+    if (byEmail) return byEmail.name;
+  }
+  if (target.profile) {
+    const byName = profiles.find((p) => p.name === target.profile);
+    if (byName) return byName.name;
+  }
+  return undefined;
+}
+
+/** The identity behind a caller-supplied target: an explicit email wins;
+ * otherwise the email the resolving device's inventory records for the named
+ * profile (the Settings page and auto-switch pass names local to the pinned /
+ * primary device). Undefined when the name is unknown there too — resolution
+ * then degrades to exact-name matching everywhere. */
+export function targetAccountEmail(
+  accounts: { profiles: Array<{ name: string; email?: string }> } | undefined | null,
+  target: { profile?: string; email?: string },
+): string | undefined {
+  if (target.email) return target.email;
+  if (!target.profile) return undefined;
+  return (accounts?.profiles ?? []).find((p) => p.name === target.profile)?.email;
+}
+
 export type AutoSwitchDecision =
   | { action: "continue" } // active account's window rolled — plain continue un-parks for free
   | { action: "switch"; profile: string }
