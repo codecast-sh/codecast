@@ -615,26 +615,50 @@ function BlockedSessionsBanner({
     .filter((sess) => sess.pending_api_error_kind === "auth")
     .map((sess) => sess._id);
 
-  // The account picker's inventory. The whole banner asks ONE question — which
-  // account does the fleet continue on? — so accounts render as a single
-  // select, not a button per profile. Ranked by live headroom (the same brain
-  // auto-switch trusts) and annotated with usage, so the choice is informed
-  // without demanding one: the default is the current account, and the select
-  // is furniture until the user has a reason to open it.
-  const activeEmail = loginDevice?.active_email ?? (accountData?.devices ?? []).find((d) => d.active_email)?.active_email;
-  const accountOptions: { name: string; email?: string; usage?: CcUsage }[] = [];
-  for (const device of accountData?.devices ?? []) {
+  // The account picker's inventory. Accounts are DEVICE-SPECIFIC: a saved
+  // profile is a keychain snapshot on one machine, so the only accounts worth
+  // offering are the ones saved on the machines that will EXECUTE the revive —
+  // each blocked session's online owner, or the primary standing in for an
+  // offline or remote owner (the same routing insertSwitchCommands applies).
+  // Options are keyed by email (the identity); a profile name is that
+  // machine's alias and may differ or be absent elsewhere. The whole banner
+  // asks ONE question — which account does the fleet continue on? — so
+  // accounts render as a single select, ranked by live headroom.
+  const devices = accountData?.devices ?? [];
+  const deviceById = new Map(devices.map((d) => [d.device_id, d]));
+  const executorFor = (sess: InboxSession) => {
+    const owner = sess.owner_device_id ? deviceById.get(sess.owner_device_id) : undefined;
+    return owner && owner.online && !owner.is_remote ? owner : loginDevice;
+  };
+  const executors = [...new Map(acted.map((sess) => executorFor(sess)).filter((d) => !!d).map((d) => [d!.device_id, d!])).values()];
+  const activeEmails = [...new Set(executors.map((d) => d.active_email).filter((e): e is string => !!e))];
+  const activeEmail = activeEmails.length === 1 ? activeEmails[0] : undefined;
+  type AccountOption = { key: string; name: string; email?: string; usage?: CcUsage; missingOn: string[] };
+  const accountOptions: AccountOption[] = [];
+  for (const device of executors) {
     for (const p of device.profiles) {
-      if (p.email && p.email === activeEmail) continue;
-      const existing = accountOptions.find((t) => t.name === p.name);
-      if (!existing) accountOptions.push({ name: p.name, email: p.email, usage: p.usage });
+      // The account a machine is signed into now is "this account", not a switch.
+      if (p.email && device.active_email === p.email) continue;
+      const key = p.email ? `email:${p.email}` : `name:${p.name}`;
+      const existing = accountOptions.find((t) => t.key === key);
+      if (!existing) accountOptions.push({ key, name: p.name, email: p.email, usage: p.usage, missingOn: [] });
       else if (!existing.usage && p.usage) existing.usage = p.usage;
     }
   }
+  for (const opt of accountOptions) {
+    opt.missingOn = executors
+      .filter((d) => !d.profiles.some((p) => (opt.email ? p.email === opt.email : p.name === opt.name)))
+      .map((d) => d.label);
+  }
   const rankedAccounts = rankByHeadroom(accountOptions, now);
-  const activeUsage = (accountData?.devices ?? [])
-    .flatMap((d) => d.profiles)
-    .find((p) => p.email && p.email === activeEmail)?.usage;
+  // Usage of what the executing machines run now — the account that parked
+  // these sessions, not whatever the machine at the desk is signed into.
+  const activeUsage = executors
+    .flatMap((d) => d.profiles.filter((p) => p.email && p.email === d.active_email))
+    .map((p) => p.usage)
+    .find((u) => !!u);
+  const selectedAccount = rankedAccounts.find((t) => t.key === onAccount);
+  const switchTarget = (opt: AccountOption) => (opt.email ? { email: opt.email } : { profile: opt.name });
   // "82% used" / "at limit" — enough to steer the pick, nothing more.
   const usageNote = (usage?: CcUsage): string => {
     if (isUsageExhausted(usage, now)) return " — at limit";
@@ -700,7 +724,7 @@ function BlockedSessionsBanner({
   // and the snooze — so the banner resurfaces for a retry. If a daemon is merely
   // unreachable, the stamps age out (BLOCKED_REVIVE_TTL_MS) and those sessions
   // honestly return to blocked.
-  const runRevive = async (profile: string | undefined) => {
+  const runRevive = async (target: { email?: string; profile?: string } | undefined) => {
     const ids = acted.map((sess) => sess._id);
     const store = useInboxStore.getState();
     const nonce = Math.random().toString(36).slice(2, 10);
@@ -711,24 +735,39 @@ function BlockedSessionsBanner({
     }
     store.markBlockedReviveRequested(ids);
     closeBanner();
-    setBusy(profile ?? "revive");
+    const targetLabel = target?.email ?? target?.profile;
+    setBusy(targetLabel ?? "revive");
     try {
       const res = await requestSwitch({
-        profile,
+        ...target,
         include_subagents: includeSubs,
         continue_client_ids: clientIds,
       });
+      // Sessions on a machine that lacks the account got no command: their
+      // painted "continue" and revive stamp must not stand.
+      const unswitchable = (res as { unswitchable?: number; unswitchable_devices?: string[] }).unswitchable ?? 0;
+      const unswitchableDevices = (res as { unswitchable_devices?: string[] }).unswitchable_devices ?? [];
+      if (unswitchable > 0) {
+        const stranded = acted
+          .filter((sess) => unswitchableDevices.includes(executorFor(sess)?.label ?? ""))
+          .map((sess) => sess._id);
+        for (const id of stranded) store.removeOptimisticMessage(id, clientIds[id]);
+        store.clearBlockedReviveRequested(stranded);
+      }
       toast.success(
-        (profile
-          ? `Switching to "${profile}" — ${res.conversations} blocked session${res.conversations === 1 ? "" : "s"} will continue on it`
+        (targetLabel
+          ? `Switching to ${targetLabel} — ${res.conversations} blocked session${res.conversations === 1 ? "" : "s"} will continue on it`
           : `Restarting ${res.conversations} blocked session${res.conversations === 1 ? "" : "s"} on the current account`) +
-          (res.unreachable > 0 ? ` (${res.unreachable} unreachable: daemon offline)` : ""),
+          (res.unreachable > 0 ? ` (${res.unreachable} unreachable: daemon offline)` : "") +
+          (unswitchable > 0
+            ? ` (${unswitchable} skipped: ${unswitchableDevices.join(", ")} ${unswitchableDevices.length === 1 ? "does" : "do"} not have that account saved)`
+            : ""),
       );
     } catch (err) {
       for (const id of ids) store.removeOptimisticMessage(id, clientIds[id]);
       store.clearBlockedReviveRequested(ids);
       updateDismissed("blocked_sessions_banner", 0);
-      toast.error(err instanceof Error ? err.message : profile ? "Account switch failed" : "Failed to restart blocked sessions");
+      toast.error(err instanceof Error ? err.message : targetLabel ? "Account switch failed" : "Failed to restart blocked sessions");
     } finally {
       setBusy(null);
     }
@@ -742,7 +781,7 @@ function BlockedSessionsBanner({
   // from. The button therefore always acts on the whole acted set and always
   // says the full count.
   const handleContinue = () => {
-    if (onAccount) return void runRevive(onAccount);
+    if (selectedAccount) return void runRevive(switchTarget(selectedAccount));
     if (authCount > 0) return void runRevive(undefined);
     handleContinueAll();
   };
@@ -751,8 +790,8 @@ function BlockedSessionsBanner({
   // line right above accounts for the difference.
   const countLabel =
     acted.length === 1 ? "it" : acted.length === blocked.length ? `all ${acted.length}` : `${acted.length}`;
-  const continueTitle = onAccount
-    ? `Switch this machine to ${rankedAccounts.find((t) => t.name === onAccount)?.email ?? onAccount}, restart the blocked sessions, and continue them on it`
+  const continueTitle = selectedAccount
+    ? `Switch ${executors.length === 1 ? executors[0].label : "the machines owning these sessions"} to ${selectedAccount.email ?? selectedAccount.name}, restart the blocked sessions, and continue them on it`
     : authCount > 0
       ? `Send "continue" to each blocked session — ${authCount === acted.length ? "they are" : `the ${authCount} signed out are`} restarted first (their processes hold an expired login), no account change`
       : `Send "continue" to each blocked session — no restart, no account change${limitCount > 0 ? "; they resume once the limit resets" : ""}`;
@@ -903,17 +942,17 @@ function BlockedSessionsBanner({
           className="rounded bg-amber-500 px-3 py-1 text-[11px] font-bold text-sol-bg shadow-sm transition-colors hover:bg-amber-400 disabled:opacity-60"
         >
           {busy !== null
-            ? onAccount
+            ? selectedAccount
               ? "Switching…"
               : "Continuing…"
-            : onAccount
+            : selectedAccount
               ? `Switch & continue ${countLabel}`
               : `Continue ${countLabel}`}
         </button>
         {rankedAccounts.length > 0 && (
           <label
             className="flex min-w-0 items-center gap-1.5 text-[11px] text-sol-text-dim"
-            title={`Which Claude account the sessions continue on${activeEmail ? ` — currently ${activeEmail}` : ""}; switching restarts them on the chosen account`}
+            title={`Which Claude account the sessions continue on${activeEmail ? ` — currently ${activeEmail}` : activeEmails.length > 1 ? ` — currently ${activeEmails.join(" / ")}` : ""}; only accounts saved on ${executors.length === 1 ? executors[0].label : "the machines owning these sessions"} are offered`}
           >
             on
             <select
@@ -922,10 +961,10 @@ function BlockedSessionsBanner({
               disabled={busy !== null}
               className="max-w-[220px] rounded border border-amber-500/25 bg-sol-bg px-1.5 py-0.5 text-[11px] text-sol-text outline-none hover:border-amber-500/50 focus:border-amber-500 disabled:opacity-60"
             >
-              <option value="">this account{usageNote(activeUsage)}</option>
+              <option value="">{activeEmails.length > 1 ? "current accounts" : "this account"}{usageNote(activeUsage)}</option>
               {rankedAccounts.map((t) => (
-                <option key={t.name} value={t.name}>
-                  {t.name}{usageNote(t.usage)}
+                <option key={t.key} value={t.key}>
+                  {t.email ?? t.name}{usageNote(t.usage)}{t.missingOn.length > 0 ? ` — not on ${t.missingOn.join(", ")}` : ""}
                 </option>
               ))}
             </select>

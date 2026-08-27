@@ -28,6 +28,8 @@ import {
   isSubagentConversation,
   isDeviceOnline,
   isValidProfileName,
+  resolveDeviceProfile,
+  targetAccountEmail,
   shouldSweepStaleFlag,
   LOGIN_FLOW_STALE_MS,
   STALE_FLAG_AFTER_MS,
@@ -156,6 +158,12 @@ export const requestAccountSwitch = mutation({
   args: {
     api_token: v.optional(v.string()),
     profile: v.optional(v.string()),
+    // The target account's identity. Profile NAMES are machine-local aliases,
+    // so a cross-device switch passes the email and each executing device
+    // resolves its own name; `profile` remains for device-pinned callers
+    // (Settings) and is resolved to an email via the executing device's
+    // inventory when possible.
+    email: v.optional(v.string()),
     // false = pure swap, touch no sessions (the Settings page's switch). The
     // default (true) is the incident flow: kill + continue the blocked set.
     continue_blocked: v.optional(v.boolean()),
@@ -199,7 +207,7 @@ export const requestAccountSwitch = mutation({
     const onlineById = new Map(online.map((d: any) => [d.device_id, d]));
     const primary = args.device_id ? onlineById.get(args.device_id) : freshestPrimary;
 
-    if (!primary && args.profile) {
+    if (!primary && (args.profile || args.email)) {
       throw new Error(
         args.device_id
           ? "That device's daemon is offline"
@@ -209,6 +217,7 @@ export const requestAccountSwitch = mutation({
 
     const res = await insertSwitchCommands(ctx, userId, {
       profile: args.profile,
+      email: args.email,
       blocked,
       online,
       primary,
@@ -216,13 +225,29 @@ export const requestAccountSwitch = mutation({
       now,
       continueClientIds: args.continue_client_ids,
     });
+    // A switch that no device could execute is a failure, not a quiet no-op:
+    // tell the caller which machines lack the account instead of letting the
+    // sessions drift back to blocked after an optimistic success toast.
+    if ((args.profile || args.email) && res.devices === 0) {
+      throw new Error(
+        `No online device has the account ${args.email ?? `"${args.profile}"`} saved` +
+          (res.unswitchableDevices.length > 0
+            ? ` (missing on ${res.unswitchableDevices.join(", ")})`
+            : "") +
+          " — log into it there once and save it: cast accounts save <name>",
+      );
+    }
 
     return {
       devices: res.devices,
       conversations: res.routed,
       subagents: subagentCount,
       total_blocked: totalBlocked,
-      unreachable: blocked.length - res.routed,
+      unreachable: blocked.length - res.routed - res.unswitchable,
+      // Sessions owned by machines that don't have the target account saved —
+      // no command was sent for them; the account must be saved there first.
+      unswitchable: res.unswitchable,
+      unswitchable_devices: res.unswitchableDevices,
       command_ids: res.commandIds,
     };
   },
@@ -237,7 +262,12 @@ async function insertSwitchCommands(
   ctx: { db: any },
   userId: Id<"users">,
   opts: {
+    // Machine-local profile name (device-pinned callers: Settings, auto-switch
+    // deciding from the primary's inventory). Resolved to an identity below.
     profile?: string;
+    // The account's identity — the cross-device form. Each executing device
+    // resolves it against its OWN inventory; names never travel.
+    email?: string;
     blocked: Doc<"conversations">[];
     online: Doc<"devices">[];
     primary: Doc<"devices"> | undefined;
@@ -250,8 +280,26 @@ async function insertSwitchCommands(
     // login-flow confirm, the auto-switch loop) — the daemon mints its own.
     continueClientIds?: Record<string, string>;
   },
-): Promise<{ devices: number; routed: number; commandIds: Id<"daemon_commands">[] }> {
+): Promise<{
+  devices: number;
+  routed: number;
+  unswitchable: number;
+  unswitchableDevices: string[];
+  commandIds: Id<"daemon_commands">[];
+}> {
   const onlineById = new Map(opts.online.map((d) => [d.device_id, d]));
+  const deviceFor = (deviceId: string): Doc<"devices"> | undefined =>
+    onlineById.get(deviceId) ??
+    (opts.primary?.device_id === deviceId ? opts.primary : undefined);
+  const switchRequested = !!(opts.profile || opts.email);
+  // The identity behind the request: an explicit email, or the email the
+  // primary's inventory records for the named profile (absent on old daemons —
+  // resolution then degrades to exact-name matching per device).
+  const targetEmail = targetAccountEmail(opts.primary?.cc_accounts, {
+    profile: opts.profile,
+    email: opts.email,
+  });
+
   const groups = new Map<string, Doc<"conversations">[]>();
   for (const conv of opts.blocked) {
     const owner =
@@ -263,15 +311,60 @@ async function insertSwitchCommands(
     list.push(conv);
     groups.set(owner, list);
   }
-  // The swap itself must run even when nothing is blocked.
-  if (opts.profile && opts.primary && !groups.has(opts.primary.device_id)) {
+  // Accounts are device-specific: a switch runs on the devices that own the
+  // blocked sessions, not on the primary as a matter of course. The primary
+  // joins without blocked work of its own in exactly two cases: a pure swap
+  // (nothing blocked — the Settings flow), and a fleet with remote-owned
+  // sessions (remotes never swap locally; their credential is the primary's
+  // push, so the primary must perform the swap for their revive to matter).
+  const hasRemoteGroup = [...groups.keys()].some((id) => deviceFor(id)?.is_remote === true);
+  if (
+    switchRequested &&
+    opts.primary &&
+    !groups.has(opts.primary.device_id) &&
+    (opts.blocked.length === 0 || hasRemoteGroup)
+  ) {
     groups.set(opts.primary.device_id, []);
   }
 
+  // A remote runs whatever account the primary pushes, so its sessions can
+  // only continue "on the new account" if the primary itself can swap to it.
+  const primaryCanSwitch =
+    !switchRequested ||
+    !!resolveDeviceProfile(opts.primary?.cc_accounts, {
+      profile: opts.profile,
+      email: targetEmail,
+    });
+
   const commandIds: Id<"daemon_commands">[] = [];
   let routed = 0;
+  let unswitchable = 0;
+  const unswitchableDevices: string[] = [];
   for (const [deviceId, convs] of groups) {
-    const isRemote = onlineById.get(deviceId)?.is_remote === true;
+    const device = deviceFor(deviceId);
+    const isRemote = device?.is_remote === true;
+    if (switchRequested && isRemote && !primaryCanSwitch) {
+      unswitchable += convs.length;
+      unswitchableDevices.push(device?.label ?? deviceId.slice(0, 8));
+      continue;
+    }
+    // Each non-remote device swaps under its OWN name for the account. A
+    // device that doesn't have the account saved cannot execute the switch —
+    // sending a foreign profile name would make its daemon fail before the
+    // kill and the continue, silently, after the UI reported success. Skip it
+    // and report, so the fix ("save the account on that machine") is visible.
+    let localProfile: string | undefined;
+    if (switchRequested && !isRemote) {
+      localProfile = resolveDeviceProfile(device?.cc_accounts, {
+        profile: opts.profile,
+        email: targetEmail,
+      });
+      if (!localProfile) {
+        unswitchable += convs.length;
+        unswitchableDevices.push(device?.label ?? deviceId.slice(0, 8));
+        continue;
+      }
+    }
     routed += convs.length;
     commandIds.push(
       await ctx.db.insert("daemon_commands", {
@@ -280,7 +373,7 @@ async function insertSwitchCommands(
         args: JSON.stringify({
           // Remotes never swap locally — their credential arrives via the
           // primary's push. They only recycle their blocked sessions.
-          profile: isRemote ? undefined : opts.profile,
+          profile: isRemote ? undefined : localProfile,
           conversation_ids: convs.map((c) => c._id),
           session_ids: Object.fromEntries(convs.map((c) => [c._id, c.session_id])),
           continue_blocked: opts.continueBlocked,
@@ -299,7 +392,7 @@ async function insertSwitchCommands(
       }),
     );
   }
-  return { devices: groups.size, routed, commandIds };
+  return { devices: commandIds.length, routed, unswitchable, unswitchableDevices, commandIds };
 }
 
 // The recovery nudge for remote Macs: they run a COPY of the primary's
