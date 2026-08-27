@@ -1008,6 +1008,8 @@ if (typeof window !== "undefined" && import.meta.env.DEV) {
     joinCall,
     leaveCall,
     takeOverCall,
+    startTranscribing,
+    stopTranscribing,
     setMuted,
     setCamera,
     setScreenShare,

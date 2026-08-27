@@ -2,6 +2,7 @@
 // reappearing after dismiss: dumps dismiss-relevant fields + recent activity.
 import { internalQuery, internalMutation, internalAction } from "./functions";
 import { anyApi } from "convex/server";
+import { internalMutation as rawInternalMutation } from "./_generated/server";
 import { scanInboxConversations, computeSessionsLiveness, computeInboxSessions, setConvGitDiff } from "./conversations";
 import { shouldShowInInbox } from "./inboxFilters";
 import { v } from "convex/values";
@@ -885,7 +886,12 @@ export const inboxScanCensus = internalQuery({
 // user_skills is the source) and git_status (moved to the conversation_git_diffs
 // side row). Paced: one page per mutation, resumable by cursor. Safe to delete
 // once every row has been swept.
-export const dietConversationPage = internalMutation({
+//
+// Raw (un-wrapped) internalMutation on purpose: the wrapped one appends every
+// conversation patch to the sync log, which bumps a shared sync_heads row and
+// OCC-collides with the live addMessages firehose on every retry. Nothing a
+// client renders changes here, so there is no delta worth logging.
+export const dietConversationPage = rawInternalMutation({
   args: { cursor: v.union(v.string(), v.null()), numItems: v.number(), dryRun: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const page = await ctx.db.query("conversations").paginate({ cursor: args.cursor, numItems: args.numItems });
@@ -919,7 +925,15 @@ export const dietConversationDocs = internalAction({
     const totals = { pages: 0, scanned: 0, patched: 0, bytesShed: 0 };
     let isDone = false;
     for (let i = 0; i < maxPages; i++) {
-      const r: any = await ctx.runMutation(anyApi.debugTmp.dietConversationPage, { cursor, numItems: 100, dryRun: args.dryRun });
+      let r: any = null;
+      for (let attempt = 0; attempt < 5 && !r; attempt++) {
+        try {
+          r = await ctx.runMutation(anyApi.debugTmp.dietConversationPage, { cursor, numItems: 50, dryRun: args.dryRun });
+        } catch (err) {
+          if (attempt === 4) throw err;
+          await new Promise((res) => setTimeout(res, 500 * (attempt + 1)));
+        }
+      }
       totals.pages++; totals.scanned += r.scanned; totals.patched += r.patched; totals.bytesShed += r.bytesShed;
       cursor = r.continueCursor;
       isDone = r.isDone;
