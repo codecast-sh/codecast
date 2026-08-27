@@ -351,6 +351,7 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
           !row.content.trim()
         ? { status: "done" as const, inferred: true }
         : undefined,
+    call: row.call ? { transcriptId: row.call.transcript_id } : undefined,
     reactions: reactions && reactions.length > 0 ? reactions : undefined,
     agentStatus: row.agent_status,
     replyCount: replyCount || undefined,

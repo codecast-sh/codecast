@@ -44,8 +44,11 @@ import { performSessionSend } from "./pendingMessages";
 import {
   RECORDING_SUMMARY_PUSH_TYPE,
   TRANSCRIBE_MAX_BYTES,
+  formatHuddleDigest,
+  formatHuddleSummaryTag,
   formatTranscriptChunk as formatChunk,
   isRecRoomKey,
+  parseRoomKey,
 } from "@codecast/shared/contracts";
 import { requireAccessibleDoc } from "./lib/access";
 import { verifyApiToken } from "./apiTokens";
@@ -545,12 +548,18 @@ export const setSummary = internalMutation({
   handler: async (ctx, args) => {
     const t = await ctx.db.get(args.transcript_id);
     if (!t) return;
+    // The first terminal write for this run. `endTranscript` (and, for a
+    // recording, `attachRecording`) put the row at "pending" exactly once, so
+    // this is what makes the digest below post once however many times the
+    // summary action is retried.
+    const firstVerdict = t.summary_status === "pending";
     await ctx.db.patch(t._id, {
       summary_status: args.summary_status,
       ...(args.title && !t.title ? { title: args.title } : {}),
       ...(args.summary ? { summary: args.summary } : {}),
       ...(args.action_items ? { action_items: args.action_items } : {}),
     });
+    if (firstVerdict) await scheduleHuddleDigest(ctx, t, args);
     // A recording is the one transcript whose owner walked away from it. They
     // pressed stop, put the phone in a pocket, and the words, the summary and
     // the action items land minutes later with nothing on screen to see them
@@ -570,6 +579,67 @@ export const setSummary = internalMutation({
     });
   },
 });
+
+/** Where a huddle's digest goes, from its room key: a chat room (a channel or
+ *  a member set) gets a chat message; a session room gets a turn for its agent.
+ *  A recording is one person's microphone and has no room to report into. */
+export function huddleDigestTarget(
+  roomKey: string,
+): { kind: "chat" } | { kind: "session"; conversationId: string } | null {
+  const parsed = parseRoomKey(roomKey);
+  if (!parsed) return null;
+  if (parsed.kind === "channel" || parsed.kind === "dm") return { kind: "chat" };
+  if (parsed.kind === "session") return { kind: "session", conversationId: parsed.conversationId };
+  return null;
+}
+
+/** The row a finished huddle leaves where it was held. Every huddle with any
+ *  words gets one — a summary when there was enough said to write one, the
+ *  words themselves when there was not (a "skipped" summary is under forty
+ *  words, and those words ARE the summary). A chat room gets a message the
+ *  reader can unfold into the transcript (chat.postCallDigest); a session room
+ *  gets its agent woken with the summary and the command that reads the whole
+ *  transcript, never the transcript itself. Delivery acts as the scribe. */
+async function scheduleHuddleDigest(
+  ctx: any,
+  t: Doc<"transcripts">,
+  verdict: { summary_status: "done" | "failed" | "skipped"; title?: string; summary?: string; action_items?: string[] },
+): Promise<void> {
+  const target = huddleDigestTarget(t.room_key);
+  if (!target || t.last_seq <= 0) return;
+  let summary = verdict.summary ?? t.summary ?? null;
+  if (!summary && verdict.summary_status === "skipped") {
+    const segs = await ctx.db
+      .query("transcript_segments")
+      .withIndex("by_transcript_seq", (q: any) => q.eq("transcript_id", t._id))
+      .collect();
+    summary = formatChunk(segs) || null;
+  }
+  const digest = {
+    title: t.title ?? verdict.title ?? null,
+    startedAt: t.started_at,
+    endedAt: t.ended_at ?? null,
+    speakers: (t.participants ?? []).map((p) => p.name),
+    summary,
+    actionItems: verdict.action_items ?? t.action_items ?? [],
+    summaryStatus: verdict.summary_status,
+  };
+  if (target.kind === "chat") {
+    await ctx.scheduler.runAfter(0, internal.chat.postCallDigest, {
+      transcript_id: t._id,
+      room_key: t.room_key,
+      team_id: t.team_id,
+      author: t.started_by,
+      content: formatHuddleDigest(digest),
+    });
+    return;
+  }
+  await ctx.scheduler.runAfter(0, internal.transcripts.deliverToSession, {
+    as_user: t.started_by,
+    to: target.conversationId,
+    body: formatHuddleSummaryTag(String(t._id), digest),
+  });
+}
 
 export const generateSummary = internalAction({
   args: { transcript_id: v.id("transcripts") },

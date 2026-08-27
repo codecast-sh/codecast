@@ -40,6 +40,8 @@ import {
   type TranscriptExcerpt,
 } from "../../components/calls/useCallFeed";
 import { firstName, fmtClock, speakerColor } from "../../components/calls/speakers";
+import { TranscriptTurnList } from "../../components/calls/TranscriptTurns";
+import { groupTurns } from "../../components/calls/transcriptTurnModel";
 import {
   Phone,
   PhoneCall,
@@ -130,32 +132,6 @@ function CallListRow({ call, selected }: { call: any; selected: boolean }) {
       </div>
     </Link>
   );
-}
-
-// Consecutive segments from one speaker, the unit selection works on.
-type Turn = {
-  index: number;
-  speaker_id: string;
-  speaker_name: string;
-  t0: number;
-  segments: any[];
-};
-
-function groupTurns(segments: any[]): Turn[] {
-  const turns: Turn[] = [];
-  for (const s of segments) {
-    const last = turns[turns.length - 1];
-    if (last && last.speaker_id === s.speaker_id) last.segments.push(s);
-    else
-      turns.push({
-        index: turns.length,
-        speaker_id: s.speaker_id,
-        speaker_name: s.speaker_name,
-        t0: s.t0,
-        segments: [s],
-      });
-  }
-  return turns;
 }
 
 function CallDetail({ id }: { id: string }) {
@@ -425,37 +401,7 @@ function CallDetail({ id }: { id: string }) {
                 </div>
               )}
               <div className="space-y-0.5 pb-20">
-                {turns.map((t) => (
-                  <div
-                    key={t.index}
-                    role="button"
-                    tabIndex={0}
-                    aria-pressed={isSelected(t.index)}
-                    aria-label={`Turn by ${firstName(t.speaker_name)} at ${fmtClock(t.t0)}`}
-                    onClick={(e) => onTurnClick(t.index, e)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        onTurnClick(t.index, e as any);
-                      }
-                    }}
-                    className={`-mx-2 cursor-pointer rounded-md px-2 py-1 transition-colors ${
-                      isSelected(t.index)
-                        ? "bg-sol-violet/10 ring-1 ring-inset ring-sol-violet/40"
-                        : "hover:bg-sol-bg-alt/40"
-                    }`}
-                  >
-                    <div className={`text-[11px] font-medium ${speakerColor(t.speaker_id)}`}>
-                      {firstName(t.speaker_name)}
-                      <span className="ml-2 font-normal text-sol-text-dim">{fmtClock(t.t0)}</span>
-                    </div>
-                    {t.segments.map((s: any) => (
-                      <p key={s.seq} className="text-[13px] leading-relaxed text-sol-text">
-                        {s.text}
-                      </p>
-                    ))}
-                  </div>
-                ))}
+                <TranscriptTurnList turns={turns} isSelected={isSelected} onTurnClick={onTurnClick} />
               </div>
             </>
           )}

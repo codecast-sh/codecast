@@ -24,6 +24,9 @@ export * from "./callRoomKeys";
 export * from "./recordingAudio";
 export * from "./callPush";
 export * from "./transcriptChunk";
+// The row a finished huddle leaves in its chat room or session: one formatter
+// for the digest markdown and the <huddle-summary> wire tag, one parser back.
+export * from "./huddleDigest";
 export * from "./convexErrors";
 // Without these two lines every consumer reinvents the capability vocabulary:
 // convex copied the constants, the web store reached in by relative path, and
