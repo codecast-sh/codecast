@@ -11,7 +11,7 @@
 // first, what keeps the words comes second, and the room comes last and off to
 // one side — a release that beats it still lands a complete message.
 
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { useInboxStore } from "../../store/inboxStore";
 
@@ -41,6 +41,14 @@ const realAsrPipe = await import("../calls/asrPipe");
  *  in flight — which is the whole question. */
 let joining: Deferred<void>;
 let joinCalls: Array<{ roomKey: string; micTrack?: MediaStreamTrack }> = [];
+/** Counted, not replaced. Leaving is what a guest burst must never do, and the
+ *  real leave is what the ownership tests above watch the seat disappear
+ *  through — so this records the call and then does exactly what it did. */
+let leaveCalls = 0;
+// Captured BEFORE the module is mocked. `mock.module` patches the live module
+// record, so reading `realCallManager.leaveCall` at call time would find this
+// wrapper again and recurse forever.
+const trueLeaveCall = realCallManager.leaveCall;
 
 mock.module("../calls/callManager", () => ({
   ...realCallManager,
@@ -48,6 +56,10 @@ mock.module("../calls/callManager", () => ({
   joinCall: (roomKey: string, opts?: { micTrack?: MediaStreamTrack }) => {
     joinCalls.push({ roomKey, micTrack: opts?.micTrack });
     return joining.promise;
+  },
+  leaveCall: () => {
+    leaveCalls++;
+    return trueLeaveCall();
   },
   setMuted: async (muted: boolean) => {
     useInboxStore.getState().setCallState({ muted });
@@ -148,6 +160,7 @@ const realNow = Date.now;
 
 beforeEach(() => {
   joinCalls = [];
+  leaveCalls = 0;
   pipes = [];
   recorders = [];
   micTracks = [];
@@ -523,6 +536,39 @@ describe("walkie: who is holding the room after the key comes up", () => {
     });
   }
 
+  // THE GUEST BRUSH, which is the one way this fix could have gone wrong.
+  //
+  // `abandonRoom` hands a room back, and the whole point of the discard branch
+  // is that it does so promptly. But the room a burst is spoken into may be a
+  // huddle the person was ALREADY sitting in — the dm: room of a 1:1 call is
+  // the very room a burst to that person opens. Handing that one back would
+  // hang up a live conversation because somebody brushed a key.
+  //
+  // `shouldReleaseRoom` refuses on `opened`, which `claimRoom` sets to null
+  // when the seat was already taken. This pins that the refusal survives the
+  // reordering: no leave, no `releasing` marker, and the person is still in
+  // their call afterwards.
+  test("a brushed key inside a huddle the person joined never takes their seat", async () => {
+    // Seated first, and not by the walkie.
+    S().setCallState({ roomKey: "dm:a:b", phase: "connected", muted: false });
+    joining.resolve();
+    await settle();
+    leaveCalls = 0;
+
+    await walkie.startBurst("chan-1", "dm:a:b");
+    clock += 100;
+    await release();
+
+    // Still a brush: the row is gone and nothing was finalized.
+    expect(finalize()).toBeUndefined();
+    // But the huddle is untouched. A guest never announces a hand-back and
+    // never performs one.
+    expect(leaveCalls).toBe(0);
+    expect(walkie.getWalkieStatus().releasing).toBeNull();
+    expect((S().call as any).phase).toBe("connected");
+    expect((S().call as any).roomKey).toBe("dm:a:b");
+  });
+
   test("a brushed key never arms a linger at all", async () => {
     // It used to be armed and then taken back a round trip later, which is a
     // flash of "still open with <person>" for a key nobody meant to press.
@@ -715,5 +761,157 @@ describe("walkie: the sounds, and the moments they belong to", () => {
     clock += 100;
     walkie.observeWalkie({ bursts: [], doorOpen: true });
     expect(soundLog).toEqual([]);
+  });
+});
+
+// ── the hot listen's ceiling ───────────────────────────────────────────────
+//
+// Auto-listen joins UNMUTED, so a burst holds this person's microphone open.
+// Everything that closes it again runs on a server push — and there is a real
+// case with no pushes at all in it: the sender's tab dies mid-word.
+//
+// The row stays `voice.status: "live"`. The server sweep is not a cron; it
+// runs as a side effect of the next burst in that channel, and nobody is
+// coming back to talk. `chat.listLiveVoiceBursts` returns only ids, sender,
+// room and created_at — every one frozen for the life of a burst, deliberately,
+// so the transcript cannot re-push it to every watcher — so the result stays
+// byte-identical and the client is never woken. That last fact is what makes
+// the ceiling a CEILING rather than a heartbeat: during a healthy burst there
+// are no pushes to refresh it with either.
+describe("walkie: the hot listen cannot outlive the burst", () => {
+  const ROOM = "dm:ceiling:test";
+  const burstRow = (over: Record<string, unknown> = {}) => ({
+    messageId: "m-ceiling",
+    channelId: "chan-ceiling",
+    roomKey: ROOM,
+    fromUserId: "u-riley",
+    fromName: "Riley",
+    createdAt: clock,
+    ...over,
+  });
+
+  /** What the real joinCall writes when it lands, which the mocked one does
+   *  not: without a seat there is no seat to hand back, and every question the
+   *  release path asks would answer "not ours". */
+  function seatLanded() {
+    S().setCallState({ roomKey: ROOM, phase: "connected", muted: false });
+  }
+
+  /** Move the world and the timers together. The engine reads `Date.now`
+   *  (mocked to `clock`) to judge staleness and schedules against it, so a test
+   *  that advanced only one of the two would be testing neither. */
+  async function passTime(ms: number) {
+    clock += ms;
+    jest.advanceTimersByTime(ms);
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  test("the sender's tab dies mid-burst: the microphone still closes", async () => {
+    jest.useFakeTimers();
+    Date.now = () => clock;
+    try {
+      walkie.observeWalkie({ bursts: [burstRow()], doorOpen: true });
+      seatLanded();
+      // The bargain as shipped: hearing someone means they can hear you.
+      expect(S().call.muted).toBe(false);
+      expect(joinCalls.at(-1)?.roomKey).toBe(ROOM);
+
+      // Now nothing happens. No finalize, no cancel, no sweep, no push — the
+      // exact silence a crashed tab leaves behind.
+      await passTime(200_000);
+
+      expect(S().call.muted).toBe(true);
+      expect(S().call.phase).toBe("idle");
+      expect(leaveCalls).toBeGreaterThan(0);
+      expect(walkie.getWalkieStatus().incoming).toBeNull();
+    } finally {
+      jest.useRealTimers();
+      Date.now = () => clock;
+    }
+  });
+
+  test("a stale burst goes back at once, with no half minute of open mic", async () => {
+    // The linger exists so an answer can follow a sentence. A burst nobody
+    // ended is a tab that died, so there is no sentence and nobody to answer:
+    // holding the room another thirty seconds would just be thirty more
+    // seconds of open microphone.
+    jest.useFakeTimers();
+    Date.now = () => clock;
+    try {
+      walkie.observeWalkie({ bursts: [burstRow()], doorOpen: true });
+      seatLanded();
+      await passTime(160_000);
+      expect(S().call.phase).toBe("idle");
+      expect(walkie.getWalkieStatus().lingerUntil).toBeNull();
+    } finally {
+      jest.useRealTimers();
+      Date.now = () => clock;
+    }
+  });
+
+  test("an honest two-minute monologue is never cut off, and still ends bounded", async () => {
+    // The sender's own cap is 120s, the same number the staleness window uses,
+    // so a full-length hold reaches the line at the very instant it stops —
+    // and its upload and finalize still have to land after that. The slack is
+    // what stops the ceiling taking the last word off an honest burst.
+    //
+    // Both halves in one test on purpose. A ceiling that fires early is a bug,
+    // and so is one that gives up after firing early: `applyReport` re-arms
+    // whatever it does not resolve, and this is what proves it.
+    jest.useFakeTimers();
+    Date.now = () => clock;
+    try {
+      walkie.observeWalkie({ bursts: [burstRow()], doorOpen: true });
+      seatLanded();
+      await passTime(119_000);
+      expect(S().call.muted).toBe(false);
+      expect(S().call.phase).toBe("connected");
+      expect(leaveCalls).toBe(0);
+      expect(walkie.getWalkieStatus().incoming?.messageId).toBe("m-ceiling");
+
+      await passTime(41_000);
+      expect(S().call.muted).toBe(true);
+      expect(S().call.phase).toBe("idle");
+    } finally {
+      jest.useRealTimers();
+      Date.now = () => clock;
+    }
+  });
+
+  test("somebody who stepped in keeps their seat when the ceiling fires", async () => {
+    // The ceiling fires here too — the burst really is over and saying so is
+    // right — but handing the room back is `shouldReleaseRoom`'s call, and it
+    // refuses for a room somebody chose to be in. A timer must never hang up a
+    // call.
+    jest.useFakeTimers();
+    Date.now = () => clock;
+    try {
+      walkie.observeWalkie({ bursts: [burstRow()], doorOpen: true });
+      seatLanded();
+      walkie.markWalkieUpgraded(ROOM);
+      await passTime(200_000);
+      expect(S().call.phase).toBe("connected");
+      expect(S().call.muted).toBe(false);
+      expect(leaveCalls).toBe(0);
+      // And the dead burst is still cleared, because it is still dead.
+      expect(walkie.getWalkieStatus().incoming).toBeNull();
+    } finally {
+      jest.useRealTimers();
+      Date.now = () => clock;
+      // Retire the stamp the way the app does — the call ending is what clears
+      // it — so it cannot leak into the next test's arithmetic.
+      S().setCallState({ roomKey: null, phase: "idle", muted: true });
+      walkie.refreshWalkie();
+      expect(walkie.getWalkieStatus().joinedLive).toBeNull();
+    }
+  });
+
+  test("the deadline clears the sender's cap by a real margin", () => {
+    // Stated as a number rather than left implicit: this is the outer bound on
+    // any microphone the feature opens without being asked.
+    const deadline = walkie.hotListenDeadline(1_000);
+    expect(deadline - 1_000).toBe(150_000);
+    expect(deadline - 1_000).toBeGreaterThan(120_000);
   });
 });
