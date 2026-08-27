@@ -2519,7 +2519,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {!picking && (vaultNoteMatches.length > 0 || (vaultReady && query.trim().length >= 2)) && (
+        {!picking && vaultNoteMatches.length > 0 && (
           <CommandPrimitive.Group heading="Notes" className={groupClass}>
             {vaultNoteMatches.map((n) => (
               <CommandPrimitive.Item
@@ -2538,22 +2538,6 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(n.mtime)}</span>
               </CommandPrimitive.Item>
             ))}
-            {vaultReady && query.trim().length >= 2 && (
-              <CommandPrimitive.Item
-                key="vault-content-search"
-                value={`__entity__ vault content search|||${query.trim()}`}
-                onSelect={() => {
-                  useVaultStore.getState().openSearch(query.trim());
-                  navigate(filesHref());
-                }}
-                className={itemClass}
-              >
-                <Search className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
-                <span className="truncate flex-1">
-                  Search note content for &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;
-                </span>
-              </CommandPrimitive.Item>
-            )}
           </CommandPrimitive.Group>
         )}
 
@@ -2802,60 +2786,6 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {!picking && query.trim() && (
-          <CommandPrimitive.Group className={groupClass}>
-            <CommandPrimitive.Item
-              value="__compose__"
-              onSelect={() => startCompose(query.trim())}
-              className={itemClass}
-            >
-              <span className="text-sol-yellow flex-shrink-0">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
-                </svg>
-              </span>
-              <span className="truncate">New session: &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;</span>
-            </CommandPrimitive.Item>
-          </CommandPrimitive.Group>
-        )}
-
-        {!picking && query.trim().length >= 2 && (
-          <CommandPrimitive.Group className={groupClass}>
-            <CommandPrimitive.Item
-              value="__search__page"
-              onSelect={openFullSearch}
-              className={itemClass}
-            >
-              <Search className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
-              <span className="truncate flex-1">
-                Open full search for &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;
-              </span>
-              <span className="flex items-center gap-[2px]">
-                <KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap>
-                <KeyCap size="xs">&#9166;</KeyCap>
-              </span>
-            </CommandPrimitive.Item>
-            {activeTeamId && chatOn && (
-              <CommandPrimitive.Item
-                value="__chat__ open-chat-search"
-                onSelect={() => {
-                  // Stay in the room the reader is in: /chat alone would fall
-                  // back to the busiest channel and offer the wrong in: filter.
-                  const m = pathname?.match(/^\/chat\/([^/?#]+)/);
-                  const base = m ? `/chat/${m[1]}` : "/chat";
-                  navigate(`${base}?search=${encodeURIComponent(query.trim())}`);
-                }}
-                className={itemClass}
-              >
-                <MessageSquare className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
-                <span className="truncate flex-1">
-                  Search chat for &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;
-                </span>
-              </CommandPrimitive.Item>
-            )}
-          </CommandPrimitive.Group>
-        )}
-
         {/* Async conversation search results */}
         {debouncedQuery.length >= 2 && pickAllows("session") && (
           <CommandPrimitive.Group
@@ -2952,6 +2882,76 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 No conversations matched
               </CommandPrimitive.Item>
             )}
+          </CommandPrimitive.Group>
+        )}
+
+        {!picking && query.trim().length >= 2 && (
+          <CommandPrimitive.Group className={groupClass}>
+            <CommandPrimitive.Item
+              value="__search__page"
+              onSelect={openFullSearch}
+              className={itemClass}
+            >
+              <Search className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+              <span className="truncate flex-1">
+                Open full search for &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;
+              </span>
+              <span className="flex items-center gap-[2px]">
+                <KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap>
+                <KeyCap size="xs">&#9166;</KeyCap>
+              </span>
+            </CommandPrimitive.Item>
+            {vaultReady && (
+              <CommandPrimitive.Item
+                key="vault-content-search"
+                value={`__entity__ vault content search|||${query.trim()}`}
+                onSelect={() => {
+                  useVaultStore.getState().openSearch(query.trim());
+                  navigate(filesHref());
+                }}
+                className={itemClass}
+              >
+                <Search className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                <span className="truncate flex-1">
+                  Search note content for &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;
+                </span>
+              </CommandPrimitive.Item>
+            )}
+            {activeTeamId && chatOn && (
+              <CommandPrimitive.Item
+                value="__chat__ open-chat-search"
+                onSelect={() => {
+                  // Stay in the room the reader is in: /chat alone would fall
+                  // back to the busiest channel and offer the wrong in: filter.
+                  const m = pathname?.match(/^\/chat\/([^/?#]+)/);
+                  const base = m ? `/chat/${m[1]}` : "/chat";
+                  navigate(`${base}?search=${encodeURIComponent(query.trim())}`);
+                }}
+                className={itemClass}
+              >
+                <MessageSquare className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                <span className="truncate flex-1">
+                  Search chat for &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;
+                </span>
+              </CommandPrimitive.Item>
+            )}
+          </CommandPrimitive.Group>
+        )}
+
+        {!picking && query.trim() && (
+          <CommandPrimitive.Group className={groupClass}>
+            <CommandPrimitive.Item
+              value="__compose__"
+              onSelect={() => startCompose(query.trim())}
+              className={itemClass}
+            >
+              <span className="text-sol-yellow flex-shrink-0">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
+                </svg>
+              </span>
+              <span className="truncate">New session: &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;</span>
+            </CommandPrimitive.Item>
           </CommandPrimitive.Group>
         )}
       </CommandPrimitive.List>

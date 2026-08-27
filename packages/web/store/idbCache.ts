@@ -9,7 +9,7 @@ import {
   isPersistedClientStoreKey,
 } from "./clientSyncRegistry";
 import { diffCollection } from "./idbCollectionDiff";
-import { partitionSessionRetention, expireExcludeTombstones } from "./cacheRetention";
+import { partitionSessionRetention, partitionDocDetailRetention, expireExcludeTombstones } from "./cacheRetention";
 import { isConvexId } from "../lib/entityLinks";
 
 export type OutboxEntry = {
@@ -41,9 +41,9 @@ export const PERSISTENCE_AVAILABLE = typeof window !== "undefined";
 // declared schema against what is actually on disk (adds tables and indexes,
 // drops removed tables) rather than replaying a version ladder — so the old
 // twelve-step ladder that restated the whole schema per step is gone.
-export const CACHE_SCHEMA_VERSION = 19;
+export const CACHE_SCHEMA_VERSION = 20;
 export const CACHE_SCHEMA_SIGNATURE =
-  "agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|capabilityBindings:_id|capabilityState:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|comments:_id|commits:_id|docs:_id|managedSessions:_id|messageFeed:_id, timestamp|pageThreads:_id|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|sessionDecisions:_id|sessions:_id|tasks:_id|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|workflowRuns:_id, workflow_id|workflows:_id";
+  "agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|capabilityBindings:_id|capabilityState:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|comments:_id|commits:_id|docDetails:_id|docs:_id|managedSessions:_id|messageFeed:_id, timestamp|pageThreads:_id|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|sessionDecisions:_id|sessions:_id|tasks:_id|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|workflowRuns:_id, workflow_id|workflows:_id";
 
 const SYSTEM_TABLES = {
   meta: "key",
@@ -229,6 +229,13 @@ export async function loadCache(): Promise<Record<string, any> | null> {
           metaByKey.lastFocusedConversationId,
           Date.now(),
         );
+        rows = keep;
+        if (drop.length) table.bulkDelete(drop).catch(() => {});
+      }
+      // Doc bodies are the heavy rows the thin docs list deliberately sheds —
+      // bound the opened-docs cache by last-open recency the same way.
+      if (key === "docDetails" && rows.length > 0) {
+        const { keep, drop } = partitionDocDetailRetention(rows, Date.now());
         rows = keep;
         if (drop.length) table.bulkDelete(drop).catch(() => {});
       }
