@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { classifyCodexTranscriptTail, classifyTranscriptTail, findCachedSessionIdForConversation, findSessionFile, workflowAgentTranscriptPathFor, isInterruptControlMessage, paneReconcileTarget, preferLiveSessionId, reconciledStatus, resumeShortId, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked } from "./daemon.js";
+import { classifyCodexTranscriptTail, classifyLivePaneFor, classifyTmuxLiveState, classifyTranscriptTail, extractTmuxLiveRegion, findCachedSessionIdForConversation, findSessionFile, glyphlessPromptPattern, workflowAgentTranscriptPathFor, isInterruptControlMessage, paneReconcileTarget, preferLiveSessionId, reconciledStatus, resumeShortId, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked } from "./daemon.js";
+import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 import type { TranscriptTurnState } from "./daemon.js";
 
 // Regression test for the "session stuck in 'working' (or 'stopped') forever" bug,
@@ -262,6 +263,63 @@ describe("paneReconcileTarget", () => {
       expect(paneReconcileTarget(state, "working")).toBeNull();
       expect(paneReconcileTarget(state, undefined)).toBeNull();
     }
+  });
+});
+
+// grok's ❯ composer stays visible for the whole turn, and its busy chrome
+// (header spinner, "Waiting for response… [stop]", footer "Esc:cancel") sits
+// OUTSIDE extractTmuxLiveRegion's tail — so the claude-chrome classifier reads a
+// BUSY grok pane as "idle". reconcileStatusFromPane therefore skips
+// GLYPHLESS_PROMPT_CLIENTS entirely (their settle is transcript-driven), and
+// every pane site that knows its client (the reaper's idle gates) classifies
+// through classifyLivePaneFor, whose busy-first whole-pane order can't be lied
+// to. Pane layout from the live v1.0.5 capture (2026-08-26).
+describe("classifyLivePaneFor — grok's lying ❯ glyph", () => {
+  const W = 118;
+  const busyGrokPane = [
+    "/private/tmp/grok-live   ⠼ MCP (0/1) │ 7.4K / 500K",
+    "",
+    "● I'll look at that file now.",
+    "",
+    "⠧ Waiting for response… 4s                                              12s ⇣1k [stop]",
+    "╭" + "─".repeat(W) + "╮",
+    "│ ❯ " + " ".repeat(W - 3) + "│",
+    "╰─ Grok 4.6 (high) " + "─".repeat(W - 19) + "╯",
+    "Shift+Tab:mode  │  Esc:cancel  │  Ctrl+x:shortcuts",
+  ].join("\n");
+  const idleGrokPane = [
+    "/private/tmp/grok-live   MCP (0/1) │ 7.4K / 500K",
+    "",
+    "● Done — the file is created.",
+    "",
+    "╭" + "─".repeat(W) + "╮",
+    "│ ❯ " + " ".repeat(W - 3) + "│",
+    "╰─ Grok 4.6 (high) " + "─".repeat(W - 19) + "╯",
+    "Shift+Tab:mode  │  Ctrl+x:shortcuts",
+  ].join("\n");
+
+  test("the claude-chrome path misreads the busy pane as idle (why grok must never route there)", () => {
+    // The live region crops the spinner/[stop] row away and keeps the ❯ line.
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(busyGrokPane))).toBe("idle");
+  });
+
+  test("classifyLivePaneFor('grok') reads busy-first and can't be lied to", () => {
+    expect(classifyLivePaneFor("grok", busyGrokPane)).toBe("busy");
+    expect(classifyLivePaneFor("grok", idleGrokPane)).toBe("idle");
+  });
+
+  test("non-glyphless clients keep the claude-chrome whitelist unchanged", () => {
+    expect(classifyLivePaneFor("claude", "❯ ")).toBe(classifyTmuxLiveState("❯ "));
+    expect(classifyLivePaneFor("claude", "⠧ thinking… (esc to interrupt)")).toBe("busy");
+  });
+
+  test("glyphlessPromptPattern: registry pattern for the whole-pane clients, null otherwise", () => {
+    for (const c of ["opencode", "pi", "grok"] as const) {
+      expect(glyphlessPromptPattern(c)).toBe(AGENT_CLIENTS[c].promptReadyPattern);
+    }
+    expect(glyphlessPromptPattern("claude")).toBeNull();
+    expect(glyphlessPromptPattern("codex")).toBeNull();
+    expect(glyphlessPromptPattern(undefined)).toBeNull();
   });
 });
 
