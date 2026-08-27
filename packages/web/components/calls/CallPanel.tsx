@@ -4,6 +4,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useTrackedStore } from "../../store/inboxStore";
 import { CallStage } from "./CallStage";
 import { setCallOutlivesWindow, takeOverCall } from "../../lib/calls/callManager";
+import { callWindowReport } from "../../lib/calls/callHandoff";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
 import {
   closeCallPanel,
@@ -96,20 +97,24 @@ export function CallPanel() {
   // Keep the shell told what this window is hosting, so a handback carries the
   // same room in the same state whichever way the window closes — this panel's
   // own button, or the OS close box, which says nothing on its way out.
+  //
+  // `roomKey` from the URL is what makes the FIRST report honest: it fires at
+  // phase idle, before the join, and a null room there would wipe the room the
+  // shell opened this window with. A traffic-light close in that instant is a
+  // handback with nothing to hand.
   const scribe = useSyncExternalStore(subscribeScribe, getScribeStatus, getScribeStatus).active;
   useWatchEffect(() => {
-    reportCallPanelState({
-      room: call.phase === "idle" ? null : call.roomKey,
-      mic: !call.muted,
-      camera: !!call.camera,
-      scribe,
-      // Whether this window HAS the call, which is not the same question as
-      // which room it is pointed at. The shell's handback arbiter reads it, so
-      // that a window whose join failed is never mistaken for one holding a
-      // call — the case that would strand a live call with no owner.
-      joined: call.phase === "connected",
-    });
-  }, [call.phase, call.roomKey, call.muted, call.camera, scribe]);
+    reportCallPanelState(
+      callWindowReport({
+        phase: call.phase,
+        roomKey: call.roomKey,
+        windowRoom: roomKey,
+        muted: call.muted,
+        camera: call.camera,
+        scribe,
+      }),
+    );
+  }, [call.phase, call.roomKey, roomKey, call.muted, call.camera, scribe]);
 
   // The call ended in here — the hang-up button, or the far side leaving the
   // last seat. The window has nothing left to show, so it closes, declaring
