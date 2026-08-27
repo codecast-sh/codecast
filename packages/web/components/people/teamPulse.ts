@@ -2,7 +2,7 @@
 // person, and how many huddles are open. Read from data the roster already
 // holds, so it costs no subscription and can never disagree with the rows.
 // React-free so it is unit-testable under bun.
-import { memberPresenceVisual, type FleetSummary } from "../presence/memberPresence";
+import { presenceBand, type FleetSummary, type PresenceBand } from "../presence/memberPresence";
 
 export type PulseTone = "here" | "idle" | "away" | "working" | "needsInput" | "huddle" | "quiet";
 
@@ -42,20 +42,20 @@ export function teamPulse<T>(
   fleetOf: (m: T) => FleetSummary | null | undefined,
   huddles: number,
 ): TeamPulse {
-  let here = 0, idle = 0, away = 0, offline = 0, working = 0, needsInput = 0;
+  // The bands are the roster's own sections (presenceBand), counted rather
+  // than re-derived, so the pulse can never disagree with the list under it.
+  const bands: Record<PresenceBand, number> = { online: 0, idle: 0, away: 0, offline: 0 };
+  let working = 0, needsInput = 0;
   for (const m of members) {
     if (!m) continue;
-    const v = memberPresenceVisual(m);
-    if (v === "active" || v === "busy") here++;
-    else if (v === "idle") idle++;
-    else if (v === "away") away++;
-    else offline++;
+    bands[presenceBand(m)]++;
     const f = fleetOf(m);
     if (f) {
       working += f.working;
       needsInput += f.needsYou;
     }
   }
+  const { online: here, idle, away, offline } = bands;
   const segments: PulseSegment[] = [];
   const push = (key: PulseTone, n: number, word: string) => {
     if (n > 0) segments.push({ key, n, word, tone: key });
