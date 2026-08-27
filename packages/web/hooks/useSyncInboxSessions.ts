@@ -181,17 +181,24 @@ export function useSyncInboxSessions() {
       if (storedCount === 0) {
         if (coldWarms >= MAX_COLD_WARM_PER_SYNC) continue; // drain on later passes
         coldWarms++;
-        // A previously-opened session may still sit in IDB — restore it for free
-        // (idempotent; no-op if absent or already loading). The network warm below
-        // covers the misses with the freshest tail.
-        ensureHydrated(id);
         bgFetchingRef.current.add(id);
-        convex
-          .query(api.conversations.listMessages, {
-            conversation_id: id as Id<"conversations">,
-            paginationOpts: { numItems: WARM_BOTTOM_PAGE, cursor: null },
+        // A previously-opened session usually still sits in IDB — restore it for
+        // free and only go to the network on a real miss. Awaiting the restore
+        // is what keeps a relaunch from firing one listMessages per inbox row
+        // while the live subscriptions are still fighting for the same server.
+        ensureHydrated(id)
+          .then((restored) => {
+            if (restored) {
+              syncedCountRef.current.set(id, serverCount);
+              return null;
+            }
+            return convex.query(api.conversations.listMessages, {
+              conversation_id: id as Id<"conversations">,
+              paginationOpts: { numItems: WARM_BOTTOM_PAGE, cursor: null },
+            });
           })
           .then((res: any) => {
+            if (!res) return;
             const page = res?.page;
             // Don't clobber a window the user opened (or IDB restored) meanwhile —
             // the live subscription owns it from that point on.

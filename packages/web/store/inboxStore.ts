@@ -9338,7 +9338,7 @@ export function clearProtectedInboxMemory(): void {
   reset.clientState = { ui: readCriticalUiPrefs() as ClientUI };
   reset.clientStateInitialized = false;
   useInboxStore.setState(reset);
-  _idbHydratingSet.clear();
+  _idbHydrating.clear();
 }
 
 // =====================
@@ -9394,24 +9394,34 @@ export function useTrackedStore(deps: Array<(s: InboxStoreState) => any>): Inbox
 // -- Per-conversation IDB hydration (idempotent, no hooks) --
 // Tracks in-flight hydrations (not "ever hydrated") so evicted conversations
 // can be re-hydrated from IDB when the user switches back to them.
-const _idbHydratingSet = new Set<string>();
-export function ensureHydrated(convId: string) {
+// Resolves true once the conversation holds messages in memory (already there,
+// or restored from IndexedDB), false on a genuine cache miss or storage error.
+// Callers that would otherwise fetch from the network can await this and skip
+// the round-trip on a warm cache — the inbox cold-warm used to fire a
+// listMessages for every row it didn't hold in MEMORY, which on a relaunch was
+// all of them, even though IDB had the tail for nearly every one.
+const _idbHydrating = new Map<string, Promise<boolean>>();
+export function ensureHydrated(convId: string): Promise<boolean> {
   const store = useInboxStore.getState();
   // Already in memory — nothing to hydrate
-  if (store.messages[convId]?.length > 0) return;
+  if (store.messages[convId]?.length > 0) return Promise.resolve(true);
   // In-flight hydration — don't double-load
-  if (_idbHydratingSet.has(convId)) return;
-  _idbHydratingSet.add(convId);
-  loadConversationMessages(convId).then((cached) => {
-    _idbHydratingSet.delete(convId);
-    if (!cached || cached.messages.length === 0) return;
+  const inflight = _idbHydrating.get(convId);
+  if (inflight) return inflight;
+  const p = loadConversationMessages(convId).then((cached) => {
+    _idbHydrating.delete(convId);
+    if (!cached || cached.messages.length === 0) return false;
     const current = useInboxStore.getState().messages[convId];
-    if (current?.length > 0) return;
+    if (current?.length > 0) return true;
     useInboxStore.getState().setMessages(convId, cached.messages, cached.pagination);
+    return true;
   }).catch(() => {
-    _idbHydratingSet.delete(convId);
+    _idbHydrating.delete(convId);
     // Never reinterpret a storage error as an authoritative empty conversation.
+    return false;
   });
+  _idbHydrating.set(convId, p);
+  return p;
 }
 
 // Cache-as-floor hydration merge for id-keyed collections. IndexedDB rows are
