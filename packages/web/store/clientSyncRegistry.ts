@@ -221,6 +221,15 @@ export const CLIENT_SYNC_REGISTRY = {
       fields: ["status", "answer_index", "answer_text", "resolved_at"],
     },
   },
+  // Saved views: the sidebar rail and its pinned rows. A pin lives in client
+  // UI state and renders offline, but its click resolves the view row from
+  // this collection — unpersisted, that lookup found nothing after an offline
+  // boot and the click silently did nothing. Snapshot, not delta: webList is
+  // the complete visible set (SYNC_REGISTRY keeps it out of delta mode).
+  savedViews: {
+    persistence: { kind: "collection", key: "savedViews" },
+    feeds: ["savedViews.webList"],
+  },
   plans: {
     persistence: { kind: "collection", key: "plans" },
     hydration: { phase: "deferred" },

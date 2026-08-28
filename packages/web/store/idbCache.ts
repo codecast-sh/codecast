@@ -41,15 +41,21 @@ export const PERSISTENCE_AVAILABLE = typeof window !== "undefined";
 // declared schema against what is actually on disk (adds tables and indexes,
 // drops removed tables) rather than replaying a version ladder — so the old
 // twelve-step ladder that restated the whole schema per step is gone.
-export const CACHE_SCHEMA_VERSION = 20;
+export const CACHE_SCHEMA_VERSION = 22;
 export const CACHE_SCHEMA_SIGNATURE =
-  "agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|capabilityBindings:_id|capabilityState:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|comments:_id|commits:_id|docDetails:_id|docs:_id|managedSessions:_id|messageFeed:_id, timestamp|pageThreads:_id|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|sessionDecisions:_id|sessions:_id|tasks:_id|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|workflowRuns:_id, workflow_id|workflows:_id";
+  "agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|capabilityBindings:_id|capabilityState:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|comments:_id|commits:_id|docDetails:_id|docs:_id|managedSessions:_id|messageFeed:_id, timestamp|pageThreads:_id|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|savedViews:_id|sessionDecisions:_id|sessions:_id|tasks:_id|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|workflowRuns:_id, workflow_id|workflows:_id";
 
 const SYSTEM_TABLES = {
   meta: "key",
   // Indexed by latestTimestamp so the on-disk store can be pruned (LRU + TTL)
   // instead of growing forever — one row per conversation ever opened.
   conversationMessages: "convId, latestTimestamp",
+  // The complete navigable user-message list (getUserMessages), one small row
+  // per conversation. Its own table, not a field on conversationMessages: the
+  // two lists arrive from different subscriptions at different times, and a
+  // shared row would need a read-modify-write per flush to avoid one list
+  // clobbering the other. Pruned in lockstep with conversationMessages.
+  conversationUserMessages: "convId",
   dispatchOutbox: "id, ts",
 } as const;
 
@@ -64,6 +70,7 @@ export function cacheSchemaSignature(): string {
 class CacheDB extends Dexie {
   meta!: Dexie.Table<{ key: string; value: any }, string>;
   conversationMessages!: Dexie.Table<{ convId: string; messages: any[]; latestTimestamp: number; pagination: any }, string>;
+  conversationUserMessages!: Dexie.Table<{ convId: string; userMessages: any[] }, string>;
   dispatchOutbox!: Dexie.Table<OutboxEntry, string>;
 
   constructor() {
@@ -121,6 +128,16 @@ const lastPersisted = new Map<string, Map<string, any>>();
 // tests that reset the underlying storage out from under it.
 export function _resetPersistedShadow() {
   lastPersisted.clear();
+}
+
+// Test hook: Dexie copies the IndexedDB API into the instance at construction
+// and remembers a failed open, so a test running after another file already
+// touched the singleton (no IndexedDB in the process then) must hand the
+// instance fake-indexeddb and reopen it.
+export function _reopenForTests(deps: { indexedDB: unknown; IDBKeyRange: unknown }): Promise<unknown> {
+  Object.assign((db as any)._deps, deps);
+  db.close();
+  return db.open();
 }
 
 // A top-level store key is durable iff it maps to a dedicated collection table
@@ -380,7 +397,11 @@ async function _pruneConversations() {
 
     const doomed = new Set<string>([...overCap, ...expired]);
     for (const id of protectedIds) doomed.delete(id);
-    if (doomed.size > 0) await db.conversationMessages.bulkDelete([...doomed]);
+    if (doomed.size > 0) {
+      const ids = [...doomed];
+      await db.conversationMessages.bulkDelete(ids);
+      await db.conversationUserMessages.bulkDelete(ids);
+    }
   } catch {
     // Maintenance is best-effort — the durable cache tolerates skipped prunes.
   }
@@ -405,20 +426,47 @@ if (typeof window !== "undefined") {
   });
 }
 
-export async function loadConversationMessages(convId: string): Promise<{ messages: any[]; pagination: any; latestTimestamp: number } | null> {
+export type CachedConversation = {
+  messages: any[];
+  pagination: any;
+  latestTimestamp: number;
+  // Present when the navigator list was persisted for this conversation.
+  userMessages?: any[];
+};
+
+async function _loadUserMessages(convId: string): Promise<any[] | undefined> {
+  try {
+    return (await db.conversationUserMessages.get(convId))?.userMessages;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function loadConversationMessages(convId: string): Promise<CachedConversation | null> {
   // Read-your-writes: a just-written-but-not-yet-flushed payload is the freshest
   // truth, so serve it before falling back to the persisted IDB row.
   const pending = _pendingMsgWrites.get(convId);
+  const userMessages = await _loadUserMessages(convId);
   if (pending) {
-    return { messages: pending.messages, pagination: pending.pagination, latestTimestamp: _latestTs(pending.messages) };
+    return { messages: pending.messages, pagination: pending.pagination, latestTimestamp: _latestTs(pending.messages), userMessages };
   }
   try {
     const row = await db.conversationMessages.get(convId);
-    if (!row) return null;
-    return { messages: row.messages, pagination: row.pagination, latestTimestamp: row.latestTimestamp };
+    // A conversation whose navigator list landed before any message page did
+    // still hydrates that list; the caller treats empty messages as a miss.
+    if (!row) return userMessages ? { messages: [], pagination: undefined, latestTimestamp: 0, userMessages } : null;
+    return { messages: row.messages, pagination: row.pagination, latestTimestamp: row.latestTimestamp, userMessages };
   } catch {
     return null;
   }
+}
+
+// Small row, written straight through: the store already dedups no-op ticks
+// (setUserMessages), so every call here is a real change.
+export function writeConversationUserMessages(convId: string, userMessages: any[]) {
+  if (_hydrating) return;
+  _touchedAt.set(convId, Date.now());
+  db.conversationUserMessages.put({ convId, userMessages }).catch(() => {});
 }
 
 export function writeConversationMessages(convId: string, messages: any[], pagination: any) {

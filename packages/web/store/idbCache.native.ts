@@ -55,6 +55,7 @@ const META_KEYS = new Set<string>(META_STORE_KEYS);
 const COLLECTION_PREFIX = "col:";
 const META_PREFIX = "meta:";
 const CONVMSG_PREFIX = "convmsg:";
+const CONVUSERMSG_PREFIX = "convusermsg:";
 const OUTBOX_KEY = "dispatchOutbox";
 
 let _hydrating = false;
@@ -245,16 +246,38 @@ export function setHydrating(v: boolean) {
 
 // -- Per-conversation message cache --
 
-export async function loadConversationMessages(convId: string): Promise<{ messages: any[]; pagination: any; latestTimestamp: number } | null> {
+export type CachedConversation = {
+  messages: any[];
+  pagination: any;
+  latestTimestamp: number;
+  userMessages?: any[];
+};
+
+async function loadUserMessages(convId: string): Promise<any[] | undefined> {
+  try {
+    const raw = await Storage.getItem(CONVUSERMSG_PREFIX + convId);
+    return raw == null ? undefined : JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+export async function loadConversationMessages(convId: string): Promise<CachedConversation | null> {
   if (!Storage) return null;
   try {
+    const userMessages = await loadUserMessages(convId);
     const raw = await Storage.getItem(CONVMSG_PREFIX + convId);
-    if (raw == null) return null;
+    if (raw == null) return userMessages ? { messages: [], pagination: undefined, latestTimestamp: 0, userMessages } : null;
     const row = JSON.parse(raw);
-    return { messages: row.messages, pagination: row.pagination, latestTimestamp: row.latestTimestamp };
+    return { messages: row.messages, pagination: row.pagination, latestTimestamp: row.latestTimestamp, userMessages };
   } catch {
     return null;
   }
+}
+
+export function writeConversationUserMessages(convId: string, userMessages: any[]) {
+  if (!Storage || _hydrating) return;
+  Storage.setItem(CONVUSERMSG_PREFIX + convId, JSON.stringify(userMessages)).catch(() => {});
 }
 
 export function writeConversationMessages(convId: string, messages: any[], pagination: any) {

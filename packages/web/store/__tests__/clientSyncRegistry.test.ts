@@ -192,6 +192,14 @@ describe("client sync registry", () => {
       expect(Object.keys(useInboxStore.getState().plans).sort()).toEqual(["a", "b"]);
     });
 
+    it("saved views persist as a snapshot, so a pinned view resolves on an offline boot", () => {
+      // The sidebar's pinned rows render from client UI state and then look
+      // the view up in this collection on click; unpersisted, that click was
+      // a silent no-op offline. Snapshot mode is what removes a deleted view.
+      expect(COLLECTION_STORE_KEYS).toContain("savedViews");
+      expect(REGISTRY_SYNC_OPTS.savedViews?.isDelta).toBeFalsy();
+    });
+
     it("workspace-scoped tables are declared on the entry", () => {
       expect(WORKSPACE_SCOPED_KEYS.sort()).toEqual(["docs", "plans", "projects", "tasks"].sort());
     });
