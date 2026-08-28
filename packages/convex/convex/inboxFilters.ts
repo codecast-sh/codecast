@@ -217,6 +217,7 @@ export function nextAgentStatusOnAddMessages(
 // lives in @codecast/shared/contracts as the single source of truth shared
 // with the web client's ApiErrorCard rendering.
 export { isApiErrorBanner, classifyApiErrorBanner, CLIENT_ERROR_BANNER_PREFIX, blockedContinueClientId, BLOCKED_BANNER_KINDS, CONTINUE_BANNER_KINDS } from "@codecast/shared/contracts";
+import { isApiErrorBanner as isApiErrorBannerFn } from "@codecast/shared/contracts";
 
 // Decides what an addMessages batch should do about stale API-error banners.
 //   - "supersede": a real turn arrived; delete banner(s) that precede it and
@@ -239,6 +240,51 @@ export function apiErrorBatchAction(input: {
   if (batchHasRealTurn && (conversationPending || batchHasBanner)) return "supersede";
   if (batchHasBanner && !batchHasRealTurn) return "mark_pending";
   return "none";
+}
+
+// The turn shape the park flag reasons over — an incoming addMessages row or
+// a stored messages doc, whichever the caller holds.
+export interface TurnShape {
+  role: string;
+  content?: string | null;
+  tool_calls?: readonly unknown[] | null;
+  tool_results?: readonly unknown[] | null;
+  images?: readonly unknown[] | null;
+}
+
+// A Claude Code API-error banner turn (see apiErrorBanner.ts).
+export function isBannerTurn(m: TurnShape): boolean {
+  return m.role === "assistant" && isApiErrorBannerFn(m.content);
+}
+
+// A genuine turn: assistant text or a tool call, user text, a tool result or
+// an image. A banner is not one, and neither is a system notice or an empty
+// meta row — those say nothing about whether a block lifted.
+export function isRealTurn(m: TurnShape): boolean {
+  if (isBannerTurn(m)) return false;
+  if (m.role === "assistant") return !!m.content?.trim() || (m.tool_calls?.length ?? 0) > 0;
+  if (m.role === "user") {
+    return !!m.content?.trim() || (m.tool_results?.length ?? 0) > 0 || (m.images?.length ?? 0) > 0;
+  }
+  return false;
+}
+
+// The row the park flag keys on is the newest BANNER-OR-REAL-TURN in the
+// batch, never the newest row outright. Claude Code writes a system notice
+// ("Remote Control disconnected") right after a limit banner when the account
+// switches, and the daemon's retry flush ships both in one addMessages call.
+// The notice is newer by timestamp but says nothing about the block; judging
+// it "newest" left the banner unflagged, so the session rendered resolved
+// while still parked. Ties keep the later row, like the reduce it replaces.
+export function newestSignificantMessage<T extends TurnShape & { timestamp?: number }>(
+  msgs: readonly T[],
+): T | undefined {
+  let best: T | undefined;
+  for (const m of msgs) {
+    if (!isBannerTurn(m) && !isRealTurn(m)) continue;
+    if (!best || (m.timestamp || 0) >= (best.timestamp || 0)) best = m;
+  }
+  return best;
 }
 
 // The next value of conversations.pending_api_error after a write. A banner as
