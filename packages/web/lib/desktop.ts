@@ -1,3 +1,5 @@
+import { naturalTier, type FaceTier, type FacesMode } from "./calls/faceCrop";
+
 declare global {
   interface Window {
     __CODECAST_ELECTRON__?: {
@@ -66,38 +68,28 @@ declare global {
         mic: boolean;
         camera: boolean;
         scribe: boolean;
-        joined?: boolean;
       }) => void;
       // Main window only: the call is coming back, take it.
       onCallPanelHandback?: (
         cb: (payload: { room: string; mic: boolean; camera: boolean; scribe: boolean }) => void,
       ) => void;
-      // The floating faces (route /call-faces): the call minimized to circles
-      // of people's faces, transparent everywhere else, always on top. Its own
-      // window because `transparent` and `frame` are construction-time options
-      // — the panel cannot become this at runtime, so minimizing hands the call
-      // over exactly as popping out does. `setFacesInteractive` is the
-      // click-through switch (the window ignores the mouse except over a
-      // circle), `setFacesSize` keeps the window the size of its circles, and
-      // `setFacesDragging` has the shell follow the cursor while a circle is
-      // held. Absent on older builds — gate on them.
-      isFacesWindow?: boolean;
-      openFacesWindow?: (
-        roomKey: string,
-        opts?: { mic?: boolean; camera?: boolean; scribe?: boolean; mode?: "speaker" | "everyone" },
-      ) => Promise<void>;
-      closeFacesWindow?: (opts?: { ended?: boolean }) => Promise<void>;
-      reportFacesState?: (state: {
-        room: string | null;
-        mic: boolean;
-        camera: boolean;
-        scribe: boolean;
-        mode: "speaker" | "everyone";
-        joined?: boolean;
-      }) => void;
-      setFacesInteractive?: (on: boolean) => void;
-      setFacesSize?: (size: { width: number; height: number }) => void;
-      setFacesDragging?: (on: boolean) => void;
+      // The call window's four sizes: the stage, a row of face circles, one
+      // speaker circle, and that circle at the size of a menu bar icon. ONE window — `transparent` and `frame` are
+      // construction-time options, so the window is born see-through and
+      // frameless and the stage paints its own card inside that glass. A size
+      // change therefore never moves the call between windows.
+      //
+      // The last three are what the see-through sizes need and the stage does
+      // not: `setCallWindowInteractive` is the click-through switch (the window
+      // ignores the mouse except over a circle), `setCallWindowContentSize`
+      // keeps the window the size of its circles, and `setCallWindowDragging`
+      // has the shell follow the cursor while a circle is held. Absent on
+      // older builds — gate on them.
+      setCallWindowSize?: (size: CallWindowSize) => Promise<CallWindowSize | null>;
+      getCallWindowSize?: () => Promise<CallWindowSize | null>;
+      setCallWindowInteractive?: (on: boolean) => void;
+      setCallWindowContentSize?: (size: { width: number; height: number }) => void;
+      setCallWindowDragging?: (on: boolean) => void;
       // Screen-share primitives (huddles). The shell lists capturable
       // screens/windows and lets the web pre-select one for the NEXT
       // getDisplayMedia; the picker UI itself is web-owned. Absent on older
@@ -208,11 +200,9 @@ export type DesktopWindowState = {
 //   peopleWindow: a people window exists somewhere in the app. The window that
 //                 IS it (isPeopleWindow) owns the roster, the call and walkie
 //                 pumps and their sounds; the others stand down from them.
-//   callPanel:    a window of the call's own exists — the panel, or the
-//                 floating faces it minimizes into. The call lives THERE, so no
-//                 other window draws a dock for it; they show the elsewhere
-//                 pill. One flag for both, because every other window is asking
-//                 the same question: is this call somebody else's to show?
+//   callPanel:    the call has a window of its own — whichever of its three
+//                 sizes it is in. The call lives THERE, so no other window
+//                 draws a dock for it; they show the elsewhere pill.
 export type DesktopWindowRole = {
   leader: boolean;
   appFocused: boolean;
@@ -402,19 +392,16 @@ export async function closeCallPanel(opts?: { ended?: boolean }): Promise<void> 
 /**
  * The panel tells the shell what it is hosting, so a handback carries it.
  *
- * `joined` is a different fact from `room` and the shell needs both: `room` is
- * what a handback would carry, and `joined` is whether this window actually has
- * the call. They come apart exactly when a join fails — the window still knows
- * which room it was going to host, and holds nothing. The handback arbiter
- * reads `joined`, because "a window exists" must not be mistaken for "somebody
- * has the call".
+ * `room` is what a handback would carry, and it has to be right from the FIRST
+ * report — which fires before the join, at phase idle. Reporting null there
+ * would wipe the room the shell opened the window with, and a close in that
+ * instant would hand back nothing.
  */
 export function reportCallPanelState(state: {
   room: string | null;
   mic: boolean;
   camera: boolean;
   scribe: boolean;
-  joined: boolean;
 }): void {
   bridge("reportCallPanelState")?.(state);
 }
@@ -427,130 +414,119 @@ export function onCallPanelHandback(
 }
 
 // ---------------------------------------------------------------------------
-// The floating faces: the call minimized to the circle of a person's face,
-// transparent everywhere else, over whatever you are working in.
+// The four sizes of the call window.
 //
-// Its own window rather than the panel in another shape, because `transparent`
-// and `frame` are decided when a BrowserWindow is CONSTRUCTED — Electron has no
-// runtime switch for either. So minimizing is the handoff the call panel
-// already knows how to do, with a third window: the faces window joins the
-// room, LiveKit evicts the panel as a duplicate identity, and the panel closes
-// behind it. Un-minimizing is the same two moves with the windows swapped.
+//   panel     the stage: the huddle full bleed, a card you resize by its edges.
+//   circles   everybody, as a row of face circles floating over the work.
+//   speaker   one circle, whoever is talking.
+//   tiny      the same one circle at the size of a menu bar icon.
 //
-// What IS runtime-settable, and what the three verbs below are for: whether
-// the window takes the mouse at all (it is see-through, so the pointer belongs
-// to the app underneath except over a circle), how big it is (it is sized to
-// its circles, and that changes with the mode and the room), and where it sits
-// (dragging a circle moves the window).
+// ONE window, not four. `transparent` and `frame` are decided when a
+// BrowserWindow is CONSTRUCTED, so the window is born see-through and frameless
+// and the stage paints its own card inside that glass. That is the whole point:
+// a call changing shape must never be a call changing WINDOWS, because changing
+// windows means leaving the room and re-joining it, and a person switching to a
+// circle is not asking for their audio to be re-established.
+//
+// The shell keeps the last size per machine, so the next popout comes back the
+// shape the person left it.
 // ---------------------------------------------------------------------------
 
-export const CALL_FACES_ROUTE = "/call-faces";
-
-/** What every surface calls the gesture. */
-export const MINIMIZE_TO_FACES_TITLE = "Minimize to floating faces";
-
-/** Speaker: one circle, whoever is talking. Everyone: a row of them. */
-export type FacesMode = "speaker" | "everyone";
+export type CallWindowSize = "panel" | "circles" | "speaker" | "tiny";
 
 /**
- * The faces window's URL — the panel's payload plus the mode.
+ * Every size that is not the stage — the ones a person shrinks INTO.
  *
- * Same shape and the same reason as `callPanelRoute`: the room is a query
- * param because a room key carries colons, and the mic, camera and scribe
- * state travel with it so that minimizing mid-sentence leaves you talking.
+ * Listed here rather than in the surface that draws the buttons, so a size the
+ * shell knows about cannot end up with no way to reach it. The stage maps over
+ * this and looks each one's icon and words up by key, which makes a missing
+ * button a type error rather than a shape nobody can find.
  */
-export function callFacesRoute(
-  roomKey: string,
-  opts?: { mic?: boolean; camera?: boolean; scribe?: boolean; mode?: FacesMode },
-): string {
-  const q = new URLSearchParams({ room: roomKey });
-  if (opts?.mic) q.set("mic", "1");
-  if (opts?.camera) q.set("cam", "1");
-  if (opts?.scribe) q.set("scribe", "1");
-  if (opts?.mode === "everyone") q.set("mode", "everyone");
-  return `${CALL_FACES_ROUTE}?${q.toString()}`;
-}
+export const SMALL_CALL_WINDOW_SIZES = ["circles", "speaker", "tiny"] as const;
 
-/** This renderer IS the faces window: it hosts the call and draws the circles. */
-export function isFacesWindow(): boolean {
-  return typeof window !== "undefined" && window.__CODECAST_ELECTRON__?.isFacesWindow === true;
-}
+export type SmallCallWindowSize = (typeof SMALL_CALL_WINDOW_SIZES)[number];
+
+// The face circles' own vocabulary lives in faceCrop.ts, next to the geometry.
+// Re-exported here because the window's size and the circles' mode are two
+// names for one decision, and the surfaces that make it import from one place.
+export type { FacesMode };
 
 /**
- * Whether this build can float the faces at all.
- *
- * Desktop only, and like the call panel it is absent rather than degraded
- * elsewhere: a transparent always-on-top window is a thing only the shell can
- * make, and there is no browser approximation of it worth offering.
+ * How many circles a size shows. Mode and tier are separate questions: mode is
+ * how many faces, tier is how big they are, and `tiny` is the one size that
+ * answers them differently — one face, at the smallest tier.
  */
-export function canMinimizeToFaces(): boolean {
-  return isDesktop() && !isFacesWindow() && typeof bridge("openFacesWindow") === "function";
+export function facesModeForSize(size: CallWindowSize): FacesMode {
+  return size === "circles" ? "everyone" : "speaker";
 }
 
-/** Tell the shell to open (or move) the faces window onto this room. */
-export async function openFacesWindow(
-  roomKey: string,
-  opts?: { mic?: boolean; camera?: boolean; scribe?: boolean; mode?: FacesMode },
-): Promise<boolean> {
-  const open = bridge("openFacesWindow");
-  if (!open) return false;
-  await open(roomKey, opts);
-  return true;
+/** How big those circles are. Every size but `tiny` takes its mode's own tier. */
+export function faceTierForSize(size: CallWindowSize): FaceTier {
+  return size === "tiny" ? "mini" : naturalTier(facesModeForSize(size));
 }
 
 /**
- * Close the faces window from inside it.
+ * Whether this build can make the window small at all.
  *
- * `ended` reads exactly as it does for the panel: a hang-up ended the call and
- * nothing is handed anywhere. Silence means the call is still going and the
- * shell hands it back — unless another call window already has it, which is
- * the un-minimize case and is the shell's call to make, not this window's.
+ * The circle sizes need a see-through, click-through, always-on-top window, and
+ * only the shell can make one — a browser has no approximation worth offering.
+ * An older desktop build has the panel and none of this, which is why the check
+ * is for the FUNCTION rather than for "am I on the desktop": the surface can
+ * then say the app needs an update instead of a button doing nothing.
  */
-export async function closeFacesWindow(opts?: { ended?: boolean }): Promise<void> {
-  await bridge("closeFacesWindow")?.(opts);
+export function canResizeCallWindow(): boolean {
+  return isCallPanelWindow() && typeof bridge("setCallWindowSize") === "function";
 }
 
-/** The faces window's half of the same report — `joined` included, same reason. */
-export function reportFacesState(state: {
-  room: string | null;
-  mic: boolean;
-  camera: boolean;
-  scribe: boolean;
-  mode: FacesMode;
-  joined: boolean;
-}): void {
-  bridge("reportFacesState")?.(state);
+/**
+ * Put the window into a size. Returns the size it actually landed on, or null
+ * if this build cannot do it — the caller says so rather than pretending.
+ */
+export async function setCallWindowSize(size: CallWindowSize): Promise<CallWindowSize | null> {
+  const set = bridge("setCallWindowSize");
+  if (!set) return null;
+  return (await set(size)) ?? null;
+}
+
+/** Which size the shell has this window in. Null on a build without sizes. */
+export async function getCallWindowSize(): Promise<CallWindowSize | null> {
+  const get = bridge("getCallWindowSize");
+  if (!get) return null;
+  return (await get()) ?? null;
 }
 
 /**
  * Does the window take the mouse right now?
  *
- * The window is a rectangle; the product is a few circles. Everywhere else the
- * pointer belongs to whatever application is underneath, so the window ignores
- * mouse events by default and the renderer — the only side that knows where
- * the circles are — turns that off while the pointer is over one.
+ * In the circle sizes the window is a rectangle and the product is a few
+ * circles. Everywhere else the pointer belongs to whatever application is
+ * underneath, so the window ignores mouse events and the renderer — the only
+ * side that knows where the circles are — turns that off while the pointer is
+ * over one. Ignored by the shell in the panel size, where the stage takes every
+ * click by construction.
  */
-export function setFacesInteractive(on: boolean): void {
-  bridge("setFacesInteractive")?.(on);
+export function setCallWindowInteractive(on: boolean): void {
+  bridge("setCallWindowInteractive")?.(on);
 }
 
-/** Size the window to its circles (they change with the mode and the room). */
-export function setFacesSize(size: { width: number; height: number }): void {
-  bridge("setFacesSize")?.(size);
+/** Size the window to its circles (they change with the size and the room). */
+export function setCallWindowContentSize(size: { width: number; height: number }): void {
+  bridge("setCallWindowContentSize")?.(size);
 }
 
 /**
  * Drag the window by a circle.
  *
- * Deliberately not `-webkit-app-region: drag`: over a drag region the window
- * manager takes the mouse events, so the renderer would stop receiving the
- * moves that tell it when the pointer LEFT the circle, and the window would be
- * stuck taking clicks that belong to the app underneath. Instead the shell
- * follows the cursor itself between these two calls — no per-move IPC, and it
- * composes with click-through rather than fighting it.
+ * Deliberately not `-webkit-app-region: drag`, which is what the STAGE uses:
+ * over a drag region the window manager takes the mouse events, so a
+ * click-through renderer would stop receiving the moves that tell it when the
+ * pointer LEFT the circle, and the window would be stuck taking clicks that
+ * belong to the app underneath. Instead the shell follows the cursor itself
+ * between these two calls — no per-move IPC, and it composes with click-through
+ * rather than fighting it.
  */
-export function setFacesDragging(on: boolean): void {
-  bridge("setFacesDragging")?.(on);
+export function setCallWindowDragging(on: boolean): void {
+  bridge("setCallWindowDragging")?.(on);
 }
 
 /**

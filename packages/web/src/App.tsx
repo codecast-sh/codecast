@@ -99,7 +99,6 @@ const Windows = lazy(() => import("@/app/windows/page"));
 const Palette = lazy(() => import("@/app/palette/page"));
 const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
-const CallFaces = lazy(() => import("@/app/call-faces/page"));
 
 const Settings = lazy(() => import("@/app/settings/page"));
 const SettingsCli = lazy(() => import("@/app/settings/cli/page"));
@@ -249,13 +248,17 @@ export function App() {
             <Route path="review/:id" element={<E name="ReviewView"><ReviewView /></E>} />
             <Route path="review/batch" element={<E name="ReviewBatch"><ReviewBatch /></E>} />
 
-            {/* The two windows with no background: the palette card, and the
-                floating faces a call minimizes into. Both are frameless
-                transparent Electron windows; the layout is what keeps the app's
-                own body background from filling their glass. */}
+            {/* The windows with no background: the palette card, and the call
+                window, whose two small sizes are circles of people's faces over
+                the work. Both are frameless transparent Electron windows; the
+                layout is what keeps the app's own body background from filling
+                their glass.
+
+                The call window MUST stay above ":username" or the profile
+                catch-all eats it — same rule as /people. */}
             <Route element={<TransparentWindowLayout />}>
               <Route path="palette" element={<E name="Palette"><Palette /></E>} />
-              <Route path="call-faces" element={<E name="CallFaces"><CallFaces /></E>} />
+              <Route path="call-panel" element={<E name="CallPanel"><CallPanel /></E>} />
             </Route>
 
             {/* The people window (AIM buddy list): the roster, calling and the
@@ -263,11 +266,6 @@ export function App() {
                 DashboardLayout — it is a whole window, not a page inside one.
                 MUST stay above ":username" or the profile catch-all eats it. */}
             <Route path="people" element={<E name="People"><People /></E>} />
-
-            {/* The call panel: a huddle in a window of its own — the stage full
-                bleed, no tab shell. Same rule as /people, and the same reason it
-                MUST stay above ":username" or the profile catch-all eats it. */}
-            <Route path="call-panel" element={<E name="CallPanel"><CallPanel /></E>} />
 
             {/* Settings - shared sidebar layout */}
             <Route path="settings" element={<SettingsLayout />}>

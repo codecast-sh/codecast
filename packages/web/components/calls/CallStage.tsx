@@ -6,6 +6,7 @@ import {
   AppWindow,
   Captions,
   ChevronDown,
+  Circle,
   CircleUserRound,
   ExternalLink,
   LayoutGrid,
@@ -19,6 +20,7 @@ import {
   Sparkles,
   Unlock,
   User,
+  Users,
   Video,
   VideoOff,
   Wand2,
@@ -47,21 +49,24 @@ import { RoomKnocks } from "./RoomDoor";
 import { HangUpButton, MicButton } from "./CallControls";
 import { CallChatPanel } from "./CallChatPanel";
 import { FeedChip } from "./FeedChip";
+import { faceTrackingNote } from "./useFaceCrop";
 import { openFeedTargetPicker, useAddLiveFeed, useRemoveLiveFeed, type FeedTarget } from "./useCallFeed";
 import { firstName, fmtClock, speakerColor } from "./speakers";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
 import { useRoomLock } from "../../hooks/useLiveRooms";
 import {
-  MINIMIZE_TO_FACES_TITLE,
   POP_OUT_CALL_TITLE,
+  SMALL_CALL_WINDOW_SIZES,
   attachTitlebarHead,
-  canMinimizeToFaces,
   canPopOutCall,
+  canResizeCallWindow,
+  closeCallPanel,
   navigateMainWindow,
+  type CallWindowSize,
   type DesktopDisplaySource,
+  type SmallCallWindowSize,
 } from "../../lib/desktop";
 import { popOutCall } from "../../lib/calls/popOutCall";
-import { minimizeToFaces } from "../../lib/calls/callHandoff";
 
 // The call stage: the full surface a huddle opens into when video or a screen
 // share deserves the room. Design intents, in order:
@@ -91,6 +96,24 @@ const isMuted = (roster: any[], identity: string) =>
 const SPEAKING_RING = "ring-2 ring-sol-cyan/80 shadow-[0_0_0_5px_rgba(42,161,152,0.16)]";
 
 type StageView = "auto" | "speaker" | "grid";
+
+/**
+ * How each of the window's small sizes reads on the stage's chrome.
+ *
+ * Keyed by the sizes themselves (`SMALL_CALL_WINDOW_SIZES`, which is the
+ * shell's own list) so a new size without a button is a type error rather than
+ * a shape nobody can reach. Each shrinks this same window — the media stays
+ * put, so going from the stage to a circle is not asking for your audio to be
+ * re-established.
+ */
+const SMALL_SIZE_CHROME: Record<
+  SmallCallWindowSize,
+  { icon: typeof Users; hint: string }
+> = {
+  circles: { icon: Users, hint: "Shrink to a row of faces over your work" },
+  speaker: { icon: CircleUserRound, hint: "Shrink to one circle: whoever is talking" },
+  tiny: { icon: Circle, hint: "Shrink to one circle the size of a menu bar icon" },
+};
 type RailTab = "transcript" | "chat";
 
 /**
@@ -109,9 +132,12 @@ type RailTab = "transcript" | "chat";
 export function CallStage({
   onCollapse,
   panel = false,
+  onSetSize,
 }: {
   onCollapse?: () => void;
   panel?: boolean;
+  /** Panel only: shrink the window to a row of circles, or to one. */
+  onSetSize?: (size: CallWindowSize) => void;
 }) {
   // Memoized because it feeds an effect's dependency list: a fresh no-op every
   // render would re-bind the key listener on every render.
@@ -175,17 +201,25 @@ export function CallStage({
 
   const toggleRail = (tab: RailTab) => setRail((r) => (r === tab ? null : tab));
 
-  // In the panel this header row IS the window's titlebar: it becomes the drag
-  // surface and indents past the traffic lights. Measured rather than declared,
-  // the same idiom every other desktop window's top row uses — the stage has no
-  // chrome of its own to hang a title on, so the row that is already there
-  // plays the part.
+  // In the panel this header row IS the window's titlebar: it is what you drag
+  // the window by, and `.electron-drag-region` is also what marks every button
+  // inside it no-drag, so the controls still take their clicks.
+  //
+  // The window has no traffic lights to indent past — it is frameless, and the
+  // close button on this row is its own. An OLDER desktop build still frames
+  // this window, though, and there the row has to measure itself into the
+  // titlebar the way every other window's top row does, or it paints under the
+  // lights. `canResizeCallWindow` is the honest test for which build this is:
+  // the sizes and the frameless window shipped together.
+  const chromeless = panel && canResizeCallWindow();
   const headRef = useRef<HTMLDivElement | null>(null);
   useWatchEffect(() => {
     const el = headRef.current;
     if (!panel || !el) return;
-    return attachTitlebarHead(el);
-  }, [panel]);
+    if (!chromeless) return attachTitlebarHead(el);
+    el.classList.add("electron-drag-region");
+    return () => el.classList.remove("electron-drag-region");
+  }, [panel, chromeless]);
 
   // Portaled to <body>: the dock mounts inside the app shell, whose
   // transformed ancestors would otherwise capture this fixed overlay (the
@@ -196,7 +230,14 @@ export function CallStage({
   // palette whatever theme the app is in. Without it, light mode paints
   // --sol-text (#002b36) on a #002b36 stage and every label disappears.
   return createPortal(
-    <div className="dark fixed inset-0 z-[200] flex flex-col select-none bg-sol-base03 text-sol-text">
+    <div
+      className={`dark fixed inset-0 z-[200] flex flex-col select-none bg-sol-base03 text-sol-text${
+        // The window is see-through and frameless, so the stage's own surface
+        // is the only surface there is: a rounded card, clipped so the video
+        // inside it does not square off the corners.
+        chromeless ? " overflow-hidden rounded-xl" : ""
+      }`}
+    >
       {/* Header: where this huddle lives, the ways out, and the view. One
           quiet line — no boxes; the selected view reads by weight alone. */}
       <div ref={headRef} className="flex h-11 shrink-0 items-center gap-1 px-4">
@@ -312,18 +353,37 @@ export function CallStage({
             pop out
           </StageChromeButton>
         )}
-        {/* Minimize to the floating faces: the call as a circle of the other
-            person's face, over the work, everything else see-through. Desktop
-            only for the same reason as the popout — the shell is the only thing
-            that can make a transparent always-on-top window. */}
-        {canMinimizeToFaces() && (
+        {/* The small sizes of this same window: everybody as a row of circles,
+            one circle of whoever is talking, or that circle the size of a menu
+            bar icon. The window keeps its media across the change — that is why they are sizes and not
+            windows — so this is only a reshape. */}
+        {panel &&
+          onSetSize &&
+          SMALL_CALL_WINDOW_SIZES.map((size, i) => {
+            const chrome = SMALL_SIZE_CHROME[size];
+            return (
+              <StageChromeButton
+                key={size}
+                onClick={() => onSetSize(size)}
+                className={i === 0 ? "ml-2" : undefined}
+                title={chrome.hint}
+              >
+                <chrome.icon className="h-3.5 w-3.5" />
+                {size}
+              </StageChromeButton>
+            );
+          })}
+        {/* The window's own close. There is no traffic light to do it: closing
+            hands the call back to the main window, which joins and carries on
+            — hanging up is the other door, and it is the red button on the
+            control bar below. */}
+        {panel && chromeless && (
           <StageChromeButton
-            onClick={() => void minimizeToFaces()}
+            onClick={() => void closeCallPanel({})}
             className="ml-2"
-            title={MINIMIZE_TO_FACES_TITLE}
+            title="Close this window — the call carries on in the main window"
           >
-            <CircleUserRound className="h-3.5 w-3.5" />
-            faces
+            <X className="h-3.5 w-3.5" />
           </StageChromeButton>
         )}
         {!panel && (
@@ -1239,6 +1299,9 @@ function DevicesPopover({ onClose }: { onClose: () => void }) {
       {row("Microphone", mics, "audioinput")}
       {row("Speaker", outs, "audiooutput")}
       {row("Camera", cams, "videoinput")}
+      {/* Not a setting — a fact. The floating circles either follow a face or
+          show the middle of the frame, and only this build knows which. */}
+      <p className="pt-0.5 text-[10px] leading-snug text-sol-text-muted">{faceTrackingNote()}</p>
     </div>
   );
 }

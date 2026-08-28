@@ -1,5 +1,6 @@
 import { useCallsAvailable } from "../../lib/teamFeatures";
-import { useWalkieStatus, walkieOwnsCall } from "../../hooks/useWalkie";
+import { useWalkieStatus } from "../../hooks/useWalkie";
+import { walkieHoldsRoom } from "../../lib/calls/walkie";
 import { Headphones } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { joinCall, startHuddle } from "../../lib/calls/callManager";
@@ -82,14 +83,14 @@ export function OccupancyChip({
   // violet "in huddle" chip on a three-second voice message — six inches from
   // a walkie strip already saying "Live to Jordan Lee". Two surfaces, two
   // names, one thing. The strip is the one that knows what is happening, so
-  // this stands down while the walkie owns the room, and comes back the moment
-  // the room becomes a real huddle (walkieOwnsCall is false for a burst that
-  // walked into somebody's open mic, and false once a linger is answered).
+  // this stands down while the walkie holds the room, and comes back the moment
+  // the room becomes a real huddle — which the live room's own mode says, so
+  // there is one answer here and in the dock rather than two.
   const walkie = useWalkieStatus();
   const roster: any[] = s.callOccupancy[roomKey] || [];
   const inThisRoom = s.call.roomKey === roomKey;
   if (roster.length === 0) return null;
-  if (inThisRoom && walkieOwnsCall(walkie, s.call)) return null;
+  if (inThisRoom && walkieHoldsRoom(walkie, roomKey)) return null;
 
   return (
     <button

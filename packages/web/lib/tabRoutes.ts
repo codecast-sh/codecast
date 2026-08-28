@@ -31,15 +31,12 @@ const NON_TAB_EXACT = new Set([
   // window on the desktop, a popup in a browser). The tab shell must never
   // intercept it, or the window rewrites its own URL and paints a blank pane.
   "/people",
-  // The call panel renders a huddle as a whole window (its own OS window on
-  // the desktop, a detached tab window on older builds). Same reason as
-  // /people: the tab shell intercepting it would rewrite the window's own URL
-  // and paint a blank pane — with a live microphone behind it.
+  // The call window renders a huddle as a whole window (its own OS window on
+  // the desktop, a detached tab window on older builds) — the stage, or the
+  // circles its small sizes shrink to. Same reason as /people: the tab shell
+  // intercepting it would rewrite the window's own URL and paint a blank pane,
+  // with a live microphone behind it.
   "/call-panel",
-  // The floating faces: a transparent always-on-top window that is nothing but
-  // circles. The tab shell intercepting it would rewrite the window's own URL
-  // and leave a see-through rectangle with a live microphone in it.
-  "/call-faces",
 ]);
 // "/documentation" is a prefix (not exact) so the guide pages under
 // /documentation/<slug> stay outside the tab shell too.

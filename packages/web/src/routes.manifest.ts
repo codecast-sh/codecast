@@ -72,7 +72,6 @@ export type RouteLayout =
   | "palette"
   | "people"
   | "callPanel"
-  | "callFaces"
   | "settings";
 
 // -- Lazy component refs — import targets copied verbatim from App.tsx / TabContent.tsx so
@@ -180,7 +179,6 @@ const Palette = lazy(() => import("@/app/palette/page"));
 // People window
 const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
-const CallFaces = lazy(() => import("@/app/call-faces/page"));
 
 // Settings
 const Settings = lazy(() => import("@/app/settings/page"));
@@ -315,11 +313,6 @@ export const ROUTES: RouteEntry[] = [
   //    dashboardShell/standalone routes, so calling it standalone would force
   //    "call-panel" into the in-shell set — the opposite of what it is.
   { path: "call-panel", component: cast(CallPanel), layout: "callPanel" },
-
-  // -- The floating faces (the call minimized to circles, its own transparent
-  //    always-on-top OS window). Same reasoning as the panel above: its own
-  //    layout value, so the parity test does not sweep it into the in-shell set.
-  { path: "call-faces", component: cast(CallFaces), layout: "callFaces" },
 
   // -- Settings (SettingsLayout; index = /settings) --
   { path: "settings", component: cast(Settings), layout: "settings" },

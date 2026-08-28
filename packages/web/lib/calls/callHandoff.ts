@@ -1,5 +1,5 @@
 import { useInboxStore } from "../../store/inboxStore";
-import { canMinimizeToFaces, openFacesWindow, type FacesMode } from "../desktop";
+import type { CallWindowSize } from "../desktop";
 import { getScribeStatus } from "./transcription";
 
 /**
@@ -12,8 +12,8 @@ import { getScribeStatus } from "./transcription";
  *
  * Read here, once, from the window hosting the call, so that no caller
  * assembles the payload and none of them can assemble it differently. Every
- * gesture that moves a call — popping it out into the panel, minimizing it into
- * the floating faces, and whatever comes next — reads this.
+ * gesture that moves a call between windows — popping it out into its own
+ * window, handing it back to the main one — reads this.
  *
  * Null when there is no call to move.
  */
@@ -28,40 +28,16 @@ export function callHandoffState(): { room: string; mic: boolean; camera: boolea
   };
 }
 
-/**
- * Minimize the call to the floating faces.
- *
- * The faces window joins the room and LiveKit evicts whichever window held it
- * (every window of one person signs as the same identity), so this is the whole
- * gesture: open the window, and the call follows. The window being left closes
- * itself when it notices it has been evicted — nobody has to tell it, and the
- * new window is connected before the old one lets go, so the audio is
- * continuous across the move.
- *
- * Desktop only, and absent rather than degraded elsewhere: a transparent
- * always-on-top window is something only the shell can make, and a browser
- * approximation of it would be a window that lies about what it is.
- */
-export async function minimizeToFaces(mode?: FacesMode): Promise<void> {
-  const state = callHandoffState();
-  if (!state || !canMinimizeToFaces()) return;
-  await openFacesWindow(state.room, {
-    mic: state.mic,
-    camera: state.camera,
-    scribe: state.scribe,
-    mode,
-  });
-}
-
-// ── When a satellite call window should close, and what closing means ──────
+// ── The circle sizes have no chrome, so they need rules of their own ───────
 //
-// The floating faces window has no title bar, no close box and no dock entry.
-// If it does not close itself, nothing closes it short of quitting the app —
-// so the rules for when it goes, and for what it tells the shell on the way
-// out, decide between a tidy handoff and an unclosable window sitting over
-// somebody's work with a call stranded behind it. They are pinned here, out of
-// the component, because they are a decision table rather than a rendering
-// concern.
+// In the circle sizes the call window has no title bar, no close box and no
+// dock entry: it is a few circles and a transparent rectangle that lets the
+// mouse through. Everything a person can do with it is drawn on the circles
+// themselves — so if the circles never arrive, there is nothing on screen to
+// act on, and an invisible always-on-top window is sitting over somebody's
+// work. The two rules below are what keeps that from happening. They live here
+// rather than in the component because they are a decision table, not a
+// rendering concern.
 
 export type CallWindowPhase = "idle" | "ringing_out" | "connecting" | "connected" | "error";
 
@@ -77,62 +53,67 @@ export type WindowExit = { close: boolean; ended: boolean };
 const STAY: WindowExit = { close: false, ended: false };
 
 /**
- * Should the faces window close, and is the call over when it does?
+ * A join that failed drops the window back to the stage.
  *
- * `held` is whether this window ever actually got the call — the distinction
- * everything turns on. A window that held the call and lost it has watched the
- * call end or move, and says so. A window that NEVER held it is looking at its
- * own failure: the call is still wherever it was, and saying "ended" would
- * take a live call down with a window that never had it.
+ * `held` is whether this window ever actually got the call, and it is the
+ * distinction everything turns on. Holding it and losing it is an ordinary end
+ * — the call finished, or it moved — and the stage's own lifecycle handles
+ * that. NEVER holding it is this window looking at its own failure, and in a
+ * circle size that failure is invisible: no faces arrive, so there is nothing
+ * to click, and what is left on screen is a transparent click-through
+ * rectangle floating above everything with a call stranded behind it.
  *
- * `deadlinePassed` covers the failure with nothing to show for itself — a join
- * that neither connects nor errors. Without it that window would sit there
- * forever, because no state change is ever coming to close it.
+ * Falling back to the stage is the smallest honest answer. The stage has a
+ * surface, a close button and an account of what went wrong, so the person can
+ * see the failure and decide — closing then hands the call back to the main
+ * window by the ordinary route, which is where it still is.
+ *
+ * `deadlinePassed` covers the failure with nothing to show for itself: a join
+ * that neither connects nor errors. Without it that window would float there
+ * forever, because no state change is ever coming.
+ *
+ * Returns the size to move to, or null to stay put.
  */
-export function facesWindowExit(s: {
+export function callWindowSizeOnFailedJoin(s: {
+  size: CallWindowSize;
   phase: CallWindowPhase;
   held: boolean;
   deadlinePassed: boolean;
-}): WindowExit {
-  if (s.phase === "connected") return STAY;
-  if (s.held) return s.phase === "idle" ? { close: true, ended: true } : STAY;
-  if (s.phase === "error" || s.deadlinePassed) return { close: true, ended: false };
-  return STAY;
+}): CallWindowSize | null {
+  if (s.size === "panel" || s.held) return null;
+  if (s.phase === "error" || s.deadlinePassed) return "panel";
+  return null;
 }
 
 /**
- * What the Leave control does — and it always does something, whatever state
- * the window is in. In a window whose join failed, Leave is the only way out a
- * person has, so it can never be a no-op.
+ * What the Leave control on the circles does — and it always does something,
+ * whatever state the window is in. In a window whose join failed it is the only
+ * way out a person has there, so it can never be a no-op.
  *
  * `hangUp` is the part that must not fire on the failure path. The seat in
- * `call_members` is keyed by (user, room), so both windows of one person share
+ * `call_members` is keyed by (user, room), so every window of one person shares
  * ONE row: a window that never joined calling `leaveCall` would delete the seat
  * the window that DOES hold the call is sitting in, taking its occupancy, its
  * heartbeat and its transcript authorization with it.
  */
-export function facesLeaveGesture(held: boolean): WindowExit & { hangUp: boolean } {
+export function callWindowLeaveGesture(held: boolean): WindowExit & { hangUp: boolean } {
   return held
     ? { close: true, ended: true, hangUp: true }
     : { close: true, ended: false, hangUp: false };
 }
 
 /**
- * What a call window tells the shell it is hosting.
+ * What the call window tells the shell it is hosting.
  *
  * The shell keeps the LAST report as the handback payload, replacing it whole,
  * so every field here has to be right at every moment — including the moments
- * before there is a call to describe. Both satellite windows report the same
- * five facts, and they are assembled once, here, for the reason the rest of
- * this file exists: two windows answering the same question differently is how
- * a call goes missing.
+ * before there is a call to describe.
  */
 export type CallWindowReport = {
   room: string | null;
   mic: boolean;
   camera: boolean;
   scribe: boolean;
-  joined: boolean;
 };
 
 /**
@@ -141,16 +122,10 @@ export type CallWindowReport = {
  * and it is why `room` is never null in a window that has a room in its
  * address: the first report fires at phase `idle`, and reporting null there
  * would overwrite the room the shell seeded the window with. A close in that
- * instant — the traffic light, a moment after the window opened — then hands
- * back nothing, and the call is stranded in a window that is going away.
- *
- * `joined` is the other fact the shell cannot work out for itself: whether
- * this window HAS the call, which is not the same question as which room it is
- * pointed at. The handback arbiter reads it so that a window whose join failed
- * is never mistaken for one holding a call.
+ * instant — a moment after the window opened — then hands back nothing, and
+ * the call is stranded in a window that is going away.
  */
 export function callWindowReport(s: {
-  phase: CallWindowPhase;
   roomKey: string | null;
   windowRoom: string | null;
   muted: boolean;
@@ -162,6 +137,5 @@ export function callWindowReport(s: {
     mic: !s.muted,
     camera: !!s.camera,
     scribe: !!s.scribe,
-    joined: s.phase === "connected",
   };
 }

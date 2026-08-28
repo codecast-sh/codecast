@@ -11,13 +11,16 @@ import { useCallSync } from "../../hooks/useCallSync";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 /**
- * /call-panel — a huddle as a whole window.
+ * /call-panel — a huddle as a whole window, in whichever of its four sizes.
  *
  * Like /people it bypasses DashboardShell and DashboardLayout: no tab shell, no
  * sidebar, no shared tab state to write. On the desktop the shell gives it a
- * real window (main.js createCallWindow); the route is also what an older
- * desktop build lands on through the detached-tab rung of the popout ladder.
- * It is never a browser popup — that was the bug this window exists to end.
+ * real window (main.js createCallWindow) — frameless and see-through, because
+ * its small sizes are circles of people's faces floating over the work and
+ * `transparent` cannot be turned on after a window is built. The route is also
+ * what an older desktop build lands on through the detached-tab rung of the
+ * popout ladder. It is never a browser popup — that was the bug this window
+ * exists to end.
  *
  * Its pumps are deliberately the SHORT list. This window is not the phone: the
  * ring, the knock and the walkie belong to the people window (or the main
@@ -40,8 +43,14 @@ function CallPanelWindow() {
   // React's first frame otherwise races loadCache() and the window paints an
   // empty stage for a beat. The flag flips true even on an empty or unreadable
   // cache, so it cannot hang.
+  //
+  // With ONE exception, and it is the whole reason the size is in the URL. In
+  // the small sizes this window is a few circles over somebody's work, and
+  // a loading card floating on top of their screen is worse than the empty
+  // moment it replaces. Nothing at all is the honest first frame there.
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
-  if (!hydrated) return <AppLoader />;
+  const small = typeof window !== "undefined" && /[?&]size=(circles|speaker)/.test(window.location.search);
+  if (!hydrated) return small ? null : <AppLoader />;
   return (
     <>
       {/* Each pump behind its own inline boundary: a Convex query that throws
