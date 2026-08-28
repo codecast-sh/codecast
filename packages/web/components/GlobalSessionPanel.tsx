@@ -3175,7 +3175,10 @@ function scrollRowIntoView(container: HTMLElement, el: Element) {
   requestAnimationFrame(step);
 }
 
-export function SessionListPanel({
+// Memoized (see the export at the bottom of the file): the layout re-renders
+// often with identical props, and every un-memoized pass here rebuilt ~100
+// cards' worth of elements.
+function SessionListPanelImpl({
   onSessionSelect,
   activeSessionId,
 }: {
@@ -4884,3 +4887,6 @@ export function SessionListPanel({
   );
 }
 
+
+export const SessionListPanel = memo(SessionListPanelImpl);
+SessionListPanel.displayName = "SessionListPanel";
