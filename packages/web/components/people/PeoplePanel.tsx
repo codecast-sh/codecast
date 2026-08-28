@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { ChevronRight, Headphones, LayoutGrid, List, MessageSquare, Pin, Volume2, VolumeX } from "lucide-react";
 import { PeopleStrip } from "./PeopleStrip";
-import { TeamPulseLine, usePulseFrom } from "./TeamPulseLine";
+import { TeamPulseLine } from "./TeamPulseLine";
+import { usePulseFrom } from "./usePulseFrom";
 import { type TeamPulse } from "./teamPulse";
 import { peopleHeadClass, usePeopleDensity } from "./usePeopleDensity";
 import type { PeopleDensity } from "./peopleDensity";

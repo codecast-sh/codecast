@@ -130,7 +130,7 @@ idle(() => {
   // removes that class for this window.
   if (import.meta.env.PROD) {
     setTimeout(() => {
-      import("../components/TabContent").then((m) => m.warmTabRoutes()).catch(() => {});
+      import("../lib/tabLazyPages").then((m) => m.warmTabRoutes()).catch(() => {});
     }, 5_000);
   }
 });

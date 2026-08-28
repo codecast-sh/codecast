@@ -1,15 +1,5 @@
-import { useMemo } from "react";
-import { pulseText, teamPulse, type PulseTone, type TeamPulse } from "./teamPulse";
-import { type PeopleRosterData } from "./usePeopleRoster";
+import { pulseText, type PulseTone, type TeamPulse } from "./teamPulse";
 
-/** The pulse from roster data the caller already holds — never a second
- *  subscription. The panel reads the roster once and derives this from it. */
-export function usePulseFrom({ members, fleets, huddles }: PeopleRosterData): TeamPulse {
-  return useMemo(
-    () => teamPulse(members, (m: any) => fleets.get(String(m._id)), huddles),
-    [members, fleets, huddles],
-  );
-}
 
 /** Same colour language as the rest of the app: presence cyan for here,
  *  yellow for idle, the fleet's green for running agents, its orange for a
