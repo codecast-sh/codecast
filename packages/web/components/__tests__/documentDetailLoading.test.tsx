@@ -40,7 +40,11 @@ mock.module("../workspace/Slot", () => ({
 mock.module("../editor/CollabDocEditor", () => ({
   CollabDocEditor: () => <div data-stub="collab-editor" />,
 }));
+// Spread, not replaced: `mock.module` is process-global, and a sibling test
+// imports `matchScore` off this module.
+const realMentions = { ...(await import("../../hooks/useMentionQuery")) };
 mock.module("../../hooks/useMentionQuery", () => ({
+  ...realMentions,
   useMentionQuery: () => () => [],
   useActiveMentionScope: () => null,
 }));
@@ -50,12 +54,8 @@ mock.module("../../hooks/useImageUpload", () => ({
 mock.module("../../hooks/useTitlebarHead", () => ({
   useTitlebarHead: () => ({ current: null }),
 }));
-const realStore = await import("../../store/inboxStore");
-mock.module("../../store/inboxStore", () => ({
-  ...realStore,
-  useInboxStore: (selector: (s: any) => any) =>
-    selector({ reviewComments: {} }),
-}));
+const { mockInboxStore } = await import("./mockInboxStore");
+mockInboxStore(() => ({ reviewComments: {} }));
 
 const { DocumentDetailLayout } = await import("../DocumentDetailLayout");
 

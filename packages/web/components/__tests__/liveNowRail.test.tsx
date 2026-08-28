@@ -17,8 +17,17 @@ mock.module("../../lib/calls/callManager", () => ({
   joinCall: () => {},
   knockRoom: () => {},
 }));
+// Stubbed to the module's full export shape, not just the one export this test
+// renders. `mock.module` is process-global, so a substitution missing an export
+// breaks whichever file links it next: ConversationView imports
+// `SessionHuddleButton` from here, and got a link-time SyntaxError it never
+// asked for. Spreading the real module instead is not an option — it pulls in
+// lib/calls/callManager, the live WebRTC stack this test exists to stay out of.
 mock.module("../calls/OccupancyChip", () => ({
   Facepile: () => null,
+  OccupancyChip: () => null,
+  HuddleButton: () => null,
+  SessionHuddleButton: () => null,
 }));
 
 const { LiveNowRail } = await import("../calls/LiveNow");
