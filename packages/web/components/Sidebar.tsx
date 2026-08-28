@@ -631,8 +631,9 @@ function PinnedRail({
   const projects = useInboxStore((s) => s.projects);
   const savedViews = useInboxStore((s) => (s as any).savedViews);
   const chatChannels = useInboxStore((s) => s.chatChannels);
-  const teamMembers = useInboxStore((s) => s.teamMembers);
-  const viewer = useInboxStore((s) => (s as any).currentUser?._id ?? "");
+  // Identity-stable roster: the raw teamMembers array re-pushes every few
+  // seconds on teammates' recent_session_* churn.
+  const { members: teamMembers, viewerId: viewer } = useChatMembers();
   // A pinned channel is chat UI: gone with the feature (the pin itself is
   // kept, so turning chat back on restores it). The Threads pin is a VIEW even
   // in its legacy channel-kind form (isThreadsPin), so it survives chat off.
@@ -783,7 +784,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isTriggers = pathname === "/triggers" || pathname?.startsWith("/triggers/") ||
     pathname === "/schedules" || pathname?.startsWith("/schedules/"); // /schedules = pre-rename alias
   const { user: currentUser } = useCurrentUser();
-  const teamMembers = useInboxStore((s) => s.teamMembers);
+  // Only the create-task modal reads the roster here; don't wake the Sidebar
+  // on roster churn while it is closed.
+  const teamMembers = useInboxStore((s) => (s.createModal ? s.teamMembers : null));
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const teamsQuery = useSyncTeams();
   const teams = useInboxStore((s) => s.teams);

@@ -216,6 +216,9 @@ export function DashboardLayout(props: DashboardLayoutProps) {
 // "this data didn't prefetch" instead of taking down the entire dashboard.
 // None of these power the core shell/conversation view; they warm stores.
 function DashboardSyncEffects() {
+  // The tasks delta cursor machine: its empty deltas re-rendered the whole
+  // layout when it lived in DashboardLayoutInner.
+  usePrefetch();
   useSyncDocs();
   useSyncMentionTasks();
   useSyncMentionDocs();
@@ -379,7 +382,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const headerRef = useRef<HTMLElement>(null);
   const prevWasInboxRef = useRef(false);
   const prevPathnameRef = useRef(pathname);
-  usePrefetch();
   const tipActions = useTipActions();
 
   const recalcHeight = useCallback(() => {
