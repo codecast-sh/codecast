@@ -26,7 +26,7 @@ describe("team setup pieces are defined once", () => {
     const files = ["app", "components", "hooks", "lib"].flatMap((d) => walk(join(root, d)));
     const defining = files.filter((f) => /\bVISIBILITY_LEVELS\s*=/.test(readFileSync(f, "utf8")));
     expect(defining.map((f) => f.slice(root.length + 1))).toEqual([
-      "components/team/VisibilityPicker.tsx",
+      "lib/team/visibilityLevels.ts",
     ]);
   });
 

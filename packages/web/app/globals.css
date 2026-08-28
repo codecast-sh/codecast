@@ -606,6 +606,69 @@ html[data-idle] *::after {
   @keyframes schedRosterFade { from { opacity: 0; } to { opacity: 1; } }
 }
 
+/* Out-of-view beacon in the session inbox: a floating pill that appears when
+   the open session's card is scrolled past either fold. It slides in from the
+   edge it points toward, with a short delay so it never flashes during the
+   auto-scroll glide that follows selecting a session. Transform lives entirely
+   here (not in utility classes) because the entrance animates it. */
+@keyframes ccBeaconInUp {
+  from { opacity: 0; transform: translate(-50%, -8px) scale(0.92); }
+  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+@keyframes ccBeaconInDown {
+  from { opacity: 0; transform: translate(-50%, 8px) scale(0.92); }
+  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+.cc-session-beacon {
+  transform: translateX(-50%);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--sol-cyan) 8%, transparent),
+    0 4px 16px color-mix(in srgb, var(--sol-cyan) 22%, transparent),
+    0 2px 6px rgba(0, 0, 0, 0.35);
+  animation: ccBeaconInDown 220ms cubic-bezier(0.23, 1, 0.32, 1) 250ms backwards;
+  transition: box-shadow 150ms ease, border-color 150ms ease;
+}
+.cc-session-beacon[data-dir="up"] {
+  animation-name: ccBeaconInUp;
+}
+.cc-session-beacon:hover {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--sol-cyan) 16%, transparent),
+    0 4px 20px color-mix(in srgb, var(--sol-cyan) 35%, transparent),
+    0 2px 6px rgba(0, 0, 0, 0.35);
+}
+.cc-session-beacon__arrow {
+  transition: transform 150ms ease;
+}
+.cc-session-beacon[data-dir="up"]:hover .cc-session-beacon__arrow {
+  transform: translateY(-1.5px);
+}
+.cc-session-beacon[data-dir="down"]:hover .cc-session-beacon__arrow {
+  transform: translateY(1.5px);
+}
+/* Quiet breathing dot: marks the pill as pointing at the LIVE open session. */
+.cc-session-beacon__dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--sol-cyan);
+  animation: ccBeaconDot 2s ease-in-out infinite;
+}
+@keyframes ccBeaconDot {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-session-beacon,
+  .cc-session-beacon[data-dir="up"] {
+    animation: schedRosterFade 140ms ease-out 250ms backwards;
+  }
+  .cc-session-beacon__dot {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+
 /* Click feedback on a schedule row (dock roster or bar under a card): a quick
    schedule-orange wash that fades out. The row's resting selected tint is the
    cyan shared with subagent rows, so this pulse is the moment of confirmation
@@ -1167,6 +1230,23 @@ pre[class*="language-"] {
    is the container now. */
 .simple-view [data-sv-feed] [id^="msg-"] .pl-8 {
   padding-left: 0;
+}
+
+/* The gutter handles (.cc-block-quote / .cc-block-comment) hang 1.95rem into
+   the body indent this view just flattened, so the feed scroller clipped them
+   at its padding edge. Straddle the content edge instead: an overhang small
+   enough for the narrowest px-2 column padding, sized down to the compact
+   type. */
+.simple-view .cc-block-quote,
+.simple-view .cc-block-comment {
+  width: 1.2rem;
+  height: 1.15rem;
+}
+.simple-view .cc-block-quote {
+  left: -0.5rem;
+}
+.simple-view .cc-block-comment {
+  right: -0.5rem;
 }
 
 /* Assistant turns sit closer together; the receipt chips go flatter (the

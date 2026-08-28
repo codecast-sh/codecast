@@ -97,7 +97,7 @@ import { parseSessionFile, parseTranscriptFor, extractSlug, extractParentUuid, e
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
-import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, scrubAgentEnv } from "./agentEnv.js";
+import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, scrubAgentEnv } from "./agentEnv.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
 import { getMachineKey } from "./machineKey.js";
 import { markSynced, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
@@ -178,7 +178,7 @@ import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveR
 import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs, OpenTaskKind, OpenTaskReport } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { readThreadStateStamp } from "./stateCommand.js";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
@@ -3756,16 +3756,20 @@ async function executeRemoteCommand(
           error = `No session found for conversation ${conversationId}`;
           break;
         }
-        const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
-        if (!proc) {
-          error = `No running process for session ${sessionId.slice(0, 8)}`;
-          break;
-        }
-        const tmuxTarget = await findTmuxPaneForTty(proc.tty);
-        if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
+        const { tmuxTarget, proc } = await resolveSessionCommandPane(conversationId, sessionId, detectSessionAgentType(sessionId));
+        if (tmuxTarget) {
           await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape", "Escape"]);
           result = "escape_sent";
           log(`[REMOTE] Sent double Escape to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget}`);
+        } else if (!proc) {
+          error = `No running process for session ${sessionId.slice(0, 8)}`;
+        } else if (!MID_TURN_AGENT_STATUSES.has(lastHookStatus.get(sessionId)?.status ?? "")) {
+          // A SIGINT reaching claude at its prompt EXITS the process (observed
+          // 2026-08-28: pid 41092 died on an escape sent to an idle session). The
+          // signal is only an interrupt while a turn is running; otherwise there is
+          // nothing to interrupt and the honest answer is a no-op.
+          result = "escape_no_active_turn";
+          log(`[REMOTE] No active turn to interrupt for session ${sessionId.slice(0, 8)} (no tmux pane, skipping SIGINT)`);
         } else {
           try {
             process.kill(proc.pid, "SIGINT");
@@ -3797,13 +3801,12 @@ async function executeRemoteCommand(
           error = `Rewind not yet supported for ${agentType} sessions`;
           break;
         }
-        const proc = await findSessionProcess(sessionId, agentType);
-        if (!proc) {
+        const { tmuxTarget, proc } = await resolveSessionCommandPane(conversationId, sessionId, agentType);
+        if (!proc && !tmuxTarget) {
           error = `No running process for session ${sessionId.slice(0, 8)}`;
           break;
         }
-        const tmuxTarget = await findTmuxPaneForTty(proc.tty);
-        if (!tmuxTarget || !validateTmuxTarget(tmuxTarget)) {
+        if (!tmuxTarget) {
           error = `No tmux pane found for session ${sessionId.slice(0, 8)}`;
           break;
         }
@@ -3937,13 +3940,12 @@ async function executeRemoteCommand(
           error = `No session found for conversation ${conversationId}`;
           break;
         }
-        const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
-        if (!proc) {
+        const { tmuxTarget, proc } = await resolveSessionCommandPane(conversationId, sessionId, detectSessionAgentType(sessionId));
+        if (!proc && !tmuxTarget) {
           error = `No running process for session ${sessionId.slice(0, 8)}`;
           break;
         }
-        const tmuxTarget = await findTmuxPaneForTty(proc.tty);
-        if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
+        if (tmuxTarget) {
           const groups: string[][] = [];
           for (const k of keyList) {
             if (k === "Escape" || k === "Enter" || (groups.length > 0 && k !== groups[groups.length - 1][0])) {
@@ -9289,6 +9291,28 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
     log(`Error finding Claude session process: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
+}
+
+// Session-control commands (escape / rewind / send_keys) must act on the SAME
+// pane a message injection lands in, so they resolve through the delivery
+// resolver first and only then fall back to the pid -> tty -> pane scan. On
+// 2026-08-28 an escape resolved by the tty scan alone missed the cached pane,
+// fell back to SIGINT on the claude pid, and cancelled the turn a message had
+// started 400ms earlier (the web then showed "hasn't reached the agent").
+async function resolveSessionCommandPane(
+  conversationId: string,
+  sessionId: string,
+  agentType: AgentClientId,
+): Promise<{ tmuxTarget: string | null; proc: ClaudeSessionInfo | null }> {
+  const live = await resolveLiveTmuxTarget(conversationId, sessionId, agentType);
+  if (live.tmuxTarget) {
+    const target = live.tmuxTarget.includes(":") ? live.tmuxTarget : `${live.tmuxTarget}:0.0`;
+    if (validateTmuxTarget(target)) return { tmuxTarget: target, proc: live.proc };
+  }
+  const proc = live.proc ?? (await findSessionProcess(sessionId, agentType));
+  if (!proc) return { tmuxTarget: null, proc: null };
+  const tmuxTarget = await findTmuxPaneForTty(proc.tty);
+  return { tmuxTarget: tmuxTarget && validateTmuxTarget(tmuxTarget) ? tmuxTarget : null, proc };
 }
 
 async function findTmuxPaneForTty(tty: string): Promise<string | null> {
@@ -18599,6 +18623,18 @@ async function main(): Promise<void> {
   // and be seeding every new pane with that session's markers (see
   // AGENT_SCRUBBED_ENV_VARS). Clear them once per boot.
   scrubTmuxGlobalEnv();
+
+  // Settings-level backstop for the same class: pin transcript persistence ON
+  // in ~/.claude/settings.json so even a claude codecast didn't launch keeps
+  // its transcript when a leaked CLAUDE_CODE_CHILD_SESSION reaches it
+  // (agentEnv.ts). Idempotent; respects an authored value.
+  try {
+    if (ensureClaudeSettingsPersistence() === "wrote") {
+      log("[AGENT-ENV] pinned CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 in ~/.claude/settings.json");
+    }
+  } catch (err) {
+    log(`[AGENT-ENV] settings persistence pin failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // Exit guard: respawn with backoff if crash looping.
   // Skip self-respawn when running under launchd (KeepAlive handles restarts).

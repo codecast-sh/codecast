@@ -40,12 +40,15 @@ export const JOINED_MS = 4000;
 
 /** How long a pointer has to REST on a face before it counts as interest.
  *
- *  The same reasoning that keeps the microphone off hover, applied to the room:
- *  a mouse crossing the shell to reach anything at all sweeps six faces, and
- *  each one would mint a token and open an SFU connection. Four hundred
- *  milliseconds is longer than any crossing and shorter than any decision, so
- *  what it selects is a pointer that stopped — which is a person looking at
- *  somebody, and the best warning this side gets. */
+ *  A mouse crossing the shell to reach anything at all sweeps six faces, and
+ *  each one would mint a token, open an SFU connection and open a microphone.
+ *  Four hundred milliseconds is longer than any crossing and shorter than any
+ *  decision, so what it selects is a pointer that stopped — which is a person
+ *  looking at somebody, and the best warning this side gets.
+ *
+ *  It carries more weight than it used to. The prewarm now opens the device as
+ *  well as the connection, so this number is what stands between a mouse
+ *  crossing the screen and the recording indicator coming on. */
 export const PREWARM_DWELL_MS = 400;
 
 /**
@@ -126,10 +129,14 @@ export function faceKeyHandlers(
 ) {
   return {
     ...hold,
-    // NO MICROPHONE HERE, and the ROOM on a delay — the two halves of the same
-    // rule. Arriving on a face says nothing (a pointer crossing the shell
-    // arrives on six of them); resting on one says somebody is looking at a
-    // person, which is enough to pay for a connection but never for a device.
+    // THE DWELL IS WHAT BUYS THE DEVICE. Arriving on a face says nothing — a
+    // pointer crossing the shell arrives on six of them — so nothing happens on
+    // entry. Resting on one says somebody is looking at a person, and that is
+    // now enough for the microphone as well as the connection: the prewarm
+    // publishes it muted so a press is an unmute rather than a publish, which
+    // is the founder's call and the reason the recording indicator can light up
+    // while you hover. Four hundred milliseconds is the whole protection, and
+    // it is why this is a dwell rather than a pointer-enter.
     onPointerEnter: warm ? () => warm.start(PREWARM_DWELL_MS) : undefined,
     onPointerLeave: () => {
       warm?.cancel();

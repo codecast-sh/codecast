@@ -8565,10 +8565,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // -- Teams --
   // Local-first create, the same shape as createBucket: the stub row and the
   // workspace switch happen in one draft, so the switcher and the sidebar show
-  // the new team in the same tick. The server mutation (teams.createTeam)
-  // writes the canonical users.active_team_id, and the dispatch handler writes
-  // the ui mirror with the real id, so both halves agree once the echo lands
-  // (see lib/__tests__/activeTeamPointer.guard.test.ts). The `teams` list is
+  // the new team in the same tick. The pointer holds the stub id only for the
+  // round trip. A stub id is not a server id: every feeder that hands
+  // clientState.ui.active_team_id to Convex as an Id<"teams"> guards it with
+  // isConvexId and skips while the stub is in flight (useWorkspaceArgs,
+  // TeamMembersPump, the team sync hooks); an unguarded pass would throw
+  // ArgumentValidationError and drop that surface into its error boundary.
+  // The server mutation (teams.createTeam) writes the canonical
+  // users.active_team_id, and the dispatch handler rewrites the ui mirror
+  // with the real id, so both halves agree once the echo lands (see
+  // lib/__tests__/activeTeamPointer.guard.test.ts). The `teams` list is
   // replaced wholesale on echo, which retires the stub; resolveTeamStub rekeys
   // it first so a caller holding the real id never sees a gap.
   createTeam: async (opts: { name: string; icon?: string; icon_color?: string }) => {
@@ -8606,6 +8612,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   resolveTeamStub: sync(function (this: Draft, stubId: string, teamId: string) {
     this.teams = (this.teams ?? []).map((t: any) => (t?._id === stubId ? { ...t, _id: teamId } : t));
+    // Conditional: a user who switched workspaces during the round trip keeps
+    // their choice; the mirror only advances stub -> real id.
     if (this.clientState.ui?.active_team_id === stubId) this.clientState.ui.active_team_id = teamId;
   }),
 

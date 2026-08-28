@@ -1,5 +1,6 @@
 import { mutation, query, action, internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createTeamFeedFilter, isTeamAdmin } from "./privacy";
@@ -325,6 +326,8 @@ export const getTeamByInviteCode = query({
     return {
       _id: team._id,
       name: team.name,
+      icon: team.icon,
+      icon_color: team.icon_color,
       memberCount: memberships.length,
       isExpired,
     };
@@ -1053,6 +1056,59 @@ export const createUserFromGithub = internalMutation({
       joined_at: now,
     });
     return userId;
+  },
+});
+
+// internal: removes throwaway teams created by agent test runs. Guarded by a
+// name check so a wrong id cannot delete a real team. Deletes the team row and
+// its memberships, then repoints any user whose team_id / active_team_id
+// referenced a deleted team to a team they still belong to.
+export const cleanupTestTeams = internalMutation({
+  args: { team_ids: v.array(v.id("teams")) },
+  handler: async (ctx, args) => {
+    const deleted: string[] = [];
+    const skipped: string[] = [];
+    const affectedUsers = new Set<string>();
+    for (const teamId of args.team_ids) {
+      const team = await ctx.db.get(teamId);
+      if (!team) continue;
+      if (!/^(flow test|critique round)/i.test(team.name)) {
+        skipped.push(team.name);
+        continue;
+      }
+      const memberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
+        .collect();
+      for (const m of memberships) {
+        affectedUsers.add(m.user_id.toString());
+        await ctx.db.delete(m._id);
+      }
+      await ctx.db.delete(teamId);
+      deleted.push(team.name);
+    }
+    for (const userIdStr of affectedUsers) {
+      const userId = userIdStr as Id<"users">;
+      const user = await ctx.db.get(userId);
+      if (!user) continue;
+      const remaining = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect();
+      const remainingIds = new Set(remaining.map((m) => m.team_id.toString()));
+      const fallback = remaining[0]?.team_id;
+      const patch: Partial<{ team_id: Id<"teams"> | undefined; active_team_id: Id<"teams"> | undefined }> = {};
+      if (user.team_id && !remainingIds.has(user.team_id.toString())) {
+        patch.team_id = fallback;
+      }
+      if (user.active_team_id && !remainingIds.has(user.active_team_id.toString())) {
+        patch.active_team_id = fallback;
+      }
+      if (Object.keys(patch).length > 0) {
+        await ctx.db.patch(userId, patch);
+      }
+    }
+    return { deleted, skipped };
   },
 });
 

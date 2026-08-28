@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { GitBranch, Check, Terminal, Users } from "lucide-react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { formatRelative } from "../../lib/utils";
@@ -8,41 +7,12 @@ import {
   type TeamWorkspaceSuggestions,
   type UserWorkspace,
 } from "../../hooks/useTeamWorkspaceSuggestions";
+import "./teamFlow.css";
 
-/** Initial selection: workspaces teammates already share, plus those already
- *  mapped to this team. Pure so the create flow can reseed after the team id
- *  swaps from a stub to the real row. */
-export function seedWorkspaceSelection(
-  allProjects: UserWorkspace[],
-  suggestedPaths: Set<string>,
-  teamId: Id<"teams"> | null,
-): Record<string, boolean> {
-  const initial: Record<string, boolean> = {};
-  for (const p of allProjects) {
-    initial[p.path] = suggestedPaths.has(p.path) || isMappedToTeam(p, teamId);
-  }
-  return initial;
-}
-
-/** Owns the selected set for a share picker and reseeds it whenever the
- *  suggestion data or the target team changes. */
-export function useWorkspaceSelection(
-  data: Pick<TeamWorkspaceSuggestions, "allProjects" | "suggestedPaths">,
-  teamId: Id<"teams"> | null,
-) {
-  const { allProjects, suggestedPaths } = data;
-  const [selectedPaths, setSelectedPaths] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    if (!allProjects) return;
-    setSelectedPaths(seedWorkspaceSelection(allProjects, suggestedPaths, teamId));
-  }, [allProjects, suggestedPaths, teamId]);
-
-  const toggle = (path: string) =>
-    setSelectedPaths((prev) => ({ ...prev, [path]: !prev[path] }));
-  const selectedCount = Object.values(selectedPaths).filter(Boolean).length;
-  return { selectedPaths, toggle, selectedCount };
-}
+// The selection state (seedWorkspaceSelection, useWorkspaceSelection) lives in
+// hooks/useWorkspaceSelection so this file stays a clean Fast Refresh boundary.
+// Selection follows --team-flow-accent inside the create flow and falls back
+// to cyan elsewhere (see .tf-accent-scope in teamFlow.css).
 
 function workspaceName(path: string) {
   const parts = path.split("/");
@@ -74,7 +44,7 @@ export function WorkspaceSharePicker({
   const common = { selectedPaths, onToggle, getSuggestion, teamId };
 
   return (
-    <div className={`space-y-5 ${className}`}>
+    <div className={`tf-accent-scope space-y-5 ${className}`}>
       {matched.length > 0 && (
         <WorkspaceSection
           title="Shared by teammates"
@@ -87,11 +57,9 @@ export function WorkspaceSharePicker({
       {other.length > 0 && (
         <WorkspaceSection
           title={isNewTeam ? "Your workspaces" : "Your other workspaces"}
-          subtitle={
-            isNewTeam
-              ? "Pick the repos this team works in. Sessions there will show in the team feed."
-              : "Select any additional workspaces you'd like to share."
-          }
+          // In the create flow the page description already says what to pick,
+          // so a subtitle here would repeat the same sentence.
+          subtitle={isNewTeam ? undefined : "Select any additional workspaces you'd like to share."}
           workspaces={other}
           {...common}
         />
@@ -158,7 +126,7 @@ export function WorkspaceSharePicker({
 
           <div className="rounded-lg border border-sol-border/60 bg-sol-bg-alt/50 px-4 py-3 space-y-2">
             <div className="flex items-center gap-2 text-xs font-medium text-sol-text">
-              <Terminal className="w-3.5 h-3.5 text-sol-cyan" />
+              <Terminal className="tf-accent-text w-3.5 h-3.5" />
               Share a repo via CLI
             </div>
             <div className="font-mono text-xs text-sol-base1 bg-sol-bg rounded-md border border-sol-border/50 px-3 py-2 select-all">
@@ -189,7 +157,7 @@ function WorkspaceSection({
   teamId,
 }: {
   title: string;
-  subtitle: string;
+  subtitle?: string;
   workspaces: UserWorkspace[];
   selectedPaths: Record<string, boolean>;
   onToggle: (path: string) => void;
@@ -200,9 +168,9 @@ function WorkspaceSection({
     <div className="space-y-2">
       <div>
         <h3 className="text-sm font-medium text-sol-text">{title}</h3>
-        <p className="text-xs text-sol-text-dim mt-0.5">{subtitle}</p>
+        {subtitle && <p className="text-xs text-sol-text-dim mt-0.5">{subtitle}</p>}
       </div>
-      <div className="space-y-1.5 max-h-[240px] overflow-y-auto pr-0.5">
+      <div className="space-y-1.5 max-h-[320px] overflow-y-auto pr-0.5">
         {workspaces.map((ws) => {
           const selected = !!selectedPaths[ws.path];
           const suggestion = getSuggestion(ws.path);
@@ -212,31 +180,32 @@ function WorkspaceSection({
             <button
               key={ws.path}
               type="button"
+              role="checkbox"
+              aria-checked={selected}
               onClick={() => onToggle(ws.path)}
-              className={`w-full rounded-lg border px-4 py-3 text-left transition-colors ${
-                selected
-                  ? "border-sol-cyan bg-sol-cyan/[0.06]"
-                  : "border-sol-border hover:border-sol-base01 hover:bg-sol-bg-alt/40"
+              data-selected={selected}
+              className={`tf-option w-full rounded-lg border px-4 py-3 text-left outline-none motion-safe:active:scale-[0.99] ${
+                selected ? "" : "border-sol-border hover:border-sol-base01 hover:bg-sol-bg-alt/40"
               }`}
             >
               <div className="flex items-start gap-3">
+                {/* Visual only: aria-checked on the row carries the state. */}
                 <div
-                  className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${
-                    selected
-                      ? "border-sol-cyan bg-sol-cyan text-sol-bg"
-                      : "border-sol-border bg-sol-bg-alt"
+                  aria-hidden="true"
+                  className={`tf-check mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${
+                    selected ? "" : "border-sol-border bg-sol-bg-alt"
                   }`}
                 >
                   {selected && <Check className="w-3 h-3" />}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <GitBranch className="w-4 h-4 text-sol-cyan shrink-0" />
+                    <GitBranch className="tf-accent-text w-4 h-4 shrink-0" />
                     <span className="truncate text-sm font-medium text-sol-text">
                       {workspaceName(ws.path)}
                     </span>
                     {suggestion?.match_type === "github" && (
-                      <span className="rounded border border-sol-cyan/30 bg-sol-cyan/10 px-1.5 py-0.5 text-[10px] text-sol-cyan whitespace-nowrap">
+                      <span className="tf-accent-badge rounded border px-1.5 py-0.5 text-[10px] whitespace-nowrap">
                         GitHub match
                       </span>
                     )}
@@ -251,7 +220,7 @@ function WorkspaceSection({
                   </div>
                   <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-sol-base01">
                     {suggestion && (
-                      <span className="text-sol-cyan">
+                      <span className="tf-accent-text">
                         <Users className="w-3 h-3 inline mr-1" />
                         {suggestion.match_reason}
                       </span>

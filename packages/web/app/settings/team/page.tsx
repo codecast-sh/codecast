@@ -17,7 +17,7 @@ import {
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../../../store/inboxStore";
 import { TEAM_ICONS, TEAM_COLORS, type TeamIconName, type TeamColorName } from "../../../components/TeamIcon";
-import { TeamIdentityPicker } from "../../../components/team/TeamIdentityPicker";
+import { TeamIdentityPicker, type TeamIdentity } from "../../../components/team/TeamIdentityPicker";
 import { TeamTaskStatusEditor } from "../../../components/settings/TeamTaskStatusEditor";
 import { TeamFeaturesEditor } from "../../../components/settings/TeamFeaturesEditor";
 import { ChevronDown } from "lucide-react";
@@ -75,9 +75,18 @@ export default function TeamPage() {
     }
   };
 
-  const handleIdentityChange = async (next: { icon: TeamIconName; color: TeamColorName }) => {
+  const identity: TeamIdentity = {
+    icon: (TEAM_ICONS as readonly string[]).includes(team?.icon ?? "") ? (team!.icon as TeamIconName) : TEAM_ICONS[0],
+    color: (TEAM_COLORS as readonly string[]).includes(team?.icon_color ?? "") ? (team!.icon_color as TeamColorName) : TEAM_COLORS[0],
+  };
+
+  const handleIdentityChange = async (next: TeamIdentity) => {
     if (!effectiveTeamId || isSavingIcon) return;
-    const patch = next.icon !== team?.icon ? { icon: next.icon } : { icon_color: next.color };
+    const patch = {
+      ...(next.icon !== identity.icon ? { icon: next.icon } : {}),
+      ...(next.color !== identity.color ? { icon_color: next.color } : {}),
+    };
+    if (!Object.keys(patch).length) return;
     setIsSavingIcon(true);
     try {
       await updateTeamIcon({ team_id: effectiveTeamId, ...patch });
@@ -249,10 +258,7 @@ export default function TeamPage() {
               <div className="flex-1">
                 <div className="text-xs text-sol-base1 uppercase tracking-wider mb-2">Team Icon</div>
                 <TeamIdentityPicker
-                  value={{
-                    icon: (TEAM_ICONS as readonly string[]).includes(team.icon ?? "") ? (team.icon as TeamIconName) : TEAM_ICONS[0],
-                    color: (TEAM_COLORS as readonly string[]).includes(team.icon_color ?? "") ? (team.icon_color as TeamColorName) : TEAM_COLORS[0],
-                  }}
+                  value={identity}
                   onChange={handleIdentityChange}
                   previewName={team.name}
                   disabled={isSavingIcon}

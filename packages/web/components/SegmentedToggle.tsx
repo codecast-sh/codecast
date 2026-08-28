@@ -114,7 +114,7 @@ function SegmentedDropdown({
         <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0 cq-caret" />
       </button>
       {open && (
-        <div className="absolute top-full right-0 mt-1 w-44 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1">
+        <div className="absolute top-full right-0 mt-1 w-44 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1">
           {items.map((it) => {
             const Icon = it.icon;
             return (
