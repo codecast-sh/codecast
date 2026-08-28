@@ -42,6 +42,7 @@ export type ShortcutAction =
   | 'search.open'
   | 'chat.search'
   | 'chat.pushToTalk'
+  | 'people.wall'
   | 'palette.toggle'
   | 'zoom.in'
   | 'zoom.out'
@@ -179,6 +180,15 @@ export const SHORTCUTS: ShortcutDef[] = [
   // anything that survives a text box must be impossible to type.
   { key: 'ctrl+shift+space', action: 'chat.pushToTalk', when: 'chat.dm', skipInputCheck: true, description: 'Hold to talk in this DM' },
   { key: 'meta+k', action: 'palette.toggle', skipInputCheck: true, description: 'Toggle command palette' },
+  // THE TEAM, FROM ANYWHERE. The wall answers "who is around, and can I just
+  // ask them?" — a question people have in the middle of something else, so it
+  // costs one chord from wherever they are rather than a trip to a window.
+  //
+  // Cmd+Shift+P, and the same chord off mac, which is why it reads `meta` with
+  // no variant: Ctrl+Shift+P is already Pin/unpin session, and a second def on
+  // that combo would lose the race to it forever. Same choice the palette makes
+  // one line above (meta+k, no ctrl variant).
+  { key: 'meta+shift+p', action: 'people.wall', skipInputCheck: true, description: 'The team' },
 
   { key: 'meta+=', action: 'zoom.in', when: 'desktop', skipInputCheck: true, worksInModal: true, description: 'Zoom in' },
   { key: 'meta++', action: 'zoom.in', when: 'desktop', skipInputCheck: true, worksInModal: true, description: 'Zoom in' },
