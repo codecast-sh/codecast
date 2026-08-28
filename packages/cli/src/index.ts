@@ -88,6 +88,7 @@ import { SyncService } from "./syncService.js";
 import { resolveLocalProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
 import { runDoctor } from "./doctor.js";
 import { deviceId, deviceLabel } from "./remote/device.js";
+import { agentBinaryFromPsRow } from "./sessionProcessMatcher.js";
 import {
   buildDaemonLauncherScript,
   buildDaemonPlistXml,
@@ -265,12 +266,11 @@ function findCurrentSessionFromProcess(projectRoot: string): string | null {
 
         if (debug) console.error(`[DEBUG] PID ${pid}: comm=${comm} args=${args.slice(0, 60)}...`);
 
-        const bin = comm.split("/").pop() || "";
-        // Every registry client's binary counts as a host-agent process — a
-        // hand-rolled list here silently excluded pi and grok (and matched
-        // gemini by the wrong name). "gemini-cli" stays as a legacy alias for
-        // installs whose ps comm still reports it.
-        if (Object.values(AGENT_CLIENTS).some((d) => d.binary === bin) || bin === "gemini-cli") {
+        // Named from argv, not comm: macOS clips comm to 16 chars on this
+        // multi-column row, so a long install path never matched (see
+        // agentBinaryFromPsRow). Every registry client's binary counts.
+        const bin = agentBinaryFromPsRow(comm, args);
+        if (bin) {
           claudePid = pid;
           claudeArgs = args;
           if (debug) console.error(`[DEBUG] Found ${bin} at PID ${pid}`);
@@ -388,8 +388,30 @@ function findCurrentSessionFromProcess(projectRoot: string): string | null {
   }
 }
 
+// The session uuid the calling shell was handed by its own agent: Claude Code
+// exports CLAUDE_CODE_SESSION_ID to every Bash child, codex CODEX_SESSION_ID,
+// and the `cast claude` wrapper CODECAST_SESSION_ID. This is the one witness
+// that survives tmux, nested shells and a clipped process table, so every
+// "which session am I" read starts here and falls back to the process walk.
+function sessionIdFromEnv(): string | null {
+  return (
+    process.env.CLAUDE_CODE_SESSION_ID ||
+    process.env.CODEX_SESSION_ID ||
+    process.env.CODECAST_SESSION_ID ||
+    process.env.CODECAST_MANAGED_SESSION ||
+    null
+  );
+}
+
+/** The calling agent's own session uuid — env first, then the process walk.
+ *  No guessing: unlike detectCurrentSessionId this never picks "the one
+ *  recently active session file", so a stamp made from it is always true. */
+function ownSessionId(projectRoot: string): string | null {
+  return sessionIdFromEnv() || findCurrentSessionFromProcess(projectRoot);
+}
+
 function detectCurrentSessionId(): string | null {
-  const envId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+  const envId = sessionIdFromEnv();
   if (envId) return envId;
 
   try {
@@ -12274,7 +12296,7 @@ trigger
     //     detection (resolved server-side, own sessions only); --spawn skips
     //     the binding so each run spawns a fresh agent, linked back to the
     //     trigger via agent_task_id (the strip at the top of the session).
-    const creatorSessionUuid = findCurrentSessionFromProcess(getRealCwd());
+    const creatorSessionUuid = ownSessionId(getRealCwd());
     const sessionId = options.for || options.spawn ? null : creatorSessionUuid;
     if (sessionId) {
       try {
@@ -12482,7 +12504,7 @@ trigger
     // session from the process tree (covers manual `cast trigger complete`).
     const runSessionUuid =
       process.env.CODECAST_RUN_SESSION_UUID ||
-      findCurrentSessionFromProcess(getRealCwd()) ||
+      ownSessionId(getRealCwd()) ||
       undefined;
 
     try {
