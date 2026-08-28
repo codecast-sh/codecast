@@ -1,0 +1,106 @@
+/* Create and join team flow. The chosen crest color is the surface accent
+   through --team-flow-accent, set on the shell root from the color token. */
+
+.tf-root {
+  --team-flow-accent: var(--sol-cyan);
+}
+
+/* Staggered reveal on first paint and on each step change. --tf-i is the
+   item's order; motion stays under 300ms per item. */
+.tf-reveal {
+  animation: tf-rise 280ms cubic-bezier(0.23, 1, 0.32, 1) both;
+  animation-delay: calc(var(--tf-i, 0) * 45ms);
+}
+
+@keyframes tf-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The accent primary action. The solarized accents are mid tones: raw accent
+   as a background fails WCAG AA (4.5:1) for 14px text against BOTH --sol-bg
+   values, whichever text color you pick. So the accent carries the surface
+   (tint + border) and the label stays --sol-text, which keeps contrast high
+   in both themes for all seven team colors. */
+.tf-primary {
+  background: color-mix(in srgb, var(--team-flow-accent) 18%, var(--sol-bg-alt));
+  border: 1px solid color-mix(in srgb, var(--team-flow-accent) 60%, transparent);
+  color: var(--sol-text);
+  transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1), background-color 160ms ease, border-color 160ms ease;
+}
+.tf-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--team-flow-accent) 30%, var(--sol-bg-alt));
+  border-color: var(--team-flow-accent);
+}
+.tf-primary:not(:disabled):active {
+  transform: scale(0.97);
+}
+.tf-primary:focus-visible {
+  outline: 2px solid var(--team-flow-accent);
+  outline-offset: 2px;
+}
+
+.tf-ghost {
+  transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1), background-color 160ms ease, color 160ms ease;
+}
+.tf-ghost:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+/* Rail step marker. The active one takes the accent; done ones keep a tint. */
+.tf-marker {
+  transition: background-color 200ms ease, color 200ms ease, box-shadow 200ms ease;
+}
+/* Same contrast rule as .tf-primary: accent tint + ring, --sol-text numeral,
+   so the 11px number stays readable for every team color in both themes. */
+.tf-marker[data-state="active"] {
+  background: color-mix(in srgb, var(--team-flow-accent) 22%, var(--sol-bg-alt));
+  color: var(--sol-text);
+  box-shadow:
+    inset 0 0 0 1px var(--team-flow-accent),
+    0 0 0 4px color-mix(in srgb, var(--team-flow-accent) 22%, transparent);
+}
+.tf-marker[data-state="done"] {
+  background: color-mix(in srgb, var(--team-flow-accent) 18%, transparent);
+  /* Toward --sol-text so the check clears 3:1 (non-text) on the tint. */
+  color: color-mix(in srgb, var(--team-flow-accent) 55%, var(--sol-text));
+}
+
+/* The connector between steps fills to the current step. */
+.tf-connector {
+  background: var(--sol-border);
+}
+.tf-connector[data-done="true"] {
+  background: var(--team-flow-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tf-reveal {
+    animation: tf-fade 180ms ease both;
+    animation-delay: 0ms;
+  }
+  @keyframes tf-fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  .tf-primary,
+  .tf-ghost,
+  .tf-marker,
+  .tf-connector {
+    transition: none;
+  }
+  .tf-primary:not(:disabled):active,
+  .tf-ghost:not(:disabled):active {
+    transform: none;
+  }
+}

@@ -16,6 +16,11 @@ import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
 import { isTrustedImageSrc } from '@/lib/convex';
 import { parseInboundSessionMessage, isScheduledTaskMessage, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
+import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallbackFromLoaded, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
+import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
+import { MessageNavigatorSheet } from '@/components/session/MessageNavigatorSheet';
+import { MessageTickRail, MessageListButton } from '@/components/session/MessageTickRail';
+import { StickyPromptBanner, type StickyPrompt } from '@/components/session/StickyPromptBanner';
 import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
 import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { PermissionCard } from '@/components/PermissionCard';
@@ -3467,7 +3472,17 @@ export default function SessionDetailScreen() {
   const isNearBottomRef = useRef(true);
   const prevMessageIdsRef = useRef<Set<string>>(new Set());
   const openedAtLastMessageTsRef = useRef<number | null>(null);
-  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(highlightMessageParam || null);
+  // Visual 3s highlight on a message row. Separate from pendingScrollId: the
+  // highlight is paint only, the pending id is a scroll that still owes.
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  // A message the list still has to scroll to once it is in the loaded window
+  // (deep link ?message= or a navigator jump outside the window).
+  const [pendingScrollId, setPendingScrollId] = useState<string | null>(highlightMessageParam || null);
+  // Message navigator (sheet + tick rail) and sticky prompt banner state.
+  const [navSheetVisible, setNavSheetVisible] = useState(false);
+  const [stickyActive, setStickyActive] = useState<{ id: string; hidden: boolean } | null>(null);
+  const [stickyBannerHeight, setStickyBannerHeight] = useState(0);
+  const [dismissedStickyId, setDismissedStickyId] = useState<string | null>(null);
   const [jumpingToStart, setJumpingToStart] = useState(false);
   const [jumpingToEnd, setJumpingToEnd] = useState(false);
   const [floatingHeaderHeight, setFloatingHeaderHeight] = useState(52);
@@ -3496,6 +3511,7 @@ export default function SessionDetailScreen() {
     loadOlder: hookLoadOlder,
     jumpToStart: hookJumpToStart,
     jumpToEnd: hookJumpToEnd,
+    jumpToTimestamp: hookJumpToTimestamp,
   } = useConversationMessages(id as string, highlightMessageParam || undefined);
 
   const conversation = (storeConversation as ConversationData | null)
@@ -3871,40 +3887,205 @@ export default function SessionDetailScreen() {
 
   useEffect(() => { setCurrentMatchIndex(0); }, [searchQuery]);
 
-  useEffect(() => {
-    if (highlightedMessageId && allMessages.length > 0) {
-      const idx = allMessages.findIndex(m => m._id === highlightedMessageId);
-      if (idx >= 0) {
-        const invertedIdx = allMessages.length - 1 - idx;
-        setTimeout(() => {
-          flatListRef.current?.scrollToIndex({ index: invertedIdx, animated: true, viewPosition: 0.3 });
-        }, 500);
-        setTimeout(() => setHighlightedMessageId(null), 3000);
-      }
+  // Ref twin of allMessages so the stable jump/scroll callbacks and the
+  // FlatList viewability handler (which must never change identity) read the
+  // current list without re-creating per render.
+  const allMessagesRef = useRef(allMessages);
+  allMessagesRef.current = allMessages;
+
+  // Scroll the inverted list to a message already in the loaded window.
+  // Returns false when the message is not loaded.
+  const scrollToLoadedMessage = useCallback((messageId: string): boolean => {
+    const msgs = allMessagesRef.current;
+    const idx = msgs.findIndex(m => m._id === messageId);
+    if (idx < 0) return false;
+    const invertedIdx = msgs.length - 1 - idx;
+    flatListRef.current?.scrollToIndex({ index: invertedIdx, animated: true, viewPosition: 0.3 });
+    return true;
+  }, []);
+
+  // Light the 3s row highlight, releasing it only if it is still ours.
+  const flashHighlight = useCallback((messageId: string) => {
+    setHighlightedMessageId(messageId);
+    setTimeout(() => setHighlightedMessageId(cur => (cur === messageId ? null : cur)), 3000);
+  }, []);
+
+  // Jump to any message. In the loaded window: scroll (viewPosition 0.3) and
+  // highlight for 3s. Outside it: ask the hook for a window around the target's
+  // timestamp — jumpToTimestamp resets the hook's target latch, so a SECOND
+  // out-of-window jump (or one after a ?message= deep link) still moves the
+  // window; setParams alone would be ignored once the first target loaded. The
+  // param is still set so the URL carries the target. The pending scroll effect
+  // below finishes the jump when the window lands.
+  const jumpToMessage = useCallback((messageId: string) => {
+    if (scrollToLoadedMessage(messageId)) {
+      flashHighlight(messageId);
+      return;
     }
-  }, [highlightedMessageId, allMessages.length]);
+    setPendingScrollId(messageId);
+    const target = useInboxStore.getState().userMessages[id as string]?.find(m => m._id === messageId);
+    if (target) hookJumpToTimestamp(target.timestamp);
+    router.setParams({ message: messageId });
+  }, [scrollToLoadedMessage, flashHighlight, router, id, hookJumpToTimestamp]);
+
+  // A ?message= param set after mount (a jump outside the loaded window, or an
+  // external deep link) owes the same scroll as the one the screen opened with.
+  useEffect(() => {
+    if (highlightMessageParam) setPendingScrollId(highlightMessageParam);
+  }, [highlightMessageParam]);
+
+  // Deep links and jumps outside the window settle here: once the target is
+  // in the loaded window, scroll to it (the 500ms delay lets the inverted list
+  // lay out the fresh window first) and light the highlight.
+  useEffect(() => {
+    if (!pendingScrollId || allMessages.length === 0) return;
+    if (!allMessages.some(m => m._id === pendingScrollId)) return;
+    const target = pendingScrollId;
+    setPendingScrollId(null);
+    setTimeout(() => scrollToLoadedMessage(target), 500);
+    flashHighlight(target);
+    // Depend on the ARRAY, not its length: a jump between two 50+50 target
+    // windows can land a new window of identical length, and the body is a
+    // cheap .some().
+  }, [pendingScrollId, allMessages, scrollToLoadedMessage, flashHighlight]);
 
   const goToNextMatch = useCallback(() => {
     if (searchMatchList.length === 0) return;
     const nextIndex = (currentMatchIndex + 1) % searchMatchList.length;
     setCurrentMatchIndex(nextIndex);
-    const idx = allMessages.findIndex(m => m._id === searchMatchList[nextIndex]);
-    if (idx >= 0) {
-      const invertedIdx = allMessages.length - 1 - idx;
-      flatListRef.current?.scrollToIndex({ index: invertedIdx, animated: true, viewPosition: 0.3 });
-    }
-  }, [searchMatchList, currentMatchIndex, allMessages]);
+    scrollToLoadedMessage(searchMatchList[nextIndex]);
+  }, [searchMatchList, currentMatchIndex, scrollToLoadedMessage]);
 
   const goToPrevMatch = useCallback(() => {
     if (searchMatchList.length === 0) return;
     const prevIndex = currentMatchIndex === 0 ? searchMatchList.length - 1 : currentMatchIndex - 1;
     setCurrentMatchIndex(prevIndex);
-    const idx = allMessages.findIndex(m => m._id === searchMatchList[prevIndex]);
-    if (idx >= 0) {
-      const invertedIdx = allMessages.length - 1 - idx;
-      flatListRef.current?.scrollToIndex({ index: invertedIdx, animated: true, viewPosition: 0.3 });
+    scrollToLoadedMessage(searchMatchList[prevIndex]);
+  }, [searchMatchList, currentMatchIndex, scrollToLoadedMessage]);
+
+  // =============================================
+  // Message navigator (sheet + tick rail) + sticky prompt banner
+  // =============================================
+  // The complete user message list, independent of the paginated window. The
+  // shared useConversationMessages hook keeps it in the store — the same feed
+  // the web navigator reads. setUserMessages drops syncs that change nothing,
+  // so this array ref is stable and safe to memo on.
+  const navSourceMessages = useInboxStore(s => s.userMessages[id as string]);
+
+  // Comment counts per message, the same enrichment the web popover shows.
+  // Plain useQuery gated on isReal, matching every other enrichment query on
+  // this screen; rows render without counts until it lands.
+  const commentSummary = useQuery(
+    api.comments.getConversationCommentSummary,
+    isReal ? { conversation_id: id as Id<"conversations"> } : "skip"
+  );
+  const commentCountsByMessage = useMemo(() => countCommentsByMessage(commentSummary), [commentSummary]);
+
+  const navigatorRows = useMemo(
+    () => buildNavigatorRows(navSourceMessages ?? [], commentCountsByMessage, resolveSessionTitle),
+    [navSourceMessages, commentCountsByMessage],
+  );
+  const navRowById = useMemo(() => {
+    const map = new Map<string, NavigatorRow>();
+    for (const r of navigatorRows) map.set(r._id, r);
+    return map;
+  }, [navigatorRows]);
+  const promptCount = useMemo(
+    () => navigatorRows.reduce((n, r) => (r.kind === 'user' ? n + 1 : n), 0),
+    [navigatorRows],
+  );
+
+  // Indices (original order, LOADED window) of prompts the sticky banner may
+  // show.
+  const stickyIndices = useMemo(() => {
+    const indices: number[] = [];
+    for (let i = 0; i < allMessages.length; i++) {
+      const m = allMessages[i];
+      if (m.role === 'user' && m.content && isStickyEligible(m.content)) indices.push(i);
     }
-  }, [searchMatchList, currentMatchIndex, allMessages]);
+    return indices;
+  }, [allMessages]);
+  const stickyIndicesRef = useRef(stickyIndices);
+  stickyIndicesRef.current = stickyIndices;
+
+  // The latest prompt ABOVE the loaded window, for when the reader scrolled
+  // past every loaded prompt (web's serverStickyFallback).
+  const stickyFallback = useMemo(() => {
+    if (!hasMoreAbove) return null;
+    return pickStickyFallbackFromLoaded(navSourceMessages, allMessages);
+  }, [hasMoreAbove, allMessages, navSourceMessages]);
+
+  // Viewability drives the active sticky prompt. The handler and its config
+  // must keep ONE identity for the FlatList's lifetime, so the handler reads
+  // everything through refs and sets state only when the resolved active
+  // prompt (or whether its row is on screen) actually changes — scrolling
+  // inside one prompt's output costs no re-render.
+  const stickyActiveRef = useRef<{ id: string; hidden: boolean } | null>(null);
+  // Coverage of the VIEWPORT, not the item: a single agent output taller than
+  // the screen would never reach an item-percent threshold and the banner
+  // would vanish mid-read. Any visible pixel counts.
+  const stickyViewabilityConfig = useRef({ viewAreaCoveragePercentThreshold: 0, minimumViewTime: 32 }).current;
+  const handleViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: Array<{ index: number | null }> }) => {
+    const msgs = allMessagesRef.current;
+    const total = msgs.length;
+    let maxInvertedIdx = -1;
+    const visibleOriginal = new Set<number>();
+    for (const v of viewableItems) {
+      if (v.index == null) continue;
+      if (v.index > maxInvertedIdx) maxInvertedIdx = v.index;
+      visibleOriginal.add(total - 1 - v.index);
+    }
+    // Inverted list: the LARGEST inverted index is the topmost visible row.
+    const topVisibleIndex = maxInvertedIdx >= 0 ? total - 1 - maxInvertedIdx : -1;
+    const resolved = topVisibleIndex >= 0
+      ? resolveStickyPrompt(stickyIndicesRef.current, topVisibleIndex, visibleOriginal)
+      : null;
+    const next = resolved ? { id: msgs[resolved.index]._id, hidden: resolved.hidden } : null;
+    const prev = stickyActiveRef.current;
+    if (prev?.id === next?.id && prev?.hidden === next?.hidden) return;
+    stickyActiveRef.current = next;
+    setStickyActive(next);
+  }).current;
+
+  // Active prompt: the resolution inside the window when one lands, else the prompt
+  // above the loaded window. Also the navigator's current row.
+  const activeStickyId = stickyActive?.id ?? stickyFallback?.id ?? null;
+
+  const stickyPrompt = useMemo<StickyPrompt | null>(() => {
+    if (!userScrolled || promptCount < 2) return null;
+    if (stickyActive?.hidden) return null; // the prompt row itself is on screen
+    if (!activeStickyId || activeStickyId === dismissedStickyId) return null;
+    const row = navRowById.get(activeStickyId);
+    if (!row || row.kind !== 'user') return null;
+    return { id: row._id, ordinal: row.originalIndex + 1, text: row.display };
+  }, [userScrolled, promptCount, stickyActive, activeStickyId, dismissedStickyId, navRowById]);
+
+  const navTicks = useMemo(() => {
+    const activeIndex = activeStickyId ? navigatorRows.findIndex(r => r._id === activeStickyId) : -1;
+    return sampleTicks(navigatorRows, 24, activeIndex);
+  }, [navigatorRows, activeStickyId]);
+
+  const openNavigatorSheet = useCallback(() => setNavSheetVisible(true), []);
+  const closeNavigatorSheet = useCallback(() => setNavSheetVisible(false), []);
+
+  // Rail scrub: light the scrubbed prompt's row while the finger moves (paint
+  // only, no scroll); release jumps, and the jump owns the highlight from
+  // then on (the rail's trailing onScrub(null) must not clear it).
+  const scrubHighlightRef = useRef<string | null>(null);
+  const handleRailScrub = useCallback((messageId: string | null) => {
+    if (messageId) {
+      scrubHighlightRef.current = messageId;
+      setHighlightedMessageId(messageId);
+      return;
+    }
+    const last = scrubHighlightRef.current;
+    scrubHighlightRef.current = null;
+    if (last) setHighlightedMessageId(cur => (cur === last ? null : cur));
+  }, []);
+  const handleRailScrubEnd = useCallback((messageId: string) => {
+    scrubHighlightRef.current = null;
+    jumpToMessage(messageId);
+  }, [jumpToMessage]);
 
   const latestUsage = useMemo(() => {
     if (id === DESIGN_MOCK_ID) return { inputTokens: 0, outputTokens: 0, cacheCreation: 0, cacheRead: 0, contextSize: 124000 };
@@ -4019,6 +4200,7 @@ export default function SessionDetailScreen() {
     options.push(conversation?.is_favorite ? 'Unfavorite' : 'Favorite');
     options.push('Share');
     options.push('Search');
+    options.push('Messages');
     options.push('Copy');
     if (conversation?.session_id) options.push('Copy Resume Command');
     if (conversation && isConvexId(conversation._id)) {
@@ -4049,6 +4231,7 @@ export default function SessionDetailScreen() {
           if (label === 'Favorite' || label === 'Unfavorite') handleToggleFavorite();
           else if (label === 'Share') handleShareConversation();
           else if (label === 'Search') setSearchVisible(v => !v);
+          else if (label === 'Messages') setNavSheetVisible(true);
           else if (label === 'Copy') handleCopyMenu();
           else if (label === 'Copy Resume Command') handleCopyResume();
           else if (label === 'Restart Session') restartSession();
@@ -4069,6 +4252,7 @@ export default function SessionDetailScreen() {
           if (label === 'Favorite' || label === 'Unfavorite') handleToggleFavorite();
           else if (label === 'Share') handleShareConversation();
           else if (label === 'Search') setSearchVisible(v => !v);
+          else if (label === 'Messages') setNavSheetVisible(true);
           else if (label === 'Copy') handleCopyMenu();
           else if (label === 'Copy Resume Command') handleCopyResume();
           else if (label === 'Restart Session') restartSession();
@@ -4128,6 +4312,11 @@ export default function SessionDetailScreen() {
     prevMessageIdsRef.current = new Set();
     openedAtLastMessageTsRef.current = null;
     lastScrollYRef.current = 0;
+    setNavSheetVisible(false);
+    stickyActiveRef.current = null;
+    setStickyActive(null);
+    setStickyBannerHeight(0);
+    setDismissedStickyId(null);
     floatingHeaderOffsetRef.current = 0;
     floatingHeaderY.setValue(0);
     floatingHeaderOpacity.setValue(1);
@@ -4382,6 +4571,9 @@ export default function SessionDetailScreen() {
               <Feather name="image" size={17} color={Theme.textMuted} />
             </TouchableOpacity>
           )}
+          {navigatorRows.length > 0 && (
+            <MessageListButton count={promptCount} onPress={openNavigatorSheet} />
+          )}
           <TouchableOpacity onPress={handleMoreActions} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 4, right: 12 }} activeOpacity={0.6}>
             <Feather name="more-horizontal" size={18} color={Theme.textMuted} />
           </TouchableOpacity>
@@ -4543,9 +4735,19 @@ export default function SessionDetailScreen() {
             floating metadata strip (both headers are absolute, so in-flow
             content would render UNDER them). Same anchor as the message nav
             pill; box-none so the empty width doesn't eat list scrolls. */}
+        {/* Sticky prompt pill at the overlay anchor; the handoff strip below
+            stacks under it (its top grows by the pill's reported height). */}
+        <StickyPromptBanner
+          prompt={stickyPrompt}
+          top={insets.top + HEADER_BAR_HEIGHT + floatingHeaderHeight}
+          translateY={floatingHeaderY}
+          onJump={jumpToMessage}
+          onDismiss={setDismissedStickyId}
+          onHeight={setStickyBannerHeight}
+        />
         <RNView
           pointerEvents="box-none"
-          style={{ position: 'absolute', top: insets.top + HEADER_BAR_HEIGHT + floatingHeaderHeight, left: 0, right: 0, zIndex: 55 }}
+          style={{ position: 'absolute', top: insets.top + HEADER_BAR_HEIGHT + floatingHeaderHeight + stickyBannerHeight, left: 0, right: 0, zIndex: 55 }}
         >
           <AssignedToYouBanner conversationId={isConvexId(conversation._id) ? conversation._id : null} />
         </RNView>
@@ -4568,7 +4770,9 @@ export default function SessionDetailScreen() {
           ListHeaderComponent={null}
           ListFooterComponent={
             <>
-              <RNView style={{ height: insets.top + HEADER_BAR_HEIGHT + floatingHeaderHeight }} />
+              {/* Header clearance grows by the sticky pill's height so the
+                  topmost content is not hidden under it. */}
+              <RNView style={{ height: insets.top + HEADER_BAR_HEIGHT + floatingHeaderHeight + stickyBannerHeight }} />
               {hasMoreAbove && allMessages.length > 0 && (
                 <RNView style={styles.loadMoreIndicator}>
                   {loadingOlder ? (
@@ -4763,17 +4967,35 @@ export default function SessionDetailScreen() {
           }
           showsVerticalScrollIndicator={false}
           onScrollToIndexFailed={(info) => {
+            // Retry with the SAME viewPosition the jump asked for (0.3), so a
+            // jump in a long list lands where one in a short list does. Guard
+            // the retry against the window swapping under it (a jump can shrink
+            // the list to a 50-row target window); a stale index would make
+            // scrollToIndex THROW, not fail — the pending scroll effect owns
+            // the landing in that case.
             setTimeout(() => {
+              if (info.index >= allMessagesRef.current.length) return;
               flatListRef.current?.scrollToIndex({
                 index: info.index,
                 animated: false,
-                viewPosition: 1,
+                viewPosition: 0.3,
               });
             }, 200);
           }}
           onScroll={handleScroll}
           scrollEventThrottle={16}
+          onViewableItemsChanged={handleViewableItemsChanged}
+          viewabilityConfig={stickyViewabilityConfig}
           /* maintainVisibleContentPosition removed - was causing blank screen by fighting scroll offset */
+        />
+        <MessageTickRail
+          ticks={navTicks}
+          promptCount={promptCount}
+          activeMessageId={activeStickyId}
+          visible={userScrolled}
+          onOpen={openNavigatorSheet}
+          onScrub={handleRailScrub}
+          onScrubEnd={handleRailScrubEnd}
         />
 
         <RNView>
@@ -4787,7 +5009,9 @@ export default function SessionDetailScreen() {
 
         {/* Jump arrows */}
         <RNView style={styles.jumpButtonsOverlay} pointerEvents="box-none">
-          {allMessages.length > 150 && userScrolled && (
+          {/* The tick rail carries the position signal when it renders; only a
+              thread with no rail (fewer than 2 ticks) keeps the old track. */}
+          {allMessages.length > 150 && userScrolled && navTicks.length < 2 && (
             <RNView style={styles.scrollProgressTrackWrap}>
               <RNView style={styles.scrollProgressTrack}>
                 <Animated.View style={[styles.scrollProgressFill, {
@@ -4801,10 +5025,15 @@ export default function SessionDetailScreen() {
           )}
           {((!isNearTop && allMessages.length > 0) || hasMoreAbove) && (
             <Animated.View
+              // box-none: this wrap spans the full width at the sticky pill's
+              // anchor; without it the invisible strip swallows the pill's taps.
+              // The button also stacks BELOW the pill (stickyBannerHeight), or
+              // it would sit dead center on the pill and eat its taps/swipes.
+              pointerEvents="box-none"
               style={[
                 styles.jumpTopButtonWrap,
                 {
-                  top: insets.top + HEADER_BAR_HEIGHT + floatingHeaderHeight + 4,
+                  top: insets.top + HEADER_BAR_HEIGHT + floatingHeaderHeight + stickyBannerHeight + 4,
                   transform: [{ translateY: floatingHeaderY }],
                 },
               ]}
@@ -4825,7 +5054,7 @@ export default function SessionDetailScreen() {
             </Animated.View>
           )}
           {userScrolled && (
-            <RNView style={styles.jumpBottomButtonWrap}>
+            <RNView style={styles.jumpBottomButtonWrap} pointerEvents="box-none">
               <TouchableOpacity
                 onPress={handleJumpToEnd}
                 style={styles.jumpButton}
@@ -4867,6 +5096,13 @@ export default function SessionDetailScreen() {
           </TouchableOpacity>
         </RNView>
       )}
+      <MessageNavigatorSheet
+        visible={navSheetVisible}
+        onClose={closeNavigatorSheet}
+        rows={navigatorRows}
+        currentMessageId={activeStickyId}
+        onSelect={jumpToMessage}
+      />
       <Modal visible={treeModalVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setTreeModalVisible(false)}>
         <RNView style={styles.treeModal}>
           <RNView style={styles.treeModalHeader}>

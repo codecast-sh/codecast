@@ -14,7 +14,8 @@ import {
 import { Button } from "./ui/button";
 import { TeamIcon } from "./TeamIcon";
 import { VisibilityPicker, type TeamVisibility } from "./team/VisibilityPicker";
-import { WorkspaceSharePicker, useWorkspaceSelection } from "./team/WorkspaceSharePicker";
+import { WorkspaceSharePicker } from "./team/WorkspaceSharePicker";
+import { useWorkspaceSelection } from "../hooks/useWorkspaceSelection";
 import { useTeamWorkspaceSuggestions } from "../hooks/useTeamWorkspaceSuggestions";
 import { useSaveTeamSetup } from "../lib/team/saveTeamSetup";
 

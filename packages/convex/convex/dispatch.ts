@@ -1146,7 +1146,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // Local-first team create (inboxStore.createTeam). The mutation writes the
   // canonical users.active_team_id; the ui mirror patched above carried the
   // client's stub id, so rewrite it with the real id in the same transaction.
-  createTeam: async (ctx, userId, [, opts]: [string, { name: string; icon?: string; icon_color?: string }]) => {
+  dispatchCreateTeam: async (ctx, userId, [, opts]: [string, { name: string; icon?: string; icon_color?: string }]) => {
     const teamId = await (ctx as any).runMutation(api.teams.createTeam, {
       name: opts.name,
       icon: opts.icon,
