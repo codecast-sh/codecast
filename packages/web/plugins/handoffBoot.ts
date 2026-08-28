@@ -38,7 +38,7 @@ export function handoffBootPlugin(): Plugin {
       order: "post",
       async handler(_html, ctx) {
         const source = path.resolve(config.root, GATE_SOURCE);
-        const preload = ctx.bundle ? bootChunkUrls(ctx.bundle, ctx.chunk, config.base) : [];
+        const preload = ctx.bundle ? bootChunkUrls(ctx.bundle, ctx.chunk, config.base) : { app: [], share: [] };
         const gate = await fs.readFile(source, "utf8");
         const { code } = await transformWithEsbuild(gate, source, {
           format: "iife",
@@ -51,7 +51,7 @@ export function handoffBootPlugin(): Plugin {
         return [
           {
             tag: "script",
-            children: `${code};${GLOBAL_NAME}.runPreBootHandoff(${JSON.stringify(preload)})`,
+            children: `${code};${GLOBAL_NAME}.runPreBootHandoff(${JSON.stringify(preload.app)},${JSON.stringify(preload.share)})`,
             injectTo: "head-prepend",
           },
         ];
@@ -60,36 +60,54 @@ export function handoffBootPlugin(): Plugin {
   };
 }
 
+const SHARE_BOOT_MODULE = "src/shareBoot.tsx";
+
 /**
- * What the html entry chunk defers behind its dynamic import (src/boot.tsx),
- * plus everything that chunk statically pulls in, as URLs.
+ * What the html entry chunk defers behind its dynamic imports, plus everything
+ * those chunks statically pull in, as URLs — split into the app graph
+ * (src/boot.tsx) and the standalone share-page graph (src/shareBoot.tsx) so
+ * each kind of page preloads only what it will run.
  *
- * Deliberately keyed off the entry's `dynamicImports` rather than the boot
- * module's path: Rollup is free to merge a dynamic entry into a shared chunk,
- * which leaves `facadeModuleId` null and makes any path-based lookup silently
- * find nothing.
+ * Deliberately keyed off the entry's `dynamicImports` rather than module
+ * paths: Rollup is free to merge a dynamic entry into a shared chunk, which
+ * leaves `facadeModuleId` null and makes a path-based lookup silently find
+ * nothing. The share graph is the one exception — a merged share entry just
+ * lands in the app set, which is the pre-split behaviour.
  */
-function bootChunkUrls(bundle: OutputBundle, entryChunk: OutputChunk | undefined, base: string): string[] {
+function bootChunkUrls(
+  bundle: OutputBundle,
+  entryChunk: OutputChunk | undefined,
+  base: string,
+): { app: string[]; share: string[] } {
   const entry = entryChunk ?? (Object.values(bundle).find((c) => c.type === "chunk" && c.isEntry) as OutputChunk | undefined);
   if (!entry?.dynamicImports.length) {
     // Not fatal, but every normal page load would then wait a whole round trip
     // for the entry to run before it could even start fetching the app.
     console.warn(`[${PLUGIN_NAME}] no dynamic import found on the html entry chunk — the app preload hints are missing.`);
-    return [];
+    return { app: [], share: [] };
   }
 
-  const seen = new Set<string>();
-  const walk = (file: string) => {
-    if (seen.has(file)) return;
-    seen.add(file);
-    const chunk = bundle[file];
-    if (chunk?.type !== "chunk") return;
-    // Static imports only — matching what Vite would have preloaded. The boot
-    // chunk's own dynamic imports (lazy routes, mermaid, …) stay on demand.
-    for (const next of chunk.imports) walk(next);
+  const graph = (roots: string[]): string[] => {
+    const seen = new Set<string>();
+    const walk = (file: string) => {
+      if (seen.has(file)) return;
+      seen.add(file);
+      const chunk = bundle[file];
+      if (chunk?.type !== "chunk") return;
+      // Static imports only — matching what Vite would have preloaded. The boot
+      // chunk's own dynamic imports (lazy routes, mermaid, …) stay on demand.
+      for (const next of chunk.imports) walk(next);
+    };
+    roots.forEach(walk);
+    const prefix = base.endsWith("/") ? base : `${base}/`;
+    return [...seen].map((file) => `${prefix}${file}`);
   };
-  for (const file of entry.dynamicImports) walk(file);
 
-  const prefix = base.endsWith("/") ? base : `${base}/`;
-  return [...seen].map((file) => `${prefix}${file}`);
+  const isShare = (file: string) => {
+    const chunk = bundle[file];
+    return chunk?.type === "chunk" && !!chunk.facadeModuleId?.endsWith(SHARE_BOOT_MODULE);
+  };
+  const share = entry.dynamicImports.filter(isShare);
+  const app = entry.dynamicImports.filter((f) => !isShare(f));
+  return { app: graph(app), share: graph(share) };
 }

@@ -2990,6 +2990,9 @@ export const getSharedConversationMeta = query({
       description,
       author: user?.name || null,
       message_count: conversation.message_count || 0,
+      // The web server 302s /share/<token> straight to /conversation/<id>
+      // (skipping a full app boot whose only job was this same lookup).
+      conversation_id: conversation._id,
     };
   },
 });
