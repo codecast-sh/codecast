@@ -67,6 +67,31 @@ export function formatHuddleDigest(d: HuddleDigestInput): string {
   return out.join("\n");
 }
 
+export type HuddleDigestHead = {
+  title: string;
+  /** "12 min huddle with Alice and Bob" — the line under the title. */
+  lead: string;
+  /** The digest without its lead line: the summary and the action items. */
+  body: string;
+};
+
+/** The inverse of formatHuddleDigest's first line. A client that holds the chat
+ *  row's markdown uses this to paint the title and lead as a header of its own
+ *  — a system row about the call — instead of as bold prose inside a person's
+ *  message. Returns null when the content is not a digest this formatter wrote,
+ *  so callers can fall back to rendering the markdown whole. */
+export function parseHuddleDigestContent(content: string): HuddleDigestHead | null {
+  const nl = content.indexOf("\n");
+  const first = (nl === -1 ? content : content.slice(0, nl)).trim();
+  const m = /^\*\*(.+)\*\*\s*·\s*(.+)$/.exec(first);
+  if (!m) return null;
+  return {
+    title: m[1],
+    lead: m[2],
+    body: nl === -1 ? "" : content.slice(nl).replace(/^\n+/, ""),
+  };
+}
+
 // ── The session wire format ───────────────────────────────────────────────
 
 export type HuddleSummaryTag = {

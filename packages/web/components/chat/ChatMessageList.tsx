@@ -49,6 +49,8 @@ const estimateRow = (row: Row | undefined): number => {
     return (row.grouped ? 8 : 26) + spoken * 20;
   }
   const lines = Math.max(1, Math.ceil(m.content.length / 92));
+  // A huddle digest carries its own header plus the transcript disclosure line.
+  if (m.call) return 26 + lines * 21 + 22 + (m.reactions?.length ? 24 : 0) + (m.replyCount ? 26 : 0);
   return (row.grouped ? 4 : 22) + lines * 21 + (m.reactions?.length ? 24 : 0) + (m.replyCount ? 26 : 0);
 };
 
@@ -125,6 +127,7 @@ export const ChatMessageList = memo(function ChatMessageList({
           createdAt: m.createdAt,
           pendingAgent: m.agentStatus === "thinking" || m.agentStatus === "streaming",
           deleted: !!m.deletedAt,
+          standalone: !!m.call,
           view: m,
         })),
         { now, lastReadAt, viewerId, withoutDays: inThread },

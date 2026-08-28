@@ -85,6 +85,20 @@ describe("buildChatTimeline — grouping", () => {
     );
     expect(groupedFlags(rows)).toEqual([false, false, false]);
   });
+
+  it("never groups a standalone system row, in either direction", () => {
+    // A huddle digest renders under its own header; folding the author's next
+    // message under it would leave that message headerless.
+    const rows = buildChatTimeline(
+      [
+        msg("a", "u1", NOW - 3 * MIN),
+        msg("b", "u1", NOW - 2 * MIN, { standalone: true }),
+        msg("c", "u1", NOW - MIN),
+      ],
+      { now: NOW },
+    );
+    expect(groupedFlags(rows)).toEqual([false, false, false]);
+  });
 });
 
 describe("buildChatTimeline — day separators", () => {

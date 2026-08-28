@@ -4,6 +4,7 @@ import {
   formatHuddleSummaryTag,
   huddleDigestLead,
   isHuddleSummaryTag,
+  parseHuddleDigestContent,
   parseHuddleSummaryTag,
 } from "./huddleDigest";
 
@@ -34,6 +35,21 @@ describe("formatHuddleDigest", () => {
     expect(formatHuddleDigest({ ...digest, summary: null, summaryStatus: "skipped" })).toContain(
       "Too short to summarize.",
     );
+  });
+
+  test("round-trips: the chat row's markdown parses back into a header", () => {
+    const parsed = parseHuddleDigestContent(formatHuddleDigest(digest))!;
+    expect(parsed.title).toBe("Auth rollout");
+    expect(parsed.lead).toBe("12 min huddle with Alice and Bob");
+    expect(parsed.body).toBe(
+      "Alice and Bob agreed to ship the fix behind a flag.\n\n" +
+        "Action items:\n- Bob: ship the fix behind a flag",
+    );
+  });
+
+  test("refuses markdown this formatter did not write", () => {
+    expect(parseHuddleDigestContent("just a normal message")).toBeNull();
+    expect(parseHuddleDigestContent("**bold** but no separator line")).toBeNull();
   });
 
   test("the lead line survives odd rosters", () => {
