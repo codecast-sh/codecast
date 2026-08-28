@@ -1079,12 +1079,24 @@ export type ClientUI = {
   active_team_id?: string;
   active_filter?: "my" | "team";
   inbox_shortcuts_hidden?: boolean;
-  // Session-event sounds (a session finishing, going idle, being killed).
+  // The master sound switch: off silences every cue the app can make.
   sounds_enabled?: boolean;
   // Chat toast sounds, split from the above: an agent fleet's chirps and a
   // teammate speaking are different interruptions, and people who mute one
   // usually still want the other. Absent = on, same as sounds_enabled.
   chat_sounds_enabled?: boolean;
+  // Per-category gates under the master switch (lib/sounds.ts maps each cue to
+  // one of these). Absent = on. Unstamped like sounds_enabled: whether this
+  // machine may chirp is a fact about the room it sits in, not about the
+  // person, so the choice must not follow them to another device.
+  session_sounds_enabled?: boolean; // a session arriving, finishing, going idle
+  call_sounds_enabled?: boolean;    // ring, join/leave, declined, a knock at the door
+  walkie_sounds_enabled?: boolean;  // the six push-to-talk cues
+  ui_sounds_enabled?: boolean;      // feedback for your own gestures: send, dismiss, kill
+  // Output level, a 0..1.5 multiplier over each cue's calibrated gain. 1 (and
+  // absent) = the exact levels every cue was measured at in lib/cueSpec.ts;
+  // the headroom above 1 is safe because master gains sit near 0.05.
+  sound_volume?: number;
   // Chat toasts stay quiet until this instant. Set from the snooze button on a
   // toast — the off switch has to be one gesture from the annoyance, or people
   // mute everything after one bad afternoon.
@@ -1231,6 +1243,9 @@ export type ClientDismissed = {
   team_sharing_prompt?: number;
   // Blocked-sessions banner X (timestamp snooze, cross-device).
   blocked_sessions_banner?: number;
+  // "Turn on desktop notifications" nudge X (timestamp snooze; a missed
+  // message overrides it — lib/notificationNudge.ts).
+  notif_nudge?: number;
   // "Set up account switching" promo inside that banner — permanent opt-out.
   cc_accounts_promo?: boolean;
   // "New agent features" upsell — one stamp per snippet slug the user enabled
@@ -8565,10 +8580,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // -- Teams --
   // Local-first create, the same shape as createBucket: the stub row and the
   // workspace switch happen in one draft, so the switcher and the sidebar show
-  // the new team in the same tick. The server mutation (teams.createTeam)
-  // writes the canonical users.active_team_id, and the dispatch handler writes
-  // the ui mirror with the real id, so both halves agree once the echo lands
-  // (see lib/__tests__/activeTeamPointer.guard.test.ts). The `teams` list is
+  // the new team in the same tick. The pointer holds the stub id only for the
+  // round trip. A stub id is not a server id: every feeder that hands
+  // clientState.ui.active_team_id to Convex as an Id<"teams"> guards it with
+  // isConvexId and skips while the stub is in flight (useWorkspaceArgs,
+  // TeamMembersPump, the team sync hooks); an unguarded pass would throw
+  // ArgumentValidationError and drop that surface into its error boundary.
+  // The server mutation (teams.createTeam) writes the canonical
+  // users.active_team_id, and the dispatch handler rewrites the ui mirror
+  // with the real id, so both halves agree once the echo lands (see
+  // lib/__tests__/activeTeamPointer.guard.test.ts). The `teams` list is
   // replaced wholesale on echo, which retires the stub; resolveTeamStub rekeys
   // it first so a caller holding the real id never sees a gap.
   createTeam: async (opts: { name: string; icon?: string; icon_color?: string }) => {
@@ -8606,6 +8627,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   resolveTeamStub: sync(function (this: Draft, stubId: string, teamId: string) {
     this.teams = (this.teams ?? []).map((t: any) => (t?._id === stubId ? { ...t, _id: teamId } : t));
+    // Conditional: a user who switched workspaces during the round trip keeps
+    // their choice; the mirror only advances stub -> real id.
     if (this.clientState.ui?.active_team_id === stubId) this.clientState.ui.active_team_id = teamId;
   }),
 

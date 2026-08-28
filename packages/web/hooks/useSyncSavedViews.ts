@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useWatchEffect } from "./useWatchEffect";
@@ -34,7 +34,13 @@ export function useSyncSavedViews() {
   // unmount the whole sidebar into its ErrorBoundary.
   const { data: result } = useQueryNoThrow(
     api.savedViews.webList,
-    activeTeamId ? { team_id: activeTeamId } : {},
+    // A just-created team carries an optimistic stub id until the server
+    // echoes; a stub is not an Id<"teams">, so skip for that window.
+    activeTeamId && !isConvexId(String(activeTeamId))
+      ? "skip"
+      : activeTeamId
+        ? { team_id: activeTeamId }
+        : {},
   );
   const syncTable = useInboxStore((s) => s.syncTable);
 

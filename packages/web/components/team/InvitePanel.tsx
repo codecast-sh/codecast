@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Check, ChevronRight } from "lucide-react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -9,6 +10,8 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { copyToClipboard } from "../../lib/utils";
+import { formatInviteExpiry } from "../../lib/team/inviteExpiry";
+import "./teamFlow.css";
 
 export interface InvitePanelProps {
   teamId: Id<"teams">;
@@ -24,17 +27,6 @@ type SendState =
 
 function findTeamRole(teams: Array<{ _id?: string; role?: string } | null> | undefined, teamId: string) {
   return teams?.find((t) => t?._id === teamId)?.role;
-}
-
-export function formatInviteExpiry(timestamp: number | undefined): string {
-  if (!timestamp) return "No expiry set";
-  const diff = timestamp - Date.now();
-  if (diff < 0) return "Expired";
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-  const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-  if (days > 0) return `Expires in ${days} day${days === 1 ? "" : "s"}`;
-  if (hours > 0) return `Expires in ${hours} hour${hours === 1 ? "" : "s"}`;
-  return "Expires soon";
 }
 
 /**
@@ -99,34 +91,60 @@ export function InvitePanel({ teamId, variant = "modal" }: InvitePanelProps) {
   };
 
   return (
-    <div className={page ? "space-y-6" : "space-y-4 py-4"}>
+    <div className={`tf-accent-scope ${page ? "space-y-6" : "space-y-4 py-4"}`}>
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <Label className="text-sol-base1">Invite Link</Label>
-          <span className={`text-xs ${isExpired ? "text-sol-red" : "text-sol-base1"}`}>
-            {team ? formatInviteExpiry(team.invite_code_expires_at) : ""}
+          <Label className="text-sol-base1">Invite link</Label>
+          <span className="flex items-center gap-2 text-xs">
+            <span className={isExpired ? "text-sol-red" : "text-sol-base1"}>
+              {team ? formatInviteExpiry(team.invite_code_expires_at) : ""}
+            </span>
+            {/* Regenerate is a quiet text action next to the expiry it
+                changes, so the panel keeps one accent action: Copy. */}
+            {isAdmin && (
+              <>
+                <span aria-hidden="true" className="text-sol-border">·</span>
+                <button
+                  type="button"
+                  onClick={handleRegenerate}
+                  disabled={isRegenerating || !team}
+                  aria-label="Make a new invite link. It lasts 7 days and the old one stops working."
+                  className="tf-ghost -my-0.5 rounded px-1 py-0.5 text-sol-text-dim underline decoration-sol-border underline-offset-2 hover:text-sol-text disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tf-acc)]"
+                >
+                  {isRegenerating ? "Making a new link" : "New link"}
+                </button>
+              </>
+            )}
           </span>
         </div>
         <div className="flex gap-2">
           <Input
             value={inviteUrl}
             readOnly
-            placeholder={team ? "" : "Loading invite link"}
+            placeholder={team ? "" : "Making your invite link"}
             className={`font-mono ${page ? "text-base h-11" : "text-sm"} bg-sol-bg-alt border-sol-border text-sol-text ${isExpired ? "opacity-50" : ""}`}
           />
+          {/* Copy is the payoff action, so it carries the accent. The
+              confirmation swaps in a check with a quick pop. */}
           <Button
             onClick={handleCopy}
-            variant="outline"
             disabled={isExpired || !inviteUrl}
             aria-live="polite"
-            className={`${page ? "h-11 px-5" : ""} ${copied ? "border-sol-green text-sol-green" : "border-sol-border text-sol-base1"} hover:bg-sol-bg-alt`}
+            className={`tf-primary ${page ? "h-11 px-5" : ""}`}
           >
-            {copied ? "Copied" : "Copy"}
+            {copied ? (
+              <span className="tf-pop inline-flex items-center gap-1.5">
+                <Check className="w-4 h-4" />
+                Copied
+              </span>
+            ) : (
+              "Copy"
+            )}
           </Button>
         </div>
         {isExpired && (
           <p className="text-sm text-sol-red">
-            This invite link has expired. {isAdmin ? "Generate a new one below." : "Ask an admin to regenerate it."}
+            This invite link has expired. {isAdmin ? "Use New link above to make a fresh one." : "Ask an admin to make a new one."}
           </p>
         )}
       </div>
@@ -155,42 +173,38 @@ export function InvitePanel({ teamId, variant = "modal" }: InvitePanelProps) {
           </Button>
         </form>
         {sendState.kind === "sent" && (
-          <p className="text-sm text-sol-green" aria-live="polite">Invite sent to {sendState.to}</p>
+          <p className="tf-pop flex items-center gap-1.5 text-sm text-sol-green" aria-live="polite">
+            <Check className="w-4 h-4" />
+            Invite sent to {sendState.to}
+          </p>
         )}
         {sendState.kind === "error" && (
           <p className="text-sm text-sol-red" aria-live="polite">{sendState.message}</p>
         )}
       </div>
 
-      <div className="pt-3 border-t border-sol-border">
-        <div className="text-sm font-medium text-sol-text mb-2">How it works</div>
-        <ol className="text-sm text-sol-base1 space-y-1.5 list-decimal list-inside">
-          <li>Share the invite link with your teammate</li>
-          <li>They sign in or create an account</li>
-          <li>They join the team automatically</li>
-          <li>They install the daemon to start syncing conversations</li>
+      {/* One quiet line, closed by default: the panel reads link, email,
+          done, and the finish action stays in view. */}
+      <details className="group pt-3 border-t border-sol-border">
+        <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 rounded text-sm text-sol-base1 hover:text-sol-text [&::-webkit-details-marker]:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tf-acc)]">
+          <ChevronRight className="w-3.5 h-3.5 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden="true" />
+          How invites work
+        </summary>
+        <ol className="mt-2.5 text-sm text-sol-base1 space-y-2.5">
+          {[
+            "Send the link to a teammate.",
+            "They open it, sign in, and land on this team.",
+            "They install the CLI and their sessions show in the team feed.",
+          ].map((line, i) => (
+            <li key={i} className="flex items-start gap-2.5">
+              <span className="tf-how-num flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold">
+                {i + 1}
+              </span>
+              <span>{line}</span>
+            </li>
+          ))}
         </ol>
-      </div>
-
-      {isAdmin && (
-        <div className="pt-2 border-t border-sol-border">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm text-sol-text">Regenerate Link</div>
-              <div className="text-xs text-sol-base1">Creates a new link valid for 7 days</div>
-            </div>
-            <Button
-              onClick={handleRegenerate}
-              variant="outline"
-              size="sm"
-              disabled={isRegenerating || !team}
-              className="border-sol-cyan text-sol-cyan hover:bg-sol-cyan/10"
-            >
-              {isRegenerating ? "Regenerating" : "Regenerate"}
-            </Button>
-          </div>
-        </div>
-      )}
+      </details>
     </div>
   );
 }
