@@ -2,77 +2,13 @@ import { useInboxStore } from "../../store/inboxStore";
 import { pathLabel } from "../../lib/pathLabel";
 import { isDetachedTabWindow } from "../../lib/desktop";
 import { settingsSectionForPath } from "../../lib/settingsSections";
+import { isNonTabRoute } from "../../lib/tabRoutes";
 
-// Routes that live OUTSIDE the dashboard tab shell. The tab system (DashboardLayout
-// / TabBar / TabContent) is only mounted for dashboard routes, but `tabs`/`activeTabId`
-// persist across reloads and sign-out -- so a user who once used the dashboard still
-// carries a tab into the marketing/auth pages. Tab routing must never intercept links
-// on these routes, or it rewrites the URL via replaceState without navigating React
-// Router (e.g. clicking "Sign in" lands you on /login in the address bar while the
-// marketing page stays mounted until a manual reload).
-const NON_TAB_EXACT = new Set([
-  "/",
-  // The published-page identity relay (redirects out to /a/<slug>; /pages
-  // itself stays a tab page, so this is exact, not a prefix).
-  "/pages/auth",
-  "/about",
-  "/features",
-  "/privacy",
-  "/security",
-  "/support",
-  "/terms",
-  "/pricing",
-  "/download",
-  "/login",
-  "/signup",
-  "/forgot-password",
-  "/reset-password",
-  "/palette",
-  // The people window renders the buddy list as a whole window (its own OS
-  // window on the desktop, a popup in a browser). The tab shell must never
-  // intercept it, or the window rewrites its own URL and paints a blank pane.
-  "/people",
-  // The call panel renders a huddle as a whole window (its own OS window on
-  // the desktop, a detached tab window on older builds). Same reason as
-  // /people: the tab shell intercepting it would rewrite the window's own URL
-  // and paint a blank pane — with a live microphone behind it.
-  "/call-panel",
-  // The floating faces: a transparent always-on-top window that is nothing but
-  // circles. The tab shell intercepting it would rewrite the window's own URL
-  // and leave a see-through rectangle with a live microphone in it.
-  "/call-faces",
-]);
-// "/documentation" is a prefix (not exact) so the guide pages under
-// /documentation/<slug> stay outside the tab shell too.
-const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share", "/blog", "/documentation", "/compare", "/a"];
+// Re-exported so callers of the routing layer keep one import; the rule itself
+// lives in lib/tabRoutes (pure, no store import) so the store can apply it too.
+export { isNonTabRoute };
 
-// Every single-segment top-level route that lives INSIDE the dashboard (a tab
-// page or a standalone shell page). Public profiles live at the root as a bare
-// single segment (/:username), so the only way to tell `/ashot` (a handle, full-
-// page, outside the shell) from `/inbox` (a tab) is to know the real routes: any
-// bare single segment NOT in this set is a profile handle. KEEP IN SYNC with the
-// single-segment <Route>s in src/App.tsx — the routes.manifest parity test asserts
-// this set equals the manifest's in-shell single-segment routes, so drift fails loudly.
-const IN_SHELL_ROOT_SEGMENTS = new Set([
-  // Tab pages (TabContent patterns)
-  "inbox", "feed", "crosstalk", "chat", "search", "notifications", "questions", "threads", "docs", "capabilities", "plans", "tasks", "files", "vault", "pages", "artifacts",
-  "projects", "workflows", "routines", "triggers", "schedules", "sessions", "anchor", "team", "config", "calls",
-  // Standalone shell pages (own <Route>, not in TabContent)
-  "explore", "timeline", "windows", "orchestration", "roadmap", "cli",
-]);
 
-export function isNonTabRoute(path: string): boolean {
-  const clean = path.split("?")[0].split("#")[0];
-  if (NON_TAB_EXACT.has(clean)) return true;
-  if (NON_TAB_PREFIXES.some((p) => clean === p || clean.startsWith(p + "/"))) return true;
-  // A bare single segment that isn't a known in-shell route is a public-profile
-  // handle (App.tsx serves PublicProfile at root-level ":username", outside the
-  // shell). Without this, a signed-in user's in-app click to /<handle> would be
-  // intercepted by the tab navigator into a blank TabContent pane.
-  const single = clean.match(/^\/([^/]+)$/);
-  if (single && !IN_SHELL_ROOT_SEGMENTS.has(single[1])) return true;
-  return false;
-}
 
 /**
  * In-app navigations to a settings SECTION open the settings modal in place

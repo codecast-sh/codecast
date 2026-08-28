@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "@/store/inboxStore";
 import { isNonTabRoute, shouldUseTabRouting, tabNavigate } from "./tabRouting";
+import { healTabPaths, shellTabPath } from "@/lib/tabRoutes";
 
 const inboxTab = { id: "tab_1", title: "Inbox", path: "/inbox", createdAt: 1 };
 
@@ -129,5 +130,57 @@ describe("tabNavigate", () => {
   it("navigates normally when the pane's tab IS the active tab", () => {
     tabNavigate("/tasks", "push", "tab_1");
     expect(calls).toEqual([{ op: "push", url: "/tasks", state: { tabNav: true, tabId: "tab_1" } }]);
+  });
+});
+
+// A tab that holds a path outside the shell renders no pane and pins the URL
+// to it — the "blank middle column after every reload" the desktop showed once
+// its first tab was seeded from the boot URL `/`.
+describe("a tab may only hold a shell route", () => {
+  it("shellTabPath falls back to the inbox for outside-shell paths", () => {
+    for (const p of ["/", "/login", "/palette", "/people", "/ashot", "", undefined]) {
+      expect(shellTabPath(p)).toBe("/inbox");
+    }
+    for (const p of ["/inbox", "/inbox?s=jx7abc", "/chat/hx7abc", "/tasks/x", "/docs"]) {
+      expect(shellTabPath(p)).toBe(p);
+    }
+  });
+
+  it("healTabPaths rewrites only the offending tabs and is a no-op otherwise", () => {
+    const good = [{ id: "a", path: "/inbox?s=x" }, { id: "b", path: "/tasks" }];
+    expect(healTabPaths(good)).toBe(good);
+    const healed = healTabPaths([{ id: "a", path: "/" }, { id: "b", path: "/tasks" }]);
+    expect(healed.map((t) => t.path)).toEqual(["/inbox", "/tasks"]);
+  });
+
+  it("updateTab drops an outside-shell path and keeps the rest of the patch", () => {
+    useInboxStore.setState({ tabs: [{ ...inboxTab, path: "/inbox?s=jx7abc" }], activeTabId: inboxTab.id });
+    useInboxStore.getState().updateTab(inboxTab.id, { path: "/", title: "Home" });
+    expect(useInboxStore.getState().tabs[0]).toMatchObject({ path: "/inbox?s=jx7abc", title: "Home" });
+    useInboxStore.getState().updateTab(inboxTab.id, { path: "/tasks" });
+    expect(useInboxStore.getState().tabs[0].path).toBe("/tasks");
+  });
+
+  it("openTab seeds the inbox when handed the app root", () => {
+    useInboxStore.setState({ tabs: [], activeTabId: null });
+    const id = useInboxStore.getState().openTab({ path: "/", title: "Home" });
+    expect(useInboxStore.getState().tabs.find((t) => t.id === id)?.path).toBe("/inbox");
+  });
+
+  it("stamping the active tab keeps its path while the live URL is outside the shell", () => {
+    const realWindow = (globalThis as any).window;
+    const at = (pathname: string) => { (globalThis as any).window = { location: { pathname, search: "" } }; };
+    try {
+      useInboxStore.setState({ tabs: [inboxTab], activeTabId: inboxTab.id });
+      at("/");
+      useInboxStore.getState().saveCurrentTabState();
+      expect(useInboxStore.getState().tabs[0].path).toBe("/inbox");
+      at("/tasks");
+      useInboxStore.getState().saveCurrentTabState();
+      expect(useInboxStore.getState().tabs[0].path).toBe("/tasks");
+    } finally {
+      if (realWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = realWindow;
+    }
   });
 });

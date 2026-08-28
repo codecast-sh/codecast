@@ -10,13 +10,13 @@ import {
   sync,
   type DurableCreateContinuation,
 } from "./mutativeMiddleware";
-import { createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, promote as wsPromotePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
+import { adoptWorkspaceSnapshot, createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, promote as wsPromotePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
 import { applyWorkbench as applyWorkbenchPure, captureWorkbench, chipFilterOf, resolveWorkbenchFilter, type WorkbenchSnapshot } from "./workbench";
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { isDraft, original } from "mutative";
 import { soundDismiss, soundKill } from "../lib/sounds";
-import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox, salvageLocalFirstV2Data, PERSISTENCE_AVAILABLE } from "./idbCache";
+import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, writeConversationUserMessages, enqueueDispatch, removeDispatch, loadOutbox, salvageLocalFirstV2Data, PERSISTENCE_AVAILABLE } from "./idbCache";
 import {
   DISPATCH_TABLE_MAP,
   HYDRATION_CRITICAL_KEYS,
@@ -96,6 +96,7 @@ export type CreateModalKind = 'task' | 'plan' | 'doc' | 'chat' | 'huddle';
 import { isConvexId } from "../lib/entityLinks";
 import { pathOnMyMachines, type MachineCandidate } from "../lib/machinePicker";
 import { conversationTabPath } from "../lib/pathLabel";
+import { healTabPaths, isNonTabRoute, shellTabPath } from "../lib/tabRoutes";
 import { divertSessionOpen } from "../lib/openIntent";
 import type { PalettePick } from "../lib/palettePick";
 export { isConvexId };
@@ -1245,17 +1246,23 @@ export type ClientTips = {
   _inlineSuppressed?: boolean;
 };
 
-// Tabs carry CONTENT identity only (path, session). The panel arrangement —
-// which rails are open, their widths, the dock — is global chrome shared by
-// every tab: switching tabs must reveal another page under the exact same
-// frame, never reshape the frame. (Tabs used to snapshot/restore a per-tab
-// workspace; that made the right rail open/close and resize on every switch.)
+// A tab freezes its WHOLE view, frame included. Content identity (path,
+// session) says what the stage shows; `workspace` carries the panel
+// arrangement — left nav, list, right rail, dock: each slot's pane,
+// presentation and size — exactly as the tab last showed it. Switching away
+// stamps the live arrangement onto the tab; switching back restores it, the
+// same way the tab restores its columns and scroll. A tab with no snapshot
+// yet (a fresh tab) inherits the frame it was opened under.
 export type AppTab = {
   id: string;
   title: string;
   path: string;
   sessionId?: string;
   createdAt: number;
+  /** The full panel arrangement as of the last switch away from this tab. */
+  workspace?: WorkspaceState;
+  /** The right rail's conversation at stamp time (sidePanelSessionId). */
+  railSessionId?: string | null;
 };
 
 // The path to stamp onto a tab from the live browser URL when switching away.
@@ -1274,7 +1281,40 @@ export function stampedTabPath(tab: AppTab): string {
   const live = window.location.pathname + window.location.search;
   const conv = window.location.pathname.match(/^\/conversation\/([^/?#]+)$/);
   if (conv && tab.path.split("?")[0] === "/inbox") return `/inbox?s=${conv[1]}`;
+  // A live URL outside the shell (the app root during boot, a marketing page,
+  // the palette window) is not this tab's content: keep what the tab held, or
+  // the stamp pins the tab to a path the shell cannot render (lib/tabRoutes).
+  if (isNonTabRoute(window.location.pathname)) return tab.path;
   return live;
+}
+
+// Stamp the active tab with everything a later switch back must restore: its
+// live path, the panel arrangement, and the right rail's conversation.
+function stampActiveTab(draft: { activeTabId: string | null; tabs: AppTab[]; workspace: WorkspaceState; sidePanelSessionId: string | null }, patch?: Partial<AppTab>) {
+  if (!draft.activeTabId) return;
+  draft.tabs = draft.tabs.map((t: AppTab) => t.id === draft.activeTabId ? {
+    ...t,
+    path: stampedTabPath(t),
+    workspace: draft.workspace,
+    railSessionId: draft.sidePanelSessionId,
+    ...patch,
+  } : t);
+}
+
+// The other half of the freeze: put a tab's stamped frame back on screen.
+// Adoption is slot-validated (adoptWorkspaceSnapshot) so a legacy or partial
+// snapshot can never leave the workspace missing a slot, and the persistence
+// mirror is refreshed so a reload paints the frame that is actually visible.
+function restoreTabWorkspace(draft: any, tab: AppTab | undefined) {
+  if (!tab) return;
+  const next = adoptWorkspaceSnapshot(draft.workspace as WorkspaceState, tab.workspace);
+  if (next !== draft.workspace) {
+    draft.workspace = next;
+    persistWorkspace(draft);
+  }
+  if (tab.railSessionId !== undefined && tab.railSessionId !== draft.sidePanelSessionId) {
+    draft.sidePanelSessionId = tab.railSessionId;
+  }
 }
 
 export type ClientState = {
@@ -4426,7 +4466,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       }
       // Hydrate tabs from server on first sync
       if (incoming.tabs && Array.isArray(incoming.tabs) && draft.tabs.length === 0) {
-        draft.tabs = incoming.tabs;
+        draft.tabs = healTabPaths(incoming.tabs);
       }
       if (incoming.activeTabId && !draft.activeTabId) {
         draft.activeTabId = incoming.activeTabId;
@@ -9120,12 +9160,19 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const tab: AppTab = {
       id,
       title: opts.title,
-      path: opts.path,
+      // Only a shell route: the desktop boots at `/`, and a first tab seeded
+      // from that URL rendered a blank stage on every launch (lib/tabRoutes).
+      path: shellTabPath(opts.path),
       sessionId: opts.sessionId,
       createdAt: Date.now(),
     };
     this.tabs = [...this.tabs, tab];
-    if (opts.makeActive !== false) this.activeTabId = id;
+    if (opts.makeActive !== false) {
+      // The tab being left behind keeps its frame; the new tab has no
+      // snapshot yet, so it inherits the frame it was opened under.
+      stampActiveTab(this);
+      this.activeTabId = id;
+    }
     return id;
   }),
 
@@ -9148,27 +9195,35 @@ const inboxStoreConfig = (set: any, get: any) => ({
           t.id === nextTab.id ? { ...t, path: conversationTabPath(t.path) } : t,
         );
       }
+      this.tabs = newTabs;
+      // Close promotes the survivor without a switchTab, so restore its
+      // frozen frame here — the dying tab's frame dies with it.
+      restoreTabWorkspace(this, nextTab);
+      return;
     }
     this.tabs = newTabs;
   }),
 
-  // Switching tabs changes ONLY what the stage shows. The workspace (rails,
-  // sizes, dock) is global chrome — it never rides along, so the frame is
-  // pixel-identical across tabs.
+  // Switching tabs swaps the WHOLE frozen view: the outgoing tab is stamped
+  // with the live frame (panes, presentations, sizes, rail subject), and the
+  // incoming tab's stamped frame is put back on screen. A tab that never
+  // stamped one keeps the current frame.
   switchTab: action(function (this: Draft, id: string) {
     if (this.activeTabId === id) return;
-    if (this.activeTabId) {
-      this.tabs = this.tabs.map((t: AppTab) => t.id === this.activeTabId ? {
-        ...t,
-        path: stampedTabPath(t),
-      } : t);
-    }
+    stampActiveTab(this);
     this.activeTabId = id;
+    restoreTabWorkspace(this, this.tabs.find((t: AppTab) => t.id === id));
   }),
 
   updateTab: action(function (this: Draft, id: string, patch: Partial<AppTab>) {
     const current = this.tabs.find((t: AppTab) => t.id === id);
     if (!current) return;
+    // A path outside the shell never lands in a tab (lib/tabRoutes); the tab
+    // keeps what it showed rather than taking a path no pane renders.
+    if (patch.path !== undefined && isNonTabRoute(patch.path)) {
+      const { path: _dropped, ...rest } = patch;
+      patch = rest;
+    }
     let changed = false;
     for (const k in patch) {
       if ((current as any)[k] !== (patch as any)[k]) { changed = true; break; }
@@ -9179,11 +9234,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   saveCurrentTabState: action(function (this: Draft, patch?: Partial<AppTab>) {
     if (!this.activeTabId) return;
-    this.tabs = this.tabs.map((t: AppTab) => t.id === this.activeTabId ? {
-      ...t,
-      path: stampedTabPath(t),
-      ...patch,
-    } : t);
+    stampActiveTab(this, patch);
   }),
 
   // =====================
@@ -9715,6 +9766,10 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
     // sessions after every dev reload (ct-36951; the round-1 fix gated the
     // server-sync pull but this hydration path was the live door).
     const st = useInboxStore.getState();
+    // A tab persisted with a path the shell cannot render (older builds
+    // stamped the live URL unchecked) heals to the inbox before first paint.
+    const healedTabs = healTabPaths(st.tabs);
+    if (healedTabs !== st.tabs) useInboxStore.setState({ tabs: healedTabs });
     const ownId = (cached.lastFocusedConversationId ?? null) as string | null;
     if (ownId && !st.lastFocusedConversationId) {
       useInboxStore.setState({ lastFocusedConversationId: ownId });

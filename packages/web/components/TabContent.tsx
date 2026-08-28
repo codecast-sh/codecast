@@ -1,3 +1,4 @@
+import { isNonTabRoute } from "../lib/tabRoutes";
 import { lazy, Suspense, useEffect, useMemo, type ComponentType, type LazyExoticComponent } from "react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
 import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
@@ -80,8 +81,13 @@ const AdminDaemonLogs = lazyPage("@/app/admin/daemon-logs/page", () => import("@
 // switched to, corrupting stored tab paths (and, via clientState sync, the
 // server's copy of them). Document scope on globalThis for the same reason the
 // lazy pages live there: a dev hot update re-executes this module.
+// Only a shell path is worth adopting: the desktop enters at the app root `/`
+// (which then redirects to the inbox), and adopting that entry URL pinned the
+// active tab to a path no pane renders — a blank stage on every launch.
 const navBoot: { url: string | null } = ((globalThis as any).__codecastTabNavBoot ??= {
-  url: typeof window !== "undefined" && window.location ? window.location.pathname + window.location.search : null,
+  url: typeof window !== "undefined" && window.location && !isNonTabRoute(window.location.pathname)
+    ? window.location.pathname + window.location.search
+    : null,
 });
 
 // Which tabs have mounted panes, document-scoped for the same reason: when

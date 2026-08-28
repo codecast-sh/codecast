@@ -22,7 +22,7 @@ const read = (rel: string) => readFileSync(join(webRoot, rel), "utf8");
 const appSrc = read("src/App.tsx");
 const tabContentSrc = read("components/TabContent.tsx");
 const dashLayoutSrc = read("components/DashboardLayout.tsx");
-const tabRoutingSrc = read("src/compat/tabRouting.ts");
+const tabRoutingSrc = read("lib/tabRoutes.ts");
 
 const manifestByHref = new Map(ROUTES.map((r) => [routeHref(r.path), r] as const));
 

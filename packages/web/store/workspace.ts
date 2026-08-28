@@ -291,10 +291,37 @@ export function hydrateWorkspace(
   return ws;
 }
 
+/**
+ * Adopt a per-tab layout snapshot wholesale. Snapshots come from persistence
+ * and from older clients that stamped partial shapes, so each slot is taken
+ * only when it looks like real slot state (has its pane and presentation);
+ * anything malformed keeps the current slot. Returns `current` untouched when
+ * nothing well-formed is in the snapshot, so callers can cheaply detect a no-op.
+ */
+export function adoptWorkspaceSnapshot(current: WorkspaceState, snap: unknown): WorkspaceState {
+  if (!snap || typeof snap !== "object") return current;
+  const next: WorkspaceState = { ...current };
+  let changed = false;
+  for (const id of SLOT_IDS) {
+    const s = (snap as Partial<Record<SlotId, SlotState>>)[id];
+    if (!s || typeof s !== "object" || !("pane" in s) || !("presentation" in s)) continue;
+    next[id] = s;
+    changed = true;
+  }
+  return changed ? next : current;
+}
+
 /** The conversation sharing the stage, if any (the old `companionSessionId`). */
 export function companionId(ws: WorkspaceState): string | null {
   const p = ws.secondary.pane;
   return p && p.kind === "conversation" ? p.ref : null;
+}
+
+/** The conversation drilled in as an overlay (the fleet board's dialog), if
+    any. Distinct from a split companion: an overlay is what the user is
+    LOOKING AT, so per-session chords and menus target it. */
+export function overlayConversationId(ws: WorkspaceState): string | null {
+  return ws.secondary.presentation === "overlay" ? companionId(ws) : null;
 }
 
 // ---------------------------------------------------------------------------
