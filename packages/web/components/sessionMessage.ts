@@ -315,6 +315,26 @@ const NOISE_PATTERNS = [
   /tasks\/[a-z0-9]+\.output/,
 ];
 
+// A bare nudge the human typed to keep the agent moving ("continue", "go",
+// "ok"). Real input to the agent, but noise on any surface that summarizes
+// what the human asked for: the sticky prompt header, the message navigator.
+const BARE_NUDGE_RE = /^(?:continue|go(?: on| ahead)?|keep going|carry on|proceed|next|ok(?:ay)?|yes|y|do it)[\s.!…]*$/i;
+
+export function isBareNudge(display: string | null | undefined): boolean {
+  return !!display && BARE_NUDGE_RE.test(display.trim());
+}
+
+// The text a sticky prompt header may show for a user message, or null when
+// the message is not the human's own ask: anything machinery delivered (a
+// trigger run, a cast send, a teammate broadcast), a spawned run's opening
+// briefing, or a bare nudge. Every sticky source (timeline, cached user list,
+// last-message fallback) must agree, so they all go through here.
+export function stickyPromptContent(raw: string | null | undefined): string | null {
+  if (!raw || isSpawnedTaskPrompt(raw)) return null;
+  const display = cleanUserMessage(raw);
+  return display && !isBareNudge(display) ? display : null;
+}
+
 export function cleanUserMessage(raw: string | null | undefined): string | null {
   if (!raw) return null;
   // A machine-delivered message (cast send, or an inter-agent teammate broadcast) isn't the

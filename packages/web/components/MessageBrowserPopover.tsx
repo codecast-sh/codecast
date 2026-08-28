@@ -7,7 +7,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { isCommandMessage, cleanContent } from "../lib/conversationProcessor";
-import { parseMachineDeliveredMessage, type MachineDeliveredKind } from "./sessionMessage";
+import { parseMachineDeliveredMessage, isBareNudge, type MachineDeliveredKind } from "./sessionMessage";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
 import { shareTokenArg } from "../lib/shareTokenScope";
@@ -37,12 +37,6 @@ const MACHINE_KIND_LABEL: Record<HiddenKind, string> = {
   chat: "chat",
   continue: "continue",
 };
-
-// A bare continuation nudge ("continue", "Continue.") — real content to the
-// agent, noise in a message navigator.
-function isBareContinue(display: string): boolean {
-  return /^continue[.!…]*$/i.test(display.trim());
-}
 
 // Chip/tooltip noun for the machine-delivered rows: precise when they're all
 // one kind ("2 sessions", "1 trigger"), neutral when mixed — "automated" would
@@ -674,7 +668,7 @@ export function MessageNavButton({
           // Bare "continue" nudges bucket with the machine rows: unnumbered,
           // hidden until the "other" chip reveals them. The kind label carries
           // the word, so the body would be pure repetition — drop it.
-          if (!user.isCmd && isBareContinue(user.display)) {
+          if (!user.isCmd && isBareNudge(user.display)) {
             return {
               _id: m._id,
               display: "",

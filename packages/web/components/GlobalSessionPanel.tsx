@@ -268,7 +268,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
           autoFocusInput
           backHref={backHref}
           onBack={onBack}
-          fallbackStickyContent={cleanUserMessage(lastUserMessage)}
+          fallbackStickyContent={lastUserMessage}
           targetMessageId={targetMessageId}
           isJumpingToTarget={isJumpingToTarget}
           subHeaderContent={<>
