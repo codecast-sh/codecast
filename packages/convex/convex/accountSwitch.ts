@@ -535,6 +535,10 @@ export const requestLoginFlow = mutation({
   args: {
     api_token: v.optional(v.string()),
     device_id: v.optional(v.string()),
+    // Relaunch over a live pending flow (the browser tab never opened or got
+    // closed) — skips the pending gate here and tells the daemon to supersede
+    // its running flow instead of joining it.
+    force: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -562,7 +566,7 @@ export const requestLoginFlow = mutation({
     // a second one over it. (A stale pending row means the daemon died
     // mid-flow; starting over is exactly right.)
     const existing = target.cc_login_flow;
-    if (existing?.status === "pending" && now - existing.started_at < LOGIN_FLOW_STALE_MS) {
+    if (!args.force && existing?.status === "pending" && now - existing.started_at < LOGIN_FLOW_STALE_MS) {
       return { device_id: target.device_id, email: existing.email, already_pending: true };
     }
 
@@ -573,7 +577,7 @@ export const requestLoginFlow = mutation({
     const commandId = await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "start_login" as const,
-      args: JSON.stringify({ email }),
+      args: JSON.stringify({ email, ...(args.force ? { force: true } : {}) }),
       created_at: now,
       target_device_id: target.device_id,
     });

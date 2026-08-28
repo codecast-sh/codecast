@@ -159,6 +159,22 @@ export function monitorNotificationDescription(n: Pick<ParsedTaskNotification, "
   return n.summary.match(/[“"](.*?)[”"]/)?.[1];
 }
 
+// A terminal notification's summary is one machine sentence — `Background
+// command "X" completed (exit code 0)`, `Background agent "Y" failed with
+// exit code 3`. Split it into the parts a surface renders as visual elements:
+// what kind of thing finished (the words before the quote), which one (the
+// quoted description), and the exit code when the sentence carries one. The
+// orphan/no-completion-record notices are unquoted prose and yield undefined —
+// the surface falls back to the sentence itself.
+export type NotificationSummaryParts = { kind: string; description: string; exitCode?: number };
+
+export function parseNotificationSummary(summary: string): NotificationSummaryParts | undefined {
+  const m = summary.match(/^([A-Za-z][A-Za-z ]{0,40}?)\s*[“"](.+?)[”"]/);
+  if (!m) return undefined;
+  const exit = summary.match(/exit code (\d+)/);
+  return { kind: m[1].trim().toLowerCase(), description: m[2], exitCode: exit ? Number(exit[1]) : undefined };
+}
+
 const TIMED_OUT_MARKER = "[Monitor timed out";
 // The harness's own "this is now a background task" results, and the id each
 // carries. Anchored to the START of the result: the harness always leads with

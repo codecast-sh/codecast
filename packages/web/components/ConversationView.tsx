@@ -18,7 +18,7 @@ import rehypeHighlight from "rehype-highlight";
 import { rehypeSearchHighlight } from "../lib/rehypeSearchHighlight";
 import { compressImage } from "../lib/compressImage";
 import { textareaCaretRect } from "../lib/textareaCaret";
-import { useStorageImageUrl, useStorageImageUrls, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
+import { useStorageImageSrc, useStorageImageUrls, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
 import { AvatarImg } from "../lib/avatarCache";
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from "../lib/sessionImages";
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
@@ -80,7 +80,7 @@ import { useConversationCommentsSync } from "../hooks/useConversationComments";
 import { parseTriggerCadence, fmtDuration, fmtClock } from "./triggerCadence";
 import { TriggerPromptView } from "./TriggerPromptView";
 import { CollapsibleBody, ExpandableLine } from "./CollapsibleBody";
-import { monitorRowsFor, effectiveMonitorStatus, isWatchHostDead, reportSaysDead, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, isOrphanSummaryNotification, monitorNotificationDescription, decodeEntities, type MonitorStatus } from "./monitorRows";
+import { monitorRowsFor, effectiveMonitorStatus, isWatchHostDead, reportSaysDead, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, isOrphanSummaryNotification, monitorNotificationDescription, parseNotificationSummary, decodeEntities, type MonitorStatus } from "./monitorRows";
 
 function messageLink(conversationId: string | undefined, messageId: string) {
   return `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;
@@ -126,8 +126,9 @@ import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { AssignmentBadge } from "./AssignmentBadge";
-import { AssignedToYouBanner } from "./OwnersBadge";
+import { AssignedToYouBanner, useOwnersFromStore } from "./OwnersBadge";
 import { TmuxAttachPill } from "./TmuxAttachPill";
+import { SessionDaemonChip } from "./DaemonStatusChip";
 import { SessionFilesButton } from "./SessionFilesButton";
 import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
 import { BrowserWatchSplit, toggleBrowserWatch, useBrowserWatchOpen } from "./browser/BrowserWatchSplit";
@@ -156,6 +157,7 @@ import remarkBreaks from "remark-breaks";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK, renderMarkdownPre } from "./messageMarkdown";
 import { FilePathLink } from "./FilePathLink";
 import { FilePathContext } from "../lib/filePathLinks";
+import { isStickyEligible, pickStickyFallbackFromLoaded } from "../lib/messageNavigator";
 import { parseInboundSessionMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, stickyPromptContent, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
 import { CallTranscriptDisclosure } from "./calls/TranscriptTurns";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
@@ -389,6 +391,48 @@ const MD_COMPONENTS_NO_PRE = { ...MD_COMPONENTS_CODE_LINK, img: MESSAGE_MD_COMPO
 // costs only element instantiation. Map insertion order doubles as LRU.
 const MD_RENDER_CACHE = new Map<string, ReactElement>();
 const MD_RENDER_CACHE_MAX = 500;
+
+// Above this size an assistant body is parsed per block (split at blank lines
+// outside code fences) with each block cached separately. A streaming message
+// grows at its END, so every prefix block hits the cache and only the last
+// block reparses per push — without this, each streaming push reparsed the
+// whole growing body (70-300ms for giant code/table bodies). Only giant
+// bodies take this path: splitting can change loose-list grouping
+// cosmetically, so ordinary messages keep exact single-parse semantics.
+const MD_BLOCK_SPLIT_THRESHOLD = 8000;
+
+// Split at blank-line runs, but never inside a ``` / ~~~ fence.
+function splitMarkdownBlocks(content: string): string[] {
+  const lines = content.split("\n");
+  const blocks: string[] = [];
+  let cur: string[] = [];
+  let inFence = false;
+  let fenceMark = "";
+  for (const line of lines) {
+    const fence = line.match(/^\s*(`{3,}|~{3,})/);
+    if (fence) {
+      if (!inFence) { inFence = true; fenceMark = fence[1][0]; }
+      else if (fence[1][0] === fenceMark) inFence = false;
+    }
+    if (!inFence && line.trim() === "" && cur.length > 0) {
+      blocks.push(cur.join("\n"));
+      cur = [];
+      continue;
+    }
+    cur.push(line);
+  }
+  if (cur.length > 0) blocks.push(cur.join("\n"));
+  return blocks;
+}
+
+function mdCachePut(key: string, el: ReactElement): ReactElement {
+  MD_RENDER_CACHE.set(key, el);
+  if (MD_RENDER_CACHE.size > MD_RENDER_CACHE_MAX) {
+    MD_RENDER_CACHE.delete(MD_RENDER_CACHE.keys().next().value!);
+  }
+  return el;
+}
+
 function renderMessageMarkdownCached(content: string, userText?: boolean): ReactElement {
   const key = userText ? "\u0000u" + content : content;
   const hit = MD_RENDER_CACHE.get(key);
@@ -397,29 +441,45 @@ function renderMessageMarkdownCached(content: string, userText?: boolean): React
     MD_RENDER_CACHE.set(key, hit);
     return hit;
   }
+  if (!userText && content.length > MD_BLOCK_SPLIT_THRESHOLD) {
+    const blocks = splitMarkdownBlocks(content);
+    const el = (
+      <>
+        {blocks.map((b, i) => (
+          <Fragment key={i}>{renderMessageMarkdownCached(b)}</Fragment>
+        ))}
+      </>
+    );
+    return mdCachePut(key, el);
+  }
   const el = ReactMarkdownBase({
     children: content,
     remarkPlugins: userText ? USER_MD_REMARK : entityRemarkPlugins,
     rehypePlugins: MESSAGE_MD_REHYPE,
     components: MESSAGE_MD_COMPONENTS,
   });
-  MD_RENDER_CACHE.set(key, el);
-  if (MD_RENDER_CACHE.size > MD_RENDER_CACHE_MAX) {
-    MD_RENDER_CACHE.delete(MD_RENDER_CACHE.keys().next().value!);
-  }
-  return el;
+  return mdCachePut(key, el);
 }
 
 // Memoized message-body renderer. With no active search, render through the
 // cross-mount cache above. An active search query changes the rendered output
 // (rehypeSearchHighlight), so that rare path bypasses the cache and goes
 // through the context-aware ReactMarkdown wrapper instead.
+// Above this size a pasted user body renders as plain text: the remark parse
+// costs 70-300ms on giant pastes (logs, stack traces) and markdown semantics
+// add nothing to them — pre-wrap even keeps their line breaks exact where
+// markdown would collapse them. Assistant bodies keep markdown at any size.
+const USER_PLAIN_TEXT_THRESHOLD = 4000;
+
 const MessageMarkdown = memo(function MessageMarkdown({ content, userText }: { content: string; userText?: boolean }) {
   const query = useContext(HighlightContext);
   // An all-HTML body renders as a sanitized canvas — the markdown pipeline
   // escapes raw tags into garbled source.
   const html = tryRenderHtmlMessage(content);
   if (html) return html;
+  if (userText && !query && content.length > USER_PLAIN_TEXT_THRESHOLD) {
+    return <div className="whitespace-pre-wrap break-words">{content}</div>;
+  }
   if (query) {
     return (
       <ReactMarkdown remarkPlugins={userText ? USER_MD_REMARK : entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
@@ -841,6 +901,32 @@ function ForkCopyingState({ copied, total }: { copied: number; total?: number })
       <div className="text-[11px] text-sol-text-dim/60">
         Large forks copy in batches. Messages will appear automatically as they arrive.
       </div>
+    </div>
+  );
+}
+
+// A captioned rule across the timeline: two gradient lines meeting the caption
+// in the middle. One shape for every anchor the feed draws — the "New" unread
+// line, the "assigned to you" handoff line, the idle-gap stamp at the tail.
+function TimelineRule({
+  color,
+  className = "mt-1 mb-3",
+  faint,
+  label,
+  children,
+}: {
+  color: string;
+  className?: string;
+  faint?: boolean;
+  label?: string;
+  children: ReactNode;
+}) {
+  const line = `flex-1 h-px${faint ? " opacity-40" : ""}`;
+  return (
+    <div className={`flex items-center gap-3 select-none ${className}`} aria-label={label}>
+      <div className={line} style={{ background: `linear-gradient(to right, transparent, ${color})` }} />
+      {children}
+      <div className={line} style={{ background: `linear-gradient(to left, transparent, ${color})` }} />
     </div>
   );
 }
@@ -6311,20 +6397,22 @@ function useSwipeToDismiss(onDismiss: () => void) {
 
 // Batched + cross-mount-cached URL resolution: one query for all visible
 // images, and a remount (virtualized scroll) reuses the cached URL instead of
-// re-subscribing and re-flashing "Loading…".
+// re-subscribing and re-flashing "Loading…". Bytes are cache-first too
+// (useStorageImageSrc): a seen image paints from the local byte cache, and the
+// history prefetch warms it before the block ever mounts.
 function useImageSrc(image: ImageData): { src: string | undefined; storageResolved: boolean; storageMissing: boolean } {
-  // storageUrl: undefined = still loading, null = not found, string = URL
-  const storageUrl = useStorageImageUrl(image.storage_id);
-  const storageResolved = image.storage_id ? storageUrl !== undefined : true;
-  const storageMissing = Boolean(image.storage_id) && storageUrl === null;
+  // storageSrc: undefined = still resolving, null = not found, string = src
+  const storageSrc = useStorageImageSrc(image.storage_id);
+  const storageResolved = image.storage_id ? storageSrc !== undefined : true;
+  const storageMissing = Boolean(image.storage_id) && storageSrc === null;
 
   // While uploading we only have the local blob: preview. After the upload
-  // resolves we prefer the real storage URL but fall back to the preview until
-  // the URL resolves, so the thumbnail never flickers to "Loading…".
+  // resolves we prefer the real storage src but fall back to the preview until
+  // it resolves, so the thumbnail never flickers to "Loading…".
   const src = image.uploading && image.preview_url
     ? image.preview_url
     : image.storage_id
-      ? (typeof storageUrl === "string" ? storageUrl : image.preview_url || undefined)
+      ? (typeof storageSrc === "string" ? storageSrc : image.preview_url || undefined)
       : image.data
         ? `data:${image.media_type};base64,${image.data}`
         : image.preview_url || undefined;
@@ -6866,13 +6954,19 @@ function extractCompactionSummaryContent(content: string): string {
 // completion record, marked closed on the way in. Nothing is wrong and nothing
 // is owed, so it wears the same quiet grey as the "monitor ended" line, and the
 // unknown-status fallback lands there too rather than crying wolf.
-const taskStatusConfig: Record<string, { icon: string; color: string; bg: string }> = {
-  completed: { icon: '\u2713', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20' },
-  killed: { icon: '\u25A0', color: 'text-sol-orange', bg: 'bg-sol-orange/10 border-sol-orange/20' },
-  failed: { icon: '\u2717', color: 'text-sol-red', bg: 'bg-sol-red/10 border-sol-red/20' },
-  running: { icon: '\u25B6', color: 'text-sol-blue', bg: 'bg-sol-blue/10 border-sol-blue/20' },
-  stopped: { icon: '\u25A0', color: 'text-sol-text-dim', bg: 'bg-sol-bg-alt/30 border-sol-border/40' },
+const taskStatusConfig: Record<string, { icon: string; color: string; bg: string; eyebrow: string; chip: string }> = {
+  completed: { icon: '\u2713', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', eyebrow: 'text-emerald-400/70', chip: 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10' },
+  killed: { icon: '\u25A0', color: 'text-sol-orange', bg: 'bg-sol-orange/10 border-sol-orange/20', eyebrow: 'text-sol-orange/70', chip: 'border-sol-orange/40 text-sol-orange bg-sol-orange/10' },
+  failed: { icon: '\u2717', color: 'text-sol-red', bg: 'bg-sol-red/10 border-sol-red/20', eyebrow: 'text-sol-red/70', chip: 'border-sol-red/40 text-sol-red bg-sol-red/10' },
+  running: { icon: '\u25B6', color: 'text-sol-blue', bg: 'bg-sol-blue/10 border-sol-blue/20', eyebrow: 'text-sol-blue/70', chip: 'border-sol-blue/40 text-sol-blue bg-sol-blue/10' },
+  stopped: { icon: '\u25A0', color: 'text-sol-text-dim', bg: 'bg-sol-bg-alt/30 border-sol-border/40', eyebrow: 'text-sol-text-dim', chip: 'border-sol-border/60 text-sol-text-dim bg-sol-bg-alt/40' },
 };
+
+// The statuses whose notification the harness injects as a NEW user turn \u2014 the
+// message the reader is looking at is what pulled the agent back to work, and
+// the turn below it is the response. "stopped" is excluded: those notices are
+// resume-time bookkeeping riding a turn that was starting anyway.
+const WAKE_STATUSES = new Set(['completed', 'failed', 'killed']);
 
 function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { content: string; timestamp: number; agentNameToChildMap?: Record<string, string> }) {
   const parsed = parseTaskNotification(content);
@@ -6916,6 +7010,41 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
   const agentName = nameMatch?.[1];
   if (agentName && agentNameToChildMap?.[agentName]) {
     childId = agentNameToChildMap[agentName];
+  }
+
+  // The machine sentence split into visual parts (kind eyebrow, prominent
+  // description, status chip) \u2014 the unquoted prose notices (orphan cleanup)
+  // have no parts and keep the sentence. The wake cue marks the rows whose
+  // injection is what pulled the agent back to work.
+  const parts = parseNotificationSummary(parsed.summary);
+  const woke = WAKE_STATUSES.has(parsed.status);
+
+  if (parts) {
+    const chipText = `${parsed.status}${parts.exitCode ? ` \u00b7 exit ${parts.exitCode}` : ''}`;
+    return (
+      <div
+        className={`mb-2 px-3 py-2 flex items-start gap-2 text-xs border rounded ${cfg.bg}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
+        onClick={childId ? () => router.push(`/conversation/${childId}`) : undefined}
+      >
+        <span className={`font-mono text-sm leading-none shrink-0 mt-0.5 ${cfg.color}`}>{cfg.icon}</span>
+        <span className={`text-[10px] font-medium tracking-wide uppercase shrink-0 mt-px ${cfg.eyebrow}`}>{parts.kind}</span>
+        <ExpandableLine text={parts.description} className="text-sol-text font-medium" title={parsed.summary} />
+        <span className={`px-1 py-0 rounded border text-[9px] font-semibold shrink-0 mt-px ${cfg.chip}`}>{chipText}</span>
+        {childId && (
+          <svg className={`w-3 h-3 shrink-0 mt-0.5 ${cfg.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+        )}
+        {woke && (
+          <span className="flex items-center gap-1 text-[10px] text-sol-text-dim shrink-0 mt-px whitespace-nowrap" title="This notification woke the agent \u2014 the turn below is its response">
+            <Zap className="w-3 h-3" />
+            woke the agent
+          </span>
+        )}
+        <span className="text-sol-text-dim font-mono text-[10px] shrink-0">{parsed.taskId}</span>
+        <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      </div>
+    );
   }
 
   return (
@@ -13231,6 +13360,24 @@ const ConversationViewInner = (
     () => computeNewDividerIndex(timeline, unreadAnchorAt, enteredAt),
     [timeline, unreadAnchorAt, enteredAt],
   );
+  // The handoff anchor, drawn the same way: the "assigned to you" line sits
+  // above the first row at or after the moment a teammate made you an owner.
+  // A session handed over after its last message (the usual case: a finished
+  // thread passed on) anchors below the final row instead. -1 = no handoff.
+  const handoff = useOwnersFromStore(pendingConvId).handoff;
+  const handoffAt = handoff?.added_at ?? 0;
+  const handoffIndex = useMemo(() => {
+    if (!handoffAt || timeline.length === 0) return -1;
+    const idx = timeline.findIndex((it) => it.timestamp >= handoffAt);
+    return idx === -1 ? timeline.length : idx;
+  }, [timeline, handoffAt]);
+  const handoffRule = handoff && handoffIndex >= 0 && (
+    <TimelineRule color="var(--sol-violet)" label="Assigned to you">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-violet" title={formatFullTimestamp(handoffAt)}>
+        {handoff.added_by_name || "A teammate"} assigned this to you · {formatRelativeTime(handoffAt)}
+      </span>
+    </TimelineRule>
+  );
 
 
   const populateInputRef = useRef<((text: string, opts?: { append?: boolean }) => void) | null>(null);
@@ -13285,8 +13432,15 @@ const ConversationViewInner = (
   const cachedUserMessages = useInboxStore(
     (s) => (conversation?._id ? s.userMessages[conversation._id] : undefined)
   );
+  // Escape in an empty composer interrupts the agent. Only forward it while the
+  // agent is provably mid-turn: an idle session has nothing to interrupt, and a
+  // message still pending delivery is the dangerous case. On 2026-08-28 an
+  // Escape pressed seconds after send reached the daemon 400ms after it had
+  // injected that message and cancelled the turn the message had just started.
+  const liveAgentStatus = managedSession?.agent_status as LiveAgentStatus | undefined;
   const handleSendEscape = useCallback(() => {
     if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
+    if (!isActiveAgentStatus(liveAgentStatus)) return;
     void convCommand(convexConvId, "sendEscapeToSession").then(
       () => toast.info("Escape sent to session"),
       (err) => {
@@ -13297,7 +13451,7 @@ const ConversationViewInner = (
         toast.error(err instanceof Error ? err.message : "Failed to send Escape");
       },
     );
-  }, [conversation, effectiveIsOwner, convCommand, convexConvId]);
+  }, [conversation, effectiveIsOwner, convCommand, convexConvId, liveAgentStatus]);
 
   const handleMessageSent = useCallback(() => {
     setUserScrolled(false);
@@ -13548,9 +13702,7 @@ const ConversationViewInner = (
     if (!serverUserMessages) return new Set<string>();
     const ids = new Set<string>();
     for (const m of serverUserMessages) {
-      if (stickyPromptContent(m.content) === null) continue;
-      const display = cleanContent(m.content);
-      if (display.length > 0 && !isSystemMessage(display)) ids.add(m._id);
+      if (isStickyEligible(m.content)) ids.add(m._id);
     }
     return ids;
   }, [serverUserMessages]);
@@ -13574,28 +13726,13 @@ const ConversationViewInner = (
   }, [timeline, processedServerMsgIds, userMsgKindMap]);
 
   const serverStickyFallback = useMemo(() => {
-    if (!serverUserMessages || serverUserMessages.length === 0 || !hasMoreAbove) return null;
-    const localIds = new Set<string>();
-    let earliestLoadedTs = Infinity;
+    if (!hasMoreAbove) return null;
+    const loaded: Message[] = [];
     for (const item of timeline) {
-      if (item.type !== 'message') continue;
-      const m = item.data as Message;
-      localIds.add(m._id);
-      if (typeof m.timestamp === 'number' && m.timestamp < earliestLoadedTs) earliestLoadedTs = m.timestamp;
+      if (item.type === 'message') loaded.push(item.data as Message);
     }
-    // Pick the latest user message that sits ABOVE the loaded window — the most
-    // recent prompt the reader scrolled past but that isn't paginated in yet.
-    // Returning the first not-loaded message instead would always surface the
-    // conversation's opening prompt when parked deep in a long thread.
-    for (let i = serverUserMessages.length - 1; i >= 0; i--) {
-      const msg = serverUserMessages[i];
-      if (msg.role !== 'user') continue;
-      if (localIds.has(msg._id) || !processedServerMsgIds.has(msg._id)) continue;
-      if (msg.timestamp >= earliestLoadedTs) continue;
-      return { id: msg._id, content: msg.content, fromUserId: (msg as any).from_user_id as string | undefined };
-    }
-    return null;
-  }, [serverUserMessages, timeline, hasMoreAbove, processedServerMsgIds]);
+    return pickStickyFallbackFromLoaded(serverUserMessages, loaded);
+  }, [serverUserMessages, timeline, hasMoreAbove]);
 
   const [activeStickyMsg, setActiveStickyMsgRaw] = useState<{ index: number; content: string; id: string; fromUserId?: string } | null>(null);
   const setActiveStickyMsg = useCallback((val: { index: number; content: string; id: string; fromUserId?: string } | null) => {
@@ -16139,6 +16276,11 @@ const ConversationViewInner = (
                   <TmuxAttachPill tmuxSession={managedSession?.tmux_session} isLive={isSessionLive} conversationKey={conversation?._id.toString()} />
                 </span>
 
+                {/* Runs on a remote host whose daemon is struggling: say so
+                    here, on the session it actually affects — the header
+                    fleet chip deliberately ignores remote machines. */}
+                {conversation?._id && !guest && <SessionDaemonChip conversationId={String(conversation._id)} />}
+
                 {sessionGallerySrcs.length > 0 && <SessionGalleryButton srcs={sessionGallerySrcs} />}
 
                 {/* The project's files, one click away regardless of what the
@@ -16823,20 +16965,18 @@ const ConversationViewInner = (
                   {content && (
                     <div className={`conv-col mx-auto px-4 sm:px-5 md:px-6 ${condensedFeed ? "py-px" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
                       {virtualItem.index === firstUnseenIndex && (
-                        <div className="flex items-center gap-3 mt-1 mb-3 select-none" aria-label="New messages">
-                          <div className="flex-1 h-px" style={{ background: 'linear-gradient(to right, transparent, var(--sol-orange))' }} />
-                          <span className="text-[10px] font-semibold uppercase tracking-[0.15em]" style={{ color: 'var(--sol-orange)' }}>New</span>
-                          <div className="flex-1 h-px" style={{ background: 'linear-gradient(to left, transparent, var(--sol-orange))' }} />
-                        </div>
+                        <TimelineRule color="var(--sol-orange)" label="New messages">
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-orange">New</span>
+                        </TimelineRule>
                       )}
+                      {virtualItem.index === handoffIndex && handoffRule}
                       {content}
                       {virtualItem.index === timeline.length - 1 && !hasMoreBelow && (now - lastActivityAt) > 5 * 60 * 1000 && (
-                        <div className="flex items-center gap-3 mt-5 mb-1">
-                          <div className="flex-1 h-px opacity-40" style={{ background: 'linear-gradient(to right, transparent, var(--sol-border))' }} />
+                        <TimelineRule color="var(--sol-border)" className="mt-5 mb-1" faint>
                           <span className="text-[11px] text-sol-text-dim/60">{formatRelativeTime(lastActivityAt)}</span>
-                          <div className="flex-1 h-px opacity-40" style={{ background: 'linear-gradient(to left, transparent, var(--sol-border))' }} />
-                        </div>
+                        </TimelineRule>
                       )}
+                      {virtualItem.index === timeline.length - 1 && !hasMoreBelow && handoffIndex === timeline.length && handoffRule}
                     </div>
                   )}
                 </div>

@@ -30,7 +30,7 @@ for (const dir of ["downloads", "temp"]) {
   app.setPath(dir, p);
 }
 
-const { pickWindow, pickOfferWindow, chooseLeader, RecentKeys } = require("./notificationRouter");
+const { pickWindow, chooseLeader, RecentKeys } = require("./notificationRouter");
 const {
   shouldHandBackCall,
   callWindowChrome,
@@ -45,6 +45,7 @@ const {
   startedApps,
   decideOffer,
 } = require("./meetingDetector");
+const { getOsNotificationState, notificationSettingsUrl } = require("./osNotificationState");
 
 let notificationRefs = [];
 
@@ -1142,8 +1143,8 @@ function describeWindows() {
       isMain: win === mainWindow,
       isPeople: win === peopleWindow,
       // The call panel bypasses the dashboard layout, same as the buddy list.
-      // Routing that asks for a dashboard surface (pickOfferWindow) needs to
-      // tell it apart from an ordinary detached tab window.
+      // Routing that wants a dashboard surface needs to tell it apart from an
+      // ordinary detached tab window.
       isCallPanel: win === callWindow,
       focused: win.isFocused(),
       lastFocusedAt: lastFocusedAt.get(win.id) || 0,
@@ -1403,6 +1404,113 @@ function hidePalette() {
   if (!paletteWindow || !paletteWindow.isVisible()) return;
   paletteWindow.hide();
 }
+
+// ---------------------------------------------------------------------------
+// The meeting-offer window: the record-this-meeting card as a small chromeless
+// window in the top-right corner (route /meeting-offer). The palette's polite
+// sibling — same glass, opposite manners: summoned by the meeting poller
+// rather than a keystroke, revealed with showInactive and NEVER focused. The
+// person it appears to is joining a meeting; a card taking their keystrokes is
+// worse than no card at all.
+//
+// The renderer owns the content AND the recording it starts, so the shell's
+// whole job is shape and place: the page reports its content size
+// (meeting-offer-size), the shell reshapes the window around it anchored to
+// the corner, and the first report is the reveal signal — so an offer landing
+// in a still-booting window shows exactly when there is something to see.
+// ---------------------------------------------------------------------------
+let meetingOfferWindow = null;
+const MEETING_OFFER_MARGIN = 16;
+
+function createMeetingOfferWindow() {
+  const zoom = getAutoZoomFactor();
+  const win = new BrowserWindow({
+    width: 360,
+    height: 64,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    show: false,
+    hasShadow: false,
+    focusable: true,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      zoomFactor: zoom,
+      additionalArguments: [`--zoom-factor=${zoom}`, "--meeting-offer-window"],
+      // It records. While it does, it is by definition behind the meeting —
+      // throttled timers would starve the transcript's heartbeat and the
+      // orphan sweep would end a recording that is still running.
+      backgroundThrottling: false,
+    },
+  });
+  meetingOfferWindow = win;
+  // Over a fullscreen meeting app — which is exactly where the person is when
+  // this card matters.
+  win.setAlwaysOnTop(true, "screen-saver");
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.loadURL(`${currentBaseUrl}/meeting-offer`);
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+  win.webContents.on("did-finish-load", () => {
+    if (!win.isDestroyed()) {
+      win.webContents.executeJavaScript(
+        "document.documentElement.classList.add('electron-desktop')"
+      );
+    }
+  });
+  win.on("closed", () => {
+    if (meetingOfferWindow === win) meetingOfferWindow = null;
+  });
+}
+
+// Top-right of the display the cursor is on, growing downward and leftward so
+// the corner anchor holds while the card expands.
+function placeMeetingOfferWindow(width, height) {
+  const win = meetingOfferWindow;
+  if (!win || win.isDestroyed()) return;
+  const cursor = screen.getCursorScreenPoint();
+  const area = screen.getDisplayNearestPoint(cursor).workArea;
+  win.setBounds({
+    x: Math.round(area.x + area.width - width - MEETING_OFFER_MARGIN),
+    y: Math.round(area.y + MEETING_OFFER_MARGIN),
+    width: Math.round(width),
+    height: Math.round(height),
+  });
+}
+
+ipcMain.on("meeting-offer-size", (e, size) => {
+  const win = meetingOfferWindow;
+  if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
+  const width = Math.max(60, Math.min(560, Math.round(Number(size?.width) || 360)));
+  const height = Math.max(40, Math.min(480, Math.round(Number(size?.height) || 64)));
+  placeMeetingOfferWindow(width, height);
+  if (!win.isVisible()) win.showInactive();
+});
+
+ipcMain.on("meeting-offer-hide", (e) => {
+  const win = meetingOfferWindow;
+  if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
+  win.hide();
+});
+
+// "Open the transcript" from the recording face: the card is not a place to
+// read, so the transcript lands in the main window.
+ipcMain.on("meeting-offer-open-call", (e, id) => {
+  const win = meetingOfferWindow;
+  if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
+  const clean = String(id ?? "").replace(/[^A-Za-z0-9_-]/g, "");
+  if (clean) navigateMain(`/calls/${clean}`);
+});
 
 // Open a FULL new session in the main window (Ctrl+N model): bring the app
 // forward and let the web shell start the deferred session inline (it renders
@@ -1858,6 +1966,22 @@ ipcMain.handle("show-notification", (_e, payload) => {
   return { shown: true };
 });
 
+// OS-level notification consent (macOS). "granted" | "off" | "ask" | "unknown"
+// — see osNotificationState.js. Unpackaged dev runs register with the OS under
+// Electron's own bundle id, so query that one there.
+const notificationBundleId = () => (app.isPackaged ? "sh.codecast.desktop" : "com.github.Electron");
+ipcMain.handle("get-os-notification-state", () => getOsNotificationState(notificationBundleId()));
+// In the "ask" state macOS has never prompted: posting one real notification
+// is what raises the system Allow/Don't Allow dialog. Deliberately not gated
+// on app focus — the user just clicked "Enable".
+ipcMain.handle("request-os-notification-permission", () => {
+  showNativeNotification("Notifications are on", "Codecast will notify you when someone messages or a session needs you.");
+});
+// In the "off" state only System Settings can flip it back.
+ipcMain.handle("open-notification-settings", () => {
+  shell.openExternal(notificationSettingsUrl(notificationBundleId()));
+});
+
 // Sign-in hands its OAuth flow to the user's real browser (issue #20): the
 // embedded window has no Google/GitHub sessions. https-only — the renderer
 // only ever passes app-origin auth URLs, and anything else has no business
@@ -1999,13 +2123,14 @@ async function meetingTick() {
   }
 }
 
-// The offer reaches ONE window and TAKES NO FOCUS — nothing is shown, raised
-// or sounded here. A card that jumps in front of somebody joining a meeting is
+// The offer goes to the dedicated meeting-offer window and TAKES NO FOCUS —
+// nothing is raised or sounded here. The window reveals itself (inactive, in
+// the corner) when its renderer reports content, and the chime is the
+// renderer's. A card that jumps in front of somebody joining a meeting is
 // worse than a recording they had to start by hand.
 function offerToRecord(appId, decision) {
-  const pick = pickOfferWindow(describeWindows());
-  if (!pick) return;
-  const win = BrowserWindow.fromId(pick.id);
+  if (!meetingOfferWindow) createMeetingOfferWindow();
+  const win = meetingOfferWindow;
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
   win.webContents.send("meeting-detected", {
     app: appId,
