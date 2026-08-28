@@ -20,7 +20,7 @@ export type CrumbSpec = {
   /** Absent on the last crumb — you are already there. */
   href?: string;
   /** What kind of thing this names, so the bar can mark it (a project dot…). */
-  kind?: "section" | "project" | "task" | "doc" | "plan" | "session" | "channel";
+  kind?: "section" | "project" | "task" | "doc" | "plan" | "channel";
   /** The entity's id, for the renderer to resolve a colour or avatar. */
   id?: string;
 };
@@ -32,7 +32,6 @@ export type BreadcrumbLookups = {
   task?: (id: string) => Named;
   doc?: (id: string) => Named;
   plan?: (id: string) => Named;
-  session?: (id: string) => Named;
   channel?: (id: string) => Named;
 };
 
@@ -58,7 +57,6 @@ export const SECTION_LABELS: Record<string, string> = {
   settings: "Settings",
   team: "Team",
   feed: "Feed",
-  conversation: "Inbox",
 };
 
 /** Trim a title for a crumb — the trail is a wayfinding strip, not a headline. */
@@ -75,7 +73,6 @@ const KIND_LABELS: Record<NonNullable<CrumbSpec["kind"]>, string> = {
   task: "Task",
   doc: "Doc",
   plan: "Plan",
-  session: "Session",
   channel: "Channel",
 };
 
@@ -84,9 +81,8 @@ const CONVEX_ID = /^[a-z0-9]{32}$/;
 
 /** The name and (separately) the short id. Falls back so a crumb never renders
  *  blank while the store is still catching up — but never to a raw Convex id:
- *  that is a handle, not a name. A session is named by its 7-char short form
- *  (the id every `cast` command and link uses); other kinds have their own
- *  short ids, so they show only what kind of thing this is until it loads. */
+ *  that is a handle, not a name, so the crumb shows only what kind of thing
+ *  this is until it loads. */
 function entityCrumb(
   row: Named,
   fallbackId: string,
@@ -96,9 +92,7 @@ function entityCrumb(
   const short = row?.short_id;
   if (name) return { label: crumbLabel(name), shortId: short };
   if (short) return { label: crumbLabel(short) };
-  if (CONVEX_ID.test(fallbackId)) {
-    return { label: kind === "session" ? fallbackId.slice(0, 7) : KIND_LABELS[kind] };
-  }
+  if (CONVEX_ID.test(fallbackId)) return { label: KIND_LABELS[kind] };
   return { label: crumbLabel(fallbackId) };
 }
 
@@ -153,9 +147,6 @@ export function buildBreadcrumbs(pathname: string, lookups: BreadcrumbLookups = 
       break;
     case "chat":
       if (rest[0]) push(rest[0], "channel", lookups.channel);
-      break;
-    case "conversation":
-      if (rest[0]) push(rest[0], "session", lookups.session);
       break;
     default:
       // Sections with no detail route of their own stop at their own name.

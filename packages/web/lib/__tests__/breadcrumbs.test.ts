@@ -8,7 +8,6 @@ const lookups = {
   doc: (id) => ({ d1: { title: "Sync design notes" } })[id],
   plan: (id) => ({ pl1: { title: "Restore acquisition", short_id: "pl-306" } })[id],
   channel: (id) => ({ c1: { name: "general" } })[id],
-  session: (id) => ({ s1: { title: "Task filtering" } })[id],
 };
 
 const labels = (path, l = lookups) => buildBreadcrumbs(path, l).map((c) => c.label);
@@ -60,11 +59,8 @@ describe("buildBreadcrumbs", () => {
     expect(labels("/projects/p9/t9", {})).toEqual(["Projects", "p9", "t9"]);
   });
 
-  it("never renders a raw Convex id — a session shows its short handle, others their kind", () => {
+  it("never renders a raw Convex id — the crumb names the kind until the row loads", () => {
     const raw = "jx7bpagx1jct409wgrkdqcn4558d7560";
-    const [, sess] = buildBreadcrumbs(`/conversation/${raw}`, {});
-    expect(sess.label).toBe("jx7bpag");
-    expect(sess.shortId).toBeUndefined();
     const [, task] = buildBreadcrumbs(`/tasks/${raw}`, {});
     expect(task.label).toBe("Task");
     expect(task.shortId).toBeUndefined();
@@ -73,7 +69,6 @@ describe("buildBreadcrumbs", () => {
   it("uses whichever name field the entity carries", () => {
     expect(labels("/chat/c1")).toEqual(["Chat", "general"]);
     expect(labels("/docs/d1")).toEqual(["Docs", "Sync design notes"]);
-    expect(labels("/conversation/s1")).toEqual(["Inbox", "Task filtering"]);
   });
 
   it("keeps the short id beside the name, not spliced into it", () => {

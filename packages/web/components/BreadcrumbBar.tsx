@@ -60,14 +60,6 @@ export function BreadcrumbBar() {
   const planTitle = useInboxStore((s) => (planId ? findRow(s.plans, planId)?.title : undefined));
   const planShortId = useInboxStore((s) => (planId ? findRow(s.plans, planId)?.short_id : undefined));
 
-  // /conversation/<id> is keyed by the conversation id on both maps; the
-  // session row is the one the inbox already holds, conversations the thin
-  // seed a deep link writes first.
-  const sessionId = head === "conversation" ? first : undefined;
-  const sessionTitle = useInboxStore((s) =>
-    sessionId ? (findRow(s.sessions, sessionId)?.title ?? findRow(s.conversations, sessionId)?.title) : undefined,
-  );
-
   const channelId = head === "chat" ? first : undefined;
   // A DM's crumb is the other side's names — same derivation as every chat
   // surface; a channel's is its slug. Never the raw id.
@@ -91,10 +83,9 @@ export function BreadcrumbBar() {
       doc: () => ({ title: docTitle }),
       plan: () => ({ title: planTitle, short_id: planShortId }),
       channel: () => ({ name: channelName }),
-      session: () => ({ title: sessionTitle }),
     };
     return buildBreadcrumbs(pathname, lookups);
-  }, [pathname, projectTitle, taskTitle, taskShortId, docTitle, planTitle, planShortId, channelName, sessionTitle]);
+  }, [pathname, projectTitle, taskTitle, taskShortId, docTitle, planTitle, planShortId, channelName]);
 
   // One crumb is a label, not a trail.
   if (specs.length < 2) return null;
