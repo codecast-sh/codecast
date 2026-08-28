@@ -1068,7 +1068,11 @@ function SchedHealthDot({ accent, task }: { accent: SchedAccent; task: { last_ru
 
 // The next-fire badge — one tone function, one label function, so the strip and
 // the row show the same countdown for the same schedule.
-function SchedFireBadge({ task, now, className = "" }: { task: TaskRow; now: number; className?: string }) {
+// Memoized with its own label-keyed clock: ~80 badges used to re-render on
+// every parent pass and every 30s tick, each paying toLocale* formatting and a
+// tooltip. Now a badge re-renders only when its text would change.
+const SchedFireBadge = memo(function SchedFireBadge({ task, className = "" }: { task: TaskRow; className?: string }) {
+  const now = useNowWhen((t) => taskStateLabel(task, t), 30_000);
   const badge = (
     <span className={`${className} shrink-0 inline-flex items-center justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold tabular-nums border transition-colors ${schedBadgeTone(task, now)}`}>
       {taskStateLabel(task, now)}
@@ -1083,7 +1087,7 @@ function SchedFireBadge({ task, now, className = "" }: { task: TaskRow; now: num
       {badge}
     </ShortcutTooltip>
   );
-}
+});
 
 // One schedule row, used EVERYWHERE a schedule renders as a row: the dock
 // roster and the bars stacked under a session card (attached). One anatomy so
@@ -1216,7 +1220,7 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
               {row.kind === "loop" ? "loop" : describeTaskCadence(task)}
             </span>
           )}
-          <SchedFireBadge task={task} now={now} className={attached && row.kind !== "loop" ? "ml-auto" : ""} />
+          <SchedFireBadge task={task} className={attached && row.kind !== "loop" ? "ml-auto" : ""} />
         </div>
         {/* Attached rows are TWO lines, always: the gist shares its line with
             the last-outcome meta (retrying, recency) so a bar under a card
@@ -1520,7 +1524,7 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
         </span>
       )}
       {primary ? (
-        <SchedFireBadge task={primary.task} now={now} className="ml-auto" />
+        <SchedFireBadge task={primary.task} className="ml-auto" />
       ) : (
         <span className="ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border bg-sol-green/10 text-sol-green border-sol-green/30">
           <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />
