@@ -42,6 +42,30 @@ export type WatchInputEvent =
   | { kind: "key"; type: "keyDown" | "keyUp"; key: string; code?: string; text?: string; modifiers?: number }
   | { kind: "insertText"; text: string };
 
+/**
+ * Map a viewer's client point to normalized page coordinates (0..1), given
+ * the <img> that renders the frame with object-contain. The video content
+ * sits letterboxed inside the img box; a click in the letterbox bands maps
+ * to nothing. Pure, so the geometry is testable without a DOM.
+ */
+export function mapToFrame(
+  clientX: number,
+  clientY: number,
+  box: { left: number; top: number; width: number; height: number },
+  natural: { width: number; height: number },
+): { nx: number; ny: number } | null {
+  if (!natural.width || !natural.height || !box.width || !box.height) return null;
+  const scale = Math.min(box.width / natural.width, box.height / natural.height);
+  const w = natural.width * scale;
+  const h = natural.height * scale;
+  const left = box.left + (box.width - w) / 2;
+  const top = box.top + (box.height - h) / 2;
+  const nx = (clientX - left) / w;
+  const ny = (clientY - top) / h;
+  if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return null;
+  return { nx, ny };
+}
+
 export interface WatchConnection {
   close: () => void;
   /** Send input events (control mode). No-op before ready or after close. */
