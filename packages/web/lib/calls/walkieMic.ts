@@ -15,6 +15,7 @@
 // tens of milliseconds of work.
 import { Track } from "livekit-client";
 import { getRoom, mediaFailureReason } from "./callManager";
+import { bindPrewarmMic } from "./roomPrewarm";
 import { micConstraints, readJoinPrefs } from "./joinPrefs";
 
 /** The track already published into the room this client is sitting in —
@@ -167,3 +168,25 @@ export async function warmMic(): Promise<void> {
 export function micFailureReason(): Promise<string> {
   return mediaFailureReason("microphone", lastMicError);
 }
+
+
+// THE PREWARM USES THIS DEVICE, not one of its own.
+//
+// A prewarmed room publishes a muted microphone so the far side has already
+// negotiated the track before anybody presses (the founder's call: the
+// recording indicator lights on hover, and a press becomes an unmute rather
+// than a publish). It has to be THIS module's device — a second getUserMedia
+// would be a second entry in the browser's indicator, a second echo path, and
+// a second thing to remember to close.
+//
+// Registered from this side rather than imported from the other, for the same
+// reason `bindMicInUse` is injected: `callManager` sits between this file and
+// the prewarm, so an import the other way would close a cycle.
+//
+// `warmMic` and nothing else, so the rule that a hover can never raise a
+// permission dialog survives the change: where permission has not already been
+// granted this hands back null and the prewarm simply stays silent.
+bindPrewarmMic(async () => {
+  await warmMic();
+  return heldMic();
+});
