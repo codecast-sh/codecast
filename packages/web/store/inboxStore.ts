@@ -7034,14 +7034,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // feed, just like store.sessions backs the personal feed). Both the live query
   // (newest page) and "Load more" (older pages) dump here; we overlay by _id so
   // updates and paginated pages merge without ever losing a row, then keep it
-  // sorted newest-first. Bounded only to keep the persisted blob sane. sync() =
-  // local draft + IDB write, no server dispatch.
+  // sorted newest-first. UNBOUNDED on purpose: every row a page ever fetched
+  // stays cached. The feed's exhaustiveness rests on this — a cap silently
+  // dropped the oldest rows once a deep scroll crossed it, and the catch-up
+  // walk (lib/feedCatchup) counts on cached rows below the watermark staying
+  // put. sync() = local draft + IDB write, no server dispatch.
   mergeFeedConversations: sync(function (this: Draft, key: string, convs: any[]) {
     const byId = new Map((this.feedConversations[key] ?? []).map((c: any) => [c._id, c]));
     for (const c of convs ?? []) byId.set(c._id, c);
     this.feedConversations[key] = [...byId.values()]
-      .sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0))
-      .slice(0, 2000);
+      .sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
   }),
 
   // Whether older pages remain for this feed key (persisted so the "Load more"
@@ -7744,6 +7746,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
       return;
     }
     this.userMessages[convId] = msgs;
+    // Persisted beside the message pages so a reopen (or a reload) paints the
+    // message navigator from disk instead of a skeleton while getUserMessages
+    // is in flight; ensureHydrated restores it.
+    writeConversationUserMessages(convId, msgs);
   }),
 
   addOptimisticMessage: sync(function (this: Draft, convId: string, content: string, images?: Array<OptimisticImage>, clientId?: string) {
@@ -9489,24 +9495,33 @@ export function useTrackedStore(deps: Array<(s: InboxStoreState) => any>): Inbox
 // listMessages for every row it didn't hold in MEMORY, which on a relaunch was
 // all of them, even though IDB had the tail for nearly every one.
 const _idbHydrating = new Map<string, Promise<boolean>>();
+// Conversations whose messages were already in memory when we went to disk
+// for the navigator list alone. Probed once: ensureHydrated runs on every
+// ConversationView render, and a conversation with no persisted list must not
+// cost an IDB read per render. Eviction drops messages and the list together,
+// so the next full hydration re-reads both regardless of this set.
+const _userMsgsProbed = new Set<string>();
 export function ensureHydrated(convId: string): Promise<boolean> {
   const store = useInboxStore.getState();
+  const hasMessages = store.messages[convId]?.length > 0;
   // Already in memory — nothing to hydrate
-  if (store.messages[convId]?.length > 0) return Promise.resolve(true);
+  if (hasMessages && (store.userMessages[convId] || _userMsgsProbed.has(convId))) return Promise.resolve(true);
   // In-flight hydration — don't double-load
   const inflight = _idbHydrating.get(convId);
   if (inflight) return inflight;
+  if (hasMessages) _userMsgsProbed.add(convId);
   const p = loadConversationMessages(convId).then((cached) => {
     _idbHydrating.delete(convId);
-    if (!cached || cached.messages.length === 0) return false;
-    const current = useInboxStore.getState().messages[convId];
-    if (current?.length > 0) return true;
-    useInboxStore.getState().setMessages(convId, cached.messages, cached.pagination);
+    const s = useInboxStore.getState();
+    if (cached?.userMessages && !s.userMessages[convId]) s.setUserMessages(convId, cached.userMessages);
+    if (!cached || cached.messages.length === 0) return hasMessages;
+    if (s.messages[convId]?.length > 0) return true;
+    s.setMessages(convId, cached.messages, cached.pagination);
     return true;
   }).catch(() => {
     _idbHydrating.delete(convId);
     // Never reinterpret a storage error as an authoritative empty conversation.
-    return false;
+    return hasMessages;
   });
   _idbHydrating.set(convId, p);
   return p;
