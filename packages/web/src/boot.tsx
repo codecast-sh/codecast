@@ -23,6 +23,21 @@ installIdleAnimationPause();
 // desktop shell, where local is a daily driver, not a debugger — the desktop
 // pointed at local should feel like the product. Prod builds strip the
 // double-invoke anyway, so this changes nothing there.
+// Dev-only: React 19 captures an Error() per created element for "owner
+// stacks" (jsxDEV), until a 10k-per-render cap after which it reuses a shared
+// sentinel. V8's stack capture costs O(live stack depth) whatever
+// Error.stackTraceLimit says, and React's render stack is deep: measured ~60ms
+// of pure element creation per ConversationView pass (2.9s of a 3s session
+// switch on local). Pinning the counter at the cap makes every element take
+// React's own cheap path. Only dev warnings lose the owner stack; set
+// localStorage cc_owner_stacks=1 when you need them.
+if (import.meta.env.DEV && localStorage.getItem("cc_owner_stacks") !== "1") {
+  const internals = (React as any).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+  if (internals && "recentlyCreatedOwnerStacks" in internals) {
+    Object.defineProperty(internals, "recentlyCreatedOwnerStacks", { get: () => 1e4, set() {}, configurable: true });
+  }
+}
+
 const app = (
   <BrowserRouter>
     <App />
