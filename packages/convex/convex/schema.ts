@@ -2104,16 +2104,18 @@ export default defineSchema({
       v.literal("plan_status_changed"),
       v.literal("plan_task_completed"),
       v.literal("artifact_commented"),
-      // Team chat. There is deliberately no type for a plain channel message:
-      // ordinary chatter produces unread state only, never a notification row and
-      // never a push. A direct message is the exception — it is addressed to you
-      // by construction, so every DM line notifies exactly like a mention.
+      // Team chat. By default ordinary chatter produces unread state only —
+      // never a notification row, never a push. A direct message is one
+      // exception (addressed to you by construction, it notifies like a
+      // mention); chat_post is the other: a plain channel line, written only
+      // for members who set that channel's notify level to "all".
       v.literal("chat_mention"),
       v.literal("chat_reply"),
       v.literal("chat_here"),
       v.literal("chat_dm"),
       // Someone added you to a private channel or a group message.
-      v.literal("chat_added")
+      v.literal("chat_added"),
+      v.literal("chat_post")
     ),
     actor_user_id: v.optional(v.id("users")),
     // Display identity for actors without an account (an anonymous artifact
@@ -2504,6 +2506,51 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_workspace", ["workspace"])
     .index("by_short_id", ["short_id"]),
+
+  // A post on a project's Updates tab: a human status post or an agent's
+  // periodic digest. Untracked by the change feed (same trade as
+  // task_comments): every write bumps the parent project's updated_at, and the
+  // web reads these through reactive queries, so clients stay fresh without
+  // first-class sync plumbing. Access is always derived from the parent
+  // project (owner or team member) — rows carry no workspace stamp of their
+  // own, so they can never drift from the project's scope.
+  project_updates: defineTable({
+    project_id: v.id("projects"),
+    // Short id ("pu-N") so the CLI can address an update for commenting.
+    short_id: v.optional(v.string()),
+    user_id: v.id("users"),
+    author: v.string(),
+    // The person behind the post; absent for agent/system authored rows.
+    author_user_id: v.optional(v.id("users")),
+    author_kind: v.union(v.literal("user"), v.literal("agent")),
+    // "update" = a deliberate post; "digest" = an automated roll-up (the
+    // weekly what-changed post). The UI badges digests differently.
+    kind: v.union(v.literal("update"), v.literal("digest")),
+    title: v.optional(v.string()),
+    body: v.string(),
+    conversation_id: v.optional(v.id("conversations")),
+    created_at: v.number(),
+    updated_at: v.number(),
+    edited_at: v.optional(v.number()),
+  })
+    .index("by_project_created", ["project_id", "created_at"])
+    .index("by_short_id", ["short_id"]),
+
+  // Discussion under a project update. Mirrors task_comments: flat thread,
+  // denormalized project_id so the timeline can scan one index.
+  project_update_comments: defineTable({
+    update_id: v.id("project_updates"),
+    project_id: v.id("projects"),
+    author: v.string(),
+    author_user_id: v.optional(v.id("users")),
+    author_kind: v.union(v.literal("user"), v.literal("agent")),
+    text: v.string(),
+    conversation_id: v.optional(v.id("conversations")),
+    created_at: v.number(),
+  })
+    .index("by_update_created", ["update_id", "created_at"])
+    .index("by_project_created", ["project_id", "created_at"]),
+
 
   // Saved list views — a named set of filters/grouping/sort for /tasks, /docs or
   // /plans. These used to live in the owner's client_state bag, which made them

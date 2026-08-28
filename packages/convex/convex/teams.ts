@@ -1,5 +1,6 @@
 import { mutation, query, action, internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createTeamFeedFilter, isTeamAdmin } from "./privacy";
@@ -325,11 +326,24 @@ export const getTeamByInviteCode = query({
     return {
       _id: team._id,
       name: team.name,
+      icon: team.icon,
+      icon_color: team.icon_color,
       memberCount: memberships.length,
       isExpired,
     };
   },
 });
+
+// Message counters in the roster's session preview move on every streamed turn.
+// They are shown only as a coarse hover figure, so step them before they leave
+// the server — the same trick bucketTs plays on the presence timestamps. The web
+// store already steps this field by 16 (COUNTER_QUANTUM, inboxStore.ts), so the
+// value a client renders is unchanged.
+const MEMBER_COUNTER_STEP = 16;
+function stepCount(n: number | undefined): number | undefined {
+  if (n === undefined) return undefined;
+  return Math.floor(n / MEMBER_COUNTER_STEP) * MEMBER_COUNTER_STEP;
+}
 
 export const getTeamMembers = query({
   args: {
@@ -448,8 +462,14 @@ export const getTeamMembers = query({
           in_huddle: !!liveCall,
           in_room_key: visibleRoomKey,
           recent_session_title: recentConvo?.title,
-          recent_session_messages: recentConvo?.message_count,
-          recent_session_updated: recentConvo?.updated_at,
+          // Coarse for the same reason as the presence fields above: this
+          // roster is always mounted, and a teammate's streaming agent bumps
+          // updated_at and message_count several times a second. Bucketed, most
+          // of those turns yield a byte-identical result and Convex skips the
+          // push; invalidation is unchanged. Both feed a hover figure and a
+          // relative age only.
+          recent_session_messages: stepCount(recentConvo?.message_count),
+          recent_session_updated: bucketTs(recentConvo?.updated_at),
           recent_session_last_message: recentConvo?.last_message_preview,
         };
       })
@@ -1053,6 +1073,64 @@ export const createUserFromGithub = internalMutation({
       joined_at: now,
     });
     return userId;
+  },
+});
+
+// internal: removes throwaway teams created by agent test runs. Guarded by a
+// name check so a wrong id cannot delete a real team. Deletes the team row and
+// its memberships, then repoints any user whose team_id / active_team_id
+// referenced a deleted team to a team they still belong to.
+export const cleanupTestTeams = internalMutation({
+  args: { team_ids: v.array(v.id("teams")) },
+  handler: async (ctx, args) => {
+    const deleted: string[] = [];
+    const skipped: string[] = [];
+    const affectedUsers = new Set<string>();
+    for (const teamId of args.team_ids) {
+      const team = await ctx.db.get(teamId);
+      if (!team) continue;
+      if (!/^(flow test|critique round)/i.test(team.name)) {
+        skipped.push(team.name);
+        continue;
+      }
+      const memberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
+        .collect();
+      for (const m of memberships) {
+        affectedUsers.add(m.user_id.toString());
+        await ctx.db.delete(m._id);
+      }
+      await ctx.db.delete(teamId);
+      deleted.push(team.name);
+    }
+    for (const userIdStr of affectedUsers) {
+      const userId = userIdStr as Id<"users">;
+      const user = await ctx.db.get(userId);
+      if (!user) continue;
+      const remaining = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect();
+      const remainingIds = new Set(remaining.map((m) => m.team_id.toString()));
+      // Oldest membership, not index order: the fallback decides which team
+      // the user lands on, so it must be their most established one, never
+      // whichever row the scan happened to return first.
+      const fallback = remaining
+        .slice()
+        .sort((a, b) => (a.joined_at ?? 0) - (b.joined_at ?? 0))[0]?.team_id;
+      const patch: Partial<{ team_id: Id<"teams"> | undefined; active_team_id: Id<"teams"> | undefined }> = {};
+      if (user.team_id && !remainingIds.has(user.team_id.toString())) {
+        patch.team_id = fallback;
+      }
+      if (user.active_team_id && !remainingIds.has(user.active_team_id.toString())) {
+        patch.active_team_id = fallback;
+      }
+      if (Object.keys(patch).length > 0) {
+        await ctx.db.patch(userId, patch);
+      }
+    }
+    return { deleted, skipped };
   },
 });
 

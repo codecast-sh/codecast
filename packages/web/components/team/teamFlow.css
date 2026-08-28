@@ -1,0 +1,287 @@
+/* Create and join team flow. The chosen crest color is the surface accent
+   through --team-flow-accent, set on the shell root from the color token. */
+
+.tf-root {
+  --team-flow-accent: var(--sol-cyan);
+  position: relative;
+  /* Own stacking context, so the wash below can sit behind the content
+     with a negative z-index yet stay above ancestor backgrounds. */
+  isolation: isolate;
+}
+
+/* A soft pool of the accent behind the rail and the heading, so the page
+   visibly takes on the team color as it is picked. background-color
+   transitions when the accent changes, so a new swatch re-tints the
+   surface smoothly instead of snapping. */
+.tf-root::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  /* The box reaches far past the shell so the ellipse fades out inside it,
+     or is cut only at the scroll area's own edges, where a cut reads as
+     the glow running under the chrome. The ellipse centers on the crest. */
+  inset: -6rem -2rem auto -20rem;
+  height: 26rem;
+  background-color: color-mix(in srgb, var(--team-flow-accent) 36%, transparent);
+  -webkit-mask-image: radial-gradient(36rem 18rem at 22.5rem 8rem, black, transparent 75%);
+  mask-image: radial-gradient(36rem 18rem at 22.5rem 8rem, black, transparent 75%);
+  transition: background-color 400ms ease;
+  pointer-events: none;
+}
+
+/* The rail crest is the hero: a colored halo lifts it off the page and
+   follows the accent with the same smooth re-tint. */
+.tf-crest {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--team-flow-accent) 40%, transparent),
+    0 14px 36px -8px color-mix(in srgb, var(--team-flow-accent) 60%, transparent);
+  transition: box-shadow 400ms ease;
+}
+
+/* The flow name above the crest picks up the accent. Mixed toward
+   --sol-text so the 11px caps stay readable for every team color. */
+.tf-eyebrow {
+  color: color-mix(in srgb, var(--team-flow-accent) 55%, var(--sol-text));
+  transition: color 400ms ease;
+}
+
+/* Staggered reveal on first paint only. --tf-i is the item's order; motion
+   stays under 300ms per item. */
+.tf-reveal {
+  animation: tf-rise 280ms cubic-bezier(0.23, 1, 0.32, 1) both;
+  animation-delay: calc(var(--tf-i, 0) * 45ms);
+}
+
+@keyframes tf-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Step navigation. One quick directional slide on the whole step, no
+   stagger: navigation repeats, so it stays faster than the first paint.
+   --tf-dir is 1 going forward, -1 going back. */
+.tf-step-enter {
+  animation: tf-step-in 200ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+@keyframes tf-step-in {
+  from {
+    opacity: 0;
+    transform: translateX(calc(var(--tf-dir, 1) * 10px));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The accent primary action. The solarized accents are mid tones: raw accent
+   as a background fails WCAG AA (4.5:1) for 14px text against BOTH --sol-bg
+   values, whichever text color you pick. So the accent carries the surface
+   (tint + border) and the label stays --sol-text, which keeps contrast high
+   in both themes for all seven team colors. */
+.tf-primary {
+  background: color-mix(in srgb, var(--team-flow-accent, var(--sol-cyan)) 34%, var(--sol-bg-alt));
+  border: 1px solid color-mix(in srgb, var(--team-flow-accent, var(--sol-cyan)) 60%, transparent);
+  color: var(--sol-text);
+  box-shadow: 0 1px 8px -2px color-mix(in srgb, var(--team-flow-accent, var(--sol-cyan)) 35%, transparent);
+  transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1), background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+.tf-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--team-flow-accent, var(--sol-cyan)) 46%, var(--sol-bg-alt));
+  border-color: var(--team-flow-accent, var(--sol-cyan));
+}
+.tf-primary:not(:disabled):active {
+  transform: scale(0.97);
+}
+.tf-primary:focus-visible {
+  outline: 2px solid var(--team-flow-accent, var(--sol-cyan));
+  outline-offset: 2px;
+}
+
+.tf-ghost {
+  transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1), background-color 160ms ease, color 160ms ease;
+}
+.tf-ghost:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+/* Rail step marker. The active one takes the accent; done ones keep a tint. */
+.tf-marker {
+  transition: background-color 200ms ease, color 200ms ease, box-shadow 200ms ease;
+}
+/* Same contrast rule as .tf-primary: accent tint + ring, --sol-text numeral,
+   so the 11px number stays readable for every team color in both themes. */
+.tf-marker[data-state="active"] {
+  background: color-mix(in srgb, var(--team-flow-accent) 22%, var(--sol-bg-alt));
+  color: var(--sol-text);
+  box-shadow:
+    inset 0 0 0 1px var(--team-flow-accent),
+    0 0 0 4px color-mix(in srgb, var(--team-flow-accent) 22%, transparent);
+}
+.tf-marker[data-state="done"] {
+  background: color-mix(in srgb, var(--team-flow-accent) 18%, transparent);
+  /* Toward --sol-text so the check clears 3:1 (non-text) on the tint. */
+  color: color-mix(in srgb, var(--team-flow-accent) 55%, var(--sol-text));
+}
+
+/* The connector between steps fills to the current step. */
+.tf-connector {
+  background: var(--sol-border);
+  transition: background-color 300ms ease;
+}
+.tf-connector[data-done="true"] {
+  background: var(--team-flow-accent);
+}
+
+/* Selection states inside the steps follow the accent too. --tf-acc is set
+   by .tf-accent-scope (falling back to cyan outside the flow, e.g. the
+   setup dialog and the settings page) or inline where the accent is the
+   picked color itself (the identity picker). */
+.tf-accent-scope {
+  --tf-acc: var(--team-flow-accent, var(--sol-cyan));
+}
+
+/* A selectable card (visibility levels, workspace rows). The transform in
+   the list backs the press feedback (active scale) on the cards. */
+.tf-option {
+  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease,
+    transform 150ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.tf-option[data-selected="true"] {
+  border-color: var(--tf-acc, var(--sol-cyan));
+  background: color-mix(in srgb, var(--tf-acc, var(--sol-cyan)) 6%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--tf-acc, var(--sol-cyan)) 30%, transparent);
+}
+.tf-option:focus-visible {
+  outline: 2px solid var(--tf-acc, var(--sol-cyan));
+  outline-offset: 2px;
+}
+.tf-option[data-selected="true"] .tf-chip {
+  background: color-mix(in srgb, var(--tf-acc, var(--sol-cyan)) 15%, transparent);
+  color: var(--tf-acc, var(--sol-cyan));
+}
+.tf-option[data-selected="true"] .tf-check {
+  border-color: var(--tf-acc, var(--sol-cyan));
+  background: var(--tf-acc, var(--sol-cyan));
+  color: var(--sol-bg);
+}
+
+/* Detail that opens only on the selected card (visibility levels). The
+   grid-rows trick animates height without measuring: 0fr collapsed, 1fr
+   open. The inner wrapper carries min-height: 0 and overflow: hidden. */
+.tf-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.tf-collapse[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+
+/* A selectable tile in the icon grid: accent tint plus ring, not a dark block. */
+.tf-tile {
+  transition: background-color 150ms ease, box-shadow 150ms ease;
+}
+.tf-tile[data-selected="true"] {
+  background: color-mix(in srgb, var(--tf-acc, var(--sol-cyan)) 14%, transparent);
+  box-shadow: inset 0 0 0 1px var(--tf-acc, var(--sol-cyan));
+}
+.tf-tile:focus-visible {
+  outline: 2px solid var(--tf-acc, var(--sol-cyan));
+  outline-offset: 1px;
+}
+
+/* Accent outline button (Regenerate). Follows --tf-acc like the rest of the
+   scope; falls back to cyan outside the flow. Unlayered, so it wins over the
+   ui Button variant classes the same way .tf-primary does. */
+.tf-accent-outline {
+  color: var(--tf-acc, var(--sol-cyan));
+  border-color: color-mix(in srgb, var(--tf-acc, var(--sol-cyan)) 45%, transparent);
+  background: transparent;
+  transition: background-color 150ms ease, border-color 150ms ease,
+    transform 160ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.tf-accent-outline:not(:disabled):hover {
+  background: color-mix(in srgb, var(--tf-acc, var(--sol-cyan)) 10%, transparent);
+  border-color: var(--tf-acc, var(--sol-cyan));
+  color: var(--tf-acc, var(--sol-cyan));
+}
+.tf-accent-outline:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+/* One quick pop for confirmations (Copied, invite sent): the state change
+   reads as an event, not a quiet relabel. */
+.tf-pop {
+  animation: tf-pop 240ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+@keyframes tf-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Numbered circles in the invite step's "How it works" list. Same tint
+   recipe as the rail's done markers, keyed to --tf-acc so the modal
+   fallback stays cyan. */
+.tf-how-num {
+  background: color-mix(in srgb, var(--tf-acc, var(--sol-cyan)) 16%, transparent);
+  color: color-mix(in srgb, var(--tf-acc, var(--sol-cyan)) 55%, var(--sol-text));
+}
+
+/* A completed rail step is a button back to that step. */
+.tf-step-btn:hover .tf-marker[data-state="done"] {
+  background: color-mix(in srgb, var(--team-flow-accent) 30%, transparent);
+}
+
+/* Accent-colored text and badges (icons, match labels, the recommended tag). */
+.tf-accent-text {
+  color: var(--tf-acc, var(--sol-cyan));
+}
+.tf-accent-badge {
+  color: var(--tf-acc, var(--sol-cyan));
+  border-color: color-mix(in srgb, var(--tf-acc, var(--sol-cyan)) 30%, transparent);
+  background: color-mix(in srgb, var(--tf-acc, var(--sol-cyan)) 10%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tf-reveal,
+  .tf-step-enter,
+  .tf-pop {
+    animation: tf-fade 180ms ease both;
+    animation-delay: 0ms;
+  }
+  @keyframes tf-fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  .tf-primary,
+  .tf-ghost,
+  .tf-marker,
+  .tf-connector,
+  .tf-accent-outline,
+  .tf-collapse {
+    transition: none;
+  }
+  .tf-primary:not(:disabled):active,
+  .tf-ghost:not(:disabled):active,
+  .tf-accent-outline:not(:disabled):active {
+    transform: none;
+  }
+}

@@ -84,6 +84,13 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   // Resolves { shown } — false when main dropped it (duplicate from another
   // window, or an app window is focused), so only the announcing window sounds.
   showNotification: (title, body, data) => ipcRenderer.invoke("show-notification", { title, body, data }),
+  // OS-level notification consent: are Codecast's banners actually allowed in
+  // System Settings? ("granted" | "off" | "ask" | "unknown"). The request
+  // variant posts a real notification, which on macOS raises the system
+  // Allow/Don't Allow prompt when the app was never registered.
+  getOsNotificationState: () => ipcRenderer.invoke("get-os-notification-state"),
+  requestOsNotificationPermission: () => ipcRenderer.invoke("request-os-notification-permission"),
+  openNotificationSettings: () => ipcRenderer.invoke("open-notification-settings"),
   // Multi-window notification routing: each renderer tells main what it shows
   // ({ active, open: [{id,path}], inCall }); main answers with this window's
   // role ({ leader, appFocused, anyInCall }) whenever it changes.

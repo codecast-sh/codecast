@@ -204,6 +204,35 @@ export const ChatMessageList = memo(function ChatMessageList({
     list.scrollToBottom({ smooth: !prefersReducedMotion() });
   }, [list]);
 
+  // Your own send always lands you at the bottom. The virtualizer's native
+  // follow only acts within scrollEndThreshold of the end, and a burst of sends
+  // compounds estimate error until the believed offset drifts out of that band
+  // — parked a little above the bottom, your message under the composer, and no
+  // pill because nothing was deliberately scrolled. Sending IS intent to be at
+  // the bottom, so snap, and let scrollToBottom's retry ladder absorb the late
+  // measurements. Keyed on the pending tail: only a stub this tab just wrote is
+  // ever pending, so an echo rekey or someone else's message can't re-trigger.
+  const tail = rows.length ? rows[rows.length - 1] : undefined;
+  const ownSendKey =
+    tail && tail.kind === "message" && tail.message.view.pending
+      && tail.message.view.author.id === viewerId
+      ? tail.key
+      : null;
+  // Entering a channel is a landing, not a send — the unread rule owns that
+  // position, so a pending tail that is merely already there must not snap.
+  const ownSendScrolledRef = useRef(ownSendKey);
+  const ownSendChannelRef = useRef(channelId);
+  if (ownSendChannelRef.current !== channelId) {
+    ownSendChannelRef.current = channelId;
+    ownSendScrolledRef.current = ownSendKey;
+  }
+  const { scrollToBottom } = list;
+  useEffect(() => {
+    if (!ownSendKey || ownSendScrolledRef.current === ownSendKey) return;
+    ownSendScrolledRef.current = ownSendKey;
+    scrollToBottom({ smooth: !prefersReducedMotion() });
+  }, [ownSendKey, scrollToBottom]);
+
   // Land on a permalinked message. Two steps, because the row may be virtualized
   // out of the DOM: scroll the virtualizer to its index first, then flash the
   // element once it has actually mounted.
