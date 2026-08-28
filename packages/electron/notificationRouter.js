@@ -174,34 +174,6 @@ function chooseLeader(windows) {
   return windows.reduce((a, b) => (tieBreak(b, a) > 0 ? b : a));
 }
 
-// Which window carries a question addressed to the person — today, the offer to
-// record a meeting the shell just noticed starting.
-//
-// Not pickWindow, and the difference is the point. pickWindow routes a CLICK: a
-// banner names a thing, and the click should land wherever that thing already
-// is. This routes a QUESTION, which names nothing and belongs wherever the
-// person is.
-//
-// It has to be a window that carries the DASHBOARD, which rules out the buddy
-// list and the call panel — both bypass the dashboard layout, and the recording
-// pill lives there. The pill is the only way to stop a recording, so offering
-// to start one in a window that cannot show it would be offering something the
-// person could not take back.
-//
-// Among those: the focused window, then the main window, then whichever they
-// looked at last. NOTHING HERE TAKES FOCUS — the card is placed and waits. An
-// unseen question means nothing records, which is the safe way for this to
-// fail.
-function pickOfferWindow(windows) {
-  const hosts = (windows || []).filter((w) => !w.isPeople && !w.isCallPanel);
-  if (!hosts.length) return null;
-  return (
-    hosts.find((w) => w.focused) ||
-    hosts.find((w) => w.isMain) ||
-    hosts.reduce((a, b) => ((b.lastFocusedAt || 0) > (a.lastFocusedAt || 0) ? b : a))
-  );
-}
-
 // Remembers banner keys for a while so duplicate reports collapse. Callers
 // without a stable key get one from the banner's text and click target: two
 // windows reporting the same server row send byte-identical text.
@@ -226,4 +198,4 @@ class RecentKeys {
   }
 }
 
-module.exports = { areaOf, classifyRoute, sameEntity, scoreWindow, pickWindow, pickOfferWindow, chooseLeader, RecentKeys };
+module.exports = { areaOf, classifyRoute, sameEntity, scoreWindow, pickWindow, chooseLeader, RecentKeys };

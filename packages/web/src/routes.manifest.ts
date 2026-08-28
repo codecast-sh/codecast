@@ -141,6 +141,7 @@ const Workflows = lazy(() => import("@/app/workflows/dashboard"));
 // Triggers = delayed/recurring/event-driven agent runs (renamed from "Schedules";
 // the /schedules path stays routable as an alias for old links).
 const Triggers = lazy(() => import("@/app/triggers/page"));
+const TriggerDetail = lazy(() => import("@/app/triggers/[id]/page"));
 const Sessions = lazy(() => import("@/app/sessions/page"));
 const Anchor = lazy(() => import("@/app/anchor/page"));
 // One component serves the index and every section
@@ -179,6 +180,7 @@ const Palette = lazy(() => import("@/app/palette/page"));
 // People window
 const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
+const MeetingOffer = lazy(() => import("@/app/meeting-offer/page"));
 
 // Settings
 const Settings = lazy(() => import("@/app/settings/page"));
@@ -268,7 +270,9 @@ export const ROUTES: RouteEntry[] = [
   { path: "workflows", component: cast(Workflows), layout: "dashboardShell", tab: "/workflows", fullWidth: true },
   { path: "routines", component: cast(Routines), layout: "dashboardShell", tab: "/routines", fullWidth: true },
   { path: "triggers", component: cast(Triggers), layout: "dashboardShell", tab: "/triggers", fullWidth: true },
+  { path: "triggers/:id", component: cast(TriggerDetail), layout: "dashboardShell", tab: "/triggers/:id", fullWidth: true },
   { path: "schedules", component: cast(Triggers), layout: "dashboardShell", tab: "/schedules", fullWidth: true },
+  { path: "schedules/:id", component: cast(TriggerDetail), layout: "dashboardShell", tab: "/schedules/:id", fullWidth: true },
   { path: "sessions", component: cast(Sessions), layout: "dashboardShell", tab: "/sessions" },
   // Full-bleed via pageLayout's FULL_WIDTH_PATTERNS (like /sessions), not an isOnXPage flag.
   { path: "anchor", component: cast(Anchor), layout: "dashboardShell", tab: "/anchor" },
@@ -313,6 +317,10 @@ export const ROUTES: RouteEntry[] = [
   //    dashboardShell/standalone routes, so calling it standalone would force
   //    "call-panel" into the in-shell set — the opposite of what it is.
   { path: "call-panel", component: cast(CallPanel), layout: "callPanel" },
+
+  // -- The meeting-offer window (TransparentWindowLayout): the record-this-
+  //    meeting card as a small chromeless corner window --
+  { path: "meeting-offer", component: cast(MeetingOffer), layout: "palette" },
 
   // -- Settings (SettingsLayout; index = /settings) --
   { path: "settings", component: cast(Settings), layout: "settings" },

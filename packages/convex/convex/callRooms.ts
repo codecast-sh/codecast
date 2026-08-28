@@ -111,7 +111,22 @@ export function liveMembers<T extends { last_seen: number; prewarm?: boolean }>(
   rows: T[],
   now: number,
 ): T[] {
-  return rows.filter((m) => !m.prewarm && now - m.last_seen < CALL_MEMBER_STALE_MS);
+  return rows.filter((m) => isSeat(m) && now - m.last_seen < CALL_MEMBER_STALE_MS);
+}
+
+/** Is this row a person's seat at all, at any freshness?
+ *
+ *  `liveMembers` asks two questions at once — is it a seat, and is its lease
+ *  current — and almost every reader wants both. This is the first half alone,
+ *  for the one reader that wants a STALE seat on purpose: the orphan-transcript
+ *  sweep dates a dead huddle's end from the last lease anybody refreshed, and a
+ *  prewarm row that arrived afterwards would push that end up to ninety seconds
+ *  into the future and inflate the recording's duration by the same amount.
+ *
+ *  Exported so the prewarm rule lives in this file only. A reader that spells
+ *  out `!row.prewarm` for itself is the sixteenth place to forget it. */
+export function isSeat(row: { prewarm?: boolean }): boolean {
+  return !row.prewarm;
 }
 
 // ── Recordings ────────────────────────────────────────────────────────────

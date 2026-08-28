@@ -20,17 +20,25 @@ interface TeamCrestProps {
 export function TeamCrest({ icon, color, size = "md", className }: TeamCrestProps) {
   const s = SIZE_CLASSES[size];
   const bg = color && color in colorBgClassMap ? colorBgClassMap[color as TeamColorName] : "bg-sol-base01";
+  // The tile itself never remounts: a color change re-tints through the
+  // background and text color transitions, so the halo and wash around it
+  // (transitions on ancestors) stay in sync. Only an icon change replays
+  // the small zoom, keyed on the icon alone.
   return (
     <div
-      key={`${icon}-${color}`}
       className={cn(
-        "relative flex items-center justify-center shrink-0 overflow-hidden motion-safe:animate-in motion-safe:zoom-in-95 motion-safe:duration-200",
+        "relative flex items-center justify-center shrink-0 overflow-hidden",
         s.tile,
         className,
       )}
     >
-      <div className={cn("absolute inset-0 opacity-20", bg)} />
-      <TeamIcon icon={icon} color={color} className={cn("relative", s.icon)} />
+      <div className={cn("absolute inset-0 opacity-20 transition-colors duration-300", bg)} />
+      <span
+        key={icon}
+        className="relative flex motion-safe:animate-in motion-safe:zoom-in-90 motion-safe:fade-in motion-safe:duration-200"
+      >
+        <TeamIcon icon={icon} color={color} className={cn("transition-colors duration-300", s.icon)} />
+      </span>
     </div>
   );
 }

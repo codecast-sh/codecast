@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { AvatarImg } from "../lib/avatarCache";
+import { imageBytes } from "../lib/imageByteCache";
 import { useConvex, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -8,7 +9,7 @@ import { useRouter } from "next/navigation";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
 import { SessionMenuItems } from "./menus/ObjectContextMenus";
-import { copyToClipboard } from "../lib/utils";
+import { copyToClipboard, formatRelative, formatDateFull } from "../lib/utils";
 import { ImageLightbox } from "./ImageGallery";
 import { SessionErrorBanner } from "./SessionErrorBanner";
 import { AppLoader } from "./AppLoader";
@@ -50,7 +51,7 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, ZapOff, Pin, Copy } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, ZapOff, Pin, Copy, ArrowUp, ArrowDown } from "lucide-react";
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -455,10 +456,10 @@ export function SignInCta({
   const who = email ?? "your Claude account";
   const flowWho = flow?.email ?? who;
 
-  const handleClick = async () => {
+  const handleClick = async (force = false) => {
     setLaunching(true);
     try {
-      await requestLogin({ device_id: device.device_id });
+      await requestLogin({ device_id: device.device_id, ...(force ? { force: true } : {}) });
       // The device row's pending stamp echoes back through listAccountProfiles;
       // keep the local flag briefly so the button can't double-fire meanwhile.
       setTimeout(() => setLaunching(false), 5_000);
@@ -477,6 +478,14 @@ export function SignInCta({
           <div className="text-sol-text-dim">
             The sign-in page opened on {device.label || "your machine"} — the blocked sessions restart on their own once it completes.
           </div>
+          <button
+            onClick={() => handleClick(true)}
+            disabled={disabled}
+            title={`Kill the running sign-in on ${device.label || "your machine"} and open a fresh browser page`}
+            className="mt-1 font-medium text-amber-500 underline underline-offset-2 transition-colors hover:text-amber-400 disabled:opacity-60"
+          >
+            Page didn&apos;t open? Relaunch the sign-in
+          </button>
         </div>
       </div>
     );
@@ -513,7 +522,7 @@ export function SignInCta({
       )}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         <button
-          onClick={handleClick}
+          onClick={() => handleClick()}
           disabled={disabled}
           title={`Run /login on ${device.label || "your machine"} — opens the browser sign-in${email ? ` for ${email}` : ""}`}
           className="inline-flex items-center gap-1.5 rounded-md bg-amber-500 px-3.5 py-1.5 text-[12px] font-bold text-sol-bg shadow-sm transition-colors hover:bg-amber-400 disabled:opacity-60"
@@ -1338,9 +1347,9 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
             <History className="w-3.5 h-3.5" />
           </button>
         </ShortcutTooltip>
-        <ShortcutTooltip label="Open in Triggers" hint="edit, history, full detail" side="top">
+        <ShortcutTooltip label="Open trigger page" hint="full detail, history, edit" side="top">
           <Link
-            href={`/triggers?task=${task._id}`}
+            href={`/triggers/${task._id}`}
             aria-label="Open in Triggers"
             onClick={(e) => e.stopPropagation()}
             className="p-1 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-[color,background-color,transform] duration-100 active:scale-90"
@@ -1414,8 +1423,8 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
               <CtxItem icon={History} onSelect={() => setRunsOpen((v) => !v)}>
                 {runsOpen ? "Hide run history" : "Run history"}
               </CtxItem>
-              <CtxItem icon={Settings2} onSelect={() => router.push(`/triggers?task=${task._id}`)}>
-                Open in Triggers
+              <CtxItem icon={Settings2} onSelect={() => router.push(`/triggers/${task._id}`)}>
+                Open trigger page
               </CtxItem>
               <CtxSeparator />
               <CtxItem
@@ -2164,7 +2173,10 @@ export const SessionCard = memo(function SessionCard({
   // an invisible broken img still reserves ~46px and wraps the text early.
   const [thumbBroken, setThumbBroken] = useState(false);
   useEffect(() => setThumbBroken(false), [session.image_preview_url]);
-  const hasThumb = showImageThumb && !!session.image_preview_url && !thumbBroken;
+  // Cache-first bytes: a thumbnail seen once paints locally (and offline)
+  // instead of re-fetching per scroll-through of the inbox.
+  const thumbSrc = imageBytes.useSrc(showImageThumb ? session.image_preview_url : undefined);
+  const hasThumb = showImageThumb && !!thumbSrc && !thumbBroken;
   // sessionLabel and isFavorite are now passed as scalar props (computed once in
   // the parent via labelByConv/cardIsFavorite) instead of per-card store scans —
   // see ct-37958. Only spawnedByTitle stays a local selector.
@@ -2524,7 +2536,9 @@ export const SessionCard = memo(function SessionCard({
       onDrop={handleFileDrop}
       onContextMenu={onCardContextMenu ? (e) => onCardContextMenu(e, session, isForeignSession) : undefined}
       className={`relative group transition-all overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
-        session.assigned_ping ? "ring-1 ring-inset ring-sol-cyan/50 bg-sol-cyan/[0.06]" : ""
+        // Violet, not cyan: cyan ring+tint is the ACTIVE row's treatment, and an
+        // unacked handoff must never read as "this is the session you have open".
+        session.assigned_ping ? "ring-1 ring-inset ring-sol-violet/50 bg-sol-violet/[0.06]" : ""
       } ${
         isActive
           ? "bg-sol-cyan/[0.12] border-l-[3px] border-l-sol-cyan ring-1 ring-inset ring-sol-cyan/45 shadow-[0_1px_10px_-2px_rgba(42,161,152,0.35)]"
@@ -2586,16 +2600,22 @@ export const SessionCard = memo(function SessionCard({
           </ShortcutTooltip>
         </div>
         {session.assigned_ping && (
-          <div className="flex items-start gap-1.5 mt-1 px-1.5 py-1 rounded-md bg-sol-cyan/15 border border-sol-cyan/30">
-            <UserCheck className="w-3 h-3 text-sol-cyan flex-shrink-0 mt-0.5" />
+          /* mr-5 keeps the strip — and its "Got it" button — clear of the
+             hover toolbar's column on the right, whose gradient would
+             otherwise wash over the button. */
+          <div className="flex items-start gap-1.5 mt-1 mr-5 px-1.5 py-1 rounded-md bg-sol-violet/15 border border-sol-violet/30">
+            <UserCheck className="w-3 h-3 text-sol-violet flex-shrink-0 mt-0.5" />
             {/* The note is the REASON for the handoff — clamped for the list,
                 tap the body to read all of it without opening the session. */}
             <div
               className={`min-w-0 flex-1 text-[11px] leading-snug ${session.assigned_ping.note ? "cursor-pointer" : ""}`}
               onClick={session.assigned_ping.note ? (e) => { e.stopPropagation(); setPingExpanded((v) => !v); } : undefined}
             >
-              <span className="font-semibold text-sol-cyan">
+              <span className="font-semibold text-sol-violet">
                 {session.assigned_ping.by_name} assigned this to you
+              </span>
+              <span className="text-sol-text-dim whitespace-nowrap" title={formatDateFull(session.assigned_ping.at)}>
+                {" · "}{formatRelative(session.assigned_ping.at, coarseNow)}
               </span>
               {session.assigned_ping.note && (
                 <div className={`text-sol-text-muted whitespace-pre-wrap break-words ${pingExpanded ? "" : "line-clamp-2"}`}>
@@ -2608,7 +2628,7 @@ export const SessionCard = memo(function SessionCard({
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); ackAssignment(session._id); }}
-              className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sol-cyan/20 text-sol-cyan border border-sol-cyan/40 hover:bg-sol-cyan/30 transition-colors"
+              className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sol-violet/20 text-sol-violet border border-sol-violet/40 hover:bg-sol-violet/30 transition-colors"
             >
               Got it
             </button>
@@ -2897,7 +2917,7 @@ export const SessionCard = memo(function SessionCard({
           title="View image"
         >
           <img
-            src={session.image_preview_url!}
+            src={thumbSrc!}
             alt=""
             loading="lazy"
             draggable={false}
@@ -2907,8 +2927,8 @@ export const SessionCard = memo(function SessionCard({
         </button>
       )}
       </div>
-      {thumbZoom && session.image_preview_url && (
-        <ImageLightbox src={session.image_preview_url} onClose={() => setThumbZoom(false)} />
+      {thumbZoom && thumbSrc && (
+        <ImageLightbox src={thumbSrc} onClose={() => setThumbZoom(false)} />
       )}
       </div>
       {/* The ONE pin a pinned session shows: a persistent, interactive badge anchored
@@ -3180,6 +3200,88 @@ function scrollRowIntoView(container: HTMLElement, el: Element) {
     requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
+}
+
+// Floating "jump back to your open session" pill. Appears over the list edge
+// when the active card is scrolled out of view — top edge when the card is
+// above the fold, bottom edge when below — and one click glides back to it.
+// Visibility comes from an IntersectionObserver rooted at the scroll container
+// (fires on scroll AND container resize with zero per-frame work); a
+// per-render node check re-attaches it when a resort replaces the card's DOM
+// node without any scroll event.
+function ActiveSessionBeacon({
+  containerRef,
+  activeSessionId,
+  title,
+}: {
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  activeSessionId?: string | null;
+  title?: string | null;
+}) {
+  const [dir, setDir] = useState<"up" | "down" | null>(null);
+  const observedRef = useRef<Element | null>(null);
+  const ioRef = useRef<IntersectionObserver | null>(null);
+
+  // No dep array on purpose: the parent re-renders exactly when the list
+  // restructures, which is when the active card's node can change identity.
+  // The body is a single querySelector + ref compare, so the steady-state
+  // cost per render is negligible.
+  useEffect(() => {
+    const container = containerRef.current;
+    const el = container && activeSessionId
+      ? container.querySelector(`[data-session-id="${activeSessionId}"]`)
+      : null;
+    if (el === observedRef.current) return;
+    ioRef.current?.disconnect();
+    observedRef.current = el;
+    if (!el || !container) {
+      setDir(null);
+      return;
+    }
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry) return;
+        if (entry.isIntersecting) {
+          setDir(null);
+          return;
+        }
+        const rootTop = entry.rootBounds?.top ?? container.getBoundingClientRect().top;
+        setDir(entry.boundingClientRect.top < rootTop ? "up" : "down");
+      },
+      { root: container, threshold: 0 },
+    );
+    io.observe(el);
+    ioRef.current = io;
+  });
+  // Unmount teardown also forgets the node: under StrictMode's mount/unmount/
+  // mount rehearsal the effect above re-runs against the same node and must
+  // re-observe rather than short-circuit on the ref compare.
+  useEffect(() => () => {
+    ioRef.current?.disconnect();
+    ioRef.current = null;
+    observedRef.current = null;
+  }, []);
+
+  const handleJump = useCallback(() => {
+    const container = containerRef.current;
+    const el = observedRef.current;
+    if (container && el && el.isConnected) scrollRowIntoView(container, el);
+  }, [containerRef]);
+
+  if (!dir) return null;
+  return (
+    <button
+      onClick={handleJump}
+      data-dir={dir}
+      className={`cc-session-beacon absolute left-1/2 z-30 flex items-center gap-1.5 rounded-full border border-sol-cyan/40 bg-sol-bg/90 py-1 pl-2 pr-2.5 text-[10px] font-medium text-sol-cyan backdrop-blur-md hover:border-sol-cyan/70 hover:text-sol-cyan ${dir === "up" ? "top-2" : "bottom-2"}`}
+      title="Scroll to the open session"
+      aria-label="Scroll to the open session"
+    >
+      {dir === "up" ? <ArrowUp className="cc-session-beacon__arrow h-3 w-3" /> : <ArrowDown className="cc-session-beacon__arrow h-3 w-3" />}
+      <span className="cc-session-beacon__dot" aria-hidden />
+      <span className="max-w-[150px] truncate">{title || "Open session"}</span>
+    </button>
+  );
 }
 
 // Memoized (see the export at the bottom of the file): the layout re-renders
@@ -3497,9 +3599,8 @@ function SessionListPanelImpl({
   // conversation's schedule strip to arrive expanded — the click means "show me
   // this schedule", so the prompt should be visible without a second click.
   // No conversation to land on (a spawn schedule that has never run, or one
-  // whose conversation isn't in the local cache) falls back to the schedule's
-  // own row on /schedules — ?task= arrives expanded and scrolled into view —
-  // so a row click is never a silent no-op.
+  // whose conversation isn't in the local cache) falls back to the trigger's
+  // own detail page, so a row click is never a silent no-op.
   // A trigger that has FIRED before also lands on its most recent firing (the
   // same target the newest run-history entry opens) instead of the tail. The
   // trigger message resolves synchronously from the loaded window when it's
@@ -3511,7 +3612,7 @@ function SessionListPanelImpl({
     const st = useInboxStore.getState();
     const sess = row.openId ? st.sessions[row.openId] : undefined;
     if (!sess) {
-      router.push(`/triggers?task=${row.task._id}`);
+      router.push(`/triggers/${row.task._id}`);
       return;
     }
     st.setScheduleStripExpand({ convId: sess._id, nonce: Date.now() });
@@ -3548,16 +3649,16 @@ function SessionListPanelImpl({
       .catch(() => {});
   }, [handleSelect, router, convex]);
   // Trigger view header click: the trigger IS the citizen there, so its row
-  // opens the trigger's own page (/triggers?task= arrives expanded and scrolled
-  // into view) — the sessions it drives are already sub rows right below.
-  // Pseudo rows (loops, live subagents) have no agent_tasks row for that page
-  // to show, so they keep the conversation-open path.
+  // opens the trigger's own detail page — the sessions it drives are already
+  // sub rows right below. Pseudo rows (loops, live subagents) have no
+  // agent_tasks row for that page to show, so they keep the
+  // conversation-open path.
   const openTriggerPage = useCallback((row: TriggerRow) => {
     if (row.kind) {
       openScheduleTarget(row);
       return;
     }
-    router.push(`/triggers?task=${row.task._id}`);
+    router.push(`/triggers/${row.task._id}`);
   }, [router, openScheduleTarget]);
   // Schedule bars under cards: the schedules bound to a VISIBLE session — the
   // ones it originates (inject, any type), the spawn triggers it created
@@ -4537,7 +4638,7 @@ function SessionListPanelImpl({
                   </button>
                 </ShortcutTooltip>
                 {viewMenuOpen && (
-                  <div className="absolute top-full right-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1">
+                  <div className="absolute top-full right-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1">
                     <FilterOptionList
                       options={viewModeOptions}
                       value={viewMode}
@@ -4627,7 +4728,10 @@ function SessionListPanelImpl({
         </div>
         </div>
       </div>
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto scrollbar-auto">
+      {/* Relative wrapper so the out-of-view beacon can float over the list
+          edges without joining the scroll flow. */}
+      <div className="relative flex-1 min-h-0">
+      <div ref={scrollContainerRef} className="h-full overflow-y-auto scrollbar-auto">
         {favoritesView ? (
           favoriteGroups && favoriteGroups.count > 0 ? (
             <>
@@ -4862,6 +4966,12 @@ function SessionListPanelImpl({
           onKill: handleKillDismissed,
         })}
         </>)}
+      </div>
+      <ActiveSessionBeacon
+        containerRef={scrollContainerRef}
+        activeSessionId={focusedId}
+        title={(focusedId && s.sessions[focusedId]?.title) || null}
+      />
       </div>
       {/* The schedule dock is panel chrome, not list content: it renders under
           the scroll area in every view mode EXCEPT "by trigger" — there the
