@@ -1359,11 +1359,14 @@ export const debugList = internalQuery({
 // One-time restamp for plan-body docs mislabeled "human" (2026-08-26).
 // `cast plan create` stamped source "human" even when an agent session ran it,
 // and plans.* hardcoded "human" onto the plan-body doc, so thousands of agent
-// plans sat on the human docs shelf. A doc flips to "agent" when its plan
-// shows machine provenance: a non-human plan source, a creating conversation,
-// or bound agent sessions. Paged — call repeatedly with the returned cursor
-// until isDone. Does not bump updated_at: the docs full crawl re-reads rows
-// fresh, so clients converge without a sync storm.
+// plans sat on the human docs shelf. History carries no marker of which
+// create path a plan came from, and plans here are overwhelmingly
+// agent-created, so every plan-body doc still stamped "human" flips to
+// "agent"; pinning is the rescue for any a person wants on the shelf. New
+// writes stamp truthfully by path (web UI → human, agent session CLI →
+// agent). Paged — call repeatedly with the returned cursor until isDone.
+// Does not bump updated_at: the docs full crawl re-reads rows fresh, so
+// clients converge without a sync storm.
 export const restampPlanDocOrigins = internalMutation({
   args: {
     cursor: v.optional(v.string()),
@@ -1376,22 +1379,9 @@ export const restampPlanDocOrigins = internalMutation({
       .paginate({ numItems: args.numItems ?? 100, cursor: args.cursor ?? null });
     let scanned = 0;
     let restamped = 0;
-    const planCache = new Map<string, any>();
     for (const d of page.page) {
       scanned++;
       if (!d.plan_id || d.source !== "human") continue;
-      const key = String(d.plan_id);
-      let plan = planCache.get(key);
-      if (plan === undefined) {
-        plan = (await ctx.db.get(d.plan_id)) ?? null;
-        planCache.set(key, plan);
-      }
-      if (!plan) continue;
-      const machineBorn =
-        plan.source !== "human" ||
-        !!plan.created_from_conversation_id ||
-        (plan.session_ids?.length ?? 0) > 0;
-      if (!machineBorn) continue;
       restamped++;
       if (!args.dryRun) await ctx.db.patch(d._id, { source: "agent" });
     }

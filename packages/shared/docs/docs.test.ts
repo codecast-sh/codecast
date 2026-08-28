@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { docOrigin, isHumanDocOrigin, isOnHumanShelf, docSourceForPlanSource } from "./index";
+import { docOrigin, docOriginClass, isHumanDocOrigin, isOnHumanShelf, docSourceForPlanSource } from "./index";
 
 describe("docOrigin", () => {
   test("only an explicit human stamp is human", () => {
@@ -14,6 +14,22 @@ describe("docOrigin", () => {
     expect(docOrigin({ source: undefined })).toBe("agent");
     expect(docOrigin({ source: null })).toBe("agent");
     expect(isHumanDocOrigin({})).toBe(false);
+  });
+});
+
+describe("docOriginClass", () => {
+  test("splits deliberate agent filing from mined collection, like tasks split agent from triage", () => {
+    expect(docOriginClass({ source: "human" })).toBe("human");
+    expect(docOriginClass({ source: "agent" })).toBe("agent");
+    expect(docOriginClass({ source: "plan_mode" })).toBe("agent");
+    expect(docOriginClass({ source: "file_sync" })).toBe("mined");
+    expect(docOriginClass({ source: "inline_extract" })).toBe("mined");
+    expect(docOriginClass({ source: "import" })).toBe("mined");
+  });
+
+  test("unknown sources class as agent, not mined", () => {
+    expect(docOriginClass({ source: "some_future_writer" })).toBe("agent");
+    expect(docOriginClass({})).toBe("agent");
   });
 });
 

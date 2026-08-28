@@ -9,7 +9,7 @@ import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
 import { DocMenuItems } from "../../components/menus/ObjectContextMenus";
-import { docOrigin, isOnHumanShelf } from "@codecast/shared/docs";
+import { docOrigin, docOriginClass, isOnHumanShelf } from "@codecast/shared/docs";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import { docMatchesProjectFilter } from "../../lib/docFilters";
 import { useWorkspaceArgs, workspaceStamp } from "../../hooks/useWorkspaceArgs";
@@ -24,6 +24,7 @@ import {
   User,
   Bot,
   Layers,
+  Lightbulb,
 } from "lucide-react";
 
 const api = _api as any;
@@ -239,21 +240,27 @@ export function DocListContent() {
   }, [docsList]);
 
   // Source filtering applied before other filters.
-  // The default view is the human's shelf: docs a person wrote, plus anything
-  // pinned. Machine output (agent plan bodies, session-mined notes, file
-  // syncs) sits behind the Agent-internal source filter; "all" shows both.
-  // Same shape as the tasks board, via the shared @codecast/shared/docs rule,
-  // so web and mobile can't drift. Legacy "human"/"bot" links map onto the
-  // new values.
+  // The default view is the human's shelf: docs a person created, plus
+  // anything pinned. Docs agents deliberately filed (plan bodies, cast doc
+  // create) sit behind Agent-internal; docs machinery collected (session
+  // extracts, file syncs, imports) behind Mined — the same split the tasks
+  // board makes between agent work and triage suggestions. "all" shows
+  // everything. One shared rule (@codecast/shared/docs), so web and mobile
+  // can't drift. Legacy "human"/"bot" links map onto the new values.
   const onShelf = isOnHumanShelf;
   const sourceFilteredDocs = useMemo(() => {
-    if (sourceFilter === "agent" || sourceFilter === "bot") return docsList.filter((d) => !onShelf(d));
+    if (sourceFilter === "agent" || sourceFilter === "bot") {
+      return docsList.filter((d) => !onShelf(d) && docOriginClass(d) === "agent");
+    }
+    if (sourceFilter === "mined") {
+      return docsList.filter((d) => !onShelf(d) && docOriginClass(d) === "mined");
+    }
     if (sourceFilter === "all") return docsList;
     // "" (default) and legacy "human" links both mean the human's shelf.
     return docsList.filter(onShelf);
   }, [docsList, sourceFilter]);
 
-  const isShelfView = sourceFilter !== "agent" && sourceFilter !== "bot" && sourceFilter !== "all";
+  const isShelfView = sourceFilter === "" || sourceFilter === "human";
   const hiddenAgentCount = useMemo(() => {
     if (!isShelfView) return 0;
     return docsList.filter((d) => !onShelf(d)).length;
@@ -429,6 +436,7 @@ export function DocListContent() {
             options: [
               { key: "", label: "Your docs (default)", icon: User },
               { key: "agent", label: "Agent-internal", icon: Bot, color: "text-sol-cyan" },
+              { key: "mined", label: "Mined & synced", icon: Lightbulb, color: "text-sol-yellow" },
               { key: "all", label: "All docs", icon: Layers },
             ],
             onChange: (v: string) => setParam({ source: v }),
