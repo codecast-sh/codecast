@@ -27,7 +27,6 @@ import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { TriggerContextPanel } from "../../components/TriggerContextPanel";
 import { toast } from "sonner";
 import { animatedHideSession } from "../../store/undoActions";
-import { cleanUserMessage } from "../../components/sessionMessage";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 
@@ -209,7 +208,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
           isJumpingToTarget={isJumpingToTarget}
           highlightQuery={highlightQuery}
           onClearHighlight={onClearHighlight}
-          fallbackStickyContent={isOwnSession ? cleanUserMessage(lastUserMessage) : undefined}
+          fallbackStickyContent={isOwnSession ? lastUserMessage : undefined}
           subHeaderContent={<>
             {isOwnSession && (
               <TriggerContextPanel

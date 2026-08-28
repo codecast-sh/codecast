@@ -156,12 +156,12 @@ import remarkBreaks from "remark-breaks";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK, renderMarkdownPre } from "./messageMarkdown";
 import { FilePathLink } from "./FilePathLink";
 import { FilePathContext } from "../lib/filePathLinks";
-import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
+import { parseInboundSessionMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, stickyPromptContent, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
 import { CallTranscriptDisclosure } from "./calls/TranscriptTurns";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
-import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand } from "./castCommand";
+import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserPageUrl, buildBrowserRowMap, sameBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, type BrowserRowInput, type BrowserRowState, type CastBodyPart, type ChatSendArgs, type ParsedCastCommand, type DecideArgs } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
-import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, isConvexId, computeNewDividerIndex, convBucketMap, pendingRowSendArgs, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage, type SessionDecisionItem } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
 
 
@@ -792,6 +792,8 @@ type ConversationViewProps = {
   onSendAndAdvance?: () => void;
   onSendAndDismiss?: () => void;
   autoFocusInput?: boolean;
+  // Raw last user message of the session (server preview slice). The view
+  // decides whether it may serve as the sticky fallback via stickyPromptContent.
   fallbackStickyContent?: string | null;
   onBack?: () => void;
   subHeaderContent?: React.ReactNode;
@@ -2846,9 +2848,9 @@ function classifyUserMessage(
 }
 
 function isStickyWorthy(kind: UserMessageKind): boolean {
-  // Session messages (cast send from another session) are excluded: the sticky
-  // pill surfaces what the human said, not machine-delivered cross-session msgs.
-  return kind.kind === 'normal' || kind.kind === 'plan' || kind.kind === 'scheduled_task';
+  // The sticky pill surfaces what the human said. Machine-delivered kinds
+  // (session messages, teammate broadcasts, trigger runs) never qualify.
+  return kind.kind === 'normal' || kind.kind === 'plan';
 }
 
 function formatRelativeTime(ts: number): string {
@@ -12027,7 +12029,8 @@ function settleTimelineItemAtOffset(
 const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"];
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, isJumpingToTarget, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, isJumpingToTarget, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent }, ref) {
+  const fallbackStickyContent = useMemo(() => stickyPromptContent(rawFallbackStickyContent), [rawFallbackStickyContent]);
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, _setUserScrolled] = useState(false);
   const userScrolledRef = useRef(false);
@@ -13346,7 +13349,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (!serverUserMessages) return new Set<string>();
     const ids = new Set<string>();
     for (const m of serverUserMessages) {
-      if (isMachineDeliveredMessage(m.content)) continue;
+      if (stickyPromptContent(m.content) === null) continue;
       const display = cleanContent(m.content);
       if (display.length > 0 && !isSystemMessage(display)) ids.add(m._id);
     }
@@ -13365,7 +13368,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (processedServerMsgIds.has(msg._id)) indices.push(i);
       } else {
         const kind = userMsgKindMap.get(msg._id);
-        if (kind && isStickyWorthy(kind)) indices.push(i);
+        if (kind && isStickyWorthy(kind) && stickyPromptContent(msg.content) !== null) indices.push(i);
       }
     }
     return indices;
