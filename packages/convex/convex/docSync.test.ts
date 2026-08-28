@@ -192,3 +192,35 @@ describe("toMarkdown entity round-trip", () => {
     expect(toMarkdown(person).trim()).toBe("@Samvit");
   });
 });
+
+// A date pill (dateMention node) writes back `@[<label> date:<iso>]` — the
+// shared mention vocabulary read mode and EntityRefExtension both parse. It
+// used to fall through to "" and vanish from doc.content on every web edit.
+describe("toMarkdown date mentions", () => {
+  test("dateMention serializes label + iso", () => {
+    expect(
+      toMarkdown({
+        type: "dateMention",
+        attrs: { type: "date", id: "2026-08-24", label: "Today", dateValue: "2026-08-24" },
+      }),
+    ).toBe("@[Today date:2026-08-24]");
+  });
+
+  test("label falls back to the iso date when absent", () => {
+    expect(
+      toMarkdown({ type: "dateMention", attrs: { type: "date", id: "2026-08-24" } }),
+    ).toBe("@[2026-08-24 date:2026-08-24]");
+  });
+
+  test("a date pill inside a paragraph keeps its surrounding text", () => {
+    const md = toMarkdown({
+      type: "paragraph",
+      content: [
+        { type: "text", text: "Ship by " },
+        { type: "dateMention", attrs: { type: "date", id: "2026-09-01", label: "Sep 1, 2026", dateValue: "2026-09-01" } },
+        { type: "text", text: " at the latest." },
+      ],
+    });
+    expect(md).toBe("Ship by @[Sep 1, 2026 date:2026-09-01] at the latest.\n\n");
+  });
+});

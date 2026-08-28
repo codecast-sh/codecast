@@ -121,3 +121,23 @@ describe("doc transclusion (![[doc:…]])", () => {
     expect(html).not.toContain("workout circuit");
   });
 });
+
+// The doc editor serializes a date pill as `@[<label> date:<iso>]`
+// (DateMentionExtension markdown storage / convex docSync toMarkdown). Read
+// mode must render that form back as the same pill — before this, the form
+// didn't exist and dates were silently wiped from doc.content.
+describe("date mention pills (@[label date:iso])", () => {
+  test("renders a date pill with the label and resolved weekday", () => {
+    const html = render("Kickoff @[Aug 24, 2026 date:2026-08-24] sharp.");
+    expect(html).toContain("Aug 24, 2026");
+    // Resolved display derived from the ISO date, not the label.
+    expect(html).toContain("Mon, Aug 24");
+    // The raw serialized form never reaches the reader.
+    expect(html).not.toContain("date:2026-08-24");
+  });
+
+  test("a malformed date id falls through to the mention fallback, not a crash", () => {
+    const html = render("See @[Someday date:not-a-date].");
+    expect(html).not.toContain("Mon,");
+  });
+});
