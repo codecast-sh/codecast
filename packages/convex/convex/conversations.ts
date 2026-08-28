@@ -7657,8 +7657,14 @@ const INBOX_LIVENESS_FIELDS = [
   "is_connected", "tmux_session", "permission_mode", "agent_started_at",
   "open_tasks", "open_tasks_at",
 ] as const;
-function stripInboxLiveness(row: any): void {
+// The two fields that change on every streamed message. A client that opts in
+// (`fast_fields_in_overlay`) gets them from the sessionsLiveness overlay instead,
+// so a streaming session no longer changes the list result and Convex stops
+// re-pushing the whole ~1.7MB list on every token.
+const INBOX_FAST_FIELDS = ["message_count", "updated_at"] as const;
+function stripInboxLiveness(row: any, fastFieldsToo = false): void {
   for (const f of INBOX_LIVENESS_FIELDS) row[f] = null;
+  if (fastFieldsToo) for (const f of INBOX_FAST_FIELDS) row[f] = null;
 }
 
 // Enrich one conversation into the inbox session row, including the AskUserQuestion
@@ -8353,6 +8359,7 @@ export async function computeInboxSessions(
   opts: {
     show_all?: boolean;
     includeLiveness?: boolean;
+    fastFieldsInOverlay?: boolean;
     // Explicitly-requested conversations (a label's filed set) hydrated into the
     // candidate pool regardless of the recency window — labels exist to park old
     // sessions. Deliberately filed, so also exempt from cluster-hiding.
@@ -8456,7 +8463,7 @@ export async function computeInboxSessions(
   }
 
   sortInboxRows(results);
-  if (!includeLiveness) for (const row of results) stripInboxLiveness(row);
+  if (!includeLiveness) for (const row of results) stripInboxLiveness(row, opts.fastFieldsInOverlay === true);
   return { sessions: results, hidden_count: hiddenCount };
 }
 
@@ -8468,6 +8475,8 @@ export const listInboxSessions = query({
     // inbox. Defaults to true so older / un-redeployed clients that read liveness
     // straight off this query keep working unchanged.
     include_liveness: v.optional(v.boolean()),
+    // Opt-in: omit message_count/updated_at from rows (they ride sessionsLiveness).
+    fast_fields_in_overlay: v.optional(v.boolean()),
     // Ignored cache-buster: lets the recovery poll force a real round-trip
     // instead of being served the live subscription's stalled cache. See the
     // matching `_probe` arg on users.getCurrentUser.
@@ -8479,6 +8488,7 @@ export const listInboxSessions = query({
     return computeInboxSessions(ctx, userId, {
       show_all: args.show_all,
       includeLiveness: args.include_liveness,
+      fastFieldsInOverlay: args.fast_fields_in_overlay,
     });
   },
 });
@@ -8545,6 +8555,10 @@ type LivenessFields = {
   // wakes, and the inbox draws its "↳ Background …" rows from it.
   open_tasks: any[] | null;
   open_tasks_at: number | null;
+  // Fast fields (see INBOX_FAST_FIELDS): exact values for clients whose base
+  // list omits them.
+  message_count: number;
+  updated_at: number;
 };
 
 // The parents that a producing subagent child should keep in "working", derived ONCE
@@ -8736,6 +8750,8 @@ async function enrichLivenessFields(
     agent_started_at: maps.agentStartedAtMap.get(cid) ?? null,
     open_tasks: maps.openTasksMap.get(cid)?.tasks ?? null,
     open_tasks_at: maps.openTasksMap.get(cid)?.at ?? null,
+    message_count: conv.message_count ?? 0,
+    updated_at: conv.updated_at,
   };
 }
 

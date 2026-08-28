@@ -41,7 +41,7 @@ export function applyLiveInboxIds(sessions: any[]) {
  * for callers that need the live payload itself.
  */
 export function useLiveInboxSessions(opts?: { onSync?: (sessions: any[]) => void }) {
-  const inboxSessions = useQuery(api.conversations.listInboxSessions, { show_all: false, include_liveness: false });
+  const inboxSessions = useQuery(api.conversations.listInboxSessions, { show_all: false, include_liveness: false, fast_fields_in_overlay: true });
   const syncTable = useInboxStore((s) => s.syncTable);
   const onSyncRef = useRef(opts?.onSync);
   onSyncRef.current = opts?.onSync;
