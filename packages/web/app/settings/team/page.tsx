@@ -1,7 +1,8 @@
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { Card } from "../../../components/ui/card";
+import { toast } from "sonner";
 import { AvatarImg } from "../../../lib/avatarCache";
 import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
@@ -17,12 +18,16 @@ import {
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../../../store/inboxStore";
 import { TEAM_ICONS, TEAM_COLORS, type TeamIconName, type TeamColorName } from "../../../components/TeamIcon";
-import { TeamIdentityPicker } from "../../../components/team/TeamIdentityPicker";
+import { TeamIdentityPicker, type TeamIdentity } from "../../../components/team/TeamIdentityPicker";
 import { TeamTaskStatusEditor } from "../../../components/settings/TeamTaskStatusEditor";
 import { TeamFeaturesEditor } from "../../../components/settings/TeamFeaturesEditor";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Github, Users } from "lucide-react";
+import {
+  SettingsField, SettingsPanel, SettingsSection, SettingsRow,
+} from "../../../components/settings/ui";
 
 export default function TeamPage() {
+  const router = useRouter();
   const user = useQuery(api.users.getCurrentUser);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const effectiveTeamId = activeTeamId || user?.team_id;
@@ -75,9 +80,18 @@ export default function TeamPage() {
     }
   };
 
-  const handleIdentityChange = async (next: { icon: TeamIconName; color: TeamColorName }) => {
+  const identity: TeamIdentity = {
+    icon: (TEAM_ICONS as readonly string[]).includes(team?.icon ?? "") ? (team!.icon as TeamIconName) : TEAM_ICONS[0],
+    color: (TEAM_COLORS as readonly string[]).includes(team?.icon_color ?? "") ? (team!.icon_color as TeamColorName) : TEAM_COLORS[0],
+  };
+
+  const handleIdentityChange = async (next: TeamIdentity) => {
     if (!effectiveTeamId || isSavingIcon) return;
-    const patch = next.icon !== team?.icon ? { icon: next.icon } : { icon_color: next.color };
+    const patch = {
+      ...(next.icon !== identity.icon ? { icon: next.icon } : {}),
+      ...(next.color !== identity.color ? { icon_color: next.color } : {}),
+    };
+    if (!Object.keys(patch).length) return;
     setIsSavingIcon(true);
     try {
       await updateTeamIcon({ team_id: effectiveTeamId, ...patch });
@@ -128,7 +142,7 @@ export default function TeamPage() {
       setSyncResult(result);
       setGithubOrgName("");
     } catch (error: any) {
-      alert(`Failed to sync GitHub org: ${error.message}`);
+      toast.error(`Failed to sync GitHub org: ${error.message}`);
     } finally {
       setIsSyncingGithub(false);
     }
@@ -160,238 +174,257 @@ export default function TeamPage() {
   };
 
   const isAdmin = teamContext?.role === "admin";
+  const goTo = (path: string) => {
+    useInboxStore.getState().closeSettingsModal();
+    router.push(path);
+  };
 
   if (!effectiveTeamId || !team) {
     return (
-      <div className="space-y-6">
-        <Card className="p-6 bg-sol-bg border-sol-border">
-          <p className="text-sol-base1">You are not part of a team.</p>
-        </Card>
-      </div>
+      <SettingsPanel>
+        <SettingsSection title="Team" icon={Users} padded>
+          <div className="flex flex-col items-center gap-4 py-6 text-center">
+            <p className="max-w-prose text-sm text-sol-text-muted">
+              You are not part of a team yet. Create one to work with your teammates, or join one you were invited to.
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => goTo("/settings/team/create")}
+                variant="cyan"
+              >
+                Create a team
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => goTo("/settings/team/join")}>
+                Join a team
+              </Button>
+            </div>
+          </div>
+        </SettingsSection>
+      </SettingsPanel>
     );
   }
 
-  return (
-    <div className="space-y-6">
-      <Card className="p-6 bg-sol-bg border-sol-border">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-sol-text">Team</h2>
-          <div className="flex items-center gap-2">
-            {isAdmin && (
-              <InviteModal
-                teamId={effectiveTeamId}
-                trigger={
-                  <Button variant="outline" size="sm" className="border-sol-cyan text-sol-cyan">
-                    Invite
-                  </Button>
-                }
-              />
-            )}
-          </div>
-        </div>
+  const memberCount = teamMembers?.length || 0;
 
-        <div className="space-y-4">
-          <div className="flex items-center justify-between py-2 border-b border-sol-border">
-            <div>
-              <div className="text-xs text-sol-base1 uppercase tracking-wider">Team Name</div>
-              {isEditingTeamName ? (
-                <div className="flex items-center gap-2 mt-1">
-                  <Input
-                    value={teamName}
-                    onChange={(e) => setTeamName(e.target.value)}
-                    placeholder={team.name}
-                    className="h-8 w-48 bg-sol-bg-alt border-sol-border text-sol-text"
-                    autoFocus
-                  />
-                  <Button
-                    size="sm"
-                    onClick={handleSaveTeamName}
-                    disabled={!teamName.trim() || isSavingTeamName}
-                    className="h-8 bg-sol-cyan hover:bg-sol-cyan/80 text-sol-base03"
-                  >
-                    {isSavingTeamName ? "..." : "Save"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setIsEditingTeamName(false);
-                      setTeamName("");
-                    }}
-                    className="h-8"
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="text-sol-text font-medium">{team.name}</span>
-                  {isAdmin && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setIsEditingTeamName(true)}
-                      className="h-6 px-2 text-xs text-sol-base1 hover:text-sol-text"
-                    >
-                      Edit
-                    </Button>
-                  )}
-                </div>
+  return (
+    <SettingsPanel>
+      <SettingsSection
+        title="Team"
+        icon={Users}
+        actions={
+          isAdmin ? (
+            <InviteModal
+              teamId={effectiveTeamId}
+              trigger={
+                <Button variant="outline" size="sm" className="border-sol-cyan text-sol-cyan">
+                  Invite
+                </Button>
+              }
+            />
+          ) : undefined
+        }
+      >
+        <SettingsRow label="Team name">
+          {isEditingTeamName ? (
+            <div className="flex items-center gap-2">
+              <Input
+                value={teamName}
+                onChange={(e) => setTeamName(e.target.value)}
+                placeholder={team.name}
+                className="h-8 w-48 bg-sol-bg border-sol-border text-sol-text"
+                autoFocus
+              />
+              <Button
+                size="sm"
+                onClick={handleSaveTeamName}
+                disabled={!teamName.trim() || isSavingTeamName}
+                variant="cyan" className="h-8"
+              >
+                {isSavingTeamName ? "..." : "Save"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setIsEditingTeamName(false);
+                  setTeamName("");
+                }}
+                className="h-8"
+              >
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-sol-text">{team.name}</span>
+              {isAdmin && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setIsEditingTeamName(true)}
+                  className="h-6 px-2 text-xs text-sol-text-muted hover:text-sol-text"
+                >
+                  Edit
+                </Button>
               )}
             </div>
-            <div className="text-sm text-sol-base1">
-              {teamMembers?.length || 0} member{(teamMembers?.length || 0) !== 1 ? "s" : ""}
-            </div>
-          </div>
-
-          {isAdmin && (
-            <div className="flex items-start justify-between py-2 border-b border-sol-border">
-              <div className="flex-1">
-                <div className="text-xs text-sol-base1 uppercase tracking-wider mb-2">Team Icon</div>
-                <TeamIdentityPicker
-                  value={{
-                    icon: (TEAM_ICONS as readonly string[]).includes(team.icon ?? "") ? (team.icon as TeamIconName) : TEAM_ICONS[0],
-                    color: (TEAM_COLORS as readonly string[]).includes(team.icon_color ?? "") ? (team.icon_color as TeamColorName) : TEAM_COLORS[0],
-                  }}
-                  onChange={handleIdentityChange}
-                  previewName={team.name}
-                  disabled={isSavingIcon}
-                />
-              </div>
-            </div>
           )}
+        </SettingsRow>
+        {isAdmin && (
+          <SettingsField label="Team icon">
+            <TeamIdentityPicker
+              value={identity}
+              onChange={handleIdentityChange}
+              previewName={team.name}
+              disabled={isSavingIcon}
+            />
+          </SettingsField>
+        )}
+      </SettingsSection>
 
-          {isAdmin && user.github_username && (
-            <div className="flex items-start justify-between py-2 border-b border-sol-border">
-              <div className="flex-1">
-                <div className="text-xs text-sol-base1 uppercase tracking-wider mb-2">GitHub Org Sync</div>
-                <p className="text-sm text-sol-base1 mb-3">
-                  Import members from a GitHub organization to your team
-                </p>
-                <div className="flex items-center gap-2">
-                  <Input
-                    value={githubOrgName}
-                    onChange={(e) => setGithubOrgName(e.target.value)}
-                    placeholder="org-name"
-                    className="h-9 w-64 bg-sol-bg-alt border-sol-border text-sol-text"
-                    disabled={isSyncingGithub}
-                  />
-                  <Button
-                    onClick={handleSyncGithubOrg}
-                    disabled={!githubOrgName.trim() || isSyncingGithub}
-                    className="h-9 bg-sol-cyan hover:bg-sol-cyan/80 text-sol-base03"
-                  >
-                    {isSyncingGithub ? "Syncing..." : "Sync Org"}
-                  </Button>
-                </div>
-                {syncResult && (
-                  <div className="mt-3 p-3 rounded-lg bg-sol-bg-alt">
-                    <div className="text-sm text-sol-text">
-                      Imported {syncResult.imported.length} of {syncResult.total} members
-                    </div>
-                    {syncResult.skipped.length > 0 && (
-                      <div className="text-xs text-sol-base1 mt-1">
-                        Skipped {syncResult.skipped.length} (already members)
+      {isAdmin && user.github_username && (
+        <SettingsSection
+          title="GitHub org sync"
+          icon={Github}
+          description="Import members from a GitHub organization to your team."
+        >
+          <SettingsField
+            label="Organization"
+            htmlFor="github-org"
+            hint={
+              syncResult && (
+                <span>
+                  <span className="text-sol-text">
+                    Imported {syncResult.imported.length} of {syncResult.total} members
+                  </span>
+                  {syncResult.skipped.length > 0 && (
+                    <span> · Skipped {syncResult.skipped.length} (already members)</span>
+                  )}
+                </span>
+              )
+            }
+          >
+            <div className="flex items-center gap-2">
+              <Input
+                id="github-org"
+                value={githubOrgName}
+                onChange={(e) => setGithubOrgName(e.target.value)}
+                placeholder="org-name"
+                className="w-64 bg-sol-bg border-sol-border text-sol-text"
+                disabled={isSyncingGithub}
+              />
+              <Button
+                onClick={handleSyncGithubOrg}
+                disabled={!githubOrgName.trim() || isSyncingGithub}
+                size="sm"
+                variant="cyan"
+              >
+                {isSyncingGithub ? "Syncing..." : "Sync org"}
+              </Button>
+            </div>
+          </SettingsField>
+        </SettingsSection>
+      )}
+
+      <SettingsSection
+        title="Members"
+        icon={Users}
+        actions={
+          <span className="text-xs text-sol-text-muted">
+            {memberCount} member{memberCount !== 1 ? "s" : ""}
+          </span>
+        }
+      >
+        {teamMembers?.filter((m): m is NonNullable<typeof m> => m !== null).map((member) => {
+          const daemonStatus = getMemberDaemonStatus(member.daemon_last_seen);
+          return (
+            <div key={member._id} className="flex items-center justify-between gap-4 px-4 py-3 sm:px-5">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="relative shrink-0">
+                  <AvatarImg
+                    src={member.github_avatar_url}
+                    alt={member.name || "User avatar"}
+                    className="w-10 h-10 rounded-full"
+                    fallback={
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sol-bg-highlight text-sm font-semibold text-sol-text">
+                        {member.name?.[0]?.toUpperCase() || member.email?.[0]?.toUpperCase() || "?"}
                       </div>
+                    }
+                  />
+                  <div className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-sol-bg ${
+                    daemonStatus.status === "online" ? "bg-sol-green" :
+                    daemonStatus.status === "recent" ? "bg-sol-yellow" : "bg-sol-text-dim"
+                  }`} />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-sol-text">
+                    {member.name || "Unnamed"}
+                    {member._id === user._id && (
+                      <span className="ml-2 text-xs text-sol-text-muted">(you)</span>
                     )}
                   </div>
+                  <div className="truncate text-xs text-sol-text-muted">
+                    {member.email}
+                    {member.github_username && (
+                      <>
+                        {" • "}
+                        <a
+                          href={`https://github.com/${member.github_username}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sol-cyan hover:underline"
+                        >
+                          @{member.github_username}
+                        </a>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-3">
+                <span className="text-xs text-sol-text-dim">{daemonStatus.text}</span>
+                {isAdmin && member._id !== user._id ? (
+                  <button
+                    type="button"
+                    onClick={() => handleRoleChange(
+                      member._id,
+                      member.role === "admin" ? "member" : "admin"
+                    )}
+                    disabled={roleChangeInProgress === member._id}
+                    className={`flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
+                      member.role === "admin"
+                        ? "border-sol-cyan bg-sol-cyan/10 text-sol-cyan hover:bg-sol-cyan/20"
+                        : "border-sol-border bg-sol-bg-highlight/20 text-sol-text-muted hover:bg-sol-bg-highlight/40 hover:text-sol-text"
+                    }`}
+                  >
+                    {roleChangeInProgress === member._id ? "..." : member.role}
+                    <ChevronDown className="h-3 w-3 opacity-60" />
+                  </button>
+                ) : (
+                  <span className={`rounded-md px-2 py-1 text-xs font-medium ${
+                    member.role === "admin"
+                      ? "bg-sol-cyan/10 text-sol-cyan"
+                      : "bg-sol-bg-highlight/20 text-sol-text-muted"
+                  }`}>
+                    {member.role}
+                  </span>
+                )}
+                {isAdmin && member._id !== user._id && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setMemberToRemove(member._id)}
+                    className="h-7 px-2 text-sol-red hover:bg-sol-red/10"
+                  >
+                    Remove
+                  </Button>
                 )}
               </div>
             </div>
-          )}
-
-          <div className="space-y-2">
-            <div className="text-xs text-sol-base1 uppercase tracking-wider">Members</div>
-            {teamMembers?.filter((m): m is NonNullable<typeof m> => m !== null).map((member) => {
-              const daemonStatus = getMemberDaemonStatus(member.daemon_last_seen);
-              return (
-                <div key={member._id} className="flex items-center justify-between py-3 px-3 rounded-lg bg-sol-bg-alt">
-                  <div className="flex items-center gap-3">
-                    <div className="relative">
-                      <AvatarImg
-                        src={member.github_avatar_url}
-                        alt={member.name || "User avatar"}
-                        className="w-10 h-10 rounded-full"
-                        fallback={
-                          <div className="w-10 h-10 rounded-full bg-sol-base02 flex items-center justify-center text-sol-text text-sm font-semibold">
-                            {member.name?.[0]?.toUpperCase() || member.email?.[0]?.toUpperCase() || "?"}
-                          </div>
-                        }
-                      />
-                      <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-sol-bg-alt ${
-                        daemonStatus.status === "online" ? "bg-sol-green" :
-                        daemonStatus.status === "recent" ? "bg-sol-yellow" : "bg-sol-base01"
-                      }`} />
-                    </div>
-                    <div>
-                      <div className="text-sol-text font-medium">
-                        {member.name || "Unnamed"}
-                        {member._id === user._id && (
-                          <span className="ml-2 text-xs text-sol-base1">(you)</span>
-                        )}
-                      </div>
-                      <div className="text-sm text-sol-base1">
-                        {member.email}
-                        {member.github_username && (
-                          <>
-                            {" • "}
-                            <a
-                              href={`https://github.com/${member.github_username}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-sol-cyan hover:underline"
-                            >
-                              @{member.github_username}
-                            </a>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs text-sol-base1">{daemonStatus.text}</span>
-                    {isAdmin && member._id !== user._id ? (
-                      <button
-                        onClick={() => handleRoleChange(
-                          member._id,
-                          member.role === "admin" ? "member" : "admin"
-                        )}
-                        disabled={roleChangeInProgress === member._id}
-                        className={`px-2 py-1 rounded text-xs font-medium cursor-pointer transition-colors flex items-center gap-1 border ${
-                          member.role === "admin"
-                            ? "bg-sol-cyan/20 text-sol-cyan border-sol-cyan/30 hover:bg-sol-cyan/30"
-                            : "bg-sol-base02/20 text-sol-base1 border-sol-base01/30 hover:bg-sol-base02/30 hover:text-sol-text"
-                        }`}
-                      >
-                        {roleChangeInProgress === member._id ? "..." : member.role}
-                        <ChevronDown className="w-3 h-3 opacity-60" />
-                      </button>
-                    ) : (
-                      <span className={`px-2 py-1 rounded text-xs font-medium ${
-                        member.role === "admin"
-                          ? "bg-sol-cyan/20 text-sol-cyan"
-                          : "bg-sol-base02/20 text-sol-base1"
-                      }`}>
-                        {member.role}
-                      </span>
-                    )}
-                    {isAdmin && member._id !== user._id && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setMemberToRemove(member._id)}
-                        className="h-7 px-2 text-sol-red hover:bg-sol-red/10"
-                      >
-                        Remove
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </Card>
+          );
+        })}
+      </SettingsSection>
 
       {effectiveTeamId && (
         <TeamFeaturesEditor teamId={effectiveTeamId} isAdmin={isAdmin} />
@@ -408,8 +441,8 @@ export default function TeamPage() {
       <Dialog open={!!memberToRemove} onOpenChange={() => setMemberToRemove(null)}>
         <DialogContent className="bg-sol-bg border-sol-border">
           <DialogHeader>
-            <DialogTitle className="text-sol-text">Remove Team Member</DialogTitle>
-            <DialogDescription className="text-sol-base1">
+            <DialogTitle className="text-sol-text">Remove team member</DialogTitle>
+            <DialogDescription className="text-sol-text-muted">
               Are you sure you want to remove this member from the team? This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
@@ -418,20 +451,19 @@ export default function TeamPage() {
               variant="outline"
               onClick={() => setMemberToRemove(null)}
               disabled={isRemoving}
-              className="border-sol-border text-sol-base1"
             >
               Cancel
             </Button>
             <Button
               onClick={handleRemoveMember}
               disabled={isRemoving}
-              className="bg-sol-red hover:bg-sol-red/80 text-sol-base3"
+              className="bg-sol-red hover:bg-sol-red/80 text-sol-base03"
             >
-              {isRemoving ? "Removing..." : "Remove Member"}
+              {isRemoving ? "Removing..." : "Remove member"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </SettingsPanel>
   );
 }
