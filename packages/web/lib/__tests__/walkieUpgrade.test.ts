@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { otherJoinedLive, senderHearing, senderHearingFrom } from "../../hooks/useWalkie";
-import { observeWalkieUpgrade, walkieDoorOpen } from "../../hooks/useWalkieSync";
+import { observeWalkieUpgrade } from "../../hooks/useWalkieSync";
 import { micConstraints } from "../calls/joinPrefs";
 import { getWalkieStatus, refreshWalkie, walkieJoinedRoom } from "../calls/walkie";
 import {
@@ -106,47 +106,6 @@ describe("walkie: reading the far side's join off the roster", () => {
   });
 });
 
-// THE DOOR, which is now also the consent for a microphone.
-//
-// It used to gate only whether a voice reached this machine. With hot
-// auto-listen it gates whether a mic opens untouched, so every clause is worth
-// a test of its own.
-describe("walkie: the door", () => {
-  const open = {
-    callsOn: true,
-    present: true,
-    snoozed: false,
-    pref: "team",
-    status: "available",
-  };
-
-  it("is open by default, because a teammate reaching you is the point", () => {
-    expect(walkieDoorOpen(open)).toBe(true);
-    // Absent pref means "team": the product's default is the open door.
-    expect(walkieDoorOpen({ ...open, pref: undefined })).toBe(true);
-  });
-
-  it("is shut by every one of the four ways to shut it", () => {
-    expect(walkieDoorOpen({ ...open, callsOn: false })).toBe(false);
-    expect(walkieDoorOpen({ ...open, present: false })).toBe(false);
-    expect(walkieDoorOpen({ ...open, snoozed: true })).toBe(false);
-    expect(walkieDoorOpen({ ...open, pref: "off" })).toBe(false);
-    expect(walkieDoorOpen({ ...open, status: "busy" })).toBe(false);
-  });
-
-  it("stays shut while snoozed even with everything else wide open", () => {
-    // Snooze is pressed to stop a voice that is playing at that second, so it
-    // has to outrank the pref rather than merely agree with it.
-    expect(walkieDoorOpen({ ...open, snoozed: true, pref: "team", status: "available" })).toBe(false);
-  });
-
-  it("lets an away teammate through, and stops a busy one", () => {
-    // "away" is a fact about the person's day; "busy" is a request. Only one of
-    // them is an instruction to this door.
-    expect(walkieDoorOpen({ ...open, status: "away" })).toBe(true);
-    expect(walkieDoorOpen({ ...open, status: "busy" })).toBe(false);
-  });
-});
 
 describe("walkie: what the microphone is opened with", () => {
   it("cancels echo, always", () => {

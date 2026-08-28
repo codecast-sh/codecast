@@ -3985,6 +3985,12 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
     phase: "idle" | "ringing_out" | "connecting" | "connected" | "error";
     roomKey: string | null;
     muted: boolean;
+    /** The microphone could not be opened for this seat — denied, blocked, or
+     *  no device. A seat like that still HEARS the room; it publishes nothing.
+     *  Implies `muted`, and it is the difference between a person who chose
+     *  silence and one who has no choice, which is the whole of what the strip
+     *  and the dock have to say honestly. */
+    micDenied: boolean;
     camera: boolean;
     sharing: boolean;
     speaking: string[];
@@ -9402,6 +9408,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     phase: "idle" as const,
     roomKey: null,
     muted: true,
+    micDenied: false,
     camera: false,
     sharing: false,
     speaking: [],

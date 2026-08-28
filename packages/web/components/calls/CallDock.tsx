@@ -1,6 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { createPortal } from "react-dom";
-import { Rnd } from "react-rnd";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { AppWindow, ChevronUp, Maximize2, Pin, PinOff, Video, VideoOff } from "lucide-react";
 import { useTrackedStore } from "../../store/inboxStore";
 import {
@@ -15,7 +13,8 @@ import { AddPeopleButton } from "./AddPeople";
 import { HangUpButton, MicButton } from "./CallControls";
 import { RoomKnocks, RoomLockButton } from "./RoomDoor";
 import { WalkieBanner } from "./WalkieDock";
-import { callDockSurface, useWalkieStatus, type DockSurface } from "../../hooks/useWalkie";
+import { callDockSurface, useWalkieStatus } from "../../hooks/useWalkie";
+import { CallSurfaceRoot, useSurfaceHandles, type SurfaceShape } from "./CallSurfaceRoot";
 import { firstName } from "./speakers";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
 import { POP_OUT_CALL_TITLE, canPopOutCall, isCallPanelWindow } from "../../lib/desktop";
@@ -48,7 +47,6 @@ export function CallDock() {
   const roster: any[] = (call.roomKey && s.callOccupancy[call.roomKey]) || [];
   const [expanded, setExpanded] = useState(false);
   const [pinned, setPinned] = useState(true);
-  const [bounds, setBounds] = useState<Bounds | null>(null);
   const tiles = useSyncExternalStore(subscribeCallTiles, getCallTiles, () => []);
   const walkie = useWalkieStatus();
   const role = useDesktopWindowRole();
@@ -56,13 +54,12 @@ export function CallDock() {
   // a media notice opens it too, so its sentence is read.
   const notice = call.phase === "connected" ? call.error : null;
   const remoteVideo = tiles.some((t) => !t.isLocal);
-  const prevRemoteVideo = useRef(false);
+  const seenMedia = useRef({ video: false, notice: false });
 
   // Which of the four surfaces this is, decided once, by the lookup that lives
   // beside the walkie because it is a fact about the walkie.
   const surface = callDockSurface(walkie, call, { expanded });
   const walkieOwns = surface === "walkie";
-  const { morphing, onMorphEnd } = useUpgradeMorph(surface, bounds, setBounds);
 
   // THE STAGE BELONGS TO THE CALL THAT WAS EXPANDED, and to no call after it
   // (ct-45974). Nothing used to put `expanded` back: this component is mounted
@@ -74,18 +71,20 @@ export function CallDock() {
   // between and no second paint.
   if (expanded && surface === "none") setExpanded(false);
 
-  // Remote video or a media notice arriving is the moment a HUDDLE earns the
-  // stage. Never over a burst: three seconds of somebody's voice has not
-  // earned the screen, and the flag would outlive the burst and take the
-  // surface from every later one.
-  useEffect(() => {
-    if (!walkieOwns && (notice || (remoteVideo && !prevRemoteVideo.current))) setExpanded(true);
-    // Tracked whatever was decided, so a burst cannot arm the next call's
-    // first frame.
-    prevRemoteVideo.current = remoteVideo;
-  }, [notice, remoteVideo, walkieOwns]);
+  // Remote video or a media notice ARRIVING is the moment a huddle earns the
+  // stage. Never over a burst: three seconds of somebody's voice has not earned
+  // the screen, and the flag would outlive the burst and take the surface from
+  // every later one.
+  //
+  // Both are edges, and that is what lets a collapse stick: a notice sits in
+  // `call.error` for as long as the call has one, so "it is set" would re-open
+  // the stage on the very next render after the person closed it. Settled in
+  // the render that sees the change, beside the reset above, rather than in an
+  // effect whose dependency list would have to carry the same edge anyway.
+  const arrived = (remoteVideo && !seenMedia.current.video) || (!!notice && !seenMedia.current.notice);
+  seenMedia.current = { video: remoteVideo, notice: !!notice };
+  if (arrived && !walkieOwns && !expanded) setExpanded(true);
 
-  if (surface === "walkie") return <WalkieBanner />;
   if (surface === "none") return null;
   // The call has a window of its own, and it is not this one. Every other
   // window stands down from the dock rather than drawing a second set of
@@ -94,112 +93,46 @@ export function CallDock() {
   // panel's business, and the strip stays wherever it lands. This window's own
   // call state goes idle a moment later anyway, when the panel's join evicts
   // it; the gate is what keeps two docks off the screen during that moment.
-  if (role.callPanel && !isCallPanelWindow()) return null;
-  if (surface === "stage") {
-    return <CallStage onCollapse={() => setExpanded(false)} />;
-  }
-  // Portaled to <body> like the stage: the dock mounts inside the app shell,
-  // whose transformed ancestors would otherwise capture a fixed overlay.
-  return createPortal(
+  if (surface !== "walkie" && role.callPanel && !isCallPanelWindow()) return null;
+
+  // ONE ROOT, whichever shape the corner is holding. The strip, the pill and
+  // the floating window are contents of the same node, so a burst becoming a
+  // call is that node changing shape (CallSurfaceRoot) instead of one surface
+  // being destroyed and another built. The stage is the exception the other
+  // way round: it draws its own full-screen surface, so the root goes empty and
+  // simply grows into it.
+  const shape: SurfaceShape =
+    surface === "walkie" ? "walkie" : surface === "stage" ? "stage" : pinned ? "window" : "pill";
+  return (
     <>
-      {/* Both surfaces, for the length of the morph. The strip says when it is
-          done rather than being timed out from here. */}
-      {morphing && <WalkieBanner leaving onLeft={onMorphEnd} />}
-      {pinned ? (
-        <MiniWindow
-          call={call}
-          roster={roster}
-          tiles={tiles}
-          bounds={bounds ?? defaultBounds()}
-          onBounds={setBounds}
-          onUnpin={() => setPinned(false)}
-          onExpand={() => setExpanded(true)}
-          morphing={morphing}
-        />
-      ) : (
-        <div
-          className={`fixed bottom-20 right-4 z-[150] w-auto max-w-[420px] select-none ${
-            morphing ? "call-dock-morph" : ""
-          }`}
-        >
-          <div className="rounded-xl border border-sol-border bg-sol-bg-alt/95 shadow-xl backdrop-blur">
-            {call.roomKey && call.phase === "connected" && <RoomKnocks roomKey={call.roomKey} />}
-            <DockPill
+      <CallSurfaceRoot shape={shape}>
+        {surface === "walkie" ? (
+          <WalkieBanner />
+        ) : surface === "dock" ? (
+          pinned ? (
+            <MiniWindow
               call={call}
               roster={roster}
+              tiles={tiles}
+              onUnpin={() => setPinned(false)}
               onExpand={() => setExpanded(true)}
-              onPin={() => setPinned(true)}
             />
-          </div>
-        </div>
-      )}
-    </>,
-    document.body,
+          ) : (
+            <div className="rounded-xl border border-sol-border bg-sol-bg-alt/95 shadow-xl backdrop-blur">
+              {call.roomKey && call.phase === "connected" && <RoomKnocks roomKey={call.roomKey} />}
+              <DockPill
+                call={call}
+                roster={roster}
+                onExpand={() => setExpanded(true)}
+                onPin={() => setPinned(true)}
+              />
+            </div>
+          )
+        ) : null}
+      </CallSurfaceRoot>
+      {surface === "stage" && <CallStage onCollapse={() => setExpanded(false)} />}
+    </>
   );
-}
-
-type Bounds = { x: number; y: number; width: number; height: number };
-const MINI_W = 320;
-const MINI_H = 250;
-// Top right, under the header — where the palette-style overlays live.
-function defaultBounds(): Bounds {
-  const vw = typeof window === "undefined" ? 1200 : window.innerWidth;
-  return { x: Math.max(8, vw - MINI_W - 16), y: 60, width: MINI_W, height: MINI_H };
-}
-
-/** Where the walkie strip is (walkie.css: right 1rem, bottom 5rem). The dock
- *  opens HERE when a burst becomes a call, so the surface grows out of the
- *  thing the person was already looking at instead of jumping a screen away. */
-function stripBounds(): Bounds {
-  if (typeof window === "undefined") return defaultBounds();
-  return {
-    x: Math.max(8, window.innerWidth - MINI_W - 16),
-    y: Math.max(8, window.innerHeight - MINI_H - 80),
-    width: MINI_W,
-    height: MINI_H,
-  };
-}
-
-/**
- * The strip just became the dock.
- *
- * True from the moment the surface leaves "walkie" for one of the call's own
- * shapes — in practice one event, somebody pressing Join live — until the
- * strip's exit animation reports itself finished. The dock is placed in the
- * strip's corner on that edge, unless the person has already dragged the dock
- * somewhere, in which case the place they put it outranks the animation.
- *
- * Settled during the render that SEES the change, the same way this component
- * already settles `expanded`: React re-runs and throws the first pass away, so
- * there is no committed frame showing the dock without its morph.
- *
- * ENDED BY `animationend` RATHER THAN BY A TIMER. The duration then lives in
- * the stylesheet beside the keyframes instead of in a constant here that
- * somebody has to remember to keep in step — and a reduced-motion run, which
- * shortens the animation rather than removing it, ends correctly for free.
- */
-function useUpgradeMorph(
-  surface: DockSurface,
-  bounds: Bounds | null,
-  onBounds: (b: Bounds) => void,
-): { morphing: boolean; onMorphEnd: () => void } {
-  const prev = useRef<DockSurface>(surface);
-  const [morphing, setMorphing] = useState(false);
-  if (prev.current !== surface) {
-    const was = prev.current;
-    prev.current = surface;
-    if (was === "walkie" && surface === "dock") {
-      if (!bounds) onBounds(stripBounds());
-      setMorphing(true);
-    }
-  }
-  // Self-correcting, so the flag can never outlive the thing it describes: the
-  // strip's own `animationend` is what normally ends the morph, and the strip
-  // only renders on the dock branch — so any surface that returns before it
-  // (the stage, a call that ended, the panel taking the room) would otherwise
-  // leave this true and flash a strip out on some later, unrelated frame.
-  if (morphing && surface !== "dock") setMorphing(false);
-  return { morphing, onMorphEnd: useCallback(() => setMorphing(false), []) };
 }
 
 // One sentence for where the call stands, shared by the pill and the window.
@@ -237,23 +170,20 @@ function MiniWindow({
   call,
   roster,
   tiles,
-  bounds,
-  onBounds,
   onUnpin,
   onExpand,
-  morphing,
 }: {
   call: any;
   roster: any[];
   tiles: ParticipantTile[];
-  bounds: Bounds;
-  onBounds: (b: Bounds) => void;
   onUnpin: () => void;
   onExpand: () => void;
-  /** The strip is turning into this window right now (see useUpgradeMorph). */
-  morphing?: boolean;
 }) {
   const statusText = useCallStatusText(call, roster);
+  // The box belongs to the root now: it is anchored to the corner the strip
+  // shares, clamped into the viewport on every layout, and this window only
+  // says which parts of itself are a handle.
+  const handles = useSurfaceHandles();
   const speaking = useMemo(() => new Set<string>(call.speaking), [call.speaking]);
   // Others first — their screens, then their faces — and your own camera last,
   // so the window shows the people you are talking to, not a mirror.
@@ -269,111 +199,103 @@ function MiniWindow({
   const cols = video.length <= 1 ? 1 : 2;
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-[150]">
-      <Rnd
-        position={{ x: bounds.x, y: bounds.y }}
-        size={{ width: bounds.width, height: bounds.height }}
-        minWidth={240}
-        minHeight={180}
-        bounds="parent"
-        dragHandleClassName="call-window-drag-handle"
-        onDragStop={(_e, d) => onBounds({ ...bounds, x: d.x, y: d.y })}
-        onResizeStop={(_e, _dir, ref, _delta, position) =>
-          onBounds({ x: position.x, y: position.y, width: ref.offsetWidth, height: ref.offsetHeight })
-        }
-        className={`pointer-events-auto ${morphing ? "call-dock-morph" : ""}`}
+    <div className="relative flex h-full w-full select-none flex-col overflow-hidden rounded-xl border border-sol-border bg-sol-bg-alt/95 shadow-2xl backdrop-blur">
+      <div
+        className="call-surface-grip"
+        onPointerDown={handles?.onResize}
+        aria-hidden="true"
+      />
+      <div
+        className="call-window-drag-handle flex shrink-0 cursor-grab items-center gap-1.5 px-2.5 py-1.5 active:cursor-grabbing"
+        onPointerDown={handles?.onMove}
       >
-        <div className="flex h-full w-full select-none flex-col overflow-hidden rounded-xl border border-sol-border bg-sol-bg-alt/95 shadow-2xl backdrop-blur">
-          <div className="call-window-drag-handle flex shrink-0 cursor-grab items-center gap-1.5 px-2.5 py-1.5 active:cursor-grabbing">
-            <span
-              className={`min-w-0 flex-1 truncate font-mono text-[11px] ${
-                call.phase === "error" ? "text-sol-red" : "text-sol-text-muted"
-              }`}
-            >
-              {statusText}
-            </span>
-            <PopOutCallButton />
-            <button
-              onClick={onExpand}
-              className="rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
-              title="Expand to the full stage"
-            >
-              <Maximize2 className="h-3.5 w-3.5" />
-            </button>
-            <button
-              onClick={onUnpin}
-              className="rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
-              title="Unpin — shrink to the pill, the call continues"
-            >
-              <PinOff className="h-3.5 w-3.5" />
-            </button>
-          </div>
+        <span
+          className={`min-w-0 flex-1 truncate font-mono text-[11px] ${
+            call.phase === "error" ? "text-sol-red" : "text-sol-text-muted"
+          }`}
+        >
+          {statusText}
+        </span>
+        <PopOutCallButton />
+        <button
+          onClick={onExpand}
+          className="rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
+          title="Expand to the full stage"
+        >
+          <Maximize2 className="h-3.5 w-3.5" />
+        </button>
+        <button
+          onClick={onUnpin}
+          className="rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
+          title="Unpin — shrink to the pill, the call continues"
+        >
+          <PinOff className="h-3.5 w-3.5" />
+        </button>
+      </div>
 
-          <div className="min-h-0 flex-1 px-2">
-            {video.length > 0 ? (
-              <div
-                className="grid h-full min-h-0 gap-1.5"
-                style={{
-                  gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-                  gridAutoRows: "minmax(0, 1fr)",
-                }}
-              >
-                {video.map((t) => (
-                  <StageVideo
-                    key={t.key}
-                    tile={t}
-                    speaking={speaking.has(t.identity)}
-                    contain={t.kind === "screen"}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="flex h-full flex-wrap content-center items-center justify-center gap-4">
-                {roster.length === 0 && (
-                  <span className="inline-block h-10 w-10 animate-pulse rounded-full bg-sol-bg-highlight" />
-                )}
-                {roster.map((m) => (
-                  <div key={m.user_id} className="flex flex-col items-center gap-1.5">
-                    <div
-                      className={`rounded-full transition-all duration-300 ${
-                        speaking.has(String(m.user_id))
-                          ? "ring-2 ring-sol-cyan/70 ring-offset-2 ring-offset-sol-bg-alt"
-                          : ""
-                      }`}
-                    >
-                      <Avatar m={m} size={44} />
-                    </div>
-                    <span className="font-mono text-[11px] text-sol-text-muted">{firstName(m.user_name)}</span>
-                  </div>
-                ))}
-              </div>
+      <div className="min-h-0 flex-1 px-2">
+        {video.length > 0 ? (
+          <div
+            className="grid h-full min-h-0 gap-1.5"
+            style={{
+              gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+              gridAutoRows: "minmax(0, 1fr)",
+            }}
+          >
+            {video.map((t) => (
+              <StageVideo
+                key={t.key}
+                tile={t}
+                speaking={speaking.has(t.identity)}
+                contain={t.kind === "screen"}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="flex h-full flex-wrap content-center items-center justify-center gap-4">
+            {roster.length === 0 && (
+              <span className="inline-block h-10 w-10 animate-pulse rounded-full bg-sol-bg-highlight" />
             )}
+            {roster.map((m) => (
+              <div key={m.user_id} className="flex flex-col items-center gap-1.5">
+                <div
+                  className={`rounded-full transition-all duration-300 ${
+                    speaking.has(String(m.user_id))
+                      ? "ring-2 ring-sol-cyan/70 ring-offset-2 ring-offset-sol-bg-alt"
+                      : ""
+                  }`}
+                >
+                  <Avatar m={m} size={44} />
+                </div>
+                <span className="font-mono text-[11px] text-sol-text-muted">{firstName(m.user_name)}</span>
+              </div>
+            ))}
           </div>
+        )}
+      </div>
 
-          {call.roomKey && call.phase === "connected" && <RoomKnocks roomKey={call.roomKey} />}
+      {call.roomKey && call.phase === "connected" && <RoomKnocks roomKey={call.roomKey} />}
 
-          <div className="flex shrink-0 items-center justify-center gap-1 px-2 py-1.5">
-            <MicButton muted={call.muted} size="compact" />
-            <button
-              onClick={() => void setCamera(!call.camera)}
-              className={`rounded-md p-1.5 transition-colors ${
-                call.camera ? "bg-sol-cyan/15 text-sol-cyan" : "text-sol-text-muted hover:bg-sol-bg-highlight"
-              }`}
-              title={call.camera ? "Turn camera off" : "Turn camera on"}
-            >
-              {call.camera ? <Video className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}
-            </button>
-            {call.roomKey && call.phase === "connected" && (
-              <>
-                <AddPeopleButton roomKey={call.roomKey} />
-                <RoomLockButton roomKey={call.roomKey} />
-              </>
-            )}
-            <div className="mx-0.5 h-5 w-px bg-sol-border" />
-            <HangUpButton size="compact" />
-          </div>
-        </div>
-      </Rnd>
+      <div className="flex shrink-0 items-center justify-center gap-1 px-2 py-1.5">
+        <MicButton muted={call.muted} size="compact" />
+        <button
+          onClick={() => void setCamera(!call.camera)}
+          className={`rounded-md p-1.5 transition-colors ${
+            call.camera ? "bg-sol-cyan/15 text-sol-cyan" : "text-sol-text-muted hover:bg-sol-bg-highlight"
+          }`}
+          title={call.camera ? "Turn camera off" : "Turn camera on"}
+        >
+          {call.camera ? <Video className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}
+        </button>
+        {call.roomKey && call.phase === "connected" && (
+          <>
+            <AddPeopleButton roomKey={call.roomKey} />
+            <RoomLockButton roomKey={call.roomKey} />
+          </>
+        )}
+        <div className="mx-0.5 h-5 w-px bg-sol-border" />
+        <HangUpButton size="compact" />
+      </div>
     </div>
   );
 }

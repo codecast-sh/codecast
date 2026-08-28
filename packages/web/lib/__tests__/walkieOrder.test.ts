@@ -40,7 +40,14 @@ const realAsrPipe = await import("../calls/asrPipe");
 /** The room join, held open so a test can ask what happened while it was still
  *  in flight — which is the whole question. */
 let joining: Deferred<void>;
-let joinCalls: Array<{ roomKey: string; micTrack?: MediaStreamTrack }> = [];
+let joinCalls: Array<{ roomKey: string; micTrack?: MediaStreamTrack; intent?: string }> = [];
+/** Whether the join OPENS THE MICROPHONE the way the real one does. Off for
+ *  every test that is about sequence, so the counts above stay arithmetic; on
+ *  for the ones about a device that refuses, where the whole question is what
+ *  the real rule does with the failure — so it runs the real
+ *  `openMicForJoin` against a participant that asks the fake browser, rather
+ *  than a description of it. */
+let micOnJoin = false;
 /** Counted, not replaced. Leaving is what a guest burst must never do, and the
  *  real leave is what the ownership tests above watch the seat disappear
  *  through — so this records the call and then does exactly what it did. */
@@ -53,8 +60,20 @@ const trueLeaveCall = realCallManager.leaveCall;
 mock.module("../calls/callManager", () => ({
   ...realCallManager,
   getRoom: () => null,
-  joinCall: (roomKey: string, opts?: { micTrack?: MediaStreamTrack }) => {
-    joinCalls.push({ roomKey, micTrack: opts?.micTrack });
+  joinCall: async (roomKey: string, opts?: { micTrack?: MediaStreamTrack; intent?: string }) => {
+    joinCalls.push({ roomKey, micTrack: opts?.micTrack, intent: opts?.intent });
+    // A join handed a track publishes THAT one and opens no device; only a
+    // join without one reaches for the microphone.
+    if (micOnJoin && !opts?.micTrack) {
+      await realCallManager.openMicForJoin(
+        {
+          setMicrophoneEnabled: async (on: boolean) => {
+            if (on) await (globalThis as any).navigator.mediaDevices.getUserMedia({ audio: true });
+          },
+        },
+        { muted: useInboxStore.getState().call.muted, listen: opts?.intent === "listen" },
+      );
+    }
     return joining.promise;
   },
   leaveCall: () => {
@@ -123,7 +142,7 @@ mock.module("../sounds", () => ({
 const walkie = await import("../calls/walkie");
 // The real surface lookup, not a copy of it, so the question asked below is the
 // one the app asks.
-const { callDockSurface } = await import("../../hooks/useWalkie");
+const { callDockSurface, walkieStripState } = await import("../../hooks/useWalkie");
 
 // ── the browser ────────────────────────────────────────────────────────────
 
@@ -167,6 +186,7 @@ const realNow = Date.now;
 
 beforeEach(() => {
   joinCalls = [];
+  micOnJoin = false;
   leaveCalls = 0;
   pipes = [];
   recorders = [];
@@ -175,7 +195,7 @@ beforeEach(() => {
   getUserMediaCalls = 0;
   permissionState = "granted";
   joining = defer<void>();
-  S().setCallState({ roomKey: null, phase: "idle", muted: true, error: null });
+  S().setCallState({ roomKey: null, phase: "idle", muted: true, micDenied: false, error: null });
   clock = 1_700_000_000_000;
   Date.now = () => clock;
 
@@ -1066,5 +1086,251 @@ describe("walkie: the join and the away tick", () => {
     soundLog.length = 0;
     walkie.noteBurstUnheard();
     expect(soundLog).not.toContain("away");
+  });
+});
+
+// ── a receiver with no microphone ──────────────────────────────────────────
+//
+// Auto-listen joins unmuted, which is the bargain: hearing somebody means they
+// can hear you. On a browser where the person refused the microphone that
+// bargain used to cost them the whole feature. The join opened the device, the
+// device threw, and the join's own error path tore the room down and freed the
+// seat — while `incoming` stayed exactly where it was, so the strip went on
+// saying "Sam is talking" over a silence with no room behind it. The person who
+// most needed to be told what was happening was told the one thing that was
+// false.
+//
+// The rule now is that the microphone is the part of a join allowed to fail.
+// What is left is a seat that subscribes and publishes nothing.
+describe("walkie: a receiver with no microphone still hears", () => {
+  const ROOM = "dm:denied:seat";
+  const burstRow = () => ({
+    messageId: "m-denied",
+    channelId: "chan-denied",
+    roomKey: ROOM,
+    fromUserId: "u-sam",
+    fromName: "Sam",
+    createdAt: clock,
+  });
+
+  /** A browser where the person said no. The rejection carries the DOMException
+   *  NAME, which is the only thing that tells "you said no" apart from "there
+   *  is no such device". */
+  function refuseTheMicrophone() {
+    micOnJoin = true;
+    permissionState = "denied";
+    (globalThis as any).navigator.mediaDevices.getUserMedia = async () => {
+      throw Object.assign(new Error("Permission denied"), { name: "NotAllowedError" });
+    };
+  }
+
+  /** Let the listening seat's join resolve and its reads settle. */
+  async function seatTaken() {
+    joining.resolve();
+    await settle();
+  }
+
+  // The engine keeps `incoming` keyed by MESSAGE ID, so a listen left standing
+  // makes the next test's identical report a no-op — it reads as the same burst
+  // still playing. Hand the seat back between tests, the way a real burst
+  // ending does.
+  afterEach(() => {
+    walkie.observeWalkie({ bursts: [], doorOpen: false });
+    S().setCallState({ roomKey: null, phase: "idle", muted: true, micDenied: false, error: null });
+    walkie.refreshWalkie();
+  });
+
+  test("the room stays up: subscribe-only, nothing published, still hearing Sam", async () => {
+    refuseTheMicrophone();
+    walkie.observeWalkie({ bursts: [burstRow()], doorOpen: true });
+    // The seat is asked for as a LISTEN, which is what makes the microphone
+    // optional rather than required.
+    expect(joinCalls.at(-1)?.roomKey).toBe(ROOM);
+    expect(joinCalls.at(-1)?.intent).toBe("listen");
+    await seatTaken();
+    S().setCallState({ roomKey: ROOM, phase: "connected" });
+
+    // The device refused and the seat survived it.
+    expect(S().call.micDenied).toBe(true);
+    expect(S().call.muted).toBe(true);
+    // THE ROOM IS STILL THERE. Nothing hung up, nothing was handed back, and
+    // the burst is still playing — which is the entire point of the seat.
+    expect(leaveCalls).toBe(0);
+    expect(S().call.phase).toBe("connected");
+    expect(walkie.getWalkieStatus().liveRoom?.key).toBe(ROOM);
+    expect(walkie.getWalkieStatus().liveRoom?.mode).toBe("listen");
+    expect(walkie.getWalkieStatus().incoming?.fromName).toBe("Sam");
+  });
+
+  test("the strip says the true thing, and never the hot-mic line", async () => {
+    refuseTheMicrophone();
+    walkie.observeWalkie({ bursts: [burstRow()], doorOpen: true });
+    await seatTaken();
+    S().setCallState({ roomKey: ROOM, phase: "connected" });
+
+    const strip = walkieStripState(walkie.getWalkieStatus(), S(), { name: "Sam", now: clock });
+    expect(strip.headline).toBe("You can hear Sam — your mic is off (permission denied)");
+    expect(strip.micDenied).toBe(true);
+    expect(strip.rx).toBe(true);
+    // "Your mic is open — Sam can hear you" over a microphone that never opened
+    // is the worst sentence this surface could say, and it is the one the old
+    // hot-listen line would have said.
+    expect(strip.hotMic).toBe(false);
+  });
+
+  test("the fix arrives in the words that name it, through the toast the walkie already has", async () => {
+    refuseTheMicrophone();
+    walkie.observeWalkie({ bursts: [burstRow()], doorOpen: true });
+    await seatTaken();
+    // Not "Microphone unavailable": the person can act on this one.
+    expect(walkie.getWalkieStatus().error).toContain("site settings");
+  });
+
+  test("a background listen writes no call error; a person who pressed Join live is told", async () => {
+    // The same failure, two different debts. A red notice on the dock over a
+    // burst playing perfectly well is the surface inventing a problem nobody
+    // has; a person who pressed a button to talk is owed the sentence.
+    const refusing = {
+      setMicrophoneEnabled: async () => {
+        throw Object.assign(new Error("Permission denied"), { name: "NotAllowedError" });
+      },
+    };
+    permissionState = "denied";
+
+    S().setCallState({ error: null, micDenied: false, muted: false });
+    await realCallManager.openMicForJoin(refusing, { muted: false, listen: true });
+    expect(S().call.micDenied).toBe(true);
+    expect(S().call.error).toBeNull();
+
+    S().setCallState({ error: null, micDenied: false, muted: false });
+    await realCallManager.openMicForJoin(refusing, { muted: false, listen: false });
+    expect(S().call.micDenied).toBe(true);
+    expect(S().call.error).toContain("site settings");
+  });
+
+  test("muting a seat that has no device never reads as a device that works", async () => {
+    // `setMicrophoneEnabled(false)` succeeds trivially — there is nothing to
+    // turn off — so clearing the denial on a mute would erase a fact nobody has
+    // fixed, and the strip would go back to claiming a working microphone.
+    S().setCallState({ micDenied: true, muted: false });
+    await realCallManager.setMuted(true);
+    expect(S().call.micDenied).toBe(true);
+  });
+});
+
+// ── two keys down at once ──────────────────────────────────────────────────
+//
+// Two people press in the same DM within a second of each other, which is what
+// a walkie invites. Each one used to take the seated path alone: `applyReport`
+// returned early for anybody with a burst in flight, so the first presser never
+// learned that a second voice had joined the room they were already in. The
+// strip stayed one-directional over a two-way conversation.
+//
+// The rule now is that a press into a room with a live burst in it is a REPLY:
+// one room, both directions on the status, both messages landing in the order
+// they were spoken.
+describe("walkie: two keys down in one room", () => {
+  const ROOM = "dm:both:press";
+  const theirBurst = () => ({
+    messageId: "m-theirs",
+    channelId: "chan-both",
+    roomKey: ROOM,
+    fromUserId: "u-sam",
+    fromName: "Sam",
+    createdAt: clock,
+  });
+
+  // The engine keeps `incoming` keyed by MESSAGE ID, so a listen left standing
+  // makes the next test's identical report a no-op — it reads as the same burst
+  // still playing. Hand the seat back between tests, the way a real burst
+  // ending does.
+  afterEach(() => {
+    walkie.observeWalkie({ bursts: [], doorOpen: false });
+    S().setCallState({ roomKey: null, phase: "idle", muted: true, micDenied: false, error: null });
+    walkie.refreshWalkie();
+  });
+
+  test("a press while they are talking answers into the same room", async () => {
+    walkie.observeWalkie({ bursts: [theirBurst()], doorOpen: true });
+    S().setCallState({ roomKey: ROOM, phase: "connected", muted: false });
+    const joinsBefore = joinCalls.length;
+
+    await walkie.startBurst("chan-both", ROOM);
+
+    // ONE ROOM. No second join, no eviction, and the mode stays this client's
+    // own — the room I am talking into does not become a room I am listening in
+    // because somebody answered me.
+    expect(joinCalls.length).toBe(joinsBefore);
+    expect(leaveCalls).toBe(0);
+    const s = walkie.getWalkieStatus();
+    expect(s.liveRoom?.key).toBe(ROOM);
+    expect(s.liveRoom?.mode).toBe("burst");
+    // BOTH DIRECTIONS, which is what the strip draws the two rings from.
+    expect(s.sending?.roomKey).toBe(ROOM);
+    expect(s.incoming?.fromName).toBe("Sam");
+
+    const strip = walkieStripState(s, S(), { name: "Sam", now: clock });
+    expect(strip.tx).toBe(true);
+    expect(strip.rx).toBe(true);
+    expect(strip.headline).toBe("You and Sam are both talking");
+
+    clock += 2_000;
+    await release();
+  });
+
+  test("their burst arriving mid-hold reaches a sender who is already talking", async () => {
+    // The other order, and the one the early return broke outright: I pressed
+    // FIRST, so there was no incoming to survive — there was a report I never
+    // looked at.
+    await walkie.startBurst("chan-both", ROOM);
+    S().setCallState({ roomKey: ROOM, phase: "connected", muted: false });
+    expect(walkie.getWalkieStatus().incoming).toBeNull();
+
+    walkie.observeWalkie({ bursts: [theirBurst()], doorOpen: true });
+    const s = walkie.getWalkieStatus();
+    expect(s.incoming?.fromName).toBe("Sam");
+    expect(s.sending?.roomKey).toBe(ROOM);
+    expect(s.liveRoom?.mode).toBe("burst");
+
+    clock += 2_000;
+    await release();
+  });
+
+  test("both bursts land, in the order they were spoken", async () => {
+    walkie.observeWalkie({ bursts: [theirBurst()], doorOpen: true });
+    S().setCallState({ roomKey: ROOM, phase: "connected", muted: false });
+    await walkie.startBurst("chan-both", ROOM);
+
+    // Their key comes up first: their message is theirs to land, and this side
+    // must not cancel, mute or evict anything on the way through.
+    clock += 3_000;
+    walkie.observeWalkie({ bursts: [], doorOpen: true });
+    expect(walkie.getWalkieStatus().incoming).toBeNull();
+    expect(walkie.getWalkieStatus().sending?.roomKey).toBe(ROOM);
+    expect(leaveCalls).toBe(0);
+
+    // Then mine, which lands as its own message behind theirs.
+    clock += 1_000;
+    await release();
+    expect(finalize()).toBeTruthy();
+    expect(mutations.some((m) => m.name === "chat:cancelVoiceBurst")).toBe(false);
+  });
+
+  test("a burst in ANOTHER room is never walked into mid-sentence", async () => {
+    // One pair of ears cannot follow two rooms, and leaving to hear a third
+    // person would evict the conversation I am in the middle of having. It
+    // waits as a message, which is what it already is.
+    await walkie.startBurst("chan-both", ROOM);
+    const joinsBefore = joinCalls.length;
+    walkie.observeWalkie({
+      bursts: [{ ...theirBurst(), messageId: "m-elsewhere", roomKey: "dm:some:other" }],
+      doorOpen: true,
+    });
+    expect(walkie.getWalkieStatus().incoming).toBeNull();
+    expect(walkie.getWalkieStatus().liveRoom?.key).toBe(ROOM);
+    expect(joinCalls.length).toBe(joinsBefore);
+
+    clock += 2_000;
+    await release();
   });
 });

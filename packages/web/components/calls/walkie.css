@@ -226,9 +226,13 @@
 
 /* ── The walkie strip ────────────────────────────────────────────────────────
  *
- * Where the unpinned call pill sits, and deliberately the same size: it stands
+ * Where the unpinned call pill sits, and the corner is the point: this stands
  * IN for the dock while a burst is running, so it must not move the eye to a
- * new corner when a room turns from a burst into a huddle.
+ * new place when a room turns from a burst into a huddle.
+ *
+ * 420px, which is the dock's own width. It was 380 and it was too small for
+ * what it has to carry: a face big enough to recognise, two lines of what is
+ * being said as it is said, and two answers that can be hit without aiming.
  */
 
 .walkie-strip-host {
@@ -236,12 +240,10 @@
   right: 1rem;
   bottom: 5rem;
   z-index: 150;
-  width: auto;
-  /* Wider than the pill it stands in for, because it now has to hold three
-     decisions rather than one: step in, shut the door, or answer. The CORNER
-     is what stops the eye moving when a burst turns into a huddle, and the
-     corner is unchanged. */
-  max-width: 380px;
+  width: 420px;
+  /* A phone, or a narrow window, still gets the whole strip and no horizontal
+     scrollbar under it. */
+  max-width: calc(100vw - 2rem);
   user-select: none;
 }
 
@@ -314,6 +316,68 @@
     0 0 22px color-mix(in srgb, var(--walkie-rx) 16%, transparent);
 }
 
+.walkie-strip {
+  border: 1px solid var(--sol-border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--sol-bg-alt) 95%, transparent);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.28);
+  backdrop-filter: blur(6px);
+  padding: 12px 13px;
+}
+
+/* Someone's key is down right now, and which way it is going is the edge. Warm
+ * out, cool in — readable from across a desk without a single word being read,
+ * which is the whole argument for spending a colour on direction. */
+.walkie-strip-live {
+  border-color: color-mix(in srgb, var(--sol-text) 30%, transparent);
+}
+
+.walkie-strip-tx {
+  border-color: color-mix(in srgb, var(--walkie-tx) 55%, transparent);
+  box-shadow:
+    0 10px 30px rgb(0 0 0 / 0.28),
+    0 0 0 1px color-mix(in srgb, var(--walkie-tx) 22%, transparent),
+    0 0 22px color-mix(in srgb, var(--walkie-tx) 16%, transparent);
+}
+
+.walkie-strip-rx {
+  border-color: color-mix(in srgb, var(--walkie-rx) 55%, transparent);
+  box-shadow:
+    0 10px 30px rgb(0 0 0 / 0.28),
+    0 0 0 1px color-mix(in srgb, var(--walkie-rx) 22%, transparent),
+    0 0 22px color-mix(in srgb, var(--walkie-rx) 16%, transparent);
+}
+
+/* BOTH KEYS ARE DOWN. Two people pressed at once and the room carries a voice
+ * each way, so the card wears both edges rather than letting one win: cool on
+ * the frame for the voice arriving, warm in the glow for the one leaving. The
+ * rings on the face and on the key say the same thing at close range. */
+.walkie-strip-tx.walkie-strip-rx {
+  border-color: color-mix(in srgb, var(--walkie-rx) 60%, transparent);
+  box-shadow:
+    0 10px 30px rgb(0 0 0 / 0.28),
+    0 0 0 1px color-mix(in srgb, var(--walkie-tx) 45%, transparent),
+    0 0 22px color-mix(in srgb, var(--walkie-tx) 18%, transparent);
+}
+
+/* THERE IS NO MICROPHONE. Nothing is going out, so nothing on this card is
+ * warm: the seat hears the room and publishes silence, and the headline says
+ * so in words. */
+.walkie-strip-denied {
+  border-color: color-mix(in srgb, var(--sol-text) 26%, transparent);
+}
+
+/* SOMEBODY STEPPED IN. Four seconds, and the only moment this surface is
+ * violet: violet is what a call is everywhere else in the product, and the
+ * sentence on the card at this instant is that a burst just became one. */
+.walkie-strip-joined {
+  border-color: color-mix(in srgb, var(--sol-violet) 60%, transparent);
+  box-shadow:
+    0 10px 30px rgb(0 0 0 / 0.28),
+    0 0 0 1px color-mix(in srgb, var(--sol-violet) 30%, transparent),
+    0 0 26px color-mix(in srgb, var(--sol-violet) 20%, transparent);
+}
+
 /* ── The level bars ─────────────────────────────────────────────────────────
  *
  * Four bars that rise with the voice, off the same `--level` custom property
@@ -360,69 +424,67 @@
  * will land with the words the server recovers from it — so this is a delay,
  * not a loss, and it must not be dressed as an error. */
 .walkie-strip-quiet {
-  margin-top: 5px;
-  font-size: 11px;
+  margin-top: 7px;
+  font-size: 12px;
   color: var(--sol-text-dim);
 }
+
+/* ── Who is talking ─────────────────────────────────────────────────────────
+ *
+ * The face, the two lines about it, the two small tools, and the key. One row,
+ * because they are one thought: this person, this is what is happening, and
+ * here is how you answer without deciding anything.
+ */
 
 .walkie-strip-head {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 11px;
+}
+
+.walkie-strip-who {
+  min-width: 0;
+  flex: 1;
 }
 
 .walkie-strip-name {
-  min-width: 0;
-  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.25;
   color: var(--sol-text);
 }
 
-.walkie-strip-pulse {
+/* What is happening, in the words the engine decided (hooks/useWalkie
+ * walkieStripState). Two lines at most: every one of these sentences is short,
+ * and a name long enough to wrap should push the second line rather than the
+ * card's height. */
+.walkie-strip-headline {
+  margin-top: 1px;
+  font-size: 15px;
+  line-height: 1.3;
+  color: var(--sol-text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* The DM and the door out. Small, stacked, and dim until wanted: they are the
+ * two things somebody might want that are not the two decisions below. */
+.walkie-strip-tools {
   flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-}
-
-/* Still during the linger, breathing only while somebody's key is actually
- * down. Motion here means "words are arriving right now", so it must stop when
- * they stop — a dot that keeps pulsing through the quiet is a lie about the
- * room. */
-.walkie-strip-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--walkie-rx);
-  opacity: 0.5;
-}
-
-.walkie-strip-live .walkie-strip-dot {
-  opacity: 1;
-  animation: walkie-breathe 1.4s ease-in-out infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .walkie-strip-live .walkie-strip-dot { animation: none; }
-}
-
-/* Its own keyframe rather than the chat bubble's: this file loads with the call
- * dock, on pages that never import chat.css. */
-@keyframes walkie-breathe {
-  0%, 100% { opacity: 0.35; transform: scale(0.82); }
-  45%      { opacity: 1;    transform: scale(1); }
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .walkie-strip-icon {
-  flex-shrink: 0;
   display: inline-flex;
-  padding: 3px;
-  border-radius: 6px;
+  padding: 4px;
+  border-radius: 7px;
   color: var(--sol-text-dim);
   transition: color 120ms, background 120ms;
 }
@@ -432,51 +494,68 @@
   background: var(--sol-bg-highlight);
 }
 
-/* The words as they arrive. Two lines at most: this is enough to decide whether
- * to answer, and the DM has the rest. */
-.walkie-strip-tail {
-  margin-top: 5px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--sol-text-muted);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+.walkie-strip-reply {
+  flex-shrink: 0;
+  display: inline-flex;
 }
 
-/* The key is the primary control here and looks like it: 52px, round, first in
- * the row and the only thing with a colour. Answering is the reason anybody
- * looks at this strip; opening the DM is the alternative, and it is written the
- * way an alternative should be. */
+/* ── The words, as they arrive ──────────────────────────────────────────────
+ *
+ * 15px, because this is the content and everything else on the card is a label
+ * for it. Two lines, and the ones you get are the LAST two: a burst is a
+ * sentence being spoken, so the newest words are the ones worth reading, and
+ * the beginning fades out at the top rather than pushing them off the bottom.
+ * The tail is cut from the front in the component; this is what makes the cut
+ * exact whatever the words happen to be.
+ */
+.walkie-strip-words {
+  margin-top: 9px;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--sol-text-muted);
+  /* Exactly two lines of the box above, and the text sits at the BOTTOM of it. */
+  max-height: 2.8em;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  /* So a clipped first line reads as "there is more behind this" rather than as
+     a line someone cut in half. */
+  mask-image: linear-gradient(to bottom, transparent 0, black 1.1em);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 1.1em);
+}
+
+/* ── The two answers ────────────────────────────────────────────────────────
+ *
+ * Full width and stacked, one under the other. They were chips in a row beside
+ * the key and they read as a toolbar; they are not a toolbar, they are the two
+ * things a person does about a voice in their room, and each of them gets the
+ * whole width so neither has to be aimed at.
+ */
 .walkie-strip-actions {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 11px;
 }
 
-/* JOIN LIVE. The primary action on the surface, and the only violet on it: the
- * walkie wears warm and cool for direction, and violet is what a call is
- * everywhere else in the product. Pressing this is the sentence "this is a
- * call now", so it is written in the colour calls are written in. */
+/* JOIN LIVE. Warm, and the only filled thing on the card: warm is this
+ * client's own voice going out everywhere else on this surface, and pressing
+ * this is exactly that — the microphone already open stops carrying a burst
+ * and starts carrying a conversation. */
 .walkie-strip-join {
-  flex: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 7px 10px;
-  border-radius: 8px;
-  font-size: 12.5px;
-  font-weight: 500;
-  /* Two short labels sharing the row still managed to wrap onto two lines,
-     which made the strip taller than the call pill it stands in for — the one
-     thing this surface must not do, since it swaps in and out while a room
-     turns from a burst into a huddle. */
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 9px;
+  font-size: 14.5px;
+  font-weight: 600;
   white-space: nowrap;
   color: var(--sol-bg);
-  background: var(--sol-violet);
-  border: 1px solid var(--sol-violet);
+  background: var(--walkie-tx);
+  border: 1px solid var(--walkie-tx);
   transition: filter 120ms, transform 90ms;
 }
 
@@ -485,19 +564,22 @@
 }
 
 .walkie-strip-join:active {
-  transform: scale(0.98);
+  transform: scale(0.99);
 }
 
 /* SNOOZE. The shutter, and it has to be as easy to find as the door — a
  * teammate's voice arriving in the room is exactly when somebody needs to be
- * able to say "not now" without hunting for a setting. Quiet, not hidden. */
+ * able to say "not now" without hunting for a setting. Quiet, not hidden, and
+ * the same size as the answer it is the opposite of. */
 .walkie-strip-snooze {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 7px 10px;
-  border-radius: 8px;
-  font-size: 12.5px;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 9px;
+  font-size: 14.5px;
   white-space: nowrap;
   color: var(--sol-text-muted);
   background: var(--sol-bg-highlight);
@@ -510,13 +592,31 @@
   border-color: var(--sol-border);
 }
 
-/* The face of whoever is talking. A ring in the incoming colour, so the one
- * thing the eye lands on first already says which direction this is. */
+/* ── The face ───────────────────────────────────────────────────────────────
+ *
+ * 56px, and the first thing the eye lands on. The ring around it is the cool
+ * incoming colour and it BREATHES WITH THE VOICE: `--level` is written onto
+ * this element by the engine's meter, so the ring's thickness and glow are the
+ * loudness of the person inside it, at compositor cost and no React render.
+ */
 .walkie-strip-face {
+  --level: 0;
   flex-shrink: 0;
   display: inline-flex;
   border-radius: 999px;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--walkie-rx) 55%, transparent);
+  box-shadow:
+    0 0 0 calc(2px + var(--level) * 3px) color-mix(in srgb, var(--walkie-rx) 65%, transparent),
+    0 0 calc(4px + var(--level) * 18px) color-mix(in srgb, var(--walkie-rx) 40%, transparent);
+  transition: box-shadow 70ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Still the level, still no motion: a steady ring that brightens rather than
+     one that grows. */
+  .walkie-strip-face {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--walkie-rx) calc(40% + var(--level) * 50%), transparent);
+    transition: none;
+  }
 }
 
 /* ── The hot microphone ────────────────────────────────────────────────────
@@ -533,21 +633,28 @@
 .walkie-hot {
   display: flex;
   align-items: center;
-  gap: 7px;
-  margin: -9px -10px 8px;
-  padding: 7px 10px;
+  gap: 8px;
+  margin: -12px -13px 11px;
+  padding: 9px 13px;
   border-bottom: 1px solid color-mix(in srgb, var(--walkie-tx) 30%, transparent);
-  border-radius: 11px 11px 0 0;
+  border-radius: 13px 13px 0 0;
   background: color-mix(in srgb, var(--walkie-tx) 14%, transparent);
 }
 
 .walkie-hot-dot {
   flex-shrink: 0;
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--walkie-tx);
   animation: walkie-breathe 1.4s ease-in-out infinite;
+}
+
+/* Its own keyframe rather than the chat bubble's: this file loads with the call
+ * dock, on pages that never import chat.css. */
+@keyframes walkie-breathe {
+  0%, 100% { opacity: 0.35; transform: scale(0.82); }
+  45%      { opacity: 1;    transform: scale(1); }
 }
 
 .walkie-hot-text {
@@ -556,7 +663,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--sol-text);
 }
 
@@ -564,10 +671,11 @@
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border-radius: 6px;
-  font-size: 11.5px;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
   color: var(--sol-bg);
   background: var(--walkie-tx);
   transition: filter 120ms;
@@ -579,6 +687,24 @@
 
 @media (prefers-reduced-motion: reduce) {
   .walkie-hot-dot { animation: none; }
+}
+
+/* ── The last line ──────────────────────────────────────────────────────────
+ *
+ * What the strip says after the seat has gone back: snoozed, until when, and
+ * where the message went. It cannot be part of the card, because handing the
+ * seat back is what takes the card off the screen — so it is a toast wearing
+ * the card's own skin, in the same corner, for three seconds.
+ */
+.walkie-strip-note {
+  width: 420px;
+  max-width: calc(100vw - 2rem);
+  padding: 11px 13px;
+}
+
+.walkie-strip-note-text {
+  font-size: 14px;
+  color: var(--sol-text-muted);
 }
 
 /* ── The chord hint ─────────────────────────────────────────────────────────

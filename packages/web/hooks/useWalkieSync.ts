@@ -6,24 +6,19 @@
 // deliberately without the transcript so a burst's own words do not re-push it
 // to every watcher on every sentence).
 //
-// The DOOR is decided here and nowhere else: the walkie pref, the snooze, the
-// manual busy flag, and whether the person is actually at this machine. The
-// engine applies it (lib/calls/walkie), which keeps the policy readable in one
-// place and the media plane out of React.
-//
-// It carries more weight than it used to. Auto-listen is HOT — hearing a
-// teammate means they can hear you — so this door is now also the only thing
-// standing between a burst and somebody's microphone opening without them
-// touching anything. That is why it is a named rule below rather than a
-// boolean expression buried in a hook.
-import { useCallback, useMemo, useState } from "react";
+// The DOOR — the walkie pref, the snooze, the busy flag, whether a person is at
+// this machine and whether this is the window that speaks for the app — lives
+// in lib/calls/walkieDoor. It moved out of this hook when "at the machine"
+// stopped being a question about this window: the answer now spans every window
+// of the app and, on the desktop, the operating system's own idle clock. This
+// hook reads it and hands it to the engine, which applies it (lib/calls/walkie).
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useConvex, useConvexAuth } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useConvexSync } from "./useConvexSync";
 import { useMountEffect } from "./useMountEffect";
-import { useEventListener } from "./useEventListener";
 import { memberDisplayName } from "../lib/liveEntities";
 import {
   bindWalkie,
@@ -36,6 +31,7 @@ import {
   type LiveBurstRow,
 } from "../lib/calls/walkie";
 import { otherJoinedLive, senderHearingFrom, useWalkieStatus } from "./useWalkie";
+import { machineDoorNow, subscribeMachineDoor, walkieDoorOpen } from "../lib/calls/walkieDoor";
 import { readJoinPrefs } from "../lib/calls/joinPrefs";
 import { setCamera } from "../lib/calls/callManager";
 import { soundWalkieJoined } from "../lib/sounds";
@@ -44,43 +40,6 @@ import { useNowWhen } from "./useCoarseNow";
 
 const api = _api as any;
 
-/** True while this window is the one in front of the person. A burst plays out
- *  loud, so "at the machine" is the honest bar — a laptop with the lid down or
- *  a tab buried behind others is a room the voice should not fill. */
-function atTheMachine(): boolean {
-  if (typeof document === "undefined") return false;
-  return document.visibilityState === "visible";
-}
-
-/**
- * THE DOOR: whether a teammate's burst may play out loud on this client.
- *
- * A rule rather than an inline expression because a hot microphone hangs off
- * it. Auto-listen is unmuted now — hearing somebody means they can hear you —
- * so this is no longer only "may their voice reach me", it is also "may my
- * microphone open without my touching anything". Every clause below is load
- * bearing for that second question, and there is exactly one copy of them.
- *
- * The pref is open by default: a teammate's voice reaching you is the point of
- * the feature, and "off" is the deliberate act. The snooze is the same door
- * shut for an hour — pressed to stop the voice that is playing right now, not
- * to change what the product is. Neither touches DELIVERY: a burst behind a
- * closed door still lands in the DM with its unread and its push, so nobody
- * can be silenced by somebody else's setting.
- */
-export function walkieDoorOpen(input: {
-  callsOn: boolean;
-  /** The person is at this machine, with this window in front of them. */
-  present: boolean;
-  snoozed: boolean;
-  pref?: string | null;
-  status?: string | null;
-}): boolean {
-  if (!input.callsOn || !input.present || input.snoozed) return false;
-  if (input.pref === "off") return false;
-  return input.status !== "busy";
-}
-
 export function useWalkieSync(): void {
   const convex = useConvex();
   const { isAuthenticated } = useConvexAuth();
@@ -88,10 +47,10 @@ export function useWalkieSync(): void {
     bindWalkie(convex);
   });
 
-  const [present, setPresent] = useState(atTheMachine);
-  const observePresence = useCallback(() => setPresent(atTheMachine()), []);
-  useEventListener("visibilitychange", observePresence, document);
-  useEventListener("focus", observePresence);
+  // IS A PERSON AT THIS MACHINE, AND IS THIS THE WINDOW THAT SPEAKS FOR THE APP.
+  // Two facts about the world outside this window, gathered in one place and
+  // read here as one value (lib/calls/walkieDoor).
+  const machine = useSyncExternalStore(subscribeMachineDoor, machineDoorNow, machineDoorNow);
 
   // The DM rooms worth watching. Subscribed as a signature of exactly those
   // ids — the rail re-pushes on every message in every channel, and none of
@@ -139,7 +98,8 @@ export function useWalkieSync(): void {
 
   const doorOpen = walkieDoorOpen({
     callsOn,
-    present,
+    atMachine: machine.atMachine,
+    leader: machine.leader,
     snoozed,
     pref: s.currentUser?.walkie_pref,
     status: s.currentUser?.status,

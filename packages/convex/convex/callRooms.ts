@@ -97,9 +97,21 @@ export {
 
 /** The lease is the truth: a row older than the stale window is not in the
  *  room, whatever else it says. One filter for every reader (occupancy,
- *  getMyCalls, the grant, the presence strip). */
-export function liveMembers<T extends { last_seen: number }>(rows: T[], now: number): T[] {
-  return rows.filter((m) => now - m.last_seen < CALL_MEMBER_STALE_MS);
+ *  getMyCalls, the grant, the presence strip).
+ *
+ *  A PREWARM ROW IS NOT A MEMBER either, and it is dropped here for the same
+ *  reason the lease is: this is the one question every reader of the table
+ *  already asks. A prewarm row holds a media connection open ahead of a burst
+ *  — nothing published, nobody listening — so counting it would put a person
+ *  in a room they never entered: "X hears you" over silence, an occupancy chip
+ *  on an empty room, an invite grant carried by nobody, and a room whose lease
+ *  never lapses. Fifteen readers, one rule, no reader that has to remember it.
+ */
+export function liveMembers<T extends { last_seen: number; prewarm?: boolean }>(
+  rows: T[],
+  now: number,
+): T[] {
+  return rows.filter((m) => !m.prewarm && now - m.last_seen < CALL_MEMBER_STALE_MS);
 }
 
 // ── Recordings ────────────────────────────────────────────────────────────

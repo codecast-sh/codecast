@@ -3404,6 +3404,19 @@ export default defineSchema({
     // room is what turns the strip into the call dock, on their screen and on
     // mine. Absent on every ordinary join, which is why it is optional.
     walkie_joined_at: v.optional(v.number()),
+    // NOBODY IS HERE. This row is a media connection held open ahead of a
+    // burst, so the first word is audible instead of recorded: opening a DM or
+    // resting on a face connects to the SFU early, publishes nothing, and
+    // waits. The person has not walked in, cannot hear anyone and cannot be
+    // heard.
+    //
+    // So a prewarm row is not a member, and `liveMembers` drops it — that one
+    // helper is what every reader of this table already asks, which is why the
+    // rule lives there rather than in each of them. Occupancy chips, "X hears
+    // you", the live-rooms list, invite grants and the room's own lease all
+    // inherit it. A real join clears the flag on the same row and the seat
+    // becomes ordinary.
+    prewarm: v.optional(v.boolean()),
   })
     .index("by_room", ["room_key"])
     .index("by_user", ["user_id"])

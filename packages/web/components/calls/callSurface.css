@@ -1,0 +1,64 @@
+/* The one node the strip, the pill and the dock live in.
+ *
+ * It draws nothing. Every visible edge belongs to the content inside it — the
+ * strip's own card, the dock's own card — so the morph moves a box and never
+ * stretches a border or a corner radius.
+ */
+
+.call-surface-root {
+  position: fixed;
+  z-index: 150;
+  /* The root is a placement, not a surface: only what the content draws can be
+     clicked, and the empty stage-sized box must never swallow the stage. */
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Wider than the dock it stands in for, because the strip holds three
+   decisions rather than one. The corner is what stops the eye moving. */
+.call-surface-root[data-shape="pill"] {
+  max-width: 420px;
+}
+
+/* While the dock is growing into the stage it has to be ON TOP of the stage —
+   the stage is already there underneath, and what the eye should see is the
+   card opening into it rather than a card fading behind it. */
+.call-surface-root[data-morphing] {
+  z-index: 210;
+}
+
+.call-surface-layer {
+  pointer-events: auto;
+  height: 100%;
+  /* The corner the surfaces share: every scale in the morph grows out of it. */
+  transform-origin: 100% 100%;
+}
+
+/* The surface that is leaving, for as long as it takes to fade. Out of the
+   layout and out of reach: it is a picture of what was there, and clicking it
+   would be clicking a thing that has already gone. */
+.call-surface-leaving {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+
+/* The grip that resizes the floating dock. The corner is pinned, so the box
+   grows up and to the left from the only edge that can move. */
+.call-surface-grip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  border-top: 2px solid transparent;
+  border-left: 2px solid transparent;
+  border-top-left-radius: 12px;
+  transition: border-color 120ms;
+}
+
+.call-surface-grip:hover {
+  border-color: color-mix(in srgb, var(--sol-text) 35%, transparent);
+}

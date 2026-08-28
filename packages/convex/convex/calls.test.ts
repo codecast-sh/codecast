@@ -1008,3 +1008,149 @@ describe("who scribes", () => {
     expect(list.find((r: any) => r.room_key === "channel:ch1")).toMatchObject({ locked: true, transcribe_off: true });
   });
 });
+
+// THE CONNECTION HELD OPEN AHEAD OF THE FIRST WORD.
+//
+// Being heard live is gated on a media connection that takes seconds to build,
+// so opening a DM or resting on a face connects early and publishes nothing.
+// That leaves a row in this table for somebody who is not in the room, and
+// every test here is about the row saying so — because each reader that
+// believed it would tell a lie: "X hears you" over silence, an occupancy chip
+// on an empty room, an invite grant carried by nobody, a room whose lease never
+// lapses.
+//
+// The rule lives in `liveMembers` rather than in each reader. It is the one
+// question every reader of this table already asks, so there is no reader that
+// has to remember it and no new one that can forget.
+describe("prewarm: a connection held open by somebody who is not here", () => {
+  const now = Date.now();
+  const seat = (over: Record<string, unknown> = {}) => ({
+    _id: "cmX", room_key: "channel:ch1", team_id: "t1", user_id: "u1", user_name: "U",
+    joined_at: now - 1_000, last_seen: now - 1_000, muted: true, camera: false, sharing: false,
+    ...over,
+  });
+
+  test("liveMembers drops it, so no reader can count it", async () => {
+    const { liveMembers } = await import("./callRooms");
+    expect(liveMembers([seat()], now)).toHaveLength(1);
+    expect(liveMembers([seat({ prewarm: true })], now)).toHaveLength(0);
+    // And a room holding nothing but prewarms is EMPTY, which is what lets the
+    // next real join start a new huddle rather than inherit a dead one's
+    // grants, lock and live transcript.
+    expect(liveMembers([seat({ prewarm: true }), seat({ _id: "cmY", prewarm: true })], now)).toHaveLength(0);
+  });
+
+  // Keyed by TABLE, unlike the older fakes above, because these tests assert on
+  // what was deleted. A `by_user` scan that also matches the membership row and
+  // a transcript sweep that also matches a seat both read as the mutation
+  // deleting things it never touched.
+  function prewarmCtx(rows: any[]) {
+    const tables: Record<string, any[]> = {
+      team_memberships: [{ _id: "m1", user_id: "u1", team_id: "t1" }],
+      call_members: rows,
+    };
+    const deleted: string[] = [];
+    const patches: any[] = [];
+    const inserted: any[] = [];
+    const ctx: any = {
+      auth: { getUserIdentity: async () => ({ subject: "u1|sess", tokenIdentifier: "x" }) },
+      db: {
+        query: (t: string) => ({
+          withIndex: (_i: string, builder: any) => {
+            const eqs: Array<[string, any]> = [];
+            builder({ eq(f: string, v: any) { eqs.push([f, v]); return this; } });
+            const hit = (tables[t] ?? []).filter(
+              (r) => !deleted.includes(r._id) && eqs.every(([f, v]) => String(r[f]) === String(v)),
+            );
+            return { collect: async () => hit, unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
+          },
+        }),
+        get: async (id: string) =>
+          id === "u1" ? { _id: "u1", name: "U" }
+          : id === "ch1" ? { _id: "ch1", team_id: "t1" }
+          : id === "ch2" ? { _id: "ch2", team_id: "t1" }
+          : id === "t1" ? { _id: "t1", name: "T", features: { calls: true, chat: true } }
+          : Object.values(tables).flat().find((r) => r._id === id) ?? null,
+        delete: async (id: string) => { deleted.push(id); },
+        patch: async (id: string, doc: any) => { patches.push({ id, ...doc }); },
+        insert: async (t: string, doc: any) => { inserted.push({ _table: t, ...doc }); return "cmNew"; },
+      },
+    };
+    return { ctx, deleted, patches, inserted };
+  }
+
+  async function join(ctx: any, args: any) {
+    const { joinRoom } = await import("./calls");
+    const handler = (joinRoom as any)._handler ?? (joinRoom as any).handler;
+    return handler(ctx, { room_key: "channel:ch1", ...args });
+  }
+
+  test("writes a row that says what it is: flagged, muted, unstamped", async () => {
+    const { ctx, inserted } = prewarmCtx([]);
+    const res = await join(ctx, { prewarm: true });
+    expect(res).toEqual({ room_key: "channel:ch1", prewarm: true });
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0].prewarm).toBe(true);
+    expect(inserted[0].muted).toBe(true);
+    // Nobody stepped into anything. The stamp is what turns a burst into a
+    // call on both sides' surfaces.
+    expect(inserted[0].walkie_joined_at).toBeUndefined();
+  });
+
+  test("takes nothing: no sweep, no eviction, no room reset", async () => {
+    const { ctx, deleted, patches } = prewarmCtx([]);
+    await join(ctx, { prewarm: true });
+    // A real join sweeps the room's dead rows, expires the last huddle's
+    // grants, clears its lock and ends its transcript. A guess about what
+    // somebody might do next earns none of that.
+    expect(deleted).toEqual([]);
+    expect(patches).toEqual([]);
+  });
+
+  test("a real seat anywhere refuses it, so a hover can never hang up a call", async () => {
+    // The hazard this exists for: joining a room implicitly leaves every other
+    // one, and prewarm is fired by a pointer resting on a face. Without the
+    // refusal, moving a mouse across the avatar bar during a call would delete
+    // the seat that call is running on.
+    const { ctx, deleted, inserted } = prewarmCtx([
+      seat({ _id: "live1", room_key: "channel:ch2", last_seen: now }),
+    ]);
+    const res = await join(ctx, { prewarm: true });
+    expect(res).toEqual({ room_key: "channel:ch1", prewarm: false });
+    expect(deleted).toEqual([]);
+    expect(inserted).toEqual([]);
+  });
+
+  test("one at a time: a second room drops the first", async () => {
+    const { ctx, deleted, inserted } = prewarmCtx([
+      seat({ _id: "warm1", room_key: "channel:ch2", last_seen: now, prewarm: true }),
+    ]);
+    await join(ctx, { prewarm: true });
+    expect(deleted).toEqual(["warm1"]);
+    expect(inserted).toHaveLength(1);
+  });
+
+  test("the press turns it into a seat: the flag clears and the clock restarts", async () => {
+    // The row the connection was held on is the row the join lands on, so
+    // clearing the flag here is what makes "X hears you" turn true on the same
+    // round trip that opens the microphone.
+    const { ctx, patches } = prewarmCtx([
+      seat({ _id: "warm1", last_seen: now, prewarm: true, joined_at: now - 80_000 }),
+    ]);
+    const before = Date.now();
+    await join(ctx, { muted: false, walkie_join: true });
+    expect(patches).toHaveLength(1);
+    expect(patches[0].prewarm).toBeUndefined();
+    expect(patches[0].muted).toBe(false);
+    expect(patches[0].walkie_joined_at).toBeGreaterThanOrEqual(before);
+    // The huddle started when the person did, not when the connection opened
+    // a minute and a half earlier.
+    expect(patches[0].joined_at).toBeGreaterThanOrEqual(before);
+  });
+
+  test("an ordinary join carries no flag at all", async () => {
+    const { ctx, inserted } = prewarmCtx([]);
+    await join(ctx, { muted: false });
+    expect(inserted[0].prewarm).toBeUndefined();
+  });
+});

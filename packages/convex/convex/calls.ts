@@ -224,6 +224,67 @@ async function sweepRoom(ctx: any, roomKey: string, now: number) {
   }
 }
 
+/**
+ * HOLD A ROOM OPEN AHEAD OF A BURST, without entering it.
+ *
+ * The media connection is the slow part of being heard — a cold LiveKit join
+ * measured up to 12.7s against 1.0s warm — so opening a DM or resting on a
+ * face connects early and publishes nothing. This row is only the record that
+ * it happened: `liveMembers` drops it, so it is not occupancy, not a grant and
+ * not the room's lease.
+ *
+ * It TAKES NOTHING, and that is the whole difference from a real join. It
+ * cannot evict a seat (a real one anywhere refuses it outright, which is what
+ * keeps a hover from hanging up a call), it cannot start a huddle (no grants
+ * expired, no lock cleared, no transcript ended), and it never stamps
+ * walkie_join. Nothing beats it either: the row goes stale in the ordinary
+ * window and the next write to the room sweeps it.
+ */
+async function holdPrewarmSeat(
+  ctx: any,
+  input: {
+    userId: Id<"users">;
+    user: Doc<"users"> | null;
+    teamId: Id<"teams">;
+    roomKey: string;
+    now: number;
+  },
+): Promise<{ room_key: string; prewarm: boolean }> {
+  const { userId, user, teamId, roomKey, now } = input;
+  const mine: Doc<"call_members">[] = await ctx.db
+    .query("call_members")
+    .withIndex("by_user", (q: any) => q.eq("user_id", userId))
+    .collect();
+  // A REAL SEAT ANYWHERE ENDS IT. Being in a room is the person's own doing;
+  // a prewarm is a guess about what they might do next, and a guess never
+  // outranks the call they are in. The client refuses this too — the answer is
+  // here as well because the cost of getting it wrong is somebody's live call.
+  if (liveMembers(mine, now).length > 0) return { room_key: roomKey, prewarm: false };
+  // One at a time: a second face, a second DM, and the last one is dropped.
+  for (const m of mine) {
+    if (m.room_key !== roomKey) await ctx.db.delete(m._id);
+  }
+  const existing = mine.find((m) => m.room_key === roomKey);
+  if (existing) {
+    await ctx.db.patch(existing._id, { last_seen: now, muted: true, prewarm: true });
+    return { room_key: roomKey, prewarm: true };
+  }
+  await ctx.db.insert("call_members", {
+    room_key: roomKey,
+    team_id: teamId,
+    user_id: userId,
+    user_name: user?.name ?? user?.email ?? "Teammate",
+    user_image: user?.image ?? user?.github_avatar_url ?? undefined,
+    joined_at: now,
+    last_seen: now,
+    muted: true,
+    camera: false,
+    sharing: false,
+    prewarm: true,
+  });
+  return { room_key: roomKey, prewarm: true };
+}
+
 export const joinRoom = mutation({
   args: {
     room_key: v.string(),
@@ -233,6 +294,10 @@ export const joinRoom = mutation({
     // only ever set, never cleared — the seat itself is what ends a call, and
     // leaving deletes the row and the stamp with it.
     walkie_join: v.optional(v.boolean()),
+    // "I am holding the media open in case somebody talks, and I am not here."
+    // Optional and additive the same way; see holdPrewarmSeat, which is the
+    // whole of what it does.
+    prewarm: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
@@ -240,6 +305,16 @@ export const joinRoom = mutation({
     if (!auth.ok) throw new Error(`Cannot join room: ${auth.reason}`);
     const now = Date.now();
     const user = await ctx.db.get(userId);
+
+    if (args.prewarm) {
+      return await holdPrewarmSeat(ctx, {
+        userId,
+        user,
+        teamId: auth.teamId,
+        roomKey: args.room_key,
+        now,
+      });
+    }
 
     // Sweep the room's dead rows FIRST — a rejoin after >45s away is the
     // common case, and our own stale row must be gone before we decide
@@ -289,6 +364,15 @@ export const joinRoom = mutation({
         walkie_joined_at: args.walkie_join
           ? (existing.walkie_joined_at ?? now)
           : existing.walkie_joined_at,
+        // The prewarm became a person. This is the row the media connection was
+        // held on, and the join it was held for has arrived — clearing the flag
+        // is what makes the seat count, so the far side's "X hears you" turns
+        // true on the same round trip that opens the microphone.
+        prewarm: undefined,
+        // A prewarm row is stamped with the moment the connection opened, which
+        // can be a minute and a half before anybody spoke. The huddle started
+        // when the person did.
+        joined_at: existing.prewarm ? now : existing.joined_at,
       });
       return { room_key: args.room_key };
     }

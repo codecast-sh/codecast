@@ -3,6 +3,7 @@ import {
   hotListenDeadline,
   landBurst,
   measureBurst,
+  nextRoomMode,
   pickLiveBurst,
   seatDeadline,
   shouldReleaseRoom,
@@ -186,6 +187,50 @@ const seat = (over: Partial<Parameters<typeof shouldReleaseRoom>[0]> = {}) => ({
   bursting: false,
   incoming: false,
   ...over,
+});
+
+// ── what the room becomes ──────────────────────────────────────────────────
+//
+// The transition of the whole state machine, in three lines. It lives out here
+// rather than inside the setter because a rule nobody can call is a rule nobody
+// can check, and the two cases below are exactly the ones that used to need a
+// flag apiece: a `guest` marker for a room already sat in, and an early return
+// for a room this client's own key was down in.
+
+describe("walkie: what a room becomes when a gesture arrives", () => {
+  it("gives a fresh room whatever the gesture says", () => {
+    expect(nextRoomMode(null, "burst", { seated: false })).toBe("burst");
+    expect(nextRoomMode(null, "listen", { seated: false })).toBe("listen");
+  });
+
+  it("calls a room this client was already sitting in a call, whoever opened it", () => {
+    // Hold-to-reply inside a huddle. The huddle keeps its own dock and its
+    // hang-up, and no timer of ours may take its seat — which is the whole of
+    // what a separate `guest` flag used to record.
+    expect(nextRoomMode(null, "burst", { seated: true })).toBe("call");
+    expect(nextRoomMode(null, "listen", { seated: true })).toBe("call");
+  });
+
+  it("never lets a burst take a call back down to a burst", () => {
+    // Somebody stepped in on purpose. A sentence spoken afterwards is a
+    // sentence in a conversation, not a walkie message.
+    expect(nextRoomMode("call", "burst", { seated: true })).toBe("call");
+    expect(nextRoomMode("call", "listen", { seated: false })).toBe("call");
+  });
+
+  it("keeps a room MY OWN key is down in mine when they answer into it", () => {
+    // Two people pressing at once. Their burst arriving is a reply into the
+    // room I opened, not a room I am listening in: the mode says what THIS
+    // client is doing here, and both voices being live is `sending` and
+    // `incoming`. Without this the strip changed hands mid-sentence.
+    expect(nextRoomMode("burst", "listen", { seated: true })).toBe("burst");
+  });
+
+  it("lets a listen become a burst when I answer them", () => {
+    // The other order, and it must NOT be symmetrical: pressing is a decision
+    // and hearing is not, so the client's own key wins either way round.
+    expect(nextRoomMode("listen", "burst", { seated: true })).toBe("burst");
+  });
 });
 
 describe("walkie: handing a room back", () => {

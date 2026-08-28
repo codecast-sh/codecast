@@ -27,6 +27,7 @@ import { mutateOnUnload } from "../keepaliveMutation";
 import { memberDisplayName } from "../liveEntities";
 import { startScribe, stopScribe } from "./transcription";
 import { micConstraints, readJoinPrefs, rememberCamera, rememberDevice } from "./joinPrefs";
+import { bindPrewarmConvex, takePrewarmedRoom } from "./roomPrewarm";
 import { CALL_HEARTBEAT_MS, humanizeConvexError } from "@codecast/shared/contracts";
 import {
   soundCallJoin,
@@ -59,6 +60,11 @@ const audioEls = new Map<string, HTMLMediaElement>();
 // no-ops politely until it has.
 export function bindConvex(client: ConvexHandle) {
   convex = client;
+  // The prewarm holds its own Room and mints its own token, so it needs the
+  // same client — bound here rather than by a second call site, because a
+  // prewarm that silently never runs is exactly the kind of thing nobody
+  // notices until a join is slow again.
+  bindPrewarmConvex(client);
 }
 
 function setCall(patch: Parameters<ReturnType<typeof useInboxStore.getState>["setCallState"]>[0]) {
@@ -305,18 +311,58 @@ function teardownMedia() {
 //   microphone opens and the camera comes back the way they left it. This is
 //   the founder's rule, and it is a rule rather than a default: "mics are never
 //   muted by default on a deliberate join".
-//   BACKGROUND (the absent default) — the walkie taking a seat so a burst can
-//   play, a window handing the call to another window of its own. These carry
-//   their own mute state, so this path never writes one; the server's muted
-//   default stands behind them.
+//   LISTEN — the walkie taking a seat so a teammate's burst can play. Nobody
+//   pressed anything, so a microphone that will not open is not a failure to
+//   report: the seat still hears the room, which is what it was taken for.
+//   BACKGROUND (the absent default) — a window handing the call to another
+//   window of its own. These carry their own mute state, so this path never
+//   writes one; the server's muted default stands behind them.
 export type JoinOpts = {
   micTrack?: MediaStreamTrack;
-  intent?: "deliberate";
+  intent?: "deliberate" | "listen";
   /** Stamp the seat as "stepped into a burst on purpose" (schema:
    *  call_members.walkie_joined_at). It is what upgrades both sides' surfaces
    *  from the walkie strip to the call. */
   walkieJoin?: boolean;
 };
+
+/**
+ * OPEN THE MICROPHONE FOR A SEAT, OR TAKE THE SEAT WITHOUT ONE.
+ *
+ * A denied microphone is not a failed join, and treating it as one was the bug
+ * this replaced: the walkie's auto-listen joins unmuted, so on a browser where
+ * the person had refused the microphone the publish threw, the join's catch
+ * tore the room down and freed the seat — and the receiver's strip went on
+ * saying "Riley is talking" over a silence with no room behind it. The one
+ * thing the person wanted, to hear their teammate, was the one thing the
+ * failure took away.
+ *
+ * So the mic is the part of a join that is allowed to fail. What is left is a
+ * seat that subscribes and publishes nothing, and `micDenied` says so — it
+ * implies `muted`, and it is what lets a surface tell a person who chose
+ * silence from one who has no choice.
+ *
+ * `listen` is the difference between the two callers. A person who pressed
+ * Join live asked to talk and is owed the sentence, so the failure is written
+ * to `call.error` and the dock shows it. A background listen asked for
+ * nothing; a red notice over a burst that is playing perfectly well would be
+ * the surface inventing a problem, and the strip says the true thing in its
+ * own words instead.
+ */
+export async function openMicForJoin(
+  participant: { setMicrophoneEnabled: (on: boolean) => Promise<unknown> },
+  opts: { muted: boolean; listen: boolean },
+): Promise<void> {
+  try {
+    await participant.setMicrophoneEnabled(!opts.muted);
+  } catch (err: any) {
+    setCall({
+      muted: true,
+      micDenied: true,
+      ...(opts.listen ? {} : { error: await mediaFailureReason("microphone", err) }),
+    });
+  }
+}
 
 /**
  * A deliberate join into a room this window is ALREADY sitting in.
@@ -375,25 +421,40 @@ export async function joinCall(roomKey: string, opts?: JoinOpts): Promise<void> 
     phase: "connecting",
     roomKey,
     error: null,
+    micDenied: false,
     speaking: [],
     camera: false,
     sharing: false,
   });
-  let r: Room | undefined;
+  // THE CONNECTION MAY ALREADY EXIST. Opening a DM or resting on a face holds
+  // a silent one open for that room (roomPrewarm), and this is where it is
+  // spent: a warm room has already paid for the token and the SFU handshake,
+  // which together are the seconds between pressing a key and being audible.
+  //
+  // Asked on EVERY join and before any await, hit or miss, because the other
+  // half of the call is standing the prewarm down: `mintAccessToken` signs the
+  // identity as the user id, so a prewarm still connecting when this join lands
+  // would evict it from the SFU as a duplicate identity.
+  const warm = takePrewarmedRoom(roomKey);
+  let r: Room | undefined = warm ?? undefined;
   try {
     await controlJoin(roomKey, opts);
-    if (superseded()) return;
-    const { url, token } = await convex.action(api.calls.mintAccessToken, {
-      room_key: roomKey,
-    });
-    if (superseded()) return;
+    if (superseded(r)) return;
+    const conn = warm
+      ? null
+      : await convex.action(api.calls.mintAccessToken, { room_key: roomKey });
+    if (superseded(r)) return;
     // THE DEVICES THE PERSON LAST CHOSE, on every join, not only deliberate
     // ones: which microphone is a fact about their desk, and a burst arriving
     // on the laptop's built-in mic when they have a headset on is the same bug
     // as a call doing it. Whether the mic is OPEN is the separate question,
     // and that one is the intent's business, below.
+    //
+    // A warm room was built with these same prefs and `takePrewarmedRoom`
+    // refuses to hand one over whose microphone the person has changed since,
+    // so the rule holds across the seam rather than being skipped at it.
     const prefs = readJoinPrefs();
-    r = new Room({
+    r = warm ?? new Room({
       adaptiveStream: true,
       dynacast: true,
       audioCaptureDefaults: micConstraints(prefs.micDeviceId),
@@ -471,8 +532,13 @@ export async function joinCall(roomKey: string, opts?: JoinOpts): Promise<void> 
       }
     });
 
-    await r.connect(url, token);
-    if (superseded(r)) return;
+    // The handshake, unless it already happened. A warm room arrives connected,
+    // so this is the whole of what a prewarm buys and the reason it is worth
+    // holding one: the join goes straight from here to publishing a microphone.
+    if (conn) {
+      await r.connect(conn.url, conn.token);
+      if (superseded(r)) return;
+    }
     // Publish the mic in the muted state the user chose — join is silent by
     // default (the shoulder-tap contract), one keypress to speak.
     const muted = useInboxStore.getState().call.muted;
@@ -484,7 +550,9 @@ export async function joinCall(roomKey: string, opts?: JoinOpts): Promise<void> 
       // the mute the user chose applies to it unchanged.
       if (muted) await r.localParticipant.setMicrophoneEnabled(false);
     } else {
-      await r.localParticipant.setMicrophoneEnabled(!muted);
+      // The one call in this function that opens a device, and the one that
+      // may fail without failing the join.
+      await openMicForJoin(r.localParticipant, { muted, listen: opts?.intent === "listen" });
     }
     if (superseded(r)) return;
     setCall({ phase: "connected" });
@@ -585,6 +653,7 @@ export async function leaveCall(): Promise<void> {
     sharing: false,
     error: null,
     muted: true,
+    micDenied: false,
   });
   soundCallLeave();
   if (convex && roomKey) {
@@ -630,9 +699,18 @@ export async function setMuted(muted: boolean): Promise<void> {
     try {
       await room.localParticipant.setMicrophoneEnabled(!muted);
     } catch (err: any) {
-      setCall({ muted: true, error: err?.name === "NotAllowedError" ? "Microphone permission denied" : null });
+      // The same rule as a join's: a microphone that will not open leaves the
+      // seat intact and says why. This is the path "Join live" takes into a
+      // room it is already sitting in (applyDeliberateJoin), so a person who
+      // steps into a burst with the microphone refused still gets the call —
+      // subscribe-only, and told so.
+      setCall({ muted: true, micDenied: true, error: await mediaFailureReason("microphone", err) });
       return;
     }
+    // Only UNMUTING can clear it. Muting a seat that has no microphone
+    // succeeds trivially — there is nothing to turn off — and reading that as
+    // "the device works now" would erase a denial nobody has fixed.
+    if (!muted) setCall({ micDenied: false });
   }
   pushFlags();
 }

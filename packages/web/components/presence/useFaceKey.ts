@@ -23,6 +23,7 @@ import {
   useWalkieLevelVar,
   walkieKeyState,
 } from "../../hooks/useWalkie";
+import { prewarmRoom } from "../../lib/calls/roomPrewarm";
 import { useInboxStore } from "../../store/inboxStore";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { isWallTap } from "../people/peopleWallLayout";
@@ -36,6 +37,16 @@ export const REFUSAL_MS = 2200;
  *  The founder asked for "a message like hey he joined": long enough to read
  *  across a room, short enough that it is not a badge the face now wears. */
 export const JOINED_MS = 4000;
+
+/** How long a pointer has to REST on a face before it counts as interest.
+ *
+ *  The same reasoning that keeps the microphone off hover, applied to the room:
+ *  a mouse crossing the shell to reach anything at all sweeps six faces, and
+ *  each one would mint a token and open an SFU connection. Four hundred
+ *  milliseconds is longer than any crossing and shorter than any decision, so
+ *  what it selects is a pointer that stopped — which is a person looking at
+ *  somebody, and the best warning this side gets. */
+export const PREWARM_DWELL_MS = 400;
 
 /**
  * THE THREE WALKIE FACTS A FACE DRAWS, as one string.
@@ -108,10 +119,29 @@ export function useWalkieFaces(): WalkieFaces {
 export function faceKeyHandlers(
   hold: ReturnType<typeof pttHoldProps>,
   gesture: { begin: () => void; finish: () => void },
+  /** Ask for this face's room to be connected ahead of any press, after a
+   *  delay, or drop a request that has not fired yet. Absent leaves the face
+   *  exactly as cold as it was. */
+  warm?: { start: (delayMs: number) => void; cancel: () => void },
 ) {
   return {
     ...hold,
-    onPointerEnter: undefined as undefined | (() => void),
+    // NO MICROPHONE HERE, and the ROOM on a delay — the two halves of the same
+    // rule. Arriving on a face says nothing (a pointer crossing the shell
+    // arrives on six of them); resting on one says somebody is looking at a
+    // person, which is enough to pay for a connection but never for a device.
+    onPointerEnter: warm ? () => warm.start(PREWARM_DWELL_MS) : undefined,
+    onPointerLeave: () => {
+      warm?.cancel();
+      hold.onPointerLeave();
+    },
+    // Tabbing onto a face is the deliberate version of resting on one, so it
+    // needs no dwell to prove it — the same judgement `pttHoldProps` already
+    // makes about warming the microphone on focus.
+    onFocus: () => {
+      hold.onFocus();
+      warm?.start(0);
+    },
     onPointerDown: (e: Parameters<typeof hold.onPointerDown>[0]) => {
       gesture.begin();
       hold.onPointerDown(e);
@@ -211,6 +241,30 @@ export function useFaceKey({
   // `performance.now()` rather than Date.now(): a duration must not be at the
   // mercy of the system clock being corrected mid-press.
   const downAt = useRef(0);
+
+  // THE ROOM, EARLY. Resting on a face or tabbing onto it is the first signal
+  // this side gets that a burst may be coming, and the connection is the slow
+  // part of being heard. The timer is a ref rather than state: nothing on
+  // screen changes, so a render would be a render for nobody.
+  const dwellTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelDwell = () => {
+    if (dwellTimer.current) clearTimeout(dwellTimer.current);
+    dwellTimer.current = null;
+  };
+  useMountEffect(() => cancelDwell);
+  const warm = {
+    start: (delayMs: number) => {
+      if (!callsEnabled) return;
+      cancelDwell();
+      if (delayMs <= 0) {
+        prewarmRoom(roomKey);
+        return;
+      }
+      dwellTimer.current = setTimeout(() => prewarmRoom(roomKey), delayMs);
+    },
+    cancel: cancelDwell,
+  };
+
   const hold = pttHoldProps(ptt);
   const keyProps = faceKeyHandlers(hold, {
     begin: () => {
@@ -228,7 +282,7 @@ export function useFaceKey({
     finish: () => {
       if (isWallTap(downAt.current, performance.now())) onTap();
     },
-  });
+  }, warm);
 
   return { state, sending, holding: ptt.holding, talking, refused, blocked, roomKey, txRef, rxRef, keyProps };
 }

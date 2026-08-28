@@ -36,7 +36,7 @@
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
 import { newChatMessageClientId } from "../../store/chatSlice";
-import { joinCall, leaveCall, setMuted } from "./callManager";
+import { joinCall, leaveCall, mediaFailureReason, setMuted } from "./callManager";
 import { openAsrPipe, type AsrPipe } from "./asrPipe";
 import {
   acquireMic,
@@ -290,14 +290,40 @@ export function walkieBlockedFor(roomKey?: string): WalkieStatus["unavailable"] 
  */
 function enterLiveRoom(key: string, mode: WalkieRoomMode): void {
   const held = status.liveRoom?.key === key ? status.liveRoom : null;
-  // A room this client was ALREADY SITTING IN is a call, whoever opened it.
-  // Hold-to-reply inside a huddle is a guest speaking in somebody else's room:
-  // the huddle keeps its own dock and its hang-up, and no timer of ours may
-  // take its seat. Asked once, at the instant of the gesture — the pre-burst
-  // world, which is what a separate `guest` flag used to record.
-  const next: WalkieRoomMode = held?.mode === "call" || (!held && inRoom(key)) ? "call" : mode;
+  const next = nextRoomMode(held?.mode ?? null, mode, { seated: inRoom(key) });
   if (held?.mode === next) return;
   emit({ liveRoom: { key, mode: next, since: held?.since ?? Date.now() } });
+}
+
+/**
+ * WHAT THE ROOM BECOMES when a gesture arrives in a room already held. Three
+ * lines, exported because it IS the state machine's transition and a rule that
+ * lives inside a setter is a rule nobody can check.
+ *
+ * A CALL STAYS A CALL. Somebody decided to be in this room; nothing a burst
+ * does takes that back.
+ *
+ * A ROOM ALREADY SAT IN IS A CALL. Hold-to-reply inside a huddle is a guest
+ * speaking in somebody else's room: the huddle keeps its own dock and its
+ * hang-up, and no timer of ours may take its seat. Asked at the instant of the
+ * gesture, about the pre-burst world, which is what a separate `guest` flag
+ * used to record.
+ *
+ * AND A ROOM MY OWN KEY IS DOWN IN STAYS MINE. Two people pressing at once is
+ * one room with voices going both ways, not a room that changes hands
+ * mid-sentence: their burst arriving while I am talking is a reply into what I
+ * opened. The mode says what THIS client is doing here; that both directions
+ * are live is `sending` and `incoming`, which is where a surface reads it.
+ */
+export function nextRoomMode(
+  held: WalkieRoomMode | null,
+  gesture: WalkieRoomMode,
+  ctx: { seated: boolean },
+): WalkieRoomMode {
+  if (held === "call") return "call";
+  if (!held) return ctx.seated ? "call" : gesture;
+  if (held === "burst" && gesture === "listen") return "burst";
+  return gesture;
 }
 
 function leaveLiveRoom(): void {
@@ -429,8 +455,13 @@ function reconcileIdleRelease(): void {
 }
 
 function onSeatIdle(): void {
+  // The deadline is NOT cleared with the timer. A release can be refused (a
+  // room somebody stepped into) or take a moment to land, and a reconcile that
+  // then computed the same past deadline would arm it again — a one second poll
+  // calling `leaveCall` over and over. Keeping it means the reconcile below
+  // sees no change and does nothing; every state that could change the answer
+  // refreshes on its own.
   idleTimer = null;
-  idleAt = null;
   const live = status.liveRoom;
   if (!live) return;
   // A burst still marked live at this point belongs to a tab that died: no
@@ -1140,6 +1171,33 @@ export function refreshWalkie(): void {
   applyReport();
 }
 
+/**
+ * TAKE THE SEAT SO A BURST CAN PLAY, WITH OR WITHOUT A MICROPHONE.
+ *
+ * Nobody pressed anything to get here, so the seat's job is to HEAR — and a
+ * refused microphone used to cost exactly that. The join opened the device
+ * because auto-listen is unmuted, the device threw, the join's own error path
+ * tore the room down, and the strip went on saying a teammate was talking over
+ * a silence with no room behind it. The one person this feature has to work
+ * for on a machine with the microphone off got nothing at all.
+ *
+ * `intent: "listen"` is the whole fix on the media side: the mic is the part of
+ * the join allowed to fail, and what is left is a seat that subscribes and
+ * publishes nothing (callManager's `openMicForJoin`). The strip reads
+ * `call.micDenied` and says so in its own words.
+ *
+ * The toast is the fix in reach. `mediaFailureReason` names the actual remedy —
+ * the site-settings icon left of the address bar — and the walkie's error field
+ * already carries exactly one toast per distinct message, so a person who has
+ * blocked the microphone is told once how to unblock it rather than on every
+ * burst.
+ */
+async function takeListeningSeat(roomKey: string): Promise<void> {
+  await joinCall(roomKey, { intent: "listen" });
+  if (!useInboxStore.getState().call.micDenied) return;
+  emit({ error: await mediaFailureReason("microphone") });
+}
+
 let lastReport: { bursts: LiveBurstRow[]; doorOpen: boolean } = { bursts: [], doorOpen: false };
 /** When this client started hearing the burst it is hearing now. The listening
  *  side's only measure of whether anything was actually said. */
@@ -1147,13 +1205,23 @@ let incomingSince = 0;
 
 function applyReport(): void {
   const { bursts: rows, doorOpen } = lastReport;
-  const current = pickLiveBurst(rows, Date.now());
+  let current = pickLiveBurst(rows, Date.now());
 
-  // Our own key is down: we are already in a room and hearing whoever is in it.
-  if (burst) {
-    refresh();
-    return;
-  }
+  // MY OWN KEY IS DOWN. A teammate keying up in the SAME room is answering me,
+  // and both voices belong in the room I am already holding: `incoming` is set
+  // beside `sending`, the strip shows both directions, and each burst lands as
+  // its own message in the order it was spoken. Nothing here opens a second
+  // room — the seat is taken, `enterLiveRoom` keeps the mode mine, and the
+  // microphone is already live.
+  //
+  // A burst somewhere ELSE is not ours to walk into: one pair of ears cannot
+  // follow two rooms, and leaving mid-sentence to hear it would evict the
+  // conversation I am in the middle of having. It waits as a message.
+  //
+  // This used to be a blanket early return, which meant the person who pressed
+  // FIRST never learned that anybody had answered: the strip stayed a
+  // one-directional "recording" while a second voice was already in the room.
+  if (burst && current && current.roomKey !== burst.roomKey) current = null;
 
   if (current && doorOpen && !busyElsewhere(current.roomKey)) {
     if (status.incoming?.messageId !== current.messageId) {
@@ -1175,7 +1243,11 @@ function applyReport(): void {
       // hearing the same way it animates the one being spoken.
       pumpWalkieMeter();
       soundWalkieOpen();
-      if (!inRoom(incoming.roomKey)) {
+      // My own burst is already carrying this room (`openRoomForBurst`), and it
+      // is joining with the CLONE the recorder is reading. A second join for
+      // the same key would supersede that one and publish a fresh microphone
+      // instead, so the reply lets the burst do the seating.
+      if (!inRoom(incoming.roomKey) && burst?.roomKey !== incoming.roomKey) {
         // HOT. Hearing someone means they can hear you — a walkie is not a
         // speaker, and half a channel is not a channel. The founder's decision,
         // overriding the muted auto-join this used to be.
@@ -1191,7 +1263,7 @@ function applyReport(): void {
         // person deliberately closed is the one thing the door cannot consent
         // to on their behalf.
         useInboxStore.getState().setCallState({ muted: false });
-        void joinCall(incoming.roomKey);
+        void takeListeningSeat(incoming.roomKey);
       }
     }
   } else if (status.incoming) {
