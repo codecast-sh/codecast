@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { classifyCodexTranscriptTail, classifyLivePaneFor, classifyTmuxLiveState, classifyTranscriptTail, extractTmuxLiveRegion, findCachedSessionIdForConversation, findSessionFile, glyphlessPromptPattern, workflowAgentTranscriptPathFor, isInterruptControlMessage, paneReconcileTarget, preferLiveSessionId, reconciledStatus, resumeShortId, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked } from "./daemon.js";
+import { classifyCodexTranscriptTail, classifyLivePaneFor, classifyTmuxLiveState, classifyTranscriptTail, extractTmuxLiveRegion, findCachedSessionIdForConversation, findSessionFile, glyphlessPromptPattern, workflowAgentTranscriptPathFor, isInterruptControlMessage, paneReconcileTarget, preferLiveSessionId, reconciledStatus, resetSessionFileIndexForTests, resumeShortId, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked } from "./daemon.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 import type { TranscriptTurnState } from "./daemon.js";
 
@@ -406,6 +406,40 @@ describe("findSessionFile subagent layouts", () => {
         path.join(wfDir, "agent-a920233e1ad3a0d16.jsonl"),
       );
       expect(findSessionFile("agent-missing")).toBeNull();
+    } finally {
+      process.env.HOME = prevHome;
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  // findSessionFile answers from a shared index of every transcript store (one
+  // walk, map hits) instead of walking per call — the per-call walk was the
+  // main event-loop pin behind the "daemon under load" badge on large fleets.
+  // The index must not go stale in the ways that matter: a deleted transcript
+  // stops resolving immediately, and a transcript created after the walk is
+  // found once the miss-rebuild window passes.
+  test("session-file index revalidates deletions and picks up new files on rebuild", () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "cc-find-index-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+    try {
+      const projectDir = path.join(tmpHome, ".claude", "projects", "-Users-x-proj");
+      fs.mkdirSync(projectDir, { recursive: true });
+      const a = path.join(projectDir, "aaaaaaaa-0000-0000-0000-000000000001.jsonl");
+      fs.writeFileSync(a, "{}\n");
+
+      expect(findSessionFile("aaaaaaaa-0000-0000-0000-000000000001")?.path).toBe(a);
+
+      // Deletion: the cached hit is stat-validated, so it must vanish at once.
+      fs.rmSync(a);
+      expect(findSessionFile("aaaaaaaa-0000-0000-0000-000000000001")).toBeNull();
+
+      // Creation after the walk: invisible while the index is fresh, found
+      // after a reset (standing in for the miss-rebuild window elapsing).
+      const b = path.join(projectDir, "bbbbbbbb-0000-0000-0000-000000000002.jsonl");
+      fs.writeFileSync(b, "{}\n");
+      resetSessionFileIndexForTests();
+      expect(findSessionFile("bbbbbbbb-0000-0000-0000-000000000002")?.path).toBe(b);
     } finally {
       process.env.HOME = prevHome;
       fs.rmSync(tmpHome, { recursive: true, force: true });

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { WalkieSnoozedNote, WalkieStripView } from "../calls/WalkieDock";
+import { HOME_CORNER } from "../calls/callSurfacePlacement";
 
 // THE STRIP, IN EVERY STATE IT HAS.
 //
@@ -17,10 +18,15 @@ import { WalkieSnoozedNote, WalkieStripView } from "../calls/WalkieDock";
 // stylesheet then does with those classes.
 
 const css = readFileSync(new URL("../calls/walkie.css", import.meta.url), "utf8");
+// WHERE the card sits belongs to the surface root now (ct-46671): the strip,
+// the pill and the dock are three contents of one node, so the corner and the
+// width are that node's and this file's rules are the card's alone.
+const surfaceCss = readFileSync(new URL("../calls/callSurface.css", import.meta.url), "utf8");
 const source = readFileSync(new URL("../calls/WalkieDock.tsx", import.meta.url), "utf8");
 
 /** One rule's declarations, by its exact selector. Comments dropped. */
-function rule(selector: string): Record<string, string> {
+function rule(selector: string, sheet: string = css): Record<string, string> {
+  const css = sheet;
   const at = css.indexOf(`\n${selector} {`);
   expect(at).toBeGreaterThan(-1);
   const body = css.slice(at + selector.length + 3, css.indexOf("}", at)).replace(/\/\*[\s\S]*?\*\//g, "");
@@ -99,13 +105,14 @@ describe("a teammate is talking to me", () => {
 
 describe("the card is the size of what it is saying", () => {
   test("420 wide, and never wider than the window", () => {
-    const host = rule(".walkie-strip-host");
+    const host = rule('.call-surface-root[data-shape="walkie"]', surfaceCss);
     expect(host.width).toBe("420px");
     expect(host["max-width"]).toBe("calc(100vw - 2rem)");
     // The corner is unchanged: this stands in for the dock, and the eye must
-    // not have to move when a burst becomes a huddle.
-    expect(host.right).toBe("1rem");
-    expect(host.bottom).toBe("5rem");
+    // not have to move when a burst becomes a huddle. It is a number rather
+    // than a rule now, because the dock can be dragged off it and the strip
+    // cannot — 1rem in and 5rem up, as it always was.
+    expect(HOME_CORNER).toEqual({ right: 16, bottom: 80 });
   });
 
   test("the name and the headline are 15px, not 12", () => {
@@ -137,7 +144,7 @@ describe("the card is the size of what it is saying", () => {
   });
 
   test("every colour comes from a token", () => {
-    const region = css.slice(css.indexOf(".walkie-strip-host"), css.indexOf("/* ── The chord hint"));
+    const region = css.slice(css.indexOf(".walkie-strip {"), css.indexOf("/* ── The chord hint"));
     const declarations = region.replace(/\/\*[\s\S]*?\*\//g, "");
     // Black shadows are the one raw colour, and they are opacity on nothing.
     const raw = declarations.match(/#[0-9a-fA-F]{3,8}\b|\brgb\((?!0 0 0)/g);
@@ -281,13 +288,13 @@ describe("somebody stepped in", () => {
 
 describe("snoozed", () => {
   const html = renderToStaticMarkup(
-    <WalkieSnoozedNote until={new Date("2026-08-28T15:12:00").getTime()} name="Riley Chen" />,
+    <WalkieSnoozedNote until={new Date("2026-08-28T15:12:00").getTime()} />,
   );
 
   test("says until when, and where the message went", () => {
     expect(html).toContain("Snoozed until");
     expect(html).toContain("3:12");
-    expect(html).toContain("message is in the DM");
+    expect(html).toContain("The message is in the DM");
   });
 
   test("wearing the strip's own skin, in the strip's own corner", () => {

@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-import type { TeamVisibility } from "../components/team/VisibilityPicker";
+import type { TeamVisibility } from "../lib/team/visibilityLevels";
 
 export type SuggestedWorkspace = {
   path: string;

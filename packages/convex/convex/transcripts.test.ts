@@ -476,3 +476,87 @@ describe("the huddle digest", () => {
     expect(c._scheduled).toEqual([]);
   });
 });
+
+// A PREWARM ROW MUST NOT EXTEND A DEAD HUDDLE'S RECORDING.
+//
+// Being heard from the first word means opening a DM connects to the media
+// server ahead of anybody speaking, which leaves a row in call_members for a
+// person who is not in the room. `liveMembers` hides it from every reader that
+// asks who is here — but this sweep asks a different question. It dates a dead
+// huddle's end from the last lease anybody refreshed, deliberately reading
+// STALE rows, and a connection opened after the huddle died is the freshest
+// lease in the room while meaning nothing about when people stopped talking.
+describe("the orphan sweep dates the end from seats, never from a prewarm", () => {
+  // Anchored to the real clock, because the handler reads Date.now() itself:
+  // a fixed timestamp in the future makes every lease read as current and the
+  // sweep silently does nothing.
+  const T = Date.now();
+  const STALE = CALL_MEMBER_STALE_MS;
+
+  function sweepCtx(callRows: any[]) {
+    const transcripts = [
+      { _id: "tr1", room_key: "channel:ch1", status: "live", started_at: T - 600_000, last_beat: T - 300_000 },
+    ];
+    const patches: any[] = [];
+    const ctx: any = {
+      db: {
+        query: (t: string) => ({
+          withIndex: (_i: string, builder: any) => {
+            const eqs: Array<[string, any]> = [];
+            builder({ eq(f: string, v: any) { eqs.push([f, v]); return this; } });
+            const src = t === "transcripts" ? transcripts : t === "call_members" ? callRows : [];
+            return { collect: async () => src.filter((r: any) => eqs.every(([f, v]) => String(r[f]) === String(v))) };
+          },
+        }),
+        get: async (id: string) => transcripts.find((r) => r._id === id) ?? null,
+        patch: async (id: string, doc: any) => { patches.push({ id, ...doc }); },
+        insert: async () => "x",
+      },
+      scheduler: { runAfter: async () => {} },
+      runMutation: async () => {},
+    };
+    return { ctx, patches };
+  }
+
+  async function sweep(ctx: any) {
+    const { sweepOrphanedLive } = await import("./transcripts");
+    const handler = (sweepOrphanedLive as any)._handler ?? (sweepOrphanedLive as any).handler;
+    return handler(ctx, {});
+  }
+
+  const row = (over: Record<string, unknown>) => ({
+    _id: "cm", room_key: "channel:ch1", team_id: "t1", user_id: "u1",
+    muted: false, camera: false, sharing: false, joined_at: T - 600_000, ...over,
+  });
+
+  test("ends at the last real seat's lease, not the prewarm's", async () => {
+    // The speaker's tab died a while ago; somebody opened this DM afterwards
+    // and their connection is now the freshest row in the table.
+    const seatSeen = T - STALE - 60_000;
+    const { ctx, patches } = sweepCtx([
+      row({ _id: "dead", last_seen: seatSeen }),
+      row({ _id: "warm", last_seen: T - 1_000, prewarm: true }),
+    ]);
+    const res = await sweep(ctx);
+    expect(res.ended).toBe(1);
+    const ended = patches.find((p) => p.id === "tr1");
+    // MUTATION CHECK: drop the `.filter(isSeat)` in sweepOrphanedLive and this
+    // becomes T - 1_000 — the recording grows by however long the connection
+    // had been held, up to the full ninety second idle window.
+    expect(ended.ended_at).toBe(seatSeen);
+  });
+
+  test("a room holding nothing but a prewarm is still an ended huddle", async () => {
+    // The prewarm must not keep the transcript alive either: liveMembers drops
+    // it, so the room reads empty and the sweep does its job.
+    const { ctx, patches } = sweepCtx([row({ _id: "warm", last_seen: T, prewarm: true })]);
+    const res = await sweep(ctx);
+    expect(res.ended).toBe(1);
+    expect(patches.find((p) => p.id === "tr1").status).toBe("ended");
+  });
+
+  test("a live seat still protects the transcript", async () => {
+    const { ctx } = sweepCtx([row({ _id: "here", last_seen: T })]);
+    expect((await sweep(ctx)).ended).toBe(0);
+  });
+});

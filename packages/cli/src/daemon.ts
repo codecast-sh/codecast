@@ -97,7 +97,7 @@ import { parseSessionFile, parseTranscriptFor, extractSlug, extractParentUuid, e
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
-import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, scrubAgentEnv } from "./agentEnv.js";
+import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, scrubAgentEnv } from "./agentEnv.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
 import { getMachineKey } from "./machineKey.js";
 import { markSynced, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
@@ -178,7 +178,7 @@ import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveR
 import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs, OpenTaskKind, OpenTaskReport } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { readThreadStateStamp } from "./stateCommand.js";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
@@ -3756,16 +3756,20 @@ async function executeRemoteCommand(
           error = `No session found for conversation ${conversationId}`;
           break;
         }
-        const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
-        if (!proc) {
-          error = `No running process for session ${sessionId.slice(0, 8)}`;
-          break;
-        }
-        const tmuxTarget = await findTmuxPaneForTty(proc.tty);
-        if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
+        const { tmuxTarget, proc } = await resolveSessionCommandPane(conversationId, sessionId, detectSessionAgentType(sessionId));
+        if (tmuxTarget) {
           await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape", "Escape"]);
           result = "escape_sent";
           log(`[REMOTE] Sent double Escape to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget}`);
+        } else if (!proc) {
+          error = `No running process for session ${sessionId.slice(0, 8)}`;
+        } else if (!MID_TURN_AGENT_STATUSES.has(lastHookStatus.get(sessionId)?.status ?? "")) {
+          // A SIGINT reaching claude at its prompt EXITS the process (observed
+          // 2026-08-28: pid 41092 died on an escape sent to an idle session). The
+          // signal is only an interrupt while a turn is running; otherwise there is
+          // nothing to interrupt and the honest answer is a no-op.
+          result = "escape_no_active_turn";
+          log(`[REMOTE] No active turn to interrupt for session ${sessionId.slice(0, 8)} (no tmux pane, skipping SIGINT)`);
         } else {
           try {
             process.kill(proc.pid, "SIGINT");
@@ -3797,13 +3801,12 @@ async function executeRemoteCommand(
           error = `Rewind not yet supported for ${agentType} sessions`;
           break;
         }
-        const proc = await findSessionProcess(sessionId, agentType);
-        if (!proc) {
+        const { tmuxTarget, proc } = await resolveSessionCommandPane(conversationId, sessionId, agentType);
+        if (!proc && !tmuxTarget) {
           error = `No running process for session ${sessionId.slice(0, 8)}`;
           break;
         }
-        const tmuxTarget = await findTmuxPaneForTty(proc.tty);
-        if (!tmuxTarget || !validateTmuxTarget(tmuxTarget)) {
+        if (!tmuxTarget) {
           error = `No tmux pane found for session ${sessionId.slice(0, 8)}`;
           break;
         }
@@ -3937,13 +3940,12 @@ async function executeRemoteCommand(
           error = `No session found for conversation ${conversationId}`;
           break;
         }
-        const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
-        if (!proc) {
+        const { tmuxTarget, proc } = await resolveSessionCommandPane(conversationId, sessionId, detectSessionAgentType(sessionId));
+        if (!proc && !tmuxTarget) {
           error = `No running process for session ${sessionId.slice(0, 8)}`;
           break;
         }
-        const tmuxTarget = await findTmuxPaneForTty(proc.tty);
-        if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
+        if (tmuxTarget) {
           const groups: string[][] = [];
           for (const k of keyList) {
             if (k === "Escape" || k === "Enter" || (groups.length > 0 && k !== groups[groups.length - 1][0])) {
@@ -5058,13 +5060,30 @@ function patchConfig(updates: Partial<Config>): void {
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(toWrite, null, 2), { mode: 0o600 });
 }
 
+// conversations.json is >1MB on a busy machine, and hot paths (heartbeat
+// maintenance, delivery, sweeps) read it per session — parsing it fresh each
+// call cost ~85ms a call and was a top contributor to the loop freezes behind
+// the "daemon under load" badge. Memoize the parse, validated by stat so a
+// write from anywhere (including another process) invalidates it. Callers
+// mutate the returned object then saveConversationCache it, so the memo shares
+// the object and save refreshes the stamp.
+let conversationCacheMemo: { data: ConversationCache; mtimeMs: number; size: number } | null = null;
+
 function readConversationCache(): ConversationCache {
   const cacheFile = path.join(CONFIG_DIR, "conversations.json");
-  if (!fs.existsSync(cacheFile)) {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(cacheFile);
+  } catch {
     return {};
   }
+  if (conversationCacheMemo && conversationCacheMemo.mtimeMs === stat.mtimeMs && conversationCacheMemo.size === stat.size) {
+    return conversationCacheMemo.data;
+  }
   try {
-    return JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as ConversationCache;
+    const data = JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as ConversationCache;
+    conversationCacheMemo = { data, mtimeMs: stat.mtimeMs, size: stat.size };
+    return data;
   } catch {
     return {};
   }
@@ -5073,6 +5092,12 @@ function readConversationCache(): ConversationCache {
 function saveConversationCache(cache: ConversationCache): void {
   const cacheFile = path.join(CONFIG_DIR, "conversations.json");
   fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
+  try {
+    const stat = fs.statSync(cacheFile);
+    conversationCacheMemo = { data: cache, mtimeMs: stat.mtimeMs, size: stat.size };
+  } catch {
+    conversationCacheMemo = null;
+  }
 }
 
 let projectMapCache: Record<string, string> | null = null;
@@ -9291,6 +9316,28 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
   }
 }
 
+// Session-control commands (escape / rewind / send_keys) must act on the SAME
+// pane a message injection lands in, so they resolve through the delivery
+// resolver first and only then fall back to the pid -> tty -> pane scan. On
+// 2026-08-28 an escape resolved by the tty scan alone missed the cached pane,
+// fell back to SIGINT on the claude pid, and cancelled the turn a message had
+// started 400ms earlier (the web then showed "hasn't reached the agent").
+async function resolveSessionCommandPane(
+  conversationId: string,
+  sessionId: string,
+  agentType: AgentClientId,
+): Promise<{ tmuxTarget: string | null; proc: ClaudeSessionInfo | null }> {
+  const live = await resolveLiveTmuxTarget(conversationId, sessionId, agentType);
+  if (live.tmuxTarget) {
+    const target = live.tmuxTarget.includes(":") ? live.tmuxTarget : `${live.tmuxTarget}:0.0`;
+    if (validateTmuxTarget(target)) return { tmuxTarget: target, proc: live.proc };
+  }
+  const proc = live.proc ?? (await findSessionProcess(sessionId, agentType));
+  if (!proc) return { tmuxTarget: null, proc: null };
+  const tmuxTarget = await findTmuxPaneForTty(proc.tty);
+  return { tmuxTarget: tmuxTarget && validateTmuxTarget(tmuxTarget) ? tmuxTarget : null, proc };
+}
+
 async function findTmuxPaneForTty(tty: string): Promise<string | null> {
   if (!hasTmux()) return null;
   try {
@@ -12452,75 +12499,223 @@ export function workflowAgentTranscriptPathFor(sessionId: string): string | null
   return null;
 }
 
-export function findSessionFile(sessionId: string): SessionFileInfo | null {
-  for (const candidate of claudeTranscriptCandidates(sessionId)) {
-    if (fs.existsSync(candidate)) return { path: candidate, agentType: "claude" };
-  }
+// ─── Session-file index ────────────────────────────────────────────────────
+// findSessionFile used to walk every transcript store per CALL — ~75 project
+// dirs plus their subdirs (~1500 readdirs) for a claude lookup, a full
+// recursive ~/.codex/sessions walk for codex, and so on. A single miss cost
+// ~350ms of sync FS on the event loop, and the heartbeat maintenance pass
+// calls it once per due session — with a 700+ session fleet that alone pinned
+// the loop 5-20s per tick and lit the "daemon under load" badge. So the walk
+// runs ONCE, enumerating every store into sessionId -> file, and lookups are
+// map hits validated by a single existsSync.
+//
+// Freshness: the index rebuilds when older than the TTL, and early on a MISS
+// once it is older than the miss-rebuild window — so a transcript written
+// moments ago (a new session, a repair) is found within ~2s while steady-state
+// misses (sessions with no local file, queried every tick) cost one rebuild
+// per window instead of one full walk per query. Deletions never go stale: a
+// hit is stat-validated before it is returned.
+//
+// Insertion order per store mirrors the old probe order exactly (claude's
+// project-dir readdir order with top-level files before subagent layouts), and
+// stores are merged claude-first, so a session id present in two places keeps
+// resolving to the same file the walk would have returned.
+const SESSION_FILE_INDEX_TTL_MS = 30_000;
+const SESSION_FILE_INDEX_MISS_REBUILD_MS = 2_000;
+let sessionFileIndex: Map<string, SessionFileInfo> | null = null;
+let sessionFileIndexBuiltAt = 0;
+// The HOME the index was walked under. Tests swap HOME to a temp dir per case;
+// an index carried across that swap would answer from the wrong tree.
+let sessionFileIndexHome = "";
 
-  const codexPath = findCodexRolloutPath(sessionId);
-  if (codexPath) return { path: codexPath, agentType: "codex" };
+/** Test hook: forget the index so the next lookup re-walks. */
+export function resetSessionFileIndexForTests(): void {
+  sessionFileIndex = null;
+  sessionFileIndexBuiltAt = 0;
+}
 
-  // Gemini sessions: ~/.gemini/tmp/<hash>/chats/<sessionId>.json
-  const geminiTmpDir = path.join(process.env.HOME || "", ".gemini", "tmp");
-  if (fs.existsSync(geminiTmpDir)) {
-    try {
-      const projectDirs = fs.readdirSync(geminiTmpDir, { withFileTypes: true })
-        .filter(d => d.isDirectory()).map(d => d.name);
-      for (const dir of projectDirs) {
-        const chatsDir = path.join(geminiTmpDir, dir, "chats");
-        if (!fs.existsSync(chatsDir)) continue;
-        const jsonPath = path.join(chatsDir, `${sessionId}.json`);
-        if (fs.existsSync(jsonPath)) return { path: jsonPath, agentType: "gemini" };
+function indexSessionFile(
+  index: Map<string, SessionFileInfo>,
+  sessionId: string,
+  filePath: string,
+  agentType: AgentClientId,
+): void {
+  // First wins: enumeration follows the old probe order, so an earlier entry is
+  // the one the per-call walk would have returned.
+  if (!index.has(sessionId)) index.set(sessionId, { path: filePath, agentType });
+}
+
+// The trailing uuid in a codex rollout (`<name>-<ts>-<uuid>.jsonl`) or pi
+// (`<ISO-ts>_<uuid>.jsonl`) filename — the session id both stores key by.
+const TRAILING_UUID_JSONL_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
+
+function buildSessionFileIndex(): Map<string, SessionFileInfo> {
+  const index = new Map<string, SessionFileInfo>();
+  const home = process.env.HOME || "";
+
+  // Claude: mirror claudeTranscriptCandidates — per project dir, top-level
+  // <sessionId>.jsonl first, then each session subdir's own files, its
+  // subagents/, and subagents/workflows/<run>/ files.
+  const claudeProjectsDir = path.join(home, ".claude", "projects");
+  try {
+    for (const dir of fs.readdirSync(claudeProjectsDir, { withFileTypes: true })) {
+      if (!dir.isDirectory()) continue;
+      const dirPath = path.join(claudeProjectsDir, dir.name);
+      let subDirs: string[];
+      try {
+        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+        for (const e of entries) {
+          if (e.isFile() && e.name.endsWith(".jsonl")) {
+            indexSessionFile(index, e.name.slice(0, -6), path.join(dirPath, e.name), "claude");
+          }
+        }
+        subDirs = entries.filter(e => e.isDirectory()).map(e => e.name);
+      } catch { continue; }
+      for (const subDir of subDirs) {
+        const parentDir = path.join(dirPath, subDir);
+        try {
+          for (const e of fs.readdirSync(parentDir, { withFileTypes: true })) {
+            if (e.isFile() && e.name.endsWith(".jsonl")) {
+              indexSessionFile(index, e.name.slice(0, -6), path.join(parentDir, e.name), "claude");
+            }
+          }
+        } catch { continue; }
+        const subagentsDir = path.join(parentDir, "subagents");
+        try {
+          for (const e of fs.readdirSync(subagentsDir, { withFileTypes: true })) {
+            if (e.isFile() && e.name.endsWith(".jsonl")) {
+              indexSessionFile(index, e.name.slice(0, -6), path.join(subagentsDir, e.name), "claude");
+            }
+          }
+        } catch { continue; }
+        const workflowsDir = path.join(subagentsDir, "workflows");
+        try {
+          for (const wfRun of fs.readdirSync(workflowsDir, { withFileTypes: true })) {
+            if (!wfRun.isDirectory()) continue;
+            const runDir = path.join(workflowsDir, wfRun.name);
+            for (const e of fs.readdirSync(runDir, { withFileTypes: true })) {
+              if (e.isFile() && e.name.endsWith(".jsonl")) {
+                indexSessionFile(index, e.name.slice(0, -6), path.join(runDir, e.name), "claude");
+              }
+            }
+          }
+        } catch {}
       }
-    } catch {}
+    }
+  } catch {}
+
+  // Codex: ~/.codex/sessions/YYYY/MM/DD/<name>-<ts>-<sessionId>.jsonl,
+  // recursive like findCodexRolloutPath.
+  const codexSessionsDir = path.join(home, ".codex", "sessions");
+  const walkCodex = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walkCodex(fullPath);
+      } else if (entry.isFile()) {
+        const m = TRAILING_UUID_JSONL_RE.exec(entry.name);
+        if (m) indexSessionFile(index, m[1], fullPath, "codex");
+      }
+    }
+  };
+  walkCodex(codexSessionsDir);
+
+  // Gemini: ~/.gemini/tmp/<hash>/chats/<sessionId>.json
+  const geminiTmpDir = path.join(home, ".gemini", "tmp");
+  try {
+    for (const dir of fs.readdirSync(geminiTmpDir, { withFileTypes: true })) {
+      if (!dir.isDirectory()) continue;
+      const chatsDir = path.join(geminiTmpDir, dir.name, "chats");
+      try {
+        for (const e of fs.readdirSync(chatsDir, { withFileTypes: true })) {
+          if (e.isFile() && e.name.endsWith(".json")) {
+            indexSessionFile(index, e.name.slice(0, -5), path.join(chatsDir, e.name), "gemini");
+          }
+        }
+      } catch {}
+    }
+  } catch {}
+
+  // pi: ~/.pi/agent/sessions/<cwd-slug>/<ISO-ts>_<sessionId>.jsonl — the id is
+  // the filename's trailing uuid.
+  const piSessionsDir = path.join(home, ".pi", "agent", "sessions");
+  try {
+    for (const slugDir of fs.readdirSync(piSessionsDir, { withFileTypes: true })) {
+      if (!slugDir.isDirectory()) continue;
+      const dirPath = path.join(piSessionsDir, slugDir.name);
+      try {
+        for (const e of fs.readdirSync(dirPath, { withFileTypes: true })) {
+          if (!e.isFile()) continue;
+          const m = TRAILING_UUID_JSONL_RE.exec(e.name);
+          if (m) indexSessionFile(index, m[1], path.join(dirPath, e.name), "pi");
+        }
+      } catch {}
+    }
+  } catch {}
+
+  // grok: ~/.grok/sessions/<url-encoded-cwd>/<sessionId>/updates.jsonl — the
+  // session DIRECTORY is named by the id.
+  const grokSessionsDir = path.join(home, ".grok", "sessions");
+  try {
+    for (const slugDir of fs.readdirSync(grokSessionsDir, { withFileTypes: true })) {
+      if (!slugDir.isDirectory()) continue;
+      const dirPath = path.join(grokSessionsDir, slugDir.name);
+      try {
+        for (const sessionDir of fs.readdirSync(dirPath, { withFileTypes: true })) {
+          if (!sessionDir.isDirectory()) continue;
+          const updatesPath = path.join(dirPath, sessionDir.name, "updates.jsonl");
+          if (fs.existsSync(updatesPath)) {
+            indexSessionFile(index, sessionDir.name, updatesPath, "grok");
+          }
+        }
+      } catch {}
+    }
+  } catch {}
+
+  return index;
+}
+
+function rebuildSessionFileIndex(): Map<string, SessionFileInfo> {
+  sessionFileIndexHome = process.env.HOME || "";
+  const index = (sessionFileIndex = buildSessionFileIndex());
+  sessionFileIndexBuiltAt = Date.now();
+  return index;
+}
+
+export function findSessionFile(sessionId: string): SessionFileInfo | null {
+  let index = sessionFileIndex;
+  if (
+    !index ||
+    sessionFileIndexHome !== (process.env.HOME || "") ||
+    Date.now() - sessionFileIndexBuiltAt > SESSION_FILE_INDEX_TTL_MS
+  ) {
+    index = rebuildSessionFileIndex();
   }
+  let hit = index.get(sessionId);
+  if (hit && !fs.existsSync(hit.path)) {
+    index.delete(sessionId);
+    hit = undefined;
+  }
+  if (!hit && Date.now() - sessionFileIndexBuiltAt > SESSION_FILE_INDEX_MISS_REBUILD_MS) {
+    // A genuine miss on a stale index: the file may have been created since the
+    // last walk (a fresh session, a repair write). One rebuild per window.
+    index = rebuildSessionFileIndex();
+    const rebuilt = index.get(sessionId);
+    if (rebuilt && fs.existsSync(rebuilt.path)) hit = rebuilt;
+  }
+  if (hit) return hit;
 
   // OpenCode sessions live in the SQLite store (~/.local/share/opencode/opencode.db),
-  // not a per-session file, so the "path" is the DB itself. This lets callers that
-  // only need the agent type / a stat resolve opencode; the transcript-tail path
-  // reads binary DB bytes and safely defers (classifyOpencodeTranscriptTail returns
-  // "unknown" on unparseable input) — opencode status is authoritatively driven from
+  // not a per-session file, so the "path" is the DB itself and it cannot be
+  // enumerated into the index. This lets callers that only need the agent type /
+  // a stat resolve opencode; the transcript-tail path reads binary DB bytes and
+  // safely defers (classifyOpencodeTranscriptTail returns "unknown" on
+  // unparseable input) — opencode status is authoritatively driven from
   // processOpencodeSession, which reads the DB directly.
   if (sessionId.startsWith("ses_") && sessionExistsInOpencodeDb(sessionId)) {
     return { path: opencodeDbPath(), agentType: "opencode" };
-  }
-
-  // pi sessions: ~/.pi/agent/sessions/<cwd-slug>/<ISO-ts>_<sessionId>.jsonl. The
-  // session id is the filename's trailing uuid, so match a *.jsonl whose name
-  // contains it across the one-level slug dirs (mirrors the codex name-contains scan).
-  const piSessionsDir = path.join(process.env.HOME || "", ".pi", "agent", "sessions");
-  if (fs.existsSync(piSessionsDir)) {
-    try {
-      const slugDirs = fs.readdirSync(piSessionsDir, { withFileTypes: true })
-        .filter(d => d.isDirectory());
-      for (const slugDir of slugDirs) {
-        const dirPath = path.join(piSessionsDir, slugDir.name);
-        for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
-          if (entry.isFile() && entry.name.endsWith(".jsonl") && entry.name.includes(sessionId)) {
-            return { path: path.join(dirPath, entry.name), agentType: "pi" };
-          }
-        }
-      }
-    } catch {}
-  }
-
-  // grok sessions: ~/.grok/sessions/<url-encoded-cwd>/<sessionId>/updates.jsonl.
-  // The session DIRECTORY is named by the full uuid, so scan every cwd-slug dir
-  // for a child dir with that exact name (one existsSync per slug dir — this also
-  // covers grok's long-path hash dirs and sessions relocated between cwd dirs,
-  // which an encodeGrokCwdSlug lookup would miss).
-  const grokSessionsDir = path.join(process.env.HOME || "", ".grok", "sessions");
-  if (fs.existsSync(grokSessionsDir)) {
-    try {
-      const slugDirs = fs.readdirSync(grokSessionsDir, { withFileTypes: true })
-        .filter(d => d.isDirectory());
-      for (const slugDir of slugDirs) {
-        const updatesPath = path.join(grokSessionsDir, slugDir.name, sessionId, "updates.jsonl");
-        if (fs.existsSync(updatesPath)) {
-          return { path: updatesPath, agentType: "grok" };
-        }
-      }
-    } catch {}
   }
 
   return null;
@@ -13569,6 +13764,14 @@ const wipSnapshotGivenUp = new Map<string, string>();
 /** Round-robin cursor so every session gets a turn under MAX_PER_PASS. */
 let wipSweepCursor = 0;
 
+/** transcript path -> the cwd recorded in its head. A session's cwd is written
+ * at session start and never changes, so this is extracted once per file
+ * instead of re-reading 64KB per session per sweep (which, across a large
+ * fleet, was one of the loop pins behind the "under load" badge). Only
+ * successful extractions are cached: a just-created transcript whose head
+ * doesn't carry the cwd yet gets re-read next pass. */
+const sessionCwdCache = new Map<string, string>();
+
 /** Sessions with both a conversation id and a real local cwd — the common
  * ground of every git-side sweep (wip snapshots, git-plane health). */
 function collectGitSweepTargets(
@@ -13581,11 +13784,14 @@ function collectGitSweepTargets(
     if (!conversationId) continue;
     const file = findSessionFile(sessionId);
     if (!file) continue;
-    let cwd: string | undefined;
-    try {
-      const head = readFileHead(file.path, 65536);
-      cwd = file.agentType === "codex" ? extractCodexCwd(head) : extractCwd(head);
-    } catch {}
+    let cwd = sessionCwdCache.get(file.path);
+    if (!cwd) {
+      try {
+        const head = readFileHead(file.path, 65536);
+        cwd = file.agentType === "codex" ? extractCodexCwd(head) : extractCwd(head);
+      } catch {}
+      if (cwd) sessionCwdCache.set(file.path, cwd);
+    }
     if (!cwd || !fs.existsSync(cwd)) continue;
     targets.push({ sessionId, conversationId, cwd });
   }
@@ -18599,6 +18805,18 @@ async function main(): Promise<void> {
   // and be seeding every new pane with that session's markers (see
   // AGENT_SCRUBBED_ENV_VARS). Clear them once per boot.
   scrubTmuxGlobalEnv();
+
+  // Settings-level backstop for the same class: pin transcript persistence ON
+  // in ~/.claude/settings.json so even a claude codecast didn't launch keeps
+  // its transcript when a leaked CLAUDE_CODE_CHILD_SESSION reaches it
+  // (agentEnv.ts). Idempotent; respects an authored value.
+  try {
+    if (ensureClaudeSettingsPersistence() === "wrote") {
+      log("[AGENT-ENV] pinned CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 in ~/.claude/settings.json");
+    }
+  } catch (err) {
+    log(`[AGENT-ENV] settings persistence pin failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // Exit guard: respawn with backoff if crash looping.
   // Skip self-respawn when running under launchd (KeepAlive handles restarts).
