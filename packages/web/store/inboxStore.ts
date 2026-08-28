@@ -4668,6 +4668,28 @@ function notePendingMessageSendRequested(clientId?: string): void {
   }
 }
 
+// The send args a pending optimistic row stands for, for any path that re-issues
+// its send (rekey redrive, boot redrive, the bubble's Retry). Replays the exact
+// bytes the original send dispatched: the server dedupes this client id by
+// argument fingerprint, so a rebuilt payload (raw content without the
+// mention-expansion context, or the same text without its images) is refused
+// as COMMAND_ID_REUSED. `uploading` means an image has no storage id yet: the
+// detached upload task that owns the row sends it once the upload settles, so
+// no other path may send first — the server keeps the first row per client id,
+// and a send that beats the upload lands the message without its image for good.
+export function pendingRowSendArgs(message: Message): { content: string; imageIds: string[] | undefined; uploading: boolean } {
+  const content = message._dispatchContent || message.content || "";
+  const images = message.images || [];
+  const imageIds = images
+    .map((image: any) => image?.storage_id)
+    .filter((id: unknown): id is string => typeof id === "string");
+  return {
+    content,
+    imageIds: imageIds.length ? imageIds : undefined,
+    uploading: images.some((image: any) => image?.uploading),
+  };
+}
+
 function redrivePendingMessagesFor(convexId: string): void {
   const store = useInboxStore.getState();
   for (const message of store.pendingMessages[convexId] || []) {
@@ -4675,15 +4697,10 @@ function redrivePendingMessagesFor(convexId: string): void {
     const clientId = message._clientId || message._id;
     const requestedAt = recentlyRequestedPendingMessages.get(clientId);
     if (requestedAt && Date.now() - requestedAt < PENDING_MESSAGE_REDRIVE_COALESCE_MS) continue;
-    // Replay the exact bytes the original send dispatched: the server dedupes
-    // this client id by argument fingerprint, so a rebuilt payload (raw content
-    // without the mention-expansion context) is refused as COMMAND_ID_REUSED.
-    const content = message._dispatchContent || message.content || "";
-    const imageIds = (message.images || [])
-      .map((image: any) => image?.storage_id)
-      .filter((id: unknown): id is string => typeof id === "string");
-    if (!content.trim() && imageIds.length === 0) continue;
-    store.sendMessage(convexId, content, imageIds.length ? imageIds : undefined, clientId);
+    const { content, imageIds, uploading } = pendingRowSendArgs(message);
+    if (uploading) continue;
+    if (!content.trim() && !imageIds) continue;
+    store.sendMessage(convexId, content, imageIds, clientId);
   }
 }
 
@@ -7796,12 +7813,18 @@ const inboxStoreConfig = (set: any, get: any) => ({
     else this.pendingMessages[convId] = kept;
   }),
 
+  // Lands settled uploads on the row by client id, under whichever key holds it
+  // now: the upload task captured the STUB id at send time, and a parked create
+  // may have rekeyed the row to its real id while the upload was in flight. A
+  // miss would leave the row `uploading` forever and every redrive would skip it.
   resolvePendingUploads: sync(function (this: Draft, convId: string, clientId: string, images: Array<OptimisticImage>) {
-    const pending = this.pendingMessages[convId];
-    if (!pending) return;
-    this.pendingMessages[convId] = pending.map((m) =>
-      m._clientId === clientId || m._id === clientId ? { ...m, images } : m
-    );
+    const isRow = (m: Message) => m._clientId === clientId || m._id === clientId;
+    const keys = this.pendingMessages[convId]?.some(isRow)
+      ? [convId]
+      : Object.keys(this.pendingMessages).filter((key) => this.pendingMessages[key]?.some(isRow));
+    for (const key of keys) {
+      this.pendingMessages[key] = this.pendingMessages[key].map((m) => (isRow(m) ? { ...m, images } : m));
+    }
   }),
 
   stampPendingDispatchContent: sync(function (this: Draft, convId: string, clientId: string, dispatchContent: string) {

@@ -148,6 +148,59 @@ describe("healStrandedStub", () => {
     expect(sends[0]?.args).toEqual([REAL_ID, "deliver me", null, "client-rekey"]);
   });
 
+  // ct-46401 — the rekey fallback fired while the first message's image was
+  // still uploading: it sent the row without a storage id, the server kept that
+  // row for the client id, and the upload task's later send (with the id) was
+  // deduped away. The message reached the agent as "[Image 1] …" with no image.
+  it("does not redrive a first message whose image is still uploading; the settled upload sends it with the id", async () => {
+    const stubId = "uploadingfirstmessageaa";
+    const { calls } = installFakeDispatch();
+    seedStrandedStub(stubId);
+    useInboxStore.setState((s: any) => ({
+      pendingMessages: {
+        ...s.pendingMessages,
+        [stubId]: [{
+          ...s.pendingMessages[stubId][0],
+          _id: "opt-upload",
+          _clientId: "client-upload",
+          _isFailed: undefined,
+          content: "[Image 1] look at this",
+          images: [{ media_type: "image/png", preview_url: "blob:preview", uploading: true }],
+        }],
+      },
+    }));
+
+    useInboxStore.getState().syncTable("sessions", [{
+      _id: REAL_ID,
+      session_id: stubId,
+      title: "New session",
+      agent_type: "claude_code",
+      project_path: "/Users/me/proj",
+      git_root: "/Users/me/proj",
+      message_count: 0,
+      is_idle: true,
+      has_pending: false,
+      updated_at: Date.now(),
+    } as any]);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls.filter((c) => c.action === "sendMessage")).toHaveLength(0);
+
+    // The upload task captured the STUB key at send time; the row has since
+    // moved to the real id. It must still land on the row.
+    const resolved = [{ media_type: "image/png", storage_id: "kg2storage" }];
+    useInboxStore.getState().resolvePendingUploads(stubId, "client-upload", resolved);
+    const row = useInboxStore.getState().pendingMessages[REAL_ID]?.[0] as any;
+    expect(row?.images).toEqual(resolved);
+
+    // A later redrive (boot, Retry) now replays the row with its image id.
+    useInboxStore.getState().redrivePendingMessages();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const sends = calls.filter((c) => c.action === "sendMessage");
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.args).toEqual([REAL_ID, "[Image 1] look at this", ["kg2storage"], "client-upload"]);
+  });
+
   it("coalesces the normal await-and-send path with the rekey fallback", async () => {
     const stubId = "healthyfirstmessageaaaa";
     const { calls } = installFakeDispatch();

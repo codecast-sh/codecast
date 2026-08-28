@@ -7752,12 +7752,17 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       // (messageId IS the optimistic clientId), so it creates the missing
       // pending row or no-ops against an existing one.
       if (isPending && isConvexId(conversationId) && content.trim()) {
-        // Replay the exact bytes the original send dispatched (if it fired):
-        // the server fingerprints this client id's args, and a rebuilt payload
-        // is refused as COMMAND_ID_REUSED instead of deduping.
+        // Replay the row's own send args (dispatched bytes + image ids): the
+        // server fingerprints this client id's args, and a rebuilt payload is
+        // refused as COMMAND_ID_REUSED instead of deduping. While an image is
+        // still uploading the upload task owns the send; a re-send now would
+        // land the message without its image.
         const pendingRow = (useInboxStore.getState().pendingMessages[conversationId] || [])
           .find((m) => m._clientId === messageId || m._id === messageId);
-        useInboxStore.getState().sendMessage(conversationId, pendingRow?._dispatchContent || content, undefined, messageId);
+        const send = pendingRow ? pendingRowSendArgs(pendingRow) : { content, imageIds: undefined, uploading: false };
+        if (!send.uploading) {
+          useInboxStore.getState().sendMessage(conversationId, send.content || content, send.imageIds, messageId);
+        }
       }
       // If the session is alive (any heartbeating agent_status — idle, working,
       // blocked, booting), the re-sent message delivers through the normal
