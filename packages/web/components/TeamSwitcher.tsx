@@ -26,13 +26,14 @@ export function TeamSwitcher() {
   const switchWorkspace = useSwitchWorkspace();
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const [inviteOpen, setInviteOpen] = useState(false);
-  const isAdmin = user?.role === "admin";
 
   if (!user) {
     return null;
   }
 
   const activeTeam = teams?.find(t => t?._id === activeTeamId);
+  // Invite targets the ACTIVE team; only its admins see the item.
+  const canInvite = !!activeTeam && activeTeam.role === "admin";
 
   const handleTeamChange = async (teamId: Id<"teams"> | null) => {
     await switchWorkspace(teamId);
@@ -112,7 +113,7 @@ export function TeamSwitcher() {
           <UserPlus className="w-4 h-4" />
           <span>Join Team</span>
         </DropdownMenuItem>
-        {isAdmin && (
+        {canInvite && (
           <>
             <DropdownMenuSeparator className="bg-sol-border" />
             <DropdownMenuItem
@@ -125,9 +126,9 @@ export function TeamSwitcher() {
           </>
         )}
       </DropdownMenuContent>
-      {isAdmin && (
+      {canInvite && (
         <Suspense fallback={null}>
-          <InviteModal open={inviteOpen} onOpenChange={setInviteOpen} />
+          <InviteModal teamId={activeTeam._id} open={inviteOpen} onOpenChange={setInviteOpen} />
         </Suspense>
       )}
     </DropdownMenu>

@@ -3780,6 +3780,13 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
    *  count". Local only — a session's read state never dispatches. */
   markSessionSeen: (id: string) => void;
   createBucket: (opts: { name: string; color?: string }, continuation?: DurableCreateContinuation) => Promise<{ bucketId: string }>;
+  /** Local-first team create: a stub team row and the active team switch land
+   *  in the same tick; resolves the REAL team id once the server answers, and
+   *  rolls the stub and the active team back if it refuses. */
+  createTeam: (opts: { name: string; icon?: string; icon_color?: string }) => Promise<string>;
+  dispatchCreateTeam: (stubId: string, opts: { name: string; icon?: string; icon_color?: string }) => Promise<string>;
+  resolveTeamStub: (stubId: string, teamId: string) => void;
+  discardTeamStub: (stubId: string, previousActiveTeamId: string | undefined) => void;
   updateBucket: (id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) => void;
   assignSessionToBucket: (conversationId: string, bucketId: string | null) => void;
 
@@ -8547,6 +8554,58 @@ const inboxStoreConfig = (set: any, get: any) => ({
       updated_at: now,
     };
     return { stubId, ...(continuation ? { continuation } : {}) };
+  }),
+
+  // -- Teams --
+  // Local-first create, the same shape as createBucket: the stub row and the
+  // workspace switch happen in one draft, so the switcher and the sidebar show
+  // the new team in the same tick. The server mutation (teams.createTeam)
+  // writes the canonical users.active_team_id, and the dispatch handler writes
+  // the ui mirror with the real id, so both halves agree once the echo lands
+  // (see lib/__tests__/activeTeamPointer.guard.test.ts). The `teams` list is
+  // replaced wholesale on echo, which retires the stub; resolveTeamStub rekeys
+  // it first so a caller holding the real id never sees a gap.
+  createTeam: async (opts: { name: string; icon?: string; icon_color?: string }) => {
+    const name = (opts?.name || "").trim();
+    if (!name) throw new Error("Team name is required");
+    const stubId = `team-stub-${Math.random().toString(36).slice(2)}`;
+    const previousActiveTeamId = get().clientState.ui?.active_team_id;
+    try {
+      const teamId = await get().dispatchCreateTeam(stubId, { ...opts, name });
+      if (typeof teamId !== "string" || !teamId) throw new Error("Team create returned no id");
+      get().resolveTeamStub(stubId, teamId);
+      return teamId;
+    } catch (error) {
+      get().discardTeamStub(stubId, previousActiveTeamId);
+      throw error;
+    }
+  },
+
+  dispatchCreateTeam: asyncAction(function (this: Draft, stubId: string, opts: { name: string; icon?: string; icon_color?: string }) {
+    this.teams = [
+      ...(this.teams ?? []),
+      {
+        _id: stubId,
+        name: opts.name,
+        icon: opts.icon,
+        icon_color: opts.icon_color,
+        role: "admin",
+        memberCount: 1,
+        created_at: Date.now(),
+      },
+    ];
+    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
+    this.clientState.ui.active_team_id = stubId;
+  }),
+
+  resolveTeamStub: sync(function (this: Draft, stubId: string, teamId: string) {
+    this.teams = (this.teams ?? []).map((t: any) => (t?._id === stubId ? { ...t, _id: teamId } : t));
+    if (this.clientState.ui?.active_team_id === stubId) this.clientState.ui.active_team_id = teamId;
+  }),
+
+  discardTeamStub: sync(function (this: Draft, stubId: string, previousActiveTeamId: string | undefined) {
+    this.teams = (this.teams ?? []).filter((t: any) => t?._id !== stubId);
+    if (this.clientState.ui?.active_team_id === stubId) this.clientState.ui.active_team_id = previousActiveTeamId;
   }),
 
   // Rename / color / sort / archive ride the generic patch path (inbox_buckets

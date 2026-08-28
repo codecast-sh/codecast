@@ -56,6 +56,40 @@ function getRandomColor(): string {
   return TEAM_COLORS[Math.floor(Math.random() * TEAM_COLORS.length)];
 }
 
+export const TEAM_NAME_MAX_LENGTH = 40;
+
+export function isTeamIcon(value: unknown): value is (typeof TEAM_ICONS)[number] {
+  return typeof value === "string" && (TEAM_ICONS as readonly string[]).includes(value);
+}
+
+export function isTeamColor(value: unknown): value is (typeof TEAM_COLORS)[number] {
+  return typeof value === "string" && (TEAM_COLORS as readonly string[]).includes(value);
+}
+
+/**
+ * Pure validation for createTeam. Trims the name and rejects an empty or
+ * too long name with a plain error. An absent or unknown icon or color falls
+ * back to a random pick, so a stale client never blocks team creation.
+ */
+export function validateTeamCreateArgs(args: {
+  name: string;
+  icon?: string;
+  icon_color?: string;
+}): { name: string; icon: string; icon_color: string } {
+  const name = args.name.trim();
+  if (name.length === 0) {
+    throw new Error("Team name is required");
+  }
+  if (name.length > TEAM_NAME_MAX_LENGTH) {
+    throw new Error(`Team name must be ${TEAM_NAME_MAX_LENGTH} characters or fewer`);
+  }
+  return {
+    name,
+    icon: isTeamIcon(args.icon) ? args.icon : getRandomIcon(),
+    icon_color: isTeamColor(args.icon_color) ? args.icon_color : getRandomColor(),
+  };
+}
+
 export const getUserTeams = query({
   args: {},
   handler: async (ctx) => {
@@ -161,19 +195,19 @@ export const createTeam = mutation({
     // client-supplied id. Kept optional so existing callers don't break.
     user_id: v.optional(v.id("users")),
     icon: v.optional(v.string()),
+    icon_color: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
     if (!authUserId) {
       throw new Error("Not authenticated");
     }
+    const identity = validateTeamCreateArgs(args);
     const inviteCode = generateInviteCode();
     const now = Date.now();
     const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
     const teamId = await ctx.db.insert("teams", {
-      name: args.name,
-      icon: args.icon || getRandomIcon(),
-      icon_color: getRandomColor(),
+      ...identity,
       created_at: now,
       invite_code: inviteCode,
       invite_code_expires_at: now + sevenDaysInMs,
@@ -1166,14 +1200,14 @@ export const updateTeamIcon = mutation({
     const updates: { icon?: string; icon_color?: string } = {};
 
     if (args.icon !== undefined) {
-      if (!TEAM_ICONS.includes(args.icon as typeof TEAM_ICONS[number])) {
+      if (!isTeamIcon(args.icon)) {
         throw new Error("Invalid icon");
       }
       updates.icon = args.icon;
     }
 
     if (args.icon_color !== undefined) {
-      if (!TEAM_COLORS.includes(args.icon_color as typeof TEAM_COLORS[number])) {
+      if (!isTeamColor(args.icon_color)) {
         throw new Error("Invalid color");
       }
       updates.icon_color = args.icon_color;

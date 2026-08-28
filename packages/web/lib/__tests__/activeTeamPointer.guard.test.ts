@@ -56,4 +56,28 @@ describe("active-team pointer", () => {
     expect(src).toContain("updateClientUI({ active_team_id");
     expect(src).toContain("saveActiveTeam");
   });
+
+  // The store's local-first team create is the second sanctioned writer. It
+  // moves the mirror in its draft (same tick as the stub row) and rides one
+  // dispatch whose server side calls teams.createTeam, which writes the
+  // canonical pointer. Both halves must stay in that one action.
+  test("the store's createTeam is the only draft writer of the mirror, and its dispatch writes the canonical pointer", () => {
+    const store = readFileSync(join(ROOT, "store/inboxStore.ts"), "utf8");
+    const writers = [...store.matchAll(/^\s*(\w+):\s*(?:asyncAction|sync|action)\(function[\s\S]*?^  \}\),/gm)]
+      .filter((m) => /\.active_team_id = /.test(m[0]))
+      .map((m) => m[1]);
+    expect(writers.sort()).toEqual(["discardTeamStub", "dispatchCreateTeam", "resolveTeamStub"]);
+
+    const dispatch = readFileSync(
+      join(ROOT, "..", "convex", "convex", "dispatch.ts"),
+      "utf8",
+    );
+    const handler = dispatch.match(/^  createTeam: async \([\s\S]*?^  \},/m)?.[0] ?? "";
+    expect(handler).toContain("api.teams.createTeam");
+    expect(handler).toContain("active_team_id: teamId");
+
+    const teams = readFileSync(join(ROOT, "..", "convex", "convex", "teams.ts"), "utf8");
+    const mutation = teams.match(/export const createTeam = mutation\([\s\S]*?^\}\);/m)?.[0] ?? "";
+    expect(mutation).toContain("active_team_id: teamId");
+  });
 });

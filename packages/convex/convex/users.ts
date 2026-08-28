@@ -2317,6 +2317,51 @@ function getConversationProjectPath(conv: { git_root?: string | null; project_pa
   return conv.git_root || conv.project_path || null;
 }
 
+// One walk over the viewer's most recently ACTIVE conversations, folded into
+// distinct projects. Keyed by git root when present, else project path. The
+// window is by updated_at, not creation time: a project whose sessions are
+// old but still in use must not fall out behind a burst of fresh sessions.
+async function collectRecentProjects(ctx: QueryCtx, userId: Id<"users">, take = 600) {
+  const conversations = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_updated", (q) => q.eq("user_id", userId))
+    .order("desc")
+    .take(take);
+
+  const projectMap = new Map<string, {
+    path: string;
+    git_root: string | null;
+    git_remote_url?: string;
+    session_count: number;
+    last_active: number;
+  }>();
+
+  for (const conv of conversations) {
+    const path = getConversationProjectPath(conv);
+    if (!path) continue;
+
+    const existing = projectMap.get(path);
+    if (existing) {
+      existing.session_count++;
+      existing.last_active = Math.max(existing.last_active, conv.updated_at);
+      if (!existing.git_remote_url && conv.git_remote_url) {
+        existing.git_remote_url = conv.git_remote_url;
+      }
+      continue;
+    }
+
+    projectMap.set(path, {
+      path,
+      git_root: conv.git_root || null,
+      git_remote_url: conv.git_remote_url,
+      session_count: 1,
+      last_active: conv.updated_at,
+    });
+  }
+
+  return Array.from(projectMap.values()).sort((a, b) => b.last_active - a.last_active);
+}
+
 function getPathPrefixUpperBound(pathPrefix: string) {
   return `${pathPrefix}\uffff`;
 }
@@ -2728,38 +2773,7 @@ export const getRecentProjectsWithGitInfo = query({
       return [];
     }
     const limit = args.limit ?? 20;
-    const conversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .order("desc")
-      .take(200);
-
-    const projectMap = new Map<string, {
-      git_root: string | null;
-      project_path: string;
-      session_count: number;
-      last_active: number;
-      git_remote_url?: string;
-    }>();
-
-    for (const conv of conversations) {
-      const key = conv.git_root || conv.project_path;
-      if (!key) continue;
-
-      const existing = projectMap.get(key);
-      if (existing) {
-        existing.session_count++;
-        existing.last_active = Math.max(existing.last_active, conv.updated_at);
-      } else {
-        projectMap.set(key, {
-          git_root: conv.git_root || null,
-          project_path: conv.project_path || key,
-          session_count: 1,
-          last_active: conv.updated_at,
-          git_remote_url: conv.git_remote_url,
-        });
-      }
-    }
+    const recentProjects = await collectRecentProjects(ctx, userId);
 
     const mappings = await ctx.db
       .query("directory_team_mappings")
@@ -2768,13 +2782,12 @@ export const getRecentProjectsWithGitInfo = query({
 
     const mappingsByPath = new Map(mappings.map(m => [m.path_prefix, m]));
 
-    const projects = Array.from(projectMap.entries())
-      .sort((a, b) => b[1].last_active - a[1].last_active)
+    const projects = recentProjects
       .slice(0, limit)
-      .map(([path, data]) => {
-        const mapping = mappingsByPath.get(path);
+      .map((data) => {
+        const mapping = mappingsByPath.get(data.path);
         return {
-          path,
+          path: data.path,
           is_git_repo: !!data.git_root,
           git_remote_url: data.git_remote_url,
           session_count: data.session_count,
@@ -2828,45 +2841,13 @@ export const getSuggestedTeamProjects = query({
       .collect();
     const mappingByPath = new Map(currentUserMappings.map((mapping) => [mapping.path_prefix, mapping]));
 
-    const conversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_updated", (q) => q.eq("user_id", userId))
-      .order("desc")
-      .take(200);
-
-    const projectMap = new Map<string, {
-      path: string;
-      git_remote_url?: string;
-      session_count: number;
-      last_active: number;
-      repo_key: string | null;
-      repo_name: string | null;
-    }>();
-
-    for (const conv of conversations) {
-      const path = getConversationProjectPath(conv);
-      if (!path) continue;
-
-      const existing = projectMap.get(path);
-      if (existing) {
-        existing.session_count++;
-        existing.last_active = Math.max(existing.last_active, conv.updated_at);
-        if (!existing.git_remote_url && conv.git_remote_url) {
-          existing.git_remote_url = conv.git_remote_url;
-          existing.repo_key = getRepoKeyFromRemote(conv.git_remote_url);
-        }
-        continue;
-      }
-
-      projectMap.set(path, {
-        path,
-        git_remote_url: conv.git_remote_url,
-        session_count: 1,
-        last_active: conv.updated_at,
-        repo_key: getRepoKeyFromRemote(conv.git_remote_url),
-        repo_name: getRepoNameFromPath(path),
-      });
-    }
+    const projectMap = new Map(
+      (await collectRecentProjects(ctx, userId)).map((project) => [project.path, {
+        ...project,
+        repo_key: getRepoKeyFromRemote(project.git_remote_url),
+        repo_name: getRepoNameFromPath(project.path),
+      }]),
+    );
 
     const repoKeySignals = new Map<string, { members: Set<string> }>();
     const repoNameSignals = new Map<string, { members: Set<string> }>();

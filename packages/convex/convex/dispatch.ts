@@ -1143,6 +1143,20 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // Saved views. Creates carry a client_key so a retry returns the same row
   // rather than a second copy of the view (savedViews.webCreate is idempotent
   // on that key), and the optimistic stub supersedes onto it.
+  // Local-first team create (inboxStore.createTeam). The mutation writes the
+  // canonical users.active_team_id; the ui mirror patched above carried the
+  // client's stub id, so rewrite it with the real id in the same transaction.
+  createTeam: async (ctx, userId, [, opts]: [string, { name: string; icon?: string; icon_color?: string }]) => {
+    const teamId = await (ctx as any).runMutation(api.teams.createTeam, {
+      name: opts.name,
+      icon: opts.icon,
+      icon_color: opts.icon_color,
+    });
+    await applyPatches(ctx, userId, {
+      client_state: { _: { ui: { active_team_id: teamId } } },
+    });
+    return teamId;
+  },
   createSavedView: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.savedViews.webCreate, opts);
   },
