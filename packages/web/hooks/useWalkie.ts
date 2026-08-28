@@ -33,11 +33,15 @@ import {
   subscribeWalkie,
   subscribeWalkieLevel,
   walkieBlockedFor,
+  walkieHoldsRoom,
   warmMic,
   type WalkieStatus,
 } from "../lib/calls/walkie";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { teamHasFeature } from "../lib/teamFeatures";
+import { PRESENCE_BUCKET_MS } from "@codecast/convex/convex/presenceState";
+import { describeRoom } from "../lib/calls/roomLabels";
+import { memberDisplayName } from "../lib/liveEntities";
 import { useShortcutAction, useShortcutContext } from "../shortcuts";
 import { useEventListener } from "./useEventListener";
 import { useMountEffect } from "./useMountEffect";
@@ -48,23 +52,11 @@ export function useWalkieStatus(): WalkieStatus {
   return useSyncExternalStore(subscribeWalkie, getWalkieStatus, getWalkieStatus);
 }
 
-// One subscription to the engine, for the three facts no single component owns.
+// One subscription to the engine, for the two facts no single component owns.
 //
-// THE CONVERSATION THE WALKIE LAST USED. `lingerUntil` says a room is being held
-// open in case somebody answers, but not WHICH room, and the engine does not
-// clear it when the person walks into some other call. Without this, joining a
-// huddle inside that half minute would put the walkie strip over a real call: no
-// mic, no hang-up, somebody else's name on it. The strip also has to keep
-// offering the answer through the linger, which means still knowing whose DM to
-// send it to.
-//
-// WHETHER THE WALKIE IS A GUEST. A burst joins a room, but the room may already
-// have been a live huddle with this person's mic open in it — the dm: room of a
-// 1:1 call is the very room a burst to that person is spoken into. The walkie
-// must not take the dock away from a call in progress, so it records, at the
-// moment a burst begins, whether it opened that mic or merely walked in. The
-// engine publishes `sending` synchronously BEFORE it unmutes, so the call state
-// read here is still the pre-burst world, which is exactly the question.
+// THE CONVERSATION THE WALKIE LAST USED. The engine names the room it is in;
+// this names the DM behind it, so the strip can keep offering the answer after
+// the burst that opened it has landed.
 //
 // A BURST THAT FAILED TO SEND, below.
 //
@@ -76,30 +68,11 @@ export type WalkieTarget = { roomKey: string; channelId: string };
 
 let lastTarget: WalkieTarget | null = null;
 let reportedError: string | null = null;
-/** The burst currently being tracked, so a guest ruling is made once per burst
- *  rather than re-read after the engine has changed the world. */
-let engagedBurst: string | null = null;
-let guest = false;
 
 subscribeWalkie(() => {
   const s = getWalkieStatus();
   const live = s.sending ?? s.incoming;
-  const burstKey = s.sending ? s.sending.clientId : (s.incoming?.messageId ?? null);
-  if (live) {
-    lastTarget = { roomKey: live.roomKey, channelId: live.channelId };
-    if (burstKey !== engagedBurst) {
-      engagedBurst = burstKey;
-      const call = useInboxStore.getState().call;
-      guest =
-        call.roomKey === live.roomKey &&
-        !call.muted &&
-        (call.phase === "connected" || call.phase === "connecting");
-    }
-  } else {
-    // The ruling outlives the burst: the linger that follows a guest burst is
-    // still happening inside somebody's huddle.
-    engagedBurst = null;
-  }
+  if (live) lastTarget = { roomKey: live.roomKey, channelId: live.channelId };
 
   // A burst that did not send has to SAY so. The engine reports the failure and
   // stops there, and both ways it fails are silent lies otherwise: a row that
@@ -535,86 +508,6 @@ export function pttHoldProps(ptt: PushToTalk) {
 }
 
 /**
- * Whether the walkie, rather than an ordinary huddle, owns the room the call
- * plane is in. It decides which of the two docks is on screen, and the two must
- * never both be: a burst joins a room the same way a huddle does, so without
- * this the call dock's floating window would open for every sentence anybody
- * says.
- *
- * Owning the dock means REPLACING the call's own controls — no hang-up, no
- * mute, no camera, no lock — so every branch below has to be sure the room is
- * a burst and not a conversation. Matching room keys is not enough: a 1:1 call
- * lives in the same dm: room a burst to that person is spoken into, so the keys
- * match exactly when the answer must be no.
- */
-export function walkieOwnsCall(
-  status: WalkieStatus,
-  call: { roomKey: string | null; phase: string; muted: boolean },
-  opts: { lingerRoom?: string | null; guest?: boolean; upgraded?: boolean } = {},
-): boolean {
-  const lingerRoom = opts.lingerRoom !== undefined ? opts.lingerRoom : (lastTarget?.roomKey ?? null);
-  // SOMEBODY STEPPED IN ON PURPOSE. This outranks every branch below, including
-  // a key that is still down: the founder's rule is that a hold stays a strip
-  // until the other side explicitly joins, and this is that moment arriving.
-  //
-  // It replaces the mute, which used to carry this meaning everywhere below —
-  // an open microphone meant a person had joined. Hot auto-listen ended that
-  // reading: every listener's mic is open now, so a burst played to three
-  // people would have read as three conversations and put the full call dock
-  // over all three of their screens for a sentence.
-  if (opts.upgraded !== undefined ? opts.upgraded : status.joinedLive === call.roomKey) {
-    return false;
-  }
-  // The walkie walked into a call that was already running with this person's
-  // mic open. It is a guest there, and a guest does not take the room's controls
-  // away from it — not while talking, not while listening, and not through the
-  // linger afterwards, which is still happening inside that same huddle.
-  if (opts.guest !== undefined ? opts.guest : guest) return false;
-  // Being handed back is still being owned. Leaving is asynchronous — the call
-  // plane keeps reporting a live seat for a few ticks after the walkie is done
-  // with the room — and during those ticks the answer here has to stay yes, or
-  // the ordinary dock appears for an instant on a room that is in the middle of
-  // disappearing. When it finally does, the phase goes idle and the surface is
-  // "none", which is what the person should see.
-  if (status.releasing && status.releasing === call.roomKey) return true;
-  if (status.sending) return status.sending.roomKey === call.roomKey;
-  if (status.incoming) return status.incoming.roomKey === call.roomKey;
-  // Lingering: THIS room is being held open in case anybody answers. Nobody
-  // has, or the test above would have taken the room back.
-  return !!status.lingerUntil && !!call.roomKey && call.roomKey === lingerRoom;
-}
-
-/**
- * Whether the full call stage is open, after something happened.
- *
- * The dock holds this as its own state and hands every change through here, so
- * that the two ways it moves are one rule in one place — the person's own
- * gestures (the expand button, the collapse button) set it directly and are not
- * this function's business.
- *
- * THE STAGE BELONGS TO THE CALL THAT WAS EXPANDED, and to no call after it.
- * Nothing used to put it back: the dock is mounted for the life of the page and
- * merely draws nothing when idle, so one expanded huddle left the flag true
- * forever, and the next call — or the next walkie burst — opened full screen by
- * itself, a second or two in, when the room connected. That is the founder's
- * "it kind of switches to the full call unexpectedly", reproduced with two
- * identities and screenshotted (ct-45974, ct-46031).
- *
- * AND NEVER OVER A BURST. Remote video arriving earns the stage in a huddle and
- * does not in three seconds of somebody's voice — and opening it there does
- * lasting damage, because the flag would outlive the burst and take the surface
- * from every later one.
- */
-export function nextStageOpen(
-  open: boolean,
-  ev: { phase: string; walkieOwns?: boolean; notice?: boolean; newRemoteVideo?: boolean },
-): boolean {
-  if (ev.phase === "idle") return false;
-  if (ev.walkieOwns) return open;
-  return open || !!ev.notice || !!ev.newRemoteVideo;
-}
-
-/**
  * THE DOOR, for the two toggles that let a person set it.
  *
  * One hook rather than two copies of `walkie_pref !== "off"`, because there is
@@ -658,58 +551,168 @@ export function useWalkieDoor(): {
  * dock's own occupancy list is the wire.
  *
  * MY OWN stamp is excluded on purpose. This side already knows what it pressed,
- * synchronously, through the engine's `joinedLive`; reading my own row back
- * would only be a slower way to learn it, and it would make the rule depend on
- * a round trip that the local-first path is there to avoid.
+ * synchronously, through the engine's live room; reading my own row back would
+ * only be a slower way to learn it, and it would make the rule depend on a
+ * round trip that the local-first path is there to avoid.
+ *
+ * AND SO IS A STAMP THAT PREDATES THIS SEAT. `walkie_joined_at` is written when
+ * somebody joins and it outlives a browser that dies without leaving, so a room
+ * whose last occupant crashed mid-call keeps its stamp for good. Read without
+ * `since`, the next burst into that room would be a call from its first tick:
+ * the sender's mic never closes on release, a join is announced that nobody
+ * made, and the strip hands itself to the call dock over a burst. `since` is
+ * when THIS client entered the room, so anything older is a leftover.
  */
 export function otherJoinedLive(
   roster: { user_id?: unknown; walkie_joined_at?: number }[],
   myUserId: string | null | undefined,
+  since = 0,
 ): boolean {
   const me = String(myUserId ?? "");
-  return roster.some((m) => !!m?.walkie_joined_at && String(m.user_id ?? "") !== me);
+  // THE STAMP ARRIVES BUCKETED, and `since` is a raw local clock. The server
+  // floors every roster timestamp to the minute (calls.projectMember through
+  // bucketTs) so a room's occupancy pushes byte-identical results while people
+  // mute and unmute in it. So a join made forty seconds after this client sat
+  // down reports as the top of that minute — EARLIER than `since` — and
+  // comparing the two directly threw away every genuinely fresh join for up to
+  // a minute, which is the entire life of a burst. Measured with two browsers:
+  // the sender never saw the join, never became a call, and was muted on
+  // release, which is the whole of A1 silently undone.
+  //
+  // So the comparison happens in the wire's own units. That caps this rule's
+  // resolution at a minute, which is all the stamp can carry: a leftover from
+  // the same minute this client walked in still counts as news. The cases it
+  // exists for — a browser that died an hour ago, a room somebody left
+  // yesterday — are minutes to days old and still rejected.
+  const floor = since > 0 ? Math.floor(since / PRESENCE_BUCKET_MS) * PRESENCE_BUCKET_MS : 0;
+  return roster.some(
+    (m) =>
+      !!m?.walkie_joined_at &&
+      Number(m.walkie_joined_at) >= floor &&
+      String(m.user_id ?? "") !== me,
+  );
+}
+
+/**
+ * WHAT THE SENDER IS TOLD ABOUT THE PERSON THEY ARE TALKING TO.
+ *
+ * The strip used to say "Live to Jordan" the moment this client's own track
+ * reached the SFU, which is a fact about MY seat and says nothing whatever
+ * about Jordan's. It read as "Jordan is hearing this" and was false every time
+ * Jordan was away from the machine, had the door shut, or was busy — the exact
+ * cases the walkie exists to survive, because the burst still lands as a
+ * message in the DM either way.
+ *
+ * So the claim is read off the ROOM instead: the live roster both sides already
+ * subscribe to (calls.getRoomOccupancy, the same list the occupancy chip and
+ * the upgrade watcher use). A seat in the room is somebody with the audio
+ * playing; no seat is somebody who will read it instead.
+ *
+ * NEVER OFF MY OWN SEAT. That is the whole point, so when neither identity is
+ * resolved there is no way to tell my row from theirs and the answer is the
+ * cautious one — the message still arrives, and saying so is never wrong.
+ *
+ * `heardLive` is untouched and still means what it meant: my track reached the
+ * room. It is the internal fact the engine needs; it is not a sentence about
+ * another person.
+ */
+export type SenderHearing = { state: "hears" | "away" | "busy"; text: string };
+
+export function senderHearing(
+  roster: { user_id?: unknown }[],
+  me: string | null | undefined,
+  other: {
+    /** Their user id, when the room names them (a DM does). */
+    userId?: string | null;
+    name: string;
+    /** The manual status, and the walkie's own door — the pref and the snooze
+     *  their client reads to decide whether a burst plays out loud. Shut, the
+     *  burst is a message rather than a voice, and the sender should hear that
+     *  from the strip rather than from the silence. */
+    status?: string | null;
+    pref?: string | null;
+    snoozed?: boolean;
+  },
+): SenderHearing {
+  const meId = String(me ?? "");
+  const otherId = other.userId ? String(other.userId) : "";
+  const seated =
+    !!(otherId || meId) &&
+    roster.some((m) => {
+      const id = String(m?.user_id ?? "");
+      if (!id) return false;
+      return otherId ? id === otherId : id !== meId;
+    });
+  if (seated) return { state: "hears", text: `${other.name} hears you` };
+  // Busy and away are the same outcome — a message instead of a voice — and
+  // two different sentences, because one of them is a person who chose it and
+  // the other is a person who is not there.
+  const busy = other.status === "busy" || other.pref === "off" || !!other.snoozed;
+  return busy
+    ? { state: "busy", text: `${other.name} is busy — they get the message` }
+    : { state: "away", text: `${other.name} is away — they get the message` };
+}
+
+/**
+ * The same answer, derived from the store for a room.
+ *
+ * One derivation with two readers, and that is the point rather than a
+ * convenience: the strip renders `.text` and the away tick fires on `.state`
+ * (hooks/useWalkieSync). Two copies of this lookup would eventually disagree,
+ * and the shape of that bug is a sentence saying one thing while a sound says
+ * the other.
+ *
+ * `now` is passed in because the snooze runs out on a clock: a surface reads
+ * it off `useNowWhen`, a callback off `Date.now()`, and neither wants a timer
+ * hidden in here.
+ */
+export function senderHearingFrom(
+  state: any,
+  roomKey: string,
+  now: number,
+): SenderHearing & { otherId: string } {
+  const { label, otherIds } = describeRoom(roomKey, state);
+  const otherId = otherIds?.[0] ? String(otherIds[0]) : "";
+  const member = otherId
+    ? (state.teamMembers ?? []).find((m: any) => String(m?._id) === otherId)
+    : null;
+  const out = senderHearing(
+    (state.callOccupancy?.[roomKey] as { user_id?: unknown }[]) ?? [],
+    state.currentUser?._id,
+    {
+      userId: otherId,
+      name: memberDisplayName(member, label),
+      status: member?.status,
+      pref: member?.walkie_pref,
+      snoozed: Number(member?.walkie_snoozed_until ?? 0) > now,
+    },
+  );
+  return { ...out, otherId };
 }
 
 /** The four things the call dock can be. */
 export type DockSurface = "none" | "walkie" | "stage" | "dock";
 
 /**
- * Which surface the dock shows, out of the walkie's state and the call's.
+ * WHICH SURFACE THE DOCK SHOWS. A lookup, not a rule stack.
  *
- * Here rather than inline in the component because the answer is a rule about
- * the walkie, not a rendering detail — and because the rule was wrong in a way
- * only a test would have caught. The stage used to be able to outrank the
- * walkie: the branch read `walkieOwnsCall(...) && !expanded`, and `expanded` is
- * the dock's own `useState` that nothing put back when a call ended. So one
- * expanded huddle, at any point in the session, made every later hold of the
- * key open the full call stage over the person's conversation about a second
- * into the burst — the room join is what they saw as "after a few seconds".
- * Reproduced with two identities, screenshotted, ct-46031.
+ * The walkie holds one room and knows what it is, so the answer is that fact
+ * read out: a burst or a listen draws the strip, and everything else is the
+ * ordinary call dock — expanded into the stage if the person expanded it.
  *
- * WHOEVER OWNS THE ROOM OWNS THE SURFACE, and nothing local overrides it. The
- * order below is the whole rule: a burst that outlived its room, then no call
- * at all, then the walkie, and only then the two shapes of the ordinary dock.
- *
- * THE UPGRADE IS A CHANGE OF OWNER, not a fifth surface. When somebody presses
- * Join live the room stops being a burst for everyone in it, `walkieOwnsCall`
- * answers false from that moment, and the ordinary dock takes the room the way
- * it takes any other — which is why there is no branch for it here. Unmuting
- * is NOT that signal any more and must never be read as one: auto-listen opens
- * every listener's microphone, so the mute says who can be heard and nothing
- * at all about whether a conversation started (ct-46032).
+ * A burst OUTLIVES the room it was spoken into: when the room falls over under
+ * an open microphone the call plane goes idle, but the recorder, the meter and
+ * the recognizer are still running and the message still lands. That is why the
+ * strip is asked for first and why `walkieHoldsRoom` tolerates a call with no
+ * room. A call plane sitting in some OTHER room is the opposite case — the
+ * person walked into a huddle — and that room keeps its own dock.
  */
 export function callDockSurface(
   status: WalkieStatus,
-  call: { roomKey: string | null; phase: string; muted: boolean },
-  opts: { expanded: boolean; lingerRoom?: string | null; guest?: boolean; upgraded?: boolean },
+  call: { roomKey: string | null; phase: string },
+  opts: { expanded: boolean },
 ): DockSurface {
-  // A BURST OUTLIVES THE ROOM IT WAS SPOKEN INTO. When the room falls over
-  // under an open microphone the call plane goes idle, but the recorder, the
-  // meter and the recognizer are still running and the burst still lands as a
-  // message. `walkieOwnsCall` cannot answer here — its sending branch compares
-  // the burst's room against the call's, and the call no longer has one.
-  if (status.sending && call.phase === "idle") return "walkie";
+  if (walkieHoldsRoom(status, call.roomKey)) return "walkie";
   if (call.phase === "idle") return "none";
-  if (walkieOwnsCall(status, call, opts)) return "walkie";
   return opts.expanded ? "stage" : "dock";
 }

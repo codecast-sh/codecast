@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { bindWalkie } from "../../lib/calls/walkie";
-import { callDockSurface, nextStageOpen, walkieBlockedReason, walkieBurstDropped, walkieJoinReason, walkieKeyName, walkieKeyState, walkieOwnsCall } from "../../hooks/useWalkie";
+import { callDockSurface, walkieBlockedReason, walkieBurstDropped, walkieJoinReason, walkieKeyName, walkieKeyState } from "../../hooks/useWalkie";
 import { useInboxStore } from "../../store/inboxStore";
 import { voiceDuration } from "../../lib/voicePlayer";
 import { ChatMessage } from "../chat/ChatMessage";
@@ -139,267 +139,119 @@ describe("voice bubble", () => {
   });
 });
 
-describe("who owns the dock", () => {
-  const idle = { roomKey: null, phase: "idle", muted: true };
-  const inRoom = { roomKey: ROOM, phase: "connected", muted: true };
+// ── WHICH SURFACE THE DOCK SHOWS ───────────────────────────────────────────
+//
+// The walkie and the ordinary call dock are two surfaces for one room, and
+// exactly one of them is right at any moment: a burst joins a room the same way
+// a huddle does, so without this the floating call window would open for every
+// sentence anybody says.
+//
+// The answer used to be assembled from six ordered rules over three fields, and
+// it was wrong in ways only a test caught. The founder, holding the composer
+// key: "it kind of switches to the full call unexpectedly after a few seconds."
+// The full stage replaced his DM about a second into every hold, because a
+// huddle he had expanded EARLIER in the session left `expanded` true and the
+// branch read `walkieOwnsCall(...) && !expanded` (ct-45974, ct-46031).
+//
+// It is one fact read out now. Everything below is that fact from every angle
+// the walkie can be in.
+describe("which surface the dock shows", () => {
   const base = {
     sending: null,
     incoming: null,
-    lingerUntil: null,
+    liveRoom: null,
     unavailable: null,
     canReply: false,
+    asr: "live",
     error: null,
   } as const;
+  /** The walkie in a room, as the engine publishes it. */
+  const held = (mode: "burst" | "listen" | "call", key = ROOM) => ({
+    ...base,
+    liveRoom: { key, mode, since: 1_700_000_000_000 },
+  });
+  /** This client's own seat through a burst: the engine unmutes to publish. */
+  const seated = { roomKey: ROOM, phase: "connected" };
+  const huddle = { roomKey: "channel:elsewhere", phase: "connected" };
+  const gone = { roomKey: null, phase: "idle" };
+  const surface = (status: any, call: any, expanded = false) =>
+    callDockSurface(status as any, call, { expanded });
 
-  test("a burst being heard owns the room, so the call dock stands down", () => {
-    const status = {
-      ...base,
-      incoming: { channelId: "c", messageId: "m", roomKey: ROOM, fromUserId: "u", fromName: "Ada" },
-    };
-    expect(walkieOwnsCall(status as any, inRoom, { guest: false })).toBe(true);
+  test("a burst and a listen both draw the strip, and nothing local outranks them", () => {
+    // The regression itself: nothing about the burst differs between these two
+    // calls, only a flag left behind by a huddle that ended minutes ago.
+    expect(surface(held("burst"), seated)).toBe("walkie");
+    expect(surface(held("burst"), seated, true)).toBe("walkie");
+    expect(surface(held("listen"), seated)).toBe("walkie");
+    expect(surface(held("listen"), seated, true)).toBe("walkie");
   });
 
-  test("a burst into some OTHER room leaves this call's dock alone", () => {
-    const status = {
-      ...base,
-      incoming: { channelId: "c", messageId: "m", roomKey: "dm:x:y", fromUserId: "u", fromName: "Ada" },
-    };
-    expect(walkieOwnsCall(status as any, inRoom, { guest: false })).toBe(false);
-  });
-
-  test("an open mic during the linger is still the walkie's, not a huddle", () => {
-    // THE MUTE STOPPED BEING THE TEST. Auto-listen is hot now, so the linger
-    // after a burst is a room this person is sitting in with their microphone
-    // OPEN and nobody having joined anything — the walkie's own state, not a
-    // conversation. Reading the mic the old way handed the ordinary call dock
-    // its full controls over every burst anybody listened to.
-    const lingering = { ...base, lingerUntil: Date.now() + 30_000 };
-    expect(walkieOwnsCall(lingering as any, inRoom, { lingerRoom: ROOM, guest: false })).toBe(true);
-    expect(
-      walkieOwnsCall(lingering as any, { ...inRoom, muted: false }, { lingerRoom: ROOM, guest: false }),
-    ).toBe(true);
+  test("the room held open after the key comes up is still the walkie's", () => {
+    // The gap this closes: between the burst clearing and the room being held
+    // the engine used to answer for nobody, and the dock took a room the walkie
+    // had not let go of — measured at 861ms, the length of the audio upload.
+    // The live room spans the whole of it now, mic open or shut.
+    expect(surface(held("burst"), { ...seated, muted: true })).toBe("walkie");
+    expect(surface(held("listen"), { ...seated, muted: false })).toBe("walkie");
   });
 
   test("somebody stepping in on purpose hands the room to the call dock", () => {
-    // The upgrade, from every angle the walkie can be in. It outranks a key
-    // that is still down, which is the founder's rule stated exactly: a hold
-    // stays a strip until the OTHER side explicitly joins.
-    const sending = {
-      ...base,
-      sending: { channelId: "c", roomKey: ROOM, clientId: "cid", messageId: null, startedAt: 0, transcript: "" },
-    };
-    const hearing = {
-      ...base,
-      incoming: { channelId: "c", messageId: "m", roomKey: ROOM, fromUserId: "u", fromName: "Ada" },
-    };
-    const lingering = { ...base, lingerUntil: Date.now() + 30_000 };
-    for (const status of [sending, hearing, lingering]) {
-      expect(walkieOwnsCall(status as any, inRoom, { lingerRoom: ROOM, guest: false })).toBe(true);
-      expect(
-        walkieOwnsCall(status as any, inRoom, { lingerRoom: ROOM, guest: false, upgraded: true }),
-      ).toBe(false);
-    }
+    // The founder's rule stated exactly: a hold stays a strip until somebody
+    // explicitly joins. Unmuting is NOT that signal and must never be read as
+    // one — auto-listen opens every listener's microphone, so the mute says who
+    // can be heard and nothing about whether a conversation started (ct-46032).
+    expect(surface(held("call"), seated)).toBe("dock");
+    expect(surface(held("call"), seated, true)).toBe("stage");
   });
 
-  test("the upgrade is read off the room it names, never a stale one", () => {
-    // `joinedLive` carries a room key rather than a flag for this reason: a
-    // call somebody joined and left must not turn the NEXT burst, in some
-    // other room, into a call nobody joined.
-    const hearing = {
-      ...base,
-      joinedLive: "dm:someone:else",
-      incoming: { channelId: "c", messageId: "m", roomKey: ROOM, fromUserId: "u", fromName: "Ada" },
-    };
-    expect(walkieOwnsCall(hearing as any, inRoom, { guest: false })).toBe(true);
-    expect(
-      walkieOwnsCall({ ...hearing, joinedLive: ROOM } as any, inRoom, { guest: false }),
-    ).toBe(false);
-  });
-
-  test("walking into a huddle during the linger gets the CALL dock, not the strip", () => {
-    // The engine holds a room open for half a minute after a burst and does not
-    // clear that when the person joins something else. Owning "whatever room we
-    // happen to be in" would put the walkie strip — no mic, no hang-up, the
-    // wrong name — over a real call for up to 30 seconds.
-    const lingering = { ...base, lingerUntil: Date.now() + 30_000 };
-    const huddle = { roomKey: "channel:elsewhere", phase: "connected", muted: true };
-    expect(walkieOwnsCall(lingering as any, huddle, { lingerRoom: ROOM, guest: false })).toBe(false);
-  });
-
-  test("an ordinary huddle is never the walkie's", () => {
-    expect(walkieOwnsCall(base as any, inRoom, { lingerRoom: null })).toBe(false);
-    expect(walkieOwnsCall(base as any, idle, { lingerRoom: null })).toBe(false);
-  });
-
-  test("a burst inside a LIVE UNMUTED call leaves that call its own dock", () => {
+  test("a burst spoken inside a live call leaves that call its own dock", () => {
     // The room keys match exactly when the answer must be no: a 1:1 call lives
     // in the same dm: room a burst to that person is spoken into. Taking the
     // dock here would strip a call in progress of its hang-up, mute, camera and
-    // lock for the length of a sentence.
-    const live = { roomKey: ROOM, phase: "connected", muted: false };
-    const sending = {
-      ...base,
-      sending: { channelId: "c", roomKey: ROOM, clientId: "cid", messageId: null, startedAt: 0, transcript: "" },
-    };
-    expect(walkieOwnsCall(sending as any, live, { guest: true })).toBe(false);
-
-    const hearing = {
-      ...base,
-      incoming: { channelId: "c", messageId: "m", roomKey: ROOM, fromUserId: "u", fromName: "Ada" },
-    };
-    // ONE guard now, and it is the one that was always load-bearing: the room
-    // was already a conversation when the key went down. The open mic used to
-    // be a second, redundant guard here and has been dropped, because hot
-    // auto-listen made it fire on the ordinary listening path too — and it
-    // guarded nothing this does not, since `guest` is ruled from exactly this
-    // condition (useWalkie's subscription: same room, unmuted, connected) in
-    // the pre-burst world. Forcing `guest: false` here describes a state the
-    // engine cannot produce.
-    expect(walkieOwnsCall(hearing as any, live, { guest: true })).toBe(false);
-
-    // And the linger afterwards is still inside that same huddle.
-    const lingering = { ...base, lingerUntil: Date.now() + 30_000 };
-    expect(walkieOwnsCall(lingering as any, { ...live, muted: true }, { lingerRoom: ROOM, guest: true })).toBe(
-      false,
-    );
+    // lock for the length of a sentence. The engine answers it by giving a room
+    // it finds itself ALREADY SEATED IN the mode `call`, so there is no
+    // separate guest ruling to keep in step with this one.
+    expect(surface(held("call"), seated)).toBe("dock");
+    expect(surface(held("call"), seated, true)).toBe("stage");
   });
 
-  test("a burst that OPENED its room still owns the dock while it is spoken", () => {
-    // The engine unmutes to publish the mic, so an unmuted room is not by itself
-    // a huddle — what matters is whether it was one before the key went down.
-    const sending = {
-      ...base,
-      sending: { channelId: "c", roomKey: ROOM, clientId: "cid", messageId: null, startedAt: 0, transcript: "" },
-    };
-    const opened = { roomKey: ROOM, phase: "connected", muted: false };
-    expect(walkieOwnsCall(sending as any, opened, { guest: false })).toBe(true);
-  });
-});
-
-// Whether the full stage is open, as a rule rather than as scattered
-// setState calls. It carries the ct-45974 fix, so it is worth its own tests:
-// the flag used to be local state that nothing ever put back.
-describe("when the full call stage is open", () => {
-  test("a call ending closes the stage", () => {
-    // ct-45974. CallDock is mounted for the life of the page and merely
-    // returns null when idle, so an expanded huddle used to leave this true
-    // forever — and the NEXT call, or the next walkie burst, opened full
-    // screen on its own with nobody having asked.
-    expect(nextStageOpen(true, { phase: "idle" })).toBe(false);
-    expect(nextStageOpen(false, { phase: "idle" })).toBe(false);
-    // Even with everything that would otherwise open it shouting at once.
-    expect(nextStageOpen(true, { phase: "idle", notice: true, newRemoteVideo: true })).toBe(false);
+  test("the room is read off the key it names, never a stale one", () => {
+    // A call somebody joined and left must not turn the NEXT burst, in some
+    // other room, into a call nobody joined.
+    expect(surface(held("call", "dm:someone:else"), seated)).toBe("dock");
+    expect(surface(held("burst", "dm:someone:else"), seated)).toBe("dock");
   });
 
-  test("nothing opens the stage over a burst", () => {
-    // Remote video arriving is the moment a HUDDLE earns the stage. Over three
-    // seconds of somebody's voice it is wrong, and it used to do lasting harm:
-    // the flag stayed true after the burst and took the surface from every
-    // later one.
-    expect(nextStageOpen(false, { phase: "connected", walkieOwns: true, newRemoteVideo: true })).toBe(false);
-    expect(nextStageOpen(false, { phase: "connected", walkieOwns: true, notice: true })).toBe(false);
-    // And a stage already open is left exactly as it was — a burst neither
-    // opens it nor closes it.
-    expect(nextStageOpen(true, { phase: "connected", walkieOwns: true })).toBe(true);
+  test("walking into a huddle while the walkie holds another room gets the CALL dock", () => {
+    // The engine holds a room open for half a minute after a burst. Owning
+    // "whatever room we happen to be in" would put the walkie strip — no mic,
+    // no hang-up, the wrong name — over a real call for up to thirty seconds.
+    expect(surface(held("burst"), huddle)).toBe("dock");
+    expect(surface(held("burst"), huddle, true)).toBe("stage");
   });
 
-  test("in an ordinary call, video and notices still open it, and it stays open", () => {
-    expect(nextStageOpen(false, { phase: "connected", newRemoteVideo: true })).toBe(true);
-    expect(nextStageOpen(false, { phase: "connected", notice: true })).toBe(true);
-    expect(nextStageOpen(false, { phase: "connected" })).toBe(false);
-    expect(nextStageOpen(true, { phase: "connected" })).toBe(true);
-  });
-});
-
-// The founder, holding the composer key and talking: "it kind of switches to
-// the full call unexpectedly after a few seconds." Reproduced with two
-// identities — the full call stage replaced his DM about a second into every
-// hold, because a huddle he had expanded EARLIER in the session left
-// `expanded` true and the branch read `walkieOwnsCall(...) && !expanded`.
-//
-// So the rule these pin is one sentence: while the key is down and nobody else
-// has unmuted, the surface is the strip, and nothing local outranks it.
-describe("which surface the dock shows while the key is down", () => {
-  const base = {
-    sending: null,
-    incoming: null,
-    lingerUntil: null,
-    unavailable: null,
-    canReply: false,
-    error: null,
-  } as const;
-  const sendingInto = (room = ROOM) => ({
-    ...base,
-    sending: { channelId: "c", roomKey: room, clientId: "cid", messageId: null, startedAt: 0, transcript: "" },
-  });
-  /** The sender's own seat through a burst: the engine unmutes to publish. */
-  const seated = { roomKey: ROOM, phase: "connected", muted: false };
-  const surface = (status: any, call: any, expanded: boolean) =>
-    callDockSurface(status, call, { expanded, guest: false, lingerRoom: ROOM });
-
-  test("a stale expanded from an EARLIER call does not open the stage over a burst", () => {
-    // The regression itself. Nothing about the burst differs between these two
-    // calls — only a flag left behind by a huddle that ended minutes ago.
-    expect(surface(sendingInto(), seated, false)).toBe("walkie");
-    expect(surface(sendingInto(), seated, true)).toBe("walkie");
+  test("a burst that outlived its room keeps the strip", () => {
+    // The room falls over under an open microphone: the call plane goes idle,
+    // but the recorder, the meter and the recognizer are still running and the
+    // message still lands.
+    expect(surface(held("burst"), gone)).toBe("walkie");
+    expect(surface(held("burst"), gone, true)).toBe("walkie");
   });
 
-  test("heardLive landing mid-hold changes nothing", () => {
-    // The room answers a second or two in and the words start reaching the
-    // other person live. That is the burst working, not the burst becoming a
-    // call, so the surface must not move — with or without a stale flag.
-    const before = { ...sendingInto().sending, heardLive: false, openAt: null };
-    const after = { ...sendingInto().sending, heardLive: true, openAt: 1_700_000_001_000 };
-    for (const expanded of [false, true]) {
-      expect(surface({ ...base, sending: before }, seated, expanded)).toBe("walkie");
-      expect(surface({ ...base, sending: after }, seated, expanded)).toBe("walkie");
-    }
-  });
-
-  test("a muted teammate joining mid-hold changes nothing", () => {
-    // The receiver's door auto-joins them MUTED to hear the burst — occupancy
-    // goes to two while the key is still down. Nothing in the answer reads the
-    // roster, and this says so: the same status against the same seat.
-    //
-    // When they UNMUTE the room does become a conversation and the dock is the
-    // right answer, but that is the deliberate upgrade and ct-46032 owns
-    // building it. Today a hold stays a strip until it ends.
-    expect(surface(sendingInto(), seated, false)).toBe("walkie");
-    expect(surface(sendingInto(), seated, true)).toBe("walkie");
-  });
-
-  test("the room the walkie holds after the key comes up is still the walkie's", () => {
-    // The gap this closes: between the burst clearing and the linger starting
-    // the engine used to answer for nobody, and the dock took a room the
-    // walkie had not let go of — measured at 861ms, the length of the audio
-    // upload. `beginLinger` now runs where `sending` is cleared, so the two
-    // states below are the only two that exist.
-    const lingering = { ...base, lingerUntil: Date.now() + 30_000 };
-    const held = { roomKey: ROOM, phase: "connected", muted: true };
-    expect(surface(sendingInto(), seated, false)).toBe("walkie");
-    expect(surface(lingering, held, false)).toBe("walkie");
-    // And a stale flag cannot take it during the linger either.
-    expect(surface(lingering, held, true)).toBe("walkie");
-  });
-
-  test("a burst that outlived its room keeps the strip, and no call at all shows nothing", () => {
-    const gone = { roomKey: null, phase: "idle", muted: true };
-    expect(surface(sendingInto(), gone, false)).toBe("walkie");
-    expect(surface(sendingInto(), gone, true)).toBe("walkie");
-    expect(surface(base, gone, false)).toBe("none");
+  test("no call at all shows nothing, however the stage was left", () => {
+    // ct-45974, structurally rather than by a rule that has to remember: the
+    // dock is mounted for the life of the page, and an expanded huddle used to
+    // leave its flag true forever — so the next call, or the next burst, opened
+    // full screen on its own with nobody having asked.
+    expect(surface(base, gone)).toBe("none");
     expect(surface(base, gone, true)).toBe("none");
   });
 
   test("an ordinary huddle still gets the dock, and the stage when it was expanded", () => {
     // The other half of the rule: pinning the walkie's surface must not have
     // taken the stage away from the calls it belongs to.
-    const huddle = { roomKey: "channel:elsewhere", phase: "connected", muted: false };
-    expect(callDockSurface(base as any, huddle, { expanded: false, guest: false, lingerRoom: null })).toBe("dock");
-    expect(callDockSurface(base as any, huddle, { expanded: true, guest: false, lingerRoom: null })).toBe("stage");
-    // And a burst spoken INSIDE somebody's live huddle is a guest there: the
-    // call keeps its own controls, expanded or not.
-    expect(callDockSurface(sendingInto() as any, seated, { expanded: false, guest: true })).toBe("dock");
-    expect(callDockSurface(sendingInto() as any, seated, { expanded: true, guest: true })).toBe("stage");
+    expect(surface(base, huddle)).toBe("dock");
+    expect(surface(base, huddle, true)).toBe("stage");
   });
 });
 
