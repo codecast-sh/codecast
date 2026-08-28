@@ -3038,7 +3038,7 @@ const needsAttentionRowSig = (t: any) =>
 
 // Structural signature for the decision rows the Questions section branches on.
 const decisionsSectionSig = makeCollectionSig((d: any) =>
-  d.status === "pending" ? `${d._id}|${d.conversation_id}` : "");
+  d.status === "pending" ? `${d._id}|${d.conversation_id}|${d.updated_at ?? 0}` : "");
 
 function NeedsAttentionSection() {
   // Workspace-scoped rows, with a field signature so this always-mounted

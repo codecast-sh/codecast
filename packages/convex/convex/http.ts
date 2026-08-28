@@ -1461,27 +1461,71 @@ http.route({
     try {
       const body = await request.json();
       const { api_token, session_id, question, options, context_md, report_slug, blocking, default_option } = body;
+      // One route, four verbs: ask (default), edit, cancel, ls. The CLI's
+      // `cast decide` subcommands map onto these one to one.
+      const action: string = body.action || "ask";
 
-      if (!api_token || !session_id || !question || !Array.isArray(options)) {
-        return new Response(
-          JSON.stringify({ error: "Missing required fields: api_token, session_id, question, options" }),
-          { status: 400, headers: { "Content-Type": "application/json", ...corsHeaders } }
-        );
+      if (!api_token) {
+        return new Response(JSON.stringify({ error: "Missing api_token" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
       }
 
-      const result = await ctx.runMutation(api.sessionDecisions.ask, {
-        api_token,
-        session_id,
-        question,
-        options,
-        context_md,
-        report_slug,
-        blocking,
-        default_option,
-      });
+      let result: any;
+      if (action === "ls") {
+        if (!session_id) {
+          return new Response(JSON.stringify({ error: "Missing session_id" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json", ...corsHeaders },
+          });
+        }
+        result = await ctx.runMutation(api.sessionDecisions.listForSession, { api_token, session_id });
+      } else if (action === "edit" || action === "cancel") {
+        if (!body.decision_id) {
+          return new Response(JSON.stringify({ error: "Missing decision_id" }), {
+            status: 400,
+            headers: { "Content-Type": "application/json", ...corsHeaders },
+          });
+        }
+        result =
+          action === "cancel"
+            ? await ctx.runMutation(api.sessionDecisions.withdraw, { api_token, decision_id: body.decision_id, session_id })
+            : await ctx.runMutation(api.sessionDecisions.edit, {
+                api_token,
+                decision_id: body.decision_id,
+                session_id,
+                question,
+                options: Array.isArray(options) ? options : undefined,
+                context_md,
+                report_slug,
+                blocking,
+                default_option,
+                clear_default: body.clear_default,
+              });
+      } else {
+        if (!session_id || !question || !Array.isArray(options)) {
+          return new Response(
+            JSON.stringify({ error: "Missing required fields: api_token, session_id, question, options" }),
+            { status: 400, headers: { "Content-Type": "application/json", ...corsHeaders } }
+          );
+        }
+        result = await ctx.runMutation(api.sessionDecisions.ask, {
+          api_token,
+          session_id,
+          question,
+          options,
+          context_md,
+          report_slug,
+          blocking,
+          default_option,
+        });
+      }
 
       if (result.error) {
-        return new Response(JSON.stringify({ error: result.error }), {
+        // A resolved row's summary rides along so the CLI can say how the
+        // question was answered instead of only that it cannot be changed.
+        return new Response(JSON.stringify(result), {
           status: result.error === "Unauthorized" ? 401 : 400,
           headers: { "Content-Type": "application/json", ...corsHeaders },
         });

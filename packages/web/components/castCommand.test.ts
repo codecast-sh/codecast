@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { stripCdPrefix, stripEnvPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs, extractStateArgs } from "./castCommand";
+import { stripCdPrefix, stripEnvPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs, extractStateArgs, extractDecideArgs } from "./castCommand";
 
 describe("stripEnvPrefix", () => {
   test("strips a leading assignment", () => {
@@ -636,5 +636,72 @@ describe("extractChatSendArgs", () => {
   test("other chat subcommands are not sends", () => {
     expect(extractChatSendArgs("read", "--channel hx7p8")).toBeNull();
     expect(extractChatSendArgs("thread", "j17kq")).toBeNull();
+  });
+});
+
+describe("extractDecideArgs", () => {
+  const parse = (cmd: string) => {
+    const p = parseCastCommandString(cmd)!;
+    return extractDecideArgs(p.subcommand, p.args);
+  };
+
+  test("an ask: quoted question, options with consequences, heredoc context", () => {
+    const out = parse(
+      `cast decide "Which schema wins?" -o "Frontmatter wins :: stable ids" -o "Path wins" --context -  <<'EOF'\nThe daemon writes ids from the path.\n\nEither side can be authoritative.\nEOF`,
+    );
+    expect(out.verb).toBe("ask");
+    expect(out.question).toBe("Which schema wins?");
+    expect(out.options).toEqual([{ label: "Frontmatter wins", description: "stable ids" }, { label: "Path wins" }]);
+    expect(out.context).toBe("The daemon writes ids from the path.\n\nEither side can be authoritative.");
+    expect(out.advisory).toBe(false);
+    expect(out.defaultOption).toBeUndefined();
+  });
+
+  test("an advisory ask carries a 0-based default and an inline context", () => {
+    const out = parse(`cast decide "Back off or switch keys?" -o "Back off" -o "Switch keys" --advisory --default 2 --context "429s for 4m."`);
+    expect(out.advisory).toBe(true);
+    expect(out.defaultOption).toBe(1);
+    expect(out.context).toBe("429s for 4m.");
+  });
+
+  test("a shell-expanded context is a recipe, not the delivered text", () => {
+    const out = parse(`cast decide "Q?" -o A -o B --context "$(cat notes.md)"`);
+    expect(out.context).toBeNull();
+    expect(out.question).toBe("Q?");
+  });
+
+  test("a report path is kept", () => {
+    expect(parse(`cast decide "Drop it?" -o Yes -o No --report drop-analysis.html`).report).toBe("drop-analysis.html");
+  });
+
+  test("edit with an id and a new context", () => {
+    const out = parse(`cast decide edit k57abcdefghijklmnopqrstuv --context - <<'EOF'\nNew facts.\nEOF`);
+    expect(out.verb).toBe("edit");
+    expect(out.decisionId).toBe("k57abcdefghijklmnopqrstuv");
+    expect(out.context).toBe("New facts.");
+    expect(out.question).toBeNull();
+  });
+
+  test("edit without an id: --question and --blocking", () => {
+    const out = parse(`cast decide edit --question "Merge or rebase?" --blocking`);
+    expect(out.decisionId).toBeUndefined();
+    expect(out.question).toBe("Merge or rebase?");
+    expect(out.blocking).toBe(true);
+  });
+
+  test("cancel and its aliases", () => {
+    expect(parse("cast decide cancel").verb).toBe("cancel");
+    expect(parse("cast decide rm k57abcdefghijklmnopqrstuv")).toMatchObject({ verb: "cancel", decisionId: "k57abcdefghijklmnopqrstuv" });
+  });
+
+  test("ls parses to the list verb with nothing else", () => {
+    expect(parse("cast decide ls")).toMatchObject({ verb: "ls", options: [] });
+  });
+
+  test("an unquoted question folds the first word back out of the subcommand slot", () => {
+    const out = parse("cast decide Ship -o Yes -o No --context why");
+    expect(out.verb).toBe("ask");
+    expect(out.question).toBe("Ship");
+    expect(out.options.map((o) => o.label)).toEqual(["Yes", "No"]);
   });
 });

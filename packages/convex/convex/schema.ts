@@ -2251,14 +2251,21 @@ export default defineSchema({
     // human's answer can override it later.
     blocking: v.boolean(),
     default_option: v.optional(v.number()),
+    // answered / dismissed are the human's verdicts; withdrawn is the agent
+    // taking its own question back (`cast decide cancel`) — the facts changed
+    // and there is nothing left to decide.
     status: v.union(
       v.literal("pending"),
       v.literal("answered"),
-      v.literal("dismissed")
+      v.literal("dismissed"),
+      v.literal("withdrawn")
     ),
     answer_index: v.optional(v.number()),
     answer_text: v.optional(v.string()),
     created_at: v.number(),
+    // Last `cast decide edit`. created_at stays the ask time because the queue
+    // ranks by age; this is what wakes a card whose text changed underneath it.
+    updated_at: v.optional(v.number()),
     resolved_at: v.optional(v.number()),
     resolved_by: v.optional(v.id("users")),
   })

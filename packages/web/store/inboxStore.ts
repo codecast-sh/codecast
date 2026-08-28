@@ -891,10 +891,13 @@ export type SessionDecisionItem = {
   report_slug?: string;
   blocking: boolean;
   default_option?: number;
-  status: "pending" | "answered" | "dismissed";
+  // withdrawn: the agent took its question back (`cast decide cancel`).
+  status: "pending" | "answered" | "dismissed" | "withdrawn";
   answer_index?: number;
   answer_text?: string;
   created_at: number;
+  // Last `cast decide edit`; created_at is the ask time (queue age).
+  updated_at?: number;
   resolved_at?: number;
 };
 
