@@ -6,6 +6,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Button } from "../../../components/ui/button";
 import { Logo } from "../../../components/Logo";
 import { AppLoader } from "../../../components/AppLoader";
+import { adoptPathIntoActiveTab } from "../../../src/compat/tabRouting";
 
 export default function JoinTeamPage() {
   const params = useParams();
@@ -131,7 +132,7 @@ export default function JoinTeamPage() {
               </p>
             </div>
             <Button
-              onClick={() => router.push("/team/activity")}
+              onClick={() => { adoptPathIntoActiveTab("/team/activity"); router.push("/team/activity"); }}
               className="w-full bg-amber-600 hover:bg-amber-500 text-white"
             >
               Go to Dashboard

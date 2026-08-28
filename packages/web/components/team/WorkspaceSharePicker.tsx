@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { GitBranch, Check, Terminal, Users } from "lucide-react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { formatRelative } from "../../lib/utils";
@@ -9,40 +8,8 @@ import {
   type UserWorkspace,
 } from "../../hooks/useTeamWorkspaceSuggestions";
 
-/** Initial selection: workspaces teammates already share, plus those already
- *  mapped to this team. Pure so the create flow can reseed after the team id
- *  swaps from a stub to the real row. */
-export function seedWorkspaceSelection(
-  allProjects: UserWorkspace[],
-  suggestedPaths: Set<string>,
-  teamId: Id<"teams"> | null,
-): Record<string, boolean> {
-  const initial: Record<string, boolean> = {};
-  for (const p of allProjects) {
-    initial[p.path] = suggestedPaths.has(p.path) || isMappedToTeam(p, teamId);
-  }
-  return initial;
-}
-
-/** Owns the selected set for a share picker and reseeds it whenever the
- *  suggestion data or the target team changes. */
-export function useWorkspaceSelection(
-  data: Pick<TeamWorkspaceSuggestions, "allProjects" | "suggestedPaths">,
-  teamId: Id<"teams"> | null,
-) {
-  const { allProjects, suggestedPaths } = data;
-  const [selectedPaths, setSelectedPaths] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    if (!allProjects) return;
-    setSelectedPaths(seedWorkspaceSelection(allProjects, suggestedPaths, teamId));
-  }, [allProjects, suggestedPaths, teamId]);
-
-  const toggle = (path: string) =>
-    setSelectedPaths((prev) => ({ ...prev, [path]: !prev[path] }));
-  const selectedCount = Object.values(selectedPaths).filter(Boolean).length;
-  return { selectedPaths, toggle, selectedCount };
-}
+// The selection state (seedWorkspaceSelection, useWorkspaceSelection) lives in
+// hooks/useWorkspaceSelection so this file stays a clean Fast Refresh boundary.
 
 function workspaceName(path: string) {
   const parts = path.split("/");
@@ -87,11 +54,9 @@ export function WorkspaceSharePicker({
       {other.length > 0 && (
         <WorkspaceSection
           title={isNewTeam ? "Your workspaces" : "Your other workspaces"}
-          subtitle={
-            isNewTeam
-              ? "Pick the repos this team works in. Sessions there will show in the team feed."
-              : "Select any additional workspaces you'd like to share."
-          }
+          // In the create flow the page description already says what to pick,
+          // so a subtitle here would repeat the same sentence.
+          subtitle={isNewTeam ? undefined : "Select any additional workspaces you'd like to share."}
           workspaces={other}
           {...common}
         />
@@ -189,7 +154,7 @@ function WorkspaceSection({
   teamId,
 }: {
   title: string;
-  subtitle: string;
+  subtitle?: string;
   workspaces: UserWorkspace[];
   selectedPaths: Record<string, boolean>;
   onToggle: (path: string) => void;
@@ -200,9 +165,9 @@ function WorkspaceSection({
     <div className="space-y-2">
       <div>
         <h3 className="text-sm font-medium text-sol-text">{title}</h3>
-        <p className="text-xs text-sol-text-dim mt-0.5">{subtitle}</p>
+        {subtitle && <p className="text-xs text-sol-text-dim mt-0.5">{subtitle}</p>}
       </div>
-      <div className="space-y-1.5 max-h-[240px] overflow-y-auto pr-0.5">
+      <div className="space-y-1.5 max-h-[320px] overflow-y-auto pr-0.5">
         {workspaces.map((ws) => {
           const selected = !!selectedPaths[ws.path];
           const suggestion = getSuggestion(ws.path);
