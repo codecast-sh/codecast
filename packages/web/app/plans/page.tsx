@@ -37,7 +37,7 @@ import {
 import { openForwardToChat } from "../../lib/forwardToChat";
 import { useTeamFeature } from "../../lib/teamFeatures";
 import { toast } from "sonner";
-import { LivenessDot } from "../../components/LivenessDot";
+import { LivePulseHalo } from "../../components/LivenessDot";
 import { planLivenessState } from "../../lib/liveness";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 
@@ -113,7 +113,7 @@ function SidebarPlanItem({
     >
       <div className="flex items-center gap-2 min-w-0">
         {liveness === "active" ? (
-          <LivenessDot state="active" size="sm" />
+          <LivePulseHalo><StatusIcon className={`w-3.5 h-3.5 ${status.color}`} /></LivePulseHalo>
         ) : (
           <StatusIcon className={`w-3.5 h-3.5 flex-shrink-0 ${status.color}`} />
         )}

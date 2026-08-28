@@ -164,7 +164,7 @@ export function TaskRow({ task, state, triageMode, onTriage, indent = 0, hiddenD
         title="Change status (s)"
       >
         {activeSession && taskLivenessState(task.status, activeSession) === "active" ? (
-          <LivenessDot state="active" size="sm" />
+          <LivePulseHalo><StatusIcon className={`w-4 h-4 ${status.color}`} /></LivePulseHalo>
         ) : (
           <StatusIcon className={`w-4 h-4 ${status.color}`} />
         )}
