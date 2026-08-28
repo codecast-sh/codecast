@@ -457,9 +457,33 @@ describe("mentions", () => {
 });
 
 describe("the notification fan-out", () => {
-  test("a plain channel message notifies nobody", async () => {
+  test("a plain channel message notifies nobody by default", async () => {
     const ctx = context(ALICE);
     await call(sendMessage, ctx, { channel_id: CHANNEL, content: "morning all" });
+    expect(ctx._emitted.length).toBe(0);
+  });
+
+  test("notify level 'all' turns a plain line into a chat_post", async () => {
+    const ctx = context(ALICE, {
+      chat_reads: [readRow(BOB, "all"), readRow(CAROL, "mentions")],
+    });
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "morning all" });
+    // Bob opted in; Carol sits at the default; Alice wrote it.
+    expect(ctx._emitted.map((e: any) => e.args.event_type)).toEqual(["chat_post"]);
+    expect(ctx._emitted[0].args.direct_recipient_id).toBe(BOB);
+    expect(ctx._emitted[0].args.push_subtitle).toBe("#general");
+    expect(ctx._emitted[0].args.push_body).toBe("morning all");
+  });
+
+  test("chat_post never leaves a thread: replies stay with their participants", async () => {
+    const ctx = context(ALICE, { chat_reads: [readRow(BOB, "all")] });
+    const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "root" });
+    ctx._emitted.length = 0;
+    // Alice replies on her own thread: no participants besides her, and Bob's
+    // "all" must not pull the reply out into the channel.
+    await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "a follow-up", thread_root_id: root.message_id,
+    });
     expect(ctx._emitted.length).toBe(0);
   });
 

@@ -57,9 +57,17 @@ let leaveCalls = 0;
 // wrapper again and recurse forever.
 const trueLeaveCall = realCallManager.leaveCall;
 
+/** A microphone already publishing into the room this client is sitting in.
+ *  Null unless a test is about hold-to-reply inside a room that is really
+ *  connected, which is the only case where the burst has one to borrow. */
+let seatedMic: any = null;
+
 mock.module("../calls/callManager", () => ({
   ...realCallManager,
-  getRoom: () => null,
+  getRoom: () =>
+    seatedMic
+      ? { localParticipant: { getTrackPublication: () => ({ track: { mediaStreamTrack: seatedMic } }) } }
+      : null,
   joinCall: async (roomKey: string, opts?: { micTrack?: MediaStreamTrack; intent?: string }) => {
     joinCalls.push({ roomKey, micTrack: opts?.micTrack, intent: opts?.intent });
     // A join handed a track publishes THAT one and opens no device; only a
@@ -71,7 +79,7 @@ mock.module("../calls/callManager", () => ({
             if (on) await (globalThis as any).navigator.mediaDevices.getUserMedia({ audio: true });
           },
         },
-        { muted: useInboxStore.getState().call.muted, listen: opts?.intent === "listen" },
+        { intent: opts?.intent as any },
       );
     }
     return joining.promise;
@@ -143,6 +151,7 @@ const walkie = await import("../calls/walkie");
 // The real surface lookup, not a copy of it, so the question asked below is the
 // one the app asks.
 const { callDockSurface, walkieStripState } = await import("../../hooks/useWalkie");
+const { announceJoin, clearJoinAnnouncement, getJoinAnnouncement } = await import("../calls/joinAnnounce");
 
 // ── the browser ────────────────────────────────────────────────────────────
 
@@ -186,6 +195,7 @@ const realNow = Date.now;
 
 beforeEach(() => {
   joinCalls = [];
+  seatedMic = null;
   micOnJoin = false;
   leaveCalls = 0;
   pipes = [];
@@ -1178,6 +1188,44 @@ describe("walkie: a receiver with no microphone still hears", () => {
     expect(strip.hotMic).toBe(false);
   });
 
+  test("never claims an open microphone before one is publishing", async () => {
+    // THE WINDOW THIS CLOSES, measured in a real headless browser with the
+    // permission refused: the SFU connects, `call.phase` goes to connected, and
+    // the publish fails about two seconds later. The walkie used to write
+    // `muted: false` before the join, so those two seconds were spent telling a
+    // person with no microphone that their mic was open and Riley could hear
+    // them. The mute is the publication's to write now, and this is the tick
+    // that proves it — before the join has answered anything.
+    refuseTheMicrophone();
+    walkie.observeWalkie({ bursts: [burstRow()], doorOpen: true });
+    S().setCallState({ roomKey: ROOM, phase: "connected" });
+    expect(S().call.muted).toBe(true);
+    expect(
+      walkieStripState(walkie.getWalkieStatus(), S(), { name: "Sam", now: clock }).hotMic,
+    ).toBe(false);
+
+    await seatTaken();
+    expect(S().call.muted).toBe(true);
+    expect(
+      walkieStripState(walkie.getWalkieStatus(), S(), { name: "Sam", now: clock }).hotMic,
+    ).toBe(false);
+  });
+
+  test("and opens it, and says so, when the device answers", async () => {
+    // The other half of the same rule, and the founder's bargain: hearing
+    // somebody means they can hear you. A rule that only ever said "muted"
+    // would pass every test above and ship a walkie nobody can answer.
+    micOnJoin = true;
+    walkie.observeWalkie({ bursts: [burstRow()], doorOpen: true });
+    await seatTaken();
+    S().setCallState({ roomKey: ROOM, phase: "connected" });
+    expect(S().call.muted).toBe(false);
+    expect(S().call.micDenied).toBe(false);
+    const strip = walkieStripState(walkie.getWalkieStatus(), S(), { name: "Sam", now: clock });
+    expect(strip.hotMic).toBe(true);
+    expect(strip.headline).toBe("Sam is talking");
+  });
+
   test("the fix arrives in the words that name it, through the toast the walkie already has", async () => {
     refuseTheMicrophone();
     walkie.observeWalkie({ bursts: [burstRow()], doorOpen: true });
@@ -1197,13 +1245,13 @@ describe("walkie: a receiver with no microphone still hears", () => {
     };
     permissionState = "denied";
 
-    S().setCallState({ error: null, micDenied: false, muted: false });
-    await realCallManager.openMicForJoin(refusing, { muted: false, listen: true });
+    S().setCallState({ error: null, micDenied: false, muted: true });
+    await realCallManager.openMicForJoin(refusing, { intent: "listen" });
     expect(S().call.micDenied).toBe(true);
     expect(S().call.error).toBeNull();
 
     S().setCallState({ error: null, micDenied: false, muted: false });
-    await realCallManager.openMicForJoin(refusing, { muted: false, listen: false });
+    await realCallManager.openMicForJoin(refusing, { intent: "deliberate" });
     expect(S().call.micDenied).toBe(true);
     expect(S().call.error).toContain("site settings");
   });
@@ -1253,14 +1301,14 @@ describe("walkie: two keys down in one room", () => {
   test("a press while they are talking answers into the same room", async () => {
     walkie.observeWalkie({ bursts: [theirBurst()], doorOpen: true });
     S().setCallState({ roomKey: ROOM, phase: "connected", muted: false });
-    const joinsBefore = joinCalls.length;
 
     await walkie.startBurst("chan-both", ROOM);
 
-    // ONE ROOM. No second join, no eviction, and the mode stays this client's
-    // own — the room I am talking into does not become a room I am listening in
-    // because somebody answered me.
-    expect(joinCalls.length).toBe(joinsBefore);
+    // ONE ROOM, and nothing left it. The reply asks for the room it is already
+    // in — idempotent in callManager, and this harness has no LiveKit to
+    // publish into — so what matters is that every join names the SAME key and
+    // the seat is never handed back mid-sentence.
+    expect(new Set(joinCalls.map((j) => j.roomKey))).toEqual(new Set([ROOM]));
     expect(leaveCalls).toBe(0);
     const s = walkie.getWalkieStatus();
     expect(s.liveRoom?.key).toBe(ROOM);
@@ -1316,6 +1364,43 @@ describe("walkie: two keys down in one room", () => {
     expect(mutations.some((m) => m.name === "chat:cancelVoiceBurst")).toBe(false);
   });
 
+  test("borrows the microphone already publishing here, and is heard at once", async () => {
+    // Hold-to-reply where the seat is REALLY connected: the mic is in the room
+    // already, so there is no second device to open and nothing to wait for.
+    seatedMic = { readyState: "live", stop() {}, clone: () => ({ readyState: "live", stop() {} }) };
+    S().setCallState({ roomKey: ROOM, phase: "connected", muted: false });
+    const gum = getUserMediaCalls;
+
+    await walkie.startBurst("chan-both", ROOM);
+    expect(getUserMediaCalls).toBe(gum);
+    expect(walkie.getWalkieStatus().sending?.heardLive).toBe(true);
+    // Nothing to ask the room for: the track is already in it.
+    expect(joinCalls.length).toBe(0);
+
+    clock += 2_000;
+    await release();
+  });
+
+  test("a seat still CONNECTING is not a microphone in the room", async () => {
+    // The ordinary shape of answering a burst you only just started hearing:
+    // the listening join is in flight, so the seat exists and the publication
+    // does not. Reading `inRoom` as "my mic is already here" made the burst
+    // skip the join it needed and then claim it was being heard by a room it
+    // had never reached — measured in the headless rig, where a press 868ms
+    // after the burst arrived landed in exactly this state.
+    S().setCallState({ roomKey: ROOM, phase: "connecting", muted: false });
+
+    await walkie.startBurst("chan-both", ROOM);
+    // Its own device, carried into the room by the join.
+    expect(joinCalls.at(-1)?.roomKey).toBe(ROOM);
+    expect(joinCalls.at(-1)?.micTrack).toBeTruthy();
+    // And no claim of being heard until that join answers.
+    expect(walkie.getWalkieStatus().sending?.heardLive).toBe(false);
+
+    clock += 2_000;
+    await release();
+  });
+
   test("a burst in ANOTHER room is never walked into mid-sentence", async () => {
     // One pair of ears cannot follow two rooms, and leaving to hear a third
     // person would evict the conversation I am in the middle of having. It
@@ -1328,9 +1413,98 @@ describe("walkie: two keys down in one room", () => {
     });
     expect(walkie.getWalkieStatus().incoming).toBeNull();
     expect(walkie.getWalkieStatus().liveRoom?.key).toBe(ROOM);
+    // Nothing reached for the other room.
     expect(joinCalls.length).toBe(joinsBefore);
 
     clock += 2_000;
     await release();
+  });
+});
+
+// ── the stamp that arrived a moment too late ───────────────────────────────
+//
+// A join is a round trip behind the gesture that made it. So the far side
+// pressing Join live just before the key comes up lands just AFTER: the release
+// reads a room that is still a burst, mutes, and a beat later the stamp says it
+// is a call. The person is then in a conversation, told so in words and a
+// sound, with the microphone the whole upgrade exists to keep open already
+// closed — which is A1's bug arriving by a different door.
+describe("walkie: a join stamp that lands after the key came up", () => {
+  const ROOM = "dm:late:stamp";
+
+  afterEach(() => {
+    S().setCallState({ roomKey: null, phase: "idle", muted: true, micDenied: false, error: null });
+    walkie.refreshWalkie();
+  });
+
+  test("re-opens the microphone the release closed, and rogers only once", async () => {
+    await walkie.startBurst("chan-1", ROOM);
+    S().setCallState({ roomKey: ROOM, phase: "connected", muted: false });
+    clock += 2_000;
+    soundLog.length = 0;
+    muteCalls = [];
+    await release();
+
+    // The ordinary release: the sign-off, and the mic closed behind it.
+    expect(soundLog.filter((x) => x === "roger")).toEqual(["roger"]);
+    expect(muteCalls).toEqual([true]);
+
+    // And now the stamp, one beat late.
+    walkie.markWalkieUpgraded(ROOM);
+    await settle();
+    expect(S().call.muted).toBe(false);
+    expect(muteCalls).toEqual([true, false]);
+    // The sign-off is not said twice. It marked the end of a message, and the
+    // message is over; what happened since is that a conversation started.
+    expect(soundLog.filter((x) => x === "roger")).toEqual(["roger"]);
+  });
+
+  test("never opens a microphone the PERSON closed", async () => {
+    // The muted lurker in a huddle. Somebody stepping into a burst in the room
+    // they are sitting in must not open their mic — the release never closed
+    // it, so this rule has nothing to undo.
+    S().setCallState({ roomKey: ROOM, phase: "connected", muted: true });
+    muteCalls = [];
+    walkie.markWalkieUpgraded(ROOM);
+    await settle();
+    expect(S().call.muted).toBe(true);
+    expect(muteCalls).toEqual([]);
+  });
+
+  test("never opens a microphone in a room the stamp does not name", async () => {
+    await walkie.startBurst("chan-1", ROOM);
+    S().setCallState({ roomKey: ROOM, phase: "connected", muted: false });
+    clock += 2_000;
+    await release();
+    muteCalls = [];
+    walkie.markWalkieUpgraded("dm:somewhere:else");
+    await settle();
+    expect(muteCalls).toEqual([]);
+  });
+});
+
+// ── the title dies with the room ───────────────────────────────────────────
+describe("walkie: the join announcement", () => {
+  const ROOM = "dm:title:life";
+
+  afterEach(() => {
+    clearJoinAnnouncement();
+    S().setCallState({ roomKey: null, phase: "idle", muted: true, micDenied: false, error: null });
+    walkie.refreshWalkie();
+  });
+
+  test("goes when the room does, rather than outliving it by four seconds", async () => {
+    // "Jordan joined — it's a call now" is news about a room. Hanging up inside
+    // the four seconds used to leave the sentence sitting there, ready to
+    // announce a join into whatever opened next.
+    S().setCallState({ roomKey: ROOM, phase: "connected", muted: false });
+    walkie.markWalkieUpgraded(ROOM);
+    announceJoin(ROOM, "Jordan joined — it's a call now");
+    expect(getJoinAnnouncement()?.roomKey).toBe(ROOM);
+
+    S().setCallState({ roomKey: null, phase: "idle", muted: true });
+    walkie.refreshWalkie();
+    expect(walkie.getWalkieStatus().liveRoom).toBeNull();
+    expect(getJoinAnnouncement()).toBeNull();
   });
 });

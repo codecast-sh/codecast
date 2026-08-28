@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { monitorRowsFor, effectiveMonitorStatus, watchingMonitors, isWatchHostDead, liveWatchRowsFor, reportSaysDead, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, isOrphanSummaryNotification, monitorNotificationDescription } from "./monitorRows";
+import { monitorRowsFor, effectiveMonitorStatus, watchingMonitors, isWatchHostDead, liveWatchRowsFor, reportSaysDead, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, isOrphanSummaryNotification, monitorNotificationDescription, parseNotificationSummary } from "./monitorRows";
 
 // The wire shapes below mirror a real transcript: a Monitor tool_use, its
 // "Monitor started (task <id> …)" result on the next message, then
@@ -474,6 +474,29 @@ describe("notification parsing helpers", () => {
     const n = parseTaskNotificationBlock(bgOrphanStoppedNotif("b6aw3d3t3", "tu1", 0).content);
     expect(n.taskIds).toEqual(["b6aw3d3t3"]);
     expect(isOrphanSummaryNotification(n)).toBe(false);
+  });
+
+  test("a terminal summary splits into kind, description, and exit code", () => {
+    expect(parseNotificationSummary('Background command "Restart mac-m4pro allocation retry loop (8h window)" completed (exit code 0)')).toEqual({
+      kind: "background command",
+      description: "Restart mac-m4pro allocation retry loop (8h window)",
+      exitCode: 0,
+    });
+    expect(parseNotificationSummary('Background command "flaky watch" failed with exit code 3')).toEqual({
+      kind: "background command",
+      description: "flaky watch",
+      exitCode: 3,
+    });
+    expect(parseNotificationSummary('Background agent "researcher" completed')).toEqual({
+      kind: "background agent",
+      description: "researcher",
+      exitCode: undefined,
+    });
+  });
+
+  test("unquoted prose notices yield no parts — the surface keeps the sentence", () => {
+    const n = parseTaskNotificationBlock(bgOrphanStoppedNotif("b6aw3d3t3", "tu1", 0).content);
+    expect(parseNotificationSummary(n.summary)).toBeUndefined();
   });
 });
 
