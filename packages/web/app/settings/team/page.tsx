@@ -16,7 +16,8 @@ import {
 } from "../../../components/ui/dialog";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../../../store/inboxStore";
-import { TeamIcon, TEAM_ICONS, TEAM_COLORS, colorBgClassMap } from "../../../components/TeamIcon";
+import { TEAM_ICONS, TEAM_COLORS, type TeamIconName, type TeamColorName } from "../../../components/TeamIcon";
+import { TeamIdentityPicker } from "../../../components/team/TeamIdentityPicker";
 import { TeamTaskStatusEditor } from "../../../components/settings/TeamTaskStatusEditor";
 import { TeamFeaturesEditor } from "../../../components/settings/TeamFeaturesEditor";
 import { ChevronDown } from "lucide-react";
@@ -74,27 +75,12 @@ export default function TeamPage() {
     }
   };
 
-  const handleIconChange = async (icon: string) => {
+  const handleIdentityChange = async (next: { icon: TeamIconName; color: TeamColorName }) => {
     if (!effectiveTeamId || isSavingIcon) return;
+    const patch = next.icon !== team?.icon ? { icon: next.icon } : { icon_color: next.color };
     setIsSavingIcon(true);
     try {
-      await updateTeamIcon({
-        team_id: effectiveTeamId,
-        icon,
-      });
-    } finally {
-      setIsSavingIcon(false);
-    }
-  };
-
-  const handleColorChange = async (color: string) => {
-    if (!effectiveTeamId || isSavingIcon) return;
-    setIsSavingIcon(true);
-    try {
-      await updateTeamIcon({
-        team_id: effectiveTeamId,
-        icon_color: color,
-      });
+      await updateTeamIcon({ team_id: effectiveTeamId, ...patch });
     } finally {
       setIsSavingIcon(false);
     }
@@ -193,6 +179,7 @@ export default function TeamPage() {
           <div className="flex items-center gap-2">
             {isAdmin && (
               <InviteModal
+                teamId={effectiveTeamId}
                 trigger={
                   <Button variant="outline" size="sm" className="border-sol-cyan text-sol-cyan">
                     Invite
@@ -261,49 +248,15 @@ export default function TeamPage() {
             <div className="flex items-start justify-between py-2 border-b border-sol-border">
               <div className="flex-1">
                 <div className="text-xs text-sol-base1 uppercase tracking-wider mb-2">Team Icon</div>
-                <div className="flex items-start gap-6">
-                  <div className="flex items-center justify-center w-16 h-16 rounded-xl bg-sol-bg-alt">
-                    <TeamIcon icon={team.icon} color={team.icon_color} className="w-8 h-8" />
-                  </div>
-                  <div className="flex-1 space-y-3">
-                    <div>
-                      <div className="text-xs text-sol-base1 mb-1.5">Icon</div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {TEAM_ICONS.map((icon) => (
-                          <button
-                            key={icon}
-                            onClick={() => handleIconChange(icon)}
-                            disabled={isSavingIcon}
-                            className={`p-1.5 rounded-md transition-colors ${
-                              team.icon === icon
-                                ? "bg-sol-base02 ring-1 ring-sol-base01"
-                                : "hover:bg-sol-base02/50"
-                            } ${isSavingIcon ? "opacity-50" : ""}`}
-                          >
-                            <TeamIcon icon={icon} color={team.icon === icon ? team.icon_color : undefined} className={`w-4 h-4 ${team.icon !== icon ? "text-sol-base1" : ""}`} />
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-sol-base1 mb-1.5">Color</div>
-                      <div className="flex gap-2">
-                        {TEAM_COLORS.map((color) => (
-                          <button
-                            key={color}
-                            onClick={() => handleColorChange(color)}
-                            disabled={isSavingIcon}
-                            className={`w-7 h-7 rounded-full transition-all ${colorBgClassMap[color]} ${
-                              team.icon_color === color
-                                ? "ring-2 ring-offset-2 ring-offset-sol-bg ring-sol-base1 scale-110"
-                                : "hover:scale-105"
-                            } ${isSavingIcon ? "opacity-50" : ""}`}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <TeamIdentityPicker
+                  value={{
+                    icon: (TEAM_ICONS as readonly string[]).includes(team.icon ?? "") ? (team.icon as TeamIconName) : TEAM_ICONS[0],
+                    color: (TEAM_COLORS as readonly string[]).includes(team.icon_color ?? "") ? (team.icon_color as TeamColorName) : TEAM_COLORS[0],
+                  }}
+                  onChange={handleIdentityChange}
+                  previewName={team.name}
+                  disabled={isSavingIcon}
+                />
               </div>
             </div>
           )}

@@ -63,7 +63,7 @@ export default function SyncPage() {
   const user = useQuery(api.users.getCurrentUser);
   const syncSettings = useQuery(api.users.getSyncSettings);
   const userTeams = useQuery(api.teams.getUserTeams);
-  const projects = useQuery(api.users.getRecentProjectsWithGitInfo, { limit: 30 });
+  const projects = useQuery(api.users.getRecentProjectsWithGitInfo, { limit: 100 });
   const directoryMappings = useQuery(api.users.getDirectoryTeamMappings);
   const updateSyncSettings = useMutation(api.users.updateSyncSettings);
   const updateDirectoryMapping = useMutation(api.users.updateDirectoryTeamMapping);
@@ -419,8 +419,8 @@ export default function SyncPage() {
                   key={project.path}
                   className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${
                     synced
-                      ? "bg-white border-sol-border/50 hover:border-sol-border"
-                      : "bg-white/50 border-sol-border/30 opacity-60"
+                      ? "bg-sol-card border-sol-border/50 hover:border-sol-border"
+                      : "bg-sol-card/50 border-sol-border/30 opacity-60"
                   }`}
                 >
                   <div className="flex items-center gap-3 min-w-0 flex-1">
