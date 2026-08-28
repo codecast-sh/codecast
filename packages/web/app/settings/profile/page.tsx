@@ -10,6 +10,7 @@ import { Textarea } from "../../../components/ui/textarea";
 import { Switch } from "../../../components/ui/switch";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useWalkieDoor } from "../../../hooks/useWalkie";
+import { WALKIE_PREVIEWS, previewWalkieCue } from "../../../lib/sounds";
 
 export default function ProfilePage() {
   const user = useQuery(api.users.getCurrentUser);
@@ -100,6 +101,7 @@ export default function ProfilePage() {
             </div>
             <WalkieToggle />
           </div>
+          <WalkieSoundsRow />
           <div className="flex items-center justify-between gap-4">
             <div>
               <span className="text-sol-base1">Simple view</span>
@@ -337,6 +339,42 @@ function WalkieToggle() {
   // thing it controls. Turning it on lifts the snooze too.
   const { open, setOpen } = useWalkieDoor();
   return <Switch checked={open} onCheckedChange={setOpen} />;
+}
+
+/** The six walkie cues, each with a button that plays it.
+ *
+ *  Every other sound in the app answers something a person did or something
+ *  that arrived, so nobody ever hears one on purpose and nobody can say
+ *  whether it is right. These cues had been four times too quiet for months
+ *  before the founder put it in words. This row is where they can be heard on
+ *  demand, which is the only way that stays checkable. */
+export function WalkieSoundsRow() {
+  const soundsEnabled = useInboxStore((s) => s.clientState?.ui?.sounds_enabled !== false);
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <div>
+        <span className="text-sol-base1">Walkie sounds</span>
+        <p className="text-xs text-sol-base01 mt-0.5">
+          {soundsEnabled
+            ? "Hear each one. Live and Roger are your own key going down and coming up, Incoming and Ended are a teammate's burst, Joined is someone stepping into yours, Away means nobody was live and it went as a message."
+            : "Turn on sound effects above to hear these."}
+        </p>
+      </div>
+      <div className="flex flex-wrap justify-end gap-1.5 shrink-0">
+        {WALKIE_PREVIEWS.map((cue) => (
+          <Button
+            key={cue.id}
+            variant="outline"
+            size="sm"
+            disabled={!soundsEnabled}
+            onClick={() => previewWalkieCue(cue.spec)}
+          >
+            {cue.label}
+          </Button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function ChatSoundsToggle() {
