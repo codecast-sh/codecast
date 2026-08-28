@@ -62,6 +62,7 @@ import {
 } from "../../hooks/useChatSync";
 import { useHoldToTalk } from "../../hooks/useWalkie";
 import { usePagePresence, useTabActive } from "../../hooks/usePagePresence";
+import { prewarmRoom } from "../../lib/calls/roomPrewarm";
 import { ChatChannelRail } from "../../components/chat/ChatChannelRail";
 import { ChatMessageList } from "../../components/chat/ChatMessageList";
 import { ChatThreadPanel } from "../../components/chat/ChatThreadPanel";
@@ -195,6 +196,22 @@ export default function ChatPage() {
       ? chatViewRoomKey(activeChannel, viewerId, teamMembers)
       : undefined;
   const resolveWalkieChannel = useCallback(() => activeChannelId ?? null, [activeChannelId]);
+
+  // THE ROOM, OPENED BEFORE ANYBODY SPEAKS.
+  //
+  // Having a DM on screen is the earliest honest signal that a burst may be
+  // spoken into it, and the media connection is what the first word waits on —
+  // seconds, cold. So the room is connected silently here and `joinCall` spends
+  // it later (lib/calls/roomPrewarm). Nothing is captured, nothing is published
+  // and no surface changes; the connection releases itself if the guess was
+  // wrong.
+  //
+  // Gated on presence, and re-asked when it returns, because that is also what
+  // re-arms the release: a DM left open behind another window is a guess that
+  // has already expired, and coming back to it is a fresh one.
+  useEffect(() => {
+    if (present && walkieRoomKey) prewarmRoom(walkieRoomKey);
+  }, [present, walkieRoomKey]);
 
   // ── Permalink target ──────────────────────────────────────────────────────
   const targetId = search.get("m") || undefined;

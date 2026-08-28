@@ -4,8 +4,8 @@
 // every three seconds of someone's voice: a 320x250 floating window with a
 // video grid and a hang-up button, for a sentence. That is the wrong weight,
 // and two floating surfaces at once would be worse. So while the walkie owns
-// the room, THIS is the dock: one compact strip that says who is talking, shows
-// the words as they arrive, and offers what anybody wants next.
+// the room, THIS is the dock: one strip that says who is talking, shows the
+// words as they arrive, and offers what anybody wants next.
 //
 // WHAT IT OFFERS IS THE WHOLE UPGRADE. A burst and a call are the same room —
 // the difference is only whether somebody decided to be in it — so stepping in
@@ -15,54 +15,71 @@
 // now" as it is "yes"; and the key itself, to talk back without joining
 // anything at all.
 //
+// IT IS THE SIZE OF WHAT IT IS SAYING. A voice arriving out of nowhere is the
+// biggest interruption this product makes, and it was answered by a 380px strip
+// with a 26px face and 12px words: a notification about a conversation rather
+// than the conversation. It is 420px now, the face is 56px and carries the
+// talker's own level, the words are 15px, and the two answers are full width
+// buttons instead of chips in a row. Nobody should have to look for what to do
+// about a voice in their room.
+//
 // AND IT HAS TO SAY THAT THE MICROPHONE IS OPEN. Auto-listen is hot now:
 // hearing a teammate means they can hear you. That is the founder's decision
 // and it is the one thing on this screen a person must never meet by accident,
-// so it takes the top line with Mute in the same breath.
+// so it takes the top line with Mute in the same breath. A seat with no
+// microphone at all is the honest opposite: nothing to mute, and the headline
+// says so in words (hooks/useWalkie walkieStripState).
 //
-// The moment it stops being a walkie and becomes a huddle is `joinedLive`, not
-// the mute. The mute used to be the test and could not stay one — every
-// listener's mic is open now, so it says who can be heard and nothing at all
-// about whether a conversation started (hooks/useWalkie, ct-46032).
+// The markup is split from the wiring on purpose. WalkieStripView is every
+// state this surface has, as props, with no store and no engine behind it — so
+// each of them renders as static markup and is pinned against the real
+// stylesheet (components/__tests__/walkieStrip.test.tsx). WalkieBanner is the
+// half that knows where those props come from.
+import { useCallback, useSyncExternalStore, type ReactNode, type RefCallback } from "react";
 import { createPortal } from "react-dom";
 import { BellOff, MessageSquare, MicOff, X } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { leaveCall, setMuted } from "../../lib/calls/callManager";
 import { joinWalkieLive, shutWalkieDoor } from "../../lib/calls/walkie";
-import { lastWalkieTarget, senderHearingFrom, useWalkieStatus, walkieBurstDropped } from "../../hooks/useWalkie";
+import { getJoinAnnouncement, joinTitle, subscribeJoinAnnouncement } from "../../lib/calls/joinAnnounce";
+import {
+  lastWalkieTarget,
+  useWalkieLevelVar,
+  useWalkieStatus,
+  walkieStripState,
+} from "../../hooks/useWalkie";
 import { useChatMessageRow } from "../../hooks/useChatSync";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { memberAvatarUrl, memberDisplayName } from "../../lib/liveEntities";
 import { useRoomDescription } from "../../hooks/useCallRoom";
 import { useNowWhen } from "../../hooks/useCoarseNow";
 import { Avatar } from "./CallStage";
-import { WalkieLevelBars, WalkiePttButton } from "./WalkiePtt";
+import { WalkiePttButton } from "./WalkiePtt";
 import "./walkie.css";
+
+const api = _api as any;
 
 /** How long the snooze shuts the door for. An hour is the honest unit of
  *  "leave me alone": long enough to finish a thing, short enough that nobody
  *  has to remember they pressed it. */
 const SNOOZE_MS = 60 * 60 * 1000;
 
+/** How long the strip's last word stays after the seat has gone back. Three
+ *  seconds is a sentence read once, without hurry. */
+const SNOOZE_NOTE_MS = 3_000;
+
 /** How much of a live transcript the strip carries. It is a tail, not the
  *  message: the message is in the DM, and this is only enough to know whether
- *  to answer. */
-const TAIL = 140;
+ *  to answer. The stylesheet clamps it to two lines on top of this, so the
+ *  budget is generous and the box is what really decides. */
+const TAIL = 160;
 
-/** The live words, when they happen to be here. Chat messages sync per open
- *  channel, so a burst into a DM nobody has open has no transcript to show and
- *  the strip simply says who is talking — which is what "cheaply available"
- *  has to mean for a surface mounted on every page. */
-function LiveTail({ messageId }: { messageId: string }) {
-  const row = useChatMessageRow(messageId);
-  const text = (row?.content ?? "").trim();
-  if (!text) return null;
-  return (
-    <div className="walkie-strip-tail" title={text}>
-      {text.length > TAIL ? `…${text.slice(-TAIL)}` : text}
-    </div>
-  );
-}
+/** The talker's face. 56px, because this is the first thing the eye lands on
+ *  when a voice arrives and a name is a slower way to answer "who". */
+const FACE = 56;
 
 export function WalkieBanner({
   leaving = false,
@@ -88,6 +105,10 @@ export function WalkieBanner({
     (st: any) => st.call.roomKey,
     (st: any) => st.call.phase,
     (st: any) => st.call.muted,
+    // And whether there is a microphone at all. A refused device is what turns
+    // "Riley is talking" into "you can hear Riley, your mic is off" — the strip
+    // must repaint on it rather than wait for the next unrelated push.
+    (st: any) => st.call.micDenied,
     (st: any) => String(st.currentUser?._id ?? ""),
     // WHO IS ACTUALLY IN THE ROOM, as a signature of the seats alone. The
     // roster re-pushes on every mute, camera and heartbeat move; none of those
@@ -105,7 +126,6 @@ export function WalkieBanner({
       return m ? `${m.status ?? ""}:${m.walkie_pref ?? ""}:${m.walkie_snoozed_until ?? 0}` : "";
     },
   ]);
-  const call = s.call;
   const snoozedUntil = Number(
     (otherId ? (s.teamMembers ?? []).find((m: any) => String(m?._id) === otherId) : null)
       ?.walkie_snoozed_until ?? 0,
@@ -113,135 +133,218 @@ export function WalkieBanner({
   // Coarse on purpose: an hour-long shutter running out mid-burst is the only
   // thing this clock is for, and a minute of slack at its edge costs nobody.
   const now = useNowWhen((n) => (snoozedUntil > n ? "shut" : "open"), 30_000);
+  // THE JOIN, FOR THE FOUR SECONDS IT IS NEWS, and this surface sees it first:
+  // the far side's stamp lands while the strip is still on screen and the dock
+  // only takes over once the morph is done. Without this the biggest moment in
+  // the walkie happened entirely inside a crossfade. The same announcement the
+  // dock reads, so the two cannot word it differently (lib/calls/joinAnnounce).
+  const announcement = useSyncExternalStore(subscribeJoinAnnouncement, getJoinAnnouncement, () => null);
+  // The words, from the burst's own row rather than from the channel store.
+  const words = useLiveWords(incoming?.messageId);
+  const face = useTalkerFace(incoming?.fromUserId, incoming?.fromName ?? label);
+  // The cool ring around that face rises and falls with the voice inside it,
+  // written straight onto the element as `--level` by the engine's meter. No
+  // React render per frame: the same machinery the key's own ring uses.
+  const faceRef = useWalkieLevelVar<HTMLSpanElement>(!!incoming, incoming?.fromUserId);
   if (!target) return null;
 
   // The teammate's own name when they are the one talking, and the room's label
   // otherwise — which keeps naming a renamed teammate correctly, live, instead
   // of freezing whatever they were called when the burst started.
   const name = incoming?.fromName ?? label;
-  // THE STRIP SAYS WHICH OF THE TWO TRUE THINGS IS HAPPENING. A burst is kept
-  // from the moment the microphone opens and heard from the moment the track
-  // reaches the room, and those are seconds apart on a cold room. Saying
-  // "talking to Sam" through the gap promised the first thing while only the
-  // second was true; now each half gets its own sentence, and neither of them
-  // is a failure.
-  // THE ROOM CAN GO AWAY UNDER AN OPEN MICROPHONE, and this used to keep
-  // saying "Live to Jordan Lee" through it — measured by disconnecting a live
-  // room mid-hold: the key went to `dropped` and said so, and the strip, the
-  // surface mounted on every page for exactly the person who is NOT looking at
-  // the key, went on claiming a listener who had gone. `heardLive` only ever
-  // meant the track reached the room once; the present-tense question is
-  // walkieBurstDropped, which the key already asks.
-  //
-  // It is not a failure and the words do not say so: the recorder is still
-  // running, the recognizer is still working, and the burst still lands as a
-  // message. What is lost is the live half, and only that.
-  const dropped = walkieBurstDropped(sending, call);
-  const headline = sending
-    ? !sending.live
-      ? `Opening the mic for ${name}`
-      : dropped
-        ? `Nobody is hearing this — ${name} still gets it`
-        : sending.heardLive
-          ? // NOT "Live to X". That claim was made off this client's own seat —
-            // my track reached the room — and it was false every time X was
-            // away, busy, or had the door shut, which are the cases the walkie
-            // exists to survive. The roster is the only thing that knows, and
-            // the away tick fires off this same derivation so the words and the
-            // sound cannot say different things.
-            senderHearingFrom(s, sending.roomKey, now).text
-          : `Recording — ${name} gets it`
-    : incoming
-      ? `${name} is talking`
-      : `Still open with ${name}`;
-  // A recognizer that is down is a burst without live words, not a failed
-  // burst: the audio records, the message lands, and the server recovers the
-  // words from the recording afterwards. Saying so is the difference between a
-  // blank tail that reads as silence and one that reads as a delay.
-  const quiet = sending && status.asr === "unavailable";
-  const tone = sending ? "tx" : incoming ? "rx" : null;
-
-  // MY MICROPHONE IS OPEN AND I DID NOT OPEN IT. The hot auto-listen: hearing
-  // a teammate now means they can hear me, which is the founder's decision and
-  // the one thing on this screen that a person must never discover by
-  // accident. Not while my own key is down — a mic I am holding open is not a
-  // surprise — and not once I have muted, where the line would be a lie.
-  const hotMic = !sending && !call.muted && call.phase === "connected";
+  // WHAT THE STRIP IS SAYING, decided in one place (hooks/useWalkie's
+  // walkieStripState) and drawn here. Every claim on this surface is about
+  // somebody's open microphone and every one of them can be false in a way the
+  // person only learns from a silence, so the words and the facts live beside
+  // the two other rules that read the same world rather than inside a
+  // component.
+  const strip = walkieStripState(status, s, { name, now });
+  const headline = joinTitle(announcement, target.roomKey, Date.now(), strip.headline);
 
   return createPortal(
+    <WalkieStripView
+      leaving={leaving}
+      onLeft={onLeft}
+      name={name}
+      headline={headline}
+      words={words}
+      face={face}
+      faceRef={faceRef}
+      tx={strip.tx}
+      rx={strip.rx}
+      hotMic={strip.hotMic}
+      micDenied={strip.micDenied}
+      quiet={strip.quiet}
+      joined={headline !== strip.headline}
+      // THE TWO ANSWERS BELONG TO AN ARRIVING VOICE. While only my own key is
+      // down there is nothing to step into that I am not already in, and the
+      // row would only make the strip taller mid-hold. Both keys down is the
+      // opposite case: somebody is talking to me, and joining is exactly what
+      // that moment is for.
+      actions={!strip.tx || strip.rx}
+      onMute={() => void setMuted(true)}
+      onJoin={() => void joinWalkieLive(target.roomKey, { name })}
+      onSnooze={() => snoozeWalkie(name)}
+      onOpenDm={() => router.push(`/chat/${target.channelId}`)}
+      onLeave={() => void leaveCall()}
+      replyKey={
+        <WalkiePttButton
+          roomKey={target.roomKey}
+          resolveChannelId={() => target.channelId}
+          size="lg"
+          title="Hold to reply"
+        />
+      }
+    />,
+    document.body,
+  );
+}
+
+/**
+ * SNOOZE, and the second it takes to say so.
+ *
+ * Three things at once, and the order is the promise: the microphone closes,
+ * the seat goes back — which is what actually stops the voice, since muting
+ * only stops mine — and the hour is written to the server so the door stays
+ * shut across every window and every reload. The message is untouched:
+ * snoozing mutes a speaker, it never silences one, and the burst still lands in
+ * the DM with its unread.
+ *
+ * The confirmation cannot live in the strip. Handing the seat back is what
+ * takes the strip off the screen, so a farewell rendered inside it would be
+ * unmounted by the action it is confirming: the dock owns this surface's
+ * lifetime (components/calls/CallDock) and by design it ends the moment the
+ * room does. So the last line is a toast carrying the strip's own markup —
+ * same corner, same stylesheet, three seconds, gone.
+ */
+function snoozeWalkie(name: string): void {
+  const until = Date.now() + SNOOZE_MS;
+  useInboxStore.getState().snoozeWalkie(until);
+  void setMuted(true);
+  shutWalkieDoor();
+  toast.custom(() => <WalkieSnoozedNote until={until} name={name} />, {
+    duration: SNOOZE_NOTE_MS,
+    unstyled: true,
+  });
+}
+
+/**
+ * THE STRIP, as markup and nothing else.
+ *
+ * No store, no engine and no hooks beyond what the caller hands it: every state
+ * this surface has is a combination of these props, which is what lets each of
+ * them be rendered alone and checked against the stylesheet that draws it.
+ */
+export function WalkieStripView(props: {
+  leaving?: boolean;
+  onLeft?: () => void;
+  name: string;
+  headline: string;
+  /** The live transcript tail. Empty until the recognizer says something. */
+  words: string;
+  face: { image?: string; name: string } | null;
+  /** Writes `--level` onto the face while a voice is inside it. */
+  faceRef?: RefCallback<HTMLSpanElement>;
+  /** This client is talking. */
+  tx: boolean;
+  /** A teammate's burst is playing here. */
+  rx: boolean;
+  hotMic: boolean;
+  micDenied: boolean;
+  quiet: boolean;
+  /** The headline is the four second join announcement. */
+  joined: boolean;
+  /** Join live and Snooze are on offer. */
+  actions: boolean;
+  onMute: () => void;
+  onJoin: () => void;
+  onSnooze: () => void;
+  onOpenDm: () => void;
+  onLeave: () => void;
+  replyKey?: ReactNode;
+}) {
+  const { tx, rx } = props;
+  return (
     <div
-      className={`walkie-strip-host ${leaving ? "walkie-strip-leaving" : ""}`}
-      onAnimationEnd={leaving ? onLeft : undefined}
+      className={`walkie-strip-host ${props.leaving ? "walkie-strip-leaving" : ""}`}
+      onAnimationEnd={props.leaving ? props.onLeft : undefined}
     >
       <div
-        className={`walkie-strip ${incoming || sending ? "walkie-strip-live" : ""} ${
-          tone ? `walkie-strip-${tone}` : ""
-        } ${hotMic ? "walkie-strip-hot" : ""}`}
+        className={[
+          "walkie-strip",
+          tx || rx ? "walkie-strip-live" : "",
+          // Both at once is one room with a voice going each way, so both edges
+          // are drawn rather than one of them winning.
+          tx ? "walkie-strip-tx" : "",
+          rx ? "walkie-strip-rx" : "",
+          props.hotMic ? "walkie-strip-hot" : "",
+          props.micDenied ? "walkie-strip-denied" : "",
+          props.joined ? "walkie-strip-joined" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
       >
-        {hotMic && <HotMicLine name={name} />}
+        {props.hotMic && <HotMicLine name={props.name} onMute={props.onMute} />}
+
         <div className="walkie-strip-head">
-          {/* THE FACE, when somebody is talking to me. A voice out of nowhere
-              is the thing this strip is for, and a name is a slower way to
-              answer "who" than a face is. Only for the incoming side: my own
-              face tells me nothing I do not know. */}
-          {incoming && <TalkerFace userId={incoming.fromUserId} name={name} />}
-          {/* The meter replaces the dot while somebody is actually talking: the
-              dot could only say that a burst existed, and the bars say whether a
-              voice is reaching the microphone at all. The dot stays for the
-              linger, where there is no voice to measure. */}
-          {tone ? (
-            <WalkieLevelBars identity={incoming?.fromUserId} tone={tone} />
-          ) : (
-            <span className="walkie-strip-pulse" aria-hidden="true">
-              <span className="walkie-strip-dot" />
+          {props.face && (
+            <span ref={props.faceRef} className="walkie-strip-face" aria-hidden="true">
+              <Avatar m={{ user_image: props.face.image, user_name: props.face.name }} size={FACE} />
             </span>
           )}
-          {/* A teammate's voice arriving is the one thing here that happens TO
-              you rather than because of you, and it was announced only by the
-              sound and the strip appearing. Polite, not assertive: it is worth
-              saying, and never worth cutting somebody off mid-sentence to say. */}
-          <span className="walkie-strip-name" role="status" aria-live="polite">
-            {headline}
-          </span>
-          <button
-            type="button"
-            className="walkie-strip-icon"
-            aria-label="Open the DM"
-            title="Open the DM"
-            onClick={() => router.push(`/chat/${target.channelId}`)}
-          >
-            <MessageSquare className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            className="walkie-strip-icon"
-            aria-label="Leave the room"
-            title="Leave the room"
-            onClick={() => void leaveCall()}
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-
-        {incoming && <LiveTail messageId={incoming.messageId} />}
-        {quiet && <div className="walkie-strip-quiet">recording, no live words</div>}
-
-        {/* Nothing while our own key is down: the reply to a burst you are
-            still speaking is the same burst, and there is nothing to step into
-            that we are not already in. The ROW goes rather than its contents —
-            an empty row is still a row, and it made the strip taller mid-hold
-            than it is at rest. */}
-        {!sending && (
-          <div className="walkie-strip-actions">
-            {/* THE UPGRADE, and the reason this strip exists. It is the only
-                violet on a surface that is deliberately warm and cool
-                everywhere else, because violet is what calls are — pressing it
-                is the moment a burst becomes one. */}
+          <div className="walkie-strip-who">
+            <div className="walkie-strip-name">{props.name}</div>
+            {/* A teammate's voice arriving is the one thing here that happens TO
+                you rather than because of you, and it was announced only by the
+                sound and the strip appearing. Polite, not assertive: it is worth
+                saying, and never worth cutting somebody off mid-sentence to say. */}
+            <div className="walkie-strip-headline" role="status" aria-live="polite">
+              {props.headline}
+            </div>
+          </div>
+          <div className="walkie-strip-tools">
             <button
               type="button"
-              className="walkie-strip-join"
-              onClick={() => void joinWalkieLive(target.roomKey, { name })}
+              className="walkie-strip-icon"
+              aria-label="Open the DM"
+              title="Open the DM"
+              onClick={props.onOpenDm}
             >
+              <MessageSquare className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              className="walkie-strip-icon"
+              aria-label="Leave the room"
+              title="Leave the room"
+              onClick={props.onLeave}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          {/* Talking back without joining anything: the walkie, still. Beside
+              the face rather than in the button row, because it is a different
+              kind of thing from the two decisions below — a hold, not a click —
+              and because while both keys are down this is where my own warm
+              ring sits against their cool one. */}
+          {props.replyKey && <div className="walkie-strip-reply">{props.replyKey}</div>}
+        </div>
+
+        {!!props.words && (
+          <div className="walkie-strip-words" title={props.words}>
+            {props.words}
+          </div>
+        )}
+        {props.quiet && <div className="walkie-strip-quiet">recording, no live words</div>}
+
+        {props.actions && (
+          <div className="walkie-strip-actions">
+            {/* THE UPGRADE, and the reason this strip exists. Warm, because warm
+                is this client's own voice going out everywhere else on this
+                surface and that is exactly what pressing it does: the
+                microphone that is already open stops carrying a burst and
+                starts carrying a conversation. */}
+            <button type="button" className="walkie-strip-join" onClick={props.onJoin}>
               Join live
             </button>
             {/* And the honest opposite of it. The answer to a voice arriving is
@@ -252,26 +355,15 @@ export function WalkieBanner({
               type="button"
               className="walkie-strip-snooze"
               title="No bursts play here for an hour. They still arrive as messages."
-              onClick={() => {
-                useInboxStore.getState().snoozeWalkie(Date.now() + SNOOZE_MS);
-                shutWalkieDoor();
-              }}
+              onClick={props.onSnooze}
             >
-              <BellOff className="h-3.5 w-3.5" />
-              Snooze
+              <BellOff className="h-4 w-4" />
+              Snooze 1h
             </button>
-            {/* Talking back without joining anything: the walkie, still. */}
-            <WalkiePttButton
-              roomKey={target.roomKey}
-              resolveChannelId={() => target.channelId}
-              size="md"
-              title="Hold to reply"
-            />
           </div>
         )}
       </div>
-    </div>,
-    document.body,
+    </div>
   );
 }
 
@@ -285,25 +377,66 @@ export function WalkieBanner({
  * the fix in the same breath rather than in a menu.
  *
  * Muting keeps the seat: the burst still plays, the words still arrive, and
- * this burst simply goes back to being something you listen to.
+ * this burst simply goes back to being something you listen to. A seat that
+ * never had a microphone draws nothing here — there is no open mic to warn
+ * about, and the headline already says so in words.
  */
-function HotMicLine({ name }: { name: string }) {
+function HotMicLine({ name, onMute }: { name: string; onMute: () => void }) {
   return (
     <div className="walkie-hot">
       <span className="walkie-hot-dot" aria-hidden="true" />
       <span className="walkie-hot-text" role="status" aria-live="polite">
-        Your mic is open — {name} can hear you
+        Your mic is open, {name} can hear you
       </span>
-      <button
-        type="button"
-        className="walkie-hot-mute"
-        onClick={() => void setMuted(true)}
-      >
-        <MicOff className="h-3 w-3" />
+      <button type="button" className="walkie-hot-mute" onClick={onMute}>
+        <MicOff className="h-3.5 w-3.5" />
         Mute
       </button>
     </div>
   );
+}
+
+/** The strip's last line, after the seat has gone back. Carried by a toast
+ *  rather than by the strip, for the reason in `snoozeWalkie` above. */
+export function WalkieSnoozedNote({ until, name }: { until: number; name: string }) {
+  const clock = new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return (
+    <div className="walkie-strip walkie-strip-note">
+      <span className="walkie-strip-note-text">
+        Snoozed until {clock}. {name}&apos;s message is in the DM.
+      </span>
+    </div>
+  );
+}
+
+/**
+ * THE LIVE WORDS, FROM THE BURST AND NOT FROM THE CHANNEL.
+ *
+ * They used to come from the chat store, which syncs per OPEN channel — so the
+ * strip showed words only when the DM behind the burst happened to be on
+ * screen, which is the one case where the person could already read them.
+ * Every other time a voice arrived out of nowhere and the surface built to
+ * answer "what are they saying" said nothing at all.
+ *
+ * So the burst's own row is subscribed for exactly as long as it is playing:
+ * one document, live, ending when the burst does. Not through the standing
+ * burst watcher (chat.listLiveVoiceBursts), which deliberately carries no
+ * transcript because it re-runs a scan across every DM this client watches and
+ * a word arriving must not cost that.
+ *
+ * The store row is still read, and still first: when the DM IS open it is
+ * already there and paints in the same frame, ahead of the subscription's first
+ * answer. The longer of the two is the newer one, because a transcript only
+ * grows.
+ */
+function useLiveWords(messageId: string | undefined): string {
+  const stored = (useChatMessageRow(messageId)?.content ?? "").trim();
+  const { data } = useQueryNoThrow(api.chat.getMessage, messageId ? { message_id: messageId } : "skip");
+  const live = String(data?.message?.content ?? "").trim();
+  const text = live.length >= stored.length ? live : stored;
+  // Cut from the FRONT. The newest words are the ones worth reading, and an
+  // ellipsis at the start says plainly that a sentence began before this.
+  return text.length > TAIL ? `…${text.slice(-TAIL)}` : text;
 }
 
 /**
@@ -314,13 +447,15 @@ function HotMicLine({ name }: { name: string }) {
  * the row itself hands back a new reference on every heartbeat in the team and
  * re-renders this on all of them — for an avatar that did not change.
  */
-function TalkerFace({ userId, name }: { userId: string; name: string }) {
-  const find = (st: any) => (st.teamMembers ?? []).find((m: any) => String(m?._id) === String(userId));
+function useTalkerFace(
+  userId: string | undefined,
+  name: string,
+): { image?: string; name: string } | null {
+  const find = useCallback(
+    (st: any) => (st.teamMembers ?? []).find((m: any) => String(m?._id) === String(userId)),
+    [userId],
+  );
   const image = useInboxStore((st: any) => memberAvatarUrl(find(st)));
   const displayName = useInboxStore((st: any) => memberDisplayName(find(st), name));
-  return (
-    <span className="walkie-strip-face">
-      <Avatar m={{ user_image: image, user_name: displayName }} size={26} />
-    </span>
-  );
+  return userId ? { image, name: displayName } : null;
 }

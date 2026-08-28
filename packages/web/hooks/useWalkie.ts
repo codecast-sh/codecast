@@ -690,6 +690,112 @@ export function senderHearingFrom(
   return { ...out, otherId };
 }
 
+/**
+ * WHAT THE STRIP IS SAYING, as facts and one sentence.
+ *
+ * Every claim on this surface is about somebody's microphone, and every one of
+ * them can be false in a way the person only discovers from a silence. So the
+ * decisions live here, once, beside the two other rules that read the same
+ * world (`senderHearingFrom`, `callDockSurface`) — the component draws them and
+ * decides nothing.
+ *
+ * `tx` and `rx` are separate booleans rather than one tone because they are
+ * separate facts and both can be true: two people pressing at once is one room
+ * with a voice going each way, and the face carries a warm ring and a cool one
+ * at the same time.
+ */
+export type WalkieStrip = {
+  headline: string;
+  /** This client is talking. */
+  tx: boolean;
+  /** A teammate's burst is playing here. */
+  rx: boolean;
+  /** The microphone is open and this client never opened it — the hot listen,
+   *  the one thing on this surface nobody may meet by accident. */
+  hotMic: boolean;
+  /** There is no microphone to open: refused, blocked, or absent. This seat
+   *  hears the room and publishes nothing, and saying so is the difference
+   *  between a walkie that looks broken and one that is honest. */
+  micDenied: boolean;
+  /** The room went away under an open microphone: still recording, heard by
+   *  nobody. */
+  dropped: boolean;
+  /** The recognizer is down, so the words come after the recording rather than
+   *  during it. Not a failed burst. */
+  quiet: boolean;
+};
+
+export function walkieStripState(
+  status: WalkieStatus,
+  state: {
+    call: { roomKey: string | null; phase: string; muted: boolean; micDenied?: boolean };
+    [key: string]: any;
+  },
+  ctx: { name: string; now: number },
+): WalkieStrip {
+  const { sending, incoming } = status;
+  const call = state.call;
+  const name = ctx.name;
+  const micDenied = !!call.micDenied;
+  const dropped = walkieBurstDropped(sending, call);
+  const tx = !!sending;
+  const rx = !!incoming;
+  // MY MICROPHONE IS OPEN AND I DID NOT OPEN IT. Not while my own key is down —
+  // a mic I am holding open is not a surprise — and not once I have muted,
+  // where the line would be a lie. A refused microphone sets `muted`, so a seat
+  // with no device never claims to be heard.
+  const hotMic = !tx && !call.muted && call.phase === "connected";
+  return {
+    headline: stripHeadline({ status, state, name, now: ctx.now, dropped, micDenied }),
+    tx,
+    rx,
+    hotMic,
+    micDenied,
+    dropped,
+    quiet: tx && status.asr === "unavailable",
+  };
+}
+
+/**
+ * The one sentence, in the order the claims stop being true.
+ *
+ * A burst is kept from the moment the microphone opens and heard from the
+ * moment the track reaches the room, and those are seconds apart on a cold
+ * room, so each half gets its own sentence and neither of them is a failure.
+ * It never says "Live to X": that claim was made off this client's own seat and
+ * was false every time X was away, busy or had the door shut — the roster is
+ * the only thing that knows, and `senderHearingFrom` is what asks it.
+ */
+function stripHeadline(input: {
+  status: WalkieStatus;
+  state: any;
+  name: string;
+  /** The snooze runs out on a clock, and `senderHearingFrom` needs to know
+   *  which side of it we are on. Passed in so no timer hides in here. */
+  now: number;
+  dropped: boolean;
+  micDenied: boolean;
+}): string {
+  const { status, state, name, now, dropped, micDenied } = input;
+  const { sending, incoming } = status;
+  if (sending) {
+    if (!sending.live) return `Opening the mic for ${name}`;
+    if (dropped) return `Nobody is hearing this — ${name} still gets it`;
+    // BOTH KEYS ARE DOWN. Two voices in one room is worth saying plainly: the
+    // alternative was a strip claiming only my own half while a second person
+    // was already talking into it.
+    if (incoming) return `You and ${name} are both talking`;
+    if (sending.heardLive) return senderHearingFrom(state, sending.roomKey, now).text;
+    return `Recording — ${name} gets it`;
+  }
+  // A SEAT WITH NO MICROPHONE. The burst plays, the words arrive, and nothing
+  // this person says can leave — so the strip says exactly that rather than
+  // "Riley is talking", which reads as a conversation and is half of one.
+  if (micDenied) return `You can hear ${name} — your mic is off (permission denied)`;
+  if (incoming) return `${name} is talking`;
+  return `Still open with ${name}`;
+}
+
 /** The four things the call dock can be. */
 export type DockSurface = "none" | "walkie" | "stage" | "dock";
 
