@@ -7,7 +7,6 @@ import { UserRound, Filter, Link2, Headphones, MessageSquare } from "lucide-reac
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
-import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader } from "./ui/context-menu";
@@ -16,17 +15,19 @@ import {
   compareMembersByPresence,
   localTimeLine,
   memberDisplayName,
-  memberPresenceState,
   presenceLine,
+  teamBarSig,
 } from "./presence/memberPresence";
 import { MemberFace } from "./presence/MemberFace";
+import { TeamBarFace } from "./presence/TeamBarFace";
+import { useWalkieFaces } from "./presence/useFaceKey";
 import { useMemberActivity } from "./presence/useMemberActivity";
 import { useMemberHuddle } from "./presence/useMemberHuddle";
-import { WalkiePttButton } from "./calls/WalkiePtt";
 import { PopOutPeopleButton } from "./people/PopOutPeopleButton";
 import { useOpenDm } from "../hooks/useChatSync";
-import { dmRoomKey } from "@codecast/shared/contracts";
 import { ErrorBoundary } from "./ErrorBoundary";
+import "./calls/walkie.css";
+import "./people/people.css";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 interface TeamAvatarBarProps {
@@ -56,7 +57,6 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   // Only the viewer's id is rendered (the "self" ring) — never the whole user
   // doc, whose identity churns on daemon heartbeats.
   const viewerId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : ""));
-  const currentUser = useMemo(() => (viewerId ? ({ _id: viewerId } as any) : null), [viewerId]);
   // Explicit prop, else the active workspace. No currentUser.team_id fallback:
   // an unset pointer IS the personal workspace, and falling back to the user's
   // default team would render that team's roster inside the personal space.
@@ -65,23 +65,19 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   // signature of exactly those fields. The roster array itself re-pushes every
   // few seconds on teammates' heartbeat counters; riding that churned this bar
   // (and its avatar buttons) several times a minute forever.
-  const barSig = useInboxStore((s) => {
-    let sig = "";
-    for (const m of s.teamMembers) {
-      if (!m?._id) continue;
-      // Full manual status, not just the busy bit: the hover card highlights
-      // the active status pill from this same memo, so an available↔away flip
-      // must wake the bar too — it's a rare, user-initiated change.
-      sig += `${m._id}|${memberPresenceState(m)}|${m.status ?? ""}|${m.image ?? ""}|${m.github_avatar_url ?? ""}|${m.name ?? ""}|${m.email ?? ""}|${m.github_username ?? ""}|${m.in_room_key ?? ""}|${m.in_huddle ? 1 : 0}\n`;
-    }
-    return sig;
-  });
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- barSig stands in for the churny array
+  const barSig = useInboxStore((s) => teamBarSig(s.teamMembers));
   const teamMembers = useMemo(() => {
     const roster = useInboxStore.getState().teamMembers;
     return roster.length > 0 ? roster : null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- barSig stands in for the churny array
   }, [barSig]);
   const callsEnabled = useCallsAvailable();
+  // THE BAR SHOWS THE FLOW. Who is talking to me, which room my own key is open
+  // into, and which room somebody stepped into on purpose — a signature of
+  // exactly those three, so the engine's other six fields (a linger expiring,
+  // the recognizer going down, an error clearing) wake this always-mounted
+  // surface never.
+  const faces = useWalkieFaces();
   // Opens (or creates, local-first) THIS member's DM room. A bare
   // router.push("/chat") landed on the chat page's fallback — the busiest
   // room, i.e. somebody else's DM.
@@ -140,66 +136,65 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   const selectedMember = memberFilter ? sortedMembers.find(m => m._id === memberFilter) : null;
 
   return (
-    <div className="flex items-center gap-1 px-2">
+    // While a key is down the rest of the bar steps back — one person is being
+    // talked to and the bar should look like it. Written once per burst from a
+    // signature the bar already subscribes to; nothing here moves at the frame
+    // rate of a voice.
+    <div className="people-bar flex items-center gap-1 px-2" data-holding={faces.sendingRoomKey ? "1" : undefined}>
       <TeamMembersPump teamId={effectiveTeamId} />
-      {sortedMembers.slice(0, 6).map((member) => {
-        const displayName = memberDisplayName(member);
-        const isSelected = memberFilter === member._id;
-        const isSelf = String(member._id) === String((currentUser as any)?._id ?? "");
-        return (
-          <span
-            key={member._id}
-            className="relative"
-            onMouseEnter={() => hoverEnter(member._id)}
-            onMouseLeave={hoverLeave}
-          >
-          <button
-            onClick={() => router.push(`/team/${member.github_username || member._id}`)}
-            onContextMenu={(e) => ctxMenu.open(e, { id: member._id, username: member.github_username, displayName })}
-            className="relative block"
-          >
-            {/* The face, its badge and the huddle chip are one block shared
-                with the people window's roster (presence/MemberFace) — the
-                strip and the buddy list draw a person the same way or they
-                are two designs. The filter ring is this surface's own. */}
-            <MemberFace
-              member={member}
-              size={32}
-              className={`transition-all duration-200 ${
-                isSelected ? "rounded-full ring-2 ring-sol-cyan ring-offset-1 ring-offset-sol-bg" : ""
-              }`}
-            />
-          </button>
-          {/* Its own boundary: a crash inside the card (or a join it starts)
-              must degrade to a chip that NAMES this surface, not take the App
-              boundary — and the whole shell — down with it. */}
-          {hoveredId === member._id && (
-            <ErrorBoundary name="member card" level="inline">
-            <MemberHoverCard
-              member={member}
-              displayName={displayName}
-              isSelf={isSelf}
-              callsEnabled={callsEnabled}
-              currentUserId={String((currentUser as any)?._id ?? "")}
-              onOpenProfile={() => router.push(`/team/${member.github_username || member._id}`)}
-              onOpenChat={() => openDm([String(member._id)])}
-            />
-            </ErrorBoundary>
-          )}
-          </span>
-        );
-      })}
+      {sortedMembers.slice(0, 6).map((member) => (
+        <TeamBarFace
+          key={member._id}
+          member={member}
+          viewerId={viewerId}
+          callsEnabled={callsEnabled}
+          selected={memberFilter === member._id}
+          faces={faces}
+          onHoverEnter={() => hoverEnter(String(member._id))}
+          onHoverLeave={hoverLeave}
+          onContextMenu={(e) =>
+            ctxMenu.open(e, {
+              id: member._id,
+              username: member.github_username,
+              displayName: memberDisplayName(member),
+            })
+          }
+          card={
+            hoveredId === member._id ? (
+              // Its own boundary: a crash inside the card (or a join it starts)
+              // must degrade to a chip that NAMES this surface, not take the App
+              // boundary — and the whole shell — down with it.
+              <ErrorBoundary name="member card" level="inline">
+                <MemberHoverCard
+                  member={member}
+                  displayName={memberDisplayName(member)}
+                  isSelf={String(member._id) === viewerId}
+                  callsEnabled={callsEnabled}
+                  currentUserId={viewerId}
+                  onOpenProfile={() => router.push(`/team/${member.github_username || member._id}`)}
+                  onOpenChat={() => openDm([String(member._id)])}
+                />
+              </ErrorBoundary>
+            ) : null
+          }
+        />
+      ))}
       {/* Group huddle: the strip is where the people are, so the "ring
           several of them" gesture starts here — the new-huddle field, which
-          also reaches group threads and channels. */}
+          also reaches group threads and channels.
+
+          A LABELLED BUTTON, not a dashed circle. The faces beside it are now
+          the walkie, and a dashed ring with a headset in it read as a seventh
+          person — the founder read it as the walkie's own control. It says the
+          word instead. */}
       {callsEnabled && teamMembers.length > 1 && (
         <button
           onClick={() => useInboxStore.getState().openCreateModal("huddle")}
-          className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-dashed border-sol-border/60 text-sol-text-dim transition-colors hover:border-sol-violet/50 hover:text-sol-violet"
+          className="ml-1 flex h-7 items-center gap-1.5 rounded-full border border-sol-border/60 px-2.5 text-[11px] text-sol-text-muted transition-colors hover:border-sol-violet/50 hover:text-sol-violet"
           title="Start a huddle with several teammates"
-          aria-label="Start a huddle"
         >
           <Headphones className="h-3.5 w-3.5" />
+          Huddle
         </button>
       )}
       {/* Pop the roster out into its own window — the buddy list, floating
@@ -427,23 +422,6 @@ function MemberHoverCard({
                 <MessageSquare className="h-3.5 w-3.5" />
                 Message
               </button>
-              {/* Hold, say it, let go: the sentence lands in the DM with this
-                  person and plays out loud on their machine if they are at it.
-                  Icon only — a third full-width button would crowd the row, and
-                  the mic is the one glyph nobody has to be taught. */}
-              {callsEnabled && (
-                <WalkiePttButton
-                  roomKey={dmRoomKey(currentUserId, String(member._id))}
-                  // Only when the key actually goes down: this OPENS the DM if
-                  // there is not one yet, and hovering a face must not create
-                  // conversations.
-                  resolveChannelId={() =>
-                    useInboxStore.getState().openDmChannel([String(member._id)])
-                  }
-                  size="sm"
-                  title={`Hold to talk to ${displayName}`}
-                />
-              )}
             </>
           )}
         </div>
