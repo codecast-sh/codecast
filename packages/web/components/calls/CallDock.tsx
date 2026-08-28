@@ -15,12 +15,17 @@ import { AddPeopleButton } from "./AddPeople";
 import { HangUpButton, MicButton } from "./CallControls";
 import { RoomKnocks, RoomLockButton } from "./RoomDoor";
 import { WalkieBanner } from "./WalkieDock";
-import { callDockSurface, nextStageOpen, useWalkieStatus, type DockSurface } from "../../hooks/useWalkie";
+import { callDockSurface, useWalkieStatus, type DockSurface } from "../../hooks/useWalkie";
 import { firstName } from "./speakers";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
 import { POP_OUT_CALL_TITLE, canPopOutCall, isCallPanelWindow } from "../../lib/desktop";
 import { useDesktopWindowRole } from "../../hooks/useDesktopWindowRole";
 import { popOutCall } from "../../lib/calls/popOutCall";
+import {
+  getJoinAnnouncement,
+  joinTitle,
+  subscribeJoinAnnouncement,
+} from "../../lib/calls/joinAnnounce";
 
 // The in-call surface while the stage is collapsed, on every tab, only while
 // a call exists (call.phase !== idle). Two shapes, chosen by the pin:
@@ -53,40 +58,32 @@ export function CallDock() {
   const remoteVideo = tiles.some((t) => !t.isLocal);
   const prevRemoteVideo = useRef(false);
 
-  // THE STAGE BELONGS TO THE CALL THAT WAS EXPANDED, and to no call after it
-  // (ct-45974). Nothing used to put `expanded` back: this component is mounted
-  // for the life of the page and merely returns null when idle, so one expanded
-  // huddle left the flag true forever — and the next call, or the next walkie
-  // burst, opened full screen by itself.
-  //
-  // Settled during the render that sees the phase change rather than in an
-  // effect: React re-runs this component and throws the first pass away, so
-  // there is no committed frame in between and no second paint.
-  const prevPhase = useRef(call.phase);
-  if (prevPhase.current !== call.phase) {
-    prevPhase.current = call.phase;
-    const settled = nextStageOpen(expanded, { phase: call.phase });
-    if (settled !== expanded) setExpanded(settled);
-  }
-
-  // Which of the four surfaces this is, decided once, by the rule that lives
-  // beside `walkieOwnsCall` because it is a rule about the walkie.
+  // Which of the four surfaces this is, decided once, by the lookup that lives
+  // beside the walkie because it is a fact about the walkie.
   const surface = callDockSurface(walkie, call, { expanded });
   const walkieOwns = surface === "walkie";
   const { morphing, onMorphEnd } = useUpgradeMorph(surface, bounds, setBounds);
+
+  // THE STAGE BELONGS TO THE CALL THAT WAS EXPANDED, and to no call after it
+  // (ct-45974). Nothing used to put `expanded` back: this component is mounted
+  // for the life of the page and merely returns null when there is nothing to
+  // show, so one expanded huddle left the flag true forever — and the next
+  // call, or the next walkie burst, opened full screen by itself. One line
+  // where the flag lives, settled during the render that sees the change:
+  // React throws the first pass away, so there is no committed frame in
+  // between and no second paint.
+  if (expanded && surface === "none") setExpanded(false);
+
+  // Remote video or a media notice arriving is the moment a HUDDLE earns the
+  // stage. Never over a burst: three seconds of somebody's voice has not
+  // earned the screen, and the flag would outlive the burst and take the
+  // surface from every later one.
   useEffect(() => {
-    setExpanded((open) =>
-      nextStageOpen(open, {
-        phase: call.phase,
-        walkieOwns,
-        notice: !!notice,
-        newRemoteVideo: remoteVideo && !prevRemoteVideo.current,
-      }),
-    );
-    // Tracked whatever the rule decided, so a burst cannot arm the next call's
+    if (!walkieOwns && (notice || (remoteVideo && !prevRemoteVideo.current))) setExpanded(true);
+    // Tracked whatever was decided, so a burst cannot arm the next call's
     // first frame.
     prevRemoteVideo.current = remoteVideo;
-  }, [call.phase, notice, remoteVideo, walkieOwns]);
+  }, [notice, remoteVideo, walkieOwns]);
 
   if (surface === "walkie") return <WalkieBanner />;
   if (surface === "none") return null;
@@ -212,13 +209,28 @@ function useUpgradeMorph(
 function useCallStatusText(call: any, roster: any[]): string {
   const { label } = useRoomDescription(call.roomKey);
   const { ringingLine, settledLine } = useOutgoingRings(call.roomKey);
-  return call.phase === "error"
-    ? call.error || "Call failed"
-    : call.phase === "connecting"
-      ? "Connecting…"
-      : call.phase === "ringing_out"
-        ? "Ringing…"
-        : ringingLine ?? (roster.length <= 1 ? settledLine : null) ?? label;
+  // THE JOIN, FOR THE FOUR SECONDS IT IS NEWS. A burst turning into a call is
+  // the biggest thing the walkie does and the sender used to meet it as a
+  // surface swap and nothing else — the strip became this window, the mic
+  // stayed open, and no words anywhere said why. Its own line rather than a
+  // branch in the chain below: it outranks the room's name for a moment and
+  // then stops existing, which is not a phase and must not become one.
+  const announcement = useSyncExternalStore(
+    subscribeJoinAnnouncement,
+    getJoinAnnouncement,
+    () => null,
+  );
+  const text =
+    call.phase === "error"
+      ? call.error || "Call failed"
+      : call.phase === "connecting"
+        ? "Connecting…"
+        : call.phase === "ringing_out"
+          ? "Ringing…"
+          : ringingLine ?? (roster.length <= 1 ? settledLine : null) ?? label;
+  // An error still wins: a call that failed is not a call anybody joined.
+  if (call.phase === "error") return text;
+  return joinTitle(announcement, call.roomKey, Date.now(), text);
 }
 
 function MiniWindow({

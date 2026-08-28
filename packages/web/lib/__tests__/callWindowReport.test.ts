@@ -1,15 +1,21 @@
 import { describe, expect, it } from "bun:test";
 import { callWindowReport, type CallWindowPhase } from "../calls/callHandoff";
 
-// The shell replaces its whole record of a call window on every report, and
+// The shell replaces its whole record of the call window on every report, and
 // that record IS the handback payload: `shouldHandBackCall` refuses to hand
 // back a call with no room. So a report that says "no room" while the join is
 // still getting started does not merely lose a field — it erases the room the
-// shell opened the window with, and a close in that instant (the traffic
-// light, a moment after the window appeared) hands the call nowhere.
+// shell opened the window with, and a close in that instant (a moment after
+// the window appeared) hands the call nowhere.
+//
+// The phase is not in the report any more and the cases still name it, because
+// the point of each one is the moment in the join it describes. There used to
+// be a `joined` flag beside the room, read by an arbiter that had to tell the
+// call panel and a separate floating-faces window apart. One window with three
+// sizes has nothing to arbitrate, so the flag went with the second window.
 
-const report = (phase: CallWindowPhase, roomKey: string | null, windowRoom: string | null = "team/standup") =>
-  callWindowReport({ phase, roomKey, windowRoom, muted: false, camera: false, scribe: false });
+const report = (_phase: CallWindowPhase, roomKey: string | null, windowRoom: string | null = "team/standup") =>
+  callWindowReport({ roomKey, windowRoom, muted: false, camera: false, scribe: false });
 
 describe("callWindowReport", () => {
   it("carries the URL's room on the first report, at phase idle", () => {
@@ -37,17 +43,10 @@ describe("callWindowReport", () => {
     expect(report("idle", null, null).room).toBeNull();
   });
 
-  it("holds the call only once connected", () => {
-    expect(report("connected", "team/standup").joined).toBe(true);
-    for (const phase of ["idle", "ringing_out", "connecting", "error"] as CallWindowPhase[]) {
-      expect(report(phase, "team/standup").joined).toBe(false);
-    }
-  });
-
   it("reports the mic as live when the call is not muted", () => {
-    const base = { phase: "connected" as CallWindowPhase, roomKey: "r", windowRoom: "r", camera: true, scribe: true };
+    const base = { roomKey: "r", windowRoom: "r", camera: true, scribe: true };
     expect(callWindowReport({ ...base, muted: true })).toEqual({
-      room: "r", mic: false, camera: true, scribe: true, joined: true,
+      room: "r", mic: false, camera: true, scribe: true,
     });
     expect(callWindowReport({ ...base, muted: false }).mic).toBe(true);
   });

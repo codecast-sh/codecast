@@ -1184,7 +1184,7 @@ const RESERVED_USERNAMES = new Set([
   "join", "inbox", "feed", "search", "notifications", "conversation", "docs", "plans",
   "tasks", "projects", "workflows", "routines", "schedules", "sessions", "team",
   "admin", "config", "dashboard", "explore", "timeline", "windows", "orchestration",
-  "roadmap", "cli", "share", "commit", "pr", "review", "palette", "people", "call-panel", "call-faces", "settings",
+  "roadmap", "cli", "share", "commit", "pr", "review", "palette", "people", "call-panel", "settings",
   "pricing", "blog", "a",
   // Product nouns / safety
   "u", "api", "teams", "codecast", "help", "status", "me", "you", "new", "null", "undefined",

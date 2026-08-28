@@ -1,7 +1,8 @@
 import { useRef } from "react";
 import { useTrackedStore } from "../store/inboxStore";
 import { useWatchEffect } from "./useWatchEffect";
-import { useWalkieStatus, walkieOwnsCall } from "./useWalkie";
+import { useWalkieStatus } from "./useWalkie";
+import { walkieHoldsRoom } from "../lib/calls/walkie";
 import { isPeopleWindow } from "../lib/desktop";
 import { popOutCall } from "../lib/calls/popOutCall";
 
@@ -23,12 +24,12 @@ import { popOutCall } from "../lib/calls/popOutCall";
  * A walkie burst joins a room exactly the way a huddle does, and the buddy list
  * is where bursts land. A teammate holding their key opens a room in this
  * window, MUTED, so their words can play — that is listening to a note, not
- * being in a call, and it must never spawn a window. `walkieOwnsCall` is the
+ * being in a call, and it must never spawn a window. `walkieHoldsRoom` is the
  * codebase's own answer to that question: it is what CallDock already asks to
  * decide whether it is a call dock or the walkie strip. Asking it again here
- * means the two surfaces cannot disagree about what a burst is — and when it
- * says the ordinary dock owns the room (somebody unmuted, the burst became a
- * conversation), that IS a call, and it goes to the panel.
+ * means the two surfaces cannot disagree about what a burst is — and when the
+ * walkie is not holding the room (nobody is bursting, or somebody stepped in on
+ * purpose), that IS a call, and it goes to the panel.
  */
 export function useHandCallToPanel(): void {
   const walkie = useWalkieStatus();
@@ -48,7 +49,7 @@ export function useHandCallToPanel(): void {
       handed.current = null;
       return;
     }
-    if (!call.roomKey || walkieOwnsCall(walkie, call)) return;
+    if (!call.roomKey || walkieHoldsRoom(walkie, call.roomKey)) return;
     if (handed.current === call.roomKey) return;
     handed.current = call.roomKey;
     void popOutCall();
