@@ -1240,6 +1240,13 @@ export const addMessage = mutation({
         });
         if (patch) {
           await ctx.db.patch(existing._id, patch);
+          // Same backfill watermark rule as addMessages: an edit far behind
+          // the head is invisible to the live tail — bump the revision.
+          if (existing.timestamp < conversation.updated_at - OLD_ROW_EDIT_MARGIN_MS) {
+            await ctx.db.patch(args.conversation_id, {
+              transcript_revision: (conversation.transcript_revision ?? 0) + 1,
+            });
+          }
         }
         return existing._id;
       }
@@ -1485,6 +1492,13 @@ export const addMessage = mutation({
 
 const MAX_BATCH_SIZE = 25;
 
+// An in-place patch to a row this far behind the conversation head counts as a
+// backfill edit (resync after resume/fork, late attribution), which the live
+// tail subscription cannot see — it bumps conversations.transcript_revision so
+// the client's watermark triggers a snapshot refetch. Streaming patches target
+// the newest row and stay inside the margin, so they bump nothing.
+const OLD_ROW_EDIT_MARGIN_MS = 120_000;
+
 // Deletes Claude Code API/auth-error banner messages (see isApiErrorBanner) that
 // precede `beforeTs` in a conversation — used to retract a stale banner once a
 // genuine turn supersedes it. Bounded to the recent tail (banners only ever sit
@@ -1658,6 +1672,7 @@ export const addMessages = mutation({
 
     const ids: Id<"messages">[] = [];
     let insertedCount = 0;
+    let oldRowEdits = 0;
     let lastUserContentStored: string | undefined;
 
     // Collect pending_messages ONCE per batch instead of once per user message.
@@ -1721,6 +1736,14 @@ export const addMessages = mutation({
           });
           if (patch) {
             await ctx.db.patch(existing._id, patch);
+            // An edit far behind the conversation head is a backfill (resync
+            // after resume/fork), invisible to the client's live tail
+            // subscription — count it so the watermark bumps below. The margin
+            // keeps ordinary streaming patches (which target the newest row)
+            // from bumping the conversation doc on every flush.
+            if (existing.timestamp < conversation.updated_at - OLD_ROW_EDIT_MARGIN_MS) {
+              oldRowEdits++;
+            }
           }
           ids.push(existing._id);
           continue;
@@ -1876,6 +1899,9 @@ export const addMessages = mutation({
         updated_at: Math.max(conversation.updated_at, maxMsgTs || Date.now()),
         last_message_role: lastMsg.role,
       };
+      if (oldRowEdits > 0) {
+        convPatch.transcript_revision = (conversation.transcript_revision ?? 0) + 1;
+      }
       const batchModel = lastKnownModelFromBatch(args.messages);
       if (batchModel && batchModel !== conversation.model) {
         convPatch.model = batchModel;
@@ -1960,6 +1986,12 @@ export const addMessages = mutation({
 
       await maybeScheduleTitleGeneration(ctx, conversation, conversation.message_count, newMessageCount);
 
+    } else if (oldRowEdits > 0) {
+      // Backfill-only batch (no inserts): still bump the watermark so tail
+      // subscribers learn that rows behind their anchor changed.
+      await ctx.db.patch(args.conversation_id, {
+        transcript_revision: (conversation.transcript_revision ?? 0) + 1,
+      });
     }
 
     // Fold harness-loop events (ScheduleWakeup / scheduled_task_fire) into

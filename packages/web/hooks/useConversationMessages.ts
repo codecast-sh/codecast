@@ -1,5 +1,5 @@
 import { useCallback, useState, useRef, useMemo, useEffect } from "react";
-import { useQuery, usePaginatedQuery, useConvex } from "convex/react";
+import { useQuery, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, useTrackedStore, isConvexId, ensureHydrated } from "../store/inboxStore";
@@ -10,6 +10,18 @@ import { shareTokenArg } from "../lib/shareTokenScope";
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_PENDING: Message[] = [];
+
+// The tail anchor for a fresh visit: one ms below the newest cached row, so
+// the still-streaming newest row is inside the subscribed range from the first
+// frame. null = cold (no cached rows yet); the cold-open effect resolves it
+// via IDB hydration or the one-shot snapshot.
+function initTailState(conversationId: string): { id: string; anchor: number | null } {
+  const local = useInboxStore.getState().messages[conversationId];
+  return {
+    id: conversationId,
+    anchor: local && local.length > 0 ? local[local.length - 1].timestamp - 1 : null,
+  };
+}
 
 // Conversation fields that the daemon bumps on every ~1s heartbeat but that don't
 // change what the conversation view renders (idle duration is cosmetic and recomputed
@@ -95,7 +107,12 @@ export function useConversationMessages(
   // centered on this value, matching the hover/eager prefetch — instead of
   // waiting a round-trip for getMessageTimestamp. That's what turns a bookmark
   // click into a direct open of the right window rather than tail-then-jump.
-  targetTimestamp?: number
+  targetTimestamp?: number,
+  // Distinguishes a NEW jump request on a long-lived pane. Target
+  // initialization latches per conversation, so without this a second jump —
+  // same message or a different one — on the same mounted pane never re-fires
+  // the around-window query and silently stays put.
+  targetNonce?: number
 ) {
   // Follow the optimistic-create rekey. When a stub conversation resolves to
   // its real Convex id, rekeyId deletes the stub rows in the same store
@@ -187,74 +204,160 @@ export function useConversationMessages(
   ensureHydrated(conversationId);
 
   // =============================================
-  // NORMAL MODE: Convex paginated subscription (background sync)
+  // NORMAL MODE: local-first snapshot + live tail
   // =============================================
-  // Kept alive during a jump-to-START (jumpMode === "start") even though that
-  // is technically target mode. Reason: usePaginatedQuery resets to its
-  // initial page when its args flip to "skip" and back, which would collapse
-  // the loaded window. Keeping it mounted preserves the accumulated pages so a
-  // CANCELLED start-jump can drop straight back to the exact scroll position
-  // (the window never shrank out from under the user). Deep-link / timestamp
-  // target navigation (jumpMode "center" or a targetMessageId) still turns it
-  // off — those genuinely replace the view and don't need the live window.
+  // The old shape subscribed usePaginatedQuery(listMessages) as the live path.
+  // Its first page is anchored at the NEWEST end of the index, so it grew past
+  // 200 rows over a visit and every insert AND every in-place streaming patch
+  // re-shipped the entire grown page over the websocket — hundreds of full
+  // message bodies per tick for a change that is intrinsically one row.
+  //
+  // New shape: history is a ONE-SHOT snapshot (or the store/IDB cache — a warm
+  // switch pays zero round trips), and the only live subscription is
+  // listMessagesTail, covering rows strictly after a fixed anchor. A streaming
+  // tick then re-ships the tail (typically 1–30 rows), not the page.
+  // Kept alive during a jump-to-START (jumpMode === "start") for the same
+  // reason the paginated window was: a cancelled start-jump drops back to an
+  // intact window.
   const useNormalMode = (!targetMode || jumpMode === "start") && canQuery;
-
-  const { results: descResults, status: paginationStatus, loadMore } = usePaginatedQuery(
-    api.conversations.listMessages,
-    useNormalMode ? { conversation_id: convId, ...shareArg } : "skip",
-    // 200 (was 40): measured fetch cost is round-trip dominated — p50 ~370ms
-    // at 40 vs ~410-630ms at 200 on real conversations — while client cost is
-    // flat in window size (store write ~4ms, render virtualized). 40 gave
-    // only ~2-3 screenfuls before hitting a load boundary; 200 matches the
-    // loadOlder page so the first page and every subsequent one are one unit.
-    { initialNumItems: 200 }
-  );
-
-  // Ref avoids re-creating the sync callback when paginationStatus changes,
-  // which would re-trigger useConvexSync's effect and loop: setMessages → re-render → new callback → effect → setMessages …
-  const paginationStatusRef = useRef(paginationStatus);
-  paginationStatusRef.current = paginationStatus;
 
   // Fork-copy freeze: a freshly forked conversation is seeded locally with the
   // parent's full message window (doFork), while the server copies messages
   // oldest-first in background batches. Until fork_status leaves "copying" the
   // server's window is an incomplete prefix — letting it replace the seeded
   // list would visibly shrink the conversation and regrow it from the top.
-  // Freeze the paginated sync (and the recovery loop below) for the duration;
-  // the flip to "complete" changes this value, which re-triggers the
-  // useConvexSync effect and applies the latest full server page in one swap.
+  // Freeze snapshot + tail applies (and the recovery loop below) for the
+  // duration; the flip to "complete" re-triggers the sync effects and applies
+  // the latest server state in one swap.
   const forkCopying = useInboxStore((s) => {
     const meta: any = s.conversations[conversationId] ?? s.sessions[conversationId];
     return meta?.fork_status === "copying";
   });
 
-  // Sync Convex paginated results → Zustand store.
-  // Guard: skip setMessages when the message list is unchanged to break the
-  // re-render loop (setMessages → Zustand notify → re-render → effect → …).
-  const lastSyncedRef = useRef<string | null>(null);
+  const convex = useConvex();
 
-  useConvexSync(
-    useNormalMode && paginationStatus !== "LoadingFirstPage" ? descResults : undefined,
-    useCallback((results: any) => {
-      if (forkCopying && (useInboxStore.getState().messages[conversationId]?.length ?? 0) > 0) return;
-      const messages: Message[] = [...results].reverse();
-      const syncKey = messagePageSyncKey(conversationId, messages);
-      if (lastSyncedRef.current === syncKey) return;
-      lastSyncedRef.current = syncKey;
-      useInboxStore.getState().setMessages(conversationId, messages, {
-        hasMoreAbove: paginationStatusRef.current === "CanLoadMore" || paginationStatusRef.current === "LoadingMore",
+  // The tail anchor is fixed per visit: local rows at or before it are
+  // history, rows after it belong to the live tail subscription. null = not
+  // yet determined (cold open, snapshot or hydration pending).
+  const [tailState, setTailState] = useState<{ id: string; anchor: number | null }>(() => initTailState(conversationId));
+  if (tailState.id !== conversationId) setTailState(initTailState(conversationId));
+  const tailAnchorRef = useRef<number | null>(null);
+  tailAnchorRef.current = tailState.id === conversationId ? tailState.anchor : null;
+
+  const [snapshotLoading, setSnapshotLoading] = useState(false);
+  const snapshotInFlightRef = useRef<string | null>(null);
+
+  // One-shot page-1 fetch: cold opens, and the recovery path for deletes /
+  // backfill edits (transcript_revision jumps). Replaces the window and
+  // re-anchors the tail at the fresh newest row.
+  const fetchSnapshot = useCallback(async () => {
+    if (snapshotInFlightRef.current === conversationId) return;
+    snapshotInFlightRef.current = conversationId;
+    setSnapshotLoading(true);
+    try {
+      const res: any = await convex.query(api.conversations.listMessages, {
+        conversation_id: convId,
+        paginationOpts: { numItems: 200, cursor: null },
+        ...shareTokenArg(conversationId),
+      });
+      const state = useInboxStore.getState();
+      const meta: any = state.conversations[conversationId] ?? state.sessions[conversationId];
+      if (meta?.fork_status === "copying" && (state.messages[conversationId]?.length ?? 0) > 0) return;
+      const page: Message[] = [...(res?.page ?? [])].reverse();
+      state.setMessages(conversationId, page, {
+        hasMoreAbove: res ? !res.isDone : false,
         initialized: true,
       });
-    }, [conversationId, forkCopying])
+      setTailState({
+        id: conversationId,
+        anchor: page.length ? page[page.length - 1].timestamp - 1 : 0,
+      });
+    } catch (err) {
+       
+      console.warn("[useConversationMessages] snapshot fetch failed", { conversationId, err });
+    } finally {
+      snapshotInFlightRef.current = null;
+      setSnapshotLoading(false);
+    }
+  }, [convex, convId, conversationId]);
+
+  // Cold open: wait for the IDB hydration verdict, then either anchor on the
+  // cached tail (zero network) or pay the one snapshot round trip.
+  // eslint-disable-next-line no-restricted-syntax -- one-shot history load; the tail subscription is the live path
+  useEffect(() => {
+    if (!useNormalMode || tailState.id !== conversationId || tailState.anchor !== null) return;
+    let cancelled = false;
+    (async () => {
+      await ensureHydrated(conversationId);
+      if (cancelled) return;
+      const local = useInboxStore.getState().messages[conversationId];
+      if (local?.length) {
+        setTailState({ id: conversationId, anchor: local[local.length - 1].timestamp - 1 });
+        return;
+      }
+      fetchSnapshot();
+    })();
+    return () => { cancelled = true; };
+  }, [useNormalMode, tailState, conversationId, fetchSnapshot]);
+
+  // The live tail. Anchored one ms before the newest known row so the
+  // in-flight streaming row is always inside the subscribed range and its
+  // in-place patches replace the local copy.
+  const tailResult = useQuery(
+    api.conversations.listMessagesTail,
+    useNormalMode && tailState.id === conversationId && tailState.anchor !== null
+      ? { conversation_id: convId, after_timestamp: tailState.anchor, ...shareArg }
+      : "skip"
   );
+  useConvexSync(tailResult, useCallback((res: any) => {
+    if (!res) return;
+    const anchor = tailAnchorRef.current;
+    if (anchor === null) return;
+    if (forkCopying && (useInboxStore.getState().messages[conversationId]?.length ?? 0) > 0) return;
+    useInboxStore.getState().applyTailMessages(conversationId, anchor, res.messages ?? [], res.last_timestamp ?? null);
+    // A burst past the server cap: advance the anchor so the next subscription
+    // continues from where this result ended.
+    if (res.has_more && res.last_timestamp != null) {
+      setTailState({ id: conversationId, anchor: res.last_timestamp - 1 });
+    }
+  }, [conversationId, forkCopying]));
+
+  // Fork completion: the locally seeded window carries the PARENT's row ids;
+  // the server's copied rows have new ids the tail (anchored on the seed)
+  // never covers. On the copying → complete flip, swap the window for the
+  // server's in one snapshot — the wholesale replace the old paginated push
+  // used to do.
+  const prevForkCopyingRef = useRef(forkCopying);
+  // eslint-disable-next-line no-restricted-syntax -- transition-edge refetch
+  useEffect(() => {
+    const was = prevForkCopyingRef.current;
+    prevForkCopyingRef.current = forkCopying;
+    if (was && !forkCopying && useNormalMode) fetchSnapshot();
+  }, [forkCopying, useNormalMode, fetchSnapshot]);
 
   // =============================================
   // METADATA: Convex subscription (background sync to store)
   // =============================================
+  // strip_volatile: the fat meta payload (fork graph, child map, previews)
+  // omits the per-flush counters, so a streaming tick no longer re-pushes it.
+  // The counters ride the tiny watermark subscription below instead; syncRecord
+  // merges per key, so omitted fields keep their prior store values.
   const remoteMeta = useQuery(
     api.conversations.getConversationWithMeta,
+    canQuery ? { conversation_id: convId, strip_volatile: true, ...shareArg } : "skip"
+  );
+
+  // The transcript watermark: message_count feeds the recovery poll,
+  // transcript_revision flags backfill edits behind the tail anchor. A few
+  // integers, so it re-pushes only when one of them actually moves.
+  const watermark = useQuery(
+    api.conversations.getTranscriptWatermark,
     canQuery ? { conversation_id: convId, ...shareArg } : "skip"
   );
+  useConvexSync(watermark, useCallback((w: any) => {
+    if (!w) return;
+    useInboxStore.getState().syncRecord("conversations", conversationId, w);
+  }, [conversationId]));
 
   useConvexSync(remoteMeta, useCallback((meta: any) => {
     // getConversationWithMeta returns null for missing or access-denied — feeding
@@ -282,18 +385,22 @@ export function useConversationMessages(
 
   // Safety net: server-vs-local watermark recovery.
   //
-  // usePaginatedQuery above is the primary sync path, but its reactivity can
-  // stall: after loadMore() bounds the first page, during conversation_id
-  // transitions, under transient ws blips, or when the query is briefly
-  // skipped. Without a fallback, the local store can sit frozen while the
-  // server keeps inserting messages — the user sees a stuck conversation.
+  // The tail subscription is the primary live path, but a safety net stays:
+  // reactivity can stall under transient ws blips or while a query is briefly
+  // skipped, and the one-shot snapshot is not retried by the framework.
+  // Without a fallback, the local store can sit frozen while the server keeps
+  // inserting messages — the user sees a stuck conversation.
   //
-  // This loop watches storeMeta.message_count (server truth, kept fresh by
-  // the getConversationWithMeta subscription) against the local store. When
-  // they diverge, fetch the delta via getNewMessages and merge — same path
-  // useSyncInboxSessions.bgSyncMessages uses, just driven per-conversation.
-  const convex = useConvex();
+  // This loop watches storeMeta.message_count (server truth, kept fresh by the
+  // watermark subscription) against the local store, in both directions:
+  // server ahead → fetch the delta via getNewMessages and merge; local ahead
+  // for a sustained stretch → rows were deleted server-side (banner
+  // supersession is in tail range, but deleteMessagesByUuid can hit any row) →
+  // snapshot refetch. A transcript_revision jump (backfill edit behind the
+  // tail anchor) also snapshot-refetches.
   const recoveryInFlightRef = useRef(false);
+  const countMismatchRef = useRef<{ id: string; ticks: number }>({ id: conversationId, ticks: 0 });
+  const lastRevisionRef = useRef<{ id: string; rev: number } | null>(null);
   // eslint-disable-next-line no-restricted-syntax -- polled recovery; effect manages its own interval
   useEffect(() => {
     if (!canQuery || targetMode) return; // recovery only applies to live normal-mode view
@@ -306,12 +413,33 @@ export function useConversationMessages(
       // While a fork copy is in flight the local seeded window is the complete
       // view and the server count is a moving partial — nothing to recover.
       if ((meta as any)?.fork_status === "copying") return;
+      // Backfill edit behind the tail anchor: the revision moved, the tail
+      // can't see it — refetch the page. First observation per conversation
+      // only records the baseline.
+      const revision = (meta as any)?.transcript_revision ?? 0;
+      if (lastRevisionRef.current?.id !== conversationId) {
+        lastRevisionRef.current = { id: conversationId, rev: revision };
+      } else if (revision > lastRevisionRef.current.rev) {
+        lastRevisionRef.current = { id: conversationId, rev: revision };
+        fetchSnapshot();
+        return;
+      }
       const serverCount = (meta as any)?.message_count ?? 0;
-      if (serverCount === 0 || local.length >= serverCount) return;
-      // Don't pile on while the initial paginated query is still inflight on
-      // the very first tick — let it land if it's going to. After it settles
-      // (Exhausted/CanLoadMore), recovery is the authoritative path even if
-      // status briefly flips back to LoadingFirstPage during reactivity blips.
+      if (countMismatchRef.current.id !== conversationId) countMismatchRef.current = { id: conversationId, ticks: 0 };
+      if (serverCount === 0) return;
+      if (local.length > serverCount) {
+        // Local ahead can be a benign race (the tail delivered rows before the
+        // debounced message_count patch landed) — require it to persist before
+        // treating it as a delete and paying a snapshot refetch.
+        countMismatchRef.current.ticks++;
+        if (countMismatchRef.current.ticks >= 10) {
+          countMismatchRef.current.ticks = 0;
+          fetchSnapshot();
+        }
+        return;
+      }
+      countMismatchRef.current.ticks = 0;
+      if (local.length >= serverCount) return;
 
       recoveryInFlightRef.current = true;
       const after = local.length > 0 ? local[local.length - 1].timestamp : 0;
@@ -328,7 +456,7 @@ export function useConversationMessages(
           // transient failure and surface in logs so it doesn't silently
           // strand the UI in the loading state.
           if (result === null) {
-            // eslint-disable-next-line no-console
+             
             console.warn("[useConversationMessages] recovery got null (auth not ready?)", { conversationId });
             break;
           }
@@ -339,11 +467,11 @@ export function useConversationMessages(
           cursor = result.last_timestamp;
         }
         if (fetched > 0) {
-          // eslint-disable-next-line no-console
+           
           console.log("[useConversationMessages] recovery fetched", { conversationId, fetched, serverCount });
         }
       } catch (err) {
-        // eslint-disable-next-line no-console
+         
         console.warn("[useConversationMessages] recovery fetch failed", { conversationId, err });
       } finally {
         recoveryInFlightRef.current = false;
@@ -356,7 +484,7 @@ export function useConversationMessages(
     tick();
     const id = setInterval(tick, 1_000);
     return () => clearInterval(id);
-  }, [conversationId, canQuery, targetMode, convex, convId]);
+  }, [conversationId, canQuery, targetMode, convex, convId, fetchSnapshot]);
 
   // =============================================
   // READ FROM STORE (primary source of truth - never waits on Convex)
@@ -411,6 +539,23 @@ export function useConversationMessages(
     return [...storeMessages, ...unconfirmed].sort((a: Message, b: Message) => a.timestamp - b.timestamp);
   }, [storeMessages, storePending]);
 
+  // Long-visit re-anchor: the tail range grows as messages land; past ~300
+  // rows every push re-ships the whole range again, so bump the anchor to just
+  // below the newest row. The arg change swaps the subscription; the store
+  // already holds everything at or before the new anchor.
+  // eslint-disable-next-line no-restricted-syntax -- subscription-window management
+  useEffect(() => {
+    if (!useNormalMode || tailState.id !== conversationId || tailState.anchor === null) return;
+    const local = storeMessages;
+    if (local.length === 0) return;
+    const anchor = tailState.anchor;
+    let inTail = 0;
+    for (let i = local.length - 1; i >= 0 && local[i].timestamp > anchor; i--) inTail++;
+    if (inTail > 300) {
+      setTailState({ id: conversationId, anchor: local[local.length - 1].timestamp - 1 });
+    }
+  }, [useNormalMode, tailState, conversationId, storeMessages]);
+
   // =============================================
   // TARGET MODE: getMessagesAroundTimestamp (local state, transient)
   // =============================================
@@ -425,6 +570,22 @@ export function useConversationMessages(
     targetInitializedRef.current = false;
     targetArrivedRef.current = null;
     setTargetAroundData(null);
+  }
+
+  // A new jump request (new nonce, or a different message) re-arms the target
+  // machinery on this same pane: the around-window query fires again and
+  // target mode re-engages even after an earlier jump completed or was
+  // dismissed via jump-to-end.
+  const targetReqKey = `${targetNonce ?? ""}:${effectiveTargetMessageId ?? ""}`;
+  const [trackedTargetReqKey, setTrackedTargetReqKey] = useState(targetReqKey);
+  if (trackedTargetReqKey !== targetReqKey) {
+    setTrackedTargetReqKey(targetReqKey);
+    if (effectiveTargetMessageId) {
+      targetInitializedRef.current = false;
+      targetArrivedRef.current = null;
+      dismissedTargetKeyRef.current = null;
+      if (!targetMode) setTargetMode(true);
+    }
   }
 
   const aroundData = useQuery(
@@ -573,17 +734,18 @@ export function useConversationMessages(
 
   const hasMoreBelow = targetMode ? targetHasMoreBelow : false;
 
+  const [olderLoading, setOlderLoading] = useState(false);
+
   const isLoadingOlder = targetMode
     ? (targetIsLoadingOlder || (!!jumpMode && !targetInitializedRef.current))
-    : paginationStatus === "LoadingMore";
+    : olderLoading;
 
   // In normal mode the "destination" of a jump-to-end is the live tail. While
-  // its first page is still being fetched (LoadingFirstPage) the store holds
-  // stale/empty content, so the jump-completion effect must treat this as "not
-  // ready yet" and hold the scroll — otherwise it scrolls against stale content
-  // and then jumps again when the real page lands. The button itself is hidden
-  // at the bottom, so this never surfaces a spurious spinner on initial load.
-  const isLoadingNewer = targetMode ? targetIsLoadingNewer : (paginationStatus === "LoadingFirstPage");
+  // the cold-open snapshot is still in flight the store holds stale/empty
+  // content, so the jump-completion effect must treat this as "not ready yet"
+  // and hold the scroll — otherwise it scrolls against stale content and then
+  // jumps again when the real page lands. A warm switch never sets this.
+  const isLoadingNewer = targetMode ? targetIsLoadingNewer : snapshotLoading;
 
   const loadOlder = useCallback(() => {
     if (targetMode) {
@@ -592,14 +754,32 @@ export function useConversationMessages(
         setTargetIsLoadingOlder(true);
         setTargetLoadOlderTs(msgs[0].timestamp);
       }
-    } else if (paginationStatus === "CanLoadMore") {
-      // Larger page = far fewer round-trips to walk back through history.
-      // This was loadMore(50), which made reaching the top of a long
-      // conversation take dozens of tiny fetches; 200 keeps it snappy while
-      // staying bounded (the old loadMore(10000) defeated virtualization).
-      loadMore(200);
+    } else if ((useInboxStore.getState().pagination[conversationId]?.hasMoreAbove ?? false) && !olderLoading) {
+      // History pages are one-shot fetches keyed by the oldest local
+      // timestamp — no live subscription per page (the old usePaginatedQuery
+      // kept every loaded page subscribed and re-executing on churn). 200 per
+      // page keeps the walk-back round-trip count low without defeating
+      // virtualization.
+      const oldest = useInboxStore.getState().messages[conversationId]?.[0]?.timestamp;
+      if (oldest === undefined) return;
+      setOlderLoading(true);
+      convex.query(api.conversations.getAllMessages, {
+        conversation_id: convId,
+        limit: 200,
+        before_timestamp: oldest,
+        ...shareTokenArg(conversationId),
+      }).then((res: any) => {
+        if (!res?.messages) return;
+        useInboxStore.getState().mergeMessages(conversationId, res.messages, "prepend", {
+          hasMoreAbove: res.has_more_above ?? false,
+          initialized: true,
+        });
+      }).catch((err: unknown) => {
+         
+        console.warn("[useConversationMessages] loadOlder failed", { conversationId, err });
+      }).finally(() => setOlderLoading(false));
     }
-  }, [targetMode, targetAroundData, targetHasMoreAbove, targetIsLoadingOlder, paginationStatus, loadMore]);
+  }, [targetMode, targetAroundData, targetHasMoreAbove, targetIsLoadingOlder, olderLoading, convex, convId, conversationId]);
 
   const loadNewer = useCallback(() => {
     if (targetMode) {
