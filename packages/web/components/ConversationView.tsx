@@ -217,7 +217,7 @@ import { sessionStartupState, SESSION_STARTING_GRACE_MS } from "../lib/sessionLi
 import { messageRowKey, uniqueRowKeys } from "../lib/messageRowKey";
 import { expandEntityMentions } from "../lib/mentionExpansion";
 import { useSessionRestart, ghostRestartContextFor, deriveRestartStage, type RestartProgressRow, type RestartPhase, type RestartStage } from "../hooks/useSessionRestart";
-import { devRenderCount, devCountElements, devTimed, devSection, devPassStart } from "../lib/devRenderCount";
+import { devRenderCount, devCountElements } from "../lib/devRenderCount";
 
 // An @-mention query may contain spaces so multi-word titles are searchable: a
 // first token (possibly empty, so a bare "@" still opens recents) plus up to 4
@@ -12228,7 +12228,6 @@ const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "d
 // wrapper below can size the element tree each pass returns.
 const ConversationViewInner = (
   function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, isJumpingToTarget, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
-  devPassStart();
   devRenderCount("ConversationView2");
   const fallbackStickyContent = useMemo(() => stickyPromptContent(rawFallbackStickyContent), [rawFallbackStickyContent]);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -13023,7 +13022,6 @@ const ConversationViewInner = (
     return { forkSessionId, conversationId: forkSessionId, ready };
   }, [conversation?._id, conversation?.title, conversation?.messages, conversation?.loaded_start_index, conversation?.project_path, conversation?.git_root, conversation?.agent_type, hasMoreAbove, convCommand, forkSetMessages, addOptimisticFork, resolveForkSessionId, seedForkSession, currentUser?._id, conversation?.user]);
 
-  devSection("CV.s1");
   const handleForkFromMessage = useCallback(async (messageUuid: string) => {
     const tl = timelineRef.current;
     const idx = tl.findIndex((item: any) => item.type === "message" && item.data?.message_uuid === messageUuid);
@@ -13675,7 +13673,6 @@ const ConversationViewInner = (
   }, [timeline]);
 
   // Track if we've already scrolled for this highlight query
-  devSection("CV.s2");
   const hasScrolledToHighlight = useRef(false);
 
   // Fetch ALL matches across the whole conversation (not just loaded messages).
@@ -14357,7 +14354,6 @@ const ConversationViewInner = (
     return () => clearTimeout(t);
   }, [loadingBranchId]);
 
-  devSection("CV.s3");
   const handleTreeSwitchConversation = useCallback((convId: string) => {
     if (convId === conversation?._id?.toString()) return;
     navigateToSession(convId);
@@ -15116,7 +15112,6 @@ const ConversationViewInner = (
   // (also preserved by the copy) and place the anchor when that window lands.
   // Layout effect so the placement happens in the same commit that gated the
   // initial snap-to-bottom above — no bottom-flash in between.
-  devSection("CV.s4");
   useLayoutEffect(() => {
     const anchor = branchAnchorRef.current;
     if (!anchor) return;
@@ -15552,7 +15547,6 @@ const ConversationViewInner = (
     cache.set(msg, entry);
     return entry;
   };
-  devSection("CV.s5");
   const toolResultsCacheRef = useRef(new WeakMap<Message, { globalToolResultMap: typeof globalToolResultMap; results: ToolResult[] | undefined }>());
   const relevantToolResultsFor = (msg: Message): ToolResult[] | undefined => {
     const cache = toolResultsCacheRef.current;
@@ -15589,7 +15583,7 @@ const ConversationViewInner = (
     return fn;
   };
 
-  const renderItem = devTimed("CV.renderItem", (item: TimelineItem, index: number) => {
+  const renderItem = (item: TimelineItem, index: number) => {
     if (!item || index < 0 || index >= timeline.length) return null;
     if (item.type === 'commit') {
       const commit = item.data;
@@ -15813,7 +15807,7 @@ const ConversationViewInner = (
     }
 
     return null;
-  });
+  };
 
   // "Continued in" chips at the feed's end. Derived per (children, inline map,
   // messages) change rather than per render — it walked all loaded messages
@@ -15865,7 +15859,6 @@ const ConversationViewInner = (
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sig stands in for the array
   }, [subagentMenuSig]);
 
-  devSection("CV.s6");
   return (
     <HighlightContext.Provider value={highlightQuery}>
     <FilePathContext.Provider value={filePathCtx}>
