@@ -41,8 +41,8 @@ export const GUIDES: Guide[] = [
   },
   {
     slug: "memory",
-    title: "Agent memory",
-    dek: "Every session can search, read, and watch every other session. The commands, the scopes, and how agents use them.",
+    title: "Give Claude Code memory across sessions and teammates",
+    dek: "Not notes files: every session can search, read, and watch every other session your team has run. The commands, the scopes, and how agents use them.",
     category: "Recall",
     installSlug: "memory",
   },

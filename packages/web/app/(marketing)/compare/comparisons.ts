@@ -124,7 +124,7 @@ export const COMPARISONS: Comparison[] = [
     codecastIs:
       "Codecast records every coding agent session your team runs into one searchable dashboard — with live steering, cross-session memory for agents, and line-level attribution — and layers tasks and plans on top of that record.",
     competitorIs:
-      "Vibe Kanban is an open-source kanban board for orchestrating coding agents: you write tasks as cards, dispatch them to agents like Claude Code, Codex, or Gemini, and review the results as they move across the board.",
+      "Vibe Kanban is an open-source (Apache-2.0) kanban board for orchestrating coding agents: you write tasks as cards, dispatch them to agents like Claude Code, Codex, or Gemini, and review the results as they move across the board. Its maker, Bloop, announced in April 2026 that the project is sunsetting; the repository stays available and the community can continue it.",
     rows: [
       {
         ...SHARED_ROWS.model,
@@ -147,7 +147,7 @@ export const COMPARISONS: Comparison[] = [
     ],
     whenCompetitor: [
       "Your workflow is genuinely kanban: you think in cards, and agents are the executors you dispatch from the board.",
-      "You want one tool to both define tasks and run the agents for them.",
+      "You want one tool to both define tasks and run the agents for them, and you're comfortable depending on a project its original maintainers have sunset.",
     ],
     whenCodecast: [
       "Your team already runs agents ad hoc in terminals and IDEs, and you want that reality captured rather than replaced.",
