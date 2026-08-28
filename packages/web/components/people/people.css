@@ -242,10 +242,19 @@
 
 /* Present from the moment the mic opens and brighter the louder the voice, so
    a silent open microphone reads as a dim ring rather than as nothing at all —
-   which is the only proof on screen that the mic is hearing anything. */
+   which is the only proof on screen that the mic is hearing anything.
+
+   THE STEADY BAND IS WHAT MAKES THAT TRUE. The conic gradient sweeps `--level`
+   of a circle, so at level zero it drew no arc and the ring the comment above
+   promises was not on screen: a held key in a quiet moment, and a teammate
+   talking to you before their first word, both looked exactly like nothing. The
+   inset shadow paints the whole band in the direction's colour and the arc
+   brightens over it. Inset, because the mask keeps only the outer three pixels
+   and clips anything drawn outside the box. */
 .people-face[data-tx] .people-face-ring-tx,
 .people-face[data-rx] .people-face-ring-rx {
-  opacity: calc(0.4 + var(--level) * 0.6);
+  opacity: calc(0.55 + var(--level) * 0.45);
+  box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--tone) 45%, transparent);
 }
 
 /* HELD. The key goes down, because a key you are holding should look held —
@@ -266,10 +275,30 @@
     0 0 calc(4px + var(--level, 0) * 18px) color-mix(in srgb, var(--walkie-tx) 50%, transparent);
 }
 
-/* THEY are talking. A small lift, the cool ring, and nothing else: an incoming
-   burst is somebody else's gesture and must not look like one of yours. */
+/* THEY are talking. A small lift and the cool ring breathing: an incoming burst
+   is somebody else's gesture and must not look like one of yours — a held key
+   goes DOWN and stays down, a voice arriving rises and pulses. The pulse is on
+   the ring alone, so it cannot fight the level the same ring is drawing. */
 .people-face[data-rx] {
   transform: scale(1.06);
+}
+
+.people-face[data-rx] .people-face-ring-rx {
+  animation: people-face-rx-pulse 1.4s ease-in-out infinite;
+}
+
+/* The band breathes rather than glowing outward: the mask clips everything
+   outside the box, so the only pulse that survives it is the band's own
+   colour. */
+@keyframes people-face-rx-pulse {
+  0%, 100% { box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--walkie-rx) 45%, transparent); }
+  50%      { box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--walkie-rx) 90%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .people-face[data-rx] .people-face-ring-rx {
+    animation: none;
+  }
 }
 
 /* The hold cannot happen — their door is shut, you are in another call. The
@@ -298,7 +327,8 @@
    the others are still there and still readable — but enough that the eye is
    in no doubt where the voice is going. */
 .people-wall[data-holding] .people-face-seat:not([data-hold]),
-.people-strip[data-holding] .people-face-seat:not([data-hold]) {
+.people-strip[data-holding] .people-face-seat:not([data-hold]),
+.people-bar[data-holding] .people-face-seat:not([data-hold]) {
   opacity: 0.34;
 }
 
@@ -574,4 +604,55 @@
   right: 34px;
   padding-left: 8px;
   background: linear-gradient(to right, transparent, var(--sol-bg-highlight) 8px);
+}
+
+/* ── The shell's avatar bar ──────────────────────────────────────────────────
+ *
+ * The six faces along the top of the app are the SAME key as the wall's, drawn
+ * small: the classes above do the work and only three things are this
+ * surface's own.
+ */
+
+/* A BIGGER TARGET THAN THE PICTURE. A 32px circle is a small thing to hit with
+   a gesture you hold, so the key reaches four pixels past the face on every
+   side. A pseudo-element rather than padding: padding would resize the seat and
+   move the six faces apart. */
+.people-bar .people-face::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 999px;
+}
+
+/* "Hey, he joined" — the moment a burst became a call, under the face it
+   happened to, for four seconds. Absolute so it cannot move the bar: the
+   sentence appears over whatever is under the strip rather than pushing the
+   layout sideways mid-conversation. */
+.people-face-joined {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--walkie-rx) 22%, var(--sol-bg-alt));
+  border: 1px solid color-mix(in srgb, var(--walkie-rx) 55%, transparent);
+  color: var(--walkie-rx);
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: people-face-joined-in 180ms ease-out;
+}
+
+@keyframes people-face-joined-in {
+  from { opacity: 0; transform: translate(-50%, -3px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .people-face-joined {
+    animation: none;
+  }
 }

@@ -10,7 +10,14 @@ import {
   facesWindowSize,
   hitsInteractive,
   lerpCrop,
+  naturalTier,
   pickSpeaker,
+  tierForWidth,
+  CHROME_WIDTH,
+  HOVER_ROWS,
+  FACE_GAP,
+  FACES_PADDING,
+  TIER_DIAMETER,
   type Crop,
 } from "../calls/faceCrop";
 
@@ -264,7 +271,43 @@ describe("hitsInteractive", () => {
   });
 });
 
+describe("the circle tiers", () => {
+  it("is 96 for one speaker, 64 in a row, 40 when squeezed", () => {
+    expect(TIER_DIAMETER).toEqual({ speaker: 96, row: 64, mini: 40 });
+  });
+
+  it("puts one circle at the speaker size and a row at the row size", () => {
+    expect(naturalTier("speaker")).toBe("speaker");
+    expect(naturalTier("everyone")).toBe("row");
+  });
+
+  it("drops to mini below the width its own circles want", () => {
+    const row = facesWindowSize("everyone", 3).width;
+    expect(tierForWidth(row, "everyone", 3)).toBe("row");
+    expect(tierForWidth(row - 1, "everyone", 3)).toBe("mini");
+  });
+
+  it("drops a single speaker circle to mini too", () => {
+    const speaker = facesWindowSize("speaker", 1).width;
+    expect(tierForWidth(speaker, "speaker", 1)).toBe("speaker");
+    expect(tierForWidth(speaker - 1, "speaker", 1)).toBe("mini");
+  });
+});
+
 describe("facesWindowSize", () => {
+  it("is the circles' bounds plus 8px, and nothing else", () => {
+    // The whole point of the exact bounds: no chrome row waiting under the
+    // faces, no padding kept back for a state the window is not in.
+    expect(facesWindowSize("speaker", 1)).toEqual({
+      width: TIER_DIAMETER.speaker + FACES_PADDING * 2,
+      height: TIER_DIAMETER.speaker + FACES_PADDING * 2,
+    });
+    expect(facesWindowSize("everyone", 3)).toEqual({
+      width: 3 * TIER_DIAMETER.row + 2 * FACE_GAP + FACES_PADDING * 2,
+      height: TIER_DIAMETER.row + FACES_PADDING * 2,
+    });
+  });
+
   it("is one circle wide in speaker mode, whoever else is in the call", () => {
     expect(facesWindowSize("speaker", 5)).toEqual(facesWindowSize("speaker", 1));
   });
@@ -272,11 +315,42 @@ describe("facesWindowSize", () => {
   it("grows by a circle and a gap per person in everyone mode", () => {
     const one = facesWindowSize("everyone", 1);
     const two = facesWindowSize("everyone", 2);
-    expect(two.width - one.width).toBe(72 + 10);
+    expect(two.width - one.width).toBe(TIER_DIAMETER.row + FACE_GAP);
     expect(two.height).toBe(one.height);
   });
 
   it("never collapses to nothing when the room is empty", () => {
     expect(facesWindowSize("everyone", 0).width).toBe(facesWindowSize("everyone", 1).width);
+  });
+
+  it("shrinks the circles, and the window with them, at the mini tier", () => {
+    const mini = facesWindowSize("everyone", 3, { tier: "mini" });
+    expect(mini.height).toBe(TIER_DIAMETER.mini + FACES_PADDING * 2);
+    expect(mini.width).toBeLessThan(facesWindowSize("everyone", 3).width);
+  });
+
+  it("grows downward on hover, to hold the name and the controls", () => {
+    // Both rows live BELOW the circles, so this is the only way they fit
+    // without covering a face.
+    const idle = facesWindowSize("everyone", 3);
+    const hovered = facesWindowSize("everyone", 3, { hovered: true });
+    expect(hovered.height - idle.height).toBe(HOVER_ROWS);
+    // Three 64px faces are already wider than the chrome, so the width holds.
+    expect(hovered.width).toBe(idle.width);
+  });
+
+  it("widens too, but only where the chrome would be clipped", () => {
+    // One 96px face is narrower than four 28px buttons, so hovering it has to
+    // make room sideways as well.
+    const hovered = facesWindowSize("speaker", 1, { hovered: true });
+    expect(hovered.width).toBe(CHROME_WIDTH + FACES_PADDING * 2);
+    expect(hovered.height).toBe(TIER_DIAMETER.speaker + HOVER_ROWS + FACES_PADDING * 2);
+  });
+
+  it("never reserves either row while the pointer is away", () => {
+    for (const tier of ["speaker", "row", "mini"] as const) {
+      const idle = facesWindowSize("everyone", 1, { tier });
+      expect(idle.height).toBe(TIER_DIAMETER[tier] + FACES_PADDING * 2);
+    }
   });
 });

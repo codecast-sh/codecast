@@ -1,7 +1,18 @@
-import { describe, expect, it } from "bun:test";
-import { otherJoinedLive } from "../../hooks/useWalkie";
-import { walkieDoorOpen } from "../../hooks/useWalkieSync";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { otherJoinedLive, senderHearing, senderHearingFrom } from "../../hooks/useWalkie";
+import { observeWalkieUpgrade, walkieDoorOpen } from "../../hooks/useWalkieSync";
 import { micConstraints } from "../calls/joinPrefs";
+import { getWalkieStatus, refreshWalkie, walkieJoinedRoom } from "../calls/walkie";
+import {
+  JOIN_TITLE_MS,
+  clearJoinAnnouncement,
+  getJoinAnnouncement,
+  joinTitle,
+  subscribeJoinAnnouncement,
+  theyJoinedText,
+  youJoinedText,
+} from "../calls/joinAnnounce";
+import { useInboxStore } from "../../store/inboxStore";
 
 // THE UPGRADE: a burst becoming a call because somebody stepped into it.
 //
@@ -36,7 +47,7 @@ describe("walkie: reading the far side's join off the roster", () => {
 
   it("never reads MY OWN stamp back as news", () => {
     // This side already knows what it pressed, synchronously, through the
-    // engine's `joinedLive`. Counting my own row would make the rule wait on a
+    // engine's live room. Counting my own row would make the rule wait on a
     // round trip that the local-first path exists to avoid — and worse, it
     // would keep answering true for the whole call, so the watcher that fires
     // the join cue and the camera would have no edge to fire on.
@@ -57,6 +68,35 @@ describe("walkie: reading the far side's join off the roster", () => {
   it("ignores a row an older client wrote without the field", () => {
     expect(otherJoinedLive([seat({ walkie_joined_at: undefined })], ME)).toBe(false);
     expect(otherJoinedLive([seat({ walkie_joined_at: 0 })], ME)).toBe(false);
+  });
+
+  it("ignores a stamp left behind by a browser that died", () => {
+    // `walkie_joined_at` is written when somebody joins and nothing takes it
+    // back: a tab that crashes without leaving keeps its seat, and its stamp,
+    // until the server sweeps the room. Read without a floor, the NEXT burst
+    // into that room is a call from its very first tick — the sender's mic
+    // never closes on release, a join is announced that nobody made, and the
+    // strip hands itself to the call dock over three seconds of voice.
+    //
+    // The floor is when THIS client entered the room. Anything older happened
+    // before there was anything to join.
+    const entered = 5_000;
+    expect(otherJoinedLive([seat({ walkie_joined_at: 4_999 })], ME, entered)).toBe(false);
+    // The same room and the same person: the join is real once the stamp lands
+    // inside this seat's own lifetime.
+    expect(otherJoinedLive([seat({ walkie_joined_at: 5_001 })], ME, entered)).toBe(true);
+    // A stamp at the very moment of entry counts. A receiver who was already
+    // seated when the burst opened presses Join live in the same millisecond
+    // often enough that rounding it out would drop real joins.
+    expect(otherJoinedLive([seat({ walkie_joined_at: entered })], ME, entered)).toBe(true);
+    // And one live stamp among leftovers is still news.
+    expect(
+      otherJoinedLive(
+        [seat({ user_id: "user_ghost", walkie_joined_at: 12 }), seat({ walkie_joined_at: 9_000 })],
+        ME,
+        entered,
+      ),
+    ).toBe(true);
   });
 });
 
@@ -117,5 +157,221 @@ describe("walkie: what the microphone is opened with", () => {
     expect(micConstraints("dev-1").deviceId).toEqual({ ideal: "dev-1" });
     expect(micConstraints().deviceId).toBeUndefined();
     expect(micConstraints("").deviceId).toBeUndefined();
+  });
+});
+
+// ── what the sender is told ────────────────────────────────────────────────
+//
+// "Live to Jordan" was a claim about JORDAN made out of a fact about me: my
+// own track had reached the SFU. It was false whenever Jordan was away from
+// the machine, busy, or had the door shut — the ordinary cases, and the ones
+// the walkie is built to survive, because the burst lands in the DM either
+// way. The sentence now comes off the room's roster, which is the only thing
+// that knows whether anybody is there.
+describe("walkie: the sender's claim about the other person", () => {
+  const ME = "user_me";
+  const THEM = "user_them";
+  const them = (over: Record<string, unknown> = {}) => ({ userId: THEM, name: "Jordan", ...over });
+  const seat = (id: string) => ({ user_id: id });
+
+  it("says they hear you when they are actually in the room", () => {
+    const out = senderHearing([seat(ME), seat(THEM)], ME, them());
+    expect(out.state).toBe("hears");
+    expect(out.text).toBe("Jordan hears you");
+  });
+
+  it("NEVER reads hearing off my own seat", () => {
+    // The whole bug in one line: I am in the room because I am the one talking
+    // into it. A roster of exactly me is nobody listening.
+    const out = senderHearing([seat(ME)], ME, them());
+    expect(out.state).toBe("away");
+    expect(out.text).toBe("Jordan is away — they get the message");
+  });
+
+  it("says away when the room is empty, and never calls it a failure", () => {
+    const out = senderHearing([], ME, them());
+    expect(out.state).toBe("away");
+    // The message still arrives. The sentence has to carry that, or a person
+    // stops talking when there was no reason to.
+    expect(out.text).toContain("they get the message");
+  });
+
+  it("tells busy apart from away, by the same door the receiver applies", () => {
+    // Three ways to shut it, one sentence — because from here they are the
+    // same fact: the voice will not play, the message will.
+    for (const shut of [{ status: "busy" }, { pref: "off" }, { snoozed: true }]) {
+      const out = senderHearing([seat(ME)], ME, them(shut));
+      expect(out.state).toBe("busy");
+      expect(out.text).toBe("Jordan is busy — they get the message");
+    }
+  });
+
+  it("prefers the room over the door: a seated teammate hears you whatever their status says", () => {
+    // They are in the room. However they had their day marked, the audio is
+    // playing on their machine, and the strip must say the true thing.
+    expect(senderHearing([seat(THEM)], ME, them({ status: "busy" })).state).toBe("hears");
+  });
+
+  it("ignores a seat that belongs to somebody else entirely", () => {
+    // A group room, or a third person who wandered in. The claim names one
+    // person, so it is answered by that person's seat and no other.
+    expect(senderHearing([seat("user_third")], ME, them()).state).toBe("away");
+    // With nobody named — a room the description could not resolve — any seat
+    // that is not mine is somebody listening.
+    expect(senderHearing([seat("user_third")], ME, { name: "The room" }).state).toBe("hears");
+  });
+
+  it("claims nothing at all when neither identity has resolved", () => {
+    // A roster read before currentUser has landed, in a room that named
+    // nobody: my own seat is indistinguishable from theirs, and this is the
+    // one claim that must never be guessed.
+    expect(senderHearing([seat(ME)], undefined, { name: "Jordan" }).state).toBe("away");
+  });
+});
+
+// ── the join, in words ─────────────────────────────────────────────────────
+//
+// The founder asked for "a message like hey he joined". What shipped was a
+// sound and a surface swap: on the sender's side the strip silently became the
+// call window, the microphone stayed open, and nothing said what had changed.
+// These are the words, and the four seconds they live for.
+describe("walkie: the dock's title when somebody joins", () => {
+  const ROOM = "dm:title:test";
+  const T0 = 1_700_000_000_000;
+  const ann = (over: Record<string, unknown> = {}) => ({
+    roomKey: ROOM,
+    text: "Jordan joined — it's a call now",
+    at: T0,
+    ...over,
+  });
+
+  it("says the room's ordinary name when nothing has happened", () => {
+    expect(joinTitle(null, ROOM, T0, "Jordan Lee")).toBe("Jordan Lee");
+  });
+
+  it("says who joined, for four seconds, and then stops", () => {
+    expect(joinTitle(ann(), ROOM, T0, "Jordan Lee")).toBe("Jordan joined — it's a call now");
+    expect(joinTitle(ann(), ROOM, T0 + JOIN_TITLE_MS - 1, "Jordan Lee")).toBe(
+      "Jordan joined — it's a call now",
+    );
+    // A title is never allowed to outlive its moment: a tab that slept through
+    // the timer must not come back still announcing somebody walking in.
+    expect(joinTitle(ann(), ROOM, T0 + JOIN_TITLE_MS, "Jordan Lee")).toBe("Jordan Lee");
+    expect(joinTitle(ann(), ROOM, T0 + 60_000, "Jordan Lee")).toBe("Jordan Lee");
+  });
+
+  it("belongs to the room it names and to no room after it", () => {
+    // The person left and walked into another huddle inside the four seconds.
+    expect(joinTitle(ann(), "dm:somewhere:else", T0, "Ana")).toBe("Ana");
+    expect(joinTitle(ann(), null, T0, "Ana")).toBe("Ana");
+  });
+
+  it("names both sides of the same moment", () => {
+    expect(theyJoinedText("Jordan")).toBe("Jordan joined — it's a call now");
+    expect(youJoinedText("Jordan")).toBe("You joined Jordan");
+    // A name that never resolved still gets a sentence rather than a blank.
+    expect(theyJoinedText("")).toBe("Somebody joined — it's a call now");
+    expect(youJoinedText(null)).toBe("You joined the call");
+  });
+});
+
+describe("walkie: the far side's join, applied exactly once", () => {
+  const ROOM = "dm:announce:test";
+
+  beforeEach(() => {
+    // SEATED FIRST, because that is the only way this moment ever happens: a
+    // stamp arrives on the roster of a room this client is sitting in. The
+    // engine reconciles its live room against the seat, so an upgrade marked
+    // from outside one is dropped again before it can be read.
+    useInboxStore.getState().setCallState({ roomKey: ROOM, phase: "connected", muted: false });
+  });
+
+  afterEach(() => {
+    clearJoinAnnouncement();
+    // Retire the room the way the app does: the call ending is what clears it.
+    useInboxStore.getState().setCallState({ roomKey: null, phase: "idle", muted: true });
+    refreshWalkie();
+  });
+
+  it("announces the join once, however many times the roster re-pushes", () => {
+    // THE MUTATION CHECK LIVES HERE. The roster this rides on re-pushes for
+    // every mute, camera and heartbeat in the room, and the stamp on it never
+    // changes once written — so without the guard the sound and the sentence
+    // would fire again on each of them, and the person would be told somebody
+    // joined for as long as the call lasted.
+    const seen: string[] = [];
+    const unsubscribe = subscribeJoinAnnouncement(() => seen.push(getJoinAnnouncement()?.text ?? ""));
+    try {
+      observeWalkieUpgrade(ROOM, "Jordan");
+      observeWalkieUpgrade(ROOM, "Jordan");
+      observeWalkieUpgrade(ROOM, "Jordan");
+    } finally {
+      unsubscribe();
+    }
+    expect(seen).toEqual(["Jordan joined — it's a call now"]);
+    expect(getJoinAnnouncement()?.roomKey).toBe(ROOM);
+    // And the engine knows the room is a call, which is what keeps the mic open
+    // and hands the surface to the ordinary dock.
+    expect(walkieJoinedRoom(getWalkieStatus())).toBe(ROOM);
+  });
+});
+
+// ── one derivation, two readers ────────────────────────────────────────────
+//
+// The strip says the sentence and the away tick makes the sound, and they read
+// the same function on purpose. Two copies of this lookup would eventually
+// disagree, and the shape of that bug is a person hearing "nobody is there"
+// while the words in front of them say somebody is.
+describe("walkie: the sender's claim, derived from the store", () => {
+  const ME = "user_me";
+  const THEM = "user_them";
+  const ROOM = `dm:${ME}:${THEM}`;
+  const NOW = 1_700_000_000_000;
+
+  const store = (over: Record<string, any> = {}) => ({
+    currentUser: { _id: ME },
+    teamMembers: [{ _id: THEM, name: "Jordan Lee" }],
+    chatChannels: {},
+    chatRail: [],
+    conversations: {},
+    sessions: {},
+    callOccupancy: {},
+    ...over,
+  });
+
+  it("names the other person off the room key and the live roster", () => {
+    const s = store({ callOccupancy: { [ROOM]: [{ user_id: ME }, { user_id: THEM }] } });
+    const out = senderHearingFrom(s, ROOM, NOW);
+    expect(out.otherId).toBe(THEM);
+    expect(out.state).toBe("hears");
+    expect(out.text).toBe("Jordan Lee hears you");
+  });
+
+  it("says away for a room holding nobody but me", () => {
+    const s = store({ callOccupancy: { [ROOM]: [{ user_id: ME }] } });
+    expect(senderHearingFrom(s, ROOM, NOW).state).toBe("away");
+  });
+
+  it("reads the door off the teammate's own row, snooze included", () => {
+    // The same three ways the receiver's client shuts its door, seen from the
+    // other end (walkieDoorOpen). A snooze is a clock, so it is compared
+    // against the `now` the caller passes rather than one hidden in here.
+    const busy = store({ teamMembers: [{ _id: THEM, name: "Jordan Lee", status: "busy" }] });
+    expect(senderHearingFrom(busy, ROOM, NOW).state).toBe("busy");
+
+    const off = store({ teamMembers: [{ _id: THEM, name: "Jordan Lee", walkie_pref: "off" }] });
+    expect(senderHearingFrom(off, ROOM, NOW).state).toBe("busy");
+
+    const snoozed = store({
+      teamMembers: [{ _id: THEM, name: "Jordan Lee", walkie_snoozed_until: NOW + 60_000 }],
+    });
+    expect(senderHearingFrom(snoozed, ROOM, NOW).state).toBe("busy");
+    // And the hour running out puts them back to merely away.
+    expect(senderHearingFrom(snoozed, ROOM, NOW + 120_000).state).toBe("away");
+  });
+
+  it("renames live: the sentence follows the roster, not the burst", () => {
+    const renamed = store({ teamMembers: [{ _id: THEM, name: "Jordan L." }] });
+    expect(senderHearingFrom(renamed, ROOM, NOW).text).toBe("Jordan L. is away — they get the message");
   });
 });

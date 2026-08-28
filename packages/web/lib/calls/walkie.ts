@@ -20,21 +20,22 @@
 // shout into a DM would be a media-plane fight nobody asked for, so the status
 // says so instead and the UI disables push-to-talk.
 //
-// WHO OWNS THE MICROPHONE. This module does, and that is the inversion the
-// whole feature turned on. It used to join the room first and then borrow
-// whatever track LiveKit had published, which meant a control-plane round trip,
-// a token mint and an SFU connect stood between the key going down and anything
-// listening — measured at 1.0s into a warm room and 12.7s into a cold one.
-// Everything said in that gap reached nobody and landed in no recording, so a
-// two second burst came back as "no words".
+// WHO OWNS THE MICROPHONE. This module does, and that inversion is what made
+// the feature work. Joining the room first and borrowing LiveKit's published
+// track put a token mint and an SFU connect between the key going down and
+// anything listening — 1.0s warm, 12.7s cold — and everything said in that gap
+// reached nobody and landed in no recording, so a two second burst came back as
+// "no words". Now getUserMedia comes first, then the recorder, the meter and
+// the recognizer on that track, and the room last, carrying a CLONE.
+// `sending.live` says the words are being kept; `sending.heardLive` says
+// somebody is hearing them right now.
 //
-// Now the order runs the other way. getUserMedia first, then the recorder, the
-// meter and the recognizer on that track, and only then the room — carrying a
-// CLONE, so callManager can own, mute and stop its copy without ever
-// truncating the recording. Nothing waits on the join, so a release that beats
-// it still lands a complete message. `sending.live` says the words are being
-// kept; `sending.heardLive` says somebody is hearing them right now. Those are
-// two different claims, and the old status could only make the second.
+// WHICH SURFACE IS ON SCREEN, in two sentences. The walkie holds ONE room at a
+// time and knows only what that room is — a burst going out, a burst coming in,
+// or a call somebody stepped into on purpose — so `liveRoom` is the single
+// fact, and `walkieHoldsRoom` is the whole question a surface asks. A burst or
+// a listen draws the strip; a call draws the ordinary dock, and the stage when
+// the person expanded it.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Track } from "livekit-client";
 import { useInboxStore } from "../../store/inboxStore";
@@ -44,7 +45,15 @@ import { micConstraints, readJoinPrefs } from "./joinPrefs";
 import { openAsrPipe, type AsrPipe } from "./asrPipe";
 import { uploadBlobToStorage } from "../uploadBlob";
 import { mutateOnUnload } from "../keepaliveMutation";
-import { soundWalkieKeyUp, soundWalkieOpen, soundWalkieRoger, soundWalkieSquelch } from "../sounds";
+import {
+  soundWalkieAway,
+  soundWalkieJoined,
+  soundWalkieKeyUp,
+  soundWalkieOpen,
+  soundWalkieRoger,
+  soundWalkieSquelch,
+} from "../sounds";
+import { announceJoin, youJoinedText } from "./joinAnnounce";
 
 const api = _api as any;
 
@@ -55,13 +64,10 @@ type ConvexHandle = {
 
 /** Below this, the key was brushed rather than held: nothing was said.
  *
- *  EXPORTED because a second surface now depends on the number rather than
- *  merely obeying it. The people wall's face is both a hold and a click, and a
- *  click can only be allowed to open the microphone because anything that
- *  short is discarded here. Its tap window has to stay strictly under this, so
- *  it imports the real constant and asserts the gap — a hand-copied 700 would
- *  have gone quietly stale the day this moved, and the test that exists to
- *  catch exactly that would have kept passing. */
+ *  EXPORTED because the people wall's face is both a hold and a click, and a
+ *  click is only safe to let open the microphone because anything this short is
+ *  discarded here. Its tap window imports the real number and asserts the gap,
+ *  so a hand-copied 700 cannot go quietly stale the day this moves. */
 export const MIN_BURST_MS = 700;
 // A hard stop on one hold, for product sanity rather than for the server:
 // nobody walkie-talks for two minutes, and a key wedged down by a stuck event
@@ -121,13 +127,47 @@ export type WalkieIncoming = {
   createdAt: number;
 };
 
+/**
+ * WHAT THE ROOM IS. Three answers, and they are the whole state machine:
+ *
+ *   burst   — this client's key is down, or the seat is still held open after
+ *             it came up in case an answer arrives.
+ *   listen  — a teammate's burst is playing here, or the seat is still held
+ *             open after it ended.
+ *   call    — somebody stepped in on purpose. Mine (joinWalkieLive) or theirs
+ *             (a walkie_joined_at stamp landing on the roster).
+ *
+ * `call` is STICKY for as long as the room lasts: a burst spoken into a room
+ * that is already a call stays a call. That is what makes hold-to-reply inside
+ * a huddle a non-event rather than a thing to defend against — the walkie is a
+ * guest there, implied by the mode rather than recorded in a field of its own.
+ */
+export type WalkieRoomMode = "burst" | "listen" | "call";
+
+export type WalkieLiveRoom = {
+  key: string;
+  mode: WalkieRoomMode;
+  /** When this client's involvement with this room began. Steady across a
+   *  change of mode, because it answers "since when has the walkie been in
+   *  here" — which is what tells a fresh join stamp from one a browser that
+   *  died left behind. */
+  since: number;
+};
+
 export type WalkieStatus = {
   /** What this client is transmitting right now. */
   sending: WalkieSending | null;
   /** The teammate this client is currently listening to, live. */
   incoming: WalkieIncoming | null;
-  /** The room is being held open after a burst until this moment. */
-  lingerUntil: number | null;
+  /**
+   * THE ROOM THE WALKIE IS IN, and the only thing that decides which surface is
+   * on screen. Non-null from the instant of a press — before getUserMedia
+   * answers, let alone the room — until the seat is genuinely handed back, so
+   * there is no tick in which this client is seated and nothing owns the room.
+   * That gap was its own class of bug (ct-46031) and it is now unrepresentable
+   * rather than defended.
+   */
+  liveRoom: WalkieLiveRoom | null;
   /** Why push-to-talk cannot be used; null when it can. */
   unavailable: null | "another-call" | "not-ready";
   /** True when holding the key would answer someone — the reply affordance. */
@@ -144,47 +184,16 @@ export type WalkieStatus = {
    * landed without words.
    */
   asr: "live" | "unavailable";
-  /**
-   * THE ROOM SOMEBODY STEPPED INTO ON PURPOSE, and the moment the walkie stops
-   * being the walkie.
-   *
-   * A burst used to be told apart from a conversation by the microphone: an
-   * open mic meant somebody had joined. That reading died with hot auto-listen
-   * — every listener's mic is open now — so the intent is carried instead of
-   * inferred. It is set from two places, and both are a person pressing
-   * something: this client's own "Join live", and the far side's, which
-   * arrives as a stamp on the roster (hooks/useWalkieUpgrade).
-   *
-   * While it names the room the call plane is in, the walkie owns nothing: the
-   * ordinary dock has the surface, the linger will not hand the seat back, and
-   * the hold key behaves as it does inside any huddle.
-   */
-  joinedLive: string | null;
-  /**
-   * A room this client is handing back, from the moment the decision is made
-   * until the seat is actually gone.
-   *
-   * It exists because leaving is ASYNC and ownership is not. `leaveCall` awaits
-   * the scribe before it moves `call.phase`, so between "the walkie is done
-   * with this room" and "this client is no longer in it" there are ticks in
-   * which the person is still seated and connected. Without this the burst
-   * being unpublished in that window left `sending`, `incoming` and
-   * `lingerUntil` all null against a live seat — the release gap once more, on
-   * the one path that hands the room back instead of holding it (ct-46031).
-   */
-  releasing: string | null;
   error: string | null;
 };
 
 let status: WalkieStatus = {
   sending: null,
   incoming: null,
-  lingerUntil: null,
+  liveRoom: null,
   unavailable: "not-ready",
   canReply: false,
   asr: "live",
-  joinedLive: null,
-  releasing: null,
   error: null,
 };
 
@@ -197,12 +206,10 @@ function emit(patch: Partial<WalkieStatus>) {
   if (
     next.sending === status.sending &&
     next.incoming === status.incoming &&
-    next.lingerUntil === status.lingerUntil &&
+    next.liveRoom === status.liveRoom &&
     next.unavailable === status.unavailable &&
     next.canReply === status.canReply &&
     next.asr === status.asr &&
-    next.joinedLive === status.joinedLive &&
-    next.releasing === status.releasing &&
     next.error === status.error
   ) {
     return;
@@ -226,6 +233,9 @@ let convex: ConvexHandle | null = null;
  *  gesture below no-ops and the status reads "not-ready". */
 export function bindWalkie(client: ConvexHandle) {
   convex = client;
+  // Kept where a hot replacement of this module can find it again (see the
+  // bottom of the file). No-op in a build.
+  if (import.meta.hot) import.meta.hot.data.walkieConvex = client;
   refresh();
 }
 
@@ -260,55 +270,120 @@ export function walkieBlockedFor(roomKey?: string): WalkieStatus["unavailable"] 
   return busyElsewhere(roomKey) ? "another-call" : null;
 }
 
-/** The room the walkie considers its own right now: the one being talked into,
- *  the one being listened to, or the one still held open after a burst. */
-function walkieRoomKey(): string | undefined {
-  return burst?.roomKey ?? status.incoming?.roomKey ?? lingerRoomKey ?? undefined;
+/**
+ * ENTER THE ROOM, or change what being in it means. Synchronous, and called
+ * from the three gestures that are the only ways in: a press, a teammate's
+ * burst starting to play, and somebody stepping in on purpose.
+ *
+ * A room that is already a `call` stays one. Both halves of that matter: a
+ * second burst spoken inside a call must not turn it back into a burst, and a
+ * burst spoken into a huddle the person was already sitting in must not take
+ * the huddle's own dock away — which is the whole of what a "guest" flag used
+ * to record, now implied.
+ */
+function enterLiveRoom(key: string, mode: WalkieRoomMode): void {
+  const held = status.liveRoom?.key === key ? status.liveRoom : null;
+  // A room this client was ALREADY SITTING IN is a call, whoever opened it and
+  // whatever the walkie is about to do in it. Hold-to-reply inside a huddle is
+  // a guest speaking in somebody else's room: the huddle keeps its own dock and
+  // its own hang-up, and no timer of ours may ever take its seat. Asked here,
+  // once, at the instant of the gesture — the pre-burst world, which is exactly
+  // the question a separate `guest` flag used to record an answer to.
+  const next: WalkieRoomMode = held?.mode === "call" || (!held && inRoom(key)) ? "call" : mode;
+  if (held?.mode === next) return;
+  emit({ liveRoom: { key, mode: next, since: held?.since ?? Date.now() } });
+}
+
+function leaveLiveRoom(): void {
+  if (status.liveRoom) emit({ liveRoom: null });
+}
+
+/**
+ * THE QUESTION EVERY SURFACE ASKS: is the walkie holding this room, as a burst
+ * rather than as a call?
+ *
+ * Yes means the strip is the surface and the ordinary call dock stands down —
+ * a burst joins a room exactly the way a huddle does, so without this the
+ * floating call window would open for every sentence anybody says. No means the
+ * room is a conversation and belongs to the dock, whether it started as one or
+ * became one when somebody pressed Join live.
+ *
+ * `roomKey` null asks about the walkie alone, which is the honest question
+ * while a burst outlives the room it was spoken into: the recorder and the
+ * recognizer are still running and the message still lands, so the strip stays
+ * even though the call plane has gone idle.
+ */
+export function walkieHoldsRoom(s: WalkieStatus, roomKey: string | null): boolean {
+  const live = s.liveRoom;
+  if (!live || live.mode === "call") return false;
+  return !roomKey || roomKey === live.key;
+}
+
+/** The room somebody stepped into on purpose, for the readers that only ask
+ *  that — a face's "joined" badge, the release's "do not mute" rule. */
+export function walkieJoinedRoom(s: WalkieStatus): string | null {
+  return s.liveRoom?.mode === "call" ? s.liveRoom.key : null;
 }
 
 /** Recompute what the UI may offer. Called whenever the world moves. */
 function refresh() {
-  emit({ unavailable: walkieBlockedFor(walkieRoomKey()) });
-  reconcileHotListenCeiling();
+  reconcileLiveRoom();
+  emit({ unavailable: walkieBlockedFor(status.liveRoom?.key) });
+  reconcileIdleRelease();
 }
 
-// ── the hot listen's hard ceiling ──────────────────────────────────────────
+/**
+ * The live room, against where the call plane actually is.
+ *
+ * ONE RULE FOR THREE THINGS that used to be three: a linger whose room the
+ * person walked out of, a join stamp outliving the call it named, and a burst
+ * whose room fell over. All of them are the same sentence — the walkie is not
+ * in that room any more — and this runs on every move of the call plane
+ * (useWalkieSync refreshes on roomKey:phase), so none of them can outlive it.
+ *
+ * A burst or a listen in flight is exempt, because it OWNS a room the join has
+ * not landed in yet: nothing is seated, so there is nothing to be wrong about.
+ */
+function reconcileLiveRoom(): void {
+  const live = status.liveRoom;
+  if (!live) return;
+  if (burst || status.incoming) return;
+  if (!inRoom(live.key)) leaveLiveRoom();
+}
+
+// ── the seat's own clock ────────────────────────────────────────────────────
 //
-// AN OPEN MICROPHONE NEEDS A CLOCK OF ITS OWN, because nothing else in this
-// path has one.
+// A SEAT NEEDS A CLOCK OF ITS OWN, because nothing else in this path has one,
+// and because auto-listen is hot: a burst holds the receiver's microphone open.
 //
-// Auto-listen now joins unmuted, so a burst holds the receiver's microphone
-// open. What closes it is `applyReport` noticing the burst is over — and
-// `applyReport` runs only when the server pushes or the call plane moves.
-// Neither happens if the sender's tab dies mid-word:
+// One timer, one deadline, derived from the state rather than armed by events.
+// That is the difference between this and what it replaces — a linger timer, a
+// separate hot-listen ceiling, a `lingerRoomKey`, a `ceilingFor` and three
+// cleanup paths, each of which existed to stop one of the others going wrong.
 //
-//   The row stays `voice.status: "live"` forever. The server's sweep is not a
-//   cron — it runs as a side effect of the NEXT burst in that channel, and
-//   nobody is coming back to talk. `chat.listLiveVoiceBursts` returns only
-//   message id, channel, sender, room and created_at, every one of them frozen
-//   for the life of a burst, precisely so a transcript patch cannot re-push it
-//   to every watcher; so the result is byte-identical and the client is never
-//   woken. `pickLiveBurst` holds the staleness rule that is supposed to bound
-//   this, and it was simply never asked.
+// Two deadlines, one at a time:
 //
-// So the receiver arms its own timer. It is a CEILING, not a heartbeat: one
-// timeout at a deadline computed from the burst's own age, cleared when the
-// burst ends the ordinary way. Nothing here re-arms on a push, because during
-// a healthy burst there are no pushes to re-arm on — that is the same fact
-// that makes the ceiling necessary.
+//   A LISTEN gets the burst's own outer bound. What normally ends a listen is
+//   the server saying the burst is over, and that push never comes if the
+//   sender's tab dies mid-word: the row stays `voice.status: "live"` forever,
+//   the sweep runs only as a side effect of the next burst in that channel, and
+//   `chat.listLiveVoiceBursts` returns a byte-identical result that wakes
+//   nobody. So the receiver counts from the burst's own age instead.
 //
-// IT DOES NOT DECIDE ANYTHING. All it does is make the question get asked;
-// `shouldReleaseRoom` still answers it, and that is what keeps a call somebody
-// deliberately joined from being hung up by a timer — the ceiling fires there
-// too, clears a burst that really is over, and hands back nothing. Putting a
-// second "unless they joined" test in here as well would be a second lock on
-// one door, and the kind that drifts out of step with the first.
+//   A HELD ROOM gets half a minute from the last audio in it — my key coming
+//   up, or a teammate's burst ending. A burst is one half of a conversation and
+//   leaving at once would send the answer to an empty room.
+//
+// A key in hand holds the room with no clock at all, and so does a call
+// somebody stepped into. But a LISTEN'S ceiling runs inside a call too: the
+// burst really is over there as well, and the dead row still has to be cleared.
+// Handing the seat back is `shouldReleaseRoom`'s decision and it refuses for a
+// call, which is what keeps a timer from ever hanging one up.
 
 // Room for a full-length burst to finish and report itself: the sender's own
 // cap (MAX_BURST_MS) is the same 120s as the staleness window, so a legitimate
 // monologue reaches the line at the very moment it stops, and its upload and
-// finalize still have to land after that. Slack is what keeps the ceiling from
-// cutting off the last word of an honest two-minute hold.
+// finalize still have to land after that.
 const HOT_LISTEN_SLACK_MS = 30_000;
 
 /** When a hot listen must end whatever the server has said — 2.5 minutes after
@@ -318,45 +393,59 @@ export function hotListenDeadline(createdAt: number): number {
   return createdAt + BURST_STALE_MS + HOT_LISTEN_SLACK_MS;
 }
 
-let ceilingTimer: ReturnType<typeof setTimeout> | null = null;
-/** The burst the armed ceiling belongs to, so re-arming is idempotent. */
-let ceilingFor: string | null = null;
+/** When audio was last in the room: my key coming up, or a teammate's burst
+ *  ending. The half minute an answer might arrive in counts from here, so a
+ *  two-way exchange holds the seat for as long as it is a conversation. */
+let lastAudioAt = 0;
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
+/** The deadline the armed timer is for, so re-arming is idempotent. */
+let idleAt: number | null = null;
 
-function clearHotListenCeiling() {
-  if (ceilingTimer) clearTimeout(ceilingTimer);
-  ceilingTimer = null;
-  ceilingFor = null;
+/** When this seat stops being worth holding, or null while something is
+ *  holding it. Exported for its test: it IS the rule. */
+export function seatDeadline(input: {
+  live: WalkieLiveRoom | null;
+  bursting: boolean;
+  incoming: { createdAt: number } | null;
+  lastAudioAt: number;
+}): number | null {
+  if (!input.live) return null;
+  if (input.incoming) return hotListenDeadline(input.incoming.createdAt);
+  if (input.live.mode === "call") return null;
+  if (input.bursting) return null;
+  return input.lastAudioAt + LINGER_MS;
 }
 
-/** Arm, keep or drop the ceiling to match the world. Called from `refresh`,
- *  which every state change already goes through, so there is one place this
- *  can be got wrong rather than one per transition. */
-function reconcileHotListenCeiling() {
-  const inc = status.incoming;
-  if (!inc) {
-    clearHotListenCeiling();
-    return;
-  }
-  if (ceilingFor === inc.messageId) return;
-  clearHotListenCeiling();
-  ceilingFor = inc.messageId;
-  ceilingTimer = setTimeout(
-    () => {
-      ceilingTimer = null;
-      ceilingFor = null;
-      // The same question a push would have asked, asked by the clock instead.
-      // `applyReport` re-reads `pickLiveBurst` against a fresh now, finds the
-      // burst too old to be live, and takes the end-of-burst path.
-      applyReport();
-    },
-    // FLOORED, not just clamped at zero. `applyReport` re-arms whatever it
-    // does not resolve, so a ceiling that fired while `pickLiveBurst` still
-    // judged the burst fresh would re-arm at zero and spin the main thread.
-    // That cannot happen while the slack is positive — the deadline is past
-    // the staleness window by construction — and this is what keeps a future
-    // edit to either constant a slow poll rather than a hot loop.
-    Math.max(1_000, hotListenDeadline(inc.createdAt) - Date.now()),
-  );
+function reconcileIdleRelease(): void {
+  const at = seatDeadline({
+    live: status.liveRoom,
+    bursting: !!burst,
+    incoming: status.incoming,
+    lastAudioAt,
+  });
+  if (at === idleAt) return;
+  if (idleTimer) clearTimeout(idleTimer);
+  idleAt = at;
+  idleTimer =
+    at === null
+      ? null
+      : // FLOORED rather than clamped at zero: a deadline already in the past
+        // must not re-arm at zero and spin the main thread.
+        setTimeout(onSeatIdle, Math.max(1_000, at - Date.now()));
+}
+
+function onSeatIdle(): void {
+  idleTimer = null;
+  idleAt = null;
+  const live = status.liveRoom;
+  if (!live) return;
+  // A burst still marked live at this point belongs to a tab that died: no push
+  // is coming to end it, and there is nobody left to answer. Dropping it here
+  // is what lets the seat go back — and it is right inside a call too, where
+  // the release below refuses and only the dead row is cleared.
+  if (status.incoming) emit({ incoming: null });
+  releaseRoom(live.key);
+  refresh();
 }
 
 function localMicTrack(): MediaStreamTrack | null {
@@ -367,21 +456,14 @@ function localMicTrack(): MediaStreamTrack | null {
 
 // ── the microphone ──────────────────────────────────────────────────────────
 //
-// The walkie holds its own microphone, and this is the change that makes the
-// whole feature work. It used to have none: a press joined the room and then
-// took whatever track LiveKit had published, which put a control-plane round
-// trip, a token mint and an SFU connect between the key going down and anything
-// listening — 1.0s warm, 12.7s cold, all of it spoken into nothing.
+// The walkie holds its own, and the room joins behind it holding a CLONE. A
+// clone shares the one capture without sharing its lifetime, so callManager may
+// own, mute and stop its copy exactly as it owns every published track, and a
+// room closing mid-word cannot truncate the recording.
 //
-// So the order is inverted. getUserMedia first, recorder and recognizer on it
-// immediately, and the room joins behind them holding a CLONE of the same
-// capture. A clone shares the one microphone without sharing its lifetime, so
-// callManager may own, mute and stop its copy exactly as it owns every other
-// published track, and the recording is never cut short by a room closing.
-//
-// The track outlives the burst by a minute, because the second press is the one
-// that has to feel instant and getUserMedia on an already-granted device is
-// still tens of milliseconds of work.
+// The track outlives the burst by a minute: the second press is the one that
+// has to feel instant, and getUserMedia on an already-granted device is still
+// tens of milliseconds of work.
 
 /** How long an unused microphone is held before it is given back. Long enough
  *  to cover a conversation's back-and-forth, short enough that the browser's
@@ -502,11 +584,9 @@ export async function warmMic(): Promise<void> {
 // ── levels ──────────────────────────────────────────────────────────────────
 //
 // How loudly somebody is talking, sampled per animation frame, for a meter that
-// makes the key feel alive. Deliberately NOT on WalkieStatus and doubly not in
-// the store: `emit` wakes every React subscriber of the walkie, and a value that
-// moves sixty times a second would wake all of them sixty times a second — the
-// same jank the sidebar's wake signatures exist to prevent. It is its own
-// subscription, and only the surfaces that draw a meter take it.
+// makes the key feel alive. Its own subscription rather than a field on
+// WalkieStatus: `emit` wakes every subscriber of the walkie, and a value that
+// moves sixty times a second would wake all of them sixty times a second.
 //
 // Keyed, because both directions animate: no key is this client's own mic while
 // the key is held, and a participant identity is the teammate being heard.
@@ -555,19 +635,15 @@ function publishLevels(local: number, remote: Record<string, number>) {
 
 // The meter is calibrated in decibels, the way meters are.
 //
-// It used to be `min(1, rms * 4)` — linear in amplitude, which spends nearly
-// all of a meter's travel doing nothing. Speech is not linear: the dips
-// BETWEEN syllables sit around 0.005 to 0.0125 RMS, and the real-speech run
-// watched a burst's valleys land at 0.02 to 0.05 on the old scale. On a
-// 360-degree ring that is seven to eighteen degrees. A quiet talker looked at
-// a dead ring, which reads as "the microphone is not working" — this feature's
-// original complaint, wearing a different hat.
+// `min(1, rms * 4)` was linear in amplitude, which spends nearly all of a
+// meter's travel doing nothing: the dips between syllables sit at 0.005 to
+// 0.0125 RMS, which that scale drew as seven to eighteen degrees of a ring. A
+// quiet talker looked at a dead ring, which reads as "the microphone is not
+// working" — this feature's original complaint in a different hat.
 //
-// -50 dBFS is the bottom of the scale and -6 the top. The floor sits just
-// under a typical microphone's noise floor, so an open mic in a silent room
-// still reads zero and the ring never claims a voice that is not there; the
-// ceiling is high enough that only a shout pegs it. Between them an ordinary
-// voice lives in the upper half and the gaps between its words visibly move.
+// -50 dBFS is the bottom and -6 the top. The floor sits just under a typical
+// microphone's noise floor, so a silent room still reads zero and the ring
+// never claims a voice that is not there; only a shout pegs the ceiling.
 const METER_FLOOR_DB = -50;
 const METER_CEIL_DB = -6;
 /** Below this a measurement is a room, not a voice. The value the old linear
@@ -683,6 +759,11 @@ type Burst = {
    *  because "safe to call twice" has to hold for two calls in the same tick
    *  as well as two seconds apart. */
   rogered: boolean;
+  /** The away tick has been played for this burst. On the BURST rather than in
+   *  the watcher that decides it, because "once" here means once per hold —
+   *  the roster it is decided from re-pushes for every heartbeat in the room,
+   *  and a person who is not there does not become more absent each time. */
+  awayToned: boolean;
   recorder: MediaRecorder | null;
   chunks: Blob[];
   pipe: AsrPipe | null;
@@ -694,8 +775,6 @@ type Burst = {
 };
 
 let burst: Burst | null = null;
-let lingerTimer: ReturnType<typeof setTimeout> | null = null;
-let lingerRoomKey: string | null = null;
 
 /** Everything heard so far: the closed utterances, then the one still being
  *  said. What the bubble shows and what the server is told. */
@@ -838,6 +917,7 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
     micAt: null,
     captureAt: null,
     rogered: false,
+    awayToned: false,
     recorder: null,
     chunks: [],
     pipe: null,
@@ -850,16 +930,14 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
   // The bubble is on screen before anything is awaited — a voice message is a
   // message, and a message never waits for a round trip to appear.
   useInboxStore.getState().beginVoiceBurstRow(channelId, clientId, roomKey);
+  // THE ROOM IS CLAIMED HERE, before getUserMedia and a long way before the
+  // join. Nothing between this line and the release can find the walkie in a
+  // room with no owner, which is what a whole family of bugs used to be: a
+  // press during somebody else's linger, the gap between a burst clearing and
+  // its linger arming, the ticks an async leave spends still seated.
+  enterLiveRoom(roomKey, "burst");
   emit({ error: null, unavailable: null, asr: "live" });
   publishSending(b);
-  // The linger this press supersedes, dropped only once the burst is published.
-  // Pressing the key again during a linger used to clear it FIRST, which put
-  // one push on the wire with `sending`, `incoming` and `lingerUntil` all null
-  // while this client was still seated — the release gap's twin on the press
-  // side, one push long instead of 861ms, and paintable by anything that
-  // renders on every push. Now the burst owns the room before the linger stops
-  // doing so.
-  clearLinger();
 
   b.ready = (async () => {
     try {
@@ -871,7 +949,6 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
       // unmute comes first there, because a muted LiveKit track reads as
       // silence and the recorder would keep that silence.
       const seated = inRoom(roomKey);
-      claimRoom(roomKey);
       if (seated) await setMuted(false);
       if (b.done) return;
       const track = (seated ? localMicTrack() : null) ?? (await acquireMic());
@@ -975,29 +1052,63 @@ async function openRoomForBurst(b: Burst, track: MediaStreamTrack): Promise<void
   } catch {}
 }
 
+/**
+ * NOBODY IS LIVE TO HEAR THIS, and the sender should learn it while they are
+ * still talking rather than from the silence afterwards.
+ *
+ * The burst is landing as a message: the person is away from their machine, or
+ * their door is shut. That is the ordinary case and not a failure — the words
+ * still arrive, they simply wait to be read — so it is the quiet end of the
+ * set, one soft low tick, and it happens ONCE.
+ *
+ * The decision is not made here. Whether anybody is hearing this is a question
+ * about the room's roster and the other person's door, which lives with the
+ * words it also writes (hooks/useWalkie's `senderHearingFrom`); this owns only
+ * the "once per hold" half, because that is a fact about the burst and the
+ * watcher that calls it fires on every push of a roster.
+ */
+export function noteBurstUnheard(): void {
+  const b = burst;
+  if (!b || b.awayToned) return;
+  // Not before the microphone is open: a press that has not started recording
+  // yet has nothing to be unheard.
+  if (b.micAt === null) return;
+  b.awayToned = true;
+  soundWalkieAway();
+}
+
+/** Somebody stepped into the room this burst is being spoken into, so it is a
+ *  call now and the release must treat it as one: no sign-off, no mute.
+ *
+ *  Read off the live room rather than off the roster, because both halves of
+ *  the upgrade set it — this client's Join live synchronously, the far side's
+ *  when their stamp lands on the roster (hooks/useWalkieSync) — and the release
+ *  must not care which of the two happened. */
+function burstUpgraded(b: Burst): boolean {
+  return walkieJoinedRoom(status) === b.roomKey;
+}
+
 /** Release. Lands the burst as a message, or throws it away if nothing was
  *  said. Safe to call twice — the max-length cap releases the key first, and
  *  the hand coming off it afterwards finds nothing left to do. */
 export async function endBurst(): Promise<void> {
   const b = burst;
   if (!b) return;
-  // Only for a burst that got a mic. A press that never opened one has nothing
-  // to sign off, and the roger would claim a message that is about to be thrown
-  // away. Before the await for the same reason the clock below is: the sound
-  // answers the thumb, not the finalize.
+  // THREE CONDITIONS, and each one is a sound that used to play wrongly.
   //
-  // And only once. This function promises above that it is safe to call twice,
-  // and everything else it does honours that through `b.done` — which
-  // `stopBurstWork` sets inside `finishBurst`, past an await. The sound is in
-  // FRONT of that await, so it was gated on nothing but the burst still
-  // existing: the max-length cap calls endBurst itself without touching the
-  // hook's `held` flag, so the hand coming off the key afterwards calls it a
-  // second time and the roger beeped again for a burst already sent.
+  // Only for a burst that got a mic: a press that never opened one has nothing
+  // to sign off. Before the await, for the same reason the clock below is —
+  // the sound answers the thumb, not the finalize.
   //
-  // Its own flag rather than `b.done`, and claimed synchronously, because
-  // `done` is only true after an await — measured: two calls in the same tick
-  // still both beeped when this read `!b.done`.
-  if (b.micAt !== null && !b.rogered) {
+  // Only once, claimed synchronously through a flag of its own rather than
+  // `b.done`, which is true only after an await. The max-length cap calls
+  // endBurst itself, so the hand coming off the key calls it a second time in
+  // the same tick and the roger beeped twice for one message.
+  //
+  // AND NOT INSIDE A CALL. The roger is the walkie's sign-off — message sent,
+  // over — and once somebody has stepped in there is no message to sign off and
+  // no turn to end. Beeping announced the end of a conversation still going on.
+  if (b.micAt !== null && !b.rogered && !burstUpgraded(b)) {
     b.rogered = true;
     soundWalkieRoger();
   }
@@ -1086,7 +1197,14 @@ async function finishBurst(b: Burst, releasedAt: number): Promise<void> {
   // bounded, for the words to come back.
   await b.pipe?.finish();
   b.pipe = null;
-  await setMuted(true);
+  // THE MICROPHONE STAYS OPEN INSIDE A CALL, and this line is where the seam
+  // the founder feels used to be. Muting on release is the walkie's own
+  // bargain: the mic belongs to the hold, so it closes when the hold does. It
+  // is exactly wrong once somebody has stepped into the room — the burst became
+  // a conversation, the person is still talking, and the key coming up cut them
+  // off mid-sentence and left them to discover it. There is nothing to close
+  // here, so nothing is closed.
+  if (!burstUpgraded(b)) await setMuted(true);
 
   // Measured BEFORE the room changes hands, because the handover depends on the
   // answer: a burst that is about to be thrown away must not be handed a room
@@ -1103,58 +1221,30 @@ async function finishBurst(b: Burst, releasedAt: number): Promise<void> {
   });
 
   if (burst === b) {
-    // THE ROOM IS HELD FROM THE MOMENT THE MIC CLOSES, not from the moment the
-    // message lands, and the hand-over between the two is seamless.
-    //
-    // Everything below this line is network — the audio upload, then the
-    // finalize — and the linger used to begin after all of it. Across that
-    // window `sending`, `incoming` and `lingerUntil` were every one of them
-    // null while this client was still seated and connected, so
-    // `walkieOwnsCall` answered false for a room the walkie had not let go of
-    // and the ordinary call dock took it. Measured at 861ms on a warm
-    // localhost with a ten second recording, and it grows with the recording
-    // and the network, because it IS the upload. The person saw a floating
-    // call window — or the full call stage — appear by itself a beat after
-    // they stopped talking (ct-46031).
-    //
-    // ARMED BEFORE THE BURST IS CLEARED, and that order is the point rather
-    // than a detail. These are two separate emits, so doing it the other way
-    // still leaves ONE synchronous push in which the room has no owner, and a
-    // subscriber that renders on every push can paint it. Arming first means
-    // the sending branch owns the room until the moment the linger branch
-    // does, with nothing in between.
-    //
-    // Inside the same guard as `publishSending(null)`: if a newer burst has
-    // already claimed the module, the room is its business and not this one's.
-    //
-    // A BRUSHED KEY GETS NO LINGER. Nothing was said, so there is no half
-    // conversation to hold a room open for, and arming one here only to take it
-    // back would flash "still open with <person>" for a key nobody meant to
-    // press. `burst` is cleared first because `shouldReleaseRoom` refuses to
-    // hand back a room while a burst is in flight, and the handback below is
-    // that same question asked immediately instead of in thirty seconds.
+    // NOTHING HERE HAS TO BE ORDERED AGAINST ANYTHING ELSE, and that is the
+    // point of the one fact. `liveRoom` was claimed at the press and no line
+    // below touches it, so the room has an owner across every push in between —
+    // including the audio upload and the finalize, which is where the ordinary
+    // call dock used to appear by itself a beat after the person stopped
+    // talking (measured at 861ms with a ten second recording, ct-46031).
     burst = null;
-    // The hand-back happens BEFORE the burst is unpublished, not after. Both
-    // orderings hand the room back; only this one is never ownerless, because
-    // `abandonRoom` announces the release synchronously while `sending` is
-    // still published, and `sending` is only dropped once that announcement
-    // has landed. Doing it the other way left a seated tick with nothing
-    // owning the room on the brush path — the one branch the first round of
-    // this fix did not instrument.
-    if (discard) abandonRoom(b.roomKey);
-    else beginLinger(b.roomKey);
     publishSending(null);
+    // A BRUSHED KEY GETS NO HOLD. Nothing was said, so there is no half
+    // conversation to hold a room open for: a 102ms brush used to seat both
+    // people in a call room for thirty seconds under a strip claiming a
+    // conversation was open.
+    if (discard) releaseRoom(b.roomKey);
+    else lastAudioAt = Date.now();
+    // Arms the seat's clock, or drops a room that never answered.
+    refresh();
   }
 
   if (discard) {
     // Held too briefly to be speech, or carrying neither words nor audio: a key
     // somebody brushed. The row never notified and never counted, so it goes.
     //
-    // The room was handed back above, BEFORE this round trip rather than after
-    // it. That ordering is the release gap again in miniature: between the
-    // burst being unpublished and the room going back, this client is seated
-    // with nobody owning the room, and a network call inside that window is
-    // what makes the moment long enough to paint. Nothing here needs the seat.
+    // The room was handed back above, before this round trip rather than after
+    // it: nothing here needs the seat.
     useInboxStore.getState().dropVoiceBurstRow({ clientId: b.clientId, messageId: b.messageId });
     if (b.messageId && convex) {
       await convex.mutation(api.chat.cancelVoiceBurst, { message_id: b.messageId }).catch(() => {});
@@ -1207,30 +1297,23 @@ async function finishBurst(b: Burst, releasedAt: number): Promise<void> {
     useInboxStore.getState().dropVoiceBurstRow({ clientId: b.clientId, messageId: b.messageId });
   } else {
     // Unresolved: the network answered nothing, so the row is still LIVE over
-    // there and the orphan sweep will land it — with the words already streamed
-    // into it — the next time anybody talks in that room. The recording is what
-    // is lost, because the upload had nowhere to go.
+    // there and the orphan sweep will land it — words and all — the next time
+    // anybody talks in that room. Only the recording is lost, because the
+    // upload had nowhere to go.
     //
-    // The row stayed exactly as it was, which meant it kept pulsing "talking…"
-    // on the sender's own screen with their hand off the key, for as long as the
-    // tab lived, while a toast beside it said the message had failed. Two
-    // contradictory claims, and both wrong: nobody was talking, and the words
-    // had not failed.
-    //
-    // So it lands the outcome it most likely already has — a finished voice
-    // message carrying the transcript and no recording, a state the bubble
-    // already renders honestly ("Said out loud; the recording did not survive").
-    // If the sweep discards it instead, the channel's own sync corrects this,
-    // which is the ordinary local-first bargain: paint the expected result and
-    // let the echo reconcile.
+    // Leaving the row alone kept it pulsing "talking…" on the sender's own
+    // screen with their hand off the key, beside a toast saying the message had
+    // failed. Two contradictory claims, both wrong. So it paints the outcome
+    // the row most likely already has — a finished voice message carrying the
+    // transcript and no recording, which the bubble renders honestly — and lets
+    // the channel's own sync reconcile if the sweep discards it instead.
     emit({ error: "The recording did not send — the words are on their way" });
     useInboxStore.getState().updateVoiceBurstRow(
       { clientId: b.clientId, messageId: b.messageId },
       { content: transcript, status: "done", durationMs },
     );
   }
-  // No linger here: it began when the mic closed, above. The only path that
-  // takes it back is the discard, through `abandonRoom`.
+  // No hold armed here: the clock started when the mic closed, above.
   refresh();
 }
 
@@ -1272,118 +1355,57 @@ export async function landBurst(
   }
 }
 
-// ── linger ──────────────────────────────────────────────────────────────────
-//
-// A burst is one half of a conversation. Leaving the room the instant the key
-// comes up would mean the answer arrives at an empty room — so the room stays
-// open, MUTED, for half a minute. The receiver holding their own key keeps it
-// alive; nobody doing anything lets it close.
-//
-// Occupancy is deliberately NOT consulted here. Both sides linger, so "someone
-// else is still in the room" is true of every burst and would hold the pair in
-// an open room forever, each waiting for the other to leave. Engagement is the
-// honest signal: talking, being talked to, or a mic the person opened.
-//
-// AND THE WALKIE ONLY EVER CLOSES A ROOM IT OPENED. A burst can be spoken into
-// a huddle the person walked into by hand and has been sitting in, muted, for
-// an hour — hold-to-reply is exactly that gesture. Closing that room half a
-// minute later would throw them out of a meeting because they said one word in
-// it. `openedRoom` is the whole difference between a seat the walkie took and a
-// seat that was already the person's.
+// ── handing the seat back ───────────────────────────────────────────────────
 
-/** The room the walkie itself joined, while the person is still in it. Null
- *  the moment it is handed back, so a room they later walk into by hand is
- *  never mistaken for one of ours. */
-let openedRoom: string | null = null;
-
-function walkieOpened(roomKey: string): boolean {
-  return openedRoom === roomKey && inRoom(roomKey);
-}
-
-/** Remember whose seat this is, at the two places the walkie can take one.
- *  Called with the room the walkie is about to occupy, BEFORE it joins. */
-function claimRoom(roomKey: string) {
-  // Already seated: theirs unless a previous burst of ours is what put them
-  // here (a second burst into the same room keeps the first one's claim).
-  openedRoom = inRoom(roomKey) ? (openedRoom === roomKey ? roomKey : null) : roomKey;
-}
-
-function clearLinger() {
-  if (lingerTimer) clearTimeout(lingerTimer);
-  lingerTimer = null;
-  lingerRoomKey = null;
-  emit({ lingerUntil: null });
+/**
+ * Whether a seat is still worth holding, or may go back.
+ *
+ * Engaged means the room is a conversation: still talking, still being talked
+ * to, or somebody stepped in on purpose.
+ *
+ * THE MUTE USED TO BE THAT LAST TEST, and it cannot be any more. An open
+ * microphone meant a person had joined, back when a listener's mic was closed;
+ * with hot auto-listen every listener's mic is open, so reading it that way
+ * would seat the whole team in a room forever off one sentence. The mode
+ * carries the intent instead, which is the only thing that ever really meant
+ * "this became a call" — and it covers a room the person was already in, so a
+ * huddle somebody joined by hand is never handed back by a timer.
+ *
+ * So the open mic has a bounded life: the burst, plus the half minute an answer
+ * might arrive in, and then it closes on its own unless somebody joined. That
+ * bound is the safety of the whole hot-mic decision.
+ */
+export function shouldReleaseRoom(input: {
+  mode: WalkieRoomMode;
+  bursting: boolean;
+  incoming: boolean;
+}): boolean {
+  if (input.mode === "call") return false;
+  return !input.bursting && !input.incoming;
 }
 
 /**
  * Hand a room back, if it is ours to hand back and nothing is happening in it.
  *
- * This is the linger's own decision, pulled out so it can also be taken
- * immediately. Engaged means the room became a conversation: still talking,
- * still being talked to, or somebody stepped in on purpose.
- *
- * THE MUTE USED TO BE THAT LAST TEST, and it cannot be any more. An open
- * microphone meant a person had joined, back when a listener's mic was closed;
- * with hot auto-listen every listener's mic is open, so reading it that way
- * would seat the whole team in a room forever off one sentence — the linger
- * would never expire, the seat would never go back, and the microphone would
- * stay open with nothing holding it. The intent is stamped instead
- * (`joinedLive`), which is the only thing that ever really meant "this became
- * a call".
- *
- * So the open mic now has a bounded life: the burst, plus the half minute an
- * answer might arrive in, and then it closes on its own unless somebody
- * pressed Join live. That bound is the safety of the whole hot-mic decision.
+ * THE LIVE ROOM IS DROPPED AFTER THE LEAVE, not before, and that is the whole
+ * of what a `releasing` marker used to be. Leaving is async — `leaveCall`
+ * awaits the scribe before `call.phase` moves — so between the decision and the
+ * seat actually going there are ticks in which this client is still seated and
+ * connected. Saying nothing owns the room across them is what let the ordinary
+ * call dock flash over a room in the middle of disappearing (ct-46031).
  */
-export function shouldReleaseRoom(input: {
-  opened: boolean;
-  bursting: boolean;
-  incoming: boolean;
-  joinedLive: boolean;
-}): boolean {
-  if (!input.opened) return false;
-  if (input.bursting || input.incoming) return false;
-  return !input.joinedLive;
-}
-
 function releaseRoom(roomKey: string) {
-  const release = shouldReleaseRoom({
-    opened: walkieOpened(roomKey),
-    bursting: !!burst,
-    incoming: !!status.incoming,
-    joinedLive: status.joinedLive === roomKey,
-  });
-  if (!release) return;
-  openedRoom = null;
-  // Announced BEFORE the leave rather than after it. The leave is async — it
-  // awaits the scribe before `call.phase` moves — so a caller that drops the
-  // burst straight after this call would otherwise publish one or more ticks
-  // with a live seat and no owner. Saying "this room is going back" first means
-  // the walkie still owns it for every tick until it is genuinely gone.
-  emit({ releasing: roomKey });
+  const live = status.liveRoom;
+  if (!live || live.key !== roomKey) return;
+  if (!shouldReleaseRoom({ mode: live.mode, bursting: !!burst, incoming: !!status.incoming })) return;
+  // Nothing seated: there is no seat to hand back, only a claim to drop.
+  if (!inRoom(roomKey)) {
+    leaveLiveRoom();
+    return;
+  }
   void leaveCall().finally(() => {
-    if (status.releasing === roomKey) emit({ releasing: null });
+    if (status.liveRoom?.key === roomKey) leaveLiveRoom();
   });
-}
-
-function beginLinger(roomKey: string) {
-  clearLinger();
-  if (!inRoom(roomKey)) return;
-  // Nothing to hold open: somebody stepped in, so this is a call and the seat
-  // is theirs until they leave it. A timer here would expire against a live
-  // conversation (harmlessly — `shouldReleaseRoom` refuses — but `lingerUntil`
-  // would be claiming a burst was being held open during a huddle, which is a
-  // lie any surface reading it could paint).
-  if (status.joinedLive === roomKey) return;
-  lingerRoomKey = roomKey;
-  emit({ lingerUntil: Date.now() + LINGER_MS });
-  lingerTimer = setTimeout(() => {
-    lingerTimer = null;
-    const key = lingerRoomKey;
-    lingerRoomKey = null;
-    emit({ lingerUntil: null });
-    if (key) releaseRoom(key);
-  }, LINGER_MS);
 }
 
 // ── the upgrade ─────────────────────────────────────────────────────────────
@@ -1400,14 +1422,9 @@ function beginLinger(roomKey: string) {
  * it, and so does this.
  */
 export function markWalkieUpgraded(roomKey: string): void {
-  if (status.joinedLive === roomKey) return;
-  emit({ joinedLive: roomKey });
+  if (walkieJoinedRoom(status) === roomKey) return;
+  enterLiveRoom(roomKey, "call");
   refresh();
-}
-
-/** The upgraded room ended, or the person walked into a different one. */
-function clearUpgrade(): void {
-  if (status.joinedLive) emit({ joinedLive: null });
 }
 
 /**
@@ -1420,12 +1437,27 @@ function clearUpgrade(): void {
  * (callManager's `applyDeliberateJoin`). That is what tells the OTHER side,
  * whose surface upgrades off the same roster row.
  *
- * The linger is dropped because there is nothing left to hold open: the seat
- * is the person's now, not the walkie's.
+ * The seat's clock stops with it: a room somebody stepped into is theirs until
+ * they leave it, and no timer of ours may take it.
  */
-export async function joinWalkieLive(roomKey: string): Promise<void> {
+export async function joinWalkieLive(
+  roomKey: string,
+  /** Who is on the other end, when the surface that offered the button knows.
+   *  Only the sentence uses it — "You joined Jordan" rather than "You joined
+   *  the call" — so a caller that cannot name them still joins the same way. */
+  opts: { name?: string | null } = {},
+): Promise<void> {
   markWalkieUpgraded(roomKey);
-  clearLinger();
+  // SAID BEFORE THE JOIN, not after it. The person pressed a button and the
+  // answer to a press has to be immediate; the stamp is a round trip away, and
+  // this side already knows what it did. The far side hears its own version of
+  // this sentence off the roster (hooks/useWalkieSync).
+  announceJoin(roomKey, youJoinedText(opts.name));
+  // THE SAME CUE ON BOTH SIDES. The far side hears this off the roster stamp
+  // (hooks/useWalkieSync); nothing was playing it for the person who actually
+  // pressed the button, so the one gesture that turns a burst into a call was
+  // the only one in the set that made no sound.
+  soundWalkieJoined();
   await joinCall(roomKey, { intent: "deliberate", walkieJoin: true });
 }
 
@@ -1448,32 +1480,10 @@ export function shutWalkieDoor(): void {
   // hang up a call somebody chose to be in. If both were somehow true, clearing
   // it here would let the handback below leave a live conversation — a
   // "not now" button ending a call is the wrong reading of the word.
-  if (was) {
-    emit({ incoming: null });
-    abandonRoom(was.roomKey);
-  } else if (lingerRoomKey) {
-    abandonRoom(lingerRoomKey);
-  }
+  if (was) emit({ incoming: null });
+  const held = status.liveRoom;
+  if (held) releaseRoom(held.key);
   refresh();
-}
-
-/**
- * A burst that came to nothing: brushed, or carrying neither words nor audio.
- *
- * There is no half-conversation to hold a room open for — nobody heard
- * anything, and no message exists to answer. Lingering here put BOTH people in
- * a call room for thirty seconds off one accidental key: the sender by joining
- * to speak, the receiver by auto-joining the live row in the second before it
- * was cancelled. Both then watched a floating strip claim "Still open with
- * <the other person>", and to the rest of the team both showed as seated in a
- * live huddle. Measured, not theorised: a 102ms brush did exactly that.
- *
- * So the room goes back now. A seat the person already had is left alone —
- * that is releaseRoom's first question.
- */
-function abandonRoom(roomKey: string) {
-  clearLinger();
-  releaseRoom(roomKey);
 }
 
 // ── the receiving half ──────────────────────────────────────────────────────
@@ -1537,24 +1547,6 @@ function applyReport(): void {
   const { bursts: rows, doorOpen } = lastReport;
   const current = pickLiveBurst(rows, Date.now());
 
-  // The person left the room we were holding open. A linger is a room we are
-  // SITTING in, kept open in case an answer comes; once they have walked out
-  // of it there is nothing left to hold, and the timer must not outlive them.
-  //
-  // It used to. The timer only ever cleared itself, so leaving a lingering room
-  // and walking back into it inside the same half minute — perfectly ordinary:
-  // dismiss the strip, change your mind, join the huddle properly — armed a
-  // countdown that then threw the person straight back out of a room they had
-  // deliberately joined. This runs on every move of the call plane
-  // (useWalkieSync refreshes on roomKey:phase), so it catches the leave itself.
-  if (lingerRoomKey && !inRoom(lingerRoomKey)) clearLinger();
-
-  // The upgraded call ended, or the person walked into a different room. Same
-  // reasoning as the linger above and the same place to catch it: this runs on
-  // every move of the call plane, so a stamp cannot outlive the room it names
-  // and turn the NEXT burst into a call nobody joined.
-  if (status.joinedLive && !inRoom(status.joinedLive)) clearUpgrade();
-
   // Our own key is down: we are already in a room and hearing whoever is in it.
   if (burst) {
     refresh();
@@ -1572,16 +1564,16 @@ function applyReport(): void {
         createdAt: current.createdAt,
       };
       incomingSince = Date.now();
+      // The room is claimed in the same push that publishes the burst — and
+      // claiming it is all a teammate's burst arriving during our own hold-open
+      // has to do, because one room key replaces another with nothing in
+      // between.
+      enterLiveRoom(incoming.roomKey, "listen");
       emit({ incoming });
-      // Same order as the press, for the same reason: a teammate's burst
-      // arriving during our own linger must take the room over, not leave it
-      // ownerless for a push while the linger is dropped.
-      clearLinger();
       // Their voice gets a meter too, so a surface can animate the burst it is
       // hearing the same way it animates the one being spoken.
       pumpMeter();
       soundWalkieOpen();
-      claimRoom(incoming.roomKey);
       if (!inRoom(incoming.roomKey)) {
         // HOT. Hearing someone means they can hear you — a walkie is not a
         // speaker, and half a channel is not a channel. This is the founder's
@@ -1631,12 +1623,15 @@ function applyReport(): void {
     // for the same reason.
     const stale = Date.now() - was.createdAt >= BURST_STALE_MS;
     emit({ incoming: null });
-    if (heardMs < MIN_BURST_MS || stale) abandonRoom(was.roomKey);
+    if (heardMs < MIN_BURST_MS || stale) releaseRoom(was.roomKey);
     else {
       // The tail closes what soundWalkieOpen opened. Under the same threshold
-      // as the linger, so a key somebody brushed makes no sound at either end.
+      // as the hold-open, so a key somebody brushed makes no sound at either
+      // end.
       soundWalkieSquelch();
-      beginLinger(was.roomKey);
+      // Audio was last in this room just now, so the half minute an answer
+      // might arrive in counts from here.
+      lastAudioAt = Date.now();
     }
   }
   refresh();
@@ -1644,22 +1639,16 @@ function applyReport(): void {
 
 // The window dying with the key still down.
 //
-// callManager already makes this bargain for the ROOM one screen over, so the
-// audio stops the instant the tab goes. The MESSAGE did not: its row stayed
-// `live`, and until the server's orphan sweep caught it every receiver's strip
-// said "Riley is talking" over a dead level and no voice — the one reading a
-// working walkie must never produce, and the exact shape of the complaint this
-// whole plan exists to answer.
+// callManager already stops the audio when the tab goes. The MESSAGE did not:
+// its row stayed `live`, so until the orphan sweep caught it every receiver's
+// strip said "Riley is talking" over a dead level and no voice — the one
+// reading a working walkie must never produce.
 //
-// The recording is lost either way: an upload cannot finish in an unload
-// handler. But the transcript pushed so far is already ON the row, so this
-// lands the state the sweep would have landed anyway, immediately — a finished
-// voice message carrying the words and no recording, which the bubble already
-// renders honestly ("Said out loud; the recording did not survive").
-//
-// It goes over HTTP rather than through the client, because a mutation written
-// to the WebSocket at unload does not reliably leave before the socket is torn
-// down — see lib/keepaliveMutation, which carries the measurement.
+// The recording cannot be saved (an upload cannot finish in an unload handler),
+// but the transcript is already on the row, so this lands what the sweep would
+// have landed anyway, immediately. Over HTTP rather than through the client: a
+// mutation written to the WebSocket at unload does not reliably leave before
+// the socket is torn down (lib/keepaliveMutation carries the measurement).
 if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", () => {
     const b = burst;
@@ -1684,6 +1673,21 @@ if (typeof window !== "undefined") {
   });
 }
 
+// SURVIVING A HOT MODULE REPLACEMENT, in dev and nowhere else.
+//
+// A replaced walkie.ts comes up with no Convex client and nothing re-binds it:
+// the effect that calls `bindWalkie` runs when the app mounts, and a module
+// swap is not a mount. So every gesture no-ops and push-to-talk is dead until
+// somebody reloads the page, which is a slow way to learn you edited this file.
+//
+// Vite hands the outgoing module's `hot.data` to the incoming one, so the
+// client rides across the swap and the engine binds itself back. Last in the
+// file, because binding refreshes and a refresh reads state declared above.
+if (import.meta.hot) {
+  const carried = import.meta.hot.data.walkieConvex as ConvexHandle | undefined;
+  if (carried) bindWalkie(carried);
+}
+
 // Dev console / e2e access to the real module instance, exactly as callManager
 // and the scribe expose theirs (a dynamic import() of this file would be a
 // second instance with its own empty state).
@@ -1697,5 +1701,11 @@ if (typeof window !== "undefined" && import.meta.env.DEV) {
     observe: observeWalkie,
     blockedFor: walkieBlockedFor,
     bound: () => !!convex,
+    // The upgrade, for a headless rig: it is otherwise reachable only through
+    // a button on a floating surface, and the release path it changes (no
+    // mute, no roger) is the one thing about this feature a screenshot cannot
+    // show.
+    markUpgraded: markWalkieUpgraded,
+    joinLive: joinWalkieLive,
   };
 }

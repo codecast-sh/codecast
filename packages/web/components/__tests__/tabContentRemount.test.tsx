@@ -48,20 +48,20 @@ let version = 0;
 const listeners = new Set<() => void>();
 function notify() { version++; for (const l of listeners) l(); }
 
-mock.module("../../store/inboxStore", () => {
-  const React = require("react");
-  const useInboxStore = () => state;
-  useInboxStore.getState = () => state;
-  return {
-    useInboxStore,
-    useTrackedStore: (_deps: unknown[]) => {
-      React.useSyncExternalStore(
-        (cb: () => void) => { listeners.add(cb); return () => listeners.delete(cb); },
-        () => version,
-      );
-      return state;
-    },
-  };
+// The tab fields are driven by this file; everything else stays the real state,
+// because the substitution answers every file that runs after this one too (see
+// mockInboxStore). `useTrackedStore` is replaced as well: it has to re-render on
+// `notify`, which the real one knows nothing about.
+const { mockInboxStore } = await import("./mockInboxStore");
+const readState = mockInboxStore(() => state, {
+  useTrackedStore: (_deps: unknown[]) => {
+    const React = require("react");
+    React.useSyncExternalStore(
+      (cb: () => void) => { listeners.add(cb); return () => listeners.delete(cb); },
+      () => version,
+    );
+    return readState();
+  },
 });
 
 mock.module("../../lib/pageLayout", () => ({

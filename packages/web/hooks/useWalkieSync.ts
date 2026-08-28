@@ -29,14 +29,17 @@ import {
   bindWalkie,
   getWalkieStatus,
   markWalkieUpgraded,
+  noteBurstUnheard,
   observeWalkie,
   refreshWalkie,
+  walkieJoinedRoom,
   type LiveBurstRow,
 } from "../lib/calls/walkie";
-import { lastWalkieTarget, otherJoinedLive, useWalkieStatus } from "./useWalkie";
+import { otherJoinedLive, senderHearingFrom, useWalkieStatus } from "./useWalkie";
 import { readJoinPrefs } from "../lib/calls/joinPrefs";
 import { setCamera } from "../lib/calls/callManager";
-import { soundCallJoin } from "../lib/sounds";
+import { soundWalkieJoined } from "../lib/sounds";
+import { announceJoin, theyJoinedText } from "../lib/calls/joinAnnounce";
 import { useNowWhen } from "./useCoarseNow";
 
 const api = _api as any;
@@ -169,6 +172,45 @@ export function useWalkieSync(): void {
   useConvexSync(callSig, useCallback(() => refreshWalkie(), []));
 
   useWalkieUpgrade();
+  useWalkieAwayTick();
+}
+
+/**
+ * MY BURST IS LANDING AS A MESSAGE.
+ *
+ * The other half of "X hears you": when the roster says nobody is there, the
+ * strip says so in words and this says so in a sound, off the same derivation,
+ * so the two can never disagree.
+ *
+ * It waits for `heardLive`. Before the track reaches the room "nobody is
+ * hearing this" is a fact about MY connection rather than about them, and the
+ * strip already has its own sentence for that ("Recording — X gets it"). After
+ * it, the room is open and empty, which is the thing worth a tick.
+ *
+ * Subscribed as the SEATS alone. The door decides between "away" and "busy" in
+ * the words and changes nothing here — both are the same sound, because from
+ * the sender's side they are the same outcome — so this watcher does not wake
+ * for a teammate toggling a pref. `noteBurstUnheard` holds the once-per-hold
+ * guard; the value below only keeps the callback from running on every push.
+ */
+function useWalkieAwayTick(): void {
+  const status = useWalkieStatus();
+  const sending = status.sending;
+  const room = sending?.heardLive ? sending.roomKey : null;
+  const s = useTrackedStore([
+    (st: any) => String(st.currentUser?._id ?? ""),
+    (st: any) =>
+      ((room && st.callOccupancy?.[room]) || [])
+        .map((m: any) => String(m.user_id))
+        .sort()
+        .join("|"),
+  ]);
+  const unheard =
+    room && senderHearingFrom(s, room, Date.now()).state !== "hears"
+      ? `${sending!.clientId}:${room}`
+      : undefined;
+
+  useConvexSync(unheard, useCallback(() => noteBurstUnheard(), []));
 }
 
 /**
@@ -183,10 +225,10 @@ export function useWalkieSync(): void {
  * Three things happen on that one edge, and they are the difference between a
  * state change and a moment somebody feels:
  *
- *   THE SURFACE. Telling the engine is what does it — `walkieOwnsCall` answers
- *   false from here, so the strip becomes the dock on this screen the same way
- *   it already did on theirs. It also stops the linger handing the seat back
- *   under a call that has only just started.
+ *   THE SURFACE. Telling the engine is what does it — the live room becomes a
+ *   call from here, so the strip becomes the dock on this screen the same way
+ *   it already did on theirs. It also stops the seat's clock, which must never
+ *   hand back a call that has only just started.
  *   THE CAMERA. They are in a call they chose by talking, so their own saved
  *   camera setting applies now, exactly as it would have on a join button. The
  *   microphone is already hot and stays that way.
@@ -211,31 +253,71 @@ function useWalkieUpgrade(): void {
   ]);
   const roomKey: string | null = s.call.roomKey;
   const roster: any[] = (roomKey && s.callOccupancy[roomKey]) || [];
-  // Only a room the WALKIE is in. A stamp on an ordinary huddle is somebody
-  // who upgraded a burst into it before this client walked in, and it says
-  // nothing about the room this client is sitting in now.
-  const mine = walkieRoomOf(status) === roomKey && !!roomKey;
-  const upgraded = mine && otherJoinedLive(roster, s.currentUser?._id);
+  // Only a room the WALKIE is in. A stamp on an ordinary huddle is somebody who
+  // upgraded a burst into it before this client walked in, and it says nothing
+  // about the room this client is sitting in now.
+  const live = status.liveRoom;
+  const mine = !!roomKey && live?.key === roomKey;
+  // AND ONLY A STAMP FROM THIS SEAT'S OWN LIFETIME. `walkie_joined_at` outlives
+  // a browser that died without leaving, so a room whose last occupant crashed
+  // carries a stamp forever — and the next burst into it would read as already
+  // upgraded from its first tick: no mute on release, a join announced that
+  // nobody made, and the strip handed straight to the call dock. A stamp older
+  // than the moment this client entered the room is a leftover, not news.
+  const upgraded = mine && otherJoinedLive(roster, s.currentUser?._id, live?.since ?? 0);
 
   // Fired through the same change-driven hook the rest of this file uses: it
   // runs when its value CHANGES and skips `undefined`, which is exactly one
   // run per room somebody steps into and none at all the rest of the time.
   useConvexSync(
     upgraded && roomKey ? roomKey : undefined,
-    useCallback((room: string) => {
-      // Already known — my own Join live, or a re-push of the same roster.
-      if (getWalkieStatus().joinedLive === room) return;
-      markWalkieUpgraded(room);
-      soundCallJoin();
-      if (readJoinPrefs().cameraOn && !useInboxStore.getState().call.camera) {
-        void setCamera(true);
-      }
-    }, []),
+    useCallback((room: string) => observeWalkieUpgrade(room, joinerName(room)), []),
   );
 }
 
-/** The room the walkie considers its own, for the watcher above: the one being
- *  talked into, the one being heard, or the one still held open after a burst. */
-function walkieRoomOf(status: { sending: any; incoming: any; lingerUntil: number | null }): string | null {
-  return status.sending?.roomKey ?? status.incoming?.roomKey ?? (status.lingerUntil ? lastWalkieTarget()?.roomKey ?? null : null);
+/** Whoever it was that stepped in, named the way every other surface names
+ *  them: the live roster first, so a rename since the burst started is
+ *  reflected, and the seat's own snapshot of the name behind it. Read from the
+ *  store at the moment it fires rather than closed over, so the watcher's
+ *  callback stays identity-stable and cannot go stale. */
+function joinerName(room: string): string {
+  const st = useInboxStore.getState() as any;
+  const me = String(st.currentUser?._id ?? "");
+  const seat = ((st.callOccupancy?.[room] ?? []) as any[]).find(
+    (m) => !!m?.walkie_joined_at && String(m?.user_id ?? "") !== me,
+  );
+  if (!seat) return "";
+  const member = (st.teamMembers ?? []).find((m: any) => String(m?._id) === String(seat.user_id ?? ""));
+  return memberDisplayName(member, seat.user_name ?? "");
 }
+
+/**
+ * The upgrade arriving, applied.
+ *
+ * Beside the hook rather than inside it because ONCE PER STAMP is the whole
+ * contract here and a rule that has to hold exactly once cannot live in a
+ * closure nothing can call twice on purpose. The roster re-pushes for every
+ * mute, camera and heartbeat in the room; the stamp itself never changes after
+ * it lands. So this is guarded on the engine's own answer — the room it
+ * already knows it is in — and everything below the guard is a thing a person
+ * should feel exactly one time.
+ */
+export function observeWalkieUpgrade(room: string, name: string): void {
+  // Already known — my own Join live, or a re-push of the same roster.
+  if (walkieJoinedRoom(getWalkieStatus()) === room) return;
+  markWalkieUpgraded(room);
+  // The loudest of the six walkie cues, and the only one that climbs three
+  // notes: this is the biggest change of state the walkie has. Not
+  // soundCallJoin, whose triad says "someone entered a room" rather than "the
+  // burst you are speaking just became a call" — the two step on different
+  // intervals and over different registers so they cannot trade places.
+  soundWalkieJoined();
+  // AND IN WORDS. The sound alone is what shipped, and a cue nobody has been
+  // taught is not an announcement: the dock says who joined for four seconds,
+  // then goes back to being the room's title.
+  announceJoin(room, theyJoinedText(name));
+  if (readJoinPrefs().cameraOn && !useInboxStore.getState().call.camera) {
+    void setCamera(true);
+  }
+}
+

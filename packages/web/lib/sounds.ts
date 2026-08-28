@@ -1,5 +1,14 @@
 import { useInboxStore } from "../store/inboxStore";
 import { isNotificationLeader } from "./desktop";
+import type { CueSpec } from "./cueSpec";
+import {
+  WALKIE_AWAY,
+  WALKIE_JOINED,
+  WALKIE_KEY_UP,
+  WALKIE_OPEN,
+  WALKIE_ROGER,
+  WALKIE_SQUELCH,
+} from "./cueSpec";
 
 let ctx: AudioContext | null = null;
 
@@ -32,29 +41,93 @@ function getCtx(): AudioContext {
   return ctx;
 }
 
+/** Drop the cached AudioContext.
+ *
+ *  One context per page is the production rule — browsers cap how many may be
+ *  open — so `getCtx` caches one and never lets go. Under `bun test` that cache
+ *  outlives the file that filled it: each sound test installs its own stand-in
+ *  AudioContext and counts the nodes a cue builds, so the FIRST file to sound
+ *  anything pins the context for every file after it, and those files count
+ *  zero. The symptom is a suite that passes one file at a time and fails when
+ *  run together. Every sound test drops the cache before it counts. */
+export function resetAudioContext() {
+  ctx = null;
+}
+
 function play(
   notes: Array<{ freq: number; start: number; dur: number; gain?: number; type?: OscillatorType }>,
   masterGain = 0.12,
 ) {
+  playCue({ master: masterGain, tones: notes.map((n) => ({ ...n, gain: n.gain ?? 1 })) });
+}
+
+/** Build and start the graph a CueSpec describes.
+ *
+ *  `lib/cueRender.ts` renders the same spec numerically, node for node and
+ *  envelope for envelope. That is the only reason anyone can say what these
+ *  cues sound like: nobody working on them is allowed to play them out loud,
+ *  so every level in this file was set by measuring a render, and the
+ *  measurement is only worth anything while the two stay the same graph. Keep
+ *  them in step — filter after the envelope for tones, before it for noise. */
+function playCue(spec: CueSpec) {
   if (!isSupported()) return;
   try {
     const ac = getCtx();
+    const t0 = ac.currentTime;
     const master = ac.createGain();
-    master.gain.value = masterGain;
+    master.gain.value = spec.master;
     master.connect(ac.destination);
 
-    for (const n of notes) {
+    for (const n of spec.tones ?? []) {
       const osc = ac.createOscillator();
-      const env = ac.createGain();
       osc.type = n.type ?? "sine";
-      osc.frequency.value = n.freq;
-      env.gain.setValueAtTime(0, ac.currentTime + n.start);
-      env.gain.linearRampToValueAtTime(n.gain ?? 1, ac.currentTime + n.start + 0.02);
-      env.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + n.start + n.dur);
+      osc.frequency.setValueAtTime(n.freq, t0 + n.start);
+      if (n.sweepTo !== undefined) {
+        osc.frequency.exponentialRampToValueAtTime(n.sweepTo, t0 + n.start + n.dur);
+      }
+
+      const env = ac.createGain();
+      env.gain.setValueAtTime(0, t0 + n.start);
+      env.gain.linearRampToValueAtTime(n.gain, t0 + n.start + (n.attack ?? 0.02));
+      env.gain.exponentialRampToValueAtTime(0.001, t0 + n.start + n.dur);
+
       osc.connect(env);
+      let tail: AudioNode = env;
+      if (n.lowpass !== undefined) {
+        const lp = ac.createBiquadFilter();
+        lp.type = "lowpass";
+        lp.frequency.value = n.lowpass;
+        lp.Q.value = n.lowpassQ ?? 0;
+        env.connect(lp);
+        tail = lp;
+      }
+      tail.connect(master);
+      osc.start(t0 + n.start);
+      osc.stop(t0 + n.start + n.dur);
+    }
+
+    for (const n of spec.noise ?? []) {
+      const frames = Math.floor(ac.sampleRate * n.dur);
+      const buf = ac.createBuffer(1, frames, ac.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < frames; i++) data[i] = Math.random() * 2 - 1;
+      const src = ac.createBufferSource();
+      src.buffer = buf;
+
+      const band = ac.createBiquadFilter();
+      band.type = "bandpass";
+      band.frequency.value = n.band;
+      band.Q.value = n.q ?? 1;
+
+      const env = ac.createGain();
+      env.gain.setValueAtTime(n.gain, t0 + n.start);
+      env.gain.exponentialRampToValueAtTime(0.001, t0 + n.start + n.dur);
+
+      src.connect(band);
+      band.connect(env);
       env.connect(master);
-      osc.start(ac.currentTime + n.start);
-      osc.stop(ac.currentTime + n.start + n.dur);
+      src.start(t0 + n.start);
+      src.stop(t0 + n.start + n.dur);
     }
   } catch {}
 }
@@ -298,90 +371,163 @@ export function soundCallLeave() {
   ], 0.045);
 }
 
-// The walkie door opened: a teammate's push-to-talk burst is about to play
-// through this machine's speakers. Deliberately NOT a ring — nobody is being
-// summoned, the voice is already coming — so it is the two-click squelch of a
-// radio keying up: short, dry, and over before the first word.
-export function soundWalkieOpen() {
-  if (!isEnabled() || !isAnnouncer()) return;
-  play([
-    { freq: 1046.5, start: 0, dur: 0.05, gain: 0.35, type: "square" },
-    { freq: 698.46, start: 0.06, dur: 0.09, gain: 0.3, type: "sine" },
-  ], 0.03);
-}
-
-// The walkie door closed: the burst you were hearing ended. A radio's squelch
-// tail — the short hiss that follows a released key — so the end of a sentence
-// is as audible as its start. Quiet on purpose: it is punctuation, not news.
-export function soundWalkieSquelch() {
-  if (!isEnabled() || !isSupported() || !isAnnouncer()) return;
-  try {
-    const ac = getCtx();
-    // Quieter than the chirp that opened the burst, and deliberately so: this
-    // file's gains are master times note peak, and every cue sits between
-    // 0.010 (soundWalkieOpen) and 0.030, with the 0.080 of soundKill reserved
-    // for an alarm. This landed at 0.100 first — louder than the alarm and ten
-    // times its own pair partner — because 0.2 reads as a small number until
-    // you compare it with the master values around it. Broadband noise also
-    // carries further than a sine at equal peak, so the tail sits just UNDER
-    // the door it closes: 0.018 x 0.5 = 0.009.
-    const master = ac.createGain();
-    master.gain.value = 0.018;
-    master.connect(ac.destination);
-
-    // Noise rather than a tone: a squelch tail is the receiver's own hiss
-    // coming back, and any pitch in it would read as a second voice.
-    const frames = Math.floor(ac.sampleRate * 0.08);
-    const buf = ac.createBuffer(1, frames, ac.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < frames; i++) data[i] = Math.random() * 2 - 1;
-    const src = ac.createBufferSource();
-    src.buffer = buf;
-
-    // Band-limited so it sits where a small radio speaker sits, instead of as
-    // full-spectrum static across the room.
-    const band = ac.createBiquadFilter();
-    band.type = "bandpass";
-    band.frequency.value = 1800;
-    band.Q.value = 0.8;
-
-    const env = ac.createGain();
-    env.gain.setValueAtTime(0.5, ac.currentTime);
-    env.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.08);
-
-    src.connect(band);
-    band.connect(env);
-    env.connect(master);
-    src.start(ac.currentTime);
-    src.stop(ac.currentTime + 0.09);
-  } catch {}
-}
-
-// YOUR key going down, at the moment the mic is genuinely open — the classic
-// two-tone rising chirp a radio makes when it keys up. Two things make it worth
-// having: it is the only confirmation that arrives without looking at the
-// screen, and it marks the exact instant it becomes worth speaking.
+// ── the walkie cues ───────────────────────────────────────────────────────
 //
-// NOT announcer gated, unlike the receive sounds above. This is feedback for a
-// gesture this window's own user just made, so it belongs in this window the
-// way `soundSend` does — the leader election exists to keep ONE window from
-// announcing an event all of them observed, and a key held here is not that.
+// The founder's report was "no sound that i started recording". The cause was
+// measurable rather than a matter of taste: all four walkie cues peaked around
+// 0.011 while the ring peaks at 0.046. They were a factor of four below
+// everything else the app plays, and none of them lasted a fifth of a second.
+// They were not missing. They were under the floor of a room.
+//
+// Each is a spec in `cueSpec.ts` now, and every number here is what
+// `cueRender.ts` measures off that spec rather than what anyone intended.
+// Peak is the loudest sample. RMS is taken over a fixed 150 ms from the start,
+// because whole-cue RMS only rewards a cue for being short. ">2k" is the share
+// of energy above 2 kHz, which is the one column that sees harshness: peak and
+// RMS cannot tell a square from a sine, and the ear has no trouble at all.
+//
+//   cue       peak     was      rms    >2k    length   what it says
+//   joined   0.0532      —    0.0138  0.07     310ms   they stepped in; a call now
+//   keyUp    0.0458   0.0124  0.0141  0.08     185ms   your mic is open, speak
+//   roger    0.0386   0.0122  0.0096  0.00     130ms   your burst is closed and sent
+//   open     0.0339   0.0121  0.0103  0.07     105ms   a teammate's burst is arriving
+//   away     0.0229      —    0.0057  0.00      90ms   nobody live; it goes as a message
+//   squelch  0.0208   0.0036  0.0021  0.49      90ms   that burst ended
+//
+// For scale: soundCallJoin peaks at 0.0196, soundChatMessage at 0.0316, and
+// soundCallRing at 0.0458 — which keyUp now matches to the fourth decimal, by
+// arithmetic rather than by aim. soundKill stays the app's alarm and nothing
+// here approaches it.
+//
+// The order is the point. The two moments that carry news — your mic opening,
+// and someone stepping into your burst — are the two loudest. The two that are
+// only punctuation are the two quietest. squelch's high >2k figure is what
+// band-limited noise is; it is also the quietest thing in the table by a
+// factor of five, so it reads as a tail and not as a hiss.
+//
+// ── which of these the leader window owns ─────────────────────────────────
+//
+// The split is the one this file has always drawn, stated for six cues
+// instead of four. A cue that ANNOUNCES an event is gated on
+// `isNotificationLeader()`, because on the desktop the main window and every
+// detached tab window watch the same data and would each sound it. A cue that
+// answers THIS window's own burst is not, for the same reason `soundSend` is
+// not: only one window is holding the key.
+//
+//   leader gated   open, squelch          a teammate's burst, observed by all
+//   not gated      keyUp, roger,          your own burst, in the window that
+//                  joined, away           is holding the key
+//
+// `joined` looks like the exception and is not. It fires from a roster
+// watcher, which every window runs — but `useWalkieUpgrade` only arms that
+// watcher for a room the WALKIE is in, and the walkie's status is module
+// state in `walkie.ts`, one copy per window. Only the window that held the
+// key has the room, so only that window fires. The election has nothing to
+// settle, exactly as with keyUp. `away` is the same burst's other ending.
+//
+// The guard, not the intention, is what keeps them off the gated side. If
+// either is ever raised from a watcher that is not narrowed to this window's
+// own room, it has become an announcement and belongs above.
+
+/** YOUR key going down, at the moment the mic is genuinely open — the classic
+ *  two-tone rising chirp a radio makes when it keys up, a fifth from A5 to E6.
+ *
+ *  The cue the founder named, and the one everything else was levelled
+ *  against: it is the only confirmation that arrives without looking at the
+ *  screen, and it marks the exact instant it becomes worth speaking. It peaks
+ *  at 0.0458, which is soundCallRing's peak to the fourth decimal.
+ *
+ *  Square waves, because that is what makes a chirp read as a radio rather
+ *  than as a chime, but each note through its own lowpass — 1500 Hz for the
+ *  A5, 2200 Hz for the E6 — placed just above that note's fundamental, where
+ *  a handheld radio's speaker gives out. That keeps the buzz and drops the
+ *  harmonics that would make it harsh at nearly four times its old level:
+ *  measured share of energy above 2 kHz falls from 0.33 to 0.08. */
 export function soundWalkieKeyUp() {
   if (!isEnabled()) return;
-  play([
-    { freq: 880, start: 0, dur: 0.06, gain: 0.4, type: "square" },
-    { freq: 1174.66, start: 0.06, dur: 0.09, gain: 0.35, type: "square" },
-  ], 0.028);
+  playCue(WALKIE_KEY_UP);
 }
 
-// Your key coming up: the "roger" beep, one short falling tone. It says the
-// burst is closed and on its way, which is the half a push-to-talk key cannot
-// show — the hand is already off it and the eye has moved on.
+/** Your key coming up: the "roger" beep, one tone falling from A5 to D5. It
+ *  says the burst is closed and on its way, which is the half a push-to-talk
+ *  key cannot show — the hand is already off it and the eye has moved on. */
 export function soundWalkieRoger() {
   if (!isEnabled()) return;
-  play([
-    { freq: 659.25, start: 0, dur: 0.09, gain: 0.35, type: "sine" },
-  ], 0.035);
+  playCue(WALKIE_ROGER);
+}
+
+/** Someone stepped into the burst you are sending: it is a call now, and the
+ *  mic that was going to close is staying open. The biggest change of state
+ *  the walkie has, so it is the loudest of the six and the only one that
+ *  climbs three notes.
+ *
+ *  Deliberately not soundCallJoin, which is a major triad on C. This is a
+ *  fifth then a fourth from E5 to E6, brighter, shorter, and with an octave
+ *  over the last note only — so the two never trade places in the ear, and
+ *  "they joined my burst" never sounds like "someone entered a room". */
+export function soundWalkieJoined() {
+  if (!isEnabled()) return;
+  playCue(WALKIE_JOINED);
+}
+
+/** Your burst is landing as a message: nobody is live to hear it now. One
+ *  soft low tick, the quiet end of the set, because this is the ordinary
+ *  case and not a failure — the words still arrive, they just wait to be
+ *  read. Its attack is shorter than one cycle at 220 Hz, which is what makes
+ *  it a tick rather than a note. */
+export function soundWalkieAway() {
+  if (!isEnabled()) return;
+  playCue(WALKIE_AWAY);
+}
+
+/** The walkie door opened: a teammate's push-to-talk burst is about to play
+ *  through this machine's speakers. Deliberately NOT a ring — nobody is being
+ *  summoned, the voice is already coming — so it is the two-click squelch of a
+ *  radio keying up: short, dry, and over before the first word. Both clicks
+ *  are the same pitch, so it reads as a click rather than a tune and cannot be
+ *  mistaken for the rising keyUp or the falling roger. */
+export function soundWalkieOpen() {
+  if (!isEnabled() || !isAnnouncer()) return;
+  playCue(WALKIE_OPEN);
+}
+
+/** The walkie door closed: the burst you were hearing ended. A radio's squelch
+ *  tail — the short hiss that follows a released key — so the end of a
+ *  sentence is as audible as its start. Noise rather than a tone, because a
+ *  squelch tail is the receiver's own hiss coming back and any pitch in it
+ *  would read as a second voice. The quietest of the six on purpose: it is
+ *  punctuation, and broadband noise carries further than a sine at the same
+ *  peak. */
+export function soundWalkieSquelch() {
+  if (!isEnabled() || !isAnnouncer()) return;
+  playCue(WALKIE_SQUELCH);
+}
+
+// The six walkie cues, for the one surface that plays them on purpose.
+//
+// Settings is the only place a person can hear a cue without a teammate on
+// the other end, so the list lives beside the cues rather than in the page:
+// a cue added above and forgotten below would be a cue nobody can check.
+export const WALKIE_PREVIEWS: ReadonlyArray<{ id: string; label: string; spec: CueSpec }> = [
+  { id: "keyUp", label: "Live", spec: WALKIE_KEY_UP },
+  { id: "roger", label: "Roger", spec: WALKIE_ROGER },
+  { id: "open", label: "Incoming", spec: WALKIE_OPEN },
+  { id: "squelch", label: "Ended", spec: WALKIE_SQUELCH },
+  { id: "joined", label: "Joined", spec: WALKIE_JOINED },
+  { id: "away", label: "Away", spec: WALKIE_AWAY },
+];
+
+/** Play a cue because somebody asked to hear it.
+ *
+ *  Not gated on the leader window, and the two receive cues are the reason:
+ *  the election exists to keep several windows from answering one event, and a
+ *  click is not that event — it happened in exactly this window. A preview
+ *  that stayed silent in a second window would read as a broken sound rather
+ *  than as a rule. `sounds_enabled` still applies, and the page disables these
+ *  buttons when it is off, so the silence is never a surprise. */
+export function previewWalkieCue(spec: CueSpec) {
+  if (!isEnabled()) return;
+  playCue(spec);
 }
 
 // Your ring was declined or timed out — one low, brief, apologetic note.

@@ -29,11 +29,12 @@ import { BellOff, MessageSquare, MicOff, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { leaveCall, setMuted } from "../../lib/calls/callManager";
 import { joinWalkieLive, shutWalkieDoor } from "../../lib/calls/walkie";
-import { lastWalkieTarget, useWalkieStatus, walkieBurstDropped } from "../../hooks/useWalkie";
+import { lastWalkieTarget, senderHearingFrom, useWalkieStatus, walkieBurstDropped } from "../../hooks/useWalkie";
 import { useChatMessageRow } from "../../hooks/useChatSync";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { memberAvatarUrl, memberDisplayName } from "../../lib/liveEntities";
 import { useRoomDescription } from "../../hooks/useCallRoom";
+import { useNowWhen } from "../../hooks/useCoarseNow";
 import { Avatar } from "./CallStage";
 import { WalkieLevelBars, WalkiePttButton } from "./WalkiePtt";
 import "./walkie.css";
@@ -69,22 +70,49 @@ export function WalkieBanner({
 }: { leaving?: boolean; onLeft?: () => void } = {}) {
   const status = useWalkieStatus();
   const router = useRouter();
-  // Three scalars, so a strip mounted on every page cannot be woken by anything
-  // but the seat it actually reads. `muted` earns its place now: with a hot
-  // microphone it is the difference between the two things this strip says
-  // loudest, and muting has to paint in the same tick as the click.
-  const s = useTrackedStore([
-    (st: any) => st.call.roomKey,
-    (st: any) => st.call.phase,
-    (st: any) => st.call.muted,
-  ]);
-  const call = s.call;
   const incoming = status.incoming;
   const sending = status.sending;
   // During the linger there is no burst to read the room off, so the walkie's
   // remembered conversation carries the strip through the quiet.
   const target = incoming ?? sending ?? lastWalkieTarget();
-  const { label } = useRoomDescription(target?.roomKey ?? null);
+  // The room's own description names the other person in a DM, which is how
+  // the strip knows whose seat to look for below.
+  const { label, otherIds } = useRoomDescription(target?.roomKey ?? null);
+  const otherId = otherIds?.[0] ? String(otherIds[0]) : "";
+  // Scalars and signatures, never collections: a strip mounted on every page
+  // must not wake for a heartbeat in a room it is not reading. `muted` earns
+  // its place because with a hot microphone it is the difference between the
+  // two things this strip says loudest, and muting has to paint in the same
+  // tick as the click.
+  const s = useTrackedStore([
+    (st: any) => st.call.roomKey,
+    (st: any) => st.call.phase,
+    (st: any) => st.call.muted,
+    (st: any) => String(st.currentUser?._id ?? ""),
+    // WHO IS ACTUALLY IN THE ROOM, as a signature of the seats alone. The
+    // roster re-pushes on every mute, camera and heartbeat move; none of those
+    // change the answer this strip reads off it.
+    (st: any) =>
+      ((target?.roomKey && st.callOccupancy?.[target.roomKey]) || [])
+        .map((m: any) => String(m.user_id))
+        .sort()
+        .join("|"),
+    // And their door, which decides between "away" and "busy".
+    (st: any) => {
+      const m = otherId
+        ? (st.teamMembers ?? []).find((x: any) => String(x?._id) === otherId)
+        : null;
+      return m ? `${m.status ?? ""}:${m.walkie_pref ?? ""}:${m.walkie_snoozed_until ?? 0}` : "";
+    },
+  ]);
+  const call = s.call;
+  const snoozedUntil = Number(
+    (otherId ? (s.teamMembers ?? []).find((m: any) => String(m?._id) === otherId) : null)
+      ?.walkie_snoozed_until ?? 0,
+  );
+  // Coarse on purpose: an hour-long shutter running out mid-burst is the only
+  // thing this clock is for, and a minute of slack at its edge costs nobody.
+  const now = useNowWhen((n) => (snoozedUntil > n ? "shut" : "open"), 30_000);
   if (!target) return null;
 
   // The teammate's own name when they are the one talking, and the room's label
@@ -115,7 +143,13 @@ export function WalkieBanner({
       : dropped
         ? `Nobody is hearing this — ${name} still gets it`
         : sending.heardLive
-          ? `Live to ${name}`
+          ? // NOT "Live to X". That claim was made off this client's own seat —
+            // my track reached the room — and it was false every time X was
+            // away, busy, or had the door shut, which are the cases the walkie
+            // exists to survive. The roster is the only thing that knows, and
+            // the away tick fires off this same derivation so the words and the
+            // sound cannot say different things.
+            senderHearingFrom(s, sending.roomKey, now).text
           : `Recording — ${name} gets it`
     : incoming
       ? `${name} is talking`
@@ -206,7 +240,7 @@ export function WalkieBanner({
             <button
               type="button"
               className="walkie-strip-join"
-              onClick={() => void joinWalkieLive(target.roomKey)}
+              onClick={() => void joinWalkieLive(target.roomKey, { name })}
             >
               Join live
             </button>
