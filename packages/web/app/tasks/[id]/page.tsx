@@ -3,9 +3,9 @@ import { useState, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { copyToClipboard, canonicalUrl, formatDateFull } from "../../../lib/utils";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useParams, useRouter } from "next/navigation";
-import { useQuery } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskDetail, TaskItem, resolveAssigneeInfo } from "../../../store/inboxStore";
+import { resolveTaskLinkedConversations, resolveTaskRelatedDocs, taskLinkedConversationIds } from "../../../lib/liveEntities";
+import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
 import { useSyncTasks, useSyncTaskDetail } from "../../../hooks/useSyncTasks";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { DetailSplitLayout, PeekLayoutControls } from "../../../components/DetailSplitLayout";
@@ -26,8 +26,6 @@ import { FeedCard } from "../../../components/ActivityFeed";
 import { AgentIcon } from "../../../components/ConversationList";
 import { Avatar, TaskCommentComposer, TaskCommentItem, TimeAgo, UserBadge } from "../../../components/tasks/TaskCommentStream";
 import { WatchButton } from "../../../components/WatchButton";
-
-const api = _api as any;
 import { Badge } from "../../../components/ui/badge";
 import { TaskStatusBadge } from "../../../components/TaskStatusBadge";
 import { getLabelColor } from "../../../lib/labelColors";
@@ -84,6 +82,11 @@ const PRIORITY_OPTIONS = [
 ] as const;
 
 const STATUS_MAP: Record<string, typeof STATUS_OPTIONS[number]> = Object.fromEntries(STATUS_OPTIONS.map((s) => [s.key, s]));
+
+// The doc fields the related-docs list renders; a body edit must not wake it.
+function docOriginSig(d: any): string {
+  return `${d.conversation_id}:${d.archived_at ?? ""}:${d.display_title ?? d.title}:${d.doc_type}`;
+}
 
 function formatDate(ts: number) {
   return new Date(ts).toLocaleDateString("en-US", {
@@ -531,9 +534,18 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
   const handleMentionQuery = useMentionQuery(useActiveMentionScope());
   const handleImageUpload = useImageUpload();
   const updateTask = useInboxStore((s) => s.updateTask);
-  const currentUser = useQuery(api.users.getCurrentUser);
-  const teamMembers = useQuery(api.teams.getTeamMembers, taskTeamId ? { team_id: taskTeamId as any } : "skip");
-  const teamInfo = useQuery(api.teams.getTeam, taskTeamId ? { team_id: taskTeamId as any } : "skip");
+  // Viewer, roster and team all live in the store (fed app-wide), so the chips
+  // paint on the first frame. The roster is the ACTIVE team's; an assignee
+  // outside it falls back to the row's assignee_info (resolveAssigneeInfo).
+  // A task is only readable by its team's members, so the viewer's own team
+  // list always contains the task's team.
+  const currentUser = useInboxStore((s) => s.currentUser);
+  const teamMembers = useInboxStore((s) => s.teamMembers.length > 0 ? s.teamMembers : null);
+  const storeTeams = useInboxStore((s) => s.teams);
+  const teamInfo = useMemo(
+    () => (taskTeamId ? storeTeams.find((t: any) => String(t._id) === taskTeamId) ?? null : null),
+    [storeTeams, taskTeamId],
+  );
   // The project this task is filed under — omitted when the surface around it is
   // already that project, so the chip never repeats the breadcrumb above it.
   const allProjects = useInboxStore((s) => s.projects);
@@ -544,6 +556,28 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
   }, [allProjects, data, params?.id]);
   // Derived so an optimistic re-assignment shows instantly (see resolveAssigneeInfo).
   const assigneeInfo = resolveAssigneeInfo((data as any)?.assignee, (data as any)?.assignee_info, teamMembers as any[], currentUser);
+  // Linked sessions and related docs paint from the store on the first frame:
+  // the detail snapshot when cached, else the sessions/origin badges/docs the
+  // client already holds (resolveTaskLinkedConversations). Sessions churn on
+  // every heartbeat, so subscribe to a signature of the rendered fields, not
+  // the rows.
+  const linkedIds = useMemo(() => taskLinkedConversationIds(data), [data?.created_from_conversation, (data as any)?.conversation_ids]);
+  const linkedSig = useInboxStore((s) => linkedIds.map((cid) => {
+    const r = s.sessions[cid];
+    if (r) return `${cid}:${r.title}:${r.is_idle}:${r.updated_at}:${r.message_count}`;
+    return s.taskOriginBadges[cid] ? `${cid}:badge` : "";
+  }).join("|"));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- linkedSig stands in for the churny sessions ref
+  const linkedConversations = useMemo(() => {
+    const s = useInboxStore.getState();
+    return resolveTaskLinkedConversations(data, s.sessions, s.taskOriginBadges);
+  }, [data?.linked_conversations, linkedIds, linkedSig]);
+  const wsDocs = useWorkspaceCollection("docs", docOriginSig);
+  const relatedDocs = useMemo(() => {
+    const docs: Record<string, any> = {};
+    for (const d of wsDocs) docs[d._id] = d;
+    return resolveTaskRelatedDocs(data, docs);
+  }, [data?.related_docs, data?.created_from_conversation, wsDocs]);
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -940,13 +974,13 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           {/* Source session */}
           {(data.source === "agent" || data.source === "insight") && data.created_from_conversation && (
             <Link
-              href={`/conversation/${data.linked_conversations?.[0]?.session_id || ""}`}
+              href={`/conversation/${linkedConversations[0]?.session_id || ""}`}
               className="flex items-center gap-2.5 text-xs text-sol-text-dim mb-5 px-3 py-2 rounded-lg border border-sol-border/20 bg-sol-bg-alt/20 hover:bg-sol-bg-alt/40 hover:border-sol-violet/30 transition-colors group"
             >
               <Zap className="w-3.5 h-3.5 text-sol-violet flex-shrink-0" />
               <span>Created from</span>
               <span className="text-sol-cyan group-hover:underline truncate">
-                {data.linked_conversations?.[0]?.title || data.linked_conversations?.[0]?.headline || "session"}
+                {linkedConversations[0]?.title || linkedConversations[0]?.headline || "session"}
               </span>
               <ExternalLink className="w-3 h-3 text-sol-text-dim opacity-0 group-hover:opacity-100 transition-opacity ml-auto flex-shrink-0" />
             </Link>
@@ -1022,11 +1056,11 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           )}
 
           {/* Related Docs */}
-          {data.related_docs && data.related_docs.length > 0 && (
+          {relatedDocs.length > 0 && (
             <div className="mb-6">
               <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2">Related Documents</h2>
               <div className="border border-sol-border/30 rounded-lg divide-y divide-sol-border/20 overflow-hidden">
-                {data.related_docs.map((doc: any) => (
+                {relatedDocs.map((doc: any) => (
                   <Link key={doc._id} href={`/docs/${doc._id}`} className="flex items-center gap-3 px-4 py-2.5 hover:bg-sol-bg-alt/50 transition-colors">
                     <FileText className="w-4 h-4 text-sol-violet flex-shrink-0" />
                     <span className="text-sm text-sol-text truncate">{doc.title}</span>
@@ -1067,20 +1101,20 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           <TaskCommentComposer shortId={data.short_id} dropFilesRef={commentDropRef} />
 
         </div>
-        {!isInline && data.linked_conversations && data.linked_conversations.length > 0 && (
+        {!isInline && linkedConversations.length > 0 && (
           <div className="max-w-4xl mx-auto px-6 pb-4 w-full">
             <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2 flex items-center gap-1.5">
               <Radio className="w-3.5 h-3.5" />
-              Sessions ({data.linked_conversations.length})
-              {data.linked_conversations.some((c: any) => c.is_active) && (
+              Sessions ({linkedConversations.length})
+              {linkedConversations.some((c: any) => c.is_active) && (
                 <span className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px]">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  {data.linked_conversations.filter((c: any) => c.is_active).length} active
+                  {linkedConversations.filter((c: any) => c.is_active).length} active
                 </span>
               )}
             </h2>
             <div className="space-y-1.5">
-              {[...data.linked_conversations]
+              {[...linkedConversations]
                 .sort((a: any, b: any) => {
                   if (a.is_active && !b.is_active) return -1;
                   if (!a.is_active && b.is_active) return 1;

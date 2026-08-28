@@ -20,6 +20,22 @@ export type RosterIdentity = {
   is_bot?: boolean;
 };
 
+function identityLine(m: any): string {
+  return `${m._id}|${m.name ?? ""}|${m.email ?? ""}|${m.image ?? ""}|${m.github_avatar_url ?? ""}|${m.github_username ?? ""}|${m.is_bot ? 1 : 0}\n`;
+}
+
+function toIdentity(m: any): RosterIdentity {
+  return {
+    _id: String(m._id),
+    name: m.name ?? undefined,
+    email: m.email ?? undefined,
+    image: m.image ?? undefined,
+    github_avatar_url: m.github_avatar_url ?? undefined,
+    github_username: m.github_username ?? undefined,
+    is_bot: !!m.is_bot,
+  };
+}
+
 let _membersRef: unknown;
 let _membersSig = "";
 /** Signature of the roster's identity fields, memoized on the array ref. */
@@ -27,8 +43,7 @@ export function memberListSig(members: any[] | null | undefined): string {
   if (members === _membersRef) return _membersSig;
   let out = "";
   for (const m of members ?? []) {
-    if (!m?._id) continue;
-    out += `${m._id}|${m.name ?? ""}|${m.email ?? ""}|${m.image ?? ""}|${m.github_avatar_url ?? ""}|${m.github_username ?? ""}|${m.is_bot ? 1 : 0}\n`;
+    if (m?._id) out += identityLine(m);
   }
   _membersRef = members;
   _membersSig = out;
@@ -46,17 +61,7 @@ export function rosterIdentity(members: any[] | null | undefined): RosterIdentit
   _identityRef = members;
   if (sig === _identitySig) return _identityList;
   _identitySig = sig;
-  _identityList = (members ?? [])
-    .filter((m) => m?._id)
-    .map((m) => ({
-      _id: String(m._id),
-      name: m.name ?? undefined,
-      email: m.email ?? undefined,
-      image: m.image ?? undefined,
-      github_avatar_url: m.github_avatar_url ?? undefined,
-      github_username: m.github_username ?? undefined,
-      is_bot: !!m.is_bot,
-    }));
+  _identityList = (members ?? []).filter((m) => m?._id).map(toIdentity);
   return _identityList;
 }
 
@@ -65,4 +70,16 @@ export function useTeamRosterIdentity(): RosterIdentity[] {
   const sig = useInboxStore((s) => memberListSig(s.teamMembers));
   // eslint-disable-next-line react-hooks/exhaustive-deps -- sig stands in for the churny array
   return useMemo(() => rosterIdentity(useInboxStore.getState().teamMembers), [sig]);
+}
+
+/** The viewer projected to the same identity fields. `s.currentUser` is the
+ *  whole user doc, which churns on daemon heartbeats; this wakes only when
+ *  who-they-are changes. */
+export function useViewerIdentity(): RosterIdentity | null {
+  const sig = useInboxStore((s) => (s.currentUser?._id ? identityLine(s.currentUser) : ""));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- sig stands in for the churny doc
+  return useMemo(() => {
+    const u = useInboxStore.getState().currentUser;
+    return u?._id ? toIdentity(u) : null;
+  }, [sig]);
 }

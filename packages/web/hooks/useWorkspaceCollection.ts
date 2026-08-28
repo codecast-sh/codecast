@@ -11,12 +11,12 @@
 //
 // Re-render discipline (CLAUDE.md store rules): never subscribe an
 // always-mounted component to a whole high-churn collection. This hook
-// subscribes to a MEMBERSHIP signature — the ids of rows in the active
-// workspace — so a field edit on a row (title, status, heartbeat-driven
-// counters) does not re-render the caller; only a row entering/leaving the
-// workspace does. Callers that render row FIELDS add their own signature over
-// those fields (see GlobalSessionPanel needsAttentionSig for the shape) —
-// this hook decides which rows, not when their contents changed.
+// subscribes to a wake signature: workspace MEMBERSHIP (which row ids are in
+// the active workspace) plus a per-row FIELD projection — `updated_at` by
+// default, so any real edit (status, title, priority) repaints the caller,
+// while unrelated store churn does not. Callers can pass their own narrower
+// projection (see GlobalSessionPanel needsAttentionSig), or `null` for
+// membership-only when they truly render no row fields.
 import { useMemo } from "react";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { activeWorkspaceKey, filterByWorkspace, inWorkspace, type WorkspaceKey } from "../lib/workspaceScope";
@@ -40,7 +40,7 @@ export function useActiveWorkspaceKey(): WorkspaceKey | null {
 // store notification per subscriber.
 type SigEntry = { key: WorkspaceKey | null; sig: string };
 const sigCache = new WeakMap<object, Map<((row: any) => string) | null, SigEntry>>();
-function membershipSig(
+export function membershipSig(
   collection: Record<string, any>,
   key: WorkspaceKey | null,
   fieldSig: ((row: any) => string) | null = null,
@@ -64,25 +64,37 @@ function membershipSig(
   return sig;
 }
 
+// Default field signature: `updated_at`, which every optimistic write and
+// every server mutation bumps on a real edit. This makes a field change
+// (status, title, priority) repaint list surfaces by default — none of the
+// collections this hook serves carry heartbeat-style churn fields, so there
+// is nothing noisy to exclude. A mark-done that only flipped the store used
+// to stay invisible on /tasks until some row entered or left the workspace.
+export function defaultFieldSig(row: any): string {
+  return String(row?.updated_at ?? "");
+}
+
 /**
- * The rows of `table` that belong to the active workspace. Stable array ref
- * until membership changes. Pass `sig` to ALSO re-render on a field change:
- * a projection of the fields you render, folded into the wake signature.
+ * The rows of `table` that belong to the active workspace. Re-renders when
+ * membership changes OR a row is edited (updated_at, by default). Pass `sig`
+ * for a custom projection of the fields you render, or `null` to opt out of
+ * field reactivity entirely (membership-only, the old behavior).
  */
 export function useWorkspaceCollection<T = any>(
   table: WorkspaceScopedTable,
-  sig?: (row: T) => string,
+  sig?: ((row: T) => string) | null,
 ): T[] {
+  const fieldSig = sig === null ? null : (sig ?? (defaultFieldSig as (row: T) => string));
   const s = useTrackedStore([
     (st) => activeWorkspaceKey(st.clientState.ui?.active_team_id, st.currentUser?._id ? String(st.currentUser._id) : null),
     (st) => {
       const key = activeWorkspaceKey(st.clientState.ui?.active_team_id, st.currentUser?._id ? String(st.currentUser._id) : null);
-      return membershipSig((st as any)[table], key, sig ?? null);
+      return membershipSig((st as any)[table], key, fieldSig);
     },
   ]);
   const key = activeWorkspaceKey(s.clientState.ui?.active_team_id, s.currentUser?._id ? String(s.currentUser._id) : null);
   const coll = (s as any)[table] as Record<string, T>;
-  const memberSig = membershipSig(coll, key);
+  const memberSig = membershipSig(coll, key, fieldSig);
   // Rows filed under a store key that isn't their own _id are dropped (e.g. a
   // task detail-query copy keyed by its URL short id, planted by pre-fix
   // builds). Every sync channel keys rows by _id, so such a copy never
@@ -97,6 +109,6 @@ export function useWorkspaceCollection<T = any>(
           .map(([, row]) => row) as any[],
         key,
       ) as T[],
-    [memberSig, key, sig ? coll : null],
+    [memberSig, key, fieldSig ? coll : null],
   );
 }

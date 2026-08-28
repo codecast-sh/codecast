@@ -4417,12 +4417,13 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   tasks: {
     isDelta: true,
     altKey: "client_key",
-    // Activity (comments + history) rides only the detail queries
-    // (webGetTaskDetail live while a task is open, webGetByIds on the change
-    // feed); the list channels (webList, webListPaginated) never carry it.
-    // Preserve it across their deltas so a fetched task's activity renders
-    // instantly from cache on the next open instead of reloading async.
-    preserveFields: ["comments", "history"],
+    // The detail joins (activity, linked sessions, related docs, source
+    // insight) ride only webGetTaskDetail, live while a task is open; the list
+    // channels (webList, webListPaginated, webGetByIds) never carry them.
+    // Preserve them across list deltas so a fetched task's detail renders
+    // instantly from cache on the next open instead of reloading async. Fields
+    // the list DOES carry (creator, assignee_info, plan) stay list-authoritative.
+    preserveFields: ["comments", "history", "linked_conversations", "related_docs", "source_insight"],
   },
   // The decision queue. NOT delta: listForUser returns the complete visible
   // window (pending + 24h of resolved) on every push, so absence means the

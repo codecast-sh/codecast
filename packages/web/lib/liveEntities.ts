@@ -205,6 +205,82 @@ export function mergeLiveTasks(
   });
 }
 
+/**
+ * The conversation ids a task points at, origin first, deduplicated. The origin
+ * (created_from_conversation) is usually also the first conversation_id, but a
+ * task adopted by a later session lists that session too.
+ */
+export function taskLinkedConversationIds(
+  task: { created_from_conversation?: string | null; conversation_ids?: string[] | null } | null | undefined,
+): string[] {
+  if (!task) return [];
+  const out: string[] = [];
+  for (const id of [task.created_from_conversation, ...(task.conversation_ids ?? [])]) {
+    if (id && !out.includes(String(id))) out.push(String(id));
+  }
+  return out;
+}
+
+/**
+ * A task's linked sessions, from what the client already knows. The server's
+ * `linked_conversations` join rides only the detail query (one round-trip per
+ * cold open), but the sessions those ids name are usually in the store already
+ * — the inbox syncs them — and the list sync fetches an origin badge for every
+ * task's source conversation. Build the same row shape from those so the
+ * "Created from" chip and the Sessions list paint on the first frame; the
+ * detail snapshot, once cached, wins (it carries the insight enrichment).
+ */
+export function resolveTaskLinkedConversations(
+  task: { linked_conversations?: any[]; created_from_conversation?: string | null; conversation_ids?: string[] | null } | null | undefined,
+  sessions: Record<string, any> | null | undefined,
+  originBadges: Record<string, any> | null | undefined,
+): any[] {
+  if (!task) return [];
+  if (Array.isArray(task.linked_conversations)) return task.linked_conversations;
+  const out: any[] = [];
+  for (const id of taskLinkedConversationIds(task)) {
+    const row = sessions?.[id];
+    const badge = originBadges?.[id];
+    if (!row && !badge) continue;
+    out.push({
+      _id: id,
+      session_id: row?.session_id ?? badge?.session_id ?? id,
+      title: row?.title ?? row?.subtitle ?? badge?.title,
+      project_path: row?.project_path,
+      message_count: row?.message_count ?? badge?.message_count ?? 0,
+      is_active: row ? row.is_idle === false : false,
+      started_at: row?.started_at,
+      updated_at: row?.updated_at ?? badge?.last_message_at,
+      agent_type: row?.agent_type ?? badge?.agent_type,
+      git_branch: row?.git_branch,
+    });
+  }
+  return out;
+}
+
+/**
+ * The docs a task's origin session produced, from the store's doc list when
+ * the detail snapshot (`related_docs`) hasn't been cached yet. Same filter as
+ * the server: the origin conversation's docs, archived ones excluded.
+ */
+export function resolveTaskRelatedDocs(
+  task: { related_docs?: any[]; created_from_conversation?: string | null } | null | undefined,
+  docs: Record<string, any> | null | undefined,
+): any[] {
+  if (!task) return [];
+  if (Array.isArray(task.related_docs)) return task.related_docs;
+  const origin = task.created_from_conversation;
+  if (!origin || !docs) return [];
+  const out: any[] = [];
+  for (const id in docs) {
+    const d = docs[id];
+    if (d && d.conversation_id === origin && !d.archived_at) {
+      out.push({ _id: d._id, title: d.display_title ?? d.title, doc_type: d.doc_type, source: d.source, created_at: d.created_at });
+    }
+  }
+  return out.sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
+}
+
 function sameAssigneeInfo(a: AssigneeInfo, b: any): boolean {
   if (!a && !b) return true;
   if (!a || !b) return false;
