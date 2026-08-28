@@ -30,6 +30,8 @@ import {
  * move a circle a pixel.
  */
 export function useFaceCrop(opts: {
+  /** The circle itself. Carries `data-tracking`, which the hook alone writes. */
+  hostRef: RefObject<HTMLElement | null>;
   videoRef: RefObject<HTMLVideoElement | null>;
   /** There is a live camera track in this circle (no video, no tracking). */
   active: boolean;
@@ -37,8 +39,13 @@ export function useFaceCrop(opts: {
   /** Your own camera: a self-view that is not mirrored looks wrong. */
   mirror: boolean;
 }) {
-  const { videoRef, active, diameter, mirror } = opts;
+  const { hostRef, videoRef, active, diameter, mirror } = opts;
   useWatchEffect(() => {
+    // Honest about which of the two pictures this is, always. React never
+    // renders this attribute, so the loop below owns it outright and no
+    // re-render can put back a claim that has stopped being true.
+    const setTracking = (m: "face" | "center") => hostRef.current?.setAttribute("data-tracking", m);
+    setTracking("center");
     const video = videoRef.current;
     if (!video || !active) return;
 
@@ -132,11 +139,13 @@ export function useFaceCrop(opts: {
       if (box) {
         lastFaceAt = Date.now();
         target = clampCrop(cropFromFace(box, video.videoWidth, video.videoHeight), aspect());
+        setTracking("face");
       } else if (Date.now() - lastFaceAt > FACE_LOST_MS) {
         // Left the frame, turned away, or a camera pointed at a whiteboard.
         // Drifting back to the center crop is honest and never leaves the
         // circle framed on the last place a face happened to be.
         target = CENTER_CROP;
+        setTracking("center");
       }
     };
     if (detector) timer = setInterval(() => void sample(), SAMPLE_MS);
@@ -159,7 +168,22 @@ export function useFaceCrop(opts: {
       if (timer) clearInterval(timer);
       if (retry) clearTimeout(retry);
     };
-  }, [videoRef, active, diameter, mirror]);
+  }, [hostRef, videoRef, active, diameter, mirror]);
+}
+
+/**
+ * The one line the settings say about face tracking.
+ *
+ * There are two pictures a circle can show and they look alike at a glance: a
+ * crop that follows the person, and the middle of the frame. Which one you are
+ * getting depends on whether this build of Chromium has a face detector, which
+ * is not something a person can be expected to know — so the settings say it
+ * rather than leaving the difference to be noticed.
+ */
+export function faceTrackingNote(): string {
+  return getFaceDetector()
+    ? "Face tracking: on (Chromium FaceDetector)"
+    : "Face tracking: centered (detector unavailable)";
 }
 
 /** How often the face detector is asked where the face is. */

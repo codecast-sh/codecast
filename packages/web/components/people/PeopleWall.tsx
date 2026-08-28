@@ -1,18 +1,10 @@
 // The wall: everyone at once, sized by how present they are, and each face is
 // the key you hold to talk to them.
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { useInboxStore } from "../../store/inboxStore";
 import { navigateMainWindow } from "../../lib/desktop";
-import { dmRoomKey } from "@codecast/shared/contracts";
-import {
-  isWalkieHoldKey,
-  pttHoldProps,
-  usePushToTalk,
-  useWalkieLevelVar,
-  walkieKeyState,
-} from "../../hooks/useWalkie";
-import { useMountEffect } from "../../hooks/useMountEffect";
 import { MemberFace } from "../presence/MemberFace";
+import { useFaceKey } from "../presence/useFaceKey";
 import {
   PRESENCE_META,
   memberDisplayName,
@@ -23,7 +15,6 @@ import { emptyRosterText, unreadBadgeText } from "./peopleRoster";
 import {
   WALL_FACE_PX,
   buildWall,
-  isWallTap,
   type Wall,
   type WallFace,
   type WallTier,
@@ -124,11 +115,6 @@ export function PeopleWallView({
   );
 }
 
-/** How long the refusal hint stays up after a press that could not open a mic.
- *  Long enough to read a short sentence, short enough that it is gone before
- *  the hand comes back. */
-const REFUSAL_MS = 2200;
-
 export function WallFaceButton({
   face,
   data,
@@ -166,44 +152,12 @@ export function WallFaceButton({
     if (!navigateMainWindow(path)) window.location.href = path;
   }, [id]);
 
-  const ptt = usePushToTalk(
-    callsEnabled ? dmRoomKey(viewerId, id) : undefined,
-    useCallback(() => useInboxStore.getState().openDmChannel([id]), [id]),
-  );
-  const state = walkieKeyState(ptt);
-  // TWO different questions, and using one for both dimmed the face you were
-  // talking to for the first tenth of a second. `sending` is the microphone
-  // being OPEN, which is what lights the ring and presses the face down.
-  // `ptt.holding` is the thumb being down, which starts at the press and covers
-  // the opening gap before the mic answers — and that is the one the wall's
-  // dimming must exempt, or the held face fades out exactly as it is pressed.
-  const sending = state === "live" || state === "dropped";
-
-  // Two rings, two subscriptions, two custom properties — because one element
-  // can carry only one `--level` and both directions can be true at once (you
-  // hold their face while their own burst is still playing). Each ring owns its
-  // ref, so the warm one follows this machine's microphone and the cool one
-  // follows their voice, with no React render in either loop.
-  const txRef = useWalkieLevelVar<HTMLSpanElement>(sending);
-  const rxRef = useWalkieLevelVar<HTMLSpanElement>(talking, id);
-
-  // Which gesture just happened. `performance.now()` rather than Date.now():
-  // a duration must not be at the mercy of the system clock being corrected
-  // mid-press.
-  const downAt = useRef(0);
-  const [refused, setRefused] = useState(false);
-  const refusalTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const refuse = useCallback(() => {
-    setRefused(true);
-    if (refusalTimer.current) clearTimeout(refusalTimer.current);
-    refusalTimer.current = setTimeout(() => setRefused(false), REFUSAL_MS);
-  }, []);
-  useMountEffect(() => () => {
-    if (refusalTimer.current) clearTimeout(refusalTimer.current);
-  });
-
-  const hold = pttHoldProps(ptt);
-  const blocked = callsEnabled ? ptt.reason : "Calls are not on for this team";
+  // THE FACE IS THE KEY, and it is the same key the avatar bar in the shell
+  // holds — hold to talk, tap to open the conversation, a warm ring going out
+  // and a cool one coming in. One hook, so the two surfaces cannot drift into
+  // two answers for the same gesture.
+  const key = useFaceKey({ viewerId, memberId: id, callsEnabled, talking, onTap: openDm });
+  const { state, sending, refused, blocked } = key;
 
   // The describe channel: the same words the label under the face shows, told
   // to the surface. `attended` remembers a pointer or focus is on the face, so
@@ -234,19 +188,6 @@ export function WallFaceButton({
     describe(refused);
 
   }, [refused, describe]);
-
-  const begin = () => {
-    downAt.current = performance.now();
-    // A press that cannot open a mic must never be a dead press. `press` itself
-    // is already a no-op here — this is only the part that SAYS so.
-    if (blocked) refuse();
-  };
-  // A release ON the face is the gesture that can be a click. A pointer that
-  // wandered off it, or a cancelled gesture, ends the hold without opening
-  // anything: letting go somewhere else is how people abort.
-  const finish = () => {
-    if (isWallTap(downAt.current, performance.now())) openDm();
-  };
 
   const unread = dm?.unread ?? 0;
 
@@ -281,7 +222,7 @@ export function WallFaceButton({
       ref={seatRef}
       className="people-face-seat"
       style={{ ["--face" as string]: `${px}px` }}
-      data-hold={ptt.holding ? "1" : undefined}
+      data-hold={key.holding ? "1" : undefined}
       data-refused={refused ? "1" : undefined}
       data-ask={fleet && fleet.needsYou > 0 ? "1" : undefined}
     >
@@ -304,56 +245,23 @@ export function WallFaceButton({
         data-tx={sending ? "1" : undefined}
         data-rx={talking ? "1" : undefined}
         data-walkie-state={state}
-        {...hold}
-        // NO HOVER WARM on this surface, and this is the one place the wall
-        // departs from the key it is built on.
-        //
-        // `pttHoldProps` opens the microphone when a pointer ARRIVES on a key,
-        // which takes getUserMedia out of the press and makes the first burst of
-        // a session as instant as the second. That is right for a 28px key you
-        // aim at: pointing at it is already the gesture. It is wrong here,
-        // because on the wall the faces ARE the surface — a mouse crossing the
-        // window to reach anything at all sweeps four of them, and the browser's
-        // recording indicator would light up because somebody moved a pointer.
-        // The composer key made exactly this distinction once already, between
-        // the key and the conversation; a wall of keys falls on the other side
-        // of it.
-        //
-        // Focus still warms: tabbing onto a face is deliberate in a way that
-        // passing over one is not. A pointer hold pays the device at press time
-        // instead — tens of milliseconds on an already-granted mic.
+        {...key.keyProps}
+        // The describe channel rides on top of the gesture: the face tells the
+        // surface its words as a pointer or focus arrives, and takes them back
+        // as it leaves. The hold's own handlers run first in every case.
         onPointerEnter={onDescribe ? attend : undefined}
         onPointerLeave={() => {
-          hold.onPointerLeave?.();
+          key.keyProps.onPointerLeave?.();
           unattend();
         }}
         onFocus={() => {
-          hold.onFocus?.();
+          key.keyProps.onFocus?.();
           attend();
         }}
         onBlur={unattend}
-        onPointerDown={(e) => {
-          begin();
-          hold.onPointerDown(e);
-        }}
-        onPointerUp={() => {
-          hold.onPointerUp();
-          finish();
-        }}
-        // Gated on the same key set the hold itself uses, asked of the same
-        // function: without it Tab would time a press of zero milliseconds and
-        // its keyup would open a DM on the way past.
-        onKeyDown={(e) => {
-          if (isWalkieHoldKey(e.key) && !e.repeat) begin();
-          hold.onKeyDown(e);
-        }}
-        onKeyUp={(e) => {
-          hold.onKeyUp(e);
-          if (isWalkieHoldKey(e.key)) finish();
-        }}
       >
-        <span ref={txRef} className="people-face-ring people-face-ring-tx" aria-hidden="true" />
-        <span ref={rxRef} className="people-face-ring people-face-ring-rx" aria-hidden="true" />
+        <span ref={key.txRef} className="people-face-ring people-face-ring-tx" aria-hidden="true" />
+        <span ref={key.rxRef} className="people-face-ring people-face-ring-rx" aria-hidden="true" />
         <MemberFace
           member={member}
           size={px}
