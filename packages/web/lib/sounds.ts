@@ -1,4 +1,4 @@
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, type ClientUI } from "../store/inboxStore";
 import { isNotificationLeader } from "./desktop";
 import type { CueSpec } from "./cueSpec";
 import {
@@ -16,13 +16,33 @@ function isSupported(): boolean {
   return typeof AudioContext !== "undefined";
 }
 
-function isEnabled(): boolean {
-  return useInboxStore.getState().clientState?.ui?.sounds_enabled !== false;
+// Every cue belongs to exactly one category, and each category is one switch
+// in the Sounds settings panel. The master switch outranks them all: off means
+// silence, whatever the per-category switches say.
+export type SoundCategory = "sessions" | "chat" | "calls" | "walkie" | "ui";
+
+const CATEGORY_KEY: Record<SoundCategory, keyof ClientUI> = {
+  sessions: "session_sounds_enabled",
+  chat: "chat_sounds_enabled",
+  calls: "call_sounds_enabled",
+  walkie: "walkie_sounds_enabled",
+  ui: "ui_sounds_enabled",
+};
+
+function isEnabled(category?: SoundCategory): boolean {
+  const ui = useInboxStore.getState().clientState?.ui;
+  if (ui?.sounds_enabled === false) return false;
+  if (!category) return true;
+  return ui?.[CATEGORY_KEY[category]] !== false;
 }
 
-// Chat has its own switch (see clientState.ui.chat_sounds_enabled).
-function isChatEnabled(): boolean {
-  return useInboxStore.getState().clientState?.ui?.chat_sounds_enabled !== false;
+/** The user's output level as a multiplier over each cue's calibrated gain.
+ *  1 (and unset) = the exact measured levels in cueSpec.ts; the slider's
+ *  headroom to 1.5 is safe because master gains sit near 0.05. */
+function volumeFactor(): number {
+  const v = useInboxStore.getState().clientState?.ui?.sound_volume;
+  if (typeof v !== "number" || Number.isNaN(v)) return 1;
+  return Math.min(1.5, Math.max(0, v));
 }
 
 // Sounds that ANNOUNCE something (a message, a ring, a session waiting) play
@@ -75,7 +95,7 @@ function playCue(spec: CueSpec) {
     const ac = getCtx();
     const t0 = ac.currentTime;
     const master = ac.createGain();
-    master.gain.value = spec.master;
+    master.gain.value = spec.master * volumeFactor();
     master.connect(ac.destination);
 
     for (const n of spec.tones ?? []) {
@@ -133,27 +153,31 @@ function playCue(spec: CueSpec) {
 }
 
 export function soundNewSession() {
-  if (!isEnabled()) return;
+  if (!isEnabled("sessions")) return;
   play([
     { freq: 392, start: 0, dur: 0.2, gain: 0.5, type: "sine" },
     { freq: 523.25, start: 0.12, dur: 0.25, gain: 0.35, type: "sine" },
   ], 0.05);
 }
 
-export function soundIdle() {
-  if (!isEnabled() || !isAnnouncer()) return;
+function playIdleMotif() {
   play([
     { freq: 392, start: 0, dur: 0.25, gain: 0.4, type: "sine" },
     { freq: 494, start: 0.15, dur: 0.3, gain: 0.3, type: "sine" },
   ], 0.05);
 }
 
+export function soundIdle() {
+  if (!isEnabled("sessions") || !isAnnouncer()) return;
+  playIdleMotif();
+}
+
 export function soundDismiss() {
-  if (!isEnabled() || !isSupported()) return;
+  if (!isEnabled("ui") || !isSupported()) return;
   try {
     const ac = getCtx();
     const master = ac.createGain();
-    master.gain.value = 0.08;
+    master.gain.value = 0.08 * volumeFactor();
     master.connect(ac.destination);
 
     const bufferSize = ac.sampleRate * 0.3;
@@ -183,11 +207,11 @@ export function soundDismiss() {
 }
 
 export function soundKill() {
-  if (!isEnabled() || !isSupported()) return;
+  if (!isEnabled("ui") || !isSupported()) return;
   try {
     const ac = getCtx();
     const master = ac.createGain();
-    master.gain.value = 0.1;
+    master.gain.value = 0.1 * volumeFactor();
     master.connect(ac.destination);
 
     // Short noise burst through a lowpass — a dry "thud"
@@ -236,7 +260,7 @@ export function soundKill() {
 // The message's own id settles it — the same rule notifyNative already uses to
 // collapse one row reported by every open window into one banner.
 export function soundChatMessage(messageId?: string) {
-  if (!isChatEnabled() || !isSupported() || !isAnnouncer()) return;
+  if (!isEnabled("chat") || !isSupported() || !isAnnouncer()) return;
   if (soundedRecently(messageId)) return;
   playKnockMotif();
 }
@@ -261,7 +285,7 @@ function soundedRecently(key: string | undefined): boolean {
 // gated as a call event rather than a chat one: muting chat must not mute the
 // door. One motif, two gates, so the two can never drift apart.
 export function soundRoomKnock() {
-  if (!isEnabled() || !isSupported() || !isAnnouncer()) return;
+  if (!isEnabled("calls") || !isSupported() || !isAnnouncer()) return;
   playKnockMotif();
 }
 
@@ -269,7 +293,7 @@ function playKnockMotif() {
   try {
     const ac = getCtx();
     const master = ac.createGain();
-    master.gain.value = 0.045;
+    master.gain.value = 0.045 * volumeFactor();
     master.connect(ac.destination);
     const t0 = ac.currentTime;
 
@@ -331,7 +355,11 @@ export const soundChatMention = soundChatMessage;
 // above. The ring HOOK (useCallRing) repeats this on an interval and owns the
 // 45s ceiling; this stays a single cycle so a dismissed ring stops instantly.
 export function soundCallRing() {
-  if (!isEnabled() || !isAnnouncer()) return;
+  if (!isEnabled("calls") || !isAnnouncer()) return;
+  playRingMotif();
+}
+
+function playRingMotif() {
   // The huddle ring motif — same bell call-and-answer the mobile app plays
   // (assets/sounds/huddle-ring.m4a, generated by packages/mobile/scripts/
   // ringtone.py, candidate A): a friendly knock (G#5→E5), then a brighter
@@ -353,7 +381,7 @@ export function soundCallRing() {
 
 // Someone joined the room you're in (or you connected): a soft rising triad.
 export function soundCallJoin() {
-  if (!isEnabled()) return;
+  if (!isEnabled("calls")) return;
   play([
     { freq: 523.25, start: 0, dur: 0.15, gain: 0.4, type: "sine" },
     { freq: 659.25, start: 0.08, dur: 0.18, gain: 0.35, type: "sine" },
@@ -363,7 +391,7 @@ export function soundCallJoin() {
 
 // A participant left / the call ended: the join triad, descending.
 export function soundCallLeave() {
-  if (!isEnabled()) return;
+  if (!isEnabled("calls")) return;
   play([
     { freq: 783.99, start: 0, dur: 0.15, gain: 0.35, type: "sine" },
     { freq: 659.25, start: 0.08, dur: 0.18, gain: 0.3, type: "sine" },
@@ -444,7 +472,7 @@ export function soundCallLeave() {
  *  harmonics that would make it harsh at nearly four times its old level:
  *  measured share of energy above 2 kHz falls from 0.33 to 0.08. */
 export function soundWalkieKeyUp() {
-  if (!isEnabled()) return;
+  if (!isEnabled("walkie")) return;
   playCue(WALKIE_KEY_UP);
 }
 
@@ -452,7 +480,7 @@ export function soundWalkieKeyUp() {
  *  says the burst is closed and on its way, which is the half a push-to-talk
  *  key cannot show — the hand is already off it and the eye has moved on. */
 export function soundWalkieRoger() {
-  if (!isEnabled()) return;
+  if (!isEnabled("walkie")) return;
   playCue(WALKIE_ROGER);
 }
 
@@ -466,7 +494,7 @@ export function soundWalkieRoger() {
  *  over the last note only — so the two never trade places in the ear, and
  *  "they joined my burst" never sounds like "someone entered a room". */
 export function soundWalkieJoined() {
-  if (!isEnabled()) return;
+  if (!isEnabled("walkie")) return;
   playCue(WALKIE_JOINED);
 }
 
@@ -476,7 +504,7 @@ export function soundWalkieJoined() {
  *  read. Its attack is shorter than one cycle at 220 Hz, which is what makes
  *  it a tick rather than a note. */
 export function soundWalkieAway() {
-  if (!isEnabled()) return;
+  if (!isEnabled("walkie")) return;
   playCue(WALKIE_AWAY);
 }
 
@@ -487,7 +515,7 @@ export function soundWalkieAway() {
  *  are the same pitch, so it reads as a click rather than a tune and cannot be
  *  mistaken for the rising keyUp or the falling roger. */
 export function soundWalkieOpen() {
-  if (!isEnabled() || !isAnnouncer()) return;
+  if (!isEnabled("walkie") || !isAnnouncer()) return;
   playCue(WALKIE_OPEN);
 }
 
@@ -499,7 +527,7 @@ export function soundWalkieOpen() {
  *  punctuation, and broadband noise carries further than a sine at the same
  *  peak. */
 export function soundWalkieSquelch() {
-  if (!isEnabled() || !isAnnouncer()) return;
+  if (!isEnabled("walkie") || !isAnnouncer()) return;
   playCue(WALKIE_SQUELCH);
 }
 
@@ -523,16 +551,47 @@ export const WALKIE_PREVIEWS: ReadonlyArray<{ id: string; label: string; spec: C
  *  the election exists to keep several windows from answering one event, and a
  *  click is not that event — it happened in exactly this window. A preview
  *  that stayed silent in a second window would read as a broken sound rather
- *  than as a rule. `sounds_enabled` still applies, and the page disables these
- *  buttons when it is off, so the silence is never a surprise. */
+ *  than as a rule. Not gated on any switch either: the Sounds panel is where
+ *  switches are decided, and auditioning a cue is the only honest basis for
+ *  that decision. Volume still applies, so the slider is auditable too. */
 export function previewWalkieCue(spec: CueSpec) {
-  if (!isEnabled()) return;
   playCue(spec);
+}
+
+// ── the sound categories, for the Sounds settings panel ───────────────────
+//
+// One entry per gate in CATEGORY_KEY, each with the cue that best represents
+// it, so the panel can offer "hear it" beside every switch. The list lives
+// beside the cues for the same reason WALKIE_PREVIEWS does: a category added
+// above and forgotten here would be a switch nobody can audition.
+export const SOUND_CATEGORIES: ReadonlyArray<{
+  id: SoundCategory;
+  key: keyof ClientUI;
+  label: string;
+  desc: string;
+}> = [
+  { id: "sessions", key: "session_sounds_enabled", label: "Sessions", desc: "A session needs you or a new one arrives" },
+  { id: "chat", key: "chat_sounds_enabled", label: "Team chat", desc: "A chat message raises a toast" },
+  { id: "calls", key: "call_sounds_enabled", label: "Calls", desc: "Rings, joins and leaves, a knock at a locked huddle" },
+  { id: "walkie", key: "walkie_sounds_enabled", label: "Walkie", desc: "The push-to-talk cues: your key, their bursts" },
+  { id: "ui", key: "ui_sounds_enabled", label: "Your actions", desc: "Feedback for your own gestures: send, dismiss, kill" },
+];
+
+/** Audition a category: its most representative cue, ungated like
+ *  previewWalkieCue and for the same reason — the click is the intent. */
+export function previewSoundCategory(id: SoundCategory) {
+  switch (id) {
+    case "sessions": return playIdleMotif();
+    case "chat": return playKnockMotif();
+    case "calls": return playRingMotif();
+    case "walkie": return playCue(WALKIE_KEY_UP);
+    case "ui": return playSendMotif();
+  }
 }
 
 // Your ring was declined or timed out — one low, brief, apologetic note.
 export function soundCallDeclined() {
-  if (!isEnabled() || !isAnnouncer()) return;
+  if (!isEnabled("calls") || !isAnnouncer()) return;
   play([
     { freq: 329.63, start: 0, dur: 0.25, gain: 0.4, type: "sine" },
     { freq: 261.63, start: 0.18, dur: 0.3, gain: 0.3, type: "sine" },
@@ -540,11 +599,16 @@ export function soundCallDeclined() {
 }
 
 export function soundSend() {
-  if (!isEnabled() || !isSupported()) return;
+  if (!isEnabled("ui") || !isSupported()) return;
+  playSendMotif();
+}
+
+function playSendMotif() {
+  if (!isSupported()) return;
   try {
     const ac = getCtx();
     const master = ac.createGain();
-    master.gain.value = 0.04;
+    master.gain.value = 0.04 * volumeFactor();
     master.connect(ac.destination);
 
     // Quick upward sweep — gives a soft "fwip" send feel

@@ -1,46 +1,109 @@
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { Card } from "../../../../components/ui/card";
+import type { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { toast } from "sonner";
+import { Users } from "lucide-react";
 import { Input } from "../../../../components/ui/input";
 import { Button } from "../../../../components/ui/button";
 import { Label } from "../../../../components/ui/label";
-import { ArrowLeft } from "lucide-react";
-import Link from "next/link";
+import { TeamFlowShell, type TeamFlowStep } from "../../../../components/team/TeamFlowShell";
+import { VisibilityPicker, type TeamVisibility } from "../../../../components/team/VisibilityPicker";
+import { WorkspaceSharePicker } from "../../../../components/team/WorkspaceSharePicker";
+import { useWorkspaceSelection } from "../../../../hooks/useWorkspaceSelection";
+import { useTeamWorkspaceSuggestions } from "../../../../hooks/useTeamWorkspaceSuggestions";
+import { useSaveTeamSetup } from "../../../../lib/team/saveTeamSetup";
+import { useSwitchWorkspace } from "../../../../hooks/useSwitchWorkspace";
+import { adoptPathIntoActiveTab } from "../../../../src/compat/tabRouting";
+import { useCurrentUser } from "../../../../hooks/useCurrentUser";
 
+const CODE_FORM_ID = "team-join-code";
+const CODE_LENGTH = 8;
+const TEAM_FEED_PATH = "/team/activity";
+
+const STEPS: TeamFlowStep[] = [
+  { key: "code", label: "Invite code" },
+  { key: "visibility", label: "Visibility" },
+  { key: "workspaces", label: "Workspaces" },
+];
+
+/**
+ * Join team flow. The code step joins for real; visibility and workspaces
+ * continue inline in the same shell, so a joiner gets the same guided push
+ * to share their repos as a creator does. The public /join/<code> landing
+ * hands off here with ?teamId= once it has joined, skipping the code step.
+ */
 export default function JoinTeamPage() {
   const router = useRouter();
-  const user = useQuery(api.users.getCurrentUser);
+  const searchParams = useSearchParams();
+  const { user } = useCurrentUser();
   const joinTeam = useMutation(api.teams.joinTeam);
+  const switchWorkspace = useSwitchWorkspace();
 
+  // A hand-off from /join/<code> arrives already joined: start at
+  // visibility with the code step done.
+  const [teamId, setTeamId] = useState<Id<"teams"> | null>(
+    () => (searchParams.get("teamId") as Id<"teams"> | null) || null,
+  );
+  const [step, setStep] = useState(() => (searchParams.get("teamId") ? 1 : 0));
   const [inviteCode, setInviteCode] = useState("");
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState("");
+  const [visibility, setVisibility] = useState<TeamVisibility>("full");
 
-  if (!user) {
-    return null;
-  }
+  // A full code previews the team before joining: the crest becomes the
+  // rail's hero and the button names the team it is about to join.
+  const code = inviteCode.trim().toUpperCase();
+  const preview = useQuery(
+    api.teams.getTeamByInviteCode,
+    !teamId && code.length === CODE_LENGTH ? { invite_code: code } : "skip",
+  );
+  const previewExpired = !!preview?.isExpired;
+
+  const data = useTeamWorkspaceSuggestions(teamId);
+  const { selectedPaths, toggle, selectedCount } = useWorkspaceSelection(data, teamId);
+  const save = useSaveTeamSetup();
+
+  // The member's default visibility on this team lands with the
+  // suggestions; seed the picker once it does.
+  useEffect(() => {
+    const current = data.suggestions?.current_visibility;
+    if (current) setVisibility(current);
+  }, [data.suggestions?.team_id, data.suggestions?.current_visibility]);
+
+  const teamName = data.teamName !== "your team" ? data.teamName : preview?.name || "";
+  const crest = teamId
+    ? { icon: data.suggestions?.team_icon, color: data.suggestions?.team_icon_color, name: teamName }
+    : preview && !previewExpired
+      ? { icon: preview.icon, color: preview.icon_color, name: preview.name }
+      : { name: "" };
+
+  const goBack = useCallback(() => {
+    if (step === 0 || step === 1) {
+      // Before joining, leaving is a cancel. Once joined, the membership is
+      // real and visibility is the first step, so back exits the flow too;
+      // everything here can be changed later in Settings.
+      router.push("/settings/team");
+      return;
+    }
+    setStep((s) => s - 1);
+  }, [step, router]);
 
   const handleJoinTeam = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inviteCode.trim() || !user._id) return;
-
+    if (code.length !== CODE_LENGTH || !user?._id || previewExpired) return;
     setJoining(true);
     setError("");
-
     try {
-      const teamId = await joinTeam({
-        invite_code: inviteCode.trim().toUpperCase(),
-        user_id: user._id,
-      });
-      router.push(`/settings/sync?teamSetup=1&teamId=${teamId}`);
+      const id = await joinTeam({ invite_code: code });
+      // Joining IS the switch: the rest of the flow tunes the new team, and
+      // an abandoned flow still leaves the user in the team they joined.
+      void switchWorkspace(id);
+      setTeamId(id as Id<"teams">);
+      setStep(1);
     } catch (err) {
-      if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError("Failed to join team. Please try again.");
-      }
+      setError(err instanceof Error ? err.message : "Could not join the team. Try again.");
     } finally {
       setJoining(false);
     }
@@ -60,75 +123,136 @@ export default function JoinTeamPage() {
     }
   };
 
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <Link
-          href="/settings/team"
-          className="p-2 text-sol-base1 hover:text-sol-text rounded-lg hover:bg-sol-base02/50 transition-colors"
-        >
-          <ArrowLeft className="w-5 h-5" />
-        </Link>
-        <h1 className="text-xl font-semibold text-sol-text">Join a Team</h1>
-      </div>
+  // Saves ride behind the navigation: the feed opens now, the mappings
+  // confirm (or fail) in their own toast.
+  const finishSetup = (paths: Record<string, boolean>) => {
+    const id = teamId;
+    const name = teamName || "the team";
+    if (id) {
+      save({ teamId: id, visibility, selectedPaths: paths, allProjects: data.allProjects })
+        .then(({ mapped }) => {
+          if (mapped > 0) toast.success(`Sharing ${mapped} workspace${mapped === 1 ? "" : "s"} with ${name}`);
+        })
+        .catch((err) => {
+          console.error("Team setup save failed:", err);
+          toast.error("Could not save the team settings. You can change them in Settings.");
+        });
+    }
+    // This page lives outside the tab shell. Point the active tab at the
+    // feed first, or the shell re-asserts its old path on re-entry.
+    adoptPathIntoActiveTab(TEAM_FEED_PATH);
+    router.push(TEAM_FEED_PATH);
+    toast.success(`Welcome to ${name}`, {
+      description: "This is its feed. Sessions from shared workspaces land here.",
+    });
+  };
 
-      <Card className="p-6 bg-sol-bg border-sol-border max-w-md">
-        <form onSubmit={handleJoinTeam} className="space-y-4">
+  if (step === 0) {
+    return (
+      <TeamFlowShell
+        eyebrow="Join a team"
+        steps={STEPS}
+        stepIndex={0}
+        crest={crest}
+        heading="Enter the invite code"
+        description="Type the 8 character code or paste the invite link."
+        onBack={goBack}
+        backLabel="Cancel"
+        formId={CODE_FORM_ID}
+        continueLabel={
+          joining ? "Joining" : preview && !previewExpired ? `Join ${preview.name}` : "Join team"
+        }
+        continueDisabled={code.length !== CODE_LENGTH || joining || !user || previewExpired}
+      >
+        <form id={CODE_FORM_ID} onSubmit={handleJoinTeam} className="space-y-5">
           <div>
-            <Label htmlFor="inviteCode" className="text-sol-text">Invite Code</Label>
+            <Label htmlFor="inviteCode" className="text-sol-text">Invite code</Label>
             <div className="flex gap-2 mt-1.5">
               <Input
                 id="inviteCode"
                 value={inviteCode}
-                onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+                onChange={(e) => { setInviteCode(e.target.value.toUpperCase()); if (error) setError(""); }}
                 placeholder="ABCD1234"
-                className="bg-sol-bg-alt border-sol-border text-sol-text font-mono uppercase"
-                maxLength={8}
+                className="h-11 text-base bg-sol-bg-alt border-sol-border text-sol-text font-mono uppercase tracking-[0.2em] focus-visible:ring-[var(--team-flow-accent)]"
+                maxLength={CODE_LENGTH}
                 autoFocus
+                autoComplete="off"
               />
               <Button
                 type="button"
                 variant="outline"
                 onClick={handlePasteLink}
-                className="border-sol-border text-sol-base1 shrink-0"
+                className="h-11 border-sol-border text-sol-text-dim shrink-0"
               >
                 Paste
               </Button>
             </div>
-            <p className="mt-1.5 text-xs text-sol-base1">
-              Enter the 8-character invite code or paste an invite link
+            <p className="mt-1.5 text-xs text-sol-text-dim">
+              Ask a team admin for the code or link.
             </p>
           </div>
 
+          {preview && !previewExpired && (
+            <p className="flex items-center gap-1.5 text-sm text-sol-text-muted" aria-live="polite">
+              <Users className="h-3.5 w-3.5" />
+              {preview.name} has {preview.memberCount} {preview.memberCount === 1 ? "member" : "members"}
+            </p>
+          )}
+          {previewExpired && (
+            <div role="alert" className="p-3 bg-sol-red/10 border border-sol-red/20 rounded-lg">
+              <p className="text-sm text-sol-red">This invite code has expired. Ask a team admin for a new one.</p>
+            </div>
+          )}
           {error && (
-            <div className="p-3 bg-sol-red/10 border border-sol-red/20 rounded-lg">
+            <div role="alert" className="p-3 bg-sol-red/10 border border-sol-red/20 rounded-lg">
               <p className="text-sm text-sol-red">{error}</p>
             </div>
           )}
-
-          <div className="flex gap-3 pt-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => router.back()}
-              className="border-sol-border text-sol-base1"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              disabled={inviteCode.length !== 8 || joining}
-              className="bg-sol-cyan text-sol-bg hover:bg-sol-cyan/90"
-            >
-              {joining ? "Joining..." : "Join Team"}
-            </Button>
-          </div>
         </form>
+      </TeamFlowShell>
+    );
+  }
 
-        <p className="mt-4 text-xs text-sol-base1">
-          Ask your team admin for an invite code or link to join their team.
-        </p>
-      </Card>
-    </div>
+  if (step === 1) {
+    return (
+      <TeamFlowShell
+        eyebrow={teamName ? `Welcome to ${teamName}` : "Welcome"}
+        steps={STEPS}
+        stepIndex={1}
+        crest={crest}
+        heading="What teammates see"
+        description="You're on the team; the rest is optional tuning. Choose how much of your work shows in the team feed. You can change this any time."
+        onBack={goBack}
+        backLabel="Set up later"
+        onContinue={() => setStep(2)}
+        enterAdvances
+      >
+        <VisibilityPicker value={visibility} onChange={setVisibility} />
+      </TeamFlowShell>
+    );
+  }
+
+  return (
+    <TeamFlowShell
+      eyebrow={teamName ? `Welcome to ${teamName}` : "Welcome"}
+      steps={STEPS}
+      stepIndex={2}
+      crest={crest}
+      heading="Where you work"
+      description="Pick the repos you work in with this team. Sessions there show in the team feed."
+      onBack={goBack}
+      onSkip={() => finishSetup({})}
+      skipLabel="Skip for now"
+      onContinue={() => finishSetup(selectedPaths)}
+      continueLabel={selectedCount > 0 ? `Share ${selectedCount} workspace${selectedCount === 1 ? "" : "s"}` : "Open team"}
+      enterAdvances
+    >
+      <WorkspaceSharePicker
+        data={data}
+        teamId={teamId}
+        selectedPaths={selectedPaths}
+        onToggle={toggle}
+      />
+    </TeamFlowShell>
   );
 }

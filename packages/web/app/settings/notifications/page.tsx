@@ -2,14 +2,13 @@ import { useCallback } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { AvatarImg } from "../../../lib/avatarCache";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { Card } from "../../../components/ui/card";
 import { Switch } from "../../../components/ui/switch";
 import { toast } from "sonner";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
-  Bell, BellOff, Users, MessageSquare, Laptop,
-  CheckCircle, Terminal, Mail,
+  Bell, BellOff, Users, MessageSquare, Laptop, CheckCircle, Terminal, Mail,
 } from "lucide-react";
+import { SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
 
 type NotifType = "team_session_start" | "mention" | "permission_request" | "session_idle" | "session_error" | "task_activity" | "doc_activity" | "plan_activity" | "artifact_activity" | "chat_activity" | "email_notifications";
 
@@ -18,10 +17,10 @@ const NOTIF_SECTIONS = [
     title: "Sessions",
     icon: Terminal,
     items: [
-      { key: "team_session_start" as NotifType, label: "Team Sessions", desc: "When a team member starts a session" },
-      { key: "session_idle" as NotifType, label: "Session Idle", desc: "When your session is waiting for input" },
-      { key: "session_error" as NotifType, label: "Session Errors", desc: "When a session encounters an error" },
-      { key: "permission_request" as NotifType, label: "Permission Requests", desc: "When a session needs your approval" },
+      { key: "team_session_start" as NotifType, label: "Team sessions", desc: "When a team member starts a session" },
+      { key: "session_idle" as NotifType, label: "Session idle", desc: "When your session is waiting for input" },
+      { key: "session_error" as NotifType, label: "Session errors", desc: "When a session encounters an error" },
+      { key: "permission_request" as NotifType, label: "Permission requests", desc: "When a session needs your approval" },
     ],
   },
   {
@@ -29,17 +28,17 @@ const NOTIF_SECTIONS = [
     icon: MessageSquare,
     items: [
       { key: "mention" as NotifType, label: "Mentions", desc: "When someone @mentions you" },
-      { key: "artifact_activity" as NotifType, label: "Published Pages", desc: "When someone comments on a page you published" },
-      { key: "chat_activity" as NotifType, label: "Team Chat", desc: "Thread replies and @here in a channel (a direct @you rides Mentions)" },
+      { key: "artifact_activity" as NotifType, label: "Published pages", desc: "When someone comments on a page you published" },
+      { key: "chat_activity" as NotifType, label: "Team chat", desc: "Thread replies and @here in a channel (a direct @you rides Mentions)" },
     ],
   },
   {
     title: "Work Items",
     icon: CheckCircle,
     items: [
-      { key: "task_activity" as NotifType, label: "Task Activity", desc: "Updates on tasks you're watching" },
-      { key: "doc_activity" as NotifType, label: "Doc Activity", desc: "Updates on docs you're watching" },
-      { key: "plan_activity" as NotifType, label: "Plan Activity", desc: "Updates on plans you're watching" },
+      { key: "task_activity" as NotifType, label: "Task activity", desc: "Updates on tasks you're watching" },
+      { key: "doc_activity" as NotifType, label: "Doc activity", desc: "Updates on docs you're watching" },
+      { key: "plan_activity" as NotifType, label: "Plan activity", desc: "Updates on plans you're watching" },
     ],
   },
 ] as const;
@@ -126,159 +125,106 @@ export default function NotificationsSettingsPage() {
   ) as TeamMember[];
 
   return (
-    <div className="space-y-6">
-      {/* Global toggle */}
-      <Card className="p-6 bg-sol-bg border-sol-border">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            {enabled ? (
-              <Bell className="w-5 h-5 text-sol-cyan" />
-            ) : (
-              <BellOff className="w-5 h-5 text-sol-base01" />
-            )}
-            <div>
-              <h2 className="text-lg font-semibold text-sol-text">Notifications</h2>
-              <p className="text-sm text-sol-base1">
-                {enabled ? "Receiving push notifications" : "All notifications are off"}
-              </p>
-            </div>
-          </div>
-          <Switch checked={enabled} onCheckedChange={handleGlobalToggle} />
-        </div>
-      </Card>
-
-      {/* Email digest — its own channel, deliberately not gated behind the
-          push toggle: the unsubscribe link in every digest lands here. */}
-      <Card className="p-6 bg-sol-bg border-sol-border">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <Mail className="w-5 h-5 shrink-0 text-sol-base1" />
-            <div>
-              <span className="text-sm font-medium text-sol-text">Email me what I miss</span>
-              <p className="text-xs text-sol-base1 mt-0.5">
-                When you&apos;re away, one email batches unseen mentions, comments,
-                chat, and decisions your agents are waiting on. Never session
-                idle/error noise, and never while you&apos;re at the keyboard.
-              </p>
-            </div>
-          </div>
+    <SettingsPanel>
+      <SettingsSection
+        title="Delivery"
+        icon={enabled ? Bell : BellOff}
+        description={enabled ? "Push notifications are on." : "All push notifications are off. Email keeps its own switch below."}
+        actions={<Switch checked={enabled} onCheckedChange={handleGlobalToggle} aria-label="Push notifications" />}
+      >
+        {/* Email digest — its own channel, deliberately not gated behind the
+            push toggle: the unsubscribe link in every digest lands here. */}
+        <SettingsRow
+          icon={Mail}
+          label="Email me what I miss"
+          description="When you're away, one email batches unseen mentions, comments, chat, and decisions your agents are waiting on. Never session idle/error noise, and never while you're at the keyboard."
+          alignTop
+        >
           <Switch
             checked={getPref("email_notifications")}
             onCheckedChange={() => handleToggleType("email_notifications")}
+            aria-label="Email me what I miss"
           />
-        </div>
-      </Card>
+        </SettingsRow>
+        {/* Presence source for phone-push routing */}
+        {enabled && (
+          <SettingsRow
+            icon={Laptop}
+            label="Wait until I'm away from my computer"
+            description="Hold phone pushes while your computer sees any keyboard or mouse activity, not just activity in Codecast (machine-wide detection currently works on macOS only). Pushes arrive a few minutes after you step away, and always within an hour."
+            alignTop
+          >
+            <Switch
+              checked={machineWidePresence}
+              onCheckedChange={handleToggleMachinePresence}
+              aria-label="Wait until I'm away from my computer"
+            />
+          </SettingsRow>
+        )}
+      </SettingsSection>
 
-      {/* Per-type toggles */}
       {enabled && (
         <>
-          {/* Presence source for phone-push routing */}
-          <Card className="p-6 bg-sol-bg border-sol-border">
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <Laptop className="w-5 h-5 shrink-0 text-sol-base1" />
-                <div>
-                  <span className="text-sm font-medium text-sol-text">
-                    Wait until I&apos;m away from my computer
-                  </span>
-                  <p className="text-xs text-sol-base1 mt-0.5">
-                    Hold phone pushes while your Mac sees any keyboard or mouse
-                    activity, not just activity in Codecast. Pushes arrive a few
-                    minutes after you step away, and always within an hour.
-                  </p>
-                </div>
-              </div>
-              <Switch
-                checked={machineWidePresence}
-                onCheckedChange={handleToggleMachinePresence}
-              />
-            </div>
-          </Card>
-
-          {NOTIF_SECTIONS.map((section) => {
-            const Icon = section.icon;
-            return (
-              <Card key={section.title} className="p-6 bg-sol-bg border-sol-border">
-                <div className="flex items-center gap-2 mb-4">
-                  <Icon className="w-4 h-4 text-sol-base1" />
-                  <h3 className="text-xs font-semibold text-sol-base1 uppercase tracking-wider">
-                    {section.title}
-                  </h3>
-                </div>
-                <div className="space-y-0 divide-y divide-sol-border/40">
-                  {section.items.map((item) => (
-                    <div key={item.key} className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0">
-                      <div>
-                        <span className="text-sm font-medium text-sol-text">{item.label}</span>
-                        <p className="text-xs text-sol-base1 mt-0.5">{item.desc}</p>
-                      </div>
-                      <Switch
-                        checked={getPref(item.key)}
-                        onCheckedChange={() => handleToggleType(item.key)}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </Card>
-            );
-          })}
+          {NOTIF_SECTIONS.map((section) => (
+            <SettingsSection key={section.title} title={section.title} icon={section.icon}>
+              {section.items.map((item) => (
+                <SettingsRow key={item.key} label={item.label} description={item.desc}>
+                  <Switch
+                    checked={getPref(item.key)}
+                    onCheckedChange={() => handleToggleType(item.key)}
+                    aria-label={item.label}
+                  />
+                </SettingsRow>
+              ))}
+            </SettingsSection>
+          ))}
 
           {/* Per-member muting */}
           {otherMembers && otherMembers.length > 0 && (
-            <Card className="p-6 bg-sol-bg border-sol-border">
-              <div className="flex items-center gap-2 mb-1">
-                <Users className="w-4 h-4 text-sol-base1" />
-                <h3 className="text-xs font-semibold text-sol-base1 uppercase tracking-wider">
-                  Team Members
-                </h3>
-              </div>
-              <p className="text-xs text-sol-base01 mb-4">
-                Mute notifications from specific team members
-              </p>
-              <div className="space-y-0 divide-y divide-sol-border/40">
-                {otherMembers.map((member) => {
-                  const isMuted = mutedMembers.includes(member._id);
-                  return (
-                    <div key={member._id} className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0">
-                      <div className="flex items-center gap-3">
+            <SettingsSection
+              title="Team Members"
+              icon={Users}
+              description="Mute notifications from specific team members."
+            >
+              {otherMembers.map((member) => {
+                const isMuted = mutedMembers.includes(member._id);
+                return (
+                  <SettingsRow
+                    key={member._id}
+                    label={
+                      <span className="flex items-center gap-3">
                         <AvatarImg
                           src={member.github_avatar_url}
                           alt=""
-                          className="w-8 h-8 rounded-full"
+                          className="h-7 w-7 rounded-full"
                           fallback={
-                            <div className="w-8 h-8 rounded-full bg-sol-base02 flex items-center justify-center">
-                              <span className="text-sm font-medium text-sol-text">
+                            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-sol-bg-highlight">
+                              <span className="text-xs font-medium text-sol-text">
                                 {member.name?.[0]?.toUpperCase() || "?"}
                               </span>
-                            </div>
+                            </span>
                           }
                         />
-                        <div>
-                          <span className="text-sm font-medium text-sol-text">
-                            {member.name || member.email}
-                          </span>
-                          {member.title && (
-                            <p className="text-xs text-sol-base01">{member.title}</p>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {isMuted && (
-                          <span className="text-xs text-sol-orange">Muted</span>
-                        )}
-                        <Switch
-                          checked={!isMuted}
-                          onCheckedChange={() => handleToggleMute(member._id)}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </Card>
+                        <span className="min-w-0">
+                          <span className="block truncate">{member.name || member.email}</span>
+                          {member.title && <span className="block text-xs text-sol-text-muted">{member.title}</span>}
+                        </span>
+                      </span>
+                    }
+                  >
+                    {isMuted && <span className="text-xs text-sol-orange">Muted</span>}
+                    <Switch
+                      checked={!isMuted}
+                      onCheckedChange={() => handleToggleMute(member._id)}
+                      aria-label={`Notifications from ${member.name || member.email}`}
+                    />
+                  </SettingsRow>
+                );
+              })}
+            </SettingsSection>
           )}
         </>
       )}
-    </div>
+    </SettingsPanel>
   );
 }

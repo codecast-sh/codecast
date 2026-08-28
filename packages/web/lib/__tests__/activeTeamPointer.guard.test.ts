@@ -72,12 +72,35 @@ describe("active-team pointer", () => {
       join(ROOT, "..", "convex", "convex", "dispatch.ts"),
       "utf8",
     );
-    const handler = dispatch.match(/^  createTeam: async \([\s\S]*?^  \},/m)?.[0] ?? "";
+    const handler = dispatch.match(/^  dispatchCreateTeam: async \([\s\S]*?^  \},/m)?.[0] ?? "";
     expect(handler).toContain("api.teams.createTeam");
     expect(handler).toContain("active_team_id: teamId");
 
     const teams = readFileSync(join(ROOT, "..", "convex", "convex", "teams.ts"), "utf8");
     const mutation = teams.match(/export const createTeam = mutation\([\s\S]*?^\}\);/m)?.[0] ?? "";
     expect(mutation).toContain("active_team_id: teamId");
+  });
+
+  // While the create round trip is in flight the mirror holds the stub id
+  // ("team-stub-…"), which is NOT an Id<"teams">: a feeder that hands it to
+  // the server raw throws ArgumentValidationError and drops that surface into
+  // its ErrorBoundary. The feeders that pass the pointer into query args must
+  // therefore guard it with isConvexId (skip, never a personal fallback).
+  test("feeders that pass the pointer to the server guard non-Convex ids", () => {
+    const guarded = [
+      "hooks/useWorkspaceArgs.ts",
+      "hooks/useSyncTeamInboxSessions.ts",
+      "hooks/useSyncSavedViews.ts",
+      "hooks/useConversationsWithError.ts",
+      "hooks/useMentionQuery.ts",
+      "components/Sidebar.tsx",
+      "components/ActivityFeed.tsx",
+      "components/TeamAvatarBar.tsx",
+      "components/InviteModal.tsx",
+    ];
+    for (const rel of guarded) {
+      const src = readFileSync(join(ROOT, rel), "utf8");
+      expect(src, `${rel} must guard the active team id with isConvexId`).toContain("isConvexId(");
+    }
   });
 });

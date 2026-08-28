@@ -17,12 +17,13 @@ import {
   isValidProfileName,
   type CcUsage,
 } from "@codecast/convex/convex/ccAccountsShared";
-import { Card } from "../../../components/ui/card";
 import { AppLoader } from "../../../components/AppLoader";
 import { Button } from "../../../components/ui/button";
+import { Input } from "../../../components/ui/input";
 import { Switch } from "../../../components/ui/switch";
+import { SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { toast } from "sonner";
-import { Check, Copy, KeyRound, TimerReset, Trash2, Zap } from "lucide-react";
+import { Check, Copy, KeyRound, Laptop, TimerReset, Trash2, Zap } from "lucide-react";
 import { AccountUsageBars } from "../../../components/AccountUsageMeter";
 import { formatAgo } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
@@ -103,12 +104,12 @@ function SaveCurrentForm({ device, suggestedName }: { device: DeviceAccounts; su
         name yourself — either way you'll be able to switch back to it later.
       </p>
       <div className="mt-2 flex items-center gap-2">
-        <input
+        <Input
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") handleSave(); }}
           placeholder="profile name"
-          className="h-7 w-36 rounded border border-sol-border bg-sol-bg px-2 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan"
+          className="h-7 w-36 text-xs bg-sol-bg border-sol-border text-sol-text placeholder:text-sol-text-dim"
         />
         <Button size="sm" variant="outline" disabled={busy || !name} onClick={handleSave} className="h-7 text-xs">
           {busy ? "Saving…" : "Save as profile"}
@@ -143,7 +144,12 @@ function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
             everything is unblocked or every account is spent. Subagent workers are left out.
           </p>
         </div>
-        <Switch checked={enabled} onCheckedChange={autoSwitch.set} disabled={autoSwitch.pending} />
+        <Switch
+          checked={enabled}
+          onCheckedChange={autoSwitch.set}
+          disabled={autoSwitch.pending}
+          aria-label="Auto-switch accounts on usage limits"
+        />
       </div>
       <div className="mt-3 flex items-center gap-2.5 border-t border-sol-border/40 pt-3">
         <TimerReset
@@ -161,6 +167,7 @@ function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
           checked={autoContinue.on}
           onCheckedChange={autoContinue.set}
           disabled={autoContinue.pending}
+          aria-label="Resume at window reset"
         />
       </div>
       {enabled && exhausted && (
@@ -178,7 +185,7 @@ function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
   );
 }
 
-function DeviceAccountsCard({ device }: { device: DeviceAccounts }) {
+function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
   const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
   const removeProfile = useMutation(api.accountSwitch.removeAccountProfile);
   const now = useCoarseNow(30_000);
@@ -222,28 +229,32 @@ function DeviceAccountsCard({ device }: { device: DeviceAccounts }) {
   };
 
   return (
-    <Card className="p-4">
-      <div className="flex items-center gap-2">
-        <span className="font-medium text-sm truncate">{device.label}</span>
-        {device.is_remote && (
-          <span className="px-1.5 py-0.5 rounded text-[10px] border bg-sol-violet/10 text-sol-violet border-sol-violet/30">
-            remote — mirrors the primary's account
+    <SettingsSection
+      title={device.label}
+      icon={Laptop}
+      padded
+      actions={
+        <>
+          {device.is_remote && (
+            <span className="px-1.5 py-0.5 rounded text-[10px] border bg-sol-violet/10 text-sol-violet border-sol-violet/30">
+              remote — mirrors the primary's account
+            </span>
+          )}
+          <span className="inline-flex items-center gap-1.5 text-[11px] text-sol-text-dim">
+            <span className={`h-1.5 w-1.5 rounded-full ${online ? "bg-sol-green" : "bg-sol-border"}`} />
+            {online ? "online" : "offline"}
           </span>
-        )}
-        <span className="inline-flex items-center gap-1.5 text-[11px] text-sol-text-dim">
-          <span className={`h-1.5 w-1.5 rounded-full ${online ? "bg-sol-green" : "bg-sol-border"}`} />
-          {online ? "online" : "offline"}
-        </span>
-      </div>
-
+        </>
+      }
+    >
       {!online && (
-        <p className="mt-2 text-[11px] leading-relaxed text-sol-text-dim">
+        <p className="mb-3 text-[11px] leading-relaxed text-sol-text-dim">
           The daemon on this machine isn't reporting right now (<CopyableCommand cmd="cast restart" /> brings
           it back). Account switching needs it; the auto-switch setting below still saves.
         </p>
       )}
 
-      <div className="mt-3 space-y-1.5">
+      <div className="space-y-1.5">
         {device.profiles.map((p) => {
           const isActive = !!p.email && p.email === device.active_email;
           const plan = planLabel(p);
@@ -301,6 +312,7 @@ function DeviceAccountsCard({ device }: { device: DeviceAccounts }) {
                     <button
                       onClick={() => setConfirmRemove(p.name)}
                       disabled={busy !== null || !online}
+                      aria-label="Remove this profile from the machine"
                       title="Remove this profile from the machine"
                       className="shrink-0 rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-red/10 hover:text-sol-red"
                     >
@@ -332,7 +344,7 @@ function DeviceAccountsCard({ device }: { device: DeviceAccounts }) {
           Currently logged in as <span className="text-sol-text">{device.active_email}</span> (saved as "{activeProfile.name}").
         </div>
       )}
-    </Card>
+    </SettingsSection>
   );
 }
 
@@ -340,44 +352,37 @@ export default function ClaudeAccountsSettings() {
   const data = useQuery(api.accountSwitch.listAccountProfiles, {});
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold text-sol-text flex items-center gap-2">
-          <KeyRound className="h-4 w-4 text-sol-cyan" />
-          Claude Accounts
-        </h2>
-        <p className="mt-1 text-sm text-sol-text-muted leading-relaxed">
-          Every Claude Code session on a machine shares one login. Each account you log into gets saved
-          as a profile automatically, so you can switch the whole machine instantly — no browser, no
-          re-login. Switching never interrupts
-          running sessions: they keep their account until restarted, while new and resumed sessions use
-          the new one. When sessions are parked on a usage limit, the inbox banner offers
-          "switch &amp; continue" to revive them on the other account.
-        </p>
-      </div>
+    <SettingsPanel>
+      <p className="px-1 text-sm text-sol-text-muted leading-relaxed">
+        Every Claude Code session on a machine shares one login. Each account you log into gets saved
+        as a profile automatically, so you can switch the whole machine instantly — no browser, no
+        re-login. Switching never interrupts
+        running sessions: they keep their account until restarted, while new and resumed sessions use
+        the new one. When sessions are parked on a usage limit, the inbox banner offers
+        "switch &amp; continue" to revive them on the other account.
+      </p>
 
       {data === undefined && (
         <AppLoader className="min-h-0 bg-transparent py-12" size={28} />
       )}
 
       {data && data.devices.length === 0 && (
-        <Card className="p-4">
+        <SettingsSection title="Devices" icon={Laptop} padded>
           <div className="text-sm font-medium text-sol-text">No daemon is reporting accounts yet</div>
           <p className="mt-1 text-xs text-sol-text-muted leading-relaxed">
             Account profiles are reported by the codecast daemon on each machine. Make sure the daemon is
             running and up to date (<CopyableCommand cmd="cast restart" />), then save your current login:
           </p>
           <div className="mt-2"><CopyableCommand cmd="cast accounts save <name>" /></div>
-        </Card>
+        </SettingsSection>
       )}
 
       {data?.devices.map((d) => (
-        <DeviceAccountsCard key={d.device_id} device={d} />
+        <DeviceAccountsSection key={d.device_id} device={d} />
       ))}
 
-      <Card className="p-4">
-        <div className="text-sm font-medium text-sol-text">Add another account</div>
-        <ol className="mt-2 space-y-2 text-xs text-sol-text-muted leading-relaxed list-decimal list-inside">
+      <SettingsSection title="Add another account" icon={KeyRound} padded>
+        <ol className="space-y-2 text-xs text-sol-text-muted leading-relaxed list-decimal list-inside">
           <li>
             In any terminal on that machine, run <CopyableCommand cmd="claude /login" /> and pick the other
             account — this is the only time the browser is involved, ever.
@@ -396,7 +401,7 @@ export default function ClaudeAccountsSettings() {
           Profiles are stored in the machine's keychain; tokens never leave it. The outgoing account is
           re-snapshotted automatically on every switch, so saved profiles never go stale.
         </p>
-      </Card>
-    </div>
+      </SettingsSection>
+    </SettingsPanel>
   );
 }

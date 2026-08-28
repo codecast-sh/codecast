@@ -1,11 +1,121 @@
-import { useState } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { Button } from "../../../components/ui/button";
+import { Check, Users } from "lucide-react";
 import { Logo } from "../../../components/Logo";
 import { AppLoader } from "../../../components/AppLoader";
+import { TeamCrest } from "../../../components/team/TeamCrest";
+import { adoptPathIntoActiveTab } from "../../../src/compat/tabRouting";
+import "../../../components/team/teamFlow.css";
+
+/**
+ * Public invite landing. Pre-auth, so it cannot use the four step flow
+ * shell, but it is styled as its sibling: the team crest is the hero and
+ * the crest color is the surface accent through --team-flow-accent.
+ */
+
+/** Centered card with the accent wash pooling behind the crest. */
+function JoinShell({
+  color,
+  children,
+}: {
+  color?: string | null;
+  children: ReactNode;
+}) {
+  const style = (color
+    ? { "--team-flow-accent": `var(--sol-${color})` }
+    : undefined) as CSSProperties | undefined;
+  return (
+    <main
+      style={style}
+      className="tf-root min-h-screen bg-sol-bg flex items-center justify-center px-4 py-10"
+    >
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-x-0 top-0 h-[24rem] transition-colors duration-500"
+        style={{
+          background:
+            "radial-gradient(34rem 16rem at 50% 0%, color-mix(in srgb, var(--team-flow-accent, var(--sol-cyan)) 22%, transparent), transparent 75%)",
+        }}
+      />
+      <div className="relative w-full max-w-sm">
+        <div className="tf-reveal mb-8 flex justify-center" style={{ "--tf-i": 0 } as CSSProperties}>
+          <Logo size="lg" className="text-sol-text" />
+        </div>
+        <div className="rounded-2xl border border-sol-border bg-sol-bg-alt/60 p-8 shadow-xl backdrop-blur">
+          {children}
+        </div>
+      </div>
+    </main>
+  );
+}
+
+/** Crest, eyebrow line and team name — the header every state shares. */
+function JoinHeader({
+  eyebrow,
+  icon,
+  color,
+  name,
+  memberCount,
+}: {
+  eyebrow: string;
+  icon?: string | null;
+  color?: string | null;
+  name: string;
+  memberCount?: number;
+}) {
+  return (
+    <div className="flex flex-col items-center text-center">
+      <div className="tf-reveal" style={{ "--tf-i": 1 } as CSSProperties}>
+        <TeamCrest icon={icon} color={color} size="lg" className="tf-crest" />
+      </div>
+      <p
+        className="tf-eyebrow tf-reveal mt-5 text-[11px] font-semibold uppercase tracking-[0.14em]"
+        style={{ "--tf-i": 2 } as CSSProperties}
+      >
+        {eyebrow}
+      </p>
+      <h1
+        className="tf-reveal mt-1 text-2xl font-semibold text-sol-text"
+        style={{ "--tf-i": 3 } as CSSProperties}
+      >
+        {name}
+      </h1>
+      {memberCount !== undefined && (
+        <p
+          className="tf-reveal mt-1.5 flex items-center gap-1.5 text-sm text-sol-text-muted"
+          style={{ "--tf-i": 4 } as CSSProperties}
+        >
+          <Users className="h-3.5 w-3.5" />
+          {memberCount} {memberCount === 1 ? "member" : "members"}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function PrimaryButton({
+  onClick,
+  disabled,
+  children,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="tf-primary tf-reveal inline-flex h-10 w-full items-center justify-center rounded-md text-sm font-medium disabled:pointer-events-none disabled:opacity-50"
+      style={{ "--tf-i": 5 } as CSSProperties}
+    >
+      {children}
+    </button>
+  );
+}
 
 export default function JoinTeamPage() {
   const params = useParams();
@@ -26,206 +136,148 @@ export default function JoinTeamPage() {
 
   const isAlreadyMember = currentUser?.team_id?.toString() === teamInfo?._id.toString();
 
-  const handleSignInRedirect = () => {
-    router.push(`/login?return_to=/join/${code}`);
+  const goTo = (path: string) => {
+    adoptPathIntoActiveTab(path);
+    router.push(path);
   };
 
   const handleJoinTeam = async () => {
     if (!currentUser?._id) return;
-
     setJoining(true);
     setError("");
-
     try {
-      const teamId = await joinTeam({
-        invite_code: code,
-        user_id: currentUser._id,
-      });
+      const teamId = await joinTeam({ invite_code: code });
       router.push(`/settings/sync?teamSetup=1&teamId=${teamId}`);
     } catch (err) {
-      if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError("Failed to join team. Please try again.");
-      }
+      setError(err instanceof Error ? err.message : "Could not join the team. Try again.");
     } finally {
       setJoining(false);
     }
   };
 
-  if (!code) {
-    return (
-      <main className="min-h-screen bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg flex items-center justify-center px-4">
-        <div className="text-center">
-          <h1 className="text-2xl font-semibold text-sol-text">Invalid invite link</h1>
-        </div>
-      </main>
-    );
+  if (authLoading || (code && teamInfo === undefined)) {
+    return <AppLoader className="bg-sol-bg px-4" />;
   }
 
-  if (authLoading || teamInfo === undefined) {
+  if (!code || !teamInfo) {
     return (
-<AppLoader className="bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg px-4" />
-    );
-  }
-
-  if (!teamInfo) {
-    return (
-      <main className="min-h-screen bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg flex items-center justify-center px-4">
-        <div className="w-full max-w-md">
-          <div className="bg-sol-bg-alt/50 backdrop-blur border border-sol-border rounded-xl p-8 shadow-2xl text-center">
-            <h1 className="text-2xl font-semibold text-sol-text mb-2">Team not found</h1>
-            <p className="text-sol-text-muted mb-6">
-              This invite link is invalid or has been removed.
-            </p>
-            <Button
-              onClick={() => router.push("/inbox")}
-              className="bg-amber-600 hover:bg-amber-500 text-white"
-            >
-              Go to Inbox
-            </Button>
-          </div>
+      <JoinShell>
+        <JoinHeader eyebrow="Team invite" name="Invite not found" />
+        <p
+          className="tf-reveal mt-3 text-center text-sm text-sol-text-muted"
+          style={{ "--tf-i": 4 } as CSSProperties}
+        >
+          This invite link is invalid or was removed. Ask a team admin for a new one.
+        </p>
+        <div className="mt-6">
+          <PrimaryButton onClick={() => goTo("/inbox")}>Open codecast</PrimaryButton>
         </div>
-      </main>
+      </JoinShell>
     );
   }
 
   if (teamInfo.isExpired) {
     return (
-      <main className="min-h-screen bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg flex items-center justify-center px-4">
-        <div className="w-full max-w-md">
-          <div className="bg-sol-bg-alt/50 backdrop-blur border border-sol-border rounded-xl p-8 shadow-2xl text-center">
-            <h1 className="text-2xl font-semibold text-sol-text mb-2">Invite link expired</h1>
-            <p className="text-sol-text-muted mb-2">
-              This invite link for <span className="font-semibold text-sol-text">{teamInfo.name}</span> has expired.
-            </p>
-            <p className="text-sol-text-muted text-sm mb-6">
-              Please ask the team admin for a new invite link.
-            </p>
-            <Button
-              onClick={() => router.push("/inbox")}
-              className="bg-amber-600 hover:bg-amber-500 text-white"
-            >
-              Go to Inbox
-            </Button>
-          </div>
+      <JoinShell color={teamInfo.icon_color}>
+        <JoinHeader
+          eyebrow="Invite expired"
+          icon={teamInfo.icon}
+          color={teamInfo.icon_color}
+          name={teamInfo.name}
+        />
+        <p
+          className="tf-reveal mt-3 text-center text-sm text-sol-text-muted"
+          style={{ "--tf-i": 4 } as CSSProperties}
+        >
+          This invite link has expired. Ask a team admin for a new one.
+        </p>
+        <div className="mt-6">
+          <PrimaryButton onClick={() => goTo("/inbox")}>Open codecast</PrimaryButton>
         </div>
-      </main>
+      </JoinShell>
     );
   }
 
   if (isAlreadyMember) {
     return (
-      <main className="min-h-screen bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg flex items-center justify-center px-4">
-        <div className="w-full max-w-md">
-          <div className="bg-sol-bg-alt/50 backdrop-blur border border-sol-border rounded-xl p-8 shadow-2xl text-center">
-            <div className="mb-6">
-              <div className="w-16 h-16 bg-green-500/10 rounded-full flex items-center justify-center mx-auto mb-4">
-                <svg className="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-              <h1 className="text-2xl font-semibold text-sol-text mb-2">You&apos;re already a member</h1>
-              <p className="text-sol-text-muted">
-                You&apos;re already part of <span className="font-semibold text-sol-text">{teamInfo.name}</span>
-              </p>
-            </div>
-            <Button
-              onClick={() => router.push("/team/activity")}
-              className="w-full bg-amber-600 hover:bg-amber-500 text-white"
-            >
-              Go to Dashboard
-            </Button>
-          </div>
+      <JoinShell color={teamInfo.icon_color}>
+        <JoinHeader
+          eyebrow="Already a member"
+          icon={teamInfo.icon}
+          color={teamInfo.icon_color}
+          name={teamInfo.name}
+          memberCount={teamInfo.memberCount}
+        />
+        <p
+          className="tf-reveal mt-3 flex items-center justify-center gap-1.5 text-center text-sm text-sol-green"
+          style={{ "--tf-i": 4 } as CSSProperties}
+        >
+          <Check className="h-4 w-4" />
+          You are on this team
+        </p>
+        <div className="mt-6">
+          <PrimaryButton onClick={() => goTo("/team/activity")}>Open the team</PrimaryButton>
         </div>
-      </main>
+      </JoinShell>
     );
   }
 
   if (!isAuthenticated) {
     return (
-      <main className="min-h-screen bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg flex items-center justify-center px-4">
-        <div className="w-full max-w-md">
-          <div className="text-center mb-8 flex flex-col items-center">
-            <Logo size="xl" className="text-sol-text" />
-          </div>
-
-          <div className="bg-sol-bg-alt backdrop-blur-sm border border-sol-border rounded-xl p-8 shadow-xl">
-            <div className="text-center mb-6">
-              <h2 className="text-2xl font-semibold text-sol-text mb-2">
-                Join {teamInfo.name}
-              </h2>
-              <p className="text-sol-text-muted">
-                {teamInfo.memberCount} {teamInfo.memberCount === 1 ? 'member' : 'members'}
-              </p>
-            </div>
-
-            <div className="space-y-4">
-              <p className="text-sm text-sol-text-muted text-center">
-                Sign in to join this team and start collaborating
-              </p>
-
-              <Button
-                onClick={handleSignInRedirect}
-                className="w-full bg-amber-600 hover:bg-amber-500 text-white"
-              >
-                Sign In to Join
-              </Button>
-
-              <p className="text-center text-sm text-sol-text-muted">
-                Don&apos;t have an account?{" "}
-                <a
-                  href={`/signup?return_to=/join/${code}`}
-                  className="text-amber-400 hover:text-amber-300 font-medium transition-colors"
-                >
-                  Sign Up
-                </a>
-              </p>
-            </div>
-          </div>
+      <JoinShell color={teamInfo.icon_color}>
+        <JoinHeader
+          eyebrow="You're invited to join"
+          icon={teamInfo.icon}
+          color={teamInfo.icon_color}
+          name={teamInfo.name}
+          memberCount={teamInfo.memberCount}
+        />
+        <div className="mt-6">
+          <PrimaryButton onClick={() => router.push(`/login?return_to=/join/${code}`)}>
+            Sign in to join
+          </PrimaryButton>
         </div>
-      </main>
+        <p
+          className="tf-reveal mt-4 text-center text-sm text-sol-text-muted"
+          style={{ "--tf-i": 6 } as CSSProperties}
+        >
+          New here?{" "}
+          <a
+            href={`/signup?return_to=/join/${code}`}
+            className="font-medium text-sol-text underline-offset-4 hover:underline"
+          >
+            Create an account
+          </a>
+        </p>
+      </JoinShell>
     );
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg flex items-center justify-center px-4">
-      <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-semibold text-sol-text tracking-tight">
-            codecast
-          </h1>
+    <JoinShell color={teamInfo.icon_color}>
+      <JoinHeader
+        eyebrow="You're invited to join"
+        icon={teamInfo.icon}
+        color={teamInfo.icon_color}
+        name={teamInfo.name}
+        memberCount={teamInfo.memberCount}
+      />
+      {error && (
+        <div className="mt-4 rounded-lg border border-sol-red/20 bg-sol-red/10 p-3">
+          <p className="text-center text-sm text-sol-red">{error}</p>
         </div>
-
-        <div className="bg-sol-bg-alt/50 backdrop-blur border border-sol-border rounded-xl p-8 shadow-2xl">
-          <div className="text-center mb-6">
-            <h2 className="text-2xl font-semibold text-sol-text mb-2">
-              Join {teamInfo.name}
-            </h2>
-            <p className="text-sol-text-muted">
-              {teamInfo.memberCount} {teamInfo.memberCount === 1 ? 'member' : 'members'}
-            </p>
-          </div>
-
-          {error && (
-            <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
-              <p className="text-sm text-red-400 text-center">{error}</p>
-            </div>
-          )}
-
-          <Button
-            onClick={handleJoinTeam}
-            disabled={joining}
-            className="w-full bg-amber-600 hover:bg-amber-500 disabled:bg-amber-600/50 disabled:cursor-not-allowed text-white"
-          >
-            {joining ? "Joining..." : "Join Team"}
-          </Button>
-
-          <p className="mt-4 text-center text-sm text-sol-text-muted">
-            By joining, you&apos;ll have access to team conversations and shared resources.
-          </p>
-        </div>
+      )}
+      <div className="mt-6">
+        <PrimaryButton onClick={handleJoinTeam} disabled={joining}>
+          {joining ? "Joining" : `Join ${teamInfo.name}`}
+        </PrimaryButton>
       </div>
-    </main>
+      <p
+        className="tf-reveal mt-4 text-center text-xs text-sol-text-dim"
+        style={{ "--tf-i": 6 } as CSSProperties}
+      >
+        Joining gives you access to this team's shared sessions and chat.
+      </p>
+    </JoinShell>
   );
 }

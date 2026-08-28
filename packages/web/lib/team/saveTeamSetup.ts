@@ -1,7 +1,7 @@
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-import type { TeamVisibility } from "../../components/team/VisibilityPicker";
+import type { TeamVisibility } from "./visibilityLevels";
 import { isMappedToTeam, type UserWorkspace } from "../../hooks/useTeamWorkspaceSuggestions";
 
 type SetVisibility = (args: { team_id: Id<"teams">; visibility: TeamVisibility }) => Promise<unknown>;

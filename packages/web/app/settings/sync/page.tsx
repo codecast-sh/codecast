@@ -1,12 +1,13 @@
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { Card } from "../../../components/ui/card";
 import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
 import { Switch } from "../../../components/ui/switch";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { GitBranch, Folder, Check, Search, Eye, EyeOff, ChevronDown, AlertTriangle } from "lucide-react";
+import {
+  GitBranch, Folder, FolderGit2, Search, Eye, EyeOff, ChevronDown, AlertTriangle, RefreshCw, Terminal,
+} from "lucide-react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
   DropdownMenu,
@@ -24,6 +25,7 @@ import {
 } from "../../../components/ui/dialog";
 import { TeamIcon } from "../../../components/TeamIcon";
 import { TeamSetupDialog } from "../../../components/TeamSetupDialog";
+import { SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
 
 type TeamVisibility = "hidden" | "activity" | "summary" | "full";
 type UserTeam = {
@@ -304,73 +306,58 @@ export default function SyncPage() {
   });
 
   return (
-    <div className="space-y-6">
-      <Card className="p-6 bg-sol-bg border-sol-border">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-sol-text">Sync All Projects</h2>
-            <p className="text-sm text-sol-base1 mt-1">
-              {syncAll
-                ? "All projects sync privately by default"
-                : `Only ${syncProjects.length} selected project${syncProjects.length === 1 ? "" : "s"} will sync`
-              }
-            </p>
-          </div>
-          <Switch checked={syncAll} onCheckedChange={handleToggleSyncAll} />
-        </div>
-      </Card>
+    <SettingsPanel>
+      <SettingsSection title="Sync" icon={RefreshCw}>
+        <SettingsRow
+          label="Sync all projects"
+          description={
+            syncAll
+              ? "All projects sync privately by default"
+              : `Only ${syncProjects.length} selected project${syncProjects.length === 1 ? "" : "s"} will sync`
+          }
+        >
+          <Switch checked={syncAll} onCheckedChange={handleToggleSyncAll} aria-label="Sync all projects" />
+        </SettingsRow>
+      </SettingsSection>
 
-      <Card className="p-6 bg-sol-bg border-sol-border">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-lg font-semibold text-sol-text">Projects & Sharing</h2>
-            <p className="text-sm text-sol-base1 mt-1">
-              {hasTeams
-                ? "Control which teams can see each project"
-                : "Your recent projects"
-              }
-            </p>
-          </div>
-          <Button
-            variant="outline"
-            onClick={() => setEditMode(!editMode)}
-            className="border-sol-border text-sol-base1"
-          >
-            {editMode ? "Done" : "+ Add Path"}
+      <SettingsSection
+        title="Projects & sharing"
+        icon={FolderGit2}
+        description={hasTeams ? "Control which teams can see each project." : "Your recent projects."}
+        actions={
+          <Button variant="outline" size="sm" onClick={() => setEditMode(!editMode)}>
+            {editMode ? "Done" : "+ Add path"}
           </Button>
-        </div>
-
+        }
+        padded
+      >
         {hasTeams && (
           <div className="mb-4 space-y-2">
             {teams.map((team) => {
               const currentVisibility = team.visibility || "summary";
               const currentOption = visibilityOptions.find(o => o.value === currentVisibility);
               return (
-                <div key={team._id} className="px-3 py-2.5 rounded-lg border border-sol-border/40 bg-sol-bg-alt/50">
+                <div key={team._id} className="rounded-lg border border-sol-border/40 bg-sol-bg/40 px-3 py-2.5">
                   <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      <TeamIcon icon={team.icon} color={team.icon_color} className="w-3.5 h-3.5" />
+                    <div className="flex flex-shrink-0 items-center gap-1.5">
+                      <TeamIcon icon={team.icon} color={team.icon_color} className="h-3.5 w-3.5" />
                       <span className="text-sm font-medium text-sol-text">{team.name}</span>
                     </div>
-                    <div className="flex gap-0.5 ml-auto">
-                      {visibilityOptions.map((opt) => (
-                        <button
-                          key={opt.value}
-                          onClick={() => handleVisibilityChange(team._id, opt.value)}
-                          title={currentVisibility === opt.value ? opt.description : `Switch to: ${opt.preview}`}
-                          className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                            currentVisibility === opt.value
-                              ? "bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30"
-                              : "text-sol-base1 hover:text-sol-text hover:bg-sol-base02/40"
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
+                    <SettingsOptionGroup
+                      label={`What ${team.name} sees`}
+                      variant="pill"
+                      className="ml-auto"
+                      value={currentVisibility}
+                      onChange={(v) => handleVisibilityChange(team._id, v as TeamVisibility)}
+                      options={visibilityOptions.map((opt) => ({
+                        value: opt.value,
+                        label: opt.label,
+                        title: currentVisibility === opt.value ? opt.description : `Switch to: ${opt.preview}`,
+                      }))}
+                    />
                   </div>
                   {currentOption && (
-                    <p className="text-xs text-sol-base1 mt-1.5">
+                    <p className="mt-1.5 text-xs text-sol-text-muted">
                       {currentOption.description}
                     </p>
                   )}
@@ -380,29 +367,29 @@ export default function SyncPage() {
           </div>
         )}
 
-        <div className="flex gap-2 mb-4">
+        <div className="mb-4 flex gap-2">
           <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-sol-base1" />
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-sol-text-dim" />
             <Input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search projects..."
-              className="pl-9 bg-sol-bg-alt border-sol-border text-sol-text placeholder-sol-base1"
+              className="bg-sol-bg border-sol-border pl-9 text-sol-text"
             />
           </div>
         </div>
 
         {editMode && (
-          <div className="flex gap-2 mb-4 p-3 bg-sol-base02/30 rounded-lg">
+          <div className="mb-4 flex gap-2 rounded-lg bg-sol-bg-highlight/30 p-3">
             <Input
               type="text"
               value={newProject}
               onChange={(e) => setNewProject(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleAddProject()}
               placeholder="/path/to/project"
-              className="flex-1 bg-sol-bg-alt border-sol-border text-sol-text placeholder-sol-base1"
+              className="flex-1 bg-sol-bg border-sol-border text-sol-text"
             />
-            <Button onClick={handleAddProject} className="bg-sol-cyan text-sol-bg hover:bg-sol-cyan/90">
+            <Button onClick={handleAddProject} variant="cyan">
               Add
             </Button>
           </div>
@@ -417,80 +404,81 @@ export default function SyncPage() {
               return (
                 <div
                   key={project.path}
-                  className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${
+                  className={`flex items-center justify-between rounded-lg border p-3 transition-colors ${
                     synced
-                      ? "bg-sol-card border-sol-border/50 hover:border-sol-border"
-                      : "bg-sol-card/50 border-sol-border/30 opacity-60"
+                      ? "border-sol-border/50 bg-sol-bg/40 hover:border-sol-border"
+                      : "border-sol-border/30 bg-sol-bg/20 opacity-60"
                   }`}
                 >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
                     {project.is_git_repo ? (
-                      <GitBranch className={`w-5 h-5 flex-shrink-0 ${synced ? "text-sol-cyan" : "text-sol-base1"}`} />
+                      <GitBranch className={`h-5 w-5 flex-shrink-0 ${synced ? "text-sol-cyan" : "text-sol-text-dim"}`} />
                     ) : (
-                      <Folder className="w-5 h-5 text-sol-base1 flex-shrink-0" />
+                      <Folder className="h-5 w-5 flex-shrink-0 text-sol-text-dim" />
                     )}
                     <div className="min-w-0">
-                      <div className={`font-medium truncate ${synced ? "text-sol-text" : "text-sol-base1"}`}>
+                      <div className={`truncate text-sm font-medium ${synced ? "text-sol-text" : "text-sol-text-muted"}`}>
                         {getProjectName(project.path)}
                       </div>
-                      <div className="text-xs text-sol-base1 truncate">
+                      <div className="truncate text-xs text-sol-text-muted">
                         {project.path}
                       </div>
-                      <div className="text-xs text-sol-base1 mt-0.5">
+                      <div className="mt-0.5 text-xs text-sol-text-dim">
                         {project.session_count} session{project.session_count !== 1 ? "s" : ""} &middot; {getRelativeTime(project.last_active)}
                       </div>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 flex-shrink-0">
+                  <div className="flex flex-shrink-0 items-center gap-3">
                     {synced && hasTeams && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <button
-                            className={`flex items-center gap-2 px-3 py-1.5 rounded-md border transition-colors text-sm min-w-[140px] justify-between ${
+                            type="button"
+                            className={`flex min-w-[140px] items-center justify-between gap-2 rounded-md border px-3 py-1.5 text-sm transition-colors ${
                               teamResult && !teamResult.isDefault
-                                ? "border-sol-cyan bg-sol-cyan/15 text-sol-text"
+                                ? "border-sol-cyan bg-sol-cyan/10 text-sol-text"
                                 : teamResult?.isDefault
-                                  ? "border-sol-border/60 bg-sol-base02/15 text-sol-text"
-                                  : "border-sol-border bg-sol-bg hover:bg-sol-base02/50 text-sol-text"
+                                  ? "border-sol-border/60 bg-sol-bg-highlight/20 text-sol-text"
+                                  : "border-sol-border bg-sol-bg text-sol-text hover:bg-sol-bg-highlight/40"
                             }`}
                           >
                             <span className="flex items-center gap-2">
                               {teamResult ? (
                                 <>
-                                  <Eye className="w-4 h-4" />
+                                  <Eye className="h-4 w-4" />
                                   <span>
                                     {teamResult.team.name}
                                     {teamResult.isDefault && (
-                                      <span className="text-sol-base1 text-xs ml-0.5">(auto)</span>
+                                      <span className="ml-0.5 text-xs text-sol-text-muted">(auto)</span>
                                     )}
                                   </span>
                                 </>
                               ) : (
                                 <>
-                                  <EyeOff className="w-4 h-4" />
+                                  <EyeOff className="h-4 w-4" />
                                   <span>Only Me</span>
                                 </>
                               )}
                             </span>
-                            <ChevronDown className="w-3 h-3 opacity-50" />
+                            <ChevronDown className="h-3 w-3 opacity-50" />
                           </button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="min-w-[140px]">
                           <DropdownMenuItem
                             onClick={() => handleTeamChange(project.path, null)}
-                            className={!teamResult || teamResult.isDefault ? "bg-sol-base02/30" : ""}
+                            className={!teamResult || teamResult.isDefault ? "bg-sol-bg-highlight/40" : ""}
                           >
-                            <EyeOff className="w-4 h-4 mr-2" />
+                            <EyeOff className="mr-2 h-4 w-4" />
                             Only Me
                           </DropdownMenuItem>
                           {teams.map((team) => (
                             <DropdownMenuItem
                               key={team._id}
                               onClick={() => handleTeamChange(project.path, team._id)}
-                              className={teamResult?.team?._id === team._id && !teamResult?.isDefault ? "bg-sol-base02/30" : ""}
+                              className={teamResult?.team?._id === team._id && !teamResult?.isDefault ? "bg-sol-bg-highlight/40" : ""}
                             >
-                              <Eye className="w-4 h-4 mr-2" />
+                              <Eye className="mr-2 h-4 w-4" />
                               {team.name}
                             </DropdownMenuItem>
                           ))}
@@ -499,23 +487,18 @@ export default function SyncPage() {
                     )}
 
                     {!syncAll && (
-                      <button
-                        onClick={() => handleToggleProjectSync(project.path, !synced)}
-                        className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
-                          synced
-                            ? "bg-sol-cyan border-sol-cyan"
-                            : "border-sol-base1 hover:border-sol-cyan"
-                        }`}
-                      >
-                        {synced && <Check className="w-3 h-3 text-sol-bg" />}
-                      </button>
+                      <Switch
+                        checked={synced}
+                        onCheckedChange={(v) => handleToggleProjectSync(project.path, v)}
+                        aria-label={`Sync ${getProjectName(project.path)}`}
+                      />
                     )}
                   </div>
                 </div>
               );
             })
           ) : (
-            <div className="text-center py-8 text-sol-base1">
+            <div className="py-8 text-center text-sm text-sol-text-muted">
               {searchQuery ? (
                 <p>No projects matching &ldquo;{searchQuery}&rdquo;</p>
               ) : (
@@ -524,44 +507,42 @@ export default function SyncPage() {
             </div>
           )}
         </div>
-      </Card>
+      </SettingsSection>
 
-      <Card className="p-6 bg-sol-bg border-sol-border">
-        <h2 className="text-lg font-semibold text-sol-text mb-4">CLI Management</h2>
-        <div className="text-sm text-sol-base1 space-y-2">
-          <p>Manage sync settings from the command line:</p>
-          <div className="bg-sol-base03 p-3 rounded font-mono text-sm space-y-1">
-            <p><span className="text-sol-cyan">cast sync-settings</span> <span className="text-sol-base1">- Interactive project selection</span></p>
-            {hasTeams && (
-              <>
-                <p><span className="text-sol-cyan">cast teams</span> <span className="text-sol-base1">- List your teams</span></p>
-                <p><span className="text-sol-cyan">cast teams map &lt;path&gt; &lt;team_id&gt;</span> <span className="text-sol-base1">- Map directory to team</span></p>
-                <p><span className="text-sol-cyan">cast teams mappings</span> <span className="text-sol-base1">- List directory mappings</span></p>
-              </>
-            )}
-          </div>
-          <p className="mt-3">
-            Changes sync to your daemon on the next cycle.
-          </p>
+      <SettingsSection
+        title="CLI"
+        icon={Terminal}
+        description="Manage sync settings from the command line. Changes sync to your daemon on the next cycle."
+        padded
+      >
+        <div className="space-y-1 rounded-lg border border-sol-border/60 bg-sol-bg p-3 font-mono text-sm">
+          <p><span className="text-sol-cyan">cast sync-settings</span> <span className="text-sol-text-muted">- Interactive project selection</span></p>
+          {hasTeams && (
+            <>
+              <p><span className="text-sol-cyan">cast teams</span> <span className="text-sol-text-muted">- List your teams</span></p>
+              <p><span className="text-sol-cyan">cast teams map &lt;path&gt; &lt;team_id&gt;</span> <span className="text-sol-text-muted">- Map directory to team</span></p>
+              <p><span className="text-sol-cyan">cast teams mappings</span> <span className="text-sol-text-muted">- List directory mappings</span></p>
+            </>
+          )}
         </div>
-      </Card>
+      </SettingsSection>
 
       <TeamSetupDialog />
 
       <Dialog open={!!pendingUnsync} onOpenChange={(open) => !open && setPendingUnsync(null)}>
         <DialogContent className="bg-sol-bg border-sol-border">
           <DialogHeader>
-            <DialogTitle className="text-sol-text flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-sol-yellow" />
-              Remove Sync for {pendingUnsync ? getProjectName(pendingUnsync.path) : ""}?
+            <DialogTitle className="flex items-center gap-2 text-sol-text">
+              <AlertTriangle className="h-5 w-5 text-sol-yellow" />
+              Remove sync for {pendingUnsync ? getProjectName(pendingUnsync.path) : ""}?
             </DialogTitle>
-            <DialogDescription className="text-sol-base1">
+            <DialogDescription className="text-sol-text-muted">
               This project has {pendingUnsync?.sessionCount} synced conversation{pendingUnsync?.sessionCount !== 1 ? "s" : ""}.
               You can keep them on the server or delete them permanently.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 py-2">
-            <div className="text-xs text-sol-base1 font-mono bg-sol-base03 px-3 py-2 rounded truncate">
+            <div className="truncate rounded-md border border-sol-border/60 bg-sol-bg-alt px-3 py-2 font-mono text-xs text-sol-text-muted">
               {pendingUnsync?.path}
             </div>
           </div>
@@ -569,7 +550,6 @@ export default function SyncPage() {
             <Button
               variant="outline"
               onClick={() => setPendingUnsync(null)}
-              className="border-sol-border text-sol-base1"
               disabled={isUnsyncing}
             >
               Cancel
@@ -580,18 +560,18 @@ export default function SyncPage() {
               className="border-sol-cyan text-sol-cyan hover:bg-sol-cyan/10"
               disabled={isUnsyncing}
             >
-              {isUnsyncing ? "Removing..." : "Keep Conversations"}
+              {isUnsyncing ? "Removing..." : "Keep conversations"}
             </Button>
             <Button
               onClick={() => executeUnsync(true)}
-              className="bg-red-600 text-white hover:bg-red-700"
+              className="bg-sol-red hover:bg-sol-red/80 text-sol-base03"
               disabled={isUnsyncing}
             >
-              {isUnsyncing ? "Deleting..." : "Delete Conversations"}
+              {isUnsyncing ? "Deleting..." : "Delete conversations"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </SettingsPanel>
   );
 }
