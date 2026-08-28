@@ -1248,6 +1248,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const picking = !!pick;
   const pickAllows = useCallback((kind: PalettePickKind) => !pick || pick.kinds.includes(kind), [pick]);
   const [pickNote, setPickNote] = useState("");
+  // Two-step pick (pick.notePlaceholder set): the chosen target waits here
+  // while the confirm step collects the optional note. The query is captured
+  // at choose time — needsQuery extras read it from the search box.
+  const [pickChosen, setPickChosen] = useState<{ target: PalettePickTarget; query: string } | null>(null);
   const closePalette = useInboxStore((s) => s.closePalette);
   const togglePalette = useInboxStore((s) => s.togglePalette);
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
@@ -1613,6 +1617,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       setActionMode(initialMode !== "root" ? initialMode as ActionMode : null);
       setEnteredViaRoot(false);
       setPickNote("");
+      setPickChosen(null);
     }
   }, [open, initialMode, paletteInitialQuery]);
 
@@ -1744,12 +1749,22 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const finishPick = useCallback(
     (target: PalettePickTarget) => {
       if (!pick) return;
-      const note = pickNote.trim();
-      pick.onPick(target, { note: note || undefined, query: query.trim() });
+      if (pick.notePlaceholder) {
+        // Two-step: stage the target; the confirm step completes the pick.
+        setPickChosen({ target, query: query.trim() });
+        return;
+      }
+      pick.onPick(target, { query: query.trim() });
       closePalette();
     },
-    [pick, pickNote, query, closePalette],
+    [pick, query, closePalette],
   );
+  const sendPick = useCallback(() => {
+    if (!pick || !pickChosen) return;
+    const note = pickNote.trim();
+    pick.onPick(pickChosen.target, { note: note || undefined, query: pickChosen.query });
+    closePalette();
+  }, [pick, pickChosen, pickNote, closePalette]);
   const chooseSession = useCallback(
     (conv: Parameters<typeof navigateToSession>[0], opts?: Parameters<typeof navigateToSession>[1]) => {
       if (pick) return finishPick({ kind: "session", id: conv._id, label: cleanTitle(conv.title || "Untitled") });
@@ -2036,6 +2051,110 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     );
   }
 
+  // Pick confirm step: the target is chosen; collect the optional note and
+  // confirm. A plain view, not a CommandPrimitive — there is no list to
+  // filter. Esc still closes the whole palette (the house rule); Backspace in
+  // the empty note field or the target row itself goes back to the list.
+  if (pick && pickChosen) {
+    const target = pickChosen.target;
+    const extra = target.kind === "extra" ? (pick.extras ?? []).find((x) => x.key === target.key) : null;
+    const label = target.kind === "extra" ? (extra?.label ?? "Selection") : target.label;
+    // Chat rows collapse DMs and channels into kind "channel" — recover the
+    // row for its real icon (avatar / lock / hash) and tag.
+    const chatRow = target.kind === "channel" || target.kind === "person"
+      ? chatChannelRows.find((r) => r.id === target.id)
+      : null;
+    const tag =
+      chatRow ? (chatRow.kind === "dm" ? "direct message" : chatRow.kind === "person" ? "new direct message" : "channel")
+      : target.kind === "extra" ? null
+      : target.kind === "person" ? "new direct message"
+      : target.kind;
+    const icon =
+      chatRow?.kind === "dm" || chatRow?.kind === "person" || target.kind === "person" ? (
+        <AvatarImg
+          src={chatRow?.image}
+          alt=""
+          className="w-4 h-4 rounded-full flex-shrink-0"
+          fallback={<User className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />}
+        />
+      ) : chatRow?.isPrivate ? (
+        <Lock className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+      ) : target.kind === "channel" ? (
+        <Hash className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+      ) : target.kind === "doc" || extra?.icon === "doc" ? (
+        <FileText className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+      ) : target.kind === "task" ? (
+        <ListTodo className="w-4 h-4 flex-shrink-0 text-sol-cyan" />
+      ) : target.kind === "plan" ? (
+        <MapIcon className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+      ) : target.kind === "session" ? (
+        <MessageSquare className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+      ) : extra?.icon === "slack" ? (
+        <Hash className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+      ) : (
+        <Sparkles className="w-4 h-4 flex-shrink-0 text-sol-violet" />
+      );
+    const confirmContent = (
+      <div className="w-[580px] rounded-xl border border-sol-border bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150">
+        <div className="px-4 pt-3">
+          <div className="text-xs font-mono text-sol-text-dim truncate">{pick.title}</div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setPickChosen(null)}
+          className="mx-3 mt-2 flex items-center gap-3 rounded-lg border border-sol-border bg-sol-bg-inset px-3 py-2 text-left transition-colors hover:bg-sol-bg-highlight"
+        >
+          {icon}
+          <span className="truncate flex-1 text-sm text-sol-text">{label}</span>
+          {tag && <span className="text-[10px] text-sol-text-dim flex-shrink-0">{tag}</span>}
+          <span className="text-[11px] text-sol-text-muted flex-shrink-0">change</span>
+        </button>
+        <div className="px-3 pt-2 pb-3">
+          <input
+            value={pickNote}
+            onChange={(e) => setPickNote(e.target.value)}
+            placeholder={pick.notePlaceholder}
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                sendPick();
+              } else if (e.key === "Backspace" && !pickNote) {
+                e.preventDefault();
+                setPickChosen(null);
+              }
+            }}
+            className="w-full rounded-lg border border-sol-border bg-sol-bg-inset px-3 py-2 text-sm text-sol-text placeholder:text-sol-text-dim focus:border-sol-violet focus:outline-none"
+          />
+        </div>
+        <div className="px-3 pb-3 flex items-center justify-between">
+          <span className="flex items-center gap-1 text-[10px] text-sol-text-dim">
+            <KeyCap size="xs">&#9003;</KeyCap>
+            back
+          </span>
+          <button
+            type="button"
+            onClick={sendPick}
+            className="sol-btn-primary flex items-center gap-2 border border-sol-border"
+          >
+            {pick.confirmLabel ?? "Send"}
+            <KeyCap size="xs">&#9166;</KeyCap>
+          </button>
+        </div>
+      </div>
+    );
+    if (standalone) return confirmContent;
+    if (!open) return null;
+    return (
+      <div className="fixed inset-0 z-[9999]">
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px]" onClick={closePalette} />
+        <div className="absolute inset-0 flex items-start justify-center pt-[min(20vh,160px)]">
+          {confirmContent}
+        </div>
+      </div>
+    );
+  }
+
   // Root mode: navigation + context actions
   const paletteContent = (
     <CommandPrimitive
@@ -2073,17 +2192,6 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         />
         <KeyCap>Esc</KeyCap>
       </div>
-      {pick?.notePlaceholder && (
-        <div className="px-4 py-2 border-b border-sol-border/60">
-          <input
-            value={pickNote}
-            onChange={(e) => setPickNote(e.target.value)}
-            placeholder={pick.notePlaceholder}
-            className="w-full rounded-md border border-sol-border bg-sol-bg-alt/40 px-2.5 py-1.5 text-[12.5px] text-sol-text placeholder:text-sol-text-dim/60 focus:border-sol-violet/60 focus:outline-none"
-          />
-        </div>
-      )}
-
       <CommandPrimitive.List className="max-h-[min(60vh,480px)] overflow-y-auto overscroll-contain py-1.5 scroll-smooth">
         {!query.trim() && (
           <CommandPrimitive.Empty className="py-6 text-center text-sm text-sol-text-dim">

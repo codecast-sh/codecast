@@ -48,6 +48,7 @@ export function openFeedTargetPicker(opts: {
       title: opts.title,
       kinds: ["session", "doc"],
       notePlaceholder: opts.withNote ? "Tell the agent what to do with it (optional)" : undefined,
+      confirmLabel: feed ? "Feed" : "Send",
       extras: [
         {
           key: "new-session",
