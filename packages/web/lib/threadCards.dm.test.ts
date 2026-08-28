@@ -15,8 +15,7 @@ import type { ChatRailChannel } from "../store/chatSlice";
 // counterpart's last message (lastInboundAt). The viewer's own send never
 // creates or re-ranks a card there — a reply RETIRES the card from All (the
 // viewer spoke last, nothing awaits them) until the next inbound — and never
-// re-opens a card the user collapsed. The DMs chip stays a browsing surface
-// over the full rail, ordered by sortAt.
+// re-opens a card the user collapsed. The DMs chip follows the same rule.
 
 const T0 = 1_700_000_000_000;
 
@@ -37,13 +36,13 @@ function room(id: string, over: Partial<ChatRailChannel> = {}): ChatRailChannel 
 }
 
 describe("presence", () => {
-  test("a room with no inbound ever is browse-only: on the DMs chip, not in All", () => {
+  test("a room with no inbound ever is browse-only: in no view", () => {
     const cards = dmCards([
       room("quiet", { sortAt: T0 + 5000 }), // viewer-only sends
       room("live", { sortAt: T0, lastInboundAt: T0 }),
     ]);
     expect(cardsForChip(cards, "all", false).map((c) => c.id)).toEqual(["dm:live"]);
-    expect(cardsForChip(cards, "dm", false).map((c) => c.id)).toEqual(["dm:quiet", "dm:live"]);
+    expect(cardsForChip(cards, "dm", false).map((c) => c.id)).toEqual(["dm:live"]);
   });
 
   test("a fresh outbound to a quiet room creates no card in All", () => {
@@ -78,13 +77,12 @@ describe("rank and timestamp", () => {
   test("the shown time is the inbound time, not the own-send time", () => {
     const [card] = dmCards([room("b", { sortAt: T0 + 9000, lastInboundAt: T0 })]);
     expect(card.activityAt).toBe(T0);
-    expect(card.browseAt).toBe(T0 + 9000);
     expect(card.browseOnly).toBe(true);
   });
 
-  test("the DMs chip ranks by the rail stamp, own sends included", () => {
+  test("the DMs chip retires an answered room too", () => {
     const cards = dmCards(rail(T0 + 9000, T0));
-    expect(sortCards(cards, "dm").map((c) => c.id)).toEqual(["dm:b", "dm:a"]);
+    expect(cardsForChip(cards, "dm", false).map((c) => c.id)).toEqual(["dm:a"]);
   });
 });
 
@@ -112,12 +110,12 @@ describe("counts", () => {
         room("quiet", { unreadCount: 1 }), // no inbound: whatever the count says, not in All
         room("live", { unreadCount: 2, lastInboundAt: T0 }),
         room("hushed", { unreadCount: 3, muted: true, lastInboundAt: T0 }),
-        // Answered elsewhere but the count is stale: the DMs chip still says
-        // unread, the All badge (presence-keyed) does not.
+        // Answered elsewhere but the count is stale: presence keys to the
+        // reply, so neither the DMs chip nor the All badge counts it.
         room("answered", { unreadCount: 1, sortAt: T0 + 5000, lastInboundAt: T0 }),
       ]),
     );
     expect(counts.all).toBe(1);
-    expect(counts.dm).toBe(3);
+    expect(counts.dm).toBe(1);
   });
 });

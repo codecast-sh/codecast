@@ -102,18 +102,14 @@ export function ThreadsView({ present }: { present: boolean }) {
   }, [rows, rail, chatOn, sessionCardList, questionCardList, taskShortSig, pageSlugSig, viewerId]);
   const counts = useMemo(() => unreadByChip(allCards), [allCards]);
   const chipped = useMemo(
-    () => sortCards(cardsForChip(allCards, chip, includeSessions), chip),
+    () => sortCards(cardsForChip(allCards, chip, includeSessions)),
     [allCards, chip, includeSessions],
   );
-  // The All view shows only cards with something unread for the viewer; kind
-  // chips stay full browse lists. The hold set keeps a card on screen for the
-  // visit once it has shown, so reading it (which zeroes unread) cannot yank
-  // it away under the reader.
+  // Every view shows only cards with something unread for the viewer. The
+  // hold set keeps a card on screen for the visit once it has shown, so
+  // reading it (which zeroes unread) cannot yank it away under the reader.
   const heldRef = useRef<Set<string>>(new Set());
-  const cards = useMemo(
-    () => (chip === "all" ? unreadOnlyCards(chipped, heldRef.current) : chipped),
-    [chipped, chip],
-  );
+  const cards = useMemo(() => unreadOnlyCards(chipped, heldRef.current), [chipped]);
 
   // ── Open cards ────────────────────────────────────────────────────────────
   // Cards render expanded by default; the reader's toggles override, and a
@@ -205,7 +201,7 @@ export function ThreadsView({ present }: { present: boolean }) {
             <ThreadsEmpty
               chip={chip}
               sessionsOn={includeSessions}
-              caughtUp={chip === "all" && chipped.length > 0}
+              caughtUp={allCards.some((c) => (chip === "all" ? c.chip !== "session" : c.chip === chip))}
               onNewMessage={chatOn ? openNewMessage : undefined}
             />
           ) : (

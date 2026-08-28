@@ -61,12 +61,9 @@ export type ThreadCardModel = {
    *  viewer's own sends never move it. session: updated_at. Drives the All
    *  view's rank, the shown age, and the open map's expiry. */
   activityAt: number;
-  /** dm only: the rail's own stamp (sortAt, either direction). The DMs chip —
-   *  a browsing surface — ranks by this; everything else reads activityAt. */
-  browseAt?: number;
   /** Nothing awaits the viewer: the newest message is their own (or, for a
-   *  DM, the counterpart has never spoken). A dm card stays listed under the
-   *  DMs chip; every other browse-only card is absent from every view. */
+   *  DM, the counterpart has never spoken). A browse-only card is absent from
+   *  every view. */
   browseOnly?: boolean;
   /** Server: row.unread. dm: the rail count (0 when muted). session: 0 or 1. */
   unread: number;
@@ -237,12 +234,11 @@ export function serverCards(
 }
 
 /** DM rooms from the synced rail. Multi-person DMs are `dm` too. A muted room
- *  shows no unread, the same rule the rail applies. Presence and rank in the
- *  All view key to the counterpart's last message: a room they have never
- *  spoken in is browse-only, and so is a room the viewer has ANSWERED — their
- *  own reply is the newest message, so nothing awaits them. Replying retires
- *  the card from All; the next inbound brings it back, ranked by that
- *  message. The DMs chip stays the full rail either way. */
+ *  shows no unread, the same rule the rail applies. Presence and rank key to
+ *  the counterpart's last message: a room they have never spoken in is
+ *  browse-only, and so is a room the viewer has ANSWERED — their own reply is
+ *  the newest message, so nothing awaits them. Replying retires the card from
+ *  every view; the next inbound brings it back, ranked by that message. */
 export function dmCards(rail: ChatRailChannel[]): ThreadCardModel[] {
   const out: ThreadCardModel[] = [];
   for (const c of rail) {
@@ -256,7 +252,6 @@ export function dmCards(rail: ChatRailChannel[]): ThreadCardModel[] {
       kind: "dm",
       chip: "dm",
       activityAt: inboundAt ?? c.sortAt,
-      browseAt: c.sortAt,
       browseOnly: inboundAt === undefined || answered,
       unread: c.muted ? 0 : (c.unreadCount ?? 0),
       unreadCapped: !!c.unreadCapped,
@@ -318,21 +313,19 @@ export function questionCards(decisions: SessionDecisionItem[]): ThreadCardModel
 
 // ── Views ───────────────────────────────────────────────────────────────────
 
-/** Whether a chip lists a card. The DMs chip is the one browsing surface: it
- *  keeps browse-only rooms. Every other view drops a card nothing awaits on. */
-function listedUnder(c: ThreadCardModel, chip: ChipKey): boolean {
-  return chip === "dm" || !c.browseOnly;
+/** Whether any view lists a card: every view drops a card nothing awaits on. */
+function listedUnder(c: ThreadCardModel): boolean {
+  return !c.browseOnly;
 }
 
 /** The cards one chip shows. Sessions appear only under All, and only when
- *  the toggle is on; browse-only DM rooms appear only under their own chip;
- *  every other chip is exact. */
+ *  the toggle is on; every other chip is exact. */
 export function cardsForChip(cards: ThreadCardModel[], chip: ChipKey, includeSessions: boolean): ThreadCardModel[] {
-  if (chip === "all") return cards.filter((c) => listedUnder(c, chip) && (includeSessions || c.chip !== "session"));
-  return cards.filter((c) => c.chip === chip && listedUnder(c, chip));
+  if (chip === "all") return cards.filter((c) => listedUnder(c) && (includeSessions || c.chip !== "session"));
+  return cards.filter((c) => c.chip === chip && listedUnder(c));
 }
 
-/** The default view is an inbox: a card earns its place by carrying unread.
+/** Every view is an inbox: a card earns its place by carrying unread.
  *  `held` is the visit's memory — a card admitted once stays until the page
  *  is left, so a card marking itself read under the reader never vanishes
  *  mid-read. Sessions are exempt: the Sessions switch asks for them by name,
@@ -346,14 +339,9 @@ export function unreadOnlyCards(cards: ThreadCardModel[], held: Set<string>): Th
   return out;
 }
 
-/** Newest activity first. One merge sort across every source. The DMs chip is
- *  the browsing exception: it ranks by the rail's own stamp (browseAt), so a
- *  room the viewer just wrote to floats there — and only there. */
-export function sortCards(cards: ThreadCardModel[], chip: ChipKey = "all"): ThreadCardModel[] {
-  const at = chip === "dm"
-    ? (c: ThreadCardModel) => c.browseAt ?? c.activityAt
-    : (c: ThreadCardModel) => c.activityAt;
-  return [...cards].sort((a, b) => at(b) - at(a));
+/** Newest activity first. One merge sort across every source. */
+export function sortCards(cards: ThreadCardModel[]): ThreadCardModel[] {
+  return [...cards].sort((a, b) => b.activityAt - a.activityAt);
 }
 
 /** How many cards carry unread, per chip and for the default view. Sessions
@@ -367,10 +355,9 @@ export function unreadByChip(cards: ThreadCardModel[]): Record<ChipKey, number> 
     // badge-counting kinds roll up into the default view's number (which is
     // what the sidebar shows).
     if (c.unread <= 0) continue;
-    if (c.chip !== "session" && listedUnder(c, c.chip)) out[c.chip]++;
-    // A browse-only card is not in the All view, so it must not tick the
-    // default view's number either.
-    if (meta.countsTowardBadge && !c.browseOnly) out.all++;
+    if (!listedUnder(c)) continue;
+    if (c.chip !== "session") out[c.chip]++;
+    if (meta.countsTowardBadge) out.all++;
   }
   return out;
 }
