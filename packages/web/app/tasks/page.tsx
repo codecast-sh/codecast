@@ -3,9 +3,8 @@ import { useState, useCallback, useMemo } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useRouter, useSearchParams, useParams, usePathname } from "next/navigation";
 import Link from "next/link";
-import { useQuery } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem, TaskViewPrefs, ProjectItem, resolveAssigneeInfo } from "../../store/inboxStore";
+import { useTeamRosterIdentity, useViewerIdentity, type RosterIdentity } from "../../hooks/useTeamRoster";
 import { useSyncTasks } from "../../hooks/useSyncTasks";
 import { TaskDetailContent } from "./[id]/page";
 import { DetailSplitLayout } from "../../components/DetailSplitLayout";
@@ -15,10 +14,11 @@ import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
 import { TaskMenuItems } from "../../components/menus/ObjectContextMenus";
 import { SegmentedToggle } from "../../components/SegmentedToggle";
-import { LivenessDot, ActiveSessionBadge } from "../../components/LivenessDot";
+import { LivePulseHalo, ActiveSessionBadge } from "../../components/LivenessDot";
 import { taskLivenessState } from "../../lib/liveness";
 
-const api = _api as any;
+// The personal space has no roster; a stable empty list keeps the memos quiet.
+const NO_MEMBERS: RosterIdentity[] = [];
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { TaskStatusBadge, TASK_STATUS, TASK_STATUS_ORDER, type TaskStatus } from "../../components/TaskStatusBadge";
@@ -1015,7 +1015,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
   useWatchEffect(() => { setTaskFilter({ status: urlStatus }); }, [urlStatus]);
 
   const { hasMore, loadMore } = useSyncTasks();
-  const currentUser = useQuery(api.users.getCurrentUser);
+  const currentUser = useViewerIdentity();
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   // One workspace pointer for the whole page: rows are scoped by activeTeamId
   // (filterToWorkspace below), so the roster must use the same source — a
@@ -1040,7 +1040,12 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
     (order: string[]) => updateClientUIStore({ task_view: { ...taskView, kanban_order: order } }),
     [updateClientUIStore, taskView]
   );
-  const teamMembers = useQuery(api.teams.getTeamMembers, effectiveTeamId ? { team_id: effectiveTeamId } : "skip");
+  // The roster the header pump keeps in the store — persisted, so the assignee
+  // filter and the assign palette have people to offer offline too. The pump
+  // feeds only the active team, so the personal space reads as nobody rather
+  // than as the last team's people.
+  const roster = useTeamRosterIdentity();
+  const teamMembers = effectiveTeamId ? roster : NO_MEMBERS;
   const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
 
   const updateTask = useInboxStore((s) => s.updateTask);
@@ -1533,7 +1538,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
                 options: [
                   { key: "", label: "Anyone" },
                   { key: "_unassigned", label: "Unassigned" },
-                  ...(teamMembers || []).map((m: any) => ({ key: m._id, label: m.name || m.email })),
+                  ...teamMembers.map((m) => ({ key: m._id, label: m.name || m.email || m.github_username || m._id })),
                 ],
                 onChange: (v: string) => setParam({ assignee: v }),
               },
@@ -1584,7 +1589,7 @@ export function TaskListContent({ projectId }: { projectId?: string } = {}) {
             { key: "l", mode: "labels", label: "labels" },
             { key: "a", mode: "assign", label: "assign" },
           ]}
-          paletteProps={{ teamMembers: teamMembers || undefined, currentUser: currentUser || undefined }}
+          paletteProps={{ teamMembers, currentUser: currentUser ?? undefined }}
           onItemEdit={handleTitleEdit}
           listFooter={undefined}
           syncScope="tasks"
