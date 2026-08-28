@@ -48,31 +48,30 @@ let version = 0;
 const listeners = new Set<() => void>();
 function notify() { version++; for (const l of listeners) l(); }
 
-mock.module("../../store/inboxStore", () => {
-  const React = require("react");
-  const useInboxStore = () => state;
-  useInboxStore.getState = () => state;
-  return {
-    useInboxStore,
-    useTrackedStore: (_deps: unknown[]) => {
-      React.useSyncExternalStore(
-        (cb: () => void) => { listeners.add(cb); return () => listeners.delete(cb); },
-        () => version,
-      );
-      return state;
-    },
-  };
+// The tab fields are driven by this file; everything else stays the real state,
+// because the substitution answers every file that runs after this one too (see
+// mockInboxStore). `useTrackedStore` is replaced as well: it has to re-render on
+// `notify`, which the real one knows nothing about.
+const { mockInboxStore } = await import("./mockInboxStore");
+const readState = mockInboxStore(() => state, {
+  useTrackedStore: (_deps: unknown[]) => {
+    const React = require("react");
+    React.useSyncExternalStore(
+      (cb: () => void) => { listeners.add(cb); return () => listeners.delete(cb); },
+      () => version,
+    );
+    return readState();
+  },
 });
 
-mock.module("../../lib/pageLayout", () => ({
-  isFullWidthRoute: () => true,
-  PageShell: ({ children }: any) => <div>{children}</div>,
-}));
-mock.module("../../lib/openIntent", () => ({
-  isPrewarmTab: () => false,
-  clearPrewarmTab: () => {},
-}));
-mock.module("../../lib/tabTitle", () => ({ tabSessionId: () => null }));
+// lib/pageLayout, lib/openIntent and lib/tabTitle are NOT substituted. They
+// used to be, and it cost a sibling: `mock.module` is process-global, so
+// `isFullWidthRoute: () => true` answered lib/__tests__/pageLayout.test.ts too
+// and failed its three negative cases. Spreading the real module would not have
+// helped — the lie was the overridden export itself, not the dropped ones.
+// Nothing was gained by any of the three: /inbox and /tasks are both genuinely
+// full-width, the prewarm set is empty in a fresh process, and neither tab
+// carries a session id. The real modules answer exactly what the stubs did.
 mock.module("../../hooks/useConversationMessages", () => ({
   useConversationMessages: () => {},
 }));
