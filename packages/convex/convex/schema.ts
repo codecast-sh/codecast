@@ -2379,6 +2379,12 @@ export default defineSchema({
     // this field keeps the parent link anyway, so spawn triggers and their runs
     // still trace back to the session that armed them.
     created_by_conversation_id: v.optional(v.id("conversations")),
+    // The creator's raw session uuid, kept when created_by_conversation_id
+    // could not be resolved at insert (a trigger armed in the first seconds of
+    // a session, before its conversation row synced). Resolved to a
+    // conversation at read time by withResolvedRunConversations, exactly like
+    // last_run_session_uuid, so the parent link never depends on sync order.
+    created_by_session_uuid: v.optional(v.string()),
     project_path: v.optional(v.string()),
     agent_type: v.optional(v.string()),
     // Device that created the task (CLI `cast trigger add`). When set, only

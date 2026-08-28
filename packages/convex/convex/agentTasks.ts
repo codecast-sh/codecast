@@ -162,6 +162,7 @@ interface NewTaskArgs {
   originating_conversation_id?: string;
   target_conversation_id?: string;
   created_by_conversation_id?: string;
+  created_by_session_uuid?: string;
   project_path?: string;
   agent_type?: string;
   created_device_id?: string;
@@ -202,6 +203,7 @@ async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) 
     created_by_conversation_id: args.created_by_conversation_id
       ? args.created_by_conversation_id as Id<"conversations">
       : undefined,
+    created_by_session_uuid: args.created_by_session_uuid,
     project_path: args.project_path,
     agent_type: args.agent_type || "claude",
     created_device_id: args.created_device_id,
@@ -287,7 +289,8 @@ export const createTask = mutation({
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
-    const { api_token: _token, originating_session_ref, created_by_session_ref, ...taskArgs } = args;
+    const { api_token: _token, originating_session_ref, created_by_session_ref, ...rest } = args;
+    const taskArgs: NewTaskArgs = rest;
     if (originating_session_ref) {
       const conv = await findConversationByAnyRef(ctx, originating_session_ref, auth.userId);
       if (!conv) throw new Error(`No session of yours matches "${originating_session_ref}"`);
@@ -296,6 +299,10 @@ export const createTask = mutation({
     if (created_by_session_ref) {
       const conv = await findConversationByAnyRef(ctx, created_by_session_ref, auth.userId);
       if (conv) taskArgs.created_by_conversation_id = conv._id.toString();
+      // Not synced yet: keep the raw uuid so the read path can resolve it
+      // once the conversation row exists. Dropping it here is how a spawn
+      // trigger lost its parent for good.
+      else taskArgs.created_by_session_uuid = created_by_session_ref;
     }
     return await insertTask(ctx, auth.userId, taskArgs);
   },
@@ -317,6 +324,93 @@ export const adminSetCreatedByConversation = internalMutation({
     if (task.user_id !== conv.user_id) return false;
     await ctx.db.patch(args.task_id, { created_by_conversation_id: args.conversation_id });
     return true;
+  },
+});
+
+// Repair for the rows the clipped-comm bug left orphaned (no creator, no
+// inject binding): the creator's own transcript holds the proof. `cast trigger
+// add` prints "Trigger tr-NNN …" into the Bash tool result of the session that
+// ran it, and that message lands seconds after the row was inserted. A global
+// by_timestamp window around created_at finds it without scanning any user's
+// whole history. Match on the short id first (exact), then on a `trigger add`
+// tool call in the same window (the pre-short-id era printed the last-8 suffix).
+// Attribution only; originating_conversation_id stays untouched.
+export const adminBackfillCreatedBy = internalMutation({
+  args: {
+    user_id: v.optional(v.id("users")),
+    limit: v.optional(v.number()),
+    dry_run: v.optional(v.boolean()),
+    since_ms: v.optional(v.number()),
+    // Paging cursor: only rows created before this. Unmatched orphans stay
+    // orphans, so a newest-first scan without a cursor re-reads them forever.
+    before_ms: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const rows = args.user_id
+      ? await ctx.db
+          .query("agent_tasks")
+          .withIndex("by_user_status", (q) => q.eq("user_id", args.user_id!))
+          .collect()
+      : await ctx.db.query("agent_tasks").collect();
+    const since = args.since_ms ?? 0;
+    const orphans = rows.filter(
+      (t) =>
+        !t.created_by_conversation_id &&
+        !t.originating_conversation_id &&
+        !t.created_by_session_uuid &&
+        t.created_at >= since &&
+        t.created_at < (args.before_ms ?? Infinity)
+    );
+    const targets = orphans
+      .sort((a, b) => b.created_at - a.created_at)
+      .slice(0, args.limit ?? 10);
+
+    const out: Array<{ short_id?: string; title: string; creator?: string; creator_title?: string; via?: string }> = [];
+    for (const t of targets) {
+      const T = t.created_at;
+      const window = await ctx.db
+        .query("messages")
+        .withIndex("by_timestamp", (q) => q.gte("timestamp", T - 120_000).lte("timestamp", T + 300_000))
+        .collect();
+      const suffix = t._id.toString().slice(-8);
+      const needles = [t.short_id ? `Trigger ${t.short_id}` : null, `Trigger ${suffix}`].filter(Boolean) as string[];
+      const textOf = (m: Doc<"messages">) =>
+        [m.content ?? "", ...(m.tool_results ?? []).map((r) => r.content)].join("\n");
+      let hit = window.find((m) => !m.is_encrypted && needles.some((n) => textOf(m).includes(n)));
+      let via = hit ? "printed id" : undefined;
+      if (!hit) {
+        const calls = window.filter(
+          (m) =>
+            m.timestamp <= T + 30_000 &&
+            (m.tool_calls ?? []).some((c) => /cast\s+(trigger|schedule)\s+add/.test(c.input))
+        );
+        // Only an unambiguous single caller counts: two sessions arming
+        // triggers in the same window would otherwise cross-stamp.
+        const convs = new Set(calls.map((m) => m.conversation_id.toString()));
+        if (convs.size === 1) {
+          hit = calls[0];
+          via = "trigger add call";
+        }
+      }
+      const conv = hit ? await ctx.db.get(hit.conversation_id) : null;
+      const ok = conv && conv.user_id === t.user_id;
+      out.push({
+        short_id: t.short_id,
+        title: t.title,
+        creator: ok ? conv._id.toString() : undefined,
+        creator_title: ok ? conv.title : undefined,
+        via: ok ? via : undefined,
+      });
+      if (ok && !args.dry_run) {
+        await ctx.db.patch(t._id, { created_by_conversation_id: conv._id });
+      }
+    }
+    return {
+      scanned: targets.length,
+      remaining: orphans.length - targets.length,
+      next_before_ms: targets.length ? targets[targets.length - 1].created_at : null,
+      results: out,
+    };
   },
 });
 
@@ -813,14 +907,16 @@ async function withResolvedRunConversations(
     })
   );
 
-  // Only needed when the run didn't already record a conversation_id
-  // directly (the --context-current path).
+  // Raw session uuids stored because the conversation had not synced at
+  // write time: the last run (the --context-current path) and the creator
+  // (a trigger armed before its own session's row existed).
   const uuidToConv = new Map<string, { id: Id<"conversations">; title: string }>();
   const pendingUuids = [
     ...new Set(
-      tasks
-        .filter((t) => t.last_run_session_uuid && !t.last_run_conversation_id)
-        .map((t) => t.last_run_session_uuid as string)
+      tasks.flatMap((t) => [
+        ...(t.last_run_session_uuid && !t.last_run_conversation_id ? [t.last_run_session_uuid] : []),
+        ...(t.created_by_session_uuid && !t.created_by_conversation_id ? [t.created_by_session_uuid] : []),
+      ])
     ),
   ];
   await Promise.all(
@@ -840,6 +936,10 @@ async function withResolvedRunConversations(
         ? uuidToConv.get(t.last_run_session_uuid)
         : undefined;
     const lastRunConvId = t.last_run_conversation_id ?? resolved?.id;
+    const creator =
+      !t.created_by_conversation_id && t.created_by_session_uuid
+        ? uuidToConv.get(t.created_by_session_uuid)
+        : undefined;
     return {
       ...t,
       last_run_conversation_id: lastRunConvId,
@@ -849,9 +949,10 @@ async function withResolvedRunConversations(
       originating_conversation_title: t.originating_conversation_id
         ? titles.get(t.originating_conversation_id)
         : undefined,
+      created_by_conversation_id: t.created_by_conversation_id ?? creator?.id,
       created_by_conversation_title: t.created_by_conversation_id
         ? titles.get(t.created_by_conversation_id)
-        : undefined,
+        : creator?.title,
     };
   });
 }
