@@ -7,6 +7,7 @@ import { liftQuestions } from "../lib/decisionQueue";
 import { isInboxSessionView } from "../lib/inboxRouting";
 import { overlayConversationId } from "../store/workspace";
 import { focusComposer } from "../lib/composerControl";
+import { isPeopleWindow } from "../lib/desktop";
 import { useShortcutAction } from "./ShortcutProvider";
 import { performUndo, performRedo } from "../store/undoStack";
 import { animatedHideSession, undoableDeferSession, undoableDormantSession, undoablePinSession } from "../store/undoActions";
@@ -110,6 +111,14 @@ export function useGlobalShortcutActions() {
     if (isOnInboxPage) store.setCurrentSession(first._id);
     else store.selectPanelSession(first._id);
   }, [isOnInboxPage]));
+
+  // The people wall, over whatever you were doing. Never in the people window
+  // itself: the wall is already that window's whole view, and a modal wall over
+  // it would be the same faces twice.
+  useShortcutAction('people.wall', useCallback(() => {
+    if (isPeopleWindow()) return;
+    useInboxStore.getState().togglePeopleWall();
+  }, []));
 
   useShortcutAction('session.pin', useCallback(() => {
     const store = useInboxStore.getState();

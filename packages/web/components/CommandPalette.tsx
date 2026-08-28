@@ -196,8 +196,12 @@ const GLOBAL_COMMANDS: ReadonlyArray<{
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   keywords: string;
+  /** Rows that do not apply to every window say so; the people window has the
+   *  wall as its whole view and needs no command to open one. */
+  hidden?: () => boolean;
 }> = [
   { action: "anchor.toggle", label: "Talk to Anchor", icon: AnchorGlyph, keywords: "agent assistant bot standing member ask personal team" },
+  { action: "people.wall", label: "The team — hold a face to talk", icon: Users, keywords: "people wall faces who is around hold to talk walkie everyone roster", hidden: isPeopleWindow },
   { action: "terminal.toggle", label: "Toggle terminal", icon: Terminal, keywords: "shell console panel tmux" },
   { action: "ui.zenToggle", label: "Toggle zen mode", icon: Focus, keywords: "focus minimal distraction free" },
   { action: "sidebar.toggleLeft", label: "Toggle left sidebar", icon: PanelLeft, keywords: "nav collapse" },
@@ -2818,7 +2822,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
         {!standalone && !picking && (
           <CommandPrimitive.Group heading="Commands" className={groupClass}>
-            {GLOBAL_COMMANDS.map((cmd) => {
+            {GLOBAL_COMMANDS.filter((cmd) => !cmd.hidden?.()).map((cmd) => {
               const Icon = cmd.icon;
               return (
                 <CommandPrimitive.Item
@@ -2833,21 +2837,6 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 </CommandPrimitive.Item>
               );
             })}
-            {/* The buddy list, in a window of its own. Hand-written rather
-                than a GLOBAL_COMMANDS row because it carries no chord: those
-                rows derive a keycap hint from the shortcut registry, and an
-                empty one reads as a shortcut nobody can find. */}
-            {!isPeopleWindow() && (
-              <CommandPrimitive.Item
-                key="cmd-people-wall"
-                value="People wall faces team who is around hold to talk walkie everyone"
-                onSelect={() => { closePalette(); useInboxStore.getState().openPeopleWall(); }}
-                className={itemClass}
-              >
-                <Users className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
-                <span className="truncate flex-1">The team — hold a face to talk</span>
-              </CommandPrimitive.Item>
-            )}
             {!isPeopleWindow() && (
               <CommandPrimitive.Item
                 key="cmd-people"
