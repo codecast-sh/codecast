@@ -336,12 +336,14 @@ async function resolveMentions(
 // deletes the rows a departure leaves behind: three layers, because the failure
 // here is a private message read by someone who was removed.
 //
-// A plain channel message produces NO notification and NO push. Ordinary chatter
-// is unread state only; anything else trains people to ignore the badge.
+// A plain channel message produces a notification only for members who set the
+// channel's notify level to "all" (chat_post — Slack's "All new posts"). For
+// everyone else ordinary chatter is unread state only; anything louder by
+// default trains people to ignore the badge.
 async function notifyChat(
   ctx: MutationCtx,
   opts: {
-    eventType: "chat_mention" | "chat_reply" | "chat_here" | "chat_dm" | "chat_added";
+    eventType: "chat_mention" | "chat_reply" | "chat_here" | "chat_dm" | "chat_added" | "chat_post";
     actorUserId: Id<"users">;
     actorName: string;
     channel: Doc<"chat_channels">;
@@ -418,6 +420,21 @@ export async function threadParticipants(
   return ids;
 }
 
+// Everyone a channel's messages are FOR: the team roster, narrowed to the
+// room's members when the room is restricted, bots excluded. The audience for
+// @here and for chat_post — one definition so the two can never disagree.
+async function channelAudience(
+  ctx: ReadCtx,
+  channel: Doc<"chat_channels">,
+): Promise<Id<"users">[]> {
+  let roster = await teamRoster(ctx, channel.team_id);
+  if (isRestricted(channel)) {
+    const members = new Set((await channelMemberIds(ctx, channel._id)).map(String));
+    roster = roster.filter((u) => members.has(u._id.toString()));
+  }
+  return roster.filter((u) => !u.is_bot).map((u) => u._id);
+}
+
 // The members who are actually AT a keyboard right now, for @here. Presence is
 // the same signal push routing uses, so "here" means the same thing everywhere.
 // In a private room "here" reaches the room's members, never the whole team.
@@ -426,24 +443,18 @@ async function presentMembers(
   channel: Doc<"chat_channels">,
   now: number,
 ): Promise<Id<"users">[]> {
-  let roster = await teamRoster(ctx, channel.team_id);
-  if (isRestricted(channel)) {
-    const members = new Set((await channelMemberIds(ctx, channel._id)).map(String));
-    roster = roster.filter((u) => members.has(u._id.toString()));
-  }
   const present: Id<"users">[] = [];
-  for (const user of roster) {
-    if (user.is_bot) continue;
+  for (const userId of await channelAudience(ctx, channel)) {
     const presence = await ctx.db
       .query("user_presence")
-      .withIndex("by_user", (q: any) => q.eq("user_id", user._id))
+      .withIndex("by_user", (q: any) => q.eq("user_id", userId))
       .first();
     if (!presence) continue;
     if (
       isDesktopActivePresence(presence, now)
       || now - presence.last_input_at < HERE_PRESENCE_MS
     ) {
-      present.push(user._id);
+      present.push(userId);
     }
   }
   return present;
@@ -2271,6 +2282,29 @@ async function announceChatMessage(
         recipientId,
         message: `${actorName} posted to everyone here in #${channel.name}: ${preview}`,
         pushSubtitle: `#${channel.name} · @here`,
+        pushBody,
+      });
+    }
+  }
+
+  // An ordinary channel line reaches only the members who explicitly asked for
+  // it: notifyChat's level gate lets chat_post through at "all" and nothing
+  // else, so this fan-out only names the candidates. Thread replies stay with
+  // their participants (the chat_reply fan-out above); DM rooms have their own
+  // rule below.
+  if (channel.kind !== "dm" && !root) {
+    for (const recipientId of await channelAudience(ctx, channel)) {
+      if (notified.has(recipientId.toString())) continue;
+      notified.add(recipientId.toString());
+      await notifyChat(ctx, {
+        eventType: "chat_post",
+        actorUserId: authorId,
+        actorName,
+        channel,
+        messageId,
+        recipientId,
+        message: `${actorName} posted in #${channel.name}: ${preview}`,
+        pushSubtitle: channelWhere,
         pushBody,
       });
     }

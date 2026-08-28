@@ -135,7 +135,7 @@ export function FilterDropdown({
     : active && value ? active.label : label;
 
   const optionsPopover = open && (
-    <div className="absolute top-full left-0 mt-1 w-max min-w-[11rem] max-w-[20rem] bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1 max-h-64 overflow-y-auto">
+    <div className="absolute top-full left-0 mt-1 w-max min-w-[11rem] max-w-[20rem] bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1 max-h-64 overflow-y-auto">
       <FilterOptionList options={options} value={value} multi={multi} onChange={onChange} onPicked={() => setOpen(false)} />
     </div>
   );
