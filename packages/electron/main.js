@@ -254,6 +254,9 @@ function createWindow() {
     mainWindow.webContents.executeJavaScript(
       "document.documentElement.classList.add('electron-desktop')"
     );
+    // The first breakout window boots in the background once the main window
+    // is up, so "open in new window" is a navigation rather than a cold load.
+    warmSpareTabWindow();
     // Sticky env can boot us into local mode — mark the title the same way
     // toggleEnvironment does so it's never mistaken for prod.
     if (currentBaseUrl === LOCAL_URL) {
@@ -320,16 +323,15 @@ function sanitizeTabPath(navPath) {
   return navPath;
 }
 
-function createTabWindow(navPath) {
+// The window itself, hidden and unpositioned. Both the cold path and the warm
+// spare build one of these; only what gets loaded into it differs.
+function buildTabWindow() {
   const zoom = getAutoZoomFactor();
-  // Cascade from the main window so a breakout never opens exactly on top.
-  const base = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
   const win = new BrowserWindow({
     width: 1100,
     height: 760,
     minWidth: 700,
     minHeight: 500,
-    ...(base ? { x: base.x + 40 + tabWindows.size * 24, y: base.y + 40 + tabWindows.size * 24 } : {}),
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 12 },
     webPreferences: {
@@ -346,10 +348,6 @@ function createTabWindow(navPath) {
     show: false,
     backgroundColor: "#002b36",
   });
-  tabWindows.add(win);
-
-  win.loadURL(`${currentBaseUrl}${navPath}`);
-  win.once("ready-to-show", () => win.show());
   win.webContents.on("did-finish-load", () => {
     if (win.isDestroyed()) return;
     win.webContents.setZoomFactor(getAutoZoomFactor());
@@ -364,9 +362,94 @@ function createTabWindow(navPath) {
   });
   win.on("closed", () => {
     tabWindows.delete(win);
+    if (spareTabWindow === win) spareTabWindow = null;
     broadcastWindowRole();
   });
+  return win;
+}
+
+// ---------------------------------------------------------------------------
+// The warm spare. A detached window used to boot the whole web app from a cold
+// loadURL — bundle, store hydration, Convex reconnect — so "open in new window"
+// took seconds. Now one hidden tab window sits booted at /inbox, and a detach
+// hands it the route through the same in-app navigation the tray and
+// notifications use (a pushState, not a load), then shows it. A fresh spare
+// warms up behind it. The spare is NOT in `tabWindows` until it is claimed, so
+// it never counts as an app window for focus, leadership or banner routing.
+// ---------------------------------------------------------------------------
+
+const SPARE_WARM_DELAY_MS = 6000;
+let spareTabWindow = null;
+let spareTabReady = false;
+let spareTabTimer = null;
+
+function warmSpareTabWindow(delayMs = SPARE_WARM_DELAY_MS) {
+  if (spareTabTimer) return;
+  spareTabTimer = setTimeout(() => {
+    spareTabTimer = null;
+    if (appIsQuitting) return;
+    if (spareTabWindow && !spareTabWindow.isDestroyed()) return;
+    const win = buildTabWindow();
+    spareTabWindow = win;
+    spareTabReady = false;
+    win.webContents.once("did-finish-load", () => {
+      if (spareTabWindow === win) spareTabReady = true;
+    });
+    win.loadURL(`${currentBaseUrl}/inbox`);
+  }, delayMs);
+}
+
+// Throw the spare away (environment switch: it is booted on the wrong origin).
+function dropSpareTabWindow() {
+  if (spareTabTimer) {
+    clearTimeout(spareTabTimer);
+    spareTabTimer = null;
+  }
+  if (spareTabWindow && !spareTabWindow.isDestroyed()) spareTabWindow.destroy();
+  spareTabWindow = null;
+  spareTabReady = false;
+}
+
+function claimSpareTabWindow() {
+  const win = spareTabWindow;
+  if (!win || win.isDestroyed() || !spareTabReady) return null;
+  spareTabWindow = null;
+  spareTabReady = false;
+  return win;
+}
+
+function createTabWindow(navPath) {
+  // Cascade from the main window so a breakout never opens exactly on top.
+  const base = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
+  const spare = claimSpareTabWindow();
+  const win = spare || buildTabWindow();
+  if (base) win.setPosition(base.x + 40 + tabWindows.size * 24, base.y + 40 + tabWindows.size * 24);
+  tabWindows.add(win);
+
+  if (spare) {
+    // Navigate first, show once the new route has painted, so the window never
+    // flashes the inbox it was parked on. The URL flips before React commits
+    // the route; the title flips with the commit, so wait for that (capped, in
+    // case the route keeps the title) and then for a frame to paint.
+    win.webContents
+      .executeJavaScript(
+        `window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: ${JSON.stringify(navPath)} }));` +
+          "new Promise((done) => { const t0 = document.title, start = Date.now();" +
+          "  const tick = () => (document.title !== t0 || Date.now() - start > 400)" +
+          "    ? requestAnimationFrame(() => requestAnimationFrame(done)) : setTimeout(tick, 16);" +
+          "  tick(); })"
+      )
+      .catch(() => {})
+      .then(() => {
+        if (!win.isDestroyed()) win.show();
+      });
+  } else {
+    win.loadURL(`${currentBaseUrl}${navPath}`);
+    win.once("ready-to-show", () => win.show());
+  }
   broadcastWindowRole();
+  // The next breakout should be instant too.
+  warmSpareTabWindow();
   return win;
 }
 
@@ -1387,6 +1470,20 @@ function openFullSessionInMain() {
   );
 }
 
+// Cmd+N: the focused window pops its current view out into a window of its
+// own — the same move as the tab strip's "Open in new window". The renderer
+// owns the answer to "what is the current view" (the active tab, or the page
+// of a detached window), so the shell only asks; the detach itself comes back
+// over the detach-tab IPC.
+function detachFocusedView(win) {
+  const target = win && !win.isDestroyed() ? win : BrowserWindow.getFocusedWindow();
+  if (!target || target.isDestroyed()) return;
+  if (target !== mainWindow && !tabWindows.has(target)) return;
+  target.webContents.executeJavaScript(
+    "window.__CODECAST_DETACH_VIEW && window.__CODECAST_DETACH_VIEW()"
+  );
+}
+
 function navigateMain(navPath) {
   if (!mainWindow) return;
   mainWindow.show();
@@ -1416,6 +1513,8 @@ function toggleEnvironment() {
     paletteWindow = null;
   }
   createPaletteWindow();
+  dropSpareTabWindow();
+  warmSpareTabWindow();
   // The people window shows the same environment's roster; leaving it on the
   // old origin would have it watching a different world than the main window.
   if (peopleWindow && !peopleWindow.isDestroyed()) {
@@ -1474,8 +1573,13 @@ function buildAppMenu() {
       label: "File",
       submenu: [
         {
-          label: "New Session",
+          label: "New Window",
           accelerator: "CommandOrControl+N",
+          click: (_item, win) => detachFocusedView(win),
+        },
+        {
+          label: "New Session",
+          accelerator: "CommandOrControl+Shift+N",
           click: () => openFullSessionInMain(),
         },
         // No accelerators here: these mirror native windows the global

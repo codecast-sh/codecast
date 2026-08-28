@@ -4,7 +4,7 @@ import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { openConversationAsCompanion } from "../hooks/useOpenLinkedSession";
-import { installOpenIntent } from "../lib/openIntent";
+import { installOpenIntent, detachCurrentView } from "../lib/openIntent";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
 import { isNonTabRoute } from "../src/compat/tabRouting";
@@ -184,6 +184,8 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
   );
 });
 
+const noop = () => {};
+
 export function DashboardLayout(props: DashboardLayoutProps) {
   const isNested = useContext(DashboardNestCtx);
   const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
@@ -297,6 +299,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
   const isGuest = !isAuthenticated && !isAuthLoading;
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  // Stable handles: an inline lambda here re-rendered the (235-hook) Sidebar on
+  // every layout render.
+  const closeMobileSidebar = useCallback(() => setIsMobileSidebarOpen(false), []);
   // ComposeView's guarded close (draft keep/discard confirm) — the compose
   // backdrop below routes clicks through it. Null until the popup mounts.
   const composeCloseGuardRef = useRef<(() => void) | null>(null);
@@ -756,8 +761,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     const open = () => newFullSessionRef.current();
     (window as any).__CODECAST_NEW_SESSION = open;
     window.addEventListener(NEW_SESSION_EVENT, open);
+    // File › New Window (Cmd+N): the shell asks this window to pop its current
+    // view out; the answer to "which view" lives here, not in the shell.
+    (window as any).__CODECAST_DETACH_VIEW = detachCurrentView;
     return () => {
       delete (window as any).__CODECAST_NEW_SESSION;
+      delete (window as any).__CODECAST_DETACH_VIEW;
       window.removeEventListener(NEW_SESSION_EVENT, open);
     };
   });
@@ -1279,7 +1288,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <Sidebar
               directoryFilter={directoryFilter}
               isMobileOpen={false}
-              onMobileClose={() => {}}
+              onMobileClose={noop}
             />
           </ErrorBoundary>
         </EdgePeek>
@@ -1325,7 +1334,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                     <Sidebar
                       directoryFilter={directoryFilter}
                       isMobileOpen={isMobileSidebarOpen}
-                      onMobileClose={() => setIsMobileSidebarOpen(false)}
+                      onMobileClose={closeMobileSidebar}
                     />
                   </ErrorBoundary>
                 </div>
@@ -1383,7 +1392,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               <Sidebar
                 directoryFilter={directoryFilter}
                 isMobileOpen={isMobileSidebarOpen}
-                onMobileClose={() => setIsMobileSidebarOpen(false)}
+                onMobileClose={closeMobileSidebar}
               />
             </ErrorBoundary>
           </div>
