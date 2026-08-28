@@ -39,7 +39,10 @@ echo ""
 
 # Install dependencies (same as Railway)
 echo "   Installing dependencies..."
-bun install
+# --frozen-lockfile mirrors Railway exactly: a package.json/bun.lock mismatch fails
+# the web deploy AFTER convex is already live (2026-08-26). A plain install
+# silently rewrites the lock and hides that.
+bun install --frozen-lockfile
 
 # Build convex (same as Railway)
 echo "   Building Convex..."
