@@ -8367,6 +8367,13 @@ export async function computeInboxSessions(
   // other callers (inboxForCLI, listInboxSessionsPaginated) default to true and are
   // unchanged. Default MUST stay true — inboxForCLI classifies work-state from it.
   const includeLiveness = opts.includeLiveness !== false;
+  // The AUQ probe (one last-message read per non-idle row) exists to compute
+  // awaiting_input / is_idle — fields stripInboxLiveness nulls when liveness is
+  // excluded, so on that path the read is pure waste. The web's live
+  // subscription gets those fields from the sessionsLiveness overlay instead.
+  const enrichSkip: InboxEnrichSkip | undefined = includeLiveness
+    ? opts._skip
+    : { ...(opts._skip ?? {}), auq: true };
   const now = Date.now();
   const { conversations, maps, deliberateIds, clusterCutoff, ownedByMeIds, myOwnerRowById } =
     await scanInboxConversations(ctx, userId, now, {
@@ -8400,7 +8407,7 @@ export async function computeInboxSessions(
     // handed over on Friday is silently gone by Monday while `cast sessions`
     // with explicit ids still lists it as needs input.
     const cutoff = deliberateIds.has(conv._id.toString()) ? 0 : clusterCutoff;
-    const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, cutoff, opts._skip);
+    const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, cutoff, enrichSkip);
     if (conv.user_id.toString() !== userId.toString()) {
       const author = await getUserDoc(conv.user_id);
       row.author_name = author?.name ?? author?.email ?? null;
