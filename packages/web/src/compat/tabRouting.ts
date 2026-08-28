@@ -27,6 +27,19 @@ export function interceptSettingsNav(path: string): { carryUrl: string | null } 
   return { carryUrl: hit.search ? `${window.location.pathname}?${hit.search}` : null };
 }
 
+/**
+ * Adopt `path` into the active tab before a real navigation re-enters the
+ * dashboard shell from a non-tab route (the create and join flow pages).
+ * Without this the shell re-asserts the active tab's stored path on mount,
+ * so the push lands wherever the user last was instead of on `path`.
+ */
+export function adoptPathIntoActiveTab(path: string) {
+  const { tabs, activeTabId, updateTab } = useInboxStore.getState();
+  if (tabs.length > 0 && activeTabId) {
+    updateTab(activeTabId, { path, title: pathLabel(path) });
+  }
+}
+
 function isExternal(path: string): boolean {
   return path.startsWith("http") || path.startsWith("mailto:") || path.startsWith("#");
 }

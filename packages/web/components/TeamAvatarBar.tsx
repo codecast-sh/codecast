@@ -5,7 +5,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { UserRound, Filter, Link2, Headphones, MessageSquare } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
@@ -43,7 +43,9 @@ interface TeamAvatarBarProps {
 export function TeamMembersPump({ teamId }: { teamId: Id<"teams"> | undefined }) {
   const teamMembersQuery = useQuery(
     api.teams.getTeamMembers,
-    teamId ? { team_id: teamId } : "skip"
+    // isConvexId: a just-created team holds an optimistic stub id until the
+    // server echoes, and a stub is not an Id<"teams">.
+    teamId && isConvexId(String(teamId)) ? { team_id: teamId } : "skip"
   );
   useConvexSync(teamMembersQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamMembers", d), []));
   return null;

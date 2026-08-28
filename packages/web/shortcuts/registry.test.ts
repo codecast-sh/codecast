@@ -1,4 +1,5 @@
 import { test, expect, describe } from "bun:test";
+import { createShortcutCatalog } from "@platform/keys";
 import { SHORTCUTS, inputGuardBypass, hasOpenModal, type ShortcutAction, type ShortcutDef } from "./registry";
 
 // Regression guard for the "session died mysteriously" incident: a ctrl+shift+
@@ -158,5 +159,51 @@ describe("hasOpenModal", () => {
     } finally {
       delete (globalThis as any).document;
     }
+  });
+});
+
+// THE TEAM, FROM ANYWHERE. The wall answers a question people have in the
+// middle of something else, so the chord has to be reachable from wherever they
+// are — including out of a composer, which is where they usually are when they
+// wonder whether to just ask somebody instead.
+//
+// Its one real hazard is the neighbour: Ctrl+Shift+P is Pin/unpin session, on
+// every platform, and a second definition on that combo would sit behind it
+// forever and look like a chord that simply does not work. So the wall takes
+// the ⌘ chord and takes it on both platforms — the same call the palette makes
+// with ⌘K — and this is the test that says so out loud.
+describe("the people wall chord", () => {
+  const defs = SHORTCUTS.filter((s) => s.action === "people.wall");
+
+  test("exactly one binding, described, and global", () => {
+    expect(defs.length).toBe(1);
+    expect(defs[0].when).toBeUndefined();
+    expect(defs[0].description).toBeTruthy();
+    // Reachable from a composer: this one opens a surface, it does not mutate
+    // or destroy anything behind the dialog.
+    expect(defs[0].skipInputCheck).toBe(true);
+  });
+
+  test("one chord on every platform, and it is never the pin chord", () => {
+    // No mac variant on purpose: a `ctrl` variant off mac would resolve onto
+    // session.pin, sit behind it in catalog order and never fire.
+    expect(defs[0].key).toBe("meta+shift+p");
+    expect(defs[0].mac).toBeUndefined();
+    for (const isMac of [true, false]) {
+      const collides = createShortcutCatalog(SHORTCUTS, { isMac })
+        .conflicts()
+        .filter((c) => c.defs.some((d) => d.action === "people.wall"));
+      expect(collides).toEqual([]);
+    }
+  });
+
+  test("the help panel and the palette can both render it", () => {
+    // Both derive their keycaps from the registry by action, so a binding that
+    // resolves is the whole of "it is discoverable".
+    const catalog = createShortcutCatalog(SHORTCUTS, { isMac: true });
+    expect(catalog.getShortcutsForAction("people.wall")).toHaveLength(1);
+    expect(catalog.formatShortcutLabel("people.wall")).toBe("⌘⇧P");
+    // Listed with the other unscoped chords, which is the panel's Global block.
+    expect(catalog.getShortcutsByContext(undefined).map((d) => d.action)).toContain("people.wall");
   });
 });

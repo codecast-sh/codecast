@@ -126,7 +126,7 @@ import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { AssignmentBadge } from "./AssignmentBadge";
-import { AssignedToYouBanner } from "./OwnersBadge";
+import { AssignedToYouBanner, useOwnersFromStore } from "./OwnersBadge";
 import { TmuxAttachPill } from "./TmuxAttachPill";
 import { SessionFilesButton } from "./SessionFilesButton";
 import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
@@ -156,6 +156,7 @@ import remarkBreaks from "remark-breaks";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK, renderMarkdownPre } from "./messageMarkdown";
 import { FilePathLink } from "./FilePathLink";
 import { FilePathContext } from "../lib/filePathLinks";
+import { isStickyEligible, pickStickyFallbackFromLoaded } from "../lib/messageNavigator";
 import { parseInboundSessionMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, stickyPromptContent, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
 import { CallTranscriptDisclosure } from "./calls/TranscriptTurns";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
@@ -841,6 +842,32 @@ function ForkCopyingState({ copied, total }: { copied: number; total?: number })
       <div className="text-[11px] text-sol-text-dim/60">
         Large forks copy in batches. Messages will appear automatically as they arrive.
       </div>
+    </div>
+  );
+}
+
+// A captioned rule across the timeline: two gradient lines meeting the caption
+// in the middle. One shape for every anchor the feed draws — the "New" unread
+// line, the "assigned to you" handoff line, the idle-gap stamp at the tail.
+function TimelineRule({
+  color,
+  className = "mt-1 mb-3",
+  faint,
+  label,
+  children,
+}: {
+  color: string;
+  className?: string;
+  faint?: boolean;
+  label?: string;
+  children: ReactNode;
+}) {
+  const line = `flex-1 h-px${faint ? " opacity-40" : ""}`;
+  return (
+    <div className={`flex items-center gap-3 select-none ${className}`} aria-label={label}>
+      <div className={line} style={{ background: `linear-gradient(to right, transparent, ${color})` }} />
+      {children}
+      <div className={line} style={{ background: `linear-gradient(to left, transparent, ${color})` }} />
     </div>
   );
 }
@@ -13231,6 +13258,24 @@ const ConversationViewInner = (
     () => computeNewDividerIndex(timeline, unreadAnchorAt, enteredAt),
     [timeline, unreadAnchorAt, enteredAt],
   );
+  // The handoff anchor, drawn the same way: the "assigned to you" line sits
+  // above the first row at or after the moment a teammate made you an owner.
+  // A session handed over after its last message (the usual case: a finished
+  // thread passed on) anchors below the final row instead. -1 = no handoff.
+  const handoff = useOwnersFromStore(pendingConvId).handoff;
+  const handoffAt = handoff?.added_at ?? 0;
+  const handoffIndex = useMemo(() => {
+    if (!handoffAt || timeline.length === 0) return -1;
+    const idx = timeline.findIndex((it) => it.timestamp >= handoffAt);
+    return idx === -1 ? timeline.length : idx;
+  }, [timeline, handoffAt]);
+  const handoffRule = handoff && handoffIndex >= 0 && (
+    <TimelineRule color="var(--sol-violet)" label="Assigned to you">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-violet" title={formatFullTimestamp(handoffAt)}>
+        {handoff.added_by_name || "A teammate"} assigned this to you · {formatRelativeTime(handoffAt)}
+      </span>
+    </TimelineRule>
+  );
 
 
   const populateInputRef = useRef<((text: string, opts?: { append?: boolean }) => void) | null>(null);
@@ -13285,8 +13330,15 @@ const ConversationViewInner = (
   const cachedUserMessages = useInboxStore(
     (s) => (conversation?._id ? s.userMessages[conversation._id] : undefined)
   );
+  // Escape in an empty composer interrupts the agent. Only forward it while the
+  // agent is provably mid-turn: an idle session has nothing to interrupt, and a
+  // message still pending delivery is the dangerous case. On 2026-08-28 an
+  // Escape pressed seconds after send reached the daemon 400ms after it had
+  // injected that message and cancelled the turn the message had just started.
+  const liveAgentStatus = managedSession?.agent_status as LiveAgentStatus | undefined;
   const handleSendEscape = useCallback(() => {
     if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
+    if (!isActiveAgentStatus(liveAgentStatus)) return;
     void convCommand(convexConvId, "sendEscapeToSession").then(
       () => toast.info("Escape sent to session"),
       (err) => {
@@ -13297,7 +13349,7 @@ const ConversationViewInner = (
         toast.error(err instanceof Error ? err.message : "Failed to send Escape");
       },
     );
-  }, [conversation, effectiveIsOwner, convCommand, convexConvId]);
+  }, [conversation, effectiveIsOwner, convCommand, convexConvId, liveAgentStatus]);
 
   const handleMessageSent = useCallback(() => {
     setUserScrolled(false);
@@ -13548,9 +13600,7 @@ const ConversationViewInner = (
     if (!serverUserMessages) return new Set<string>();
     const ids = new Set<string>();
     for (const m of serverUserMessages) {
-      if (stickyPromptContent(m.content) === null) continue;
-      const display = cleanContent(m.content);
-      if (display.length > 0 && !isSystemMessage(display)) ids.add(m._id);
+      if (isStickyEligible(m.content)) ids.add(m._id);
     }
     return ids;
   }, [serverUserMessages]);
@@ -13574,28 +13624,13 @@ const ConversationViewInner = (
   }, [timeline, processedServerMsgIds, userMsgKindMap]);
 
   const serverStickyFallback = useMemo(() => {
-    if (!serverUserMessages || serverUserMessages.length === 0 || !hasMoreAbove) return null;
-    const localIds = new Set<string>();
-    let earliestLoadedTs = Infinity;
+    if (!hasMoreAbove) return null;
+    const loaded: Message[] = [];
     for (const item of timeline) {
-      if (item.type !== 'message') continue;
-      const m = item.data as Message;
-      localIds.add(m._id);
-      if (typeof m.timestamp === 'number' && m.timestamp < earliestLoadedTs) earliestLoadedTs = m.timestamp;
+      if (item.type === 'message') loaded.push(item.data as Message);
     }
-    // Pick the latest user message that sits ABOVE the loaded window — the most
-    // recent prompt the reader scrolled past but that isn't paginated in yet.
-    // Returning the first not-loaded message instead would always surface the
-    // conversation's opening prompt when parked deep in a long thread.
-    for (let i = serverUserMessages.length - 1; i >= 0; i--) {
-      const msg = serverUserMessages[i];
-      if (msg.role !== 'user') continue;
-      if (localIds.has(msg._id) || !processedServerMsgIds.has(msg._id)) continue;
-      if (msg.timestamp >= earliestLoadedTs) continue;
-      return { id: msg._id, content: msg.content, fromUserId: (msg as any).from_user_id as string | undefined };
-    }
-    return null;
-  }, [serverUserMessages, timeline, hasMoreAbove, processedServerMsgIds]);
+    return pickStickyFallbackFromLoaded(serverUserMessages, loaded);
+  }, [serverUserMessages, timeline, hasMoreAbove]);
 
   const [activeStickyMsg, setActiveStickyMsgRaw] = useState<{ index: number; content: string; id: string; fromUserId?: string } | null>(null);
   const setActiveStickyMsg = useCallback((val: { index: number; content: string; id: string; fromUserId?: string } | null) => {
@@ -16823,20 +16858,18 @@ const ConversationViewInner = (
                   {content && (
                     <div className={`conv-col mx-auto px-4 sm:px-5 md:px-6 ${condensedFeed ? "py-px" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
                       {virtualItem.index === firstUnseenIndex && (
-                        <div className="flex items-center gap-3 mt-1 mb-3 select-none" aria-label="New messages">
-                          <div className="flex-1 h-px" style={{ background: 'linear-gradient(to right, transparent, var(--sol-orange))' }} />
-                          <span className="text-[10px] font-semibold uppercase tracking-[0.15em]" style={{ color: 'var(--sol-orange)' }}>New</span>
-                          <div className="flex-1 h-px" style={{ background: 'linear-gradient(to left, transparent, var(--sol-orange))' }} />
-                        </div>
+                        <TimelineRule color="var(--sol-orange)" label="New messages">
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-orange">New</span>
+                        </TimelineRule>
                       )}
+                      {virtualItem.index === handoffIndex && handoffRule}
                       {content}
                       {virtualItem.index === timeline.length - 1 && !hasMoreBelow && (now - lastActivityAt) > 5 * 60 * 1000 && (
-                        <div className="flex items-center gap-3 mt-5 mb-1">
-                          <div className="flex-1 h-px opacity-40" style={{ background: 'linear-gradient(to right, transparent, var(--sol-border))' }} />
+                        <TimelineRule color="var(--sol-border)" className="mt-5 mb-1" faint>
                           <span className="text-[11px] text-sol-text-dim/60">{formatRelativeTime(lastActivityAt)}</span>
-                          <div className="flex-1 h-px opacity-40" style={{ background: 'linear-gradient(to left, transparent, var(--sol-border))' }} />
-                        </div>
+                        </TimelineRule>
                       )}
+                      {virtualItem.index === timeline.length - 1 && !hasMoreBelow && handoffIndex === timeline.length && handoffRule}
                     </div>
                   )}
                 </div>

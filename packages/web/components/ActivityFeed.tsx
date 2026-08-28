@@ -13,7 +13,7 @@ import { AgentIcon, type Conversation } from "./ConversationList";
 import { ImageLightbox } from "./ImageGallery";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { shouldShowSession, isWarmupSession } from "../lib/sessionFilters";
-import { useInboxStore, useTrackedStore, sessionsWakeSig, isAgentActive, sortSessions, feedPagePersistence, type InboxSession } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, sessionsWakeSig, isAgentActive, sortSessions, feedPagePersistence, isConvexId, type InboxSession } from "../store/inboxStore";
 import { feedCoverMetaKey, newestTs, oldestTs, planFeedCatchup, walkStep, FEED_CATCHUP_PAGE_LIMIT, FEED_CATCHUP_MAX_PAGES } from "../lib/feedCatchup";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -645,7 +645,11 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
   }), [activeTeamId, directoryFilter]);
 
   // Live newest page (reactive). Dump every result into the store; read it back.
-  const live = useQuery(api.conversations.listConversations, queryArgs);
+  // A just-created team holds an optimistic stub id until the server echoes;
+  // a stub is not an Id<"teams">, so skip for that window (the new team has
+  // no server rows yet anyway).
+  const stubTeam = !!activeTeamId && !isConvexId(String(activeTeamId));
+  const live = useQuery(api.conversations.listConversations, stubTeam ? "skip" : queryArgs);
   useEffect(() => {
     if (live) mergeFeed(key, live.conversations);
   }, [live, key, mergeFeed]);
