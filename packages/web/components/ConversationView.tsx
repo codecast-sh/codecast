@@ -2,7 +2,7 @@ import Link from "next/link";
 import { LogoIcon } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import { useRouter } from "next/navigation";
-import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, Fragment, ComponentProps, type ReactElement, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, createContext, useContext, Fragment, ComponentProps, type ReactElement, type ReactNode, type ForwardedRef } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -217,6 +217,7 @@ import { sessionStartupState, SESSION_STARTING_GRACE_MS } from "../lib/sessionLi
 import { messageRowKey, uniqueRowKeys } from "../lib/messageRowKey";
 import { expandEntityMentions } from "../lib/mentionExpansion";
 import { useSessionRestart, ghostRestartContextFor, deriveRestartStage, type RestartProgressRow, type RestartPhase, type RestartStage } from "../hooks/useSessionRestart";
+import { devRenderCount, devCountElements } from "../lib/devRenderCount";
 
 // An @-mention query may contain spaces so multi-word titles are searchable: a
 // first token (possibly empty, so a bare "@" still opens recents) plus up to 4
@@ -12223,8 +12224,11 @@ function settleTimelineItemAtOffset(
 
 const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"];
 
-export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, isJumpingToTarget, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent }, ref) {
+// The body is a plain function (not the forwardRef callback itself) so the dev
+// wrapper below can size the element tree each pass returns.
+const ConversationViewInner = (
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, isJumpingToTarget, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
+  devRenderCount("ConversationView2");
   const fallbackStickyContent = useMemo(() => stickyPromptContent(rawFallbackStickyContent), [rawFallbackStickyContent]);
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, _setUserScrolled] = useState(false);
@@ -17145,4 +17149,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     </FilePathContext.Provider>
     </HighlightContext.Provider>
   );
-});
+}
+);
+
+// memo: the parents (InboxConversation, ConversationDiffLayout) re-run several
+// times per session switch on their own hooks; without memo every one of those
+// passes re-ran this 5k-line body (measured 44 body executions per switch).
+export const ConversationView = memo(forwardRef<ConversationViewHandle, ConversationViewProps>(
+  function ConversationView(props, ref) {
+    const t0 = performance.now();
+    const el = ConversationViewInner(props, ref);
+    devCountElements("ConversationView2", el, performance.now() - t0);
+    return el;
+  },
+));

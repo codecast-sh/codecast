@@ -16,6 +16,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { getRelativePath } from "@codecast/shared/render";
 import { shareTokenArg } from "../lib/shareTokenScope";
+import { devRenderCount } from "../lib/devRenderCount";
 
 const MOBILE_BREAKPOINT = 768;
 const DEFAULT_DIFF_LAYOUT = { content: 40, diff: 60 };
@@ -58,6 +59,8 @@ interface ConversationDiffLayoutProps {
   hideHeader?: boolean;
 }
 
+const EMPTY_LIST: any[] = [];
+
 export function ConversationDiffLayout({
   conversation,
   embedded,
@@ -91,6 +94,7 @@ export function ConversationDiffLayout({
   subHeaderContent,
   hideHeader,
 }: ConversationDiffLayoutProps) {
+  devRenderCount("ConversationDiffLayout");
   const heightClass = "h-full";
   const [isMobile, setIsMobile] = useState(false);
   const layoutPref = useInboxStore(s => s.clientState.layouts?.conversation_diff ?? DEFAULT_DIFF_LAYOUT);
@@ -172,13 +176,17 @@ export function ConversationDiffLayout({
     updateLayout("conversation_diff", { content: newLayout["content-panel"] || 40, diff: newLayout["diff-panel"] || 60 });
   });
 
-  const changesOverlay = changes.length > 0 && !diffPanelOpen ? <ChangesBar changes={changes} /> : null;
-  const combinedHeaderExtra = changesOverlay ? (
-    <>
-      {headerExtra}
-      {changesOverlay}
-    </>
-  ) : headerExtra;
+  // Element props handed to the memoized ConversationView must keep identity
+  // across this component's own re-renders, or the memo never holds.
+  const combinedHeaderExtra = useMemo(() => {
+    const changesOverlay = changes.length > 0 && !diffPanelOpen ? <ChangesBar changes={changes} /> : null;
+    return changesOverlay ? (
+      <>
+        {headerExtra}
+        {changesOverlay}
+      </>
+    ) : headerExtra;
+  }, [changes, diffPanelOpen, headerExtra]);
 
   const conversationViewProps = {
     ref: conversationRef,
@@ -187,8 +195,8 @@ export function ConversationDiffLayout({
     headerExtra: combinedHeaderExtra,
     headerLeft,
     headerEnd,
-    commits: commits || [],
-    pullRequests: pullRequests || [],
+    commits: commits || EMPTY_LIST,
+    pullRequests: pullRequests || EMPTY_LIST,
     hasMoreAbove,
     hasMoreBelow,
     isLoadingOlder,

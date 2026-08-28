@@ -8987,6 +8987,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   blockedReviveRequestedAt: {},
   setSessionHasQueuedMessages: (sessionId: string, hasQueued: boolean) => {
     const prev = get().sessionsWithQueuedMessages;
+    // No-op bail: this fires on every queue poll and message push; a fresh Set
+    // with the same members woke the inbox panel 16× per session switch.
+    if (prev.has(sessionId) === hasQueued) return;
     const next = new Set(prev);
     if (hasQueued) next.add(sessionId);
     else next.delete(sessionId);
