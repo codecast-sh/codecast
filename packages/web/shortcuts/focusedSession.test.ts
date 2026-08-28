@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { focusedActionSessionId } from "./actions";
+import { createWorkspace, showPane, type WorkspaceState } from "../store/workspace";
 
 // Regression guard for "kill in Stashed killed a different session above it":
 // selecting a stashed/dismissed session on the inbox page opens it as a
@@ -10,11 +11,39 @@ import { focusedActionSessionId } from "./actions";
 // viewingDismissedId ?? currentSessionId on the inbox page (mirrors
 // sessionListActiveId in DashboardLayout).
 describe("focusedActionSessionId", () => {
-  const state = (over: Partial<Record<"currentSessionId" | "viewingDismissedId" | "sidePanelSessionId", string | null>>) => ({
+  const state = (
+    over: Partial<Record<"currentSessionId" | "viewingDismissedId" | "sidePanelSessionId", string | null>>,
+    workspace: WorkspaceState = createWorkspace(),
+  ) => ({
     currentSessionId: null,
     viewingDismissedId: null,
     sidePanelSessionId: null,
+    workspace,
     ...over,
+  });
+  // The fleet board's drill-in: a conversation in the secondary slot, overlay
+  // presentation. A tile click fills the slot without moving currentSessionId.
+  const drilledIn = (id: string) =>
+    showPane(createWorkspace(), "secondary", { kind: "conversation", ref: id }, { presentation: "overlay" });
+  const splitCompanion = (id: string) =>
+    showPane(createWorkspace(), "secondary", { kind: "conversation", ref: id }, { presentation: "split" });
+
+  test("inbox: the drill-in overlay is the target, not the stale current session behind the board", () => {
+    const s = state({ currentSessionId: "highlighted-tile" }, drilledIn("drilled"));
+    expect(focusedActionSessionId(s, true)).toBe("drilled");
+  });
+
+  test("inbox: a split companion is not a drill-in — the current session stays the target", () => {
+    const s = state({ currentSessionId: "primary" }, splitCompanion("companion"));
+    expect(focusedActionSessionId(s, true)).toBe("primary");
+  });
+
+  test("the drill-in wins even when the page flag lags (tab-aware pathname after a nav)", () => {
+    // The overlay can only exist on the inbox board, so its presence is the
+    // truth about where the user is; a stale isOnInboxPage=false must not
+    // redirect the chord to a null side-panel selection.
+    const s = state({ sidePanelSessionId: "panel-sel" }, drilledIn("drilled"));
+    expect(focusedActionSessionId(s, false)).toBe("drilled");
   });
 
   test("inbox: peeking a stashed session targets the peek, not the live session behind it", () => {

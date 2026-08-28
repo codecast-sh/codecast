@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useInboxStore, classifySession, filterInboxScope, selectCommentRailOpen, selectNavCollapsed } from "../store/inboxStore";
 import { liftQuestions } from "../lib/decisionQueue";
 import { isInboxSessionView } from "../lib/inboxRouting";
+import { overlayConversationId } from "../store/workspace";
 import { focusComposer } from "../lib/composerControl";
 import { useShortcutAction } from "./ShortcutProvider";
 import { performUndo, performRedo } from "../store/undoStack";
@@ -14,23 +15,29 @@ import { checkMilestone } from "../tips/useTips";
 import { switchToWorkbench, sortedWorkbenches } from "../lib/workbenchSwitch";
 
 // The session a per-session chord (stash/kill/defer/pin/rename/label) acts on:
-// the row the user sees highlighted. On the inbox page that's the
-// dismissed/stashed peek when one is open (viewingDismissedId), else the live
-// current session; off the inbox it's the side panel's selection. This MUST
-// mirror sessionListActiveId in DashboardLayout — without the viewingDismissedId
-// term, peeking a stashed/dismissed session and hitting kill tore down whichever
-// live session was sitting behind the peek (the row visible above it), not the
-// hidden one you were looking at.
+// the row the user sees highlighted. The fleet board's drill-in overlay wins
+// outright when one is open: it is the topmost surface, a tile click only
+// fills the workspace secondary slot (it never moves currentSessionId), and it
+// can only exist on the inbox board — so it is read BEFORE isOnInboxPage,
+// whose tab-aware pathname can lag the real URL right after a nav (the chord
+// then consumed the key and no-op'd on a null side-panel selection). Otherwise
+// on the inbox page it's the dismissed/stashed peek (viewingDismissedId), else
+// the live current session; off the inbox it's the side panel's selection.
+// This MUST mirror sessionListActiveId in DashboardLayout — without the
+// viewingDismissedId term, peeking a stashed/dismissed session and hitting
+// kill tore down whichever live session was sitting behind the peek (the row
+// visible above it), not the hidden one you were looking at.
 export function focusedActionSessionId(
   store: Pick<
     ReturnType<typeof useInboxStore.getState>,
-    "currentSessionId" | "viewingDismissedId" | "sidePanelSessionId"
+    "currentSessionId" | "viewingDismissedId" | "sidePanelSessionId" | "workspace"
   >,
   isOnInboxPage: boolean,
 ): string | null | undefined {
-  return isOnInboxPage
-    ? (store.viewingDismissedId ?? store.currentSessionId)
-    : store.sidePanelSessionId;
+  return overlayConversationId(store.workspace)
+    ?? (isOnInboxPage
+      ? (store.viewingDismissedId ?? store.currentSessionId)
+      : store.sidePanelSessionId);
 }
 
 export function useGlobalShortcutActions() {
@@ -114,6 +121,19 @@ export function useGlobalShortcutActions() {
     }
   }, [isOnInboxPage]));
 
+  // A triage verb that removes the row from its band finishes by closing the
+  // fleet drill-in when it was the target: the board behind it is what shows
+  // the result (the tile moves bands), and leaving the just-parked
+  // conversation on top would hide exactly that. Returns true when it closed
+  // one — that IS the advance for the board (setCurrentSession would leave
+  // the board for the next row's conversation page).
+  const closeOverlayIfCurrent = useCallback((id: string): boolean => {
+    const store = useInboxStore.getState();
+    if (overlayConversationId(store.workspace) !== id) return false;
+    store.wsHide("secondary", { remember: false });
+    return true;
+  }, []);
+
   // Shared body of the stash/kill chords; the only difference is the mode.
   // The kill itself happens SERVER-side on the hide data transition
   // (dispatch.applyPatches), so neither handler asks for it. The kill chord
@@ -134,7 +154,8 @@ export function useGlobalShortcutActions() {
     }
     if (mode === "kill") killWithNotice(currentId);
     else animatedHideSession(currentId, mode);
-  }, [isOnInboxPage, killWithNotice]);
+    closeOverlayIfCurrent(currentId);
+  }, [isOnInboxPage, killWithNotice, closeOverlayIfCurrent]);
 
   useShortcutAction('session.stash', useCallback(() => hideCurrent("stash"), [hideCurrent]));
 
@@ -150,11 +171,12 @@ export function useGlobalShortcutActions() {
     const idx = ordered.findIndex(s => s._id === currentId);
     const next = ordered[idx + 1] ?? ordered.find(s => s._id !== currentId);
     stamp(currentId);
+    if (closeOverlayIfCurrent(currentId)) return;
     if (next) {
       if (isOnInboxPage) store.setCurrentSession(next._id);
       else store.selectPanelSession(next._id);
     }
-  }, [isOnInboxPage]);
+  }, [isOnInboxPage, closeOverlayIfCurrent]);
 
   useShortcutAction('session.deferAdvance', useCallback(() => stampAndAdvance(undoableDeferSession), [stampAndAdvance]));
   useShortcutAction('session.dormantAdvance', useCallback(() => stampAndAdvance(undoableDormantSession), [stampAndAdvance]));

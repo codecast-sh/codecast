@@ -13,6 +13,9 @@ const DESTRUCTIVE_ACTIONS: ShortcutAction[] = [
   "session.kill",
   "session.stash",
   "session.deferAdvance",
+  // Not destructive, but it rides the same backspace family and advances the
+  // view — an unconditional bypass would fire it from a full composer.
+  "session.dormantAdvance",
 ];
 
 describe("destructive shortcuts use the empty-input guard", () => {
