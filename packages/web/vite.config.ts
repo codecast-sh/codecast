@@ -160,6 +160,9 @@ export default defineConfig({
   build: {
     sourcemap: true,
     target: "es2022",
+    // dist/.vite/manifest.json: the web server reads the share entry's chunk
+    // graph from it to emit modulepreload hints (server/share.ts).
+    manifest: true,
     rollupOptions: {
       output: {
         manualChunks(id) {

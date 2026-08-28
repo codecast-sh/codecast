@@ -53,6 +53,8 @@ const Conversation = lazy(() => import("@/app/conversation/[id]/page"));
 const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"));
 const Share = lazy(() => import("@/app/share/[token]/page"));
 const ShareMessage = lazy(() => import("@/app/share/message/[token]/page"));
+const ShareDoc = lazy(() => import("@/app/share/doc/[token]/page"));
+const SharePlan = lazy(() => import("@/app/share/plan/[token]/page"));
 const PublicProfile = lazy(() => import("@/app/u/[username]/page"));
 
 const CommitView = lazy(() => import("@/app/commit/[owner]/[repo]/[sha]/page"));
@@ -238,6 +240,8 @@ export function App() {
                 dev — so the share link never boots the SPA.) */}
             <Route path="share/:token" element={<E name="Share"><Share /></E>} />
             <Route path="share/message/:token" element={<E name="ShareMessage"><ShareMessage /></E>} />
+            <Route path="share/doc/:token" element={<E name="ShareDoc"><ShareDoc /></E>} />
+            <Route path="share/plan/:token" element={<E name="SharePlan"><SharePlan /></E>} />
 
             {/* Code review */}
             <Route path="commit/:owner/:repo/:sha" element={<E name="CommitView"><CommitView /></E>} />

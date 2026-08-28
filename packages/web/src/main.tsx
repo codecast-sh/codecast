@@ -1,4 +1,4 @@
-import { handoffTookOverBoot } from "../lib/desktopHandoff";
+import { handoffTookOverBoot, isStandaloneSharePath } from "../lib/desktopHandoff";
 import "../app/globals.css";
 
 /**
@@ -16,5 +16,7 @@ import "../app/globals.css";
  * the built HTML, fetched in parallel on every load.
  */
 if (!handoffTookOverBoot()) {
-  void import("./boot");
+  // Share pages boot standalone: they hydrate server-rendered markup and never
+  // need the store, the inbox, or auth. Everything else is the app.
+  void (isStandaloneSharePath(window.location.pathname) ? import("./shareBoot") : import("./boot"));
 }

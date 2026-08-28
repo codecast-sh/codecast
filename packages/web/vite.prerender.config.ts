@@ -15,12 +15,18 @@ export default defineConfig({
   css: baseConfig.css,
   logLevel: "warn",
   build: {
-    ssr: "src/prerender-entry.tsx",
+    // Two SSR entries: the build-time marketing prerender, and the
+    // request-time share-page renderer the web server imports.
+    ssr: true,
     outDir: "dist-ssr",
     emptyOutDir: true,
     sourcemap: false,
     target: "node18",
     rollupOptions: {
+      input: {
+        "prerender-entry": "src/prerender-entry.tsx",
+        "share-ssr": "src/share-ssr-entry.tsx",
+      },
       output: { entryFileNames: "[name].mjs", format: "es" },
     },
   },

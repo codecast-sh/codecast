@@ -48,7 +48,7 @@ function matches(ua: string | undefined, patterns: string[]): boolean {
 }
 
 const convexUrl = process.env.VITE_CONVEX_URL || "https://convex.codecast.sh";
-const convex = new ConvexHttpClient(convexUrl);
+export const convex = new ConvexHttpClient(convexUrl);
 
 const BASE_URL = SITE_URL;
 const DIST_DIR = join(import.meta.dirname, "../dist");

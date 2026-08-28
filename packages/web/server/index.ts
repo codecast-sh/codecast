@@ -5,6 +5,7 @@ import { readFile, stat } from "fs/promises";
 import { extname, join } from "path";
 import { createRequire } from "module";
 import { botMetaMiddleware } from "./bot-meta";
+import { registerShareRoutes, getShellHtml } from "./share";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json");
@@ -187,10 +188,15 @@ app.get("/a/:slug", (c) => {
 
 app.use("*", botMetaMiddleware);
 
+// Human share-link visitors: payload-inlined shell, modulepreload hints, and
+// the /share/<token> → /conversation/<id> redirect. Registered after the bot
+// middleware so crawlers keep getting their meta/prerender pages.
+registerShareRoutes(app);
+
 app.use("*", serveStatic({ root: DIST_DIR }));
 
 app.get("*", async (c) => {
-  const html = await readFile(join(DIST_DIR, "index.html"), "utf-8");
+  const html = (await getShellHtml()) ?? (await readFile(join(DIST_DIR, "index.html"), "utf-8"));
   c.header("Cache-Control", "no-cache");
   return c.html(html);
 });

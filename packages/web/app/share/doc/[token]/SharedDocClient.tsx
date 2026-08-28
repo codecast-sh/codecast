@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { AvatarImg } from "../../../../lib/avatarCache";
 import { MarkdownRenderer } from "../../../../components/tools/MarkdownRenderer";
 import { AppLoader } from "../../../../components/AppLoader";
+import { readSharePreload } from "@/lib/sharePreload";
 
 const DOC_TYPE_LABELS: Record<string, { label: string; color: string }> = {
   plan: { label: "Plan", color: "text-sol-blue" },
@@ -43,7 +44,8 @@ export default function SharedDocClient() {
   const params = useParams();
   const token = params.token as string;
 
-  const doc = useQuery((api as any).docs.getShared, { share_token: token });
+  const liveDoc = useQuery((api as any).docs.getShared, { share_token: token });
+  const doc = liveDoc !== undefined ? liveDoc : readSharePreload<typeof liveDoc>("doc", token);
 
   if (doc === undefined) {
     return (
