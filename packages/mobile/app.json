@@ -40,8 +40,7 @@
         "NSCameraUsageDescription": "Codecast uses the camera to share your live video with teammates when you turn your camera on during a team huddle (a live voice and video call).",
         "NSMicrophoneUsageDescription": "Codecast uses the microphone for two things you start yourself. In a team huddle (a live voice and video call) it transmits your voice to teammates. When you press record, it captures the meeting in the room so Codecast can write you a transcript and a summary; that recording is yours alone and no teammate can open it. Audio is never captured at any other time.",
         "NSPhotoLibraryUsageDescription": "Codecast uses your photo library so you can attach photos and screenshots to messages. For example, you can attach a screenshot of a bug to a task you send to your coding agent or teammates. Only the photos you select are uploaded."
-      },
-      "deploymentTarget": "16.0"
+      }
     },
     "android": {
       "package": "com.ashotp.codecast",
@@ -50,22 +49,81 @@
           "action": "VIEW",
           "autoVerify": true,
           "data": [
-            { "scheme": "https", "host": "codecast.sh", "pathPrefix": "/session" },
-            { "scheme": "https", "host": "codecast.sh", "pathPrefix": "/conversation" },
-            { "scheme": "https", "host": "codecast.sh", "pathPrefix": "/task" },
-            { "scheme": "https", "host": "codecast.sh", "pathPrefix": "/plan" },
-            { "scheme": "https", "host": "codecast.sh", "pathPrefix": "/doc" },
-            { "scheme": "https", "host": "codecast.sh", "pathPrefix": "/share" },
-            { "scheme": "https", "host": "codecast.sh", "pathPrefix": "/join" },
-            { "scheme": "https", "host": "www.codecast.sh", "pathPrefix": "/session" },
-            { "scheme": "https", "host": "www.codecast.sh", "pathPrefix": "/conversation" },
-            { "scheme": "https", "host": "www.codecast.sh", "pathPrefix": "/task" },
-            { "scheme": "https", "host": "www.codecast.sh", "pathPrefix": "/plan" },
-            { "scheme": "https", "host": "www.codecast.sh", "pathPrefix": "/doc" },
-            { "scheme": "https", "host": "www.codecast.sh", "pathPrefix": "/share" },
-            { "scheme": "https", "host": "www.codecast.sh", "pathPrefix": "/join" }
+            {
+              "scheme": "https",
+              "host": "codecast.sh",
+              "pathPrefix": "/session"
+            },
+            {
+              "scheme": "https",
+              "host": "codecast.sh",
+              "pathPrefix": "/conversation"
+            },
+            {
+              "scheme": "https",
+              "host": "codecast.sh",
+              "pathPrefix": "/task"
+            },
+            {
+              "scheme": "https",
+              "host": "codecast.sh",
+              "pathPrefix": "/plan"
+            },
+            {
+              "scheme": "https",
+              "host": "codecast.sh",
+              "pathPrefix": "/doc"
+            },
+            {
+              "scheme": "https",
+              "host": "codecast.sh",
+              "pathPrefix": "/share"
+            },
+            {
+              "scheme": "https",
+              "host": "codecast.sh",
+              "pathPrefix": "/join"
+            },
+            {
+              "scheme": "https",
+              "host": "www.codecast.sh",
+              "pathPrefix": "/session"
+            },
+            {
+              "scheme": "https",
+              "host": "www.codecast.sh",
+              "pathPrefix": "/conversation"
+            },
+            {
+              "scheme": "https",
+              "host": "www.codecast.sh",
+              "pathPrefix": "/task"
+            },
+            {
+              "scheme": "https",
+              "host": "www.codecast.sh",
+              "pathPrefix": "/plan"
+            },
+            {
+              "scheme": "https",
+              "host": "www.codecast.sh",
+              "pathPrefix": "/doc"
+            },
+            {
+              "scheme": "https",
+              "host": "www.codecast.sh",
+              "pathPrefix": "/share"
+            },
+            {
+              "scheme": "https",
+              "host": "www.codecast.sh",
+              "pathPrefix": "/join"
+            }
           ],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         }
       ],
       "adaptiveIcon": {
@@ -90,6 +148,14 @@
       "url": "https://u.expo.dev/a2698c27-7e77-4406-aae2-063844898e60"
     },
     "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "16.0"
+          }
+        }
+      ],
       "expo-router",
       "expo-updates",
       "expo-secure-store",
