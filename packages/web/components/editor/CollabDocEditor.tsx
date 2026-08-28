@@ -1,11 +1,12 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { EditorProvider, useCurrentEditor } from "@tiptap/react";
 import { Editor as HeadlessEditor, Extension } from "@tiptap/core";
 import { getVersion, sendableSteps } from "prosemirror-collab";
 import type { ComposeEditorHandle } from "./ComposeEditor";
 import { AppLoader } from "../AppLoader";
 import { useTiptapSync } from "@convex-dev/prosemirror-sync/tiptap";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useConvex } from "convex/react";
+import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import {
   createBaseExtensions,
@@ -18,7 +19,7 @@ import { BubbleToolbar } from "./BubbleToolbar";
 import { uploadImageWithPlaceholder } from "./ImageUploadPlugin";
 import { createWikiLinkExtension } from "./WikiLinkExtension";
 import { useMountEffect } from "../../hooks/useMountEffect";
-import { EMPTY_PM_DOC, writeDocSyncCache } from "../../lib/docSyncCache";
+import { EMPTY_PM_DOC, writeDocSyncCache, clearDocSyncCache, isSyncGap } from "../../lib/docSyncCache";
 import type { SyncApi } from "@convex-dev/prosemirror-sync";
 
 const api = _api as any;
@@ -158,6 +159,7 @@ function EditorInner({
   getMarkdownRef,
   composeHandleRef,
   onContentChange,
+  onSyncGap,
 }: {
   docId: string;
   editable: boolean;
@@ -165,8 +167,44 @@ function EditorInner({
   getMarkdownRef?: React.MutableRefObject<(() => string) | null>;
   composeHandleRef?: React.MutableRefObject<ComposeEditorHandle | null>;
   onContentChange?: (hasContent: boolean) => void;
+  /** The live editor must remount from the server snapshot (see isSyncGap). */
+  onSyncGap: () => void;
 }) {
   const { editor } = useCurrentEditor();
+
+  // Gap detector (lib/docSyncCache isSyncGap). Watches the server's version;
+  // when it moves ahead of this editor, one replay fetch decides: steps came
+  // back → the sync extension is already catching up, nothing to do; nothing
+  // came back → the deltas were wiped by a CLI rewrite and this tab can never
+  // catch up by replay, so drop the cache and remount from the snapshot.
+  const convex = useConvex();
+  const serverVersion = useQuery(api.docSync.latestVersion, { id: docId }) as number | null | undefined;
+  const checkedVersionRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!editor || editor.isDestroyed || serverVersion == null) return;
+    const local = getVersion(editor.state);
+    if (serverVersion <= local || checkedVersionRef.current === serverVersion) return;
+    checkedVersionRef.current = serverVersion;
+    let cancelled = false;
+    convex
+      .query(api.docSync.getSteps, { id: docId, version: local })
+      .then((res: { version: number }) => {
+        if (cancelled || editor.isDestroyed) return;
+        const gap = isSyncGap({
+          serverVersion,
+          localVersion: getVersion(editor.state),
+          stepsVersion: res.version,
+        });
+        if (!gap) return;
+        clearDocSyncCache(docId);
+        toast.info("This document was replaced outside the editor — reloaded");
+        onSyncGap();
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [editor, serverVersion, docId, convex, onSyncGap]);
 
   const readMarkdown = () =>
     editor ? ((editor.storage as any).markdown?.getMarkdown?.() ?? editor.getText()) : "";
@@ -266,7 +304,7 @@ function markdownToJson(markdown: string, extensions: any[]): any {
   return json;
 }
 
-export function CollabDocEditor({
+function CollabDocEditorLive({
   docId,
   markdownContent,
   onMentionQuery,
@@ -281,7 +319,8 @@ export function CollabDocEditor({
   onExit,
   onContentChange,
   composeHandleRef,
-}: CollabDocEditorProps) {
+  onSyncGap,
+}: CollabDocEditorProps & { onSyncGap: () => void }) {
   const onImageUploadRef = useRef(onImageUpload);
   onImageUploadRef.current = onImageUpload;
   const syncApi = api.docSync as unknown as SyncApi;
@@ -411,6 +450,7 @@ export function CollabDocEditor({
           getMarkdownRef={getMarkdownRef}
           composeHandleRef={composeHandleRef}
           onContentChange={onContentChange}
+          onSyncGap={onSyncGap}
         />
         {/* Gated on contentReady like the seed path above: mounting this with a
             still-loading (empty) markdownContent prop replaces the whole collab
@@ -425,4 +465,15 @@ export function CollabDocEditor({
       </EditorProvider>
     </div>
   );
+}
+
+/**
+ * The collab editor, plus the remount the gap detector needs: a fresh mount
+ * re-runs the sync hook with an empty cache, so it loads the server snapshot
+ * instead of the version this tab was stranded at.
+ */
+export function CollabDocEditor(props: CollabDocEditorProps) {
+  const [generation, setGeneration] = useState(0);
+  const onSyncGap = useCallback(() => setGeneration((g) => g + 1), []);
+  return <CollabDocEditorLive key={generation} {...props} onSyncGap={onSyncGap} />;
 }
