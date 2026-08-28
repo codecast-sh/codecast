@@ -29,8 +29,10 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../../store/undoActions";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
+import { devRenderCount } from "../../lib/devRenderCount";
 
 export const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, targetTimestamp, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; targetTimestamp?: number; highlightQuery?: string; onClearHighlight?: () => void }) {
+  devRenderCount("InboxConversation2");
   // Non-blocking switch: the heavy work of a session switch is mounting the new
   // conversation's message tree (every block keyed by msg._id unmounts/remounts,
   // re-parsing markdown). Defer the id the BODY renders from so a switch stays
@@ -116,23 +118,25 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
       });
   }, [sessionId, convCommand]);
 
-  if (!conversation) {
-    return <ConversationPlaceholder id={sessionId} />;
-  }
-
-  const convId = conversation._id as Id<"conversations">;
-  const isOwnSession = (conversation as any).is_own !== false;
+  const convId = (conversation?._id ?? sessionId) as Id<"conversations">;
+  const isOwnSession = !!conversation && (conversation as any).is_own !== false;
   // The public link must PRESENT the token (?share=) — a bare conversation id
   // grants nothing to anonymous viewers or link unfurlers (issue #27).
-  const shareUrl = conversation.share_token
-    ? `${shareOrigin()}/conversation/${convId}?share=${encodeURIComponent(conversation.share_token)}`
+  const shareToken = conversation?.share_token;
+  const shareUrl = shareToken
+    ? `${shareOrigin()}/conversation/${convId}?share=${encodeURIComponent(shareToken)}`
     : null;
-  const shareControls = isOwnSession ? (
+  const isPrivate = conversation?.is_private !== false;
+  const teamVisibility = (conversation as any)?.team_visibility || (conversation as any)?.effective_team_visibility;
+  const hasTeam = !!(conversation as any)?.team_id;
+  // Element props for the memoized ConversationView: built once per input
+  // change, not per render, or the memo below it never holds.
+  const shareControls = useMemo(() => isOwnSession ? (
     <SharePopover
-      isPrivate={conversation.is_private !== false}
-      teamVisibility={(conversation as any).team_visibility || (conversation as any).effective_team_visibility}
-      hasShareToken={!!conversation.share_token}
-      hasTeam={!!(conversation as any).team_id}
+      isPrivate={isPrivate}
+      teamVisibility={teamVisibility}
+      hasShareToken={!!shareToken}
+      hasTeam={hasTeam}
       onSetPrivate={() => { setPrivacy(convId, true); toast.success("Made private"); }}
       onSetTeamVisibility={(mode) => { setTeamVisibility(convId, mode); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
       onGenerateShareLink={async () => { const token = await generateShareLink({ conversation_id: convId }); return `${shareOrigin()}/conversation/${convId}?share=${encodeURIComponent(token)}`; }}
@@ -140,10 +144,26 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
       forwardUrl={`${shareOrigin()}/conversation/${convId}`}
       forwardLabel="session"
     />
-  ) : null;
-
+  ) : null, [isOwnSession, isPrivate, teamVisibility, shareToken, hasTeam, convId, shareUrl, setPrivacy, setTeamVisibility, generateShareLink]);
   const activePlanId = (conversation as any)?.active_plan_id;
   const workflowRunId = (conversation as any)?.workflow_run_id;
+  const convSessionId = (conversation as any)?.session_id;
+  const agentTaskId = (conversation as any)?.agent_task_id;
+  const subHeaderContent = useMemo(() => <>
+    {isOwnSession && (
+      <TriggerContextPanel
+        conversationId={convId}
+        sessionId={convSessionId}
+        agentTaskId={agentTaskId}
+      />
+    )}
+    {activePlanId && <PlanContextPanel planId={activePlanId} />}
+    {workflowRunId && <WorkflowContextPanel workflowRunId={workflowRunId} />}
+  </>, [isOwnSession, convId, convSessionId, agentTaskId, activePlanId, workflowRunId]);
+
+  if (!conversation) {
+    return <ConversationPlaceholder id={sessionId} />;
+  }
 
   return (
     <div className="relative h-full flex flex-col">
@@ -207,17 +227,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
           highlightQuery={highlightQuery}
           onClearHighlight={onClearHighlight}
           fallbackStickyContent={isOwnSession ? lastUserMessage : undefined}
-          subHeaderContent={<>
-            {isOwnSession && (
-              <TriggerContextPanel
-                conversationId={convId}
-                sessionId={(conversation as any).session_id}
-                agentTaskId={(conversation as any).agent_task_id}
-              />
-            )}
-            {activePlanId && <PlanContextPanel planId={activePlanId} />}
-            {workflowRunId && <WorkflowContextPanel workflowRunId={workflowRunId} />}
-          </>}
+          subHeaderContent={subHeaderContent}
         />
       </div>
     </div>

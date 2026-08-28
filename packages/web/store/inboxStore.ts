@@ -4360,6 +4360,9 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       "agent_status", "is_idle", "is_unresponsive", "awaiting_input",
       "is_connected", "tmux_session", "permission_mode", "agent_started_at",
       "open_tasks", "open_tasks_at",
+      // Fast fields: change on every streamed message, so they ride the overlay
+      // too (fast_fields_in_overlay) — otherwise every token re-pushed the list.
+      "message_count", "updated_at",
       "_postCreateBucketId",
     ],
     transform(draft, table, incoming) {
@@ -8987,6 +8990,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   blockedReviveRequestedAt: {},
   setSessionHasQueuedMessages: (sessionId: string, hasQueued: boolean) => {
     const prev = get().sessionsWithQueuedMessages;
+    // No-op bail: this fires on every queue poll and message push; a fresh Set
+    // with the same members woke the inbox panel 16× per session switch.
+    if (prev.has(sessionId) === hasQueued) return;
     const next = new Set(prev);
     if (hasQueued) next.add(sessionId);
     else next.delete(sessionId);

@@ -91,6 +91,29 @@ function allocateId() {
   return Math.random().toString(36).substring(2, 15);
 }
 
+// The newest usage record among the assistant messages, without running the
+// whole reducer: ConversationView needs only this field per message push, and
+// the full reduce (JSON-parsing every tool input) cost ~1s per switch on a
+// 1.4k-message conversation.
+export function latestUsageOf(rawMessages: RawMessage[]): UsageData | undefined {
+  let best: UsageData | undefined;
+  for (const msg of rawMessages) {
+    if (msg.role !== 'assistant' || !msg.usage) continue;
+    if (best && msg.timestamp <= best.timestamp) continue;
+    const cacheCreation = msg.usage.cache_creation_input_tokens || 0;
+    const cacheRead = msg.usage.cache_read_input_tokens || 0;
+    best = {
+      inputTokens: msg.usage.input_tokens,
+      outputTokens: msg.usage.output_tokens,
+      cacheCreation,
+      cacheRead,
+      contextSize: cacheCreation + cacheRead + msg.usage.input_tokens,
+      timestamp: msg.timestamp,
+    };
+  }
+  return best;
+}
+
 export function reducer(state: ReducerState, rawMessages: RawMessage[]): ProcessedMessage[] {
   const newMessages: ProcessedMessage[] = [];
   const changed: Set<string> = new Set();

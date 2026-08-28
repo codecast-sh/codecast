@@ -1500,7 +1500,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         </a>
       )}
       {createModal === "task" && (
-        <CreateTaskModal onClose={() => closeCreateModal()} teamMembers={teamMembers} currentUser={currentUser} defaults={createModalDefaults} />
+        <CreateTaskModal onClose={() => closeCreateModal()} teamMembers={teamMembers ?? []} currentUser={currentUser} defaults={createModalDefaults} />
       )}
       {createModal === "plan" && (
         <CreateDocModal onClose={() => closeCreateModal()} initialType="plan" />
