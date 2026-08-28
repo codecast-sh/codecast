@@ -2039,6 +2039,28 @@ export const sessionsWakeSig = makeCollectionSig<InboxSession>(sessionStructural
 // instead of the raw map and a badge/panel wakes only when that set changes.
 let _pendingSendSigRef: unknown;
 let _pendingSendSig = "";
+// The mine-scoped inbox categorization, shared by every surface that mirrors
+// the inbox (sidebar count badge, active-agents badge, dock badge). One
+// ref-keyed cache so N consumers cost one categorize pass per structural
+// change instead of N (each pass walks the whole never-prune session cache).
+// `coarseNow` keeps the trust-TTL sweep alive; pass the caller's coarse clock.
+let _mineCatKey: unknown[] | null = null;
+let _mineCatValue: CategorizedSessions | null = null;
+export function categorizeMineSessions(s: InboxStoreState, coarseNow: number): CategorizedSessions {
+  const meId = s.currentUser?._id ? s.currentUser._id.toString() : null;
+  const showOld = resolveShowOld(s.clientState.ui);
+  const key = [sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), s.liveInboxIds, showOld, coarseNow];
+  if (_mineCatKey && _mineCatValue && key.length === _mineCatKey.length && key.every((v, i) => Object.is(v, _mineCatKey![i]))) return _mineCatValue;
+  _mineCatValue = categorizeSessions(
+    filterInboxScope(s.sessions, "mine", meId),
+    s.sessionsWithQueuedMessages,
+    sessionsWithPendingSend(s.pendingMessages),
+    { liveInboxIds: s.liveInboxIds, showOld, reviveRequestedAt: s.blockedReviveRequestedAt },
+  );
+  _mineCatKey = key;
+  return _mineCatValue;
+}
+
 export function pendingSendWakeSig(pendingMessages: Record<string, Message[]>): string {
   if (pendingMessages === _pendingSendSigRef) return _pendingSendSig;
   const ids: string[] = [];
