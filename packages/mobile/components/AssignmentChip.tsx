@@ -286,7 +286,7 @@ export function AssignedToYouBanner({ conversationId }: { conversationId: string
     // translucent-only background would let text bleed through it.
     <View style={bannerStyles.base}>
     <View style={bannerStyles.wrap}>
-      <FontAwesome name="user-plus" size={12} color={Theme.cyan} style={{ marginTop: 2 }} />
+      <FontAwesome name="user-plus" size={12} color={Theme.violet} style={{ marginTop: 2 }} />
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text style={bannerStyles.title}>{by} assigned this thread to you</Text>
         {a.note ? <Text style={bannerStyles.note}>“{a.note}”</Text> : null}
@@ -319,6 +319,8 @@ const bannerStyles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     elevation: 3,
   },
+  // Violet like the web banner: the handoff motif stays one color everywhere,
+  // and on web cyan already means "the active session".
   wrap: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -326,9 +328,9 @@ const bannerStyles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
     borderRadius: 10,
-    backgroundColor: Theme.cyan + '22',
+    backgroundColor: Theme.violet + '22',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.cyan + '66',
+    borderColor: Theme.violet + '66',
   },
   title: {
     fontSize: 13,
@@ -346,14 +348,14 @@ const bannerStyles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 8,
-    backgroundColor: Theme.cyan + '33',
+    backgroundColor: Theme.violet + '33',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.cyan + '66',
+    borderColor: Theme.violet + '66',
   },
   ackText: {
     fontSize: 12,
     fontWeight: '600',
-    color: Theme.cyan,
+    color: Theme.violet,
   },
 });
 

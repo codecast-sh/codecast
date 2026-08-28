@@ -19,7 +19,14 @@ import { BubbleToolbar } from "./BubbleToolbar";
 import { uploadImageWithPlaceholder } from "./ImageUploadPlugin";
 import { createWikiLinkExtension } from "./WikiLinkExtension";
 import { useMountEffect } from "../../hooks/useMountEffect";
-import { EMPTY_PM_DOC, writeDocSyncCache, clearDocSyncCache, isSyncGap } from "../../lib/docSyncCache";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
+import {
+  EMPTY_PM_DOC,
+  writeDocSyncCache,
+  clearDocSyncCache,
+  isSyncGap,
+  shouldResyncOnExternalEdit,
+} from "../../lib/docSyncCache";
 import type { SyncApi } from "@convex-dev/prosemirror-sync";
 
 const api = _api as any;
@@ -142,13 +149,31 @@ function CursorOverlay({ presences }: { presences: PresenceEntry[] }) {
   );
 }
 
-function ExternalEditSync({ markdownContent, extensions }: { markdownContent: string; extensions: any[] }) {
-  const { editor } = useCurrentEditor();
-  useMountEffect(() => {
-    if (!editor || editor.isDestroyed) return;
-    const json = markdownToJson(markdownContent, extensions);
-    editor.commands.setContent(json);
-  });
+// Detects a doc that was edited outside this editor (CLI/API `docs.resetSync`)
+// while the collab session was live, and recovers by remounting from the
+// fresh server snapshot — never by calling `setContent` on the live editor.
+// See shouldResyncOnExternalEdit for why: that path corrupts prosemirror-collab's
+// step bookkeeping and throws "Inconsistent open depths" (2026-08-28).
+function ExternalEditSync({
+  docId,
+  cliEditedAt,
+  onSyncGap,
+}: {
+  docId: string;
+  cliEditedAt: number;
+  onSyncGap: () => void;
+}) {
+  const seenRef = useRef(cliEditedAt);
+  useWatchEffect(() => {
+    if (!shouldResyncOnExternalEdit(seenRef.current, cliEditedAt)) {
+      seenRef.current = cliEditedAt;
+      return;
+    }
+    seenRef.current = cliEditedAt;
+    clearDocSyncCache(docId);
+    toast.info("This document was edited outside the editor — reloaded");
+    onSyncGap();
+  }, [cliEditedAt, docId, onSyncGap]);
   return null;
 }
 
@@ -452,15 +477,11 @@ function CollabDocEditorLive({
           onContentChange={onContentChange}
           onSyncGap={onSyncGap}
         />
-        {/* Gated on contentReady like the seed path above: mounting this with a
-            still-loading (empty) markdownContent prop replaces the whole collab
-            doc with an empty paragraph and wipes doc.content server-side. */}
+        {/* Gated on contentReady like the seed path above: mounting this before
+            the doc detail (which carries cliEditedAt) has synced would race the
+            "first open" vs. "edited while open" distinction in shouldResyncOnExternalEdit. */}
         {cliEditedAt && contentReady && (
-          <ExternalEditSync
-            key={cliEditedAt}
-            markdownContent={markdownContent}
-            extensions={extensionsRef.current!}
-          />
+          <ExternalEditSync docId={docId} cliEditedAt={cliEditedAt} onSyncGap={onSyncGap} />
         )}
       </EditorProvider>
     </div>

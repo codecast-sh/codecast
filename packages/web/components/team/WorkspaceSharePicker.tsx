@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { GitBranch, Check, Terminal, Users } from "lucide-react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { formatRelative } from "../../lib/utils";
@@ -8,45 +8,49 @@ import {
   type TeamWorkspaceSuggestions,
   type UserWorkspace,
 } from "../../hooks/useTeamWorkspaceSuggestions";
+import "./teamFlow.css";
 
-/** Initial selection: workspaces teammates already share, plus those already
- *  mapped to this team. Pure so the create flow can reseed after the team id
- *  swaps from a stub to the real row. */
-export function seedWorkspaceSelection(
-  allProjects: UserWorkspace[],
-  suggestedPaths: Set<string>,
-  teamId: Id<"teams"> | null,
-): Record<string, boolean> {
-  const initial: Record<string, boolean> = {};
-  for (const p of allProjects) {
-    initial[p.path] = suggestedPaths.has(p.path) || isMappedToTeam(p, teamId);
-  }
-  return initial;
-}
-
-/** Owns the selected set for a share picker and reseeds it whenever the
- *  suggestion data or the target team changes. */
-export function useWorkspaceSelection(
-  data: Pick<TeamWorkspaceSuggestions, "allProjects" | "suggestedPaths">,
-  teamId: Id<"teams"> | null,
-) {
-  const { allProjects, suggestedPaths } = data;
-  const [selectedPaths, setSelectedPaths] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    if (!allProjects) return;
-    setSelectedPaths(seedWorkspaceSelection(allProjects, suggestedPaths, teamId));
-  }, [allProjects, suggestedPaths, teamId]);
-
-  const toggle = (path: string) =>
-    setSelectedPaths((prev) => ({ ...prev, [path]: !prev[path] }));
-  const selectedCount = Object.values(selectedPaths).filter(Boolean).length;
-  return { selectedPaths, toggle, selectedCount };
-}
+// The selection state (seedWorkspaceSelection, useWorkspaceSelection) lives in
+// hooks/useWorkspaceSelection so this file stays a clean Fast Refresh boundary.
+// Selection follows --team-flow-accent inside the create flow and falls back
+// to cyan elsewhere (see .tf-accent-scope in teamFlow.css).
 
 function workspaceName(path: string) {
   const parts = path.split("/");
   return parts[parts.length - 1] || path;
+}
+
+/**
+ * Hints for repos that share a short name (two checkouts of "outreach").
+ * Each duplicate gets the nearest ancestor segment where the group's paths
+ * stop agreeing: two checkouts under different homes get the owner
+ * (ashot, ec2-user), two under one home get the differing directory. The
+ * parent directory alone fails on the common case of the same relative
+ * path on two machines.
+ */
+function buildDupHints(paths: string[]): Map<string, string> {
+  const groups = new Map<string, string[]>();
+  for (const path of paths) {
+    const n = workspaceName(path);
+    groups.set(n, [...(groups.get(n) ?? []), path]);
+  }
+  const hints = new Map<string, string>();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const segs = group.map((p) => p.split("/").filter(Boolean));
+    const maxLen = Math.max(...segs.map((s) => s.length));
+    let depth = 1;
+    while (depth < maxLen) {
+      const vals = segs.map((s) => s[s.length - 1 - depth] ?? "");
+      if (new Set(vals).size > 1) break;
+      depth++;
+    }
+    for (let i = 0; i < group.length; i++) {
+      const hint = segs[i][segs[i].length - 1 - depth];
+      if (hint) hints.set(group[i], hint);
+    }
+  }
+  return hints;
 }
 
 /**
@@ -71,10 +75,15 @@ export function WorkspaceSharePicker({
   className?: string;
 }) {
   const { allProjects, matched, other, teamName, teamOnlyRepos, getSuggestion } = data;
-  const common = { selectedPaths, onToggle, getSuggestion, teamId };
+
+  // Duplicate short names are computed across both sections, so a matched
+  // repo and an unmatched twin still tell each other apart.
+  const dupHints = buildDupHints([...matched, ...other].map((ws) => ws.path));
+
+  const common = { selectedPaths, onToggle, getSuggestion, teamId, dupHints };
 
   return (
-    <div className={`space-y-5 ${className}`}>
+    <div className={`tf-accent-scope space-y-5 ${className}`}>
       {matched.length > 0 && (
         <WorkspaceSection
           title="Shared by teammates"
@@ -87,19 +96,26 @@ export function WorkspaceSharePicker({
       {other.length > 0 && (
         <WorkspaceSection
           title={isNewTeam ? "Your workspaces" : "Your other workspaces"}
-          subtitle={
-            isNewTeam
-              ? "Pick the repos this team works in. Sessions there will show in the team feed."
-              : "Select any additional workspaces you'd like to share."
-          }
+          // In the create flow the page description already says what to pick,
+          // so a subtitle here would repeat the same sentence.
+          subtitle={isNewTeam ? undefined : "Select any additional workspaces you'd like to share."}
           workspaces={other}
           {...common}
         />
       )}
 
       {allProjects === undefined && (
-        <div className="rounded-lg border border-sol-border bg-sol-bg-alt/40 px-4 py-8 text-center text-sm text-sol-base1">
-          Loading your workspaces...
+        // Skeleton rows in the shape of the workspace list, so the step
+        // does not reflow when the answer lands. Same recipe as the invite
+        // step's placeholder.
+        <div className="space-y-2" aria-busy="true">
+          <div className="h-4 w-36 rounded bg-sol-bg-alt animate-pulse" />
+          <div className="space-y-1.5">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="h-[74px] rounded-lg border border-sol-border/50 bg-sol-bg-alt/40 animate-pulse" />
+            ))}
+          </div>
+          <p className="text-sm text-sol-text-dim">Loading your workspaces.</p>
         </div>
       )}
 
@@ -108,17 +124,17 @@ export function WorkspaceSharePicker({
           <div className="text-sm text-sol-text font-medium">
             No workspaces found yet
           </div>
-          <p className="text-xs text-sol-base1 leading-relaxed">
+          <p className="text-xs text-sol-text-muted leading-relaxed">
             Workspaces appear here once you start sessions with the
             Codecast CLI. Install and authenticate, then your repos will
             be available to share.
           </p>
-          <div className="font-mono text-xs text-sol-base1 bg-sol-bg rounded-md border border-sol-border/50 px-3 py-2 select-all">
+          <div className="font-mono text-xs text-sol-text-muted bg-sol-bg rounded-md border border-sol-border/50 px-3 py-2 select-all">
             curl -fsSL codecast.sh/install | sh
           </div>
           <p className="text-[11px] text-sol-text-dim">
             After installing, run{" "}
-            <span className="font-mono text-sol-base1">cast auth</span>{" "}
+            <span className="font-mono text-sol-text-muted">cast auth</span>{" "}
             to connect your account, then start a session in any git
             repo.
           </p>
@@ -144,11 +160,11 @@ export function WorkspaceSharePicker({
                 className="rounded-lg border border-sol-border/60 bg-sol-bg-alt/30 px-4 py-3"
               >
                 <div className="flex items-center gap-2">
-                  <GitBranch className="w-4 h-4 text-sol-base01 shrink-0" />
+                  <GitBranch className="w-4 h-4 text-sol-text-dim shrink-0" />
                   <span className="text-sm font-medium text-sol-text">
                     {repo.repo_key}
                   </span>
-                  <span className="text-xs text-sol-base01">
+                  <span className="text-xs text-sol-text-dim">
                     {repo.member_count} teammate{repo.member_count === 1 ? "" : "s"}
                   </span>
                 </div>
@@ -158,16 +174,18 @@ export function WorkspaceSharePicker({
 
           <div className="rounded-lg border border-sol-border/60 bg-sol-bg-alt/50 px-4 py-3 space-y-2">
             <div className="flex items-center gap-2 text-xs font-medium text-sol-text">
-              <Terminal className="w-3.5 h-3.5 text-sol-cyan" />
+              <Terminal className="tf-accent-text w-3.5 h-3.5" />
               Share a repo via CLI
             </div>
-            <div className="font-mono text-xs text-sol-base1 bg-sol-bg rounded-md border border-sol-border/50 px-3 py-2 select-all">
-              cast teams map /path/to/repo {teamName}
+            <div className="font-mono text-xs text-sol-text-muted bg-sol-bg rounded-md border border-sol-border/50 px-3 py-2 select-all">
+              {/* Quoted, so a multi-word team name still copies as one
+                  argument through the select-all. */}
+              cast teams map /path/to/repo "{teamName}"
             </div>
             <p className="text-[11px] text-sol-text-dim leading-relaxed">
               Clone the repo, then run the command above from anywhere.
               Or use{" "}
-              <span className="font-mono text-sol-base1">
+              <span className="font-mono text-sol-text-muted">
                 cast sync-settings
               </span>{" "}
               for interactive setup.
@@ -187,56 +205,93 @@ function WorkspaceSection({
   onToggle,
   getSuggestion,
   teamId,
+  dupHints,
 }: {
   title: string;
-  subtitle: string;
+  subtitle?: string;
   workspaces: UserWorkspace[];
   selectedPaths: Record<string, boolean>;
   onToggle: (path: string) => void;
   getSuggestion: (path: string) => SuggestedWorkspace | undefined;
   teamId: Id<"teams"> | null;
+  dupHints: Map<string, string>;
 }) {
+  // The list clips at 320px, so the fade says "more below" and the count
+  // says how much. Both write DOM attributes directly: scroll position is
+  // not render state, and a state write per scroll frame would churn.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const updateFade = useCallback(() => {
+    const list = listRef.current;
+    const wrap = wrapRef.current;
+    if (!list || !wrap) return;
+    const below = list.scrollHeight - list.scrollTop - list.clientHeight > 4;
+    wrap.dataset.canScroll = below ? "true" : "false";
+  }, []);
+  useEffect(() => {
+    updateFade();
+  }, [workspaces.length, updateFade]);
+
   return (
     <div className="space-y-2">
       <div>
-        <h3 className="text-sm font-medium text-sol-text">{title}</h3>
-        <p className="text-xs text-sol-text-dim mt-0.5">{subtitle}</p>
+        <h3 className="text-sm font-medium text-sol-text">
+          {title}
+          <span className="ml-1.5 text-xs font-normal text-sol-text-dim tabular-nums">
+            {workspaces.length}
+          </span>
+        </h3>
+        {subtitle && <p className="text-xs text-sol-text-dim mt-0.5">{subtitle}</p>}
       </div>
-      <div className="space-y-1.5 max-h-[240px] overflow-y-auto pr-0.5">
+      <div ref={wrapRef} className="tf-scroll-wrap">
+        <div
+          ref={listRef}
+          onScroll={updateFade}
+          className="space-y-1.5 max-h-[320px] overflow-y-auto pr-0.5"
+        >
         {workspaces.map((ws) => {
           const selected = !!selectedPaths[ws.path];
           const suggestion = getSuggestion(ws.path);
           const alreadyMapped = isMappedToTeam(ws, teamId);
+          // Same short name as another row: the differing ancestor joins
+          // the title as the tiebreaker.
+          const hint = dupHints.get(ws.path);
 
           return (
             <button
               key={ws.path}
               type="button"
+              role="checkbox"
+              aria-checked={selected}
               onClick={() => onToggle(ws.path)}
-              className={`w-full rounded-lg border px-4 py-3 text-left transition-colors ${
-                selected
-                  ? "border-sol-cyan bg-sol-cyan/[0.06]"
-                  : "border-sol-border hover:border-sol-base01 hover:bg-sol-bg-alt/40"
+              data-selected={selected}
+              className={`tf-option w-full rounded-lg border px-4 py-3 text-left outline-none motion-safe:active:scale-[0.99] ${
+                selected ? "" : "border-sol-border hover:border-sol-text-muted hover:bg-sol-bg-alt/40"
               }`}
             >
               <div className="flex items-start gap-3">
+                {/* Visual only: aria-checked on the row carries the state. */}
                 <div
-                  className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${
-                    selected
-                      ? "border-sol-cyan bg-sol-cyan text-sol-bg"
-                      : "border-sol-border bg-sol-bg-alt"
+                  aria-hidden="true"
+                  className={`tf-check mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${
+                    selected ? "" : "border-sol-border bg-sol-bg-alt"
                   }`}
                 >
                   {selected && <Check className="w-3 h-3" />}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <GitBranch className="w-4 h-4 text-sol-cyan shrink-0" />
+                    <GitBranch className="tf-accent-text w-4 h-4 shrink-0" />
                     <span className="truncate text-sm font-medium text-sol-text">
                       {workspaceName(ws.path)}
                     </span>
+                    {hint && (
+                      <span className="truncate text-xs text-sol-text-dim">
+                        · {hint}
+                      </span>
+                    )}
                     {suggestion?.match_type === "github" && (
-                      <span className="rounded border border-sol-cyan/30 bg-sol-cyan/10 px-1.5 py-0.5 text-[10px] text-sol-cyan whitespace-nowrap">
+                      <span className="tf-accent-badge rounded border px-1.5 py-0.5 text-[10px] whitespace-nowrap">
                         GitHub match
                       </span>
                     )}
@@ -249,9 +304,9 @@ function WorkspaceSection({
                   <div className="mt-0.5 truncate text-xs text-sol-text-dim">
                     {ws.path}
                   </div>
-                  <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-sol-base01">
+                  <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-sol-text-dim">
                     {suggestion && (
-                      <span className="text-sol-cyan">
+                      <span className="tf-accent-text">
                         <Users className="w-3 h-3 inline mr-1" />
                         {suggestion.match_reason}
                       </span>
@@ -269,6 +324,8 @@ function WorkspaceSection({
             </button>
           );
         })}
+        </div>
+        <div className="tf-scroll-fade" aria-hidden="true" />
       </div>
     </div>
   );

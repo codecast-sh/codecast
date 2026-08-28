@@ -128,6 +128,32 @@ describe("plans.bindSession accepts both wire spellings", () => {
     })).rejects.toThrow(/required/);
   });
 
+  test("rebinding to a new plan re-points active_plan_id (last bind wins)", async () => {
+    // Regression: a guard added 2026-03 only set active_plan_id when the
+    // conversation had none, so `cast plan bind` on a session already bound to
+    // an old plan updated plan_ids but left the header pointing at the old
+    // (often finished) plan forever; nothing else could ever flip it.
+    const t = await tables();
+    t.plans.push({
+      _id: "plan_old",
+      short_id: "pl-0",
+      user_id: USER,
+      title: "Finished plan",
+      session_ids: ["conv_1"],
+      current_session_id: "conv_1",
+    } as any);
+    Object.assign(t.conversations[0], { active_plan_id: "plan_old", plan_ids: ["plan_old"] });
+    const c = ctx(t);
+    await (bindSession as any)._handler(c, {
+      api_token: TOKEN,
+      short_id: "pl-1",
+      session_id: "sess-abc",
+    });
+    const patch = c.db._patched.find((p: any) => p._id === "conv_1");
+    expect(patch?.patch.active_plan_id).toBe("plan_1");
+    expect(patch?.patch.plan_ids).toEqual(["plan_old", "plan_1"]);
+  });
+
   test("an unknown session still fails closed", async () => {
     const t = await tables();
     await expect((bindSession as any)._handler(ctx(t), {

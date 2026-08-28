@@ -13,7 +13,7 @@ import { track } from "../lib/analytics";
 import { visitTimeAgo } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useCollectionRows } from "../hooks/useCollectionRows";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { useDecisionQueue } from "../hooks/useDecisionQueue";
@@ -796,7 +796,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   // The query feeds the store (below); the badge renders from the store.
   const { data: teamUnreadCountQuery } = useQueryNoThrow(
     api.conversations.getTeamUnreadCount,
-    activeTeamId ? { teamId: activeTeamId } : "skip"
+    // isConvexId: a just-created team holds an optimistic stub id until the
+    // server echoes, and a stub is not an Id<"teams">.
+    activeTeamId && isConvexId(String(activeTeamId)) ? { teamId: activeTeamId } : "skip"
   );
   const teamUnreadCount = useInboxStore((s) => s.teamUnreadCount);
   const createModal = useInboxStore((s) => s.createModal);

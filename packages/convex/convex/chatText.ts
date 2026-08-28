@@ -157,22 +157,20 @@ export function fenceSafe(text: string, max = MAX_CHAT_CONTENT): string {
 //
 // The ONE place that says what a level means, so the server's gate and the
 // client's toast tier can never drift into two different mutes.
-//   all      — every chat event this channel produces, AND (client-side) a
-//              toast for every ordinary line. Slack's "All new posts".
+//   all      — every chat event this channel produces, including a chat_post
+//              for every ordinary line. Slack's "All new posts": an OS banner
+//              and a phone push per message, by explicit opt-in only.
 //   mentions — what is addressed to you: a direct @you, @here, a reply on a
 //              thread you are in, a DM line, an invite. Slack's default
 //              ("direct messages, mentions & keywords" + thread replies).
 //              A DM at "mentions" still notifies — every DM line IS addressed
 //              to you; only "none" silences a DM room.
 //   none     — nothing
-//
-// The server produces no event for an ordinary channel line at all, so "all"
-// and "mentions" gate the same set here; where they differ is the client's
-// quiet toast (chatToastTier), which "mentions" withholds.
 export function notifyLevelAllows(
   level: "all" | "mentions" | "none" | undefined,
-  eventType: "chat_mention" | "chat_reply" | "chat_here" | "chat_dm" | "chat_added",
+  eventType: "chat_mention" | "chat_reply" | "chat_here" | "chat_dm" | "chat_added" | "chat_post",
 ): boolean {
+  if (eventType === "chat_post") return level === "all";
   return level !== "none";
 }
 

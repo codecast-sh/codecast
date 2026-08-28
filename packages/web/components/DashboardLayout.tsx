@@ -30,6 +30,7 @@ import { SetupPromptBanner } from "./SetupPromptBanner";
 import { NewSnippetsBanner } from "./NewSnippetsBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
+import { NotificationNudgeBanner } from "./NotificationNudgeBanner";
 import { ConnectionBanner } from "./ConnectionBanner";
 import { StorageHealthBanner } from "./StorageHealthBanner";
 import { DaemonStatusChip } from "./DaemonStatusChip";
@@ -54,7 +55,7 @@ import { SessionListPanel } from "./GlobalSessionPanel";
 import { StageCompanion } from "./StageCompanion";
 import { StageFilesPane } from "./StageFilesPane";
 import { FilePathMenuHost } from "./FilePathMenuHost";
-import { companionId, autoAllowed as wsAutoAllowed, surfaceForPath, slotPolicyFor } from "../store/workspace";
+import { companionId, companionMirrorStep, companionRenderable, surfaceForPath, slotPolicyFor } from "../store/workspace";
 import { EdgePeek } from "./EdgePeek";
 import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
 import { useSyncTeamInboxSessions } from "../hooks/useSyncTeamInboxSessions";
@@ -325,6 +326,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => selectSessionRailOpen(s),
     s => s.sidePanelSessionId,
     s => companionId(s.workspace),
+    // Row EXISTENCE for the companion and the attended session, as booleans:
+    // a slot or pointer can outlive its row (killed, pruned, stale tab stamp),
+    // and whether the row is there decides if the companion panel may open.
+    // Booleans, not rows — a row dep would re-render the shell every heartbeat.
+    s => companionRenderable(s.workspace, (id) => !!s.sessions[id]),
+    s => { const id = s.viewingDismissedId ?? s.currentSessionId; return !!id && !!s.sessions[id]; },
     s => s.currentSessionId,
     s => s.viewingDismissedId,
     s => selectCommentRailOpen(s),
@@ -448,6 +455,14 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const surface = isOnSettingsPage ? "settings" : surfaceForPath(pathname ?? "");
   const slotPolicy = slotPolicyFor(surface);
   const isOnWorkingPage = slotPolicy.secondary === "split";
+  // Whether the rows behind the two pointers actually exist. Slot refs and
+  // session pointers outlive their rows (killed, pruned at boot, dropped from
+  // the live window, restored from a stale tab stamp); a companion panel may
+  // only open for a row that will render something. Without this gate the
+  // stage kept an expanded panel whose content rendered null — a giant empty
+  // column beside the page.
+  const companionRowExists = companionRenderable(s.workspace, (id) => !!s.sessions[id]);
+  const attendedRowExists = (() => { const id = s.viewingDismissedId ?? s.currentSessionId; return !!id && !!s.sessions[id]; })();
   const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnCallsPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
 
   // The teammate comment rail is a conversation-scoped overlay, so its header
@@ -476,12 +491,21 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // resolveSessionSelectKind). sidePanelSessionId survives purely as the
   // rail's highlight pointer.
   const railOpen = selectSessionRailOpen(s);
-  const showSessionList = railOpen && !isMobile;
-  const showMobileSessionList = railOpen && isMobile;
+  // The only /settings URLs that reach this layout are the focused flow
+  // pages (create team, join team, link GitHub) — section URLs bounce into
+  // the modal before rendering here. Those flows are the one thing on
+  // screen, so the session rail stays out of them on every size: on a phone
+  // it would overlay the whole flow on arrival, on desktop it stacks
+  // unrelated inbox cards beside a focused step and pushes the centered
+  // shell off axis. The persisted rail choice still applies everywhere else.
+  const showSessionList = railOpen && !isMobile && !isOnSettingsPage;
+  const showMobileSessionList = railOpen && isMobile && !isOnSettingsPage;
   // Right session list, collapsed: no persistent rail — a right-edge hover-peek
   // slides the full list out, mirroring the left sidebar's collapsed behavior.
   // Never in zen mode (same rule as the left peek): zen means nothing slides in.
-  const rightPeekEnabled = !railOpen && !isMobile && !isZenMode;
+  // Keyed to showSessionList, not railOpen, so the flow pages that suppress
+  // the rail still reach the list through the edge peek.
+  const rightPeekEnabled = !showSessionList && !isMobile && !isZenMode;
 
   // The conversation you're attending to stays visible wherever it CAN be: it
   // owns the stage on the inbox, and rides along as the companion on a working
@@ -499,33 +523,31 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     // peek is what you're attending. The reverse order made clicking a stashed
     // session on a working page a dead click — the mirror snapped the
     // companion straight back to the stale currentSessionId.
+    //
+    // MIRROR, don't just fill: there is exactly one conversation you're
+    // attending to, and it shows either on the stage (inbox) or here. If it
+    // changes by any route while a companion is open, the companion follows —
+    // otherwise you sit watching a stale pane while the inbox has moved on,
+    // and going back would land somewhere you weren't.
+    //
+    // The rule itself is pure (companionMirrorStep): it refuses to open a
+    // companion for a session row the store doesn't hold, closes one whose row
+    // vanished (bookkeeping, not a dismissal — returning to a working surface
+    // brings a real one back), and off working surfaces closes splits while
+    // never touching overlays — an overlay is the fleet board's drill-in,
+    // owned by the board, and the URL cannot be trusted to say the board is up
+    // (a stamped tab path can read /conversation/<id> while the stage shows
+    // the inbox pane), so the gate is the presentation itself.
     const attended = s.viewingDismissedId ?? s.currentSessionId ?? null;
-    const companion = companionId(s.workspace);
-    if (isOnWorkingPage && !isMobile) {
-      // MIRROR, don't just fill: there is exactly one conversation you're
-      // attending to, and it shows either on the stage (inbox) or here. If it
-      // changes by any route while a companion is open, the companion follows —
-      // otherwise you sit watching a stale pane while the inbox has moved on,
-      // and going back would land somewhere you weren't.
-      const pane = attended ? ({ kind: "conversation", ref: attended } as const) : null;
-      if (pane && companion !== attended && wsAutoAllowed(s.workspace, "secondary", pane)) {
-        store.wsShow("secondary", pane, { presentation: "split" });
-      }
-    } else if (companion) {
-      // The fleet board's drill-in lives in this same slot as an OVERLAY. It
-      // is owned by the board, not by this mirror — and the URL cannot be
-      // trusted to say the board is up (a stamped tab path can read
-      // /conversation/<id> while the stage shows the inbox pane), so the gate
-      // is the presentation itself: the companion is always a split, an
-      // overlay here is always the board's visit. Never clear overlays.
-      const isBoardDrillIn = s.workspace.secondary.presentation === "overlay";
-      if (!isBoardDrillIn) {
-        // The surface that can hold it is gone — pure bookkeeping, not a
-        // dismissal, so returning to a working surface brings it back.
-        store.wsHide("secondary", { remember: false });
-      }
-    }
-  }, [isOnWorkingPage, s.workspace.secondary.presentation, isMobile, companionId(s.workspace), s.currentSessionId, s.viewingDismissedId]);
+    const step = companionMirrorStep(
+      s.workspace,
+      attended,
+      isOnWorkingPage && !isMobile,
+      (id) => !!store.sessions[id],
+    );
+    if (step.op === "show") store.wsShow("secondary", step.pane, { presentation: "split" });
+    else if (step.op === "hide") store.wsHide("secondary", { remember: false });
+  }, [isOnWorkingPage, s.workspace.secondary.presentation, isMobile, companionId(s.workspace), s.currentSessionId, s.viewingDismissedId, companionRowExists, attendedRowExists]);
 
   // A Files pane left over from a conversation surface: pure bookkeeping hide
   // when the stage moves somewhere that can't host it (a working page's slot
@@ -947,7 +969,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // effect below must run on every render path (hooks precede the guest
   // return). Only working surfaces host a companion; elsewhere the page owns
   // the stage.
-  const showCompanion = !!companionId(s.workspace) && isOnWorkingPage && !isMobile;
+  // Row existence is part of "showable": a companion ref whose session row is
+  // gone renders nothing (StageCompanion), and an expanded panel with nothing
+  // in it is the empty-column bug. The mirror effect above also closes the
+  // slot; this render gate makes the pixel symptom impossible either way.
+  const showCompanion = !!companionId(s.workspace) && companionRowExists && isOnWorkingPage && !isMobile;
   // The Files pane shares the slot: a conversation on stage may have the
   // project's files beside it (slotPolicyFor(...).files).
   const showFilesPane = !showCompanion && s.workspace.secondary.pane?.kind === "files" && s.workspace.secondary.presentation === "split" && slotPolicy.files && !isMobile;
@@ -1274,6 +1300,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <NewSnippetsBanner />
         <CliOfflineBanner />
         <TmuxMissingBanner />
+        <NotificationNudgeBanner />
       </ErrorBoundary>
 
       <ErrorBoundary name="TabBar" level="inline">
