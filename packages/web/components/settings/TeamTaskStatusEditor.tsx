@@ -38,6 +38,11 @@ import { filterToWorkspace } from "../../lib/workspaceScope";
 
 const mintId = () => `st_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
+// Unsaved drafts survive the editor unmounting (modal close, section switch,
+// backdrop click) so a half-finished edit is recoverable instead of silently
+// discarded. Keyed by team; cleared on save or explicit discard.
+const pendingDrafts = new Map<string, TeamTaskStatus[]>();
+
 // Linear names the categories by workflow phase; ours map onto them.
 const CATEGORY_LABEL: Record<TaskStatusCategory, string> = {
   backlog: "Backlog",
@@ -60,7 +65,19 @@ export function TeamTaskStatusEditor({
 }) {
   const updateTaskStatuses = useMutation(api.teams.updateTaskStatuses);
   const saved = useMemo(() => teamTaskStatuses(configured), [configured]);
-  const [draft, setDraft] = useState<TeamTaskStatus[] | null>(null);
+  const draftKey = String(teamId);
+  const [draft, setDraftState] = useState<TeamTaskStatus[] | null>(
+    () => pendingDrafts.get(draftKey) ?? null,
+  );
+  const setDraft = (
+    updater: TeamTaskStatus[] | null | ((cur: TeamTaskStatus[] | null) => TeamTaskStatus[] | null),
+  ) =>
+    setDraftState((cur) => {
+      const next = typeof updater === "function" ? updater(cur) : updater;
+      if (next === null) pendingDrafts.delete(draftKey);
+      else pendingDrafts.set(draftKey, next);
+      return next;
+    });
   const [saving, setSaving] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const statuses = draft ?? saved;
@@ -135,25 +152,11 @@ export function TeamTaskStatusEditor({
 
   return (
     <Card className="p-6 bg-sol-bg border-sol-border">
-      <div className="flex items-start justify-between gap-3 mb-4">
-        <div>
-          <h2 className="text-lg font-semibold text-sol-text">Task statuses</h2>
-          <p className="text-xs text-sol-text-muted mt-0.5">
-            The team's workflow. Statuses live under fixed categories; boards, groups and pickers use these names.
-          </p>
-        </div>
-        {isAdmin && (
-          <div className="flex items-center gap-2 flex-shrink-0">
-            {dirty && (
-              <Button variant="ghost" size="sm" onClick={() => { setDraft(null); setOpenId(null); }} disabled={saving}>
-                Discard
-              </Button>
-            )}
-            <Button size="sm" onClick={save} disabled={!dirty || saving}>
-              {saving ? "Saving…" : "Save"}
-            </Button>
-          </div>
-        )}
+      <div className="mb-4">
+        <h2 className="text-lg font-semibold text-sol-text">Task statuses</h2>
+        <p className="text-xs text-sol-text-muted mt-0.5">
+          The team's workflow. Statuses live under fixed categories; boards, groups and pickers use these names.
+        </p>
       </div>
 
       <div className="space-y-2">
@@ -270,6 +273,24 @@ export function TeamTaskStatusEditor({
       </div>
       {!isAdmin && (
         <p className="text-[11px] text-sol-text-dim mt-3">Only team admins can edit statuses.</p>
+      )}
+      {isAdmin && dirty && (
+        // Sticky pins to the scroller's content box, so -bottom-5 cancels the
+        // settings panel's py-5 and the bar sits on the visible edge.
+        <div className="sticky -bottom-5 -mx-6 -mb-6 mt-4 flex items-center justify-between gap-3 rounded-b-xl border-t border-sol-border bg-sol-bg px-6 py-3">
+          <span className="flex items-center gap-2 text-xs text-sol-yellow">
+            <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow" />
+            Unsaved changes
+          </span>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => { setDraft(null); setOpenId(null); }} disabled={saving}>
+              Discard
+            </Button>
+            <Button size="sm" onClick={save} disabled={saving}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </div>
       )}
     </Card>
   );

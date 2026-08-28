@@ -97,11 +97,11 @@ export function orderedStatuses(statuses: TeamTaskStatus[]): TeamTaskStatus[] {
   );
 }
 
-// Pipeline order for kanban columns: not started on the left, started in the
+// Pipeline order for kanban columns: open on the far left, backlog next, started in the
 // middle, finished on the right. The list view keeps TASK_STATUS_ORDER (active
 // work first); the board reads left to right as a pipeline instead.
 const BOARD_CATEGORY_ORDER: readonly TaskStatusCategory[] = [
-  "backlog", "open", "in_progress", "in_review", "done", "dropped",
+  "open", "backlog", "in_progress", "in_review", "done", "dropped",
 ];
 
 /**
