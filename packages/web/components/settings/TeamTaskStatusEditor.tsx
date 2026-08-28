@@ -19,9 +19,9 @@ import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
-import { Card } from "../ui/card";
+import { ArrowDown, ArrowUp, ListChecks, Plus, Trash2 } from "lucide-react";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import {
   DEFAULT_TASK_STATUS_NAMES,
   TASK_STATUS_COLORS,
@@ -35,6 +35,7 @@ import { TASK_STATUS_ORDER } from "../TaskStatusBadge";
 import { STATUS_COLOR_CLASSES, statusVisual, taskStatusKey } from "../../lib/taskStatuses";
 import { useInboxStore } from "../../store/inboxStore";
 import { filterToWorkspace } from "../../lib/workspaceScope";
+import { SettingsSection } from "./ui";
 
 const mintId = () => `st_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -151,14 +152,15 @@ export function TeamTaskStatusEditor({
   };
 
   return (
-    <Card className="p-6 bg-sol-bg border-sol-border">
-      <div className="mb-4">
-        <h2 className="text-lg font-semibold text-sol-text">Task statuses</h2>
-        <p className="text-xs text-sol-text-muted mt-0.5">
-          The team's workflow. Statuses live under fixed categories; boards, groups and pickers use these names.
-        </p>
-      </div>
-
+    // overflowVisible: the kit card's default overflow-hidden would clip the
+    // sticky save bar and keep it from pinning to the modal scroller's edge.
+    <SettingsSection
+      title="Task statuses"
+      icon={ListChecks}
+      description="The team's workflow. Statuses live under fixed categories; boards, groups and pickers use these names."
+      padded
+      overflowVisible
+    >
       <div className="space-y-2">
         {TASK_STATUS_ORDER.map((category) => {
           const rows = statuses.filter((s) => s.category === category);
@@ -170,7 +172,7 @@ export function TeamTaskStatusEditor({
                   <button
                     onClick={() => add(category)}
                     title={`Add a status under ${CATEGORY_LABEL[category]}`}
-                    className="w-6 h-6 flex items-center justify-center rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg transition-colors"
+                    className="w-6 h-6 flex items-center justify-center rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight/40 transition-colors"
                   >
                     <Plus className="w-3.5 h-3.5" />
                   </button>
@@ -211,13 +213,13 @@ export function TeamTaskStatusEditor({
 
                       {open && (
                         <div className="ml-14 mr-2 mb-3 mt-1 flex flex-wrap items-center gap-x-4 gap-y-2" onClick={(e) => e.stopPropagation()}>
-                          <input
+                          <Input
                             autoFocus
                             value={s.name}
                             placeholder="Status name"
                             onChange={(e) => rename(s.id, e.target.value)}
                             onKeyDown={(e) => { if (e.key === "Enter") setOpenId(null); }}
-                            className="min-w-[10rem] flex-1 rounded-md border border-sol-border bg-sol-bg px-2 py-1 text-sm text-sol-text outline-none focus:border-sol-cyan/60 placeholder:text-sol-text-dim/50"
+                            className="h-8 min-w-[10rem] flex-1 bg-sol-bg border-sol-border text-sm text-sol-text"
                           />
                           <div className="flex items-center gap-1.5">
                             {TASK_STATUS_COLORS.map((c) => (
@@ -276,8 +278,9 @@ export function TeamTaskStatusEditor({
       )}
       {isAdmin && dirty && (
         // Sticky pins to the scroller's content box, so -bottom-5 cancels the
-        // settings panel's py-5 and the bar sits on the visible edge.
-        <div className="sticky -bottom-5 -mx-6 -mb-6 mt-4 flex items-center justify-between gap-3 rounded-b-xl border-t border-sol-border bg-sol-bg px-6 py-3">
+        // settings modal's py-5 and the bar sits on the visible edge. The
+        // negative margins cancel the card's p-4 sm:p-5.
+        <div className="sticky -bottom-5 -mx-4 -mb-4 mt-4 flex items-center justify-between gap-3 rounded-b-xl border-t border-sol-border bg-sol-bg px-4 py-3 sm:-mx-5 sm:-mb-5 sm:px-5">
           <span className="flex items-center gap-2 text-xs text-sol-yellow">
             <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow" />
             Unsaved changes
@@ -286,12 +289,12 @@ export function TeamTaskStatusEditor({
             <Button variant="ghost" size="sm" onClick={() => { setDraft(null); setOpenId(null); }} disabled={saving}>
               Discard
             </Button>
-            <Button size="sm" onClick={save} disabled={saving}>
+            <Button size="sm" onClick={save} disabled={saving} variant="cyan">
               {saving ? "Saving…" : "Save"}
             </Button>
           </div>
         </div>
       )}
-    </Card>
+    </SettingsSection>
   );
 }

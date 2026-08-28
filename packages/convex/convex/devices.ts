@@ -13,6 +13,7 @@ import {
   type RoutableDevice,
 } from "./deviceRouting";
 import { normalizeProjectPath } from "./projectPaths";
+import { bucketTs } from "./presenceState";
 import { checkConversationAccess } from "./privacy";
 import { fromConvexAgentType, findModelOption } from "@codecast/shared/contracts";
 
@@ -926,7 +927,13 @@ export const listDevices = query({
         platform: d.platform,
         hostname: d.hostname ?? undefined,
         ssh_host: d.ssh_host ?? undefined,
-        last_seen: d.last_seen,
+        // Bucketed to the minute: every device beats every 30s, and the raw
+        // value re-pushed this whole roster — each row carrying a model
+        // inventory of several KB. The clients render it as a relative age and
+        // already quantize it to the same minute (quantizePresence in the web
+        // store), so nothing they show moves. Invalidation is unchanged, and
+        // `online` below still reads the raw timestamp.
+        last_seen: bucketTs(d.last_seen)!,
         is_remote: d.is_remote ?? false,
         local_project_roots: d.local_project_roots ?? [],
         settings: d.settings ?? undefined,

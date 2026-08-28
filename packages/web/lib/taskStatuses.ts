@@ -97,17 +97,18 @@ export function orderedStatuses(statuses: TeamTaskStatus[]): TeamTaskStatus[] {
   );
 }
 
-// Pipeline order for kanban columns: open on the far left, backlog next, started in the
+// Pipeline order for kanban columns: not started on the left, started in the
 // middle, finished on the right. The list view keeps TASK_STATUS_ORDER (active
 // work first); the board reads left to right as a pipeline instead.
 const BOARD_CATEGORY_ORDER: readonly TaskStatusCategory[] = [
-  "open", "backlog", "in_progress", "in_review", "done", "dropped",
+  "backlog", "open", "in_progress", "in_review", "done", "dropped",
 ];
 
 /**
  * Kanban column order: pipeline category order, the team's own order within
  * each category, then the user's saved column order (status ids) on top. A
- * status the saved order predates slots in at its pipeline position.
+ * status the saved order predates joins its category's section wherever the
+ * user put it; only a category with no column yet falls to pipeline position.
  */
 export function boardOrderedStatuses(statuses: TeamTaskStatus[], savedOrder?: string[]): TeamTaskStatus[] {
   const pipeIdx = (s: TeamTaskStatus) => BOARD_CATEGORY_ORDER.indexOf(s.category);
@@ -118,6 +119,11 @@ export function boardOrderedStatuses(statuses: TeamTaskStatus[], savedOrder?: st
   const placed = new Set(result.map((s) => s.id));
   for (const s of base) {
     if (placed.has(s.id)) continue;
+    const lastKin = result.findLastIndex((r) => r.category === s.category);
+    if (lastKin >= 0) {
+      result.splice(lastKin + 1, 0, s);
+      continue;
+    }
     const at = result.findIndex((r) => pipeIdx(r) > pipeIdx(s));
     result.splice(at < 0 ? result.length : at, 0, s);
   }

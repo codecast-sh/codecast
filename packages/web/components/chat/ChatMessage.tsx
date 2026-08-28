@@ -7,11 +7,12 @@ import { remarkSanitizeInvisibleUnicode } from "../tools/MarkdownRenderer";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { remarkChatMentions } from "../../lib/remarkChatMentions";
+import { remarkEntityCards } from "../../lib/remarkEntityCards";
 import { compactAge } from "../../lib/threadState";
 import { copyToClipboard } from "../../lib/utils";
 import type { ChatAttachmentView, ChatMessageView } from "./chatTypes";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
-import { useStorageImageUrl } from "../../hooks/useStorageImageUrl";
+import { useStorageImageSrc } from "../../hooks/useStorageImageUrl";
 import { ChatVoiceBubble, VoicePlayButton } from "./ChatVoiceBubble";
 import { CallTranscriptDisclosure } from "../calls/TranscriptTurns";
 import { ImageLightbox } from "../ImageGallery";
@@ -31,11 +32,12 @@ import "../editor/editor.css";
 // renderable from a fixture and cheap to memo under a virtualizer, where rows
 // remount constantly.
 
-/** One attached image: resolves its storage URL, opens the shared lightbox.
+/** One attached image: resolves its storage URL cache-first (byte cache, so a
+ *  seen image paints locally and offline), opens the shared lightbox.
  *  A tile that is still resolving keeps its footprint (no reflow when the URL
  *  lands); one that failed says so instead of leaving a hole. */
 function AttachmentTile({ att, onOpen }: { att: ChatAttachmentView; onOpen: (src: string) => void }) {
-  const url = useStorageImageUrl(att.storage_id);
+  const url = useStorageImageSrc(att.storage_id);
   if (url === null) {
     return <span className="ch-att ch-att-missing">image unavailable</span>;
   }
@@ -199,6 +201,12 @@ export const ChatMessage = memo(function ChatMessage({
   // unified calls each array entry to OBTAIN the transformer, so handing it an
   // already-built transformer makes it run with the options slot as the tree.
   // (Mutable tuple: unified's Pluggable type refuses a readonly one.)
+  //
+  // remarkEntityCards is chat's own upgrade on top of that shared pipeline:
+  // a message (or line) that is nothing but object references is someone
+  // SHARING those objects, and each renders as a browsable preview card
+  // instead of an inline pill. Registered last so it sees the entity links
+  // remarkEntityIds already produced.
   const remarkPlugins = useMemo(
     () => [
       ...USER_MD_REMARK,
@@ -207,6 +215,7 @@ export const ChatMessage = memo(function ChatMessage({
         typeof remarkChatMentions,
         { known?: Set<string>; self?: Set<string>; names?: Map<string, string> },
       ],
+      remarkEntityCards,
     ],
     [knownHandles, selfHandles, handleNames],
   );

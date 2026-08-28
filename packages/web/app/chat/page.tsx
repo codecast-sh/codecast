@@ -209,9 +209,18 @@ export default function ChatPage() {
   // Gated on presence, and re-asked when it returns, because that is also what
   // re-arms the release: a DM left open behind another window is a guess that
   // has already expired, and coming back to it is a fresh one.
-  useEffect(() => {
-    if (present && walkieRoomKey) prewarmRoom(walkieRoomKey);
-  }, [present, walkieRoomKey]);
+  //
+  // At render rather than in an effect, the same way the thread panel below
+  // watches the channel change. A connection is worth starting a paint earlier
+  // than an effect would, and `prewarmRoom` is a fire-and-forget call with its
+  // own guards — the ref is only here so a re-render for some other reason
+  // does not ask again.
+  const warmedForRef = useRef<string | undefined>(undefined);
+  const roomToWarm = present ? walkieRoomKey : undefined;
+  if (warmedForRef.current !== roomToWarm) {
+    warmedForRef.current = roomToWarm;
+    if (roomToWarm) prewarmRoom(roomToWarm);
+  }
 
   // ── Permalink target ──────────────────────────────────────────────────────
   const targetId = search.get("m") || undefined;
