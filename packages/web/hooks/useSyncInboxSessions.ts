@@ -171,7 +171,9 @@ export function useSyncInboxSessions() {
     for (const session of sessions) {
       const id = session._id as string;
       if (!isConvexId(id) || bgFetchingRef.current.has(id)) continue;
-      const serverCount = session.message_count ?? 0;
+      // The base list omits message_count (fast_fields_in_overlay); read the
+      // store row, where the overlay has merged the exact value.
+      const serverCount = session.message_count ?? store.sessions[id]?.message_count ?? 0;
       if (serverCount === 0) continue; // brand-new session — nothing to fetch yet
 
       const storedMsgs = store.messages[id];

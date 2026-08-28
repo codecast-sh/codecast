@@ -160,25 +160,30 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   closeCallPanel: (opts) => ipcRenderer.invoke("close-call-panel", opts ?? {}),
   reportCallPanelState: (state) => ipcRenderer.send("report-call-panel-state", state),
   onCallPanelHandback,
-  // The floating faces (route /call-faces): the call minimized to circles of
-  // people's faces on a transparent always-on-top window. A separate window
-  // from the panel because Electron decides `transparent` and `frame` when a
-  // window is CONSTRUCTED, so minimizing is a handoff, not a reconfiguration.
+  // The four sizes. One window, because `transparent` and `frame` are decided
+  // when a window is CONSTRUCTED: the call window is born see-through and
+  // frameless, and changing size reshapes it in place rather than handing the
+  // call to another window — a call changing shape must never be a call
+  // re-joining a room.
   //
-  // The three setters are what a see-through window needs and a normal one
-  // does not: `setFacesInteractive` decides whether the window takes the mouse
-  // at all (off except over a circle, so a click on the desktop behind reaches
-  // the desktop), `setFacesSize` keeps the window exactly as big as its
-  // circles, and `setFacesDragging` has the shell follow the cursor while a
-  // circle is held — a drag region would eat the mouse events the renderer
-  // needs to know the pointer left.
-  isFacesWindow: process.argv.includes("--call-faces-window"),
-  openFacesWindow: (roomKey, opts) => ipcRenderer.invoke("open-faces-window", roomKey, opts ?? {}),
-  closeFacesWindow: (opts) => ipcRenderer.invoke("close-faces-window", opts ?? {}),
-  reportFacesState: (state) => ipcRenderer.send("report-faces-state", state),
-  setFacesInteractive: (on) => ipcRenderer.send("set-faces-interactive", on === true),
-  setFacesSize: (size) => ipcRenderer.send("set-faces-size", size),
-  setFacesDragging: (on) => ipcRenderer.send("set-faces-dragging", on === true),
+  //   panel     the stage, a card the person resizes by its edges
+  //   circles   everybody, as a row of face circles over the work
+  //   speaker   one circle, whoever is talking
+  //   tiny      the same circle at the size of a menu bar icon
+  //
+  // The last three setters are what the see-through sizes need and the stage
+  // does not: `setCallWindowInteractive` decides whether the window takes the
+  // mouse at all (off except over a circle, so a click on the desktop behind
+  // reaches the desktop), `setCallWindowContentSize` keeps the window exactly
+  // as big as its circles, and `setCallWindowDragging` has the shell follow the
+  // cursor while a circle is held — a drag region would eat the mouse events
+  // the renderer needs to know the pointer left. The stage drags by a real
+  // drag region instead, since nothing there is competing for those events.
+  setCallWindowSize: (size) => ipcRenderer.invoke("set-call-window-size", size),
+  getCallWindowSize: () => ipcRenderer.invoke("get-call-window-size"),
+  setCallWindowInteractive: (on) => ipcRenderer.send("set-call-window-interactive", on === true),
+  setCallWindowContentSize: (size) => ipcRenderer.send("set-call-window-content-size", size),
+  setCallWindowDragging: (on) => ipcRenderer.send("set-call-window-dragging", on === true),
   // Meeting detection: the shell polls the names of running programs (and
   // nothing else) while the setting is on, and offers to record when a meeting
   // app starts. The ANSWER lives here in the web layer — main never starts a
