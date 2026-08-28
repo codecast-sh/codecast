@@ -356,6 +356,40 @@ export async function setConvGitDiff(
   }
 }
 
+// Upsert / read the stable-context side row (conversation_context). Same
+// hot-doc rationale as the git side row; the sweep in debugTmp moves legacy
+// on-doc values here.
+export async function setConvStableContext(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  data: string,
+) {
+  const existing = await ctx.db
+    .query("conversation_context")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))
+    .first();
+  if (existing) {
+    await ctx.db.patch(existing._id, { stable_context: data, updated_at: Date.now() });
+  } else {
+    await ctx.db.insert("conversation_context", {
+      conversation_id: conversationId,
+      stable_context: data,
+      updated_at: Date.now(),
+    });
+  }
+}
+
+async function getConvStableContext(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+): Promise<string | null> {
+  const row = await ctx.db
+    .query("conversation_context")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))
+    .first();
+  return row?.stable_context ?? null;
+}
+
 // Read the git side row (conversation_git_diffs). Blobs no longer live on the
 // conversation doc.
 async function getConvGitDiff(
@@ -1951,8 +1985,17 @@ export const getConversationWithMeta = query({
       ...conversationLight
     } = conversationForAccess(conversation, access);
 
+    // stable_context lives in the conversation_context side row (legacy rows
+    // still carry it on the doc until swept). Owner/team only — the same rule
+    // conversationForAccess applies to the legacy field.
+    const sideStableContext =
+      access === "owner" || access === "team"
+        ? await getConvStableContext(ctx, args.conversation_id)
+        : null;
+
     return sanitizeConvexObjectKeys({
       ...conversationLight,
+      stable_context: (conversationLight as any).stable_context ?? sideStableContext ?? undefined,
       is_own: !!isOwner,
       title,
       effective_team_visibility,
@@ -10481,8 +10524,10 @@ export async function consumeStableContextSpool(
     .first();
   if (spooled) {
     const conv = await ctx.db.get(conversationId);
-    if (conv && !conv.stable_context) {
-      await ctx.db.patch(conversationId, { stable_context: spooled.data });
+    // Don't clobber an existing record (side row, or a legacy on-doc value not
+    // yet swept) — the direct recordStableContext write is fresher.
+    if (conv && !conv.stable_context && !(await getConvStableContext(ctx, conversationId))) {
+      await setConvStableContext(ctx, conversationId, spooled.data);
     }
     await ctx.db.delete(spooled._id);
   }
@@ -10523,7 +10568,7 @@ export const recordStableContext = mutation({
         conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
       } catch {}
       if (conv && conv.user_id.toString() === userId.toString()) {
-        await ctx.db.patch(conv._id, { stable_context: args.data });
+        await setConvStableContext(ctx, conv._id, args.data);
         return { recorded: "conversation" };
       }
     }
@@ -10535,7 +10580,7 @@ export const recordStableContext = mutation({
         .filter((q) => q.eq(q.field("user_id"), userId))
         .first();
       if (conv) {
-        await ctx.db.patch(conv._id, { stable_context: args.data });
+        await setConvStableContext(ctx, conv._id, args.data);
         return { recorded: "conversation" };
       }
       // No conversation yet (hook fired before the daemon registered the

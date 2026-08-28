@@ -3,7 +3,7 @@
 import { internalQuery, internalMutation, internalAction } from "./functions";
 import { anyApi } from "convex/server";
 import { internalMutation as rawInternalMutation } from "./_generated/server";
-import { scanInboxConversations, computeSessionsLiveness, computeInboxSessions, setConvGitDiff } from "./conversations";
+import { scanInboxConversations, computeSessionsLiveness, computeInboxSessions, setConvGitDiff, setConvStableContext } from "./conversations";
 import { shouldShowInInbox } from "./inboxFilters";
 import { v } from "convex/values";
 import { BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY } from "./buckets";
@@ -900,8 +900,9 @@ export const dietConversationPage = rawInternalMutation({
     for (const conv of page.page) {
       const hasSkills = conv.available_skills !== undefined;
       const hasStatus = conv.git_status !== undefined;
-      if (!hasSkills && !hasStatus) continue;
-      bytesShed += (conv.available_skills?.length ?? 0) + (conv.git_status?.length ?? 0);
+      const hasStable = conv.stable_context !== undefined;
+      if (!hasSkills && !hasStatus && !hasStable) continue;
+      bytesShed += (conv.available_skills?.length ?? 0) + (conv.git_status?.length ?? 0) + (conv.stable_context?.length ?? 0);
       patched++;
       if (args.dryRun) continue;
       if (hasStatus && conv.git_status) {
@@ -911,7 +912,14 @@ export const dietConversationPage = rawInternalMutation({
           .first();
         await setConvGitDiff(ctx, conv._id, row?.git_diff, row?.git_diff_staged, row?.git_status ?? conv.git_status);
       }
-      await ctx.db.patch(conv._id, { available_skills: undefined, git_status: undefined });
+      if (hasStable && conv.stable_context) {
+        const row = await ctx.db
+          .query("conversation_context")
+          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+          .first();
+        if (!row?.stable_context) await setConvStableContext(ctx, conv._id, conv.stable_context);
+      }
+      await ctx.db.patch(conv._id, { available_skills: undefined, git_status: undefined, stable_context: undefined });
     }
     return { scanned: page.page.length, patched, bytesShed, continueCursor: page.continueCursor, isDone: page.isDone };
   },
