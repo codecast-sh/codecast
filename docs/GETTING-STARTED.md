@@ -288,6 +288,30 @@ R2_ENDPOINT=https://<account>.r2.cloudflarestorage.com
 
 Then `cd packages/cli && ./scripts/deploy.sh`.
 
+### Cut a release from CI (no local certificate)
+
+The macOS binaries are signed with the Developer ID certificate
+(`Developer ID Application: Ashot Petrosian (WRG9THCK9Q)`). The certificate and
+its passphrase live in two repo secrets, `MACOS_SIGN_CERT_P12` and
+`MACOS_SIGN_CERT_PASSPHRASE`, so releases do not need the certificate in a
+personal keychain. To cut a release:
+
+```bash
+gh workflow run cut-cli-release.yml -R codecast-sh/codecast
+```
+
+The workflow builds all five binaries on a macOS runner, signs the two darwin
+binaries, uploads the staging objects to R2, and dispatches "Finalize
+pre-uploaded CLI release". Finalize validates everything, publishes the
+immutable R2 objects and `latest.json`, commits the version bump, tags, and
+creates the GitHub release. Pass `-f dry_run=true` to build and sign without
+publishing anything.
+
+The CI path does not publish the npm package or the Homebrew tap. Those are
+non-fatal mirrors that `deploy.sh` publishes from a laptop. To rotate the
+certificate: export a fresh `.p12` from Keychain Access and replace both
+secrets.
+
 ---
 
 ## Convex Auto-Set Vars
