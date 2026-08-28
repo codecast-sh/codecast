@@ -48,7 +48,8 @@ function sliceSig<T>(
 
 export function useCollectionRows<T = any>(key: string, opts: CollectionRowsOpts<T> = {}): T[] {
   const { where, sig, sort } = opts;
-  const s = useTrackedStore([(st: any) => sliceSig<T>(st[key], where, sig)]);
+  const dep = useMemo(() => Object.assign((st: any) => sliceSig<T>(st[key], where, sig), { label: `sliceSig(${key})` }), [key, where, sig]);
+  const s = useTrackedStore([dep]);
   const coll = (s as any)[key] as Record<string, T> | undefined;
   const signature = sliceSig<T>(coll, where, sig);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- the signature stands in for the churny ref

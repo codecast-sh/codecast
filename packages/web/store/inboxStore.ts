@@ -4271,10 +4271,34 @@ function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boole
     }
   }
   const result = { ...server };
+  let allSame = local != null && typeof local === "object";
   for (const [key, fieldSpec] of Object.entries(spec as Record<string, MergeSpec>)) {
-    result[key] = applyMerge(local?.[key], server?.[key], fieldSpec, initialized);
+    result[key] = keepLocalIfEqual(local?.[key], applyMerge(local?.[key], server?.[key], fieldSpec, initialized));
+    if (allSame && result[key] !== local[key]) allSame = false;
+  }
+  if (allSame) {
+    // Every merged sub-bag kept its local identity; the remaining (unspec'd)
+    // keys decide whether the whole doc is a no-op push.
+    for (const key of new Set([...Object.keys(result), ...Object.keys(local)])) {
+      if (key in (spec as object)) continue;
+      if (!valueEqual(result[key], local[key])) { allSame = false; break; }
+    }
+    if (allSame) return local;
   }
   return result;
+}
+
+// Merge outputs are freshly built objects even when nothing inside them changed
+// (a clientState push touched current_conversation_id, not ui). Handing back
+// the previous reference for a value-equal sub-bag keeps every `s.clientState.ui`
+// subscriber asleep — the inbox panel re-rendered in full on each such push.
+function valueEqual(a: any, b: any): boolean {
+  if (Object.is(a, b)) return true;
+  if (a == null || b == null || typeof a !== "object" || typeof b !== "object") return false;
+  try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; }
+}
+function keepLocalIfEqual<T>(local: T, merged: T): T {
+  return local != null && merged !== local && valueEqual(local, merged) ? local : merged;
 }
 
 // Presence-ish timestamps tick every few seconds server-side (daemon heartbeat,
@@ -9480,9 +9504,48 @@ export function useTrackedStore(deps: Array<(s: InboxStoreState) => any>): Inbox
         next.every((v, i) => Object.is(v, prev.deps[i]))) {
       return prev.state;
     }
+    if (process.env.NODE_ENV !== "production" && prev) {
+      // Dev-only wake audit: which dep woke this subscriber, keyed by the dep's
+      // source text. Read from the console as __depChanges().
+      for (let i = 0; i < next.length; i++) {
+        if (!Object.is(next[i], prev.deps[i])) {
+          const k = ((deps[i] as any).label ?? String(deps[i])).slice(0, 120);
+          _depChanges.set(k, (_depChanges.get(k) || 0) + 1);
+        }
+      }
+    }
     prevRef.current = { deps: next, state };
     return state;
   });
+}
+const _depChanges = new Map<string, number>();
+if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+  (window as any).__depChanges = (reset?: boolean) => {
+    const out = [..._depChanges.entries()].sort((a, b) => b[1] - a[1]);
+    if (reset) _depChanges.clear();
+    return out;
+  };
+  // Which sessions' STRUCTURAL signature changed since the last call, and how
+  // (the sig parts that differ). Names the field behind a sessionsWakeSig wake.
+  let _sigSnap: Record<string, string> = {};
+  (window as any).__sessionSigDiff = () => {
+    const sessions = useInboxStore.getState().sessions;
+    const next: Record<string, string> = {};
+    const changed: Array<{ id: string; title?: string; diff: Array<[number, string, string]> }> = [];
+    for (const id in sessions) {
+      const sig = sessionStructuralSig(sessions[id]);
+      next[id] = sig;
+      const prev = _sigSnap[id];
+      if (prev !== undefined && prev !== sig) {
+        const a = prev.split(","), b = sig.split(",");
+        const diff: Array<[number, string, string]> = [];
+        for (let i = 0; i < Math.max(a.length, b.length); i++) if (a[i] !== b[i]) diff.push([i, a[i], b[i]]);
+        changed.push({ id: id.slice(0, 7), title: sessions[id].title?.slice(0, 40), diff });
+      }
+    }
+    _sigSnap = next;
+    return changed;
+  };
 }
 
 // -- Per-conversation IDB hydration (idempotent, no hooks) --

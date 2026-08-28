@@ -28,7 +28,7 @@ import { channelDisplayName, dmCounterpart, memberName } from "../lib/chatViews"
 import { memberAvatarUrl, memberDisplayName } from "../lib/liveEntities";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useCollectionRows } from "../hooks/useCollectionRows";
-import { useSyncTriggers } from "../hooks/useSyncTriggers";
+import { triggerSig, useSyncTriggers } from "../hooks/useSyncTriggers";
 import { POP_OUT_PEOPLE_TITLE, isElectron, isPeopleWindow } from "../lib/desktop";
 import { popOutPeople } from "./people/popOutPeople";
 import { isInboxRoute } from "../lib/inboxRouting";
@@ -1357,7 +1357,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // Store-fed (hooks/useSyncTriggers): the palette searches the cached
   // roster; the feeder mounts only while a search is live.
   useSyncTriggers(open && query.trim().length >= 2);
-  const triggerList = useCollectionRows<any>("agentTasks");
+  const triggerList = useCollectionRows<any>("agentTasks", { sig: triggerSig });
   const triggerMatches = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (q.length < 2 || !Array.isArray(triggerList)) return [];

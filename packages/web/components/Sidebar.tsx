@@ -749,7 +749,11 @@ function PinnedRail({
 
 // The session fields the directory rail groups by; anything else on the row
 // (heartbeats, streaming counters) doesn't wake the sidebar.
-const sidebarSessionSig = (r: any) => `${r.git_root ?? ""}|${r.project_path ?? ""}|${r.updated_at ?? 0}`;
+// updated_at is quantized to the minute: the raw stamp ticks on every heartbeat
+// and streamed token of every live session, and each tick woke the whole
+// Sidebar (measured 13 renders / 25s at idle). Recency order in this list only
+// needs minute resolution.
+const sidebarSessionSig = (r: any) => `${r.git_root ?? ""}|${r.project_path ?? ""}|${Math.floor((r.updated_at ?? 0) / 60_000)}`;
 const byUpdatedDesc = (a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
 
 export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
