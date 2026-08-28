@@ -78,7 +78,7 @@ mock.module("../desktop", () => ({
   isNotificationLeader: () => isLeader,
 }));
 
-const { soundChatMessage } = await import("../sounds");
+const { soundChatMessage, resetAudioContext } = await import("../sounds");
 
 function setWindowRoleForTest(leader: boolean) {
   isLeader = leader;
@@ -88,6 +88,10 @@ describe("one arrival, one sound", () => {
   beforeEach(() => {
     oscStarts = 0;
     bufferStarts = 0;
+    // sounds.ts caches one AudioContext for the whole process, so without this
+    // whichever sound test file runs first pins its stand-in for the rest and
+    // the others count nothing. See `resetAudioContext`.
+    resetAudioContext();
     setWindowRoleForTest(true);
   });
 
