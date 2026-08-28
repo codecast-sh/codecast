@@ -29,7 +29,7 @@ function recomputeRelativeLabel(iso: string): string | null {
 const SHORT_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
-export function resolveDateDisplay(iso: string, storedLabel?: string | null): {
+function resolveDateDisplay(iso: string, storedLabel?: string | null): {
   label: string;
   resolved: string;
 } {

@@ -12,14 +12,9 @@ import {
   presenceActivityLine,
 } from "../presence/memberPresence";
 import { emptyRosterText, unreadBadgeText } from "./peopleRoster";
-import {
-  WALL_FACE_PX,
-  buildWall,
-  type Wall,
-  type WallFace,
-  type WallTier,
-} from "./peopleWallLayout";
+import { type WallFace } from "./peopleWallLayout";
 import { usePeopleRoster, type PeopleRosterData } from "./usePeopleRoster";
+import { useWall } from "./usePeopleWall";
 import "./people.css";
 
 /** What a face tells the surface about itself as a pointer or focus arrives:
@@ -34,23 +29,6 @@ export interface FaceDescription {
   tone: string;
 }
 
-/** The wall, laid out from roster data — one memo shared by the wall and the
- *  strip so the two can never sort or size a team differently. */
-export function useWall(data: PeopleRosterData, sizes: Record<WallTier, number> = WALL_FACE_PX): Wall<any> {
-  const { members, fleets } = data;
-  return useMemo(
-    () =>
-      buildWall(
-        members,
-        (m: any) => memberPresenceVisual(m),
-        (m: any) => fleets.get(String(m._id)) ?? null,
-        (m: any) => String(m._id ?? ""),
-        (m: any) => m?.name || m?.email || "",
-        sizes,
-      ),
-    [members, fleets, sizes],
-  );
-}
 
 /**
  * A WALL, not a list.
