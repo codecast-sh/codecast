@@ -9,7 +9,7 @@ import type { LazyExoticComponent, ComponentType } from "react";
  *   1. src/App.tsx                — the React Router <Route> table (what URL renders what).
  *   2. components/TabContent.tsx  — the tab-shell pattern→component table (what the
  *                                   persistent dashboard tab system can render in place).
- *   3. src/compat/tabRouting.ts   — NON_TAB_EXACT / NON_TAB_PREFIXES (which routes live
+ *   3. lib/tabRoutes.ts           — NON_TAB_EXACT / NON_TAB_PREFIXES (which routes live
  *                                   OUTSIDE the tab shell; intercepting them rewrites the
  *                                   URL without navigating).
  *   4. components/DashboardLayout — the isOnXPage booleans that compose isFullWidthPage
