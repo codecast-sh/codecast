@@ -61,10 +61,17 @@ mock.module("../calls/callManager", () => ({
     leaveCalls++;
     return trueLeaveCall();
   },
+  // Recorded as well as applied. The release's mute is the seam the founder
+  // feels — a key coming up must not close a microphone inside a call — and
+  // reading the store afterwards cannot tell "never muted" apart from "muted
+  // and unmuted again by something else in the same tick".
   setMuted: async (muted: boolean) => {
+    muteCalls.push(muted);
     useInboxStore.getState().setCallState({ muted });
   },
 }));
+
+let muteCalls: boolean[] = [];
 
 /** The recognizer, reduced to the three things the engine asks of it. */
 type FakePipe = {
@@ -109,14 +116,14 @@ mock.module("../sounds", () => ({
   soundWalkieRoger: () => void soundLog.push("roger"),
   soundWalkieSquelch: () => void soundLog.push("squelch"),
   soundWalkieOpen: () => void soundLog.push("open"),
+  soundWalkieJoined: () => void soundLog.push("joined"),
+  soundWalkieAway: () => void soundLog.push("away"),
 }));
 
 const walkie = await import("../calls/walkie");
-// The real ownership rule, not a copy of it. It is pure — no React — and
-// importing it also brings up its module-level subscriber, which is what keeps
-// `lastTarget` and the guest ruling honest, so the question asked below is the
+// The real surface lookup, not a copy of it, so the question asked below is the
 // one the app asks.
-const { walkieOwnsCall } = await import("../../hooks/useWalkie");
+const { callDockSurface } = await import("../../hooks/useWalkie");
 
 // ── the browser ────────────────────────────────────────────────────────────
 
@@ -164,6 +171,7 @@ beforeEach(() => {
   pipes = [];
   recorders = [];
   micTracks = [];
+  muteCalls = [];
   getUserMediaCalls = 0;
   permissionState = "granted";
   joining = defer<void>();
@@ -421,16 +429,16 @@ describe("walkie: releasing before the room ever answered", () => {
 // ── who is holding the room, at every instant ──────────────────────────────
 //
 // The walkie and the ordinary call dock are two surfaces for one room, and
-// exactly one of them is right at any moment. `walkieOwnsCall` answers out of
-// the engine's three states — a burst going out, a burst coming in, a room held
-// open afterwards — so a moment in which the engine is in NONE of them, while
-// this client is still seated in the room, is a moment the call dock takes over
-// a room the walkie has not let go of. That is what these pin.
+// exactly one of them is right at any moment. The answer is `liveRoom`: it is
+// claimed at the press and dropped only once the seat has genuinely gone, so a
+// synchronous push in which this client is seated with no live room is a push
+// in which the call dock takes over a room the walkie has not let go of.
 //
-// It was real: the linger used to begin after the audio upload and the finalize
-// round trip, both of which happen after the burst is cleared. Measured in the
-// browser at 861ms with a ten second recording — a floating call window, or the
-// full stage, appearing by itself a beat after the person stopped talking.
+// It was real, back when that answer was assembled from three separate fields.
+// The linger began after the audio upload and the finalize round trip, both of
+// which happen after the burst is cleared — measured in the browser at 861ms
+// with a ten second recording: a floating call window, or the full stage,
+// appearing by itself a beat after the person stopped talking.
 
 describe("walkie: who is holding the room after the key comes up", () => {
   /** The room answering, exactly as the real joinCall leaves the call plane. */
@@ -441,8 +449,8 @@ describe("walkie: who is holding the room after the key comes up", () => {
   }
 
   /**
-   * Watch `walkieOwnsCall` on EVERY status the engine publishes, which is what
-   * a subscribed component sees. A lapse lasting one synchronous push is
+   * Watch the surface on EVERY status the engine publishes, which is what a
+   * subscribed component sees. A lapse lasting one synchronous push is
    * invisible to any test that reads the settled state afterwards, and one push
    * is exactly the size these bugs come in.
    *
@@ -458,15 +466,19 @@ describe("walkie: who is holding the room after the key comes up", () => {
       const seated =
         call.roomKey === "dm:a:b" && (call.phase === "connected" || call.phase === "connecting");
       if (!seated) return;
-      if (!walkieOwnsCall(s, { roomKey: call.roomKey, phase: call.phase, muted: call.muted })) {
+      // Both halves of the same claim: the engine says it is in this room as a
+      // burst, and the lookup that reads it says the strip. Neither alone would
+      // catch a live room whose mode had drifted.
+      const held = s.liveRoom?.key === call.roomKey && s.liveRoom.mode !== "call";
+      const surface = callDockSurface(s, { roomKey: call.roomKey, phase: call.phase }, { expanded: false });
+      if (!held || surface !== "walkie") {
         lapses.push(
           JSON.stringify({
             sending: !!s.sending,
             incoming: !!s.incoming,
-            linger: s.lingerUntil,
-            releasing: s.releasing,
+            liveRoom: s.liveRoom,
+            surface,
             phase: call.phase,
-            muted: call.muted,
           }),
         );
       }
@@ -474,10 +486,12 @@ describe("walkie: who is holding the room after the key comes up", () => {
     return { lapses, off };
   }
 
-  test("the room is already lingering when the upload starts, not when it finishes", async () => {
-    const lingerAt: Record<string, number | null> = {};
+  test("the room is still the walkie's while the upload runs, not only once it finishes", async () => {
+    const heldAt: Record<string, string | null> = {};
     mutations.length = 0;
-    bind({ onMutation: (name) => void (lingerAt[name] = walkie.getWalkieStatus().lingerUntil) });
+    bind({
+      onMutation: (name) => void (heldAt[name] = walkie.getWalkieStatus().liveRoom?.key ?? null),
+    });
     await walkie.startBurst("chan-1", "dm:a:b");
     await roomAnswers();
     clock += 2_000;
@@ -486,9 +500,9 @@ describe("walkie: who is holding the room after the key comes up", () => {
     // The upload is the first network call after the burst is cleared, and it
     // is the long one — it carries the recording. The room must already be the
     // walkie's by then.
-    expect(lingerAt["images:generateUploadUrl"]).not.toBeNull();
-    expect(lingerAt["chat:finalizeVoiceBurst"]).not.toBeNull();
-    expect(walkie.getWalkieStatus().lingerUntil).not.toBeNull();
+    expect(heldAt["images:generateUploadUrl"]).toBe("dm:a:b");
+    expect(heldAt["chat:finalizeVoiceBurst"]).toBe("dm:a:b");
+    expect(walkie.getWalkieStatus().liveRoom?.key).toBe("dm:a:b");
   });
 
   test("NO SINGLE PUSH ever shows the room without an owner", async () => {
@@ -505,7 +519,7 @@ describe("walkie: who is holding the room after the key comes up", () => {
     // push on the wire. The whole span from the first press to the second
     // release is judged by one watcher, because that is the span the founder
     // holds the key across.
-    expect(walkie.getWalkieStatus().lingerUntil).not.toBeNull();
+    expect(walkie.getWalkieStatus().liveRoom?.key).toBe("dm:a:b");
     clock += 1_000;
     await walkie.startBurst("chan-1", "dm:a:b");
     clock += 2_000;
@@ -544,10 +558,10 @@ describe("walkie: who is holding the room after the key comes up", () => {
   // the very room a burst to that person opens. Handing that one back would
   // hang up a live conversation because somebody brushed a key.
   //
-  // `shouldReleaseRoom` refuses on `opened`, which `claimRoom` sets to null
-  // when the seat was already taken. This pins that the refusal survives the
-  // reordering: no leave, no `releasing` marker, and the person is still in
-  // their call afterwards.
+  // The seat itself decides it: a room this client was already sitting in when
+  // the key went down IS a call, whoever opened it, so `shouldReleaseRoom`
+  // refuses. This pins that the refusal survives the reordering — no leave, and
+  // the person is still in their call afterwards.
   test("a brushed key inside a huddle the person joined never takes their seat", async () => {
     // Seated first, and not by the walkie.
     S().setCallState({ roomKey: "dm:a:b", phase: "connected", muted: false });
@@ -564,43 +578,27 @@ describe("walkie: who is holding the room after the key comes up", () => {
     // But the huddle is untouched. A guest never announces a hand-back and
     // never performs one.
     expect(leaveCalls).toBe(0);
-    expect(walkie.getWalkieStatus().releasing).toBeNull();
+    expect(walkie.getWalkieStatus().liveRoom?.mode).toBe("call");
     expect((S().call as any).phase).toBe("connected");
     expect((S().call as any).roomKey).toBe("dm:a:b");
   });
 
-  test("a brushed key never arms a linger at all", async () => {
-    // It used to be armed and then taken back a round trip later, which is a
-    // flash of "still open with <person>" for a key nobody meant to press.
-    // Watched rather than sampled, so the flash cannot hide between samples.
-    await walkie.startBurst("chan-1", "dm:a:b");
-    await roomAnswers();
-    // Watched from HERE, not from the top of the test: the press clears
-    // whatever linger the previous test left behind, so this is the first
-    // moment the question is about this burst rather than an earlier one.
-    expect(walkie.getWalkieStatus().lingerUntil).toBeNull();
-    let sawLinger = false;
-    const off = walkie.subscribeWalkie(() => {
-      if (walkie.getWalkieStatus().lingerUntil !== null) sawLinger = true;
-    });
-    clock += 100;
-    await release();
-    off();
-    expect(sawLinger).toBe(false);
-    expect(finalize()).toBeUndefined();
-  });
-
-  test("a brushed key still hands the room straight back", async () => {
-    // The linger now starts before the burst is measured, so the discard path
-    // has to take it back — otherwise a 100ms brush of the key leaves both
-    // people sitting in a call room for thirty seconds, which is the exact
-    // failure `abandonRoom` was written for.
+  test("a brushed key never holds the room open at all", async () => {
+    // A key nobody meant to press used to seat both people in a call room for
+    // thirty seconds under a strip claiming a conversation was open, and the
+    // first attempt at the fix armed the hold and took it back a round trip
+    // later — the same lie for a shorter time. The seat goes back inside the
+    // release now, so there is no room left for a deadline to run against.
     await walkie.startBurst("chan-1", "dm:a:b");
     await roomAnswers();
     clock += 100;
     await release();
     expect(finalize()).toBeUndefined();
-    expect(walkie.getWalkieStatus().lingerUntil).toBeNull();
+    expect(walkie.getWalkieStatus().liveRoom).toBeNull();
+    expect(
+      walkie.seatDeadline({ live: null, bursting: false, incoming: null, lastAudioAt: clock }),
+    ).toBeNull();
+    expect(leaveCalls).toBeGreaterThan(0);
   });
 });
 
@@ -843,7 +841,7 @@ describe("walkie: the hot listen cannot outlive the burst", () => {
       seatLanded();
       await passTime(160_000);
       expect(S().call.phase).toBe("idle");
-      expect(walkie.getWalkieStatus().lingerUntil).toBeNull();
+      expect(walkie.getWalkieStatus().liveRoom).toBeNull();
     } finally {
       jest.useRealTimers();
       Date.now = () => clock;
@@ -903,7 +901,7 @@ describe("walkie: the hot listen cannot outlive the burst", () => {
       // it — so it cannot leak into the next test's arithmetic.
       S().setCallState({ roomKey: null, phase: "idle", muted: true });
       walkie.refreshWalkie();
-      expect(walkie.getWalkieStatus().joinedLive).toBeNull();
+      expect(walkie.getWalkieStatus().liveRoom).toBeNull();
     }
   });
 
@@ -913,5 +911,160 @@ describe("walkie: the hot listen cannot outlive the burst", () => {
     const deadline = walkie.hotListenDeadline(1_000);
     expect(deadline - 1_000).toBe(150_000);
     expect(deadline - 1_000).toBeGreaterThan(120_000);
+  });
+});
+
+// ── the release, once the burst has become a call ───────────────────────────
+//
+// THE SEAM THE FOUNDER FEELS. A burst and a call are the same room, so the
+// upgrade adds no machinery — but the release still ran the walkie's own
+// ending over the top of it: `setMuted(true)`, because the microphone belongs
+// to the hold, and the roger, because a message had been sent. Neither is true
+// once somebody has stepped in. The person carried on speaking into a mic that
+// had just closed under them, and heard themselves signed off mid-sentence.
+describe("walkie: letting go inside a call", () => {
+  const ROOM = "dm:upgrade:release";
+
+  /** A held key, published into a room this client is seated in. */
+  async function holdInto(room: string) {
+    await walkie.startBurst("chan-1", room);
+    S().setCallState({ roomKey: room, phase: "connected", muted: false });
+    joining.resolve();
+    await settle();
+    clock += 2_000;
+  }
+
+  /** Put the stamp back the way the app does — the call ending clears it — so
+   *  one test's upgrade cannot decide the next one's release. */
+  function retire() {
+    S().setCallState({ roomKey: null, phase: "idle", muted: true });
+    walkie.refreshWalkie();
+  }
+
+  test("the key coming up leaves the microphone open", async () => {
+    await holdInto(ROOM);
+    walkie.markWalkieUpgraded(ROOM);
+    muteCalls.length = 0;
+    try {
+      await release();
+      await settle();
+      // Not "the store says unmuted" — never asked for at all. The two are
+      // different claims and only this one survives something else unmuting
+      // in the same tick.
+      expect(muteCalls).not.toContain(true);
+      expect(S().call.muted).toBe(false);
+      // And the seat is still there to be heard through.
+      expect(S().call.phase).toBe("connected");
+      expect(leaveCalls).toBe(0);
+    } finally {
+      retire();
+    }
+  });
+
+  test("and no roger: there is no message to sign off", async () => {
+    await holdInto(ROOM);
+    walkie.markWalkieUpgraded(ROOM);
+    soundLog.length = 0;
+    try {
+      await release();
+      await settle();
+      expect(soundLog).not.toContain("roger");
+    } finally {
+      retire();
+    }
+  });
+
+  test("an ordinary burst still closes the mic and still signs off", async () => {
+    // The other half of the rule, and the reason it is a condition rather than
+    // a deletion: nobody stepped in here, so the hold ends the way it always
+    // did and the microphone the hold opened goes back.
+    await holdInto("dm:plain:release");
+    muteCalls.length = 0;
+    soundLog.length = 0;
+    await release();
+    await settle();
+    expect(muteCalls).toContain(true);
+    expect(soundLog).toContain("roger");
+  });
+
+  test("a stamp on a DIFFERENT room does not keep this mic open", async () => {
+    // `joinedLive` names a room rather than carrying a flag, and this is why:
+    // a call somebody is in elsewhere says nothing about the burst in hand.
+    await holdInto("dm:plain:release");
+    walkie.markWalkieUpgraded("dm:somewhere:else");
+    muteCalls.length = 0;
+    try {
+      await release();
+      await settle();
+      expect(muteCalls).toContain(true);
+    } finally {
+      retire();
+    }
+  });
+});
+
+// ── the two cues that answer a person rather than a machine ────────────────
+//
+// The walkie's sounds are the half of it that never appears in a screenshot,
+// and these two are the ones that say what happened to the message: somebody
+// stepped into it, or nobody was there to hear it. Both are pinned to an exact
+// moment for the same reason the roger is — a cue that drifts is worse than no
+// cue, because a person has already learned what it meant.
+describe("walkie: the join and the away tick", () => {
+  test("pressing Join live sounds the join on this side too", async () => {
+    // The far side hears it off the roster stamp. Nothing was playing it for
+    // the person who actually pressed the button, so the one gesture that
+    // turns a burst into a call was the only one in the set that was silent.
+    soundLog.length = 0;
+    try {
+      // NOT awaited: the join itself is a round trip the mocked room never
+      // answers, and the cue deliberately sits in front of it — a person who
+      // pressed a button is owed an answer now, not when the SFU says so.
+      const joining = walkie.joinWalkieLive("dm:join:sound", { name: "Jordan" });
+      expect(soundLog).toContain("joined");
+      void joining.catch(() => {});
+    } finally {
+      S().setCallState({ roomKey: null, phase: "idle", muted: true });
+      walkie.refreshWalkie();
+    }
+  });
+
+  test("the away tick plays once for a burst, however often the roster pushes", async () => {
+    // THE MUTATION CHECK. The watcher that decides this fires on every push of
+    // the room's occupancy, and a person who is not there does not become more
+    // absent each time. Without the guard on the burst a two second hold into
+    // an empty room ticks over and over.
+    await walkie.startBurst("chan-1", "dm:away:tick");
+    soundLog.length = 0;
+    walkie.noteBurstUnheard();
+    walkie.noteBurstUnheard();
+    walkie.noteBurstUnheard();
+    expect(soundLog.filter((s) => s === "away")).toEqual(["away"]);
+    clock += 2_000;
+    await release();
+  });
+
+  test("a second hold gets its own tick", async () => {
+    // "Once" is once per hold, not once per tab: the next burst into the same
+    // empty room is a new message and deserves the same answer.
+    await walkie.startBurst("chan-1", "dm:away:tick");
+    walkie.noteBurstUnheard();
+    clock += 2_000;
+    await release();
+    joining.resolve();
+
+    joining = defer<void>();
+    await walkie.startBurst("chan-1", "dm:away:tick");
+    soundLog.length = 0;
+    walkie.noteBurstUnheard();
+    expect(soundLog).toContain("away");
+    clock += 2_000;
+    await release();
+  });
+
+  test("says nothing when there is no burst to be unheard", async () => {
+    soundLog.length = 0;
+    walkie.noteBurstUnheard();
+    expect(soundLog).not.toContain("away");
   });
 });

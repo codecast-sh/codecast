@@ -1,8 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import {
+  hotListenDeadline,
   landBurst,
   measureBurst,
   pickLiveBurst,
+  seatDeadline,
   shouldReleaseRoom,
   type LiveBurstRow,
 } from "../calls/walkie";
@@ -180,10 +182,9 @@ describe("walkie: measuring a burst", () => {
 // that gesture is for — was thrown out of the meeting thirty seconds later.
 
 const seat = (over: Partial<Parameters<typeof shouldReleaseRoom>[0]> = {}) => ({
-  opened: true,
+  mode: "burst" as const,
   bursting: false,
   incoming: false,
-  joinedLive: false,
   ...over,
 });
 
@@ -194,17 +195,20 @@ describe("walkie: handing a room back", () => {
 
   it("never closes a room the person walked into by hand", () => {
     // The muted lurker in a huddle who uses hold-to-reply. Their seat predates
-    // the burst and outlives it.
-    expect(shouldReleaseRoom(seat({ opened: false }))).toBe(false);
+    // the burst and outlives it — which the engine records by giving a room it
+    // finds itself already sitting in the mode `call`, whoever opened it.
+    expect(shouldReleaseRoom(seat({ mode: "call" }))).toBe(false);
   });
 
   it("leaves a room somebody stepped into on purpose alone", () => {
     // Join live was pressed: this is a huddle now, and a huddle is left by
-    // hand rather than by a timer running out.
-    expect(shouldReleaseRoom(seat({ joinedLive: true }))).toBe(false);
+    // hand rather than by a timer running out. The same answer as the line
+    // above, and that is the point of one mode rather than two flags — the two
+    // situations were never different.
+    expect(shouldReleaseRoom(seat({ mode: "call" }))).toBe(false);
   });
 
-  it("hands back a room whose microphone is open but that nobody joined", () => {
+  it("hands back a listen whose microphone is open but that nobody joined", () => {
     // THE MUTE USED TO BE THE TEST HERE and it cannot be any more. Auto-listen
     // is hot: every receiver's mic is open for the whole burst, so reading an
     // open mic as "they joined" would refuse this handback on the ordinary
@@ -214,7 +218,7 @@ describe("walkie: handing a room back", () => {
     // conversation had started, and this is what bounds the hot mic: the
     // burst, plus the half minute an answer might arrive in, then it closes
     // itself.
-    expect(shouldReleaseRoom(seat({ joinedLive: false }))).toBe(true);
+    expect(shouldReleaseRoom(seat({ mode: "listen" }))).toBe(true);
   });
 
   it("does not pull the room out from under a burst still in flight", () => {
@@ -222,12 +226,82 @@ describe("walkie: handing a room back", () => {
     expect(shouldReleaseRoom(seat({ incoming: true }))).toBe(false);
   });
 
-  it("asks whose seat it is before anything else", () => {
-    // Every other reason to stay is moot if the seat was never ours: the
-    // answer is the same no matter what else is true.
-    for (const over of [{ bursting: true }, { incoming: true }, { joinedLive: true }]) {
-      expect(shouldReleaseRoom(seat({ opened: false, ...over }))).toBe(false);
+  it("asks what the room IS before anything else", () => {
+    // Every other reason to stay is moot once the room is a call: the answer is
+    // the same no matter what else is true.
+    for (const over of [{ bursting: true }, { incoming: true }, {}]) {
+      expect(shouldReleaseRoom(seat({ mode: "call", ...over }))).toBe(false);
     }
+  });
+});
+
+// ── The seat's one clock ───────────────────────────────────────────────────
+//
+// This replaced a linger timer, a separate hot-listen ceiling, a `lingerRoomKey`
+// and a `ceilingFor`, each of which existed partly to stop one of the others
+// going wrong. The whole of it is now one deadline derived from the state, so
+// the rule can be read rather than traced, and re-arming is a comparison.
+
+describe("walkie: when the seat stops being worth holding", () => {
+  const AUDIO = 1_700_000_000_000;
+  const live = (mode: "burst" | "listen" | "call") => ({ key: "dm:a:b", mode, since: AUDIO });
+  const at = (over: Partial<Parameters<typeof seatDeadline>[0]> = {}) =>
+    seatDeadline({ live: live("burst"), bursting: false, incoming: null, lastAudioAt: AUDIO, ...over });
+
+  it("holds a room for half a minute after the last thing said in it", () => {
+    // A burst is one half of a conversation. Leaving at once would send the
+    // answer to an empty room.
+    expect(at()).toBe(AUDIO + 30_000);
+    expect(at({ live: live("listen") })).toBe(AUDIO + 30_000);
+    // From the LAST audio, either direction, so a back-and-forth holds the seat
+    // for as long as it is a conversation rather than for one fixed half minute.
+    expect(at({ lastAudioAt: AUDIO + 12_000 })).toBe(AUDIO + 42_000);
+  });
+
+  it("gives a key in hand no clock at all", () => {
+    // The hold itself is what holds the room; a deadline here would be a timer
+    // racing a person who is still talking.
+    expect(at({ bursting: true })).toBeNull();
+  });
+
+  it("gives a room somebody stepped into no clock at all", () => {
+    // A huddle is left by hand. A timer must never hang one up — which covers
+    // both a Join live and a room this client was already sitting in when the
+    // key went down, because the engine calls both of them a call.
+    expect(at({ live: live("call") })).toBeNull();
+  });
+
+  it("bounds a listen by the burst's own age, whatever the server says", () => {
+    // THE ONE CLOCK ON THIS PATH. Auto-listen is hot, so a burst holds the
+    // receiver's microphone open, and what normally closes it is the server
+    // saying the burst is over. That push never comes if the sender's tab dies
+    // mid-word: the row stays live forever, the sweep runs only as a side
+    // effect of the next burst in that channel, and the query result is
+    // byte-identical so nothing wakes. So the receiver counts from the burst's
+    // own age instead.
+    const opened = AUDIO - 4_000;
+    expect(at({ incoming: { createdAt: opened } })).toBe(hotListenDeadline(opened));
+    // It outranks the half minute: a burst that is still playing has not
+    // finished being said.
+    expect(at({ incoming: { createdAt: opened }, lastAudioAt: AUDIO })).toBe(hotListenDeadline(opened));
+    // AND IT RUNS INSIDE A CALL TOO. The dead row still has to be cleared
+    // there; handing the seat back is `shouldReleaseRoom`'s decision and it
+    // refuses, which is what keeps a timer from ending a conversation.
+    expect(at({ live: live("call"), incoming: { createdAt: opened } })).toBe(hotListenDeadline(opened));
+  });
+
+  it("clears the sender's own cap by a real margin", () => {
+    // Stated as a number rather than left implicit: this is the outer bound on
+    // any microphone the feature opens without being asked. The sender's cap is
+    // the same 120s as the staleness window, so a legitimate two-minute
+    // monologue reaches the line at the very moment it stops — and its upload
+    // and finalize still have to land after that.
+    expect(hotListenDeadline(1_000) - 1_000).toBe(150_000);
+    expect(hotListenDeadline(1_000) - 1_000).toBeGreaterThan(120_000);
+  });
+
+  it("gives a walkie that is in no room nothing to count", () => {
+    expect(at({ live: null })).toBeNull();
   });
 });
 
