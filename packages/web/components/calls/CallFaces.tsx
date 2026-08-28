@@ -1,5 +1,4 @@
 import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Maximize2, Mic, MicOff, PhoneOff, User, Users, X } from "lucide-react";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -10,96 +9,85 @@ import {
   setCallOutlivesWindow,
   setMuted,
   subscribeCallTiles,
-  takeOverCall,
   type ParticipantTile,
 } from "../../lib/calls/callManager";
-import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
+import { callWindowLeaveGesture } from "../../lib/calls/callHandoff";
 import {
-  callHandoffState,
-  callWindowReport,
-  facesLeaveGesture,
-  facesWindowExit,
-} from "../../lib/calls/callHandoff";
-import {
-  closeFacesWindow,
-  isFacesWindow,
-  openCallPanel,
-  reportFacesState,
-  setFacesDragging,
-  setFacesInteractive,
-  setFacesSize,
+  closeCallPanel,
+  setCallWindowContentSize,
+  setCallWindowDragging,
+  setCallWindowInteractive,
+  type CallWindowSize,
   type FacesMode,
 } from "../../lib/desktop";
 import {
-  EVERYONE_DIAMETER,
-  SPEAKER_DIAMETER,
+  TIER_DIAMETER,
   facePeople,
   facesToShow,
   facesWindowSize,
   hitsInteractive,
   pickSpeaker,
   type FacePerson,
+  type FaceTier,
   type HitRegion,
   type SpeakerPick,
 } from "../../lib/calls/faceCrop";
-import { useFaceCrop } from "./useFaceCrop";
-import { AvatarImg } from "../../lib/avatarCache";
-import { firstName } from "./speakers";
+import { FaceCircle, FacesChrome } from "./FaceCircle";
 import "./faces.css";
 
 /**
  * The call, minimized to the people in it.
  *
- * ── What this window IS ───────────────────────────────────────────────────
- * A circle of somebody's face, floating over whatever you are working in, with
- * everything around it see-through. Two modes: the person talking (one circle),
- * or everybody (a row). It is the smallest honest form of a call — you can see
- * who you are with, you can hear them, and one gesture gives you the room back.
+ * ── What this IS ──────────────────────────────────────────────────────────
+ * The small sizes of the call window: a circle of somebody's face floating
+ * over whatever you are working in, with everything around it see-through. A
+ * row of them, one of them, or one shrunk to the size of a menu bar icon. It is
+ * the smallest honest form of a call — you can see who you are with, you can hear
+ * them, and one gesture gives you the room back.
  *
- * ── Why it is a window and not a mode of the panel ────────────────────────
- * Electron decides `transparent` and `frame` when a window is CONSTRUCTED. The
- * call panel cannot become see-through at runtime, so minimizing is a handoff:
- * this window joins the room, LiveKit evicts the panel as a duplicate identity
- * (every window of one person signs as the same user id), and the panel closes
- * behind it. Restoring is the same two moves swapped. Nothing coordinates them
- * — the SFU's ordering guarantees the new window is connected before the old
- * one lets go, so the audio has no hole in it.
+ * ── What it is NOT ────────────────────────────────────────────────────────
+ * A window. It used to be one, because Electron decides `transparent` and
+ * `frame` when a window is CONSTRUCTED and the stage's window had a frame. The
+ * call window is now born see-through for every size, so these circles are a
+ * subtree of it — and changing size no longer re-joins the room. Everything
+ * about hosting the call (taking it over, reporting it, closing) belongs to
+ * `CallPanel`; this draws the circles and says which size to be next.
  *
- * ── The two things a see-through window has to get right ──────────────────
+ * ── The two things a see-through size has to get right ────────────────────
  * CLICK-THROUGH. The window is a rectangle, the product is a few circles.
- * It ignores the mouse by default, and the renderer — the only side that knows
- * where the circles are — lifts that while the pointer is over one. Get this
- * wrong and an invisible pane eats clicks meant for the person's editor.
+ * It ignores the mouse by default, and this component — the only side that
+ * knows where the circles are — lifts that while the pointer is over one. Get
+ * it wrong and an invisible pane eats clicks meant for the person's editor.
  *
  * FRAME DISCIPLINE. Face tracking samples at 3Hz and the crop eases toward it
  * every frame, all of it in refs and one CSS transform per circle. Nothing per
- * frame goes near React: this window sits on top of somebody's real work, and
- * it is the last place in the app that should be re-rendering sixty times a
- * second to move a circle a pixel.
+ * frame goes near React: this sits on top of somebody's real work, and it is
+ * the last place in the app that should be re-rendering sixty times a second to
+ * move a circle a pixel.
  */
-/**
- * How long this window waits to get the call before it gives up and closes.
- *
- * Longer than an ordinary join by a wide margin, and longer than the shell's
- * grace for a window that is still joining — so the shell stops believing this
- * window is on its way in before this window stops trying.
- */
-const TAKEOVER_DEADLINE_MS = 12_000;
-
-export function CallFaces() {
-  const params = useMemo(
-    () => new URLSearchParams(typeof window === "undefined" ? "" : window.location.search),
-    [],
-  );
-  const roomKey = params.get("room");
-  const [mode, setMode] = useState<FacesMode>(params.get("mode") === "everyone" ? "everyone" : "speaker");
+export function CallFaces({
+  mode,
+  tier,
+  held,
+  onSetSize,
+}: {
+  /** How many circles: one, or the whole room. */
+  mode: FacesMode;
+  /** How big they are. `tiny` is the one size that is not its mode's own tier. */
+  tier: FaceTier;
+  /** Whether the window ever actually got the call — Leave means two things. */
+  held: boolean;
+  /** Change the window's size, including back to the stage. */
+  onSetSize: (size: CallWindowSize) => void;
+}) {
   const [hovered, setHovered] = useState(false);
 
+  // Only what the circles paint. The phase, the camera flag and the rest of the
+  // call slice belong to CallPanel now, and subscribing to them here would
+  // re-render a window full of video for a fact it does not draw.
   const s = useTrackedStore([
-    (st: any) => st.call.phase,
     (st: any) => st.call.roomKey,
     (st: any) => st.call.muted,
-    (st: any) => st.call.camera,
     (st: any) => st.call.speaking,
     (st: any) => (st.call.roomKey ? st.callOccupancy[st.call.roomKey] : undefined),
     (st: any) => st.currentUser?._id,
@@ -118,100 +106,6 @@ export function CallFaces() {
     (id: string) => cameras.find((t) => t.identity === id),
     [cameras],
   );
-
-  // ── Lifecycle: the same shape as the call panel's, for the same reasons ──
-
-  // This window's disappearance is a HANDOFF: the `call_members` seat is shared
-  // with the window taking the call, so the unload hook must not free it.
-  // Declared at mount because callManager's own unload listener is registered
-  // at module load and runs before anything a page adds later.
-  useMountEffect(() => {
-    if (!isFacesWindow()) return;
-    setCallOutlivesWindow(true);
-    return () => setCallOutlivesWindow(false);
-  });
-
-  const took = useRef(false);
-  useWatchEffect(() => {
-    if (!roomKey || took.current) return;
-    took.current = true;
-    void takeOverCall({
-      roomKey,
-      mic: params.get("mic") === "1",
-      camera: params.get("cam") === "1",
-      scribe: params.get("scribe") === "1",
-    });
-  }, [roomKey, params]);
-
-  // Did this window ever actually GET the call? Everything about closing it
-  // turns on this, so it is tracked in a ref (read inside callbacks) and in
-  // state (the Leave control says a different thing in each case).
-  const held = useRef(false);
-  const [heldNow, setHeldNow] = useState(false);
-
-  const scribe = useSyncExternalStore(subscribeScribe, getScribeStatus, getScribeStatus).active;
-  useWatchEffect(() => {
-    reportFacesState({
-      // The same five facts the panel reports, assembled in the same place —
-      // including the room this window knows from its own URL before it knows
-      // anything about a call. Plus the one fact only this window has.
-      ...callWindowReport({
-        phase: call.phase,
-        roomKey: call.roomKey,
-        windowRoom: roomKey,
-        muted: call.muted,
-        camera: call.camera,
-        scribe,
-      }),
-      mode,
-    });
-  }, [call.phase, call.roomKey, roomKey, call.muted, call.camera, scribe, mode]);
-
-  // ── Closing ─────────────────────────────────────────────────────────────
-  //
-  // This window has no title bar, no close box and no place in the dock: if it
-  // does not close itself, nothing closes it short of quitting the app. So
-  // every way this can stop being useful ends here, and `ended` carries the one
-  // thing the shell cannot work out for itself:
-  //
-  //   ended: true   the call is OVER. Hand nothing anywhere.
-  //   ended: false  the call is alive and this window is not the one holding
-  //                 it — hand it back, and let the shell's arbiter decide
-  //                 whether the main window or another call window takes it.
-  //
-  // Getting that backwards on the failure path is what strands a call: a window
-  // whose join failed, closing as though it had hung up, takes a call nobody
-  // else has been told about with it.
-  const closing = useRef(false);
-  const closeWindow = useCallback((ended: boolean) => {
-    if (closing.current) return;
-    closing.current = true;
-    setCallOutlivesWindow(false);
-    void closeFacesWindow({ ended });
-  }, []);
-
-  useWatchEffect(() => {
-    if (call.phase === "connected") {
-      held.current = true;
-      setHeldNow(true);
-    }
-    const exit = facesWindowExit({ phase: call.phase, held: held.current, deadlinePassed: false });
-    if (exit.close) closeWindow(exit.ended);
-  }, [call.phase, closeWindow]);
-
-  // The failure with nothing to show for itself: a join that neither connects
-  // nor errors. No state change is coming to close this window, so a clock has
-  // to. Bounded deliberately longer than the shell's grace for a window that is
-  // still joining, so the shell stops waiting for this window before it stops
-  // trying — never the other way round, which would leave a moment where both
-  // sides believe the other has the call.
-  useMountEffect(() => {
-    const t = setTimeout(() => {
-      const exit = facesWindowExit({ phase: "connecting", held: held.current, deadlinePassed: true });
-      if (exit.close) closeWindow(exit.ended);
-    }, TAKEOVER_DEADLINE_MS);
-    return () => clearTimeout(t);
-  });
 
   // ── Whose face the single circle shows ──────────────────────────────────
   //
@@ -233,9 +127,15 @@ export function CallFaces() {
   }, [pick.id, faces]);
 
   // ── The window is exactly as big as its circles ─────────────────────────
+  //
+  // Plus the 8px the speaking ring needs, and nothing else. `hovered` is the
+  // one thing that can widen it: the chrome overlays the circles rather than
+  // sitting under them, but at the speaker tier four buttons are wider than
+  // one face, and a window that clipped its own controls is a call you cannot
+  // leave. Away from the pointer it reserves nothing.
   useWatchEffect(() => {
-    setFacesSize(facesWindowSize(mode, faces.length));
-  }, [mode, faces.length]);
+    setCallWindowContentSize(facesWindowSize(mode, faces.length, { tier, hovered }));
+  }, [mode, faces.length, tier, hovered]);
 
   // ── Click-through ───────────────────────────────────────────────────────
   //
@@ -292,7 +192,7 @@ export function CallFaces() {
     const hit = hitsInteractive(regionsRef.current, e.clientX, e.clientY);
     if (hit !== interactiveRef.current) {
       interactiveRef.current = hit;
-      setFacesInteractive(hit);
+      setCallWindowInteractive(hit);
     }
     setHovered(true);
     if (hideTimer.current) clearTimeout(hideTimer.current);
@@ -308,59 +208,42 @@ export function CallFaces() {
     if (e.button !== 0) return;
     dragging.current = true;
     e.currentTarget.setPointerCapture(e.pointerId);
-    setFacesDragging(true);
+    setCallWindowDragging(true);
   }, []);
   const endDrag = useCallback((e: React.PointerEvent) => {
     if (!dragging.current) return;
     dragging.current = false;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
-    setFacesDragging(false);
+    setCallWindowDragging(false);
   }, []);
 
   // ── The ways out ────────────────────────────────────────────────────────
-  const restore = useCallback(() => {
-    // `callHandoffState` is the one place a call's movable state is read, so
-    // restoring the panel and popping out cannot hand it over differently.
-    const state = callHandoffState();
-    if (!state) return closeWindow(false);
-    // The panel joins and evicts this window; the phase watcher above closes it.
-    void openCallPanel(state.room, state);
-    // Unless this window never had the call. Then there is nothing for the
-    // panel to evict, no disconnect will ever arrive, and waiting for one would
-    // leave this window on screen forever.
-    if (!held.current) closeWindow(false);
-  }, [closeWindow]);
+  //
+  // Restoring is a resize now, not a handoff: the same window grows back into
+  // the stage with the same room, the same mic and the same transcript. There
+  // is nothing to evict and nothing to re-join.
 
-  // Leave always wins, whatever state this window is in.
+  // Leave always wins, whatever state the window is in.
   //
   // What it MEANS depends on whether this window has the call. Holding it,
-  // leaving hangs up. Not holding it — a failed join — leaving is just closing
-  // a useless window, and it must NOT call `leaveCall`: the seat in
-  // `call_members` is shared with the window that does hold the call, and
-  // freeing it would take that window's occupancy, heartbeat and transcript
+  // leaving hangs up. Not holding it — a join that failed — leaving is just
+  // closing a window with nothing in it, and it must NOT call `leaveCall`: the
+  // seat in `call_members` is shared with whichever window does hold the call,
+  // and freeing it would take that window's occupancy, heartbeat and transcript
   // authorization with it.
   const leave = useCallback(() => {
-    const gesture = facesLeaveGesture(held.current);
+    const gesture = callWindowLeaveGesture(held);
     if (gesture.hangUp) void leaveCall();
-    closeWindow(gesture.ended);
-  }, [closeWindow]);
+    setCallOutlivesWindow(false);
+    void closeCallPanel({ ended: gesture.ended });
+  }, [held]);
 
-  const diameter = mode === "speaker" ? SPEAKER_DIAMETER : EVERYONE_DIAMETER;
+  const diameter = TIER_DIAMETER[tier];
   const speaking = useMemo(() => new Set<string>(call.speaking ?? []), [call.speaking]);
-
-  if (!roomKey) {
-    return (
-      <div className="dark faces-window">
-        <div className="face" style={{ width: SPEAKER_DIAMETER, height: SPEAKER_DIAMETER }}>
-          <span className="face-waiting">no call</span>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div ref={rootRef} className={`dark faces-window${hovered ? " faces-window--hover" : ""}`}>
-      <div className={`faces-row faces-row--${mode}`} style={mode === "speaker" ? { width: diameter, height: diameter } : undefined}>
+      <div data-face-tier={tier} className={`faces-row faces-row--${mode}`} style={mode === "speaker" ? { width: diameter, height: diameter } : undefined}>
         {faces.length === 0 && (
           <div className="face" data-face-hit style={{ width: diameter, height: diameter }} onPointerDown={startDrag} onPointerUp={endDrag} onPointerCancel={endDrag}>
             <span className="face-waiting">joining</span>
@@ -377,127 +260,22 @@ export function CallFaces() {
             // faded up: the swap is a crossfade instead of a video being torn
             // down and rebuilt for somebody about to speak again.
             shown={mode === "everyone" || person.id === shownId}
-            showName={mode === "everyone"}
             onPointerDown={startDrag}
             onPointerUp={endDrag}
           />
         ))}
       </div>
 
-      {/* The chrome. Four things, because there are exactly four things a
-          person wants from a call they have minimized: see everyone or just
-          the talker, stop being heard, get the room back, or leave. */}
-      <div className="faces-chrome" data-chrome-hit>
-        <button
-          className="faces-btn"
-          onClick={() => setMode((m) => (m === "speaker" ? "everyone" : "speaker"))}
-          title={mode === "speaker" ? "Show everyone" : "Show whoever is talking"}
-        >
-          {mode === "speaker" ? <Users className="h-3.5 w-3.5" /> : <User className="h-3.5 w-3.5" />}
-        </button>
-        <button
-          className={`faces-btn${call.muted ? " faces-btn--alert" : " faces-btn--on"}`}
-          onClick={() => void setMuted(!call.muted)}
-          title={call.muted ? "Unmute" : "Mute"}
-        >
-          {call.muted ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
-        </button>
-        <button className="faces-btn" onClick={restore} title="Back to the call window">
-          <Maximize2 className="h-3.5 w-3.5" />
-        </button>
-        <button
-          className="faces-btn faces-btn--alert"
-          onClick={leave}
-          title={heldNow ? "Leave the call" : "Close this window — the call stays where it is"}
-        >
-          {heldNow ? <PhoneOff className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
-        </button>
-      </div>
+      <FacesChrome
+        mode={mode}
+        muted={call.muted}
+        held={held}
+        onMode={() => onSetSize(mode === "speaker" ? "circles" : "speaker")}
+        onMute={() => void setMuted(!call.muted)}
+        onRestore={() => onSetSize("panel")}
+        onLeave={leave}
+      />
     </div>
   );
 }
 
-/**
- * One person, as a circle.
- *
- * With a camera, the video is cropped to their face and follows it. Without
- * one, their avatar fills the circle — a camera-off person is still somebody
- * you are talking to, and an empty circle would read as a broken video rather
- * than as a person who has their camera off.
- */
-function FaceCircle({
-  person,
-  tile,
-  diameter,
-  speaking,
-  shown,
-  showName,
-  onPointerDown,
-  onPointerUp,
-}: {
-  person: FacePerson;
-  tile?: ParticipantTile;
-  diameter: number;
-  speaking: boolean;
-  shown: boolean;
-  showName: boolean;
-  onPointerDown: (e: React.PointerEvent) => void;
-  onPointerUp: (e: React.PointerEvent) => void;
-}) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const track = tile?.track;
-
-  useWatchEffect(() => {
-    const el = videoRef.current;
-    if (!el || !track) return;
-    track.attach(el);
-    return () => {
-      track.detach(el);
-    };
-  }, [track]);
-
-  // A circle nobody can see does not need a face tracked in it.
-  useFaceCrop({ videoRef, active: !!track && shown, diameter, mirror: !!tile?.isLocal });
-
-  return (
-    <div
-      data-face-hit
-      className={`face${shown ? " face--shown" : " face--hidden"}${speaking ? " face--speaking" : ""}`}
-      style={{ width: diameter, height: diameter }}
-      onPointerDown={onPointerDown}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
-      title={person.name}
-    >
-      {track ? (
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          style={{ width: diameter, height: diameter }}
-        />
-      ) : (
-        // Camera off. Their picture fills the circle — the same shape a face
-        // would have, so a row of faces does not go ragged when somebody turns
-        // their camera off mid-call.
-        <AvatarImg
-          src={person.image}
-          alt=""
-          className="face-avatar-img"
-          fallback={
-            <span className="face-avatar-fallback" style={{ fontSize: Math.max(12, diameter / 2.6) }}>
-              {(person.name || "?").charAt(0).toUpperCase()}
-            </span>
-          }
-        />
-      )}
-      {person.muted && (
-        <span className="face-mute">
-          <MicOff className="h-3 w-3" />
-        </span>
-      )}
-      {showName && <span className="face-name">{firstName(person.name)}</span>}
-    </div>
-  );
-}

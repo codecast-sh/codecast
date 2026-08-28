@@ -288,36 +288,103 @@ export function hitsInteractive(regions: HitRegion[], x: number, y: number): boo
   return false;
 }
 
-// ── The window's own size ─────────────────────────────────────────────────
+// ── How big the circles are, and how big the window is ────────────────────
 
-/** One circle, big enough to read a face across a desk. */
-export const SPEAKER_DIAMETER = 120;
-/** Everyone: smaller, because a row of them has to stay a strip. */
-export const EVERYONE_DIAMETER = 72;
-/** The gap between circles in everyone mode. */
-export const FACE_GAP = 10;
-/** Room above and below the circles for the ring, the shadow and the chrome. */
-export const FACES_PADDING = 14;
-/** The hover chrome's row, reserved under the circles so it is never clipped. */
-export const CHROME_HEIGHT = 34;
+/**
+ * The three sizes a circle comes in.
+ *
+ * `speaker` is one face, big enough to read across a desk. `row` is everybody,
+ * smaller because a row of them has to stay a strip. `mini` is what the window
+ * becomes when somebody drags it down past the row: a face the size of a menu
+ * bar icon, which is the smallest thing that is still recognizably a person.
+ */
+export type FaceTier = "speaker" | "row" | "mini";
+
+export const TIER_DIAMETER: Record<FaceTier, number> = { speaker: 96, row: 64, mini: 40 };
+
+/** The gap between circles in a row. */
+export const FACE_GAP = 8;
+
+/**
+ * The only margin around the circles.
+ *
+ * It is not decoration and it is not a reserve for controls: it is the room
+ * the speaking ring and its glow need. The ring is 3px outside the circle and
+ * the glow blurs a few pixels past that, and a window sized to the circle
+ * alone would clip both — on a transparent window a clipped glow is a straight
+ * edge in mid-air, which is worse than no glow.
+ */
+export const FACES_PADDING = 8;
+
+/**
+ * The two rows hovering adds under the circles, and what they measure.
+ *
+ * Kept here rather than only in the stylesheet because they are what the WINDOW
+ * has to know: nothing reserves them while the pointer is away, so the window
+ * grows to hold them at the moment they appear and shrinks back when it leaves.
+ * The chrome is four 28px buttons, their gaps and its own padding; the name is
+ * one line of 9.5px mono in a pill.
+ */
+export const CHROME_BUTTON = 28;
+export const CHROME_WIDTH = CHROME_BUTTON * 4 + 4 * 3 + 3 * 2;
+export const CHROME_HEIGHT = CHROME_BUTTON + 3 * 2;
+export const NAME_HEIGHT = 18;
+/** Between the circles and the name, and between the name and the chrome. */
+export const ROW_GAP = 4;
+/** Everything hovering adds below the circles. */
+export const HOVER_ROWS = ROW_GAP + NAME_HEIGHT + ROW_GAP + CHROME_HEIGHT;
 
 export type FacesMode = "speaker" | "everyone";
+
+/** The tier a mode sits at when nobody has resized the window. */
+export function naturalTier(mode: FacesMode): FaceTier {
+  return mode === "everyone" ? "row" : "speaker";
+}
+
+/**
+ * Which tier a window of this width lands on.
+ *
+ * This is the whole of the fourth state. The window has three sizes of its own
+ * — the panel, the row of circles, one speaker circle — and dragging it below
+ * the width its circles want does not clip them and does not stop at the last
+ * size: it drops the circles to `mini`. Mode is untouched by the drop, so a
+ * squeezed row is a row of small circles and a squeezed speaker is one small
+ * circle, which is the thing the smallest window was always meant to be.
+ */
+export function tierForWidth(width: number, mode: FacesMode, faces: number): FaceTier {
+  const tier = naturalTier(mode);
+  return width < facesWindowSize(mode, faces, { tier }).width ? "mini" : tier;
+}
 
 /**
  * How big the window has to be to hold the circles.
  *
- * The window is resized to its contents rather than given a fixed frame,
- * because every pixel of it that is not a circle is a transparent rectangle
- * sitting over somebody's work — invisible, but it is what the click-through
- * hit test has to cover, and a window bigger than its contents is a bigger
- * surface to be wrong about.
+ * The circles' bounds and the 8px the ring needs. Nothing else: no title bar,
+ * no name printed under every face, no control row waiting under the circles.
+ * Every pixel of this window that is not a circle is a transparent rectangle
+ * over somebody's work, so the honest size is the small one, and a window
+ * bigger than its contents is a bigger surface for the click-through test to be
+ * wrong about.
+ *
+ * `hovered` is where the name and the controls get their room, and it costs
+ * nothing while the pointer is away. It adds the two rows below the circles,
+ * and it widens the window where four buttons are wider than the faces — one
+ * 96px circle is narrower than the chrome, and a window that clipped its own
+ * controls is a call you cannot leave. The circles keep their place at the top
+ * of the window through both, so nothing under the pointer moves.
  */
-export function facesWindowSize(mode: FacesMode, faces: number): { width: number; height: number } {
-  const n = Math.max(1, faces);
-  const d = mode === "speaker" ? SPEAKER_DIAMETER : EVERYONE_DIAMETER;
-  const count = mode === "speaker" ? 1 : n;
+export function facesWindowSize(
+  mode: FacesMode,
+  faces: number,
+  opts?: { tier?: FaceTier; hovered?: boolean },
+): { width: number; height: number } {
+  const tier = opts?.tier ?? naturalTier(mode);
+  const d = TIER_DIAMETER[tier];
+  const count = mode === "speaker" ? 1 : Math.max(1, faces);
+  const circles = count * d + (count - 1) * FACE_GAP;
+  const width = opts?.hovered ? Math.max(circles, CHROME_WIDTH) : circles;
   return {
-    width: Math.round(count * d + (count - 1) * FACE_GAP + FACES_PADDING * 2),
-    height: Math.round(d + FACES_PADDING * 2 + CHROME_HEIGHT),
+    width: Math.round(width + FACES_PADDING * 2),
+    height: Math.round(d + (opts?.hovered ? HOVER_ROWS : 0) + FACES_PADDING * 2),
   };
 }

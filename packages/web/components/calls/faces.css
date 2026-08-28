@@ -1,12 +1,14 @@
 /*
- * The floating faces: the call minimized to a circle of somebody's face,
+ * The floating faces: the call reduced to circles of people's faces,
  * transparent everywhere else, over whatever you are working in.
  *
  * Everything here is written for a window with no background. The page paints
- * nothing; only the circles and the chrome exist, and every pixel between them
- * is a hole through to the application underneath — which is why the circles
- * carry their own shadow (the window has none, deliberately: a rectangular
- * drop shadow around invisible glass is the giveaway that ruins the effect).
+ * nothing. A circle is the cropped face and nothing else — no hairline, no
+ * drop shadow, no plate behind it — because anything drawn around the face
+ * turns a person floating over your screen into a chip pinned to it. The only
+ * marks this surface ever draws are the ones that carry a fact: a cyan ring
+ * while somebody is talking, a glyph when somebody is muted, and a name pill
+ * while the pointer is on a face.
  */
 
 .faces-window {
@@ -15,8 +17,13 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  /* Circles at the top, not centered. Hovering grows the window downward to
+     make room for the name and the controls, and faces that re-centred on
+     every hover would jump under the pointer. */
   justify-content: flex-start;
-  padding: 14px;
+  /* The only margin, and it is the speaking ring's room — see FACES_PADDING
+     in faceCrop.ts, which sizes the window to the same 8px. */
+  padding: 8px;
   background: transparent;
   overflow: hidden;
   user-select: none;
@@ -32,43 +39,51 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 8px;
 }
-.faces-row--speaker .face {
+.faces-row--speaker .face-slot {
   position: absolute;
   left: 0;
   top: 0;
 }
-.faces-row--speaker .face--shown {
+.faces-row--speaker .face-slot:has(.face--shown) {
   position: relative;
 }
 
+/* The circle's square, and the frame the name hangs below. The circle clips its
+   own contents so the crop stays a disc; anything that belongs OUTSIDE the disc
+   lives here instead. */
+.face-slot {
+  position: relative;
+  flex: none;
+}
+
+/* The circle at rest carries nothing. The diameter is written inline from
+   TIER_DIAMETER, because the crop maths needs the same number in pixels and
+   two places holding one measurement is how they drift apart. */
 .face {
   position: relative;
   flex: none;
   border-radius: 50%;
   overflow: hidden;
-  background: var(--sol-base02);
-  /* The circle's own depth. Two rings: a hairline that separates it from a
-     light background, and a soft shadow that separates it from a dark one. */
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--sol-text) 14%, transparent),
-    0 6px 18px rgba(0, 0, 0, 0.42);
+  background: var(--sol-bg-alt);
   opacity: 1;
-  transition: opacity 220ms ease, box-shadow 220ms ease, width 180ms ease, height 180ms ease;
+  /* Slow out. A ring that vanished as fast as it arrived would flicker through
+     every gap between two words. */
+  transition: opacity 220ms ease, box-shadow 400ms ease;
 }
 .face--hidden {
   opacity: 0;
   pointer-events: none;
 }
 
-/* Speaking. The same cyan the walkie uses for a voice arriving, because it
-   means the same thing here: somebody is talking to you right now. */
-.face--speaking {
+/* Talking. The same cyan the walkie uses for a voice arriving, because it means
+   the same thing here. Fast in: the ring has to land on the first syllable. */
+.face[data-speaking="true"] {
   box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--sol-cyan) 85%, transparent),
-    0 0 22px color-mix(in srgb, var(--sol-cyan) 30%, transparent),
-    0 6px 18px rgba(0, 0, 0, 0.42);
+    0 0 0 3px var(--sol-cyan),
+    0 0 14px color-mix(in srgb, var(--sol-cyan) 40%, transparent);
+  transition: opacity 220ms ease, box-shadow 120ms ease;
 }
 
 /* The video is laid out as a plain square and moved entirely by transform —
@@ -82,11 +97,11 @@
   object-fit: fill;
   transform-origin: 0 0;
   will-change: transform;
-  background: var(--sol-base02);
+  background: var(--sol-bg-alt);
 }
 
-/* Camera off: the person's picture, filling the circle exactly as their video
-   would, so a row does not go ragged when somebody switches their camera off. */
+/* Camera off: the person's picture, cropped to the circle exactly as their
+   video would be, so a row does not go ragged when somebody switches off. */
 .face-avatar-img,
 .face-avatar-fallback {
   position: absolute;
@@ -99,46 +114,69 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--sol-base02);
+  background: var(--sol-bg-alt);
   color: var(--sol-text-muted);
   font-family: var(--font-mono);
 }
 
-/* Muted, on the circle itself: the one piece of state worth a glyph out here.
-   Everything else about a person lives back in the call. Top right, because the
-   bottom of the circle belongs to the name — at 72px the two collide there. */
+/* Muted: a badge, not a ring. The ring means one thing on this surface and a
+   second meaning would cost the first one its clarity. Bottom right, away from
+   the eyes, and small enough to read as a mark on the person rather than a
+   control. */
 .face-mute {
   position: absolute;
-  right: 4%;
-  top: 4%;
+  right: 5%;
+  bottom: 5%;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   background: rgba(0, 0, 0, 0.55);
   color: var(--sol-red);
   backdrop-filter: blur(4px);
 }
+[data-face-tier="mini"] .face-mute {
+  width: 14px;
+  height: 14px;
+}
 
+/* The name, only while the pointer is on that face, and under the face rather
+   than on it. A name printed on every circle all call is a caption on somebody
+   you already recognize; a name written across their chin is a caption on their
+   face. Under the circle it covers nothing, and the window makes room for it at
+   the moment it appears. */
 .face-name {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 10px 6px 4px;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent);
-  color: rgba(255, 255, 255, 0.92);
+  top: calc(100% + 4px);
+  left: 50%;
+  /* As wide as the window can hold. 100vw is the window: this page IS the
+     window, so a name is only ever cut when it would run off the glass. */
+  max-width: calc(100vw - 16px);
+  padding: 2px 6px;
+  border-radius: 999px;
+  /* Dark plate rather than a surface token: this sits on a person's face,
+     and a face can be any color. The muted badge reads the same way. */
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(6px);
+  color: rgba(255, 255, 255, 0.94);
   font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 1.1;
+  font-size: 9.5px;
+  line-height: 1.3;
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  opacity: 0;
+  transform: translate(-50%, 2px);
+  transition: opacity 140ms ease, transform 140ms ease;
+  pointer-events: none;
 }
-
+.face-slot:hover .face-name {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
 .face-waiting {
   position: absolute;
   inset: 0;
@@ -150,27 +188,33 @@
   font-size: 10.5px;
 }
 
-/* The chrome: hidden until the pointer comes near, and out of the way again
-   the moment it leaves. A permanent control bar under a floating face would
-   turn a glance into a widget. */
+/* The chrome: a row of its own under the circles, and nothing reserves that row
+   while the pointer is away — an idle window is its circles and 8px, and a
+   control bar waiting under a floating face is what turns a glance into a
+   widget. Hovering grows the window down to hold it, so it never covers a face.
+   It keeps a hairline: unlike a face, a row of buttons has no shape of its own
+   to read against whatever application is underneath. */
 .faces-chrome {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-top: 8px;
   padding: 3px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--sol-base03) 88%, transparent);
+  background: color-mix(in srgb, var(--sol-bg) 88%, transparent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--sol-text) 12%, transparent);
   backdrop-filter: blur(8px);
   opacity: 0;
-  transform: translateY(3px);
+  transform: translate(-50%, 3px);
   transition: opacity 140ms ease, transform 140ms ease;
   pointer-events: none;
+  z-index: 2;
 }
 .faces-window--hover .faces-chrome {
   opacity: 1;
-  transform: translateY(0);
+  transform: translate(-50%, 0);
   pointer-events: auto;
 }
 
@@ -178,8 +222,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   color: var(--sol-text-muted);
   background: transparent;
@@ -200,10 +244,14 @@
   color: var(--sol-red);
 }
 
-/* Reduced motion: the swap still happens, it just happens at once. A crossfade
-   is a nicety; knowing who is talking is the product. */
+/* Reduced motion: everything still says what it said, it just says it at once.
+   The ring lands on the syllable with no ease and leaves with none; the glow
+   is a static edge, so it stays. Knowing who is talking is the product; the
+   easing was only ever the manners. */
 @media (prefers-reduced-motion: reduce) {
   .face,
+  .face[data-speaking="true"],
+  .face-name,
   .faces-chrome,
   .faces-btn {
     transition: none;

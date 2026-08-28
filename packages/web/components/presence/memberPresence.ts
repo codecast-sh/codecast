@@ -122,6 +122,28 @@ export function presenceBand(member: any): PresenceBand {
 
 const BAND_ORDER: PresenceBand[] = ["online", "idle", "away", "offline"];
 
+/**
+ * THE AVATAR BAR'S WAKE SIGNATURE.
+ *
+ * The bar in the shell is mounted for the life of the app and the roster it
+ * draws from re-pushes every few seconds on teammates' presence heartbeats —
+ * an `updated_at`, a session's message count, a bucketed input timestamp. None
+ * of those change a pixel of a 32px face, and riding them re-rendered the bar
+ * and every avatar button in it several times a minute forever.
+ *
+ * So this is a signature of exactly what a face DRAWS: identity, the picture,
+ * coarse presence, the manual status the hover card highlights, and whether
+ * they are in a room. Anything not in this string must not wake the bar.
+ */
+export function teamBarSig(members: any[]): string {
+  let sig = "";
+  for (const m of members) {
+    if (!m?._id) continue;
+    sig += `${m._id}|${memberPresenceState(m)}|${m.status ?? ""}|${m.image ?? ""}|${m.github_avatar_url ?? ""}|${m.name ?? ""}|${m.email ?? ""}|${m.github_username ?? ""}|${m.in_room_key ?? ""}|${m.in_huddle ? 1 : 0}\n`;
+  }
+  return sig;
+}
+
 /** The roster, cut into its sections. Empty sections are dropped, so a team
  *  where nobody is idle shows no Idle heading. Within a section the order is
  *  by name and NOTHING else — a roster that reshuffled on every heartbeat
