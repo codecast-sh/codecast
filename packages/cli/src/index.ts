@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
 import { registerWorkspaceCommand } from "./workspace/cli.js";
+import { scrubAgentEnv } from "./agentEnv.js";
 import { registerRemoteCommand } from "./remote/cli.js";
 import { registerPublishCommand } from "./publish.js";
 import { registerCapabilityCommand } from "./capabilities/cli.js";
@@ -1111,11 +1112,11 @@ function startDaemonQuiet(): void {
   const daemonJsPath = path.join(__dirname, "daemon.js");
 
   if (fs.existsSync(daemonTsPath)) {
-    child = spawn(process.execPath, [daemonTsPath], { detached: true, stdio: "ignore" });
+    child = spawn(process.execPath, [daemonTsPath], { detached: true, stdio: "ignore", env: scrubAgentEnv({ ...process.env }) });
   } else if (fs.existsSync(daemonJsPath)) {
-    child = spawn(process.execPath, [daemonJsPath], { detached: true, stdio: "ignore" });
+    child = spawn(process.execPath, [daemonJsPath], { detached: true, stdio: "ignore", env: scrubAgentEnv({ ...process.env }) });
   } else {
-    child = spawn(process.execPath, ["_daemon"], { detached: true, stdio: "ignore" });
+    child = spawn(process.execPath, ["_daemon"], { detached: true, stdio: "ignore", env: scrubAgentEnv({ ...process.env }) });
   }
 
   child.unref();
@@ -1598,12 +1599,14 @@ function startDaemon(): void {
     child = spawn(process.execPath, [daemonTsPath], {
       detached: true,
       stdio: "ignore",
+      env: scrubAgentEnv({ ...process.env }),
     });
   } else if (fs.existsSync(daemonJsPath)) {
     // Built JS mode: run daemon.js
     child = spawn(process.execPath, [daemonJsPath], {
       detached: true,
       stdio: "ignore",
+      env: scrubAgentEnv({ ...process.env }),
     });
   } else {
     // Binary mode: spawn self with _daemon argument
@@ -1611,6 +1614,7 @@ function startDaemon(): void {
     child = spawn(process.execPath, ["_daemon"], {
       detached: true,
       stdio: "ignore",
+      env: scrubAgentEnv({ ...process.env }),
     });
   }
 

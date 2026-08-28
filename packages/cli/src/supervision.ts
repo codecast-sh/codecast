@@ -12,6 +12,7 @@
 // wake, so it rechecks within one interval of the Mac being awake; KeepAlive
 // relaunches it if the loop ever exits. This turns a multi-hour outage into a
 // sub-minute one (we cannot run at all while the Mac is fully asleep — that is macOS).
+import { AGENT_ENV_UNSET_SH } from "./agentEnv.js";
 
 export const WATCHDOG_HEARTBEAT_FILENAME = "watchdog.heartbeat";
 
@@ -41,6 +42,9 @@ export function shellEscapeForSh(value: string): string {
 // supervision pid checks all depend on that.
 export function buildDaemonLauncherScript(opts: { daemonCommand: string }): string {
   return `#!/bin/sh
+# A watchdog bootstrapped from inside a Claude Code session would hand that
+# session's markers to every daemon it revives (agentEnv.ts).
+${AGENT_ENV_UNSET_SH}
 # Codecast daemon launcher. The LaunchAgent runs this via /bin/sh so the login
 # item's identity stays stable across binary self-updates (see supervision.ts).
 exec ${opts.daemonCommand}
@@ -210,6 +214,9 @@ export function buildWatchdogShellScript(opts: { isBinary: boolean; watchdogComm
 
   if (!isBinary) {
     return `#!/bin/sh
+# A watchdog bootstrapped from inside a Claude Code session would hand that
+# session's markers to every daemon it revives (agentEnv.ts).
+${AGENT_ENV_UNSET_SH}
 LOGFILE="\${HOME}/.codecast/watchdog-shell.log"
 HEARTBEAT="\${HOME}/.codecast/${WATCHDOG_HEARTBEAT_FILENAME}"
 log() { printf '[%s] %s\\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$1" >> "\$LOGFILE"; }
@@ -319,6 +326,9 @@ done
   // in-process (not via StartInterval) for the same sleep-survival reasons; a failed
   // pass returns to the loop and retries next interval instead of killing the loop.
   return `#!/bin/sh
+# A watchdog bootstrapped from inside a Claude Code session would hand that
+# session's markers to every daemon it revives (agentEnv.ts).
+${AGENT_ENV_UNSET_SH}
 LOGFILE="\${HOME}/.codecast/watchdog-shell.log"
 HEARTBEAT="\${HOME}/.codecast/${WATCHDOG_HEARTBEAT_FILENAME}"
 log() { printf '[%s] %s\\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$1" >> "\$LOGFILE"; }

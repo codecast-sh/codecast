@@ -28,6 +28,7 @@ import { spawnSync } from "./proc.js";
 import { cliFetch } from "./cliHttp.js";
 import { fetchExport } from "./jsonlGenerator.js";
 import { claudeProjectDirName } from "./projectPathResolver.js";
+import { leakedTmuxGlobalMarkers } from "./agentEnv.js";
 import { isProjectAllowedToSync, isPathExcluded } from "./syncScope.js";
 import { c, fmt } from "./colors.js";
 import type { Config } from "./config/types.js";
@@ -351,6 +352,26 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
         ? `${retryDepth} retry item(s) draining`
         : "clear",
   });
+
+  // ── leaked Claude session markers ──
+  // A tmux server (or the daemon) bootstrapped from inside a Claude Code
+  // session carries CLAUDE_CODE_CHILD_SESSION into every pane it opens; a
+  // claude launched there saves no transcript and never syncs (agentEnv.ts).
+  // The tmux global env is the persistent carrier, so clear it here.
+  if (hasBin("tmux")) {
+    const shown = spawnSync("tmux", ["show-environment", "-g"], { encoding: "utf-8" });
+    const leaked = shown.status === 0 ? leakedTmuxGlobalMarkers(shown.stdout ?? "") : [];
+    if (leaked.length === 0) {
+      record({ name: "agent env", status: "pass", detail: "no Claude session markers in the tmux global env" });
+    } else {
+      for (const v of leaked) spawnSync("tmux", ["set-environment", "-gu", v], { stdio: "ignore" });
+      record({
+        name: "agent env",
+        status: "warn",
+        detail: `tmux global env carried ${leaked.join(", ")} (cleared) — panes opened before this ran may be saving no transcript; restart them`,
+      });
+    }
+  }
 
   // ── tmux server generations ──
   // A replaced default socket leaves the old server running unreachable with
