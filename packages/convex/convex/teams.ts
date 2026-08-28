@@ -395,6 +395,15 @@ export const getTeamMembers = query({
           title: user.title,
           bio: user.bio,
           status: user.status,
+          // THE WALKIE DOOR, so the sender can be told the truth about what
+          // their burst is about to do. The strip says "Jordan hears you" only
+          // off Jordan's seat in the room; with no seat these two decide
+          // between "away" (not there) and "busy" (there, door shut), which is
+          // the same rule the receiver's own client applies (walkieDoorOpen).
+          // Both move only when a person deliberately sets them, so neither
+          // adds churn to a roster that re-pushes on presence.
+          walkie_pref: user.walkie_pref,
+          walkie_snoozed_until: user.walkie_snoozed_until,
           timezone: user.timezone,
           // Coarse person presence. Timestamps are bucketed to the minute so a
           // 30s heartbeat usually yields a byte-identical result and Convex
