@@ -199,6 +199,14 @@ describe("worstDaemonHealth", () => {
     expect(worstDaemonHealth([], NOW)).toBeNull();
   });
 
+  // A cloud host sleeps when idle: its hours of silence are its parked state,
+  // and the viewer is never sitting at it to run the suggested restart.
+  it("leaves remote hosts out of the fleet verdict", () => {
+    const asleepLinux = { device_id: "f", label: "Linux - ip-172-31-40-243", last_seen: NOW - 10 * 60 * 60 * 1000, is_remote: true };
+    expect(worstDaemonHealth([cloud, asleepLinux], NOW)).toEqual({ kind: "ok" });
+    expect(worstDaemonHealth([asleepLinux], NOW)).toBeNull();
+  });
+
   it("ranks unreachable above busy above restarting", () => {
     const busy = { device_id: "d", label: "Busy", last_seen: NOW - 1000, loop_freeze_ms: 40_000 };
     const fresh = { device_id: "e", label: "Fresh", last_seen: NOW - 1000, daemon_started_at: NOW - 5000 };
