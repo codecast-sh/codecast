@@ -184,7 +184,10 @@ function StageHandle({
       const branch = findBranch(layout, handle.branchId);
       if (!el || !branch) return;
       e.preventDefault();
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      // Capture is a nicety (keeps hover styling on the handle mid-drag); the
+      // drag itself listens on window. It throws for an inactive pointer id
+      // (synthetic events in tests) — never let that kill the drag setup.
+      try { (e.target as HTMLElement).setPointerCapture(e.pointerId); } catch { /* no capture */ }
       setActive(true);
       const box = el.getBoundingClientRect();
       const branchPx = horizontal

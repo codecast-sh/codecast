@@ -4,6 +4,7 @@ import {
   collectAncestorPids,
   hasCodexSessionFileOpen,
   isRecognizedAgentComm,
+  registrySupersedesCachedPid,
   isResumeInvocation,
   matchSingleFreshStartedConversation,
   matchStartedConversation,
@@ -545,5 +546,38 @@ describe("agentBinaryFromPsRow", () => {
     expect(agentBinaryFromPsRow("tmux", "tmux new-session -d -s x")).toBeNull();
     expect(agentBinaryFromPsRow("bun", "bun /Users/ashot/src/codecast/packages/cli/dist/daemon.js")).toBeNull();
     expect(agentBinaryFromPsRow("node", "node")).toBeNull();
+  });
+});
+
+// The stale-pid self-heal (2026-08-30): a session resumed into a new process
+// while the old one lived on kept its old cached pid for hours — the registry
+// hook claim is the witness that outvotes the cache.
+describe("registrySupersedesCachedPid", () => {
+  const fillMs = 1_788_100_000_000; // when the daemon cached the mapping
+  const later = fillMs / 1000 + 60; // hook registration a minute after
+  const earlier = fillMs / 1000 - 60;
+
+  test("a newer hook registration naming a different pid supersedes", () => {
+    expect(registrySupersedesCachedPid({ pid: 96988, ts: later, term: "tmux" }, 16959, fillMs)).toBe(true);
+  });
+
+  test("the same pid never supersedes, however fresh", () => {
+    expect(registrySupersedesCachedPid({ pid: 16959, ts: later, term: "tmux" }, 16959, fillMs)).toBe(false);
+  });
+
+  test("a registration older than the fill lost to discovery", () => {
+    expect(registrySupersedesCachedPid({ pid: 96988, ts: earlier, term: "iTerm.app" }, 16959, fillMs)).toBe(false);
+  });
+
+  test("only the hook speaks: daemon writes and term-less records never supersede", () => {
+    expect(registrySupersedesCachedPid({ pid: 96988, ts: later, term: "tmux", src: "daemon" }, 16959, fillMs)).toBe(false);
+    expect(registrySupersedesCachedPid({ pid: 96988, ts: later }, 16959, fillMs)).toBe(false);
+  });
+
+  test("missing or malformed registration keeps the cache", () => {
+    expect(registrySupersedesCachedPid(null, 16959, fillMs)).toBe(false);
+    expect(registrySupersedesCachedPid(undefined, 16959, fillMs)).toBe(false);
+    expect(registrySupersedesCachedPid({ pid: "96988", ts: later, term: "tmux" }, 16959, fillMs)).toBe(false);
+    expect(registrySupersedesCachedPid({ pid: 96988, ts: "later", term: "tmux" }, 16959, fillMs)).toBe(false);
   });
 });

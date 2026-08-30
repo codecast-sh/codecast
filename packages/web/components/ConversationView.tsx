@@ -25,7 +25,7 @@ import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
+import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemSubtype, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
 import { classifyApiErrorBanner, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "./DecisionAnswerFooter";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
@@ -9093,6 +9093,8 @@ function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[
 }
 
 function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; subtype?: string; timestamp?: number; messageUuid?: string; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void }) {
+  if (isHiddenSystemSubtype(subtype)) return null;
+
   if (subtype === "compact_boundary") {
     return (
       <div className="my-6 flex items-center gap-3">

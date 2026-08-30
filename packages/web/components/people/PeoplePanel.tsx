@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { ChevronRight, Headphones, LayoutGrid, List, MessageSquare, Pin, Volume2, VolumeX } from "lucide-react";
+import { ChevronRight, Headphones, LayoutGrid, List, MessageSquare, PictureInPicture2, Pin, Volume2, VolumeX } from "lucide-react";
 import { PeopleStrip } from "./PeopleStrip";
 import { TeamPulseLine } from "./TeamPulseLine";
 import { usePulseFrom } from "./usePulseFrom";
@@ -11,9 +11,13 @@ import { useMountEffect } from "../../hooks/useMountEffect";
 import { type LiveRoomRow } from "../../hooks/useLiveRooms";
 import { useCallsAvailable } from "../../lib/teamFeatures";
 import {
+  canOpenFacesOverlay,
   canPin,
+  closeFacesWindow,
   getAlwaysOnTop,
+  getFacesWindowOpen,
   navigateMainWindow,
+  openFacesWindow,
   setAlwaysOnTop,
 } from "../../lib/desktop";
 import { dmRoomKey } from "@codecast/shared/contracts";
@@ -95,7 +99,7 @@ export function PeoplePanel() {
       </h1>
       {density === "strip" ? (
         <ErrorBoundary name="People strip" level="inline" fallback={null}>
-          <PeopleStrip callsEnabled={callsEnabled} data={data} pulse={pulse} pin={<PinButton />} />
+          <PeopleStrip callsEnabled={callsEnabled} data={data} pulse={pulse} pin={<><FacesOverlayButton /><PinButton /></>} />
         </ErrorBoundary>
       ) : (
         <>
@@ -176,6 +180,7 @@ function PanelHeader({
             {status}
           </button>
           <ViewSwitch compact />
+          <FacesOverlayButton />
           <PinButton />
         </div>
         {choosing && (
@@ -214,6 +219,7 @@ function PanelHeader({
         </div>
         <div className="flex items-center gap-1.5">
           <ViewSwitch />
+          <FacesOverlayButton />
           <PinButton />
         </div>
       </div>
@@ -381,6 +387,46 @@ function WalkieDoorToggle({ compact = false }: { compact?: boolean }) {
  * it refuses every caller but the desktop people window. Rendering optimistic
  * state here would let the button claim a pin that never happened.
  */
+/**
+ * The floating faces, from the window that owns keeping the team on screen.
+ *
+ * A toggle, not a launcher: the overlay is a standing arrangement ("keep the
+ * team over my work") and the button reads its current answer. Desktop only —
+ * a see-through click-through window is the shell's to make, so on an older
+ * build or in a browser the button simply is not there.
+ */
+function FacesOverlayButton() {
+  const [open, setOpen] = useState(false);
+  useMountEffect(() => {
+    if (!canOpenFacesOverlay()) return;
+    let alive = true;
+    void getFacesWindowOpen().then((on) => {
+      if (alive) setOpen(on);
+    });
+    return () => {
+      alive = false;
+    };
+  });
+  if (!canOpenFacesOverlay()) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        const next = !open;
+        setOpen(next);
+        void (next ? openFacesWindow() : closeFacesWindow());
+      }}
+      aria-pressed={open}
+      title={open ? "Floating faces are on your screen" : "Float the team's faces over your work"}
+      className={`rounded p-1 transition-colors ${
+        open ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text"
+      }`}
+    >
+      <PictureInPicture2 className="h-3.5 w-3.5" />
+    </button>
+  );
+}
+
 function PinButton() {
   const [pinned, setPinned] = useState(false);
   const [ready, setReady] = useState(false);

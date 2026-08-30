@@ -10,6 +10,7 @@ import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useEventListener } from "../hooks/useEventListener";
 import { isConvexId } from "../lib/entityLinks";
 import { suggestionChordIndex } from "../lib/suggestionChord";
+import { isDesktop } from "../lib/desktop";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { isMac } from "../shortcuts";
 
