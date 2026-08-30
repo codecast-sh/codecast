@@ -43,6 +43,7 @@ export function SegmentedToggle({
           <button
             key={it.key}
             onClick={() => onChange(it.key)}
+            aria-pressed={selected}
             className={`h-full flex items-center justify-center gap-1.5 px-2.5 text-xs transition-colors ${
               fullWidth ? "flex-1" : ""
             } ${i > 0 ? "border-l border-sol-border/40" : ""} ${
@@ -114,13 +115,14 @@ function SegmentedDropdown({
         <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0 cq-caret" />
       </button>
       {open && (
-        <div className="absolute top-full right-0 mt-1 w-44 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1">
+        <div className="absolute top-full right-0 mt-1 w-44 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1">
           {items.map((it) => {
             const Icon = it.icon;
             return (
               <button
                 key={it.key}
                 onClick={() => { onChange(it.key); setOpen(false); }}
+                aria-pressed={it.key === value}
                 className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors ${
                   it.key === value ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
                 }`}

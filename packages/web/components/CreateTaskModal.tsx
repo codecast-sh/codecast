@@ -77,7 +77,7 @@ function PropertyChip<T extends string>({
         <ChevronDown className="w-3 h-3 opacity-60" />
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 w-40 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1">
+        <div className="absolute top-full left-0 mt-1 w-40 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1">
           {options.map((opt) => {
             const OptIcon = opt.icon;
             return (
@@ -153,7 +153,7 @@ function LabelsChip({ value, onChange }: { value: string[]; onChange: (v: string
         <ChevronDown className="w-3 h-3 opacity-60" />
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] overflow-hidden">
+        <div className="absolute top-full left-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] overflow-hidden">
           <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-border/30">
             <Search className="w-3.5 h-3.5 text-sol-text-dim flex-shrink-0" />
             <input
