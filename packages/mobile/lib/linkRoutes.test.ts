@@ -16,8 +16,14 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('https://www.codecast.sh/docs/xyz')).toBe('/doc/xyz');
   });
 
-  test('share tokens open the session screen', () => {
-    expect(mobileRouteForUrl('https://codecast.sh/share/Tok123')).toBe('/session/Tok123');
+  test('share links of every kind land on the /share resolver screen', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/share/Tok123')).toBe('/share/Tok123');
+    expect(mobileRouteForUrl('https://codecast.sh/share/doc/1a221088-1fc3-48c8-a814-71119676adf0'))
+      .toBe('/share/doc/1a221088-1fc3-48c8-a814-71119676adf0');
+    expect(mobileRouteForUrl('https://codecast.sh/share/plan/abc123def')).toBe('/share/plan/abc123def');
+    expect(mobileRouteForUrl('https://codecast.sh/share/message/abc123def')).toBe('/share/message/abc123def');
+    // A sub-kind word with no token is a malformed link, not a token.
+    expect(mobileRouteForUrl('https://codecast.sh/share/doc')).toBeNull();
   });
 
   test('invites land on the team tab', () => {
@@ -90,5 +96,28 @@ describe('isMentionStart', () => {
     expect(isMentionStart(remote, remote.indexOf('@'))).toBe(false);
     const mail = 'write to hi.there@example.com';
     expect(isMentionStart(mail, mail.indexOf('@'))).toBe(false);
+  });
+});
+
+describe('redirectSystemPath (+native-intent)', () => {
+  // Imported lazily so this file keeps working if the route file moves.
+  const { redirectSystemPath } = require('../app/+native-intent');
+
+  test('web URLs re-route to their screens', () => {
+    expect(redirectSystemPath({ path: 'https://codecast.sh/conversation/abc123', initial: true }))
+      .toBe('/session/abc123');
+    expect(redirectSystemPath({ path: 'https://codecast.sh/share/doc/1a221088-1fc3-48c8-a814-71119676adf0', initial: false }))
+      .toBe('/share/doc/1a221088-1fc3-48c8-a814-71119676adf0');
+  });
+
+  test('the app scheme speaks the same vocabulary', () => {
+    expect(redirectSystemPath({ path: 'codecast://tasks/ct-4102', initial: false })).toBe('/task/ct-4102');
+    expect(redirectSystemPath({ path: 'codecast://share/abc123def', initial: false })).toBe('/share/abc123def');
+  });
+
+  test('everything unrecognized passes through untouched', () => {
+    expect(redirectSystemPath({ path: 'codecast://auth/callback', initial: false })).toBe('codecast://auth/callback');
+    expect(redirectSystemPath({ path: 'https://codecast.sh/settings', initial: false })).toBe('https://codecast.sh/settings');
+    expect(redirectSystemPath({ path: 'exp://192.168.1.5:8081/--/session/x', initial: true })).toBe('exp://192.168.1.5:8081/--/session/x');
   });
 });
