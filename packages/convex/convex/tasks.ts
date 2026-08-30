@@ -21,6 +21,7 @@ import { internal } from "./_generated/api";
 import { isViableInboxParent } from "./inboxFilters";
 import { listLiveManagedSessions } from "./lib/liveSessions";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
+import { bucketTs } from "./presenceState";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
 import { dropThreadRead, taskThreadParticipants, touchThread } from "./threadReads";
@@ -2510,7 +2511,12 @@ export async function performWebActiveSessions(ctx: { db: any }, userId: Id<"use
         agent_status: s.agent_status || undefined,
         agent_type: conv.agent_type || undefined,
         started_by: await ownerName(conv.user_id),
-        last_message_at: conv.updated_at,
+        // Bucketed to the minute: this overlay is always mounted on the task
+        // board and updated_at moves on every streamed flush, so the raw value
+        // re-pushed the whole map seconds apart. The badge renders it as a
+        // relative age (relTimeShort in LivenessDot), which is coarser than a
+        // minute. Invalidation is unchanged.
+        last_message_at: bucketTs(conv.updated_at),
       }] as const;
     }));
     const map: Record<string, { _id: string; session_id: string; title?: string; agent_status?: string; agent_type?: string; started_by?: string; last_message_at?: number }> = {};

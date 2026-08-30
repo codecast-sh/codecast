@@ -16,6 +16,7 @@ import { stripMessageTags, isUserMessageNoise, fetchUserSendDays, type SendDayRo
 import { ccAccountsValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { normalizeProjectPath, pathWithinLocalRoots } from "./projectPaths";
+import { bucketTs } from "./presenceState";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
 import { deleteCommentWithRevision } from "./commentViewWrites";
 import { gatedSnippetAvailability } from "./teamFeatures";
@@ -235,6 +236,44 @@ export function deviceLabelWrite(input: {
 }): { label: string } | Record<never, never> {
   if (input.deviceLabel) return { label: input.deviceLabel };
   return input.isNew ? { label: input.platform } : {};
+}
+
+/**
+ * Did a heartbeat field actually change? A device row carries small arrays and
+ * records (settings, cc_accounts, local_project_roots, git_plane), so identity
+ * alone reports a change on every beat; compare their content instead.
+ */
+export function sameHeartbeatValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// last_input_at is `now` minus the idle time the daemon measured a moment
+// earlier, so it drifts by a second or so on every beat even when nobody has
+// touched the machine. Compared exactly it would report a change on every beat
+// and the throttle below would never fire. Input since the last beat moves it by
+// seconds at least, because beats are 30s apart.
+const INPUT_AT_TOLERANCE_MS = 5 * 1000;
+
+/**
+ * Does this beat say anything the stored device row does not already say?
+ * Ignores the two timestamps the server derives from `now`: last_seen is the
+ * value being throttled, and last_input_at is compared with a tolerance that
+ * absorbs measurement drift but not real input.
+ */
+export function deviceBeatChanged(
+  existing: Record<string, any>,
+  patch: Record<string, unknown>,
+): boolean {
+  return Object.entries(patch).some(([k, val]) => {
+    if (k === "last_seen") return false;
+    if (k === "last_input_at") {
+      const prev = existing.last_input_at;
+      return typeof prev !== "number" || Math.abs((val as number) - prev) >= INPUT_AT_TOLERANCE_MS;
+    }
+    return !sameHeartbeatValue(existing[k], val);
+  });
 }
 
 export const daemonHeartbeat = mutation({
@@ -471,8 +510,19 @@ export const daemonHeartbeat = mutation({
           ? { model_inventory: args.model_inventory }
           : {}),
       };
+      // Coalesce the per-device write, mirroring the user-doc throttle above.
+      // `last_seen: now` alone made every 30s beat a real write, so every
+      // listDevices and routing subscription in the fleet re-ran on it. Skip the
+      // write when the beat says nothing new and the stored last_seen is still
+      // fresh; anything else the beat carries writes through at once. Writes
+      // then land at most 60s apart, well inside the 120s DEVICE_ONLINE_MS
+      // window every routing and delivery path gates on.
+      const DEVICE_WRITE_THROTTLE_MS = 45 * 1000;
       if (existingDevice) {
-        await ctx.db.patch(existingDevice._id, devicePatch);
+        const seenStale = now - existingDevice.last_seen >= DEVICE_WRITE_THROTTLE_MS;
+        if (seenStale || deviceBeatChanged(existingDevice, devicePatch)) {
+          await ctx.db.patch(existingDevice._id, devicePatch);
+        }
       } else {
         await ctx.db.insert("devices", {
           user_id: auth.userId,
@@ -3013,12 +3063,18 @@ export const getRecentProjectPaths = query({
       const path = normalizeProjectPath(raw);
       if (!path) continue;
       if (localRoots && !pathWithinLocalRoots(path, localRoots)) continue;
+      // Bucket to the minute as the value enters the tally, so both the ranking
+      // score and the returned recency are coarse. Raw updated_at moves on every
+      // streamed flush and re-pushed this whole list to an always-mounted
+      // picker; the value only drives a sort and a relative age. Invalidation is
+      // unchanged.
+      const lastActive = bucketTs(conv.updated_at)!;
       const existing = pathCounts.get(path);
       if (existing) {
         existing.count++;
-        existing.lastActive = Math.max(existing.lastActive, conv.updated_at);
+        existing.lastActive = Math.max(existing.lastActive, lastActive);
       } else {
-        pathCounts.set(path, { count: 1, lastActive: conv.updated_at });
+        pathCounts.set(path, { count: 1, lastActive });
       }
     }
 
