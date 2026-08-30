@@ -2155,6 +2155,11 @@ const LOGIN_FLOW_TMUX = "cc-login-flow";
 const LOGIN_FLOW_TIMEOUT_MS = 5 * 60 * 1000;
 const LOGIN_FLOW_POLL_MS = 2000;
 let loginFlowActive = false;
+// Bumped by every launch; a watcher whose generation fell behind was
+// superseded by a forced relaunch and must exit silently — its pane is gone
+// (the relaunch killed it) and any outcome it reported would clobber the
+// fresh flow's pending stamp.
+let loginFlowGeneration = 0;
 
 function credentialHashOf(raw: string | null): string | null {
   return raw ? createHash("sha256").update(raw).digest("hex") : null;
@@ -2181,23 +2186,27 @@ export function buildLoginFlowCommand(email: string | undefined): string {
   return `${login}; sleep 4`;
 }
 
-async function startLoginFlow(email: string | undefined): Promise<string> {
+async function startLoginFlow(email: string | undefined, force = false): Promise<string> {
   // A second click while a flow is live joins it — the browser tab is already
-  // open, and a second `claude auth login` would fight it for the callback port.
-  if (loginFlowActive) return "login_flow_already_running";
+  // open, and a second `claude auth login` would fight it for the callback
+  // port. A FORCED relaunch (the banner's "reopen" action) supersedes it
+  // instead: bump the generation (silences the old watcher), kill its pane,
+  // start fresh.
+  if (loginFlowActive && !force) return "login_flow_already_running";
+  const gen = ++loginFlowGeneration;
   loginFlowActive = true;
   try {
     const baselineHash = credentialHashOf(readActiveCredential());
     await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
     const cmd = buildLoginFlowCommand(email);
     tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", LOGIN_FLOW_TMUX, cmd], { timeout: 5000 });
-    log(`[LOGIN-FLOW] started browser sign-in${email ? ` for ${email}` : ""} (tmux ${LOGIN_FLOW_TMUX})`);
-    void watchLoginFlow(baselineHash, email)
+    log(`[LOGIN-FLOW] started browser sign-in${email ? ` for ${email}` : ""} (tmux ${LOGIN_FLOW_TMUX})${force ? " [forced relaunch]" : ""}`);
+    void watchLoginFlow(baselineHash, email, gen)
       .catch((err) => log(`[LOGIN-FLOW] watcher failed: ${err instanceof Error ? err.message : String(err)}`))
-      .finally(() => { loginFlowActive = false; });
+      .finally(() => { if (gen === loginFlowGeneration) loginFlowActive = false; });
     return "login_flow_started";
   } catch (err) {
-    loginFlowActive = false;
+    if (gen === loginFlowGeneration) loginFlowActive = false;
     throw err;
   }
 }
@@ -2205,7 +2214,7 @@ async function startLoginFlow(email: string | undefined): Promise<string> {
 // Poll until the credential store proves the sign-in (hash changed + healthy),
 // the pane dies (the CLI exited — success or failure, the grace re-check
 // tells them apart), or the timeout lapses (abandoned browser tab).
-async function watchLoginFlow(baselineHash: string | null, requestedEmail: string | undefined): Promise<void> {
+async function watchLoginFlow(baselineHash: string | null, requestedEmail: string | undefined, gen: number): Promise<void> {
   const deadline = Date.now() + LOGIN_FLOW_TIMEOUT_MS;
   let lastPane = "";
 
@@ -2245,6 +2254,9 @@ async function watchLoginFlow(baselineHash: string | null, requestedEmail: strin
 
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, LOGIN_FLOW_POLL_MS));
+    // Superseded by a forced relaunch — the pane under our name is the NEW
+    // flow's; touching or reporting anything now would sabotage it.
+    if (gen !== loginFlowGeneration) return;
     if (confirmedNow()) return finishConfirmed();
     // Keep the freshest pane content so a dying CLI still leaves us its last
     // words; a capture failure means the pane (= the CLI) is gone.
@@ -2263,6 +2275,7 @@ async function watchLoginFlow(baselineHash: string | null, requestedEmail: strin
       return finishRejected(tail ?? "the sign-in window closed before completing");
     }
   }
+  if (gen !== loginFlowGeneration) return;
   return finishRejected("timed out waiting for the browser sign-in");
 }
 
@@ -4110,7 +4123,7 @@ async function executeRemoteCommand(
         const email: string | undefined =
           typeof parsed.email === "string" && parsed.email ? parsed.email : undefined;
         try {
-          result = await startLoginFlow(email);
+          result = await startLoginFlow(email, parsed.force === true);
         } catch (err) {
           error = `Sign-in launch failed: ${err instanceof Error ? err.message : String(err)}`;
           // The web is watching cc_login_flow, not command errors — report the

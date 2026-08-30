@@ -54,6 +54,20 @@ describe("SignInCta account labeling", () => {
     expect(html).toContain("m1.local");
   });
 
+  test("the pending spinner offers a relaunch for a tab that never opened", () => {
+    const html = render({
+      device_id: "d1",
+      label: "m1.local",
+      active_email: "claude6@example.com",
+      login_flow: {
+        status: "pending",
+        email: "claude6@example.com",
+        started_at: now - 5_000,
+      },
+    });
+    expect(html).toContain("Relaunch the sign-in");
+  });
+
   test("with no live login the button falls back to the flow email", () => {
     const html = render({
       device_id: "d1",
