@@ -369,8 +369,7 @@ function lookup(collection: Record<string, any> | undefined | null, rawId: strin
 /**
  * The object a reference names, as the local store already knows it — or
  * undefined when the client has never seen it. Sessions resolve by their 7-char
- * short id as well as their Convex id; triggers are not a store collection, so
- * they always wait for the server.
+ * short id as well as their Convex id.
  */
 export function findEntityInStore(
   state: any,
@@ -388,6 +387,10 @@ export function findEntityInStore(
       return lookup(state.docs, rawId) ?? lookup(mention?.docs, rawId);
     case "project":
       return lookup(state.projects, rawId);
+    case "trigger":
+      // The viewer's own triggers (agentTasks) resolve locally by Convex id or
+      // short id; a foreign (bot-owned) trigger waits for webGet.
+      return lookup(state.agentTasks, rawId);
     case "session": {
       const short = rawId.slice(0, 7).toLowerCase();
       return (
