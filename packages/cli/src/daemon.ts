@@ -21117,201 +21117,234 @@ async function main(): Promise<void> {
   // in-flight slot wedged forever if a tmux/Convex call hangs.
   const DELIVERY_TIMEOUT_MS = 180_000;
 
+  // Shared by the reactive subscription and the poll fallback below. Feeding the
+  // same batch twice is safe: the server-side claim, messagesInFlight, the
+  // per-conversation serialization and the injection dedup window all gate re-entry.
+  const handlePendingMessagesUpdate = async (messages: any) => {
+    selfHealIfTimersStalled("convex");
+    if (!messages) {
+      return;
+    }
+
+    if (Array.isArray(messages)) {
+      if (messages.length > 0) {
+        logDelivery(`Delivery scan: ${messages.length} pending message(s) received`);
+      }
+      for (const pendingMsg of messages) {
+        try {
+          assertLegacyDeliveryEnvelope(pendingMsg);
+        } catch {
+          logDelivery(
+            `[FENCED-BYPASS-BLOCKED] msg=${String(pendingMsg?._id ?? "unknown").slice(0, 12)} reached legacy subscription`,
+          );
+          continue;
+        }
+        const claimed = await syncService.claimPendingMessageForDelivery(pendingMsg._id);
+        if (!claimed) {
+          logDelivery(`Skipping msg=${pendingMsg._id.slice(0, 8)} - not owned by this daemon`);
+          continue;
+        }
+        const msg = { ...pendingMsg, ...claimed };
+        if ((msg.retry_count ?? 0) >= 12) {
+          logDelivery(`msg=${msg._id.slice(0, 8)} retry_count=${msg.retry_count} exceeds cap, marking undeliverable`);
+          syncService.updateMessageStatus({ messageId: msg._id, status: "undeliverable" }).catch(logConvexFailure);
+          continue;
+        }
+        const inFlight = messagesInFlight.get(msg._id);
+        if (inFlight !== undefined) {
+          const age = Date.now() - inFlight.ts;
+          if (age < IN_FLIGHT_HARD_TTL_MS) {
+            logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - already in flight (age=${Math.round(age / 1000)}s)`);
+            continue;
+          }
+          logDelivery(`Reclaiming msg=${msg._id.slice(0, 8)} - in-flight ${Math.round(age / 1000)}s exceeds ${IN_FLIGHT_HARD_TTL_MS / 1000}s TTL, retrying`);
+          messagesInFlight.delete(msg._id);
+        }
+        messagesInFlight.set(msg._id, { ts: Date.now(), conversationId: msg.conversation_id });
+
+        // Per-conversation serialization: only one message delivers to a given tmux
+        // pane at a time. The subscription fires reactively when the first completes,
+        // giving the next message its turn.
+        if (conversationDeliveryActive.has(msg.conversation_id)) {
+          logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - delivery already active for conv=${msg.conversation_id.slice(0, 12)}`);
+          messagesInFlight.delete(msg._id);
+          continue;
+        }
+        conversationDeliveryActive.add(msg.conversation_id);
+
+        const imageIds = msg.image_storage_ids ?? (msg.image_storage_id ? [msg.image_storage_id] : []);
+        logDelivery(`Processing: msg=${msg._id.slice(0, 8)} conv=${msg.conversation_id.slice(0, 12)} content="${msg.content.slice(0, 80)}" images=${imageIds.length} retry=${msg.retry_count ?? 0}`);
+
+        let messageContent = msg.content;
+        if (imageIds.length > 0) {
+          const imagePaths: string[] = [];
+          for (const storageId of imageIds) {
+            try {
+              const imagePath = await downloadImage(storageId, syncService);
+              if (imagePath) {
+                imagePaths.push(imagePath);
+                log(`Downloaded image to ${imagePath}`);
+              }
+            } catch (err) {
+              log(`Failed to download image: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+          if (imagePaths.length > 0) {
+            const realText = msg.content.replace(/^\[image\]$/i, "").trim();
+            const imageTags = imagePaths.map(p => `[Image ${p}]`).join(" ");
+            messageContent = realText ? `${realText} ${imageTags}` : imageTags;
+          }
+        }
+
+        syncService.updateSessionAgentStatus(msg.conversation_id, "connected").catch(logConvexFailure);
+
+        // If recently injected to tmux, skip re-delivery (prevents retry race causing duplicates).
+        // Confirmed entries expire on the short TTL so a genuinely lost injection is redelivered;
+        // unconfirmed entries (the "injected" mark never reached Convex, so this row is still
+        // "pending" and reappears on every scanner pass) hold much longer — until the mark's
+        // background retry confirms, the agent's echo promotes the row, or the hard cap lapses.
+        // Exception: compaction recovery bypass allows re-delivery of messages dropped during CC compaction.
+        const isCompactionRecovery = compactionRedeliveryBypass.delete(msg._id);
+        const lastInjected = injectedMessageTs.get(msg._id);
+        if (lastInjected && (Date.now() - lastInjected.ts) < injectionDedupWindowMs(lastInjected) && !isCompactionRecovery) {
+          logDelivery(`DEDUP: msg=${msg._id.slice(0, 8)} injected ${Math.round((Date.now() - lastInjected.ts) / 1000)}s ago${lastInjected.confirmed ? "" : " (unconfirmed)"}, updating status only`);
+          try {
+            await syncService.updateMessageStatus({ messageId: msg._id, status: "injected" });
+            lastInjected.confirmed = true; // a served status write IS the confirmation
+          } catch {}
+          messagesInFlight.delete(msg._id);
+          conversationDeliveryActive.delete(msg.conversation_id);
+          continue;
+        }
+
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const delivered = await Promise.race([
+            deliverMessage(
+              msg.conversation_id,
+              messageContent,
+              conversationCache,
+              syncService,
+              msg._id,
+              titleCache
+            ),
+            new Promise<never>((_, reject) => {
+              timeoutHandle = setTimeout(
+                () => reject(new Error(`deliverMessage timed out after ${DELIVERY_TIMEOUT_MS / 1000}s`)),
+                DELIVERY_TIMEOUT_MS,
+              );
+            }),
+          ]);
+          if (delivered) {
+            logDelivery(`SUCCESS: msg=${msg._id.slice(0, 8)} injected${isCompactionRecovery ? " (compaction recovery)" : ""}`);
+            // The daemon just put a prompt in front of the agent — report the
+            // turn start itself instead of waiting for the session's
+            // UserPromptSubmit hook, which is lossy under load (5s timeout,
+            // discarded output). A lost hook left the session looking
+            // dormant/idle for minutes after a successful injection, which is
+            // what kept the false "message hasn't reached the agent" banner
+            // up. sendAgentStatus updates lastSentAgentStatus so heartbeats
+            // carry the new status instead of stomping it; the pane
+            // reconcile corrects the rare case where the submit didn't take.
+            const injectedSessionId = buildReverseConversationCache(conversationCache)[msg.conversation_id];
+            if (injectedSessionId) {
+              sendAgentStatus(syncService, msg.conversation_id, injectedSessionId, "thinking");
+            } else {
+              syncService.updateSessionAgentStatus(msg.conversation_id, "thinking").catch(logConvexFailure);
+            }
+            // Restamp ts but keep the confirmed flag: markInjectedBestEffort registered the
+            // entry pre-paste and may have already confirmed the status write.
+            injectedMessageTs.set(msg._id, {
+              ts: Date.now(),
+              conversationId: msg.conversation_id,
+              confirmed: injectedMessageTs.get(msg._id)?.confirmed ?? false,
+            });
+            // Track for post-compaction recovery: if CC compacts and goes idle,
+            // we can re-inject this message. Skip on recovery re-injections to
+            // prevent infinite compaction->recovery loops.
+            if (!isCompactionRecovery) {
+              recentSessionInjections.set(msg.conversation_id, {
+                messageId: msg._id,
+                content: messageContent,
+                ts: Date.now(),
+              });
+            }
+            // GC: evict expired entries to prevent unbounded growth (per-entry window:
+            // confirmed = short TTL, unconfirmed = hard cap)
+            if (injectedMessageTs.size > 500) {
+              const now = Date.now();
+              for (const [id, entry] of injectedMessageTs) {
+                if (now - entry.ts > injectionDedupWindowMs(entry)) injectedMessageTs.delete(id);
+              }
+            }
+          } else {
+            logDelivery(`FAILED: msg=${msg._id.slice(0, 8)} delivery returned false, scheduling retry ${(msg.retry_count ?? 0) + 1}`);
+            // The pre-paste dedup entry must not survive a failed delivery — it would
+            // block the retry it just scheduled (and abort the mark's background retry,
+            // which is correct: an "injected" write for an undelivered message strands it).
+            injectedMessageTs.delete(msg._id);
+            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, messageContent);
+          }
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          injectedMessageTs.delete(msg._id);
+          if (err instanceof UndeliverableMessageError) {
+            // Terminal by construction: cancel (a status the server never
+            // re-pends) instead of burning the retry ladder.
+            logDelivery(`CANCELLED: msg=${msg._id.slice(0, 8)} can never be delivered: ${errMsg}`);
+            syncService.cancelPendingMessage(msg._id).catch(logConvexFailure);
+          } else {
+            logDelivery(`ERROR: msg=${msg._id.slice(0, 8)} exception: ${errMsg}`);
+            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content);
+          }
+        } finally {
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+          messagesInFlight.delete(msg._id);
+          conversationDeliveryActive.delete(msg.conversation_id);
+        }
+      }
+    } else {
+      log(`Received non-array: ${typeof messages}`);
+    }
+
+    resetReconnectDelay();
+  };
+
+  // A subscribed query that errors SERVER-SIDE (e.g. "timed out performing too
+  // many system operations" during a backend brownout) becomes a zombie: the
+  // client keeps the listener registered, but convex only re-executes an errored
+  // query when its recorded read set changes — and a failed execution may leave
+  // none. Without an onError handler the error surfaced as a single unhandled
+  // rejection and the delivery rail stayed silent until the next daemon restart
+  // (2026-08-30: eight hours of stranded pending sends). Tearing down and
+  // resubscribing issues a fresh AddQuery, which forces a fresh server execution.
+  const makeSubscriptionErrorHandler = (name: string, teardown: () => void, resubscribe: () => void) => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    return (err: unknown) => {
+      if (timer) return;
+      try { teardown(); } catch {}
+      const delay = getReconnectDelay();
+      const msg = err instanceof Error ? err.message : String(err);
+      logDelivery(`${name} subscription errored (${msg.slice(0, 200)}); resubscribing in ${Math.round(delay / 1000)}s`);
+      timer = setTimeout(() => {
+        timer = null;
+        resubscribe();
+      }, delay);
+    };
+  };
+
   const setupSubscription = () => {
     try {
       logDelivery("Setting up pending messages subscription");
       unsubscribe = subscriptionClient.onUpdate(
         "pendingMessages:getPendingMessagesForDaemon" as any,
         { api_token: config.auth_token, device_id: deviceId() },
-        async (messages: any) => {
-          selfHealIfTimersStalled("convex");
-          if (!messages) {
-            return;
-          }
-
-          if (Array.isArray(messages)) {
-            if (messages.length > 0) {
-              logDelivery(`Subscription: ${messages.length} pending message(s) received`);
-            }
-            for (const pendingMsg of messages) {
-              try {
-                assertLegacyDeliveryEnvelope(pendingMsg);
-              } catch {
-                logDelivery(
-                  `[FENCED-BYPASS-BLOCKED] msg=${String(pendingMsg?._id ?? "unknown").slice(0, 12)} reached legacy subscription`,
-                );
-                continue;
-              }
-              const claimed = await syncService.claimPendingMessageForDelivery(pendingMsg._id);
-              if (!claimed) {
-                logDelivery(`Skipping msg=${pendingMsg._id.slice(0, 8)} - not owned by this daemon`);
-                continue;
-              }
-              const msg = { ...pendingMsg, ...claimed };
-              if ((msg.retry_count ?? 0) >= 12) {
-                logDelivery(`msg=${msg._id.slice(0, 8)} retry_count=${msg.retry_count} exceeds cap, marking undeliverable`);
-                syncService.updateMessageStatus({ messageId: msg._id, status: "undeliverable" }).catch(logConvexFailure);
-                continue;
-              }
-              const inFlight = messagesInFlight.get(msg._id);
-              if (inFlight !== undefined) {
-                const age = Date.now() - inFlight.ts;
-                if (age < IN_FLIGHT_HARD_TTL_MS) {
-                  logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - already in flight (age=${Math.round(age / 1000)}s)`);
-                  continue;
-                }
-                logDelivery(`Reclaiming msg=${msg._id.slice(0, 8)} - in-flight ${Math.round(age / 1000)}s exceeds ${IN_FLIGHT_HARD_TTL_MS / 1000}s TTL, retrying`);
-                messagesInFlight.delete(msg._id);
-              }
-              messagesInFlight.set(msg._id, { ts: Date.now(), conversationId: msg.conversation_id });
-
-              // Per-conversation serialization: only one message delivers to a given tmux
-              // pane at a time. The subscription fires reactively when the first completes,
-              // giving the next message its turn.
-              if (conversationDeliveryActive.has(msg.conversation_id)) {
-                logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - delivery already active for conv=${msg.conversation_id.slice(0, 12)}`);
-                messagesInFlight.delete(msg._id);
-                continue;
-              }
-              conversationDeliveryActive.add(msg.conversation_id);
-
-              const imageIds = msg.image_storage_ids ?? (msg.image_storage_id ? [msg.image_storage_id] : []);
-              logDelivery(`Processing: msg=${msg._id.slice(0, 8)} conv=${msg.conversation_id.slice(0, 12)} content="${msg.content.slice(0, 80)}" images=${imageIds.length} retry=${msg.retry_count ?? 0}`);
-
-              let messageContent = msg.content;
-              if (imageIds.length > 0) {
-                const imagePaths: string[] = [];
-                for (const storageId of imageIds) {
-                  try {
-                    const imagePath = await downloadImage(storageId, syncService);
-                    if (imagePath) {
-                      imagePaths.push(imagePath);
-                      log(`Downloaded image to ${imagePath}`);
-                    }
-                  } catch (err) {
-                    log(`Failed to download image: ${err instanceof Error ? err.message : String(err)}`);
-                  }
-                }
-                if (imagePaths.length > 0) {
-                  const realText = msg.content.replace(/^\[image\]$/i, "").trim();
-                  const imageTags = imagePaths.map(p => `[Image ${p}]`).join(" ");
-                  messageContent = realText ? `${realText} ${imageTags}` : imageTags;
-                }
-              }
-
-              syncService.updateSessionAgentStatus(msg.conversation_id, "connected").catch(logConvexFailure);
-
-              // If recently injected to tmux, skip re-delivery (prevents retry race causing duplicates).
-              // Confirmed entries expire on the short TTL so a genuinely lost injection is redelivered;
-              // unconfirmed entries (the "injected" mark never reached Convex, so this row is still
-              // "pending" and reappears on every scanner pass) hold much longer — until the mark's
-              // background retry confirms, the agent's echo promotes the row, or the hard cap lapses.
-              // Exception: compaction recovery bypass allows re-delivery of messages dropped during CC compaction.
-              const isCompactionRecovery = compactionRedeliveryBypass.delete(msg._id);
-              const lastInjected = injectedMessageTs.get(msg._id);
-              if (lastInjected && (Date.now() - lastInjected.ts) < injectionDedupWindowMs(lastInjected) && !isCompactionRecovery) {
-                logDelivery(`DEDUP: msg=${msg._id.slice(0, 8)} injected ${Math.round((Date.now() - lastInjected.ts) / 1000)}s ago${lastInjected.confirmed ? "" : " (unconfirmed)"}, updating status only`);
-                try {
-                  await syncService.updateMessageStatus({ messageId: msg._id, status: "injected" });
-                  lastInjected.confirmed = true; // a served status write IS the confirmation
-                } catch {}
-                messagesInFlight.delete(msg._id);
-                conversationDeliveryActive.delete(msg.conversation_id);
-                continue;
-              }
-
-              let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-              try {
-                const delivered = await Promise.race([
-                  deliverMessage(
-                    msg.conversation_id,
-                    messageContent,
-                    conversationCache,
-                    syncService,
-                    msg._id,
-                    titleCache
-                  ),
-                  new Promise<never>((_, reject) => {
-                    timeoutHandle = setTimeout(
-                      () => reject(new Error(`deliverMessage timed out after ${DELIVERY_TIMEOUT_MS / 1000}s`)),
-                      DELIVERY_TIMEOUT_MS,
-                    );
-                  }),
-                ]);
-                if (delivered) {
-                  logDelivery(`SUCCESS: msg=${msg._id.slice(0, 8)} injected${isCompactionRecovery ? " (compaction recovery)" : ""}`);
-                  // The daemon just put a prompt in front of the agent — report the
-                  // turn start itself instead of waiting for the session's
-                  // UserPromptSubmit hook, which is lossy under load (5s timeout,
-                  // discarded output). A lost hook left the session looking
-                  // dormant/idle for minutes after a successful injection, which is
-                  // what kept the false "message hasn't reached the agent" banner
-                  // up. sendAgentStatus updates lastSentAgentStatus so heartbeats
-                  // carry the new status instead of stomping it; the pane
-                  // reconcile corrects the rare case where the submit didn't take.
-                  const injectedSessionId = buildReverseConversationCache(conversationCache)[msg.conversation_id];
-                  if (injectedSessionId) {
-                    sendAgentStatus(syncService, msg.conversation_id, injectedSessionId, "thinking");
-                  } else {
-                    syncService.updateSessionAgentStatus(msg.conversation_id, "thinking").catch(logConvexFailure);
-                  }
-                  // Restamp ts but keep the confirmed flag: markInjectedBestEffort registered the
-                  // entry pre-paste and may have already confirmed the status write.
-                  injectedMessageTs.set(msg._id, {
-                    ts: Date.now(),
-                    conversationId: msg.conversation_id,
-                    confirmed: injectedMessageTs.get(msg._id)?.confirmed ?? false,
-                  });
-                  // Track for post-compaction recovery: if CC compacts and goes idle,
-                  // we can re-inject this message. Skip on recovery re-injections to
-                  // prevent infinite compaction->recovery loops.
-                  if (!isCompactionRecovery) {
-                    recentSessionInjections.set(msg.conversation_id, {
-                      messageId: msg._id,
-                      content: messageContent,
-                      ts: Date.now(),
-                    });
-                  }
-                  // GC: evict expired entries to prevent unbounded growth (per-entry window:
-                  // confirmed = short TTL, unconfirmed = hard cap)
-                  if (injectedMessageTs.size > 500) {
-                    const now = Date.now();
-                    for (const [id, entry] of injectedMessageTs) {
-                      if (now - entry.ts > injectionDedupWindowMs(entry)) injectedMessageTs.delete(id);
-                    }
-                  }
-                } else {
-                  logDelivery(`FAILED: msg=${msg._id.slice(0, 8)} delivery returned false, scheduling retry ${(msg.retry_count ?? 0) + 1}`);
-                  // The pre-paste dedup entry must not survive a failed delivery — it would
-                  // block the retry it just scheduled (and abort the mark's background retry,
-                  // which is correct: an "injected" write for an undelivered message strands it).
-                  injectedMessageTs.delete(msg._id);
-                  scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, messageContent);
-                }
-              } catch (err) {
-                const errMsg = err instanceof Error ? err.message : String(err);
-                injectedMessageTs.delete(msg._id);
-                if (err instanceof UndeliverableMessageError) {
-                  // Terminal by construction: cancel (a status the server never
-                  // re-pends) instead of burning the retry ladder.
-                  logDelivery(`CANCELLED: msg=${msg._id.slice(0, 8)} can never be delivered: ${errMsg}`);
-                  syncService.cancelPendingMessage(msg._id).catch(logConvexFailure);
-                } else {
-                  logDelivery(`ERROR: msg=${msg._id.slice(0, 8)} exception: ${errMsg}`);
-                  scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content);
-                }
-              } finally {
-                if (timeoutHandle) clearTimeout(timeoutHandle);
-                messagesInFlight.delete(msg._id);
-                conversationDeliveryActive.delete(msg.conversation_id);
-              }
-            }
-          } else {
-            log(`Received non-array: ${typeof messages}`);
-          }
-
-          resetReconnectDelay();
-        }
+        handlePendingMessagesUpdate,
+        makeSubscriptionErrorHandler(
+          "Pending messages",
+          () => { if (unsubscribe) { unsubscribe(); unsubscribe = null; } },
+          () => setupSubscription(),
+        ),
       );
       logDelivery("Pending messages subscription established");
       // Registering a subscription does NOT prove the WebSocket is up:
@@ -21348,6 +21381,33 @@ async function main(): Promise<void> {
   };
 
   setupSubscription();
+
+  // Belt and suspenders for the rail above: a reactive subscription can die in
+  // ways the onError path never sees (silent half-open socket, a server error
+  // state with no read set left to invalidate it). The poll asks the same query
+  // directly, so any silent subscription death stalls delivery by at most one
+  // interval instead of until the next daemon restart. Duplicate feeds are safe
+  // (see handlePendingMessagesUpdate).
+  const PENDING_POLL_INTERVAL_MS = 60_000;
+  let pendingPollInFlight = false;
+  setInterval(() => {
+    if (pendingPollInFlight) return;
+    pendingPollInFlight = true;
+    (async () => {
+      const messages = await syncService.getClient().query(
+        "pendingMessages:getPendingMessagesForDaemon" as any,
+        { api_token: config.auth_token, device_id: deviceId() },
+      );
+      if (Array.isArray(messages) && messages.length > 0) {
+        logDelivery(`Poll: ${messages.length} pending message(s) found by fallback scan`);
+        await handlePendingMessagesUpdate(messages);
+      }
+    })().catch((err) => {
+      log(`Pending poll fallback failed: ${err instanceof Error ? err.message : String(err)}`);
+    }).finally(() => {
+      pendingPollInFlight = false;
+    });
+  }, PENDING_POLL_INTERVAL_MS);
 
   const setupPermissionSubscription = () => {
     try {
@@ -21424,7 +21484,12 @@ async function main(): Promise<void> {
           }
 
           resetReconnectDelay();
-        }
+        },
+        makeSubscriptionErrorHandler(
+          "Permission",
+          () => { if (permissionUnsubscribe) { permissionUnsubscribe(); permissionUnsubscribe = null; } },
+          () => setupPermissionSubscription(),
+        ),
       );
       log("Permission subscription established successfully");
     } catch (err) {
@@ -21470,7 +21535,12 @@ async function main(): Promise<void> {
           }
 
           resetReconnectDelay();
-        }
+        },
+        makeSubscriptionErrorHandler(
+          "Command",
+          () => { if (commandUnsubscribe) { commandUnsubscribe(); commandUnsubscribe = null; } },
+          () => setupCommandSubscription(),
+        ),
       );
       log("Command subscription established successfully");
     } catch (err) {
