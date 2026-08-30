@@ -1417,9 +1417,10 @@ pre[class*="language-"] {
   height: 15px;
 }
 /* Count badges hug the right edge (mock: badge margin-left auto), and shrink
-   from pill to whisper. Scoped to the count pills, not avatar/dot circles. */
-.simple-view [data-sv-nav] span.rounded-full[class*="bg-sol-cyan"],
-.simple-view [data-sv-nav] span.rounded-full[class*="bg-teal"] {
+   from pill to whisper. Keyed on the NavCount marker, never on colour: a
+   colour-keyed selector also caught project dots that hashed to teal or cyan
+   and rendered them as right-aligned pale badges. */
+.simple-view [data-sv-nav] [data-sv-count] {
   margin-left: auto;
   min-width: 16px;
   height: 16px;
