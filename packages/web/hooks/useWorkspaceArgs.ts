@@ -1,4 +1,4 @@
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 export type WorkspaceArgs =
@@ -36,6 +36,12 @@ export function useWorkspaceArgs(): WorkspaceArgs {
   const initialized = useInboxStore((s) => s.clientStateInitialized);
 
   if (!initialized) return "skip";
+
+  // A just-created team holds an optimistic stub id until the server echoes
+  // (inboxStore.createTeam). A stub is not an Id<"teams">; passing it would
+  // throw ArgumentValidationError. Skip for the sub-second window instead —
+  // the new team has no server rows yet anyway.
+  if (activeTeamId && !isConvexId(String(activeTeamId))) return "skip";
 
   if (activeTeamId) {
     return {

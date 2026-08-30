@@ -1,7 +1,5 @@
-import { useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
-import { api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useSwitchWorkspace } from "../hooks/useSwitchWorkspace";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import {
@@ -15,7 +13,7 @@ import {
 import { Check, ChevronDown, Plus, User, UserPlus } from "lucide-react";
 import { useState, lazy, Suspense } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { TeamIcon } from "./TeamIcon";
+import { TeamCrest } from "./team/TeamCrest";
 
 const InviteModal = lazy(() => import("./InviteModal").then(m => ({ default: m.InviteModal })));
 
@@ -33,7 +31,9 @@ export function TeamSwitcher() {
 
   const activeTeam = teams?.find(t => t?._id === activeTeamId);
   // Invite targets the ACTIVE team; only its admins see the item.
-  const canInvite = !!activeTeam && activeTeam.role === "admin";
+  // A just-created team carries an optimistic stub id until the server row
+  // lands; inviting against it would 404 (or fall back to the previous team).
+  const canInvite = !!activeTeam && activeTeam.role === "admin" && isConvexId(String(activeTeam._id));
 
   const handleTeamChange = async (teamId: Id<"teams"> | null) => {
     await switchWorkspace(teamId);
@@ -56,7 +56,7 @@ export function TeamSwitcher() {
       <DropdownMenuTrigger asChild>
         <button className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-sol-base02/50 transition-colors text-sm">
           {activeTeam ? (
-            <TeamIcon icon={activeTeam.icon} color={activeTeam.icon_color} className="w-4 h-4" />
+            <TeamCrest icon={activeTeam.icon} color={activeTeam.icon_color} size="sm" className="w-5 h-5 rounded" />
           ) : (
             <User className="w-4 h-4 text-sol-base1" />
           )}
@@ -88,7 +88,7 @@ export function TeamSwitcher() {
               className="flex items-center justify-between cursor-pointer text-sol-text hover:bg-sol-base02/50"
             >
               <div className="flex items-center gap-2">
-                <TeamIcon icon={team.icon} color={team.icon_color} className="w-4 h-4" />
+                <TeamCrest icon={team.icon} color={team.icon_color} size="sm" />
                 <span>{team.name}</span>
                 <span className="text-xs text-sol-base1">
                   {team.role === "admin" ? "Admin" : "Member"}

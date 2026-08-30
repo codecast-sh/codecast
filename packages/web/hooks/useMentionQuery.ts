@@ -3,7 +3,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { MentionItem } from "../components/editor/MentionList";
 import { memberHandle } from "@codecast/shared/chat";
-import { useInboxStore, convBucketMap } from "../store/inboxStore";
+import { useInboxStore, convBucketMap, isConvexId } from "../store/inboxStore";
 import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { useDebounce } from "./useDebounce";
 import { inActiveWorkspace } from "../lib/workspaceScope";
@@ -69,9 +69,13 @@ export function useMentionServerSearch(
   const debounced = useDebounce(current, 250);
   const wantNow = rawQuery != null && current.length >= 2;
   const settled = debounced === current;
+  // A just-created team scope carries an optimistic stub id until the server
+  // echoes; a stub is not an Id<"teams">. Skip rather than fall back to
+  // personal, which would leak personal items into a team surface.
+  const stubTeam = !!opts?.teamId && !isConvexId(String(opts.teamId));
   const results = useQuery(
     api.docs.mentionSearch,
-    wantNow && settled
+    wantNow && settled && !stubTeam
       ? {
           query: current,
           // Explicit workspace either way: without it the server falls back to
@@ -93,7 +97,7 @@ export function useMentionServerSearch(
   );
   return {
     items,
-    loading: wantNow && (!settled || results === undefined),
+    loading: wantNow && !stubTeam && (!settled || results === undefined),
   };
 }
 

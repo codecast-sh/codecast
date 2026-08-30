@@ -283,7 +283,13 @@ export default defineSchema({
     created_at: v.number(),
     invite_code: v.string(),
     invite_code_expires_at: v.optional(v.number()),
-  }).index("by_invite_code", ["invite_code"]),
+    // Idempotency key from the client's optimistic stub. A retried create
+    // (replayed dispatch, timeout after commit) finds the team it already
+    // made instead of minting a duplicate.
+    client_key: v.optional(v.string()),
+  })
+    .index("by_invite_code", ["invite_code"])
+    .index("by_client_key", ["client_key"]),
 
   team_memberships: defineTable({
     user_id: v.id("users"),

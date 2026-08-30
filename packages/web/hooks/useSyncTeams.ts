@@ -1,8 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
+import { useSwitchWorkspace } from "./useSwitchWorkspace";
 
 /**
  * The viewer's teams, into the store.
@@ -22,5 +23,28 @@ export function useSyncTeams(): any[] | undefined {
     teamsQuery,
     useCallback((d: any) => useInboxStore.getState().syncTable("teams", d), []),
   );
+
+  // A deleted or departed active team leaves the mirror dangling: unstamped
+  // ui keys are local wins, so the server's repoint never lands, and every
+  // team-scoped query then errors in the raw. When the echo no longer holds
+  // the active team, repoint to a surviving one through the sanctioned
+  // switch. The timer lets a just-created team's echo catch up first: right
+  // after create the real id is active while the list subscription still
+  // holds the old answer, and that gap must not read as a deleted team.
+  const switchWorkspace = useSwitchWorkspace();
+  useEffect(() => {
+    if (!Array.isArray(teamsQuery)) return;
+    const active = useInboxStore.getState().clientState.ui?.active_team_id;
+    // Stub ids (optimistic create) resolve on their own; only a real id can dangle.
+    if (!active || !isConvexId(String(active))) return;
+    if (teamsQuery.some((t: any) => t?._id?.toString() === String(active))) return;
+    const timer = setTimeout(() => {
+      const now = useInboxStore.getState().clientState.ui?.active_team_id;
+      if (String(now) !== String(active)) return;
+      void switchWorkspace((teamsQuery[0]?._id as string | undefined) ?? null);
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [teamsQuery, switchWorkspace]);
+
   return teamsQuery as any[] | undefined;
 }

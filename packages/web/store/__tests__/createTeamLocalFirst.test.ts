@@ -4,6 +4,8 @@ import { useInboxStore } from "../inboxStore";
 // Creating a team is local-first: the stub row and the workspace switch land
 // in the same tick, the caller gets the real id once the server answers, the
 // echo of getUserTeams retires the stub, and a refusal puts everything back.
+// While the stub id sits in the pointer, feeders that hand it to the server
+// guard it with isConvexId (see activeTeamPointer.guard.test.ts).
 
 const serverId = (seed: string) => seed.padEnd(32, "0").slice(0, 32);
 const OLD_TEAM = serverId("teamold");

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { useConvex, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useInboxStore, InboxSession } from "../store/inboxStore";
+import { useInboxStore, InboxSession, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { useRecoveryPoll } from "./useRecoveryPoll";
 
@@ -40,7 +40,9 @@ export function useSyncTeamInboxSessions() {
   const convex = useConvex();
   const scope = useInboxStore((s) => s.clientState.ui?.inbox_scope ?? "mine");
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
-  const active = scope === "team";
+  // A freshly created team holds an optimistic stub id until the server
+  // echoes; a stub is not an Id<"teams">, so skip rather than throw.
+  const active = scope === "team" && (!activeTeamId || isConvexId(String(activeTeamId)));
   const teamArgs = active
     ? { activeTeamId: activeTeamId as Id<"teams"> | undefined, include_liveness: false }
     : "skip";

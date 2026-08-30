@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useCurrentUser } from "../hooks/useCurrentUser";
-import { useTrackedStore } from "../store/inboxStore";
+import { useTrackedStore, isConvexId } from "../store/inboxStore";
 import {
   Dialog,
   DialogContent,
@@ -30,7 +30,10 @@ export function InviteModal({ teamId, trigger, open: controlledOpen, onOpenChang
   const { user } = useCurrentUser();
   const activeTeamId = useTrackedStore([(s) => s.clientState.ui?.active_team_id]).clientState.ui
     ?.active_team_id as Id<"teams"> | undefined;
-  const effectiveTeamId = teamId ?? activeTeamId ?? user?.team_id;
+  // isConvexId: a just-created team holds an optimistic stub id until the
+  // server echoes, and InvitePanel hands the id to server queries.
+  const serverActiveTeamId = activeTeamId && isConvexId(String(activeTeamId)) ? activeTeamId : undefined;
+  const effectiveTeamId = teamId ?? serverActiveTeamId ?? user?.team_id;
 
   if (!effectiveTeamId) return null;
 
@@ -39,9 +42,9 @@ export function InviteModal({ teamId, trigger, open: controlledOpen, onOpenChang
       {trigger && <DialogTrigger asChild>{trigger}</DialogTrigger>}
       <DialogContent className="bg-sol-bg border-sol-border">
         <DialogHeader>
-          <DialogTitle className="text-sol-text">Invite Team Member</DialogTitle>
-          <DialogDescription className="text-sol-base1">
-            Share this link with your team members
+          <DialogTitle className="text-sol-text">Invite a teammate</DialogTitle>
+          <DialogDescription className="text-sol-text-muted">
+            Share the link or send an email. Anyone who opens it joins this team.
           </DialogDescription>
         </DialogHeader>
         {open && <InvitePanel teamId={effectiveTeamId} variant="modal" />}
@@ -49,7 +52,7 @@ export function InviteModal({ teamId, trigger, open: controlledOpen, onOpenChang
           <Button
             variant="outline"
             onClick={() => setOpen(false)}
-            className="border-sol-border text-sol-base1"
+            className="border-sol-border text-sol-text-muted"
           >
             Close
           </Button>
