@@ -64,6 +64,7 @@ import {
   type VaultViewMode,
 } from "../../lib/vault/viewMode";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
+import { isElectron } from "../../lib/desktop";
 
 // sigma + graphology are ~40kB gzip: nobody who doesn't open the graph pays.
 const VaultGraphView = lazy(() =>
@@ -114,15 +115,37 @@ function NoDaemonTeaching({
   // One dead end used to answer three different problems. The browser blocking
   // a loopback request looks nothing like a daemon that isn't running, and
   // telling someone to restart a healthy daemon wastes their time.
+  // A refused probe has two honest readings, and only one of them exists in
+  // the desktop app: there is no browser gate in Electron, so pointing at the
+  // address bar there sends people hunting for a permission they cannot grant.
+  const desktop = isElectron();
   const copy = {
-    "probe-failed": {
-      title: "Your browser is blocking this machine",
+    "daemon-slow": {
+      title: "The daemon is running, but slow to answer",
       body: (
         <>
-          The daemon is running and answered, but the browser wouldn&apos;t let this page
-          reach it. Chrome asks permission the first time a site connects to your local
-          network — allow it from the address-bar icon, then retry. The desktop app has no
-          such gate.
+          It&apos;s registered as live, but didn&apos;t respond within the time limit —
+          usually a daemon busy with many sessions or a slow tmux. That is load, not a
+          browser problem: retry in a moment, and{" "}
+          <code className="text-sol-text">cast doctor</code> shows its health.
+        </>
+      ),
+    },
+    "probe-failed": {
+      title: desktop ? "No daemon answered on this machine" : "This page can't reach the daemon",
+      body: desktop ? (
+        <>
+          A daemon answered, but not one this app can reach — the files live on another
+          machine, or the daemon here isn&apos;t running. Start it with{" "}
+          <code className="text-sol-text">cast daemon</code> or check{" "}
+          <code className="text-sol-text">cast doctor</code>, then retry.
+        </>
+      ) : (
+        <>
+          A daemon answered, but the request to it was refused. Either it runs on another
+          machine, or the browser blocked the local connection — Chrome asks permission the
+          first time a site connects to your local network; allow it from the address-bar
+          icon, then retry.
         </>
       ),
     },

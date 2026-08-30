@@ -20,6 +20,31 @@ const session = new Map<string, string>();
 
 const { getTerminalEndpoint, lastDiscoveryFailure } = await import("../terminal/endpoint");
 
+/** A relay with one live daemon that posts its endpoint straight away. */
+function oneDaemon(ep: typeof THIS_MACHINE) {
+  return {
+    mutation: async () => ({ commands: [{ command_id: "cmd-1" }] }),
+    query: async () => ({
+      executed_at: 1,
+      result: JSON.stringify({ port: ep.port, token: ep.token, device_id: ep.deviceId, tmux: ep.tmux }),
+    }),
+  } as any;
+}
+
+/** A loopback probe that fails the way the browser reports it: a timeout
+ *  (something is listening, nothing answered in time) or a rejection (blocked
+ *  or refused before it went anywhere). `answers` is consumed in order; once
+ *  exhausted the probe succeeds. */
+function probeFails(...answers: ("timeout" | "rejected")[]) {
+  const queue = [...answers];
+  (globalThis as any).fetch = mock(async () => {
+    const next = queue.shift();
+    if (next === "timeout") throw Object.assign(new Error("timed out"), { name: "TimeoutError" });
+    if (next === "rejected") throw new TypeError("Failed to fetch");
+    return { ok: true, json: async () => ({ tmux: true, sessions: [] }) };
+  });
+}
+
 const THIS_MACHINE = { port: 41234, token: "tok", deviceId: "dev-here", tmux: true };
 
 /** A loopback probe that answers only for the machine we say is here. */
@@ -111,5 +136,37 @@ describe("getTerminalEndpoint", () => {
     probeAnswers(true);
     expect(await getTerminalEndpoint(noDevices)).toBeNull();
     expect(lastDiscoveryFailure()).toBe("other-device");
+  });
+});
+
+describe("why a probe missed", () => {
+  test("a timed-out probe means the daemon is slow, not that the browser blocked it", async () => {
+    // The daemon posted its endpoint through the relay, so it is alive; the
+    // loopback port just did not answer in time. Restarting it, or hunting for
+    // a browser permission, are both the wrong advice.
+    probeFails("timeout", "timeout");
+    expect(await getTerminalEndpoint(oneDaemon(THIS_MACHINE))).toBeNull();
+    expect(lastDiscoveryFailure()).toBe("daemon-slow");
+  });
+
+  test("a rejected probe still reports probe-failed", async () => {
+    probeFails("rejected");
+    expect(await getTerminalEndpoint(oneDaemon(THIS_MACHINE))).toBeNull();
+    expect(lastDiscoveryFailure()).toBe("probe-failed");
+  });
+
+  test("a daemon that times out once gets a slower second look", async () => {
+    // A stall of a few seconds is the daemon's normal bad day under load; one
+    // patient retry turns that from a dead end into a connection.
+    probeFails("timeout");
+    expect(await getTerminalEndpoint(oneDaemon(THIS_MACHINE))).toEqual(THIS_MACHINE);
+    expect(lastDiscoveryFailure()).toBe("none");
+    expect((globalThis as any).fetch).toHaveBeenCalledTimes(2);
+  });
+
+  test("a rejected probe is not retried", async () => {
+    probeFails("rejected");
+    await getTerminalEndpoint(oneDaemon(THIS_MACHINE));
+    expect((globalThis as any).fetch).toHaveBeenCalledTimes(1);
   });
 });
