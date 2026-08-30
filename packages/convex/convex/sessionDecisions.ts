@@ -67,6 +67,20 @@ export const ask = mutation({
         q.eq("conversation_id", conversation._id).eq("status", "pending")
       )
       .collect();
+    // Earlier asks still open in this session: the poster is the one party who
+    // can withdraw the ones the work has moved past, so the response names them.
+    const staleOpen = (excludeId?: string) =>
+      openRows
+        .filter((r) => r._id !== excludeId)
+        .map((r) => ({
+          id: r._id,
+          question: r.question,
+          created_at: r.created_at,
+          messages_since:
+            r.asked_message_count !== undefined
+              ? Math.max(0, conversation.message_count - r.asked_message_count)
+              : undefined,
+        }));
     const existing = openRows.find((r) => r.question === args.question);
     if (existing) {
       await ctx.db.patch(existing._id, {
@@ -76,8 +90,9 @@ export const ask = mutation({
         blocking: args.blocking ?? true,
         default_option: args.default_option,
         created_at: now,
+        asked_message_count: conversation.message_count,
       });
-      return { id: existing._id, updated: true };
+      return { id: existing._id, updated: true, other_open: staleOpen(existing._id) };
     }
 
     const id = await ctx.db.insert("session_decisions", {
@@ -92,8 +107,9 @@ export const ask = mutation({
       default_option: args.default_option,
       status: "pending",
       created_at: now,
+      asked_message_count: conversation.message_count,
     });
-    return { id, updated: false };
+    return { id, updated: false, other_open: staleOpen() };
   },
 });
 
@@ -242,6 +258,12 @@ export const listForSession = mutation({
         created_at: r.created_at,
         updated_at: r.updated_at,
         resolved_at: r.resolved_at,
+        // How far the session has run past an open ask — the staleness signal
+        // the CLI prints so the poster can cancel questions the work outgrew.
+        messages_since:
+          r.status === "pending" && r.asked_message_count !== undefined
+            ? Math.max(0, conversation.message_count - r.asked_message_count)
+            : undefined,
         ...resolvedSummary(r),
       })),
     };
@@ -276,6 +298,44 @@ export const resolve = mutation({
       resolved_by: userId,
     });
     return { already_resolved: false };
+  },
+});
+
+// Where in the transcript a decision was asked. The `cast decide` run's tool
+// result carries the decision id, so the first message referencing the id —
+// in a tool result, a tool call's argv, or plain content — anchors the ask.
+// The queue's "asked 2h ago" line uses this to jump when the message is older
+// than the client's loaded window.
+export const findAskMessage = query({
+  args: { decision_id: v.id("session_decisions") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const row = await ctx.db.get(args.decision_id);
+    if (!row || row.user_id.toString() !== userId.toString()) return null;
+
+    const id = args.decision_id.toString();
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", row.conversation_id))
+      .order("asc")
+      .collect();
+    // tool-call id → its message: a hit inside a tool RESULT resolves to the
+    // message carrying the call, because the result rides a content-less
+    // carrier row that the client renders folded into the call's row.
+    const callMessage = new Map<string, (typeof messages)[number]>();
+    for (const m of messages) for (const tc of m.tool_calls ?? []) callMessage.set(tc.id, m);
+    for (const m of messages) {
+      if (m.content?.includes(id) || m.tool_calls?.some((tc) => tc.input.includes(id))) {
+        return { message_id: m._id, timestamp: m.timestamp };
+      }
+      const hit = m.tool_results?.find((r) => r.content.includes(id));
+      if (hit) {
+        const call = callMessage.get(hit.tool_use_id) ?? m;
+        return { message_id: call._id, timestamp: call.timestamp };
+      }
+    }
+    return null;
   },
 });
 

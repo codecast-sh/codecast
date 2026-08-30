@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { parseDecideOption, pickDecisionTarget, looksLikeDecisionId, describeResolution, formatDecisionList, type DecisionRow } from "./decideCommand.js";
+import { parseDecideOption, pickDecisionTarget, looksLikeDecisionId, describeResolution, formatDecisionList, formatAge, isStaleDecision, type DecisionRow } from "./decideCommand.js";
 
 describe("cast decide option parsing", () => {
   it("keeps a bare label as a label", () => {
@@ -90,13 +90,50 @@ describe("cast decide ls formatting", () => {
   });
 
   it("marks the default of an open advisory decision", () => {
-    const text = formatDecisionList([row({ blocking: false, default_option: 0 })]);
+    const now = 1 + 5 * 60_000;
+    const text = formatDecisionList([row({ blocking: false, default_option: 0 })], now);
     expect(text).toContain("→ 1. Frontmatter");
-    expect(text).toContain("still open  (advisory)");
+    expect(text).toContain("still open — asked 5m ago  (advisory)");
   });
 
   it("describes a free-text answer and a withdrawal", () => {
     expect(describeResolution(row({ status: "answered", answer_text: "neither, merge them" }))).toBe("answered: neither, merge them");
     expect(describeResolution(row({ status: "withdrawn" }))).toBe("withdrawn");
+  });
+
+  it("shows how far the session has run past an open ask", () => {
+    const now = 1 + 30 * 60_000;
+    const text = formatDecisionList([row({ messages_since: 12 })], now);
+    expect(text).toContain("still open — asked 30m ago, 12 messages since");
+    expect(text).not.toContain("moved past");
+  });
+
+  it("nudges cleanup when an open ask has gone stale, and only then", () => {
+    const now = 1 + 3 * 60 * 60_000;
+    const stale = formatDecisionList([row({})], now);
+    expect(stale).toContain("cast decide cancel <id>");
+
+    const fresh = formatDecisionList([row({})], 1 + 10 * 60_000);
+    expect(fresh).not.toContain("cast decide cancel <id>");
+
+    // A resolved row never counts as stale, however old.
+    const resolved = formatDecisionList([row({ status: "withdrawn" })], now);
+    expect(resolved).not.toContain("cast decide cancel <id>");
+  });
+});
+
+describe("decision staleness", () => {
+  it("goes stale on age or on conversation drift, pending rows only", () => {
+    expect(isStaleDecision(row({}), 1 + 60_000)).toBe(false);
+    expect(isStaleDecision(row({}), 1 + 3 * 60 * 60_000)).toBe(true);
+    expect(isStaleDecision(row({ messages_since: 40 }), 1 + 60_000)).toBe(true);
+    expect(isStaleDecision(row({ status: "answered", messages_since: 40 }), 1 + 3 * 60 * 60_000)).toBe(false);
+  });
+
+  it("formats ages coarsely", () => {
+    expect(formatAge(20_000)).toBe("just now");
+    expect(formatAge(5 * 60_000)).toBe("5m ago");
+    expect(formatAge(3 * 60 * 60_000)).toBe("3h ago");
+    expect(formatAge(50 * 60 * 60_000)).toBe("2d ago");
   });
 });

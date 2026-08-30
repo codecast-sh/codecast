@@ -56,6 +56,9 @@ export type QueueItem = {
   blocking: boolean;
   defaultOption?: number;
   createdAt: number;
+  // conversation.message_count at ask time (source "decide") — with the live
+  // session row's count, "messages since the ask".
+  askedMessageCount?: number;
   decisionId?: string;
   // AskUserQuestion answers ride poll keys; a confirmation dialog maps its
   // two options to Enter/Escape rather than 1/2.
@@ -157,6 +160,69 @@ export function routeQueueKey(
   return null;
 }
 
+export type TranscriptMessageLite = {
+  _id: string;
+  content?: string;
+  timestamp?: number;
+  tool_calls?: Array<{ id?: string; name: string; input: string }>;
+  tool_results?: Array<{ tool_use_id?: string; content: string }>;
+};
+
+/**
+ * The transcript message where the ask happened. The `cast decide` run prints
+ * the decision id (`id: …`) into its tool result, so the FIRST message
+ * carrying the id — in a tool result, a tool call's argv, or plain content —
+ * locates the ask; later `cast decide edit <id>` runs repeat it, hence first
+ * match wins. A hit inside a tool RESULT resolves to the message carrying the
+ * matching tool CALL: the result rides a content-less carrier row that renders
+ * folded into the call's row, so only the call's message is scrollable. A
+ * message whose result hasn't synced yet still matches on the Bash command
+ * plus the question; Bash-only, because an Edit call's file content can quote
+ * both strings without being the ask (it happened).
+ */
+export function findDecisionAnchorMessage(
+  messages: readonly TranscriptMessageLite[] | undefined,
+  decisionId: string | undefined,
+  question: string,
+): TranscriptMessageLite | null {
+  if (!messages) return null;
+  const callMessageFor = (toolUseId: string | undefined) =>
+    toolUseId ? messages.find((m) => m.tool_calls?.some((tc) => tc.id === toolUseId)) : undefined;
+  if (decisionId) {
+    for (const m of messages) {
+      if (m.content?.includes(decisionId)) return m;
+      if (m.tool_calls?.some((tc) => tc.input?.includes(decisionId))) return m;
+      const hit = m.tool_results?.find((r) => r.content?.includes(decisionId));
+      if (hit) return callMessageFor(hit.tool_use_id) ?? m;
+    }
+  }
+  if (question) {
+    for (const m of messages) {
+      if (m.tool_calls?.some((tc) => tc.name === "Bash" && tc.input?.includes("cast decide") && tc.input?.includes(question))) return m;
+    }
+  }
+  return null;
+}
+
+/**
+ * How far the session has run past the ask, in messages. The server snapshot
+ * delta (asked_message_count vs the live session row) is right even when the
+ * client never loaded that far back; the loaded-window scan covers rows from
+ * before the snapshot existed.
+ */
+export function messagesSinceAsk(
+  item: Pick<QueueItem, "createdAt" | "askedMessageCount">,
+  session: Pick<InboxSession, "message_count"> | undefined,
+  messages: readonly TranscriptMessageLite[] | undefined,
+): number {
+  if (item.askedMessageCount !== undefined && session?.message_count !== undefined) {
+    return Math.max(0, session.message_count - item.askedMessageCount);
+  }
+  let n = 0;
+  for (const m of messages ?? []) if ((m.timestamp ?? 0) > item.createdAt) n++;
+  return n;
+}
+
 export function sortQueue(items: QueueItem[]): QueueItem[] {
   return [...items].sort((a, b) => {
     const t = queueTier(a) - queueTier(b);
@@ -185,6 +251,7 @@ export function decisionQueueItems(
       blocking: d.blocking,
       defaultOption: d.default_option,
       createdAt: d.created_at,
+      askedMessageCount: d.asked_message_count,
       decisionId: d._id,
     });
   }

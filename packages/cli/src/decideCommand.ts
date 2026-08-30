@@ -64,6 +64,30 @@ export interface DecisionRow {
   created_at: number;
   updated_at?: number;
   resolved_at?: number;
+  // Pending rows only: how many messages the conversation has produced since
+  // the ask — the server computes it from a message-count snapshot taken at
+  // ask time.
+  messages_since?: number;
+}
+
+export function formatAge(ms: number): string {
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+// An open ask the session has visibly moved past. Either signal alone marks
+// it: hours of wall clock, or enough conversation that the question likely no
+// longer matches the work.
+const STALE_AGE_MS = 2 * 60 * 60 * 1000;
+const STALE_MESSAGES_SINCE = 30;
+
+export function isStaleDecision(row: DecisionRow, now: number = Date.now()): boolean {
+  if (row.status !== "pending") return false;
+  return now - row.created_at >= STALE_AGE_MS || (row.messages_since ?? 0) >= STALE_MESSAGES_SINCE;
 }
 
 const DECIDE_SUBCOMMANDS = new Set(["edit", "cancel", "rm", "withdraw", "ls", "list"]);
@@ -113,12 +137,16 @@ export function describeResolution(row: DecisionRow): string {
   return "withdrawn";
 }
 
-export function formatDecisionList(rows: DecisionRow[]): string {
+export function formatDecisionList(rows: DecisionRow[], now: number = Date.now()): string {
   if (rows.length === 0) return "No decisions posted from this session.";
-  return rows
+  const body = rows
     .map((r) => {
       const head = `${r.status === "pending" ? "●" : "○"} ${r.id}  ${r.question}`;
-      const lines = [head, `    ${describeResolution(r)}${r.blocking ? "" : "  (advisory)"}`];
+      const age =
+        r.status === "pending"
+          ? ` — asked ${formatAge(now - r.created_at)}${r.messages_since !== undefined ? `, ${r.messages_since} message${r.messages_since === 1 ? "" : "s"} since` : ""}`
+          : "";
+      const lines = [head, `    ${describeResolution(r)}${age}${r.blocking ? "" : "  (advisory)"}`];
       r.options.forEach((o, i) => {
         const mark = r.answer_index === i ? "✓" : r.default_option === i && r.status === "pending" ? "→" : " ";
         lines.push(`    ${mark} ${i + 1}. ${o.label}${o.description ? ` — ${o.description}` : ""}`);
@@ -126,6 +154,14 @@ export function formatDecisionList(rows: DecisionRow[]): string {
       return lines.join("\n");
     })
     .join("\n");
+  const stale = rows.filter((r) => isStaleDecision(r, now));
+  if (stale.length === 0) return body;
+  return (
+    body +
+    `\n\nThe work has likely moved past ${stale.length === 1 ? "an open decision" : `${stale.length} open decisions`}. ` +
+    `Withdraw the ones that no longer apply (cast decide cancel <id>), or bring them up to date (cast decide edit <id>) — ` +
+    `a stale question in your human's queue costs attention and earns nothing.`
+  );
 }
 
 function fail(message: string): never {
@@ -395,6 +431,19 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
 
       console.log(fmt.muted("\nThis renders as a card in the conversation and in their queue. Do not repeat the question, options, or reasoning in prose."));
       console.log(fmt.muted("If the facts change: cast decide edit — never a second decision. If it no longer applies: cast decide cancel."));
+
+      // Earlier asks still open in this session: only the poster can tell
+      // which ones the work has moved past, so say them here, at the moment
+      // it is thinking about its decisions anyway.
+      const otherOpen: Array<{ id: string; question: string; created_at: number; messages_since?: number }> = result.other_open ?? [];
+      if (otherOpen.length > 0) {
+        console.log(fmt.muted(`\nStill open from this session (${otherOpen.length} earlier):`));
+        for (const o of otherOpen) {
+          const drift = o.messages_since !== undefined ? `, ${o.messages_since} message${o.messages_since === 1 ? "" : "s"} since` : "";
+          console.log(fmt.muted(`  ${o.id}  ${o.question}  (asked ${formatAge(Date.now() - o.created_at)}${drift})`));
+        }
+        console.log(fmt.muted("If the work has moved past any of these, withdraw them: cast decide cancel <id>."));
+      }
       if (options.advisory) {
         console.log(fmt.muted("Advisory: continue with your default. The human's answer arrives as a message and may override you."));
       } else {

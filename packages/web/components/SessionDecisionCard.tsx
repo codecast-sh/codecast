@@ -6,7 +6,12 @@ import { isUsageLimitDialog } from "@codecast/shared/contracts";
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { useInboxStore, getProjectName } from "../store/inboxStore";
 import { openQuestionFromMessages, lastAssistantText, visibleOptions, type DecisionStepper } from "../hooks/useDecisionQueue";
-import { queueTier, routeQueueKey, type QueueItem } from "../lib/decisionQueue";
+import { queueTier, routeQueueKey, findDecisionAnchorMessage, messagesSinceAsk, type QueueItem } from "../lib/decisionQueue";
+import { formatTimeAgo } from "../lib/messageNavigator";
+import { useCoarseNow } from "../hooks/useCoarseNow";
+import { useConvex } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
+import { isConvexId } from "../store/inboxStore";
 import { buildSingleAnswerPayload, buildFreeTextPayload } from "../lib/pollPayload";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { KeyCap } from "./KeyboardShortcutsHelp";
@@ -104,14 +109,48 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const poll = useMemo(() => (needsMessages ? openQuestionFromMessages(messages as any[]) : null), [needsMessages, messages]);
   const recentText = useMemo(() => (needsMessages ? lastAssistantText(messages as any[]) : undefined), [needsMessages, messages]);
 
-  // How far the session has run since an advisory ask: tells you whether an
-  // override steers the agent or unwinds it.
-  const sinceAsk = useMemo(() => {
-    if (item.blocking || !messages) return 0;
-    let n = 0;
-    for (const m of messages as any[]) if ((m.timestamp ?? 0) > item.createdAt) n++;
-    return n;
-  }, [item.blocking, item.createdAt, messages]);
+  // How far behind the ask is: wall clock and — the sharper signal — how many
+  // messages the session has produced since. A blocking ask with traffic after
+  // it means someone answered in the thread; an advisory one tells you whether
+  // an override steers the agent or unwinds it.
+  //
+  // The live count is a direct primitive subscription: the queue's session row
+  // rides a wake signature that deliberately drops message_count (heartbeat
+  // churn), so item.session's copy goes stale between structural changes.
+  const liveMessageCount = useInboxStore((s) => s.sessions[item.conversationId]?.message_count);
+  const sinceAsk = useMemo(
+    () => messagesSinceAsk(item, liveMessageCount !== undefined ? { message_count: liveMessageCount } : undefined, messages as any[]),
+    [item, liveMessageCount, messages]
+  );
+  // An authored row's created_at is the ask time; a poll's honest timestamp is
+  // its tool call's message. A permission prompt has neither (the client-side
+  // first-seen stamp resets on reload), so it shows no age.
+  const askedAt = item.source === "decide" ? item.createdAt : poll?.createdAt;
+  const now = useCoarseNow(30_000);
+  const askedRel = askedAt !== undefined ? formatTimeAgo(askedAt, now) : null;
+  const askedLabel = askedRel === null ? null : askedRel === "now" ? "asked just now" : /^\d+[mhd]$/.test(askedRel) ? `asked ${askedRel} ago` : `asked ${askedRel}`;
+
+  // Jump to the ask itself — the `cast decide` call rendered in the transcript.
+  // The anchor message is found locally when loaded; when the ask is older than
+  // the loaded window, the server locates it by the decision id, which the CLI
+  // printed into the call's output (findMessageByContent).
+  const convex = useConvex();
+  const canJumpToAsk = item.source === "decide";
+  const jumpToAsk = useCallback(async () => {
+    if (!canJumpToAsk) return;
+    const { requestNavigate } = useInboxStore.getState();
+    const anchor = findDecisionAnchorMessage(messages as any[], item.decisionId, item.question);
+    let target = anchor ? { id: anchor._id, ts: anchor.timestamp } : null;
+    if (!target && item.decisionId && isConvexId(item.decisionId)) {
+      const found = await convex
+        .query(api.sessionDecisions.findAskMessage, { decision_id: item.decisionId as any })
+        .catch(() => null);
+      if (found) target = { id: found.message_id, ts: found.timestamp };
+    }
+    if (!target) return;
+    requestNavigate(item.conversationId, { scrollToMessageId: target.id, scrollToMessageTimestamp: target.ts ?? null });
+    stepper?.onExit?.();
+  }, [canJumpToAsk, messages, item.decisionId, item.question, item.conversationId, convex, stepper]);
 
   // The session title is WHO is asking, never WHAT. A poll-sourced card
   // renders no question text until the poll payload is readable from the
@@ -233,6 +272,20 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim shrink-0">session not running</span>
       )}
     </>
+  );
+
+  // Age in wall clock and in conversation distance, and the way back to the
+  // ask itself: clicking scrolls the thread to the `cast decide` call.
+  const askedLine = askedLabel === null ? null : (
+    <button
+      onClick={jumpToAsk}
+      disabled={!canJumpToAsk}
+      className={`text-[11px] text-sol-text-dim ${canJumpToAsk ? "hover:text-sol-text hover:underline" : "cursor-default"} transition-colors`}
+      title={canJumpToAsk ? "Go to the ask in the conversation" : undefined}
+    >
+      {askedLabel}
+      {sinceAsk > 0 && <> · {sinceAsk} message{sinceAsk === 1 ? "" : "s"} since</>}
+    </button>
   );
 
   const whoIsAsking = (
@@ -410,6 +463,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         </div>
         <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto px-6">
           {whoIsAsking}
+          {askedLine && <div className="-mt-2 mb-3">{askedLine}</div>}
           {question && <h1 className="text-xl text-sol-text leading-snug mb-4">{question}</h1>}
           {item.contextMd && (
             <div className="text-sm text-sol-text-muted mb-4 border-l-2 border-sol-border pl-3">
@@ -466,10 +520,15 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       </div>
       <div className="px-6 shrink-0">
         <div className="text-sm text-sol-text leading-snug line-clamp-2" title={question}>{question || "Waiting on you"}</div>
-        {!item.blocking && (
-          <div className="text-[11px] text-sol-text-dim mt-1">
-            {defaultLabel ? <>proceeding with <span className="text-sol-text-muted">{defaultLabel}</span></> : "proceeding"}
-            {sinceAsk > 0 && <> · {sinceAsk} message{sinceAsk === 1 ? "" : "s"} since the ask</>}
+        {(!item.blocking || askedLine) && (
+          <div className="text-[11px] text-sol-text-dim mt-1 flex items-center gap-1.5 flex-wrap">
+            {!item.blocking && (
+              <span>
+                {defaultLabel ? <>proceeding with <span className="text-sol-text-muted">{defaultLabel}</span></> : "proceeding"}
+                {askedLine && <span className="mx-0.5">·</span>}
+              </span>
+            )}
+            {askedLine}
           </div>
         )}
       </div>
