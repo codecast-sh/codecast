@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "@/store/inboxStore";
-import { isNonTabRoute, shouldUseTabRouting, tabNavigate } from "./tabRouting";
+import { adoptPathIntoActiveTab, isNonTabRoute, shouldUseTabRouting, tabNavigate } from "./tabRouting";
 import { healTabPaths, shellTabPath } from "@/lib/tabRoutes";
 
 const inboxTab = { id: "tab_1", title: "Inbox", path: "/inbox", createdAt: 1 };
@@ -182,5 +182,22 @@ describe("a tab may only hold a shell route", () => {
       if (realWindow === undefined) delete (globalThis as any).window;
       else (globalThis as any).window = realWindow;
     }
+  });
+});
+
+// "Open team" on the create flow (a non-tab route) must land on the team feed.
+// The shell re-asserts the active tab's stored path on re-entry, so the flow
+// adopts the target path into the active tab before the real navigation.
+describe("adoptPathIntoActiveTab", () => {
+  it("points the active tab at the target path", () => {
+    useInboxStore.setState({ tabs: [{ ...inboxTab }], activeTabId: inboxTab.id });
+    adoptPathIntoActiveTab("/team/activity");
+    expect(useInboxStore.getState().tabs[0].path).toBe("/team/activity");
+  });
+
+  it("does nothing when no tab shell exists", () => {
+    useInboxStore.setState({ tabs: [], activeTabId: null });
+    expect(() => adoptPathIntoActiveTab("/team/activity")).not.toThrow();
+    expect(useInboxStore.getState().tabs).toEqual([]);
   });
 });
