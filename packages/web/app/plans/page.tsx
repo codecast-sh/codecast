@@ -325,7 +325,6 @@ export default function PlansPage() {
     <AuthGuard>
       <DashboardLayout>
         <DetailSplitLayout
-          surface="plans"
           closeHref="/plans"
           list={
             <div className="flex flex-col h-full bg-sol-bg">
