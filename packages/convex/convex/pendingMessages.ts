@@ -1022,19 +1022,26 @@ export async function collectDeliverableForOwner(
   deviceId: string,
   now: number = Date.now()
 ): Promise<any[]> {
+  // Bounded scans, oldest first. Unbounded collects made this query's cost track
+  // the pending BACKLOG, so the exact moment delivery fell behind (backend
+  // brownout) was the moment the query grew heavy enough to time out — killing
+  // the subscription that would have drained the backlog. Delivering the oldest
+  // slice re-fires the reactive query as rows leave "pending", so a deep backlog
+  // drains in waves instead of wedging.
+  const DELIVERABLE_SCAN_CAP = 500;
   const [byOwner, bySender] = await Promise.all([
     ctx.db
       .query("pending_messages")
       .withIndex("by_owner_status", (q: any) =>
         q.eq("owner_user_id", ownerUserId).eq("status", "pending")
       )
-      .collect(),
+      .take(DELIVERABLE_SCAN_CAP),
     ctx.db
       .query("pending_messages")
       .withIndex("by_user_status", (q: any) =>
         q.eq("from_user_id", ownerUserId).eq("status", "pending")
       )
-      .collect(),
+      .take(DELIVERABLE_SCAN_CAP),
   ]);
 
   // DPM-02: device rows are read LAZILY, only when a candidate's conversation is
