@@ -1003,7 +1003,7 @@ interface MonitorResult {
   // stashed / dismissed / killed are three distinct retirement states, not one
   // "hidden" figure: stashed = hidden but agent ALIVE, dismissed = hidden and
   // agent torn down, killed = retired (outranks both, so they never double-count).
-  counts: { working: number; needs_input: number; done?: number; dormant?: number; idle: number; pinned: number; live: number; stashed?: number; dismissed?: number; killed?: number; total: number };
+  counts: { working: number; needs_input: number; done?: number; dormant?: number; idle: number; pinned: number; live: number; stashed?: number; dismissed?: number; killed?: number; below_fold?: number; total: number };
   labels?: Array<{ name: string; count: number }>;
   scope: string;
 }
@@ -1098,6 +1098,9 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
   if (counts.stashed) extra.push(`${c.dim}stashed ${counts.stashed}${c.reset}`);
   if (counts.dismissed) extra.push(`${c.dim}dismissed ${counts.dismissed}${c.reset}`);
   if (counts.killed) extra.push(`${c.red}killed ${counts.killed}${c.reset}`);
+  // Rows under the inbox's cluster cut (the fold): its own figure, listed only
+  // under -a, never folded into the work-state columns.
+  if (counts.below_fold) extra.push(`${c.dim}folded ${counts.below_fold}${c.reset}`);
   lines.push(
     summary.join(`  ${c.dim}·${c.reset}  `) +
     (extra.length ? `   ${c.dim}(${extra.join(", ")})${c.reset}` : "")
