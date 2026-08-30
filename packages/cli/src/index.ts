@@ -12590,6 +12590,191 @@ trigger
   });
 
 trigger
+  .command("update")
+  .alias("edit")
+  .description("Edit a trigger in place. Every effective edit is versioned and audited — see 'cast trigger history'.")
+  .argument("<id>", "Trigger ID (tr-42, full id, or last 8 chars)")
+  .option("--prompt <prompt>", "New prompt; '-' reads it from stdin (heredoc-friendly for multi-line markdown)")
+  .option("--title <title>", "New title")
+  .option("--in <duration>", "Reschedule as a one-shot after delay (e.g., 30m, 2h, 1d)")
+  .option("--every <duration>", "Reschedule on an interval (e.g., 4h, 1d)")
+  .option("--on <event>", "Reschedule on an event (pr_comment, pr_opened, pr_merged, push)")
+  .option("--safe", "Read-only: a spawned run gets write tools removed and state-changing commands blocked")
+  .option("--mode <mode>", "Agent mode: apply (can act) or propose (read-only). Prefer --safe.")
+  .option("--project <path>", "Project path for agent cwd")
+  .option("--agent <type>", "Agent type: claude or codex")
+  .option("--max-runtime <duration>", "Max runtime (e.g., 10m)")
+  .action(async (id, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    const scheduleFlags = ["in", "every", "on"].filter((f) => options[f]);
+    if (scheduleFlags.length > 1) {
+      console.error(`Pass only one of --in/--every/--on (got --${scheduleFlags.join(", --")})`);
+      process.exit(1);
+    }
+
+    // Only the fields the caller passed go in the body — the server treats an
+    // absent field as "keep", and records exactly what changed.
+    const body: any = { api_token: config.auth_token };
+    if (options.prompt !== undefined) {
+      const prompt = expandStdinPromptArgs([options.prompt])[0].trim();
+      if (!prompt) {
+        console.error("Empty prompt");
+        process.exit(1);
+      }
+      body.prompt = prompt;
+    }
+    if (options.title !== undefined) body.title = options.title;
+    if (options.every) {
+      const interval = parseDuration(options.every);
+      if (!interval) {
+        console.error(`Invalid duration: ${options.every}`);
+        process.exit(1);
+      }
+      body.schedule_type = "recurring";
+      body.interval_ms = interval;
+    } else if (options.on) {
+      const shorthand = EVENT_SHORTHANDS[options.on];
+      if (!shorthand) {
+        console.error(`Unknown event: ${options.on}. Valid: ${Object.keys(EVENT_SHORTHANDS).join(", ")}`);
+        process.exit(1);
+      }
+      body.schedule_type = "event";
+      body.event_filter = shorthand;
+    } else if (options.in) {
+      const delay = parseDuration(options.in);
+      if (!delay) {
+        console.error(`Invalid duration: ${options.in}`);
+        process.exit(1);
+      }
+      body.schedule_type = "once";
+      body.run_at = Date.now() + delay;
+    }
+    if (options.safe) body.mode = "propose";
+    else if (options.mode !== undefined) body.mode = options.mode;
+    if (options.project !== undefined) body.project_path = options.project;
+    if (options.agent !== undefined) body.agent_type = options.agent;
+    if (options.maxRuntime !== undefined) {
+      const ms = parseDuration(options.maxRuntime);
+      if (!ms) {
+        console.error(`Invalid duration: ${options.maxRuntime}`);
+        process.exit(1);
+      }
+      body.max_runtime_ms = ms;
+    }
+
+    if (Object.keys(body).length === 1) {
+      console.error("Nothing to update. Pass at least one of --prompt/--title/--in/--every/--on/--safe/--mode/--project/--agent/--max-runtime.");
+      process.exit(1);
+    }
+
+    const taskId = await resolveTaskId(config, siteUrl, id);
+    if (!taskId) return;
+    body.task_id = taskId;
+
+    try {
+      const response = await cliFetch(`${siteUrl}/cli/tasks/update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const result = await response.json();
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+      if (!result.success) {
+        console.error("Update failed: only scheduled or paused triggers are editable");
+        process.exit(1);
+      }
+      if (!result.changed?.length) {
+        console.log(fmt.muted(`No changes: ${id} already matches`));
+      } else {
+        console.log(`${c.green}ok${c.reset} Updated ${c.cyan}${id}${c.reset}: ${result.changed.join(", ")} (see \`cast trigger history ${id}\`)`);
+      }
+    } catch (error) {
+      console.error(`Failed: ${error instanceof Error ? error.message : error}`);
+      process.exit(1);
+    }
+  });
+
+trigger
+  .command("history")
+  .description("Show a trigger's edit history: every version, who changed what, from where")
+  .argument("<id>", "Trigger ID (tr-42, full id, or last 8 chars)")
+  .action(async (id) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const taskId = await resolveTaskId(config, siteUrl, id);
+    if (!taskId) return;
+
+    try {
+      const response = await cliFetchRead(`${siteUrl}/cli/tasks/history`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_token: config.auth_token, task_id: taskId }),
+      });
+      const history = await response.json();
+      if (history?.error) {
+        console.error(`Error: ${history.error}`);
+        process.exit(1);
+      }
+      if (!history) {
+        console.error("Trigger not found");
+        process.exit(1);
+      }
+
+      const shortId = history.short_id || taskId.slice(-8);
+      const revisions: any[] = history.revisions ?? [];
+      console.log(`${c.cyan}${shortId}${c.reset} ${c.bold}${history.title}${c.reset} ${fmt.muted(`v${revisions.length + 1}, ${revisions.length} edit(s)`)}`);
+      if (revisions.length === 0) {
+        console.log(fmt.muted("Never edited — still the version it was created with."));
+        return;
+      }
+
+      // One editable field, rendered for reading: durations as "4h", run_at
+      // as a date, the prompt as its first line.
+      const showField = (field: string, snap: any): string => {
+        const val = snap?.[field];
+        if (val === undefined || val === null) return fmt.muted("(none)");
+        if (field === "interval_ms" || field === "max_runtime_ms") return formatMs(val);
+        if (field === "run_at") return new Date(val).toLocaleString();
+        if (field === "event_filter") return val.event_type + (val.action ? `/${val.action}` : "");
+        if (field === "prompt") {
+          const firstLine = (String(val).split("\n").find((l: string) => l.trim()) ?? "").trim();
+          const truncated = firstLine.length > 60 || String(val).trim() !== firstLine;
+          return `"${firstLine.slice(0, 60)}${truncated ? "..." : ""}"`;
+        }
+        return String(val);
+      };
+
+      // Each revision stores the BEFORE snapshot; its "after" is the next
+      // revision's before, or the trigger's current fields for the newest.
+      for (let i = revisions.length - 1; i >= 0; i--) {
+        const r = revisions[i];
+        const after = i + 1 < revisions.length ? revisions[i + 1].before : history.current;
+        const when = new Date(r.created_at).toLocaleString();
+        console.log(`\n${c.yellow}v${r.revision} -> v${r.revision + 1}${c.reset}  ${fmt.muted(when)}  ${r.actor_name} ${fmt.muted(`via ${r.source}`)}`);
+        for (const field of r.changed_fields) {
+          console.log(`  ${field}: ${showField(field, r.before)} ${fmt.muted("->")} ${showField(field, after)}`);
+        }
+      }
+    } catch (error) {
+      console.error(`Failed: ${error instanceof Error ? error.message : error}`);
+      process.exit(1);
+    }
+  });
+
+trigger
   .command("log")
   .description("Show last run conversation for a trigger")
   .argument("<id>", "Trigger ID (full or last 8 chars)")
