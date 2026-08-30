@@ -1,16 +1,8 @@
-import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { useMutation, useQuery } from "convex/react";
-import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
-import { AvatarImg } from "../lib/avatarCache";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
+import React, { useState, useCallback, useRef, useEffect } from "react";
 import Link from "next/link";
 import {
   Target,
   ArrowUpRight,
-  AlertTriangle,
-  ArrowUp,
-  Minus,
-  ArrowDown,
   MessageSquare,
   FolderOpen,
   FileText,
@@ -23,27 +15,30 @@ import { stripMarkdown, docContentPreview } from "../lib/notificationText";
 import {
   parseEntityUrl,
   parsePublishedPageUrl,
-  entityRoute,
-  isConvexId,
   isEntityId,
-  entityTypeFromId,
   entityMentionRegex,
-  entityReferenceLabel,
   type EntityType,
 } from "../lib/entityLinks";
-import { findEntityInStore, resolveAssigneeInfo } from "../lib/liveEntities";
-import { useInboxStore } from "../store/inboxStore";
+import {
+  AuthorAvatar,
+  PRIORITY_CONFIG,
+  STATUS_COLOR,
+  STATUS_LABEL,
+  SessionSummaryBlock,
+  TYPE_LABEL,
+  abbrevModel,
+  relativeTime,
+  taskPeople,
+  useEntityResolution,
+} from "./entityDisplay";
+import { EntityObjectCard } from "./EntityObjectCard";
 import { DocEmbed } from "./DocEmbed";
 import { DatePill } from "./DatePill";
 import { FilePathLink } from "./FilePathLink";
 import { filePathMention, parseFilePathHref } from "../lib/filePathLinks";
 import { PublishedPageEmbed, PublishedPagePill } from "./PublishedPageEmbed";
-import { FormattedSummary } from "./FormattedSummary";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
-import { sessionCardSummary } from "../lib/sessionSummary";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
-
-const api = _api as any;
 
 export { isEntityId };
 
@@ -55,82 +50,11 @@ function parseDateRef(text: string): { iso: string; label?: string } | null {
   return { iso: m[1], label: m[2] || undefined };
 }
 
-// Task status glyph/color/label come from the canonical TASK_STATUS vocabulary
-// (TaskStatusBadge, via `taskVisual`) — the StatusCircle "fill" icons, so a
-// task reads the same here as on the board. The maps below cover PLAN statuses
-// only.
-
-const STATUS_COLOR: Record<string, string> = {
-  draft: "text-gray-400",
-  done: "text-sol-green",
-  dropped: "text-gray-500",
-  active: "text-sol-green",
-  paused: "text-sol-yellow",
-  abandoned: "text-gray-500",
-};
-
-const STATUS_LABEL: Record<string, string> = {
-  draft: "Draft",
-  done: "Done",
-  dropped: "Dropped",
-  active: "Active",
-  paused: "Paused",
-  abandoned: "Abandoned",
-};
-
-const PRIORITY_CONFIG: Record<string, { icon: any; color: string; label: string }> = {
-  urgent: { icon: AlertTriangle, color: "text-red-400", label: "Urgent" },
-  high: { icon: ArrowUp, color: "text-orange-400", label: "High" },
-  medium: { icon: Minus, color: "text-sol-yellow", label: "Medium" },
-  low: { icon: ArrowDown, color: "text-sol-blue", label: "Low" },
-};
-
-const TYPE_LABEL: Record<EntityType, string> = {
-  task: "Task",
-  plan: "Plan",
-  session: "Session",
-  doc: "Doc",
-  project: "Project",
-  trigger: "Trigger",
-};
-
-/**
- * Pick the right `webGet` argument for an id: a full Convex id resolves by
- * `{ id }`, a short id by `{ short_id }`. Sessions store a 7-char short id, so
- * we trim to that when the id is short. doc/project only ever carry Convex ids.
- */
-function entityQueryArgs(type: EntityType, id: string): { short_id?: string; id?: string } {
-  // Only a genuine 32-char Convex id may be resolved by `{ id }` (db.get). A
-  // longer-than-short-id but non-Convex string (e.g. a garbled /plans/<id> URL)
-  // would otherwise be sent to db.get and throw "Invalid ID length"; routing it
-  // through the by_short_id index instead just resolves to null.
-  if (isConvexId(id)) return { id };
-  if (type === "session") return { short_id: id.slice(0, 7).toLowerCase() };
-  if (type === "task" || type === "plan" || type === "trigger") return { short_id: id.toLowerCase() };
-  return { id };
-}
-
-// Creator (only when it isn't the viewer) and assignee (only when it differs
-// from the creator) for the task hover card. Names resolve through the same
-// roster helper the task page uses; read non-reactively — the card mounts
-// fresh on each hover, so a subscription would only add churn.
-function taskPeople(task: any) {
-  const s = useInboxStore.getState() as any;
-  const me = s.currentUser;
-  const members = s.teamMembers;
-  const myId = me?._id?.toString?.();
-  const creatorId = task.user_id?.toString?.();
-  const creator =
-    creatorId && creatorId !== myId
-      ? resolveAssigneeInfo(creatorId, task.creator, members, me)
-      : null;
-  const assigneeId = task.assignee?.toString?.();
-  const assignee =
-    assigneeId && assigneeId !== creatorId
-      ? resolveAssigneeInfo(assigneeId, task.assignee_info, members, me)
-      : null;
-  return { creator, assignee };
-}
+// Status/priority/type vocabulary, the display atoms (AuthorAvatar,
+// SessionSummaryBlock, relativeTime, taskPeople) and the id→entity resolution
+// hook all live in entityDisplay.tsx, shared with EntityObjectCard — one
+// implementation, so an object reads the same as a pill, a hover card, and a
+// shared-object card.
 
 function PersonRow({ label, person }: { label: string; person: { name?: string; image?: string | null } }) {
   return (
@@ -266,84 +190,6 @@ function PlanHoverContent({ plan }: { plan: any }) {
           Click to open <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
       </div>
-    </div>
-  );
-}
-
-// A teammate's avatar for session references: the author's image, or a colored
-// initial circle as fallback. Rendered in the pill and hover header only when a
-// session isn't the current user's (webGet returns author_* for foreign rows).
-function AuthorAvatar({
-  name,
-  avatar,
-  size = 14,
-}: {
-  name?: string | null;
-  avatar?: string | null;
-  size?: number;
-}) {
-  const dim = { width: size, height: size };
-  return (
-    <AvatarImg
-      src={avatar}
-      alt={name ?? "author"}
-      className="rounded-full object-cover ring-1 ring-sol-border/60"
-      style={dim}
-      fallback={
-        <span
-          className="inline-flex items-center justify-center rounded-full bg-sol-blue/20 text-sol-blue font-semibold leading-none ring-1 ring-sol-border/60"
-          style={{ ...dim, fontSize: Math.round(size * 0.55) }}
-        >
-          {(name?.charAt(0) || "?").toUpperCase()}
-        </span>
-      }
-    />
-  );
-}
-
-function abbrevModel(model?: string | null): string | null {
-  if (!model) return null;
-  if (model.includes("opus")) return "Opus";
-  if (model.includes("sonnet")) return "Sonnet";
-  if (model.includes("haiku")) return "Haiku";
-  return null;
-}
-
-function relativeTime(ts?: number | null): string | null {
-  if (!ts) return null;
-  const diff = Date.now() - ts;
-  const mins = Math.floor(diff / 60000);
-  const hours = Math.floor(mins / 60);
-  const days = Math.floor(hours / 24);
-  if (days > 0) return `${days}d ago`;
-  if (hours > 0) return `${hours}h ago`;
-  if (mins > 5) return `${mins}m ago`;
-  return "just now";
-}
-
-// Summary + a bit of context for a session reference card: the coalesced
-// one-line summary (idle_summary/subtitle, with Goal:/Next: labels bolded) plus
-// the last message preview. Reused by the hover popover and the inline expand so
-// "opening" a session reference shows what it's about, not just its metadata.
-function SessionSummaryBlock({ session, className = "" }: { session: any; className?: string }) {
-  const summary = sessionCardSummary(session);
-  const preview = session.last_message_preview?.trim();
-  const showPreview = preview && preview !== summary;
-  const role = session.last_message_role;
-  if (!summary && !showPreview) return null;
-  return (
-    <div className={`space-y-1 ${className}`}>
-      {summary && (
-        <p className="text-[11px] text-sol-text-muted leading-relaxed line-clamp-3 whitespace-pre-line">
-          <FormattedSummary text={summary} />
-        </p>
-      )}
-      {showPreview && (
-        <div className="flex items-start gap-1 text-[10px] text-sol-text-dim leading-snug">
-          <span className="flex-shrink-0 font-mono text-sol-cyan/60">{role && role !== "user" ? `${role}:` : ">"}</span>
-          <span className="line-clamp-2 min-w-0">{preview}</span>
-        </div>
-      )}
     </div>
   );
 }
@@ -557,6 +403,20 @@ export function EntityAwareLink({ href, children, ...props }: any) {
     if (embedText.startsWith("embed:doc:") && embedText.length > 10) {
       return <DocEmbed id={embedText.slice(10)} />;
     }
+    // A references-only paragraph or list, promoted by remarkEntityCards: the
+    // text payload is `card:<count>:<ref>`, and the reference renders as a
+    // browsable preview card instead of a pill. Count = how many cards share
+    // the row, so a lone card can be richer than one in a group.
+    //
+    // The marker class gates authenticity: this renderer is shared by every
+    // markdown surface, but only links the plugin itself rewrote carry
+    // `entity-card-ref` — a hand-typed `[card:1:…](url)` in a doc stays an
+    // ordinary link instead of smuggling a block card into a <p>.
+    const fromCardPlugin = typeof (props as any).className === "string" && (props as any).className.includes("entity-card-ref");
+    const cardMatch = fromCardPlugin ? /^card:(\d+):(.+)$/.exec(embedText) : null;
+    if (cardMatch) {
+      return <EntityObjectCard refId={cardMatch[2]} count={Math.max(1, Number(cardMatch[1]) || 1)} />;
+    }
     // A publish URL alone on its own line, hoisted by remarkEntityIds into
     // "embed:artifact:<slug>|<caption>" — the page renders inline.
     if (embedText.startsWith("embed:artifact:")) {
@@ -699,22 +559,10 @@ function GenericHoverContent({ entity, type }: { entity: any; type: EntityType }
 
 
 export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: { shortId?: string; type?: EntityType; id?: string; fallback?: React.ReactNode }) {
-  // `id` keeps its original case (Convex ids are case-sensitive); short-id and
-  // prefix matching lowercase internally.
+  // All resolution — type sniffing/server resolve, webGet queries, the
+  // local-first store seed, label and route — is the shared hook.
   const rawRef = (idProp ?? shortId ?? "").trim();
-  // A `doc:<convexId>` reference carries its type in the string itself.
-  const isDocRef = !typeProp && /^doc:/i.test(rawRef);
-  const rawId = isDocRef ? rawRef.slice(4) : rawRef;
-  const looksConvex = isConvexId(rawId);
-  // A full Convex id carries no type prefix (and can even start with "jx", so
-  // prefix sniffing misclassifies it) — resolve its table server-side instead.
-  // Prefix detection is for short ids only.
-  // No-throw: this resolver gates every other query in the pill, and a pill
-  // must degrade to plain text — not crash the conversation view — when the
-  // backend doesn't have the function yet (client/deploy skew).
-  const { data: resolvedType } = useQueryNoThrow(api.entities.resolveIdType, !typeProp && !isDocRef && looksConvex ? { id: rawId } : "skip");
-  const type: EntityType | null =
-    typeProp ?? (isDocRef ? "doc" : looksConvex ? resolvedType ?? null : entityTypeFromId(rawId));
+  const { rawId, type, entity, status, label: pillLabel, href } = useEntityResolution(rawRef, typeProp);
   const isTask = type === "task";
   const isPlan = type === "plan";
   const isSession = type === "session";
@@ -722,31 +570,6 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
 
   const [hoverOpen, setHoverOpen] = useState(false);
   const hoverTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const queryArgs = type ? entityQueryArgs(type, rawId) : null;
-  const task = useQuery(api.tasks.webGet, isTask && queryArgs ? queryArgs : "skip");
-  const plan = useQuery(api.plans.webGet, isPlan && queryArgs ? queryArgs : "skip");
-  const session = useQuery(api.conversations.webGet, isSession && queryArgs ? queryArgs : "skip");
-  // No-throw: agentTasks.webGet is newer than some deployed clients, and a
-  // conversation must not crash on a trigger reference just because the backend
-  // hasn't caught up — the pill degrades to its short id, then fills in.
-  const { data: trigger } = useQueryNoThrow(api.agentTasks.webGet, isTrigger && queryArgs ? queryArgs : "skip");
-  // docs/projects are only ever addressed by a full Convex id.
-  const doc = useQuery(api.docs.webGet, type === "doc" && looksConvex ? { id: rawId } : "skip");
-  const project = useQuery(api.projects.webGet, type === "project" && looksConvex ? { id: rawId } : "skip");
-  const served = isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : undefined;
-
-  // Local-first: the client usually already holds this row, so paint the title
-  // on the FIRST frame instead of flashing the raw id until the query answers.
-  // Read once and non-reactively (getState, not a subscription) — a pill must
-  // not re-render on the churn of a collection with thousands of rows; the live
-  // query above is what keeps the label fresh.
-  const seed = useMemo(
-    () => (type ? findEntityInStore(useInboxStore.getState(), type, rawId) : undefined),
-    [type, rawId],
-  );
-  const entity: any = served ?? seed;
-  const status = entity?.status;
 
   // A task pill's icon is the StatusCircle at the task's status, in the
   // status's own color — the pill chrome stays one consistent task color
@@ -782,24 +605,6 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
           : type === "project"
             ? "bg-sol-text-dim/10 text-sol-text-muted border-sol-text-dim/20 hover:bg-sol-text-dim/20"
             : "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20";
-
-  // One label rule for every type, shared with mobile: the pill reads as the
-  // object's NAME, and the id moves to the hover card. A trigger prefers its
-  // display_title — the generated short name, not the whole prompt's first line.
-  const resolvedTitle: string | undefined =
-    (isTrigger ? entity?.display_title : undefined) || entity?.title || entity?.display_title || entity?.name;
-  const pillLabel = entityReferenceLabel({
-    title: resolvedTitle,
-    shortId: entity?.short_id,
-    rawId,
-    typeLabel: type ? TYPE_LABEL[type] : null,
-  });
-
-  // Route that opens this entity. Prefer the resolved Convex id; fall back to
-  // the raw id so the link still works in the brief window before the query
-  // resolves. The pill IS the click target — one click navigates ("click
-  // through"), exactly like any other link.
-  const href = entityRoute(type ?? "session", entity?._id ?? rawId) ?? "#";
 
   const cancelHover = useCallback(() => {
     if (hoverTimeout.current) {
@@ -863,8 +668,8 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
           className={`not-prose inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono leading-[1.4] no-underline ${colors} border transition-colors cursor-pointer align-baseline`}
         >
           <span className="relative flex-shrink-0">
-            {isSession && (session?.author_name || session?.author_avatar) ? (
-              <AuthorAvatar name={session.author_name} avatar={session.author_avatar} size={14} />
+            {isSession && (entity?.author_name || entity?.author_avatar) ? (
+              <AuthorAvatar name={entity.author_name} avatar={entity.author_avatar} size={14} />
             ) : (
               <Icon className={`w-3 h-3 ${isTask ? taskV.color : ""}`} />
             )}
