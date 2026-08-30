@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-import type { TeamVisibility } from "../components/team/VisibilityPicker";
+import type { TeamVisibility } from "../lib/team/visibilityLevels";
 
 export type SuggestedWorkspace = {
   path: string;
@@ -47,6 +47,16 @@ export function isMappedToTeam(ws: UserWorkspace, teamId: Id<"teams"> | null): b
 }
 
 /**
+ * Agent scratch checkouts are not team workspaces: workflow temp dirs
+ * (/wf_<hex>/...) and worktrees under hidden directories (.codecast,
+ * .intern-data). They stay listed, but they sort below real repos so
+ * recency alone cannot rank them above the repos a team would share.
+ */
+export function isScratchWorkspace(path: string): boolean {
+  return /(?:^|\/)(?:wf_[0-9a-f]+|\.[^/]+)\//i.test(path);
+}
+
+/**
  * The two reads behind the workspace share step: what teammates already share
  * for this team, and the viewer's own recent workspaces. Both are one shot
  * setup queries, not registered feeds, so a plain subscription is right here.
@@ -75,7 +85,14 @@ export function useTeamWorkspaceSuggestions(teamId: Id<"teams"> | null) {
     for (const p of allProjects ?? []) {
       (suggestedPaths.has(p.path) ? matched : other).push(p);
     }
-    return { matched, other };
+    // Stable partition: real repos keep the server's recency order, scratch
+    // checkouts follow after them in theirs.
+    const downrank = (list: UserWorkspace[]) => {
+      const real = list.filter((w) => !isScratchWorkspace(w.path));
+      const scratch = list.filter((w) => isScratchWorkspace(w.path));
+      return scratch.length ? [...real, ...scratch] : list;
+    };
+    return { matched: downrank(matched), other: downrank(other) };
   }, [allProjects, suggestedPaths]);
 
   return {
