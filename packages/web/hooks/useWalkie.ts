@@ -257,6 +257,36 @@ export function walkieKeyName(
 }
 
 /**
+ * THE FACTS ONE PUSH-TO-TALK KEY DRAWS, for one room, as a string.
+ *
+ * Pure and exported so a test can prove both halves of the promise: it moves
+ * when this key's own answer moves, and it holds still through everything
+ * else. A key is only ever four things — my key is down in THIS room, the
+ * microphone is open, the words are reaching the room, and whether the gesture
+ * is available at all — and nothing else in the engine changes what it says.
+ */
+export function walkieKeySig(s: WalkieStatus, roomKey: string | undefined): string {
+  const mine = roomKey && s.sending?.roomKey === roomKey ? s.sending : null;
+  return [
+    mine ? "1" : "0",
+    mine?.live ? "1" : "0",
+    mine && mine.openAt !== null ? "1" : "0",
+    s.unavailable ?? "",
+  ].join("|");
+}
+
+/** Wake this component when THIS key's answer changes, and at no other time.
+ *  A string snapshot, so identity is value: the cache every other signature
+ *  hook needs is what `String` already gives us.
+ *
+ *  Exported for its own render test — it IS the subscription, so mounting it is
+ *  the honest way to count what a bar of faces costs. */
+export function useWalkieKeySig(roomKey: string | undefined): string {
+  const read = useCallback(() => walkieKeySig(getWalkieStatus(), roomKey), [roomKey]);
+  return useSyncExternalStore(subscribeWalkie, read, read);
+}
+
+/**
  * The gesture, without any of the chrome.
  *
  * `resolveChannelId` is called at PRESS time, never at render, because the
@@ -268,7 +298,20 @@ export function usePushToTalk(
   roomKey: string | undefined,
   resolveChannelId: () => string | null,
 ): PushToTalk {
-  const status = useWalkieStatus();
+  // ONE ROOM'S WORTH OF THE ENGINE, and never the whole snapshot.
+  //
+  // The avatar bar mounts six of these for the life of the app, and the wall
+  // mounts one per teammate. `useWalkieStatus` wakes on any field of the
+  // status moving — a partial transcript arriving, the recognizer going down,
+  // an error clearing, a room changing what it is — so one person talking
+  // re-rendered every face on screen several times a second, for a key whose
+  // answer had not moved at all.
+  //
+  // The signature below is exactly what this hook branches on for THIS room,
+  // as a string, so `useSyncExternalStore` compares it by value and a face
+  // whose room nobody is talking into holds still through every push.
+  useWalkieKeySig(roomKey);
+  const status = getWalkieStatus();
   // The engine wakes this hook when the WALKIE moves, but the answer below also
   // depends on where the call plane is — and a mute the person toggled in the
   // dock moves that without moving the walkie. A signature of the three scalars
