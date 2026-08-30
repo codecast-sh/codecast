@@ -136,6 +136,18 @@ emit_meta
 # message, mirroring a composer that renders a pasted block as one prompt.
 printf '\\033[?2004h'
 
+# CLEAR THE COMPOSER ON C-k, the way a real agent TUI does. Before pasting, the
+# daemon types a probe char and then drains with C-a/C-k, and it refuses to
+# paste until the probe is gone from the pane (the closed loop in
+# drainTmuxComposer -- a paste into a dirty composer submits "qqq<message>").
+# A bash read runs in the tty's canonical mode, where C-a and C-k are ordinary
+# bytes: they echo as ^A^K and the probe never leaves the line, so every
+# injection scenario failed AGENT_STDIN_NOT_READY against this shim. Making C-k
+# the tty's kill character gives the line the one editing behaviour the drain
+# depends on, and echoke (the macOS and Linux default) erases it from the
+# display too.
+stty kill '^K' 2>/dev/null || true
+
 has_paste_start() { case "$1" in *$'\\033'"[200~"*) return 0 ;; *) return 1 ;; esac; }
 has_paste_end() { case "$1" in *$'\\033'"[201~"*) return 0 ;; *) return 1 ;; esac; }
 
