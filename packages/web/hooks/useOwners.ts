@@ -140,10 +140,11 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
   const [ackedLocally, setAckedLocally] = useState(false);
   const meId = currentUser?._id?.toString?.();
   const myRow = meId ? (data?.owners ?? []).find((o: OwnerInfo) => o.user_id === meId) : undefined;
-  const myAssignment =
-    !ackedLocally && myRow && !myRow.seen_at && myRow.added_by && myRow.added_by !== meId
-      ? myRow
-      : null;
+  // The handoff: my owner row when someone ELSE added me. Outlives the ack —
+  // the conversation marks where in the timeline the handoff landed for as
+  // long as I own the session, not just until I press "Got it".
+  const handoff = myRow && myRow.added_by && myRow.added_by !== meId ? myRow : null;
+  const myAssignment = !ackedLocally && handoff && !handoff.seen_at ? handoff : null;
   const ack = async () => {
     setAckedLocally(true);
     try {
@@ -153,7 +154,7 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
     }
   };
 
-  return { ownerIds, ownerList, displayFor, toggle, clearAll, selectable, currentUser, myAssignment, ack };
+  return { ownerIds, ownerList, displayFor, toggle, clearAll, selectable, currentUser, handoff, myAssignment, ack };
 }
 
 export type OwnersApi = ReturnType<typeof useOwners>;

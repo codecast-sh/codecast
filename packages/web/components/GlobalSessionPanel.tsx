@@ -2536,7 +2536,9 @@ export const SessionCard = memo(function SessionCard({
       onDrop={handleFileDrop}
       onContextMenu={onCardContextMenu ? (e) => onCardContextMenu(e, session, isForeignSession) : undefined}
       className={`relative group transition-all overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
-        session.assigned_ping ? "ring-1 ring-inset ring-sol-cyan/50 bg-sol-cyan/[0.06]" : ""
+        // Violet, not cyan: cyan ring+tint is the ACTIVE row's treatment, and an
+        // unacked handoff must never read as "this is the session you have open".
+        session.assigned_ping ? "ring-1 ring-inset ring-sol-violet/50 bg-sol-violet/[0.06]" : ""
       } ${
         isActive
           ? "bg-sol-cyan/[0.12] border-l-[3px] border-l-sol-cyan ring-1 ring-inset ring-sol-cyan/45 shadow-[0_1px_10px_-2px_rgba(42,161,152,0.35)]"
@@ -2598,16 +2600,22 @@ export const SessionCard = memo(function SessionCard({
           </ShortcutTooltip>
         </div>
         {session.assigned_ping && (
-          <div className="flex items-start gap-1.5 mt-1 px-1.5 py-1 rounded-md bg-sol-cyan/15 border border-sol-cyan/30">
-            <UserCheck className="w-3 h-3 text-sol-cyan flex-shrink-0 mt-0.5" />
+          /* mr-5 keeps the strip — and its "Got it" button — clear of the
+             hover toolbar's column on the right, whose gradient would
+             otherwise wash over the button. */
+          <div className="flex items-start gap-1.5 mt-1 mr-5 px-1.5 py-1 rounded-md bg-sol-violet/15 border border-sol-violet/30">
+            <UserCheck className="w-3 h-3 text-sol-violet flex-shrink-0 mt-0.5" />
             {/* The note is the REASON for the handoff — clamped for the list,
                 tap the body to read all of it without opening the session. */}
             <div
               className={`min-w-0 flex-1 text-[11px] leading-snug ${session.assigned_ping.note ? "cursor-pointer" : ""}`}
               onClick={session.assigned_ping.note ? (e) => { e.stopPropagation(); setPingExpanded((v) => !v); } : undefined}
             >
-              <span className="font-semibold text-sol-cyan">
+              <span className="font-semibold text-sol-violet">
                 {session.assigned_ping.by_name} assigned this to you
+              </span>
+              <span className="text-sol-text-dim whitespace-nowrap" title={formatDateFull(session.assigned_ping.at)}>
+                {" · "}{formatRelative(session.assigned_ping.at, coarseNow)}
               </span>
               {session.assigned_ping.note && (
                 <div className={`text-sol-text-muted whitespace-pre-wrap break-words ${pingExpanded ? "" : "line-clamp-2"}`}>
@@ -2620,7 +2628,7 @@ export const SessionCard = memo(function SessionCard({
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); ackAssignment(session._id); }}
-              className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sol-cyan/20 text-sol-cyan border border-sol-cyan/40 hover:bg-sol-cyan/30 transition-colors"
+              className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sol-violet/20 text-sol-violet border border-sol-violet/40 hover:bg-sol-violet/30 transition-colors"
             >
               Got it
             </button>

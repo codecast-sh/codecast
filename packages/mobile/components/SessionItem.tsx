@@ -236,7 +236,7 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
         // note, and "Got it" to accept without opening the session. The nested
         // Pressable wins the touch over the row's TouchableOpacity.
         <RNView style={styles.assignedPingRow}>
-          <FontAwesome name="user-plus" size={10} color={Theme.cyan} style={{ marginTop: 3 }} />
+          <FontAwesome name="user-plus" size={10} color={Theme.violet} style={{ marginTop: 3 }} />
           {/* The note is the REASON for the handoff — clamped for the list,
               tap the body to read all of it without opening the session. */}
           <Pressable
@@ -637,6 +637,8 @@ export const styles = StyleSheet.create({
     marginBottom: 2,
     gap: 5,
   },
+  // Violet like the web card: cyan is the active/selection treatment there, and
+  // the handoff motif stays one color across platforms.
   assignedPingRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -646,14 +648,14 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 5,
     borderRadius: 8,
-    backgroundColor: Theme.cyan + '22',
+    backgroundColor: Theme.violet + '22',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.cyan + '55',
+    borderColor: Theme.violet + '55',
   },
   assignedPingTitle: {
     fontSize: 12,
     fontWeight: '600',
-    color: Theme.cyan,
+    color: Theme.violet,
     lineHeight: 16,
   },
   assignedPingNote: {
@@ -665,14 +667,14 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
-    backgroundColor: Theme.cyan + '33',
+    backgroundColor: Theme.violet + '33',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.cyan + '66',
+    borderColor: Theme.violet + '66',
   },
   assignedPingAckText: {
     fontSize: 11,
     fontWeight: '600',
-    color: Theme.cyan,
+    color: Theme.violet,
   },
   statePin: {
     marginTop: 3,
