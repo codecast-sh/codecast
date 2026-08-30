@@ -62,6 +62,34 @@ export function clearDocSyncCache(docId: string): void {
 }
 
 /**
+ * True when a doc's `cli_edited_at` stamp just moved to a genuinely new value
+ * while this editor instance has been live the whole time — i.e. `docs.resetSync`
+ * rebuilt the snapshot (see isSyncGap) *after* this tab already opened the doc.
+ *
+ * The first time an editor sees a `cliEditedAt` stamp (mount, or reopening a
+ * doc that was CLI-edited before this tab ever looked at it) is not this case:
+ * `useTiptapSync` already loads the current server snapshot at mount, so
+ * nothing needs to change. Only a stamp that *changes* under a live editor
+ * means content moved server-side while this collab session was running.
+ *
+ * That must never be pushed into the live editor with `setContent` — a
+ * whole-doc replace performed outside a tracked transaction leaves
+ * prosemirror-collab's version/step bookkeeping describing a document that no
+ * longer exists, and the next step it rebases against the real doc throws
+ * ProseMirror's "Inconsistent open depths" (`TransformError`, 2026-08-28). The
+ * only safe recovery is the same one `isSyncGap` uses: drop the cache and
+ * remount, so the editor re-initializes cleanly from the fresh server
+ * snapshot instead of mutating a live, actively-synced document in place.
+ */
+export function shouldResyncOnExternalEdit(
+  seenCliEditedAt: number | null | undefined,
+  nextCliEditedAt: number | null | undefined,
+): boolean {
+  if (nextCliEditedAt == null) return false;
+  return seenCliEditedAt != null && nextCliEditedAt !== seenCliEditedAt;
+}
+
+/**
  * True when a client can never catch up by replaying deltas: the server is
  * ahead, but a getSteps fetch from the client's version returned nothing.
  *
