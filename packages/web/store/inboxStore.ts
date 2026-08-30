@@ -3589,6 +3589,7 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // -- Message actions --
   setMessages: (convId: string, msgs: Message[], meta?: Partial<PaginationState>) => void;
   mergeMessages: (convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) => void;
+  applyTailMessages: (convId: string, anchorTs: number, msgs: Message[], lastTimestamp: number | null) => void;
   setUserMessages: (convId: string, msgs: UserMessage[]) => void;
   addOptimisticMessage: (convId: string, content: string, images?: Array<OptimisticImage>, clientId?: string) => string;
   markOptimisticAsQueued: (convId: string, content: string) => void;
@@ -4046,6 +4047,32 @@ function messageReplayKey(message: Message): string | null {
     message.images || null,
     message.subtype || "",
   ])}`;
+}
+
+// Prune pending sends confirmed by an incoming server batch: a server user row
+// matching by client_id, or by content within the 120s echo window, retires the
+// optimistic bubble. Shared by setMessages (page/snapshot applies) and
+// applyTailMessages (live tail applies). Only reassigns when something was
+// actually pruned — the filter is a remove-only pass, so equal length means
+// identical contents, and keeping the old reference avoids churning
+// pendingMessages identity on every streaming tick (defeats SessionCard memo).
+function prunePendingEchoes(draft: any, convId: string, incoming: Message[]) {
+  const pending = draft.pendingMessages[convId] || [];
+  if (pending.length === 0) return;
+  const serverUserMsgs = incoming.filter((m: Message) => m.role === "user");
+  const kept = pending.filter((m: Message) => {
+    if (m._clientId) {
+      return !serverUserMsgs.some((s: Message) => s.client_id === m._clientId);
+    }
+    const stripped = stripImageRef(m.content || "");
+    return !serverUserMsgs.some((s: Message) =>
+      stripImageRef(s.content || "") === stripped &&
+      Math.abs(s.timestamp - m.timestamp) < 120_000
+    );
+  });
+  if (kept.length !== pending.length) {
+    draft.pendingMessages[convId] = kept;
+  }
 }
 
 function dedupeReplayedMessages(messages: Message[]): Message[] {
@@ -7729,28 +7756,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   setMessages: sync(function (this: Draft, convId: string, msgs: Message[], meta?: Partial<PaginationState>) {
     msgs = dedupeReplayedMessages(msgs);
-    // Prune confirmed messages from pendingMessages
-    const pending = this.pendingMessages[convId] || [];
-    if (pending.length > 0) {
-      const serverUserMsgs = msgs.filter((m: Message) => m.role === "user");
-      const kept = pending.filter((m: Message) => {
-        if (m._clientId) {
-          return !serverUserMsgs.some((s: Message) => s.client_id === m._clientId);
-        }
-        const stripped = stripImageRef(m.content || "");
-        return !serverUserMsgs.some((s: Message) =>
-          stripImageRef(s.content || "") === stripped &&
-          Math.abs(s.timestamp - m.timestamp) < 120_000
-        );
-      });
-      // Only reassign when something was actually pruned. The filter is a
-      // remove-only pass, so equal length means identical contents — keeping
-      // the old reference avoids churning pendingMessages identity on every
-      // streaming tick while a send is in-flight (defeats SessionCard memo).
-      if (kept.length !== pending.length) {
-        this.pendingMessages[convId] = kept;
-      }
-    }
+    prunePendingEchoes(this, convId, msgs);
     // Server data only — pending messages are merged at read time.
     //
     // Preserve any local messages with timestamps strictly newer than the
@@ -7769,6 +7775,35 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const merged = newerLocal.length > 0 ? [...msgs, ...newerLocal] : msgs;
     this.messages[convId] = merged;
     const pag = { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta };
+    this.pagination[convId] = pag;
+    writeConversationMessages(convId, merged, pag);
+    evictInactiveMessages(this, convId);
+  }),
+
+  // The live-tail apply. listMessagesTail's result is AUTHORITATIVE for the
+  // range (anchorTs, lastTimestamp]: local rows there are replaced wholesale.
+  // This is what delivers in-place streaming patches — mergeMessages is
+  // add-only and silently drops a row whose _id already exists — and in-range
+  // deletes (API-error banner supersession). Rows at or before the anchor stay
+  // untouched; rows strictly newer than the tail's last timestamp are
+  // preserved (a recovery fetch can race ahead of the subscription). An empty
+  // tail result changes nothing: deletes of old rows reconcile through the
+  // message-count watermark refetch, never through an empty window.
+  applyTailMessages: sync(function (this: Draft, convId: string, anchorTs: number, msgs: Message[], lastTimestamp: number | null) {
+    msgs = dedupeReplayedMessages(msgs);
+    if (msgs.length === 0) return;
+    prunePendingEchoes(this, convId, msgs);
+    const existing = this.messages[convId] || [];
+    const tailLast = lastTimestamp ?? msgs[msgs.length - 1].timestamp;
+    const incomingIds = new Set(msgs.map((m: Message) => m._id));
+    const keep = existing.filter((m: Message) => m.timestamp <= anchorTs && !incomingIds.has(m._id));
+    const newerLocal = existing.filter((m: Message) => m.timestamp > tailLast && !incomingIds.has(m._id));
+    const merged = [...keep, ...msgs, ...newerLocal];
+    // A stale in-flight result from a just-replaced anchor can interleave with
+    // kept rows; the feed assumes ascending order, so sort unconditionally.
+    merged.sort((a: Message, b: Message) => a.timestamp - b.timestamp);
+    this.messages[convId] = merged;
+    const pag = { ...(this.pagination[convId] || DEFAULT_PAGINATION), initialized: true };
     this.pagination[convId] = pag;
     writeConversationMessages(convId, merged, pag);
     evictInactiveMessages(this, convId);
