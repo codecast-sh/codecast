@@ -1790,6 +1790,23 @@ function logConvexFailure(err: unknown): void {
   log(`[convex-bg] mutation failed: ${msg}`);
 }
 
+// The one write that repoints conversations.session_id at the live session
+// uuid. It historically fired once, fire-and-forget, at link/resume time — and
+// a lost call permanently stranded the conversation on its spawn-time stub id:
+// every session-bound `cast` write from the agent then failed "Conversation
+// not found" while message sync (keyed by conversation _id) stayed healthy, so
+// nothing surfaced the break (union-mobile fleet, 2026-08-29). Ride the durable
+// retry queue instead: never rejects, so callers may await it or drop it.
+async function pushSessionIdBinding(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string): Promise<void> {
+  try {
+    await syncServiceRef?.updateSessionId(conversationId, sessionId, projectPath, gitRoot);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log(`updateSessionId failed for ${conversationId.slice(0, 12)} <- ${sessionId.slice(0, 8)}: ${msg}; queuing for retry`, "warn");
+    retryQueueRef?.add("updateSessionId", { conversationId, sessionId, projectPath, gitRoot }, msg);
+  }
+}
+
 function logLifecycle(event: string, details?: string): void {
   const message = details ? `[LIFECYCLE] ${event}: ${details}` : `[LIFECYCLE] ${event}`;
   log(message, "info");
@@ -4242,7 +4259,7 @@ async function executeRemoteCommand(
                 if (conversationCacheRef) conversationCacheRef[realForkId] = conversationId;
                 seedOpencodeForkSyncBaseline(realForkId);
                 const forkGitInfo = projectPath ? getGitInfo(projectPath) : undefined;
-                syncServiceRef?.updateSessionId(conversationId, realForkId, projectPath || undefined, forkGitInfo?.repoRoot || forkGitInfo?.root).catch(logConvexFailure);
+                void pushSessionIdBinding(conversationId, realForkId, projectPath || undefined, forkGitInfo?.repoRoot || forkGitInfo?.root);
                 log(`[REMOTE] opencode fork: ${parsed.parent_session_id.slice(0, 12)} → ${realForkId.slice(0, 12)} for conv ${conversationId.slice(0, 12)}`);
               } catch (forkErr) {
                 log(`[REMOTE] opencode fork failed for conv ${conversationId.slice(0, 12)}: ${forkErr instanceof Error ? forkErr.message : String(forkErr)} — falling back to blank spawn`);
@@ -4362,7 +4379,7 @@ async function executeRemoteCommand(
               setPosition(forked.thread.path, fs.statSync(forked.thread.path).size);
             }
             const forkGitInfo = getGitInfo(cwd);
-            await syncServiceRef?.updateSessionId(conversationId, realThreadId, cwd, forkGitInfo?.repoRoot || forkGitInfo?.root);
+            await pushSessionIdBinding(conversationId, realThreadId, cwd, forkGitInfo?.repoRoot || forkGitInfo?.root);
             syncServiceRef?.claimSession(conversationId).catch(logConvexFailure);
             syncServiceRef?.markSessionActive(conversationId).catch(logConvexFailure);
             syncServiceRef?.registerManagedSession(realThreadId, process.pid, undefined, conversationId).catch(logConvexFailure);
@@ -6596,7 +6613,7 @@ export async function processSessionFile(
           // Reconcile project_path/git_root to the real session cwd: the stub
           // was created (e.g. from the web) before this session existed, so its
           // stored path is a guess that may not match where the session runs.
-          syncService.updateSessionId(conversationId, sessionId, actualProjectPath || undefined, gitInfo?.repoRoot || gitInfo?.root).catch(logConvexFailure);
+          void pushSessionIdBinding(conversationId, sessionId, actualProjectPath || undefined, gitInfo?.repoRoot || gitInfo?.root);
           if (tmuxEntry) {
           registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
           if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
@@ -7783,7 +7800,7 @@ async function processCodexSession(
           // match branch): the stub's stored path was a guess made before the
           // session existed and may not match where it actually runs.
           const codexGitInfo = projectPath ? getGitInfo(projectPath) : undefined;
-          syncService.updateSessionId(conversationId, sessionId, projectPath || undefined, codexGitInfo?.repoRoot || codexGitInfo?.root).catch(logConvexFailure);
+          void pushSessionIdBinding(conversationId, sessionId, projectPath || undefined, codexGitInfo?.repoRoot || codexGitInfo?.root);
           if (tmuxEntry) {
             registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
             if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
@@ -8279,7 +8296,7 @@ async function processOpencodeSession(
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         const gitInfo = cwd ? getGitInfo(cwd) : undefined;
-        syncService.updateSessionId(conversationId, sessionId, cwd || undefined, gitInfo?.repoRoot || gitInfo?.root).catch(logConvexFailure);
+        void pushSessionIdBinding(conversationId, sessionId, cwd || undefined, gitInfo?.repoRoot || gitInfo?.root);
         if (tmuxEntry) {
           registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
           if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
@@ -8567,7 +8584,7 @@ async function processTranscriptDeltaSession(
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
           const piGitInfo = projectPath ? getGitInfo(projectPath) : undefined;
-          syncService.updateSessionId(conversationId, sessionId, projectPath || undefined, piGitInfo?.repoRoot || piGitInfo?.root).catch(logConvexFailure);
+          void pushSessionIdBinding(conversationId, sessionId, projectPath || undefined, piGitInfo?.repoRoot || piGitInfo?.root);
           if (tmuxEntry) {
             registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
             if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
@@ -14595,7 +14612,7 @@ async function discoverAndLinkSession(
         // match branch). `cwd` is authoritative here: the linked candidate's
         // JSONL was found under the cwd-derived project dir.
         const discoveryGitInfo = getGitInfo(cwd);
-        syncServiceRef.updateSessionId(conversationId, linkedSessionId, cwd, discoveryGitInfo?.repoRoot || discoveryGitInfo?.root).catch(logConvexFailure);
+        void pushSessionIdBinding(conversationId, linkedSessionId, cwd, discoveryGitInfo?.repoRoot || discoveryGitInfo?.root);
         registerManagedStartedSession(conversationId, linkedSessionId, tmuxSession);
         if (startedEntry?.sessionId && startedEntry.sessionId !== linkedSessionId) {
           stopManagedSessionHeartbeat(startedEntry.sessionId);
@@ -15344,7 +15361,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       if (conversationId && reconId !== sessionId) {
         remapConversationSession(sessionId, reconId, conversationId);
         if (syncServiceRef) {
-          syncServiceRef.updateSessionId(conversationId, reconId).catch(logConvexFailure);
+          void pushSessionIdBinding(conversationId, reconId);
         }
       } else if (conversationId) {
         // Ensure cache has the mapping even when sessionId is preserved
@@ -15467,7 +15484,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         if (conversationId) {
           remapConversationSession(sessionId, rewrite.resumeId, conversationId);
           if (syncServiceRef) {
-            syncServiceRef.updateSessionId(conversationId, rewrite.resumeId).catch(logConvexFailure);
+            void pushSessionIdBinding(conversationId, rewrite.resumeId);
           }
         }
         // A fork-artifact source must go immediately: the remap above just
@@ -15852,7 +15869,7 @@ async function repairAndResumeSession(
             saveTitleCache(titleCache);
           }
           if (syncServiceRef) {
-            syncServiceRef.updateSessionId(convId, targetSessionId).catch(logConvexFailure);
+            void pushSessionIdBinding(convId, targetSessionId);
           }
           log(`Materialized fresh Claude session ${targetSessionId.slice(0, 8)} from stale ${sessionId.slice(0, 8)} (${exportData.messages.length} messages, tail=${tailMessages})`);
 
@@ -16233,7 +16250,7 @@ async function materializeSession(
       }
 
       if (syncService) {
-        syncService.updateSessionId(conversationId, sessionId).catch(logConvexFailure);
+        void pushSessionIdBinding(conversationId, sessionId);
       }
 
       logDelivery(`Materialized session=${sessionId.slice(0, 8)} conv=${conversationId.slice(0, 12)} (${exportData.messages.length} msgs, tail=${tailMessages})`);
@@ -19109,6 +19126,23 @@ async function main(): Promise<void> {
         await flushPendingMessagesBatch(pendingMessages[params.sessionId], conversationId, syncService, retryQueue);
         delete pendingMessages[params.sessionId];
       }
+      updateState();
+      return true;
+    }
+
+    if (op.type === "updateSessionId") {
+      const params = op.params as { conversationId: string; sessionId: string; projectPath?: string; gitRoot?: string };
+      // Superseded while queued: the session resumed under a fresh uuid (or the
+      // local mapping was pruned). Executing anyway would clobber the newer
+      // binding, so discard — the newer link enqueued its own op.
+      const preferred = findCachedSessionIdForConversation(conversationCache, params.conversationId);
+      if (preferred !== params.sessionId) {
+        log(`Retry: updateSessionId superseded for ${params.conversationId.slice(0, 12)} (queued ${params.sessionId.slice(0, 8)}, live ${preferred ? preferred.slice(0, 8) : "none"})`);
+        updateState();
+        return true;
+      }
+      await syncService.updateSessionId(params.conversationId, params.sessionId, params.projectPath, params.gitRoot);
+      log(`Retry: Rebound session ${params.sessionId.slice(0, 8)} -> conversation ${params.conversationId.slice(0, 12)}`);
       updateState();
       return true;
     }
