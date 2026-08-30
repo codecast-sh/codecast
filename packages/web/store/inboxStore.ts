@@ -16,6 +16,7 @@ import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } 
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { isDraft, original } from "mutative";
 import { soundDismiss, soundKill } from "../lib/sounds";
+import type { OsPermissionKind } from "../lib/osPermissions";
 import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, writeConversationUserMessages, enqueueDispatch, removeDispatch, loadOutbox, salvageLocalFirstV2Data, PERSISTENCE_AVAILABLE } from "./idbCache";
 import {
   DISPATCH_TABLE_MAP,
@@ -4058,6 +4059,9 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
     sharing: boolean;
     speaking: string[];
     error: string | null;
+    /** When `error` is a device that could not be opened, the OS permission
+     *  behind it — so the notice can carry the fix (lib/osPermissions). */
+    errorFix: OsPermissionKind | null;
   };
   setCallState: (patch: Partial<InboxStoreState["call"]>) => void;
   teamUnreadCount: number | null;
