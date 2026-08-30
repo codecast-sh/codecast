@@ -592,6 +592,13 @@ export default defineSchema({
     // and backfilled on run completion/failure, so EVERY run — not just the
     // latest — stays attributable to its schedule (panel, badges, provenance).
     agent_task_id: v.optional(v.id("agent_tasks")),
+    // Denormalized: is this conversation the home of an armed inject trigger,
+    // and of which strength (dormancy.ts ArmedTriggerHomes)? Written by the
+    // agent_tasks lifecycle (agentTasks.refreshArmedTriggerKind) so the inbox
+    // projection classifies dormancy off the row alone, with no agent_tasks
+    // read per execution. Absent = "none". Semantic (not churn), so it rides
+    // the sync log.
+    armed_trigger_kind: v.optional(v.union(v.literal("none"), v.literal("standing"), v.literal("once"))),
     // Harness /loop state, folded from the message stream at ingest (see
     // loopState.ts): the agent scheduled its own wakeup (ScheduleWakeup) or is
     // mid-wakeup-turn. Lets the inbox trigger set treat a self-pacing loop
@@ -2490,6 +2497,41 @@ export default defineSchema({
     // different account (a remote daemon's bot login) owns the trigger row.
     .index("by_created_by_conversation", ["created_by_conversation_id"])
     .index("by_originating_conversation", ["originating_conversation_id"]),
+
+  // Version history + audit log for trigger edits. One row per edit — both
+  // `cast trigger update` and the web edit dialog write through
+  // agentTasks.applyTaskUpdate, so neither surface can skip the log. Each row
+  // snapshots ALL editable fields as they were BEFORE the edit, making every
+  // row a complete prior version (no diff-walking to reconstruct one), and
+  // names who changed what from where. The current version is the agent_tasks
+  // row itself; `revision` is 1-based and monotonic per task.
+  agent_task_revisions: defineTable({
+    task_id: v.id("agent_tasks"),
+    revision: v.number(),
+    // Audit: who made the edit, from which surface.
+    actor_user_id: v.id("users"),
+    source: v.union(v.literal("cli"), v.literal("web")),
+    // Field names the edit actually changed — the log line, without diffing.
+    changed_fields: v.array(v.string()),
+    // Complete pre-edit snapshot of the editable surface.
+    before: v.object({
+      title: v.string(),
+      prompt: v.string(),
+      schedule_type: v.union(v.literal("once"), v.literal("recurring"), v.literal("event")),
+      run_at: v.optional(v.number()),
+      interval_ms: v.optional(v.number()),
+      event_filter: v.optional(v.object({
+        event_type: v.string(),
+        action: v.optional(v.string()),
+        repository: v.optional(v.string()),
+      })),
+      mode: v.union(v.literal("propose"), v.literal("apply")),
+      agent_type: v.optional(v.string()),
+      project_path: v.optional(v.string()),
+      max_runtime_ms: v.optional(v.number()),
+    }),
+    created_at: v.number(),
+  }).index("by_task", ["task_id", "revision"]),
 
   // --- Task Layer: Projects, Tasks, Docs ---
 
