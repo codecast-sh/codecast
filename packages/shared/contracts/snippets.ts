@@ -774,6 +774,12 @@ longer applies, \`cast decide cancel\` withdraws it. Both act on this session's 
 id also comes back when you post. An already answered decision cannot be edited — the answer is
 in the conversation; act on it.
 
+Stale asks are yours to sweep. \`cast decide ls\` shows each open decision's age and how many
+messages the session has produced since it was asked — when the work has visibly moved past
+one, cancel it rather than leaving it in the queue. Before ending a long turn, and whenever
+you post a new decision, check for older ones the thread has outgrown: a question your human
+answers after it stopped mattering costs their attention and earns nothing.
+
 Blocking is the default: post it, then END YOUR TURN — the answer arrives as a user message.
 \`--advisory --default <n>\` keeps you working with option n while the answer can override you
 later. Use it ONLY when the default is cheap to undo: answers tend to land an hour later and
