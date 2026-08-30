@@ -20,6 +20,35 @@ export const TEAM_COLORS = [
 export type TeamIconName = typeof TEAM_ICONS[number];
 export type TeamColorName = typeof TEAM_COLORS[number];
 
+/** Spoken names for the icon radios. The key is an internal token ("dna",
+ *  "zap"); a screen reader should hear the shape a sighted user sees. */
+export const iconLabelMap: Record<TeamIconName, string> = {
+  rocket: "Rocket",
+  flame: "Flame",
+  zap: "Lightning bolt",
+  star: "Star",
+  diamond: "Diamond",
+  crown: "Crown",
+  shield: "Shield",
+  sword: "Sword",
+  anchor: "Anchor",
+  compass: "Compass",
+  mountain: "Mountain",
+  tree: "Pine tree",
+  sun: "Sun",
+  moon: "Moon",
+  cloud: "Cloud",
+  bolt: "Bolt",
+  atom: "Atom",
+  dna: "DNA helix",
+  hexagon: "Hexagon",
+  triangle: "Triangle",
+  cube: "Cube",
+  sphere: "Sphere",
+  infinity: "Infinity",
+  omega: "Omega",
+};
+
 const iconMap: Record<TeamIconName, React.ComponentType<{ className?: string }>> = {
   rocket: Rocket,
   flame: Flame,

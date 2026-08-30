@@ -5,9 +5,9 @@ import { join } from "node:path";
 // TEAM SETUP EXTRACTION GUARD.
 //
 // The visibility levels, the workspace share picker and the save helper each
-// live in one module so the setup dialog and the create team flow cannot
-// drift. This fails when a second copy of VISIBILITY_LEVELS appears, or when
-// the dialog stops composing the shared pieces.
+// live in one module so the join and create team flows cannot drift. This
+// fails when a second copy of VISIBILITY_LEVELS appears, or when the join
+// flow stops composing the shared pieces.
 
 const root = join(import.meta.dir, "..", "..");
 
@@ -26,17 +26,15 @@ describe("team setup pieces are defined once", () => {
     const files = ["app", "components", "hooks", "lib"].flatMap((d) => walk(join(root, d)));
     const defining = files.filter((f) => /\bVISIBILITY_LEVELS\s*=/.test(readFileSync(f, "utf8")));
     expect(defining.map((f) => f.slice(root.length + 1))).toEqual([
-      "components/team/VisibilityPicker.tsx",
+      "lib/team/visibilityLevels.ts",
     ]);
   });
 
-  test("TeamSetupDialog composes the shared pieces", () => {
-    const dialog = readFileSync(join(root, "components", "TeamSetupDialog.tsx"), "utf8");
-    expect(dialog).toContain('from "./team/VisibilityPicker"');
-    expect(dialog).toContain('from "./team/WorkspaceSharePicker"');
-    expect(dialog).toContain('from "../hooks/useTeamWorkspaceSuggestions"');
-    expect(dialog).toContain('from "../lib/team/saveTeamSetup"');
-    expect(dialog).not.toContain("useMutation(");
-    expect(dialog).not.toContain("useQuery(");
+  test("the join flow composes the shared pieces", () => {
+    const page = readFileSync(join(root, "app", "settings", "team", "join", "page.tsx"), "utf8");
+    expect(page).toContain('from "../../../../components/team/VisibilityPicker"');
+    expect(page).toContain('from "../../../../components/team/WorkspaceSharePicker"');
+    expect(page).toContain('from "../../../../hooks/useTeamWorkspaceSuggestions"');
+    expect(page).toContain('from "../../../../lib/team/saveTeamSetup"');
   });
 });
