@@ -51,7 +51,7 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, ZapOff, Pin, Copy } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, ZapOff, Pin, Copy, ArrowUp, ArrowDown } from "lucide-react";
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -1347,9 +1347,9 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
             <History className="w-3.5 h-3.5" />
           </button>
         </ShortcutTooltip>
-        <ShortcutTooltip label="Open in Triggers" hint="edit, history, full detail" side="top">
+        <ShortcutTooltip label="Open trigger page" hint="full detail, history, edit" side="top">
           <Link
-            href={`/triggers?task=${task._id}`}
+            href={`/triggers/${task._id}`}
             aria-label="Open in Triggers"
             onClick={(e) => e.stopPropagation()}
             className="p-1 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-[color,background-color,transform] duration-100 active:scale-90"
@@ -1423,8 +1423,8 @@ const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOp
               <CtxItem icon={History} onSelect={() => setRunsOpen((v) => !v)}>
                 {runsOpen ? "Hide run history" : "Run history"}
               </CtxItem>
-              <CtxItem icon={Settings2} onSelect={() => router.push(`/triggers?task=${task._id}`)}>
-                Open in Triggers
+              <CtxItem icon={Settings2} onSelect={() => router.push(`/triggers/${task._id}`)}>
+                Open trigger page
               </CtxItem>
               <CtxSeparator />
               <CtxItem
@@ -3599,9 +3599,8 @@ function SessionListPanelImpl({
   // conversation's schedule strip to arrive expanded — the click means "show me
   // this schedule", so the prompt should be visible without a second click.
   // No conversation to land on (a spawn schedule that has never run, or one
-  // whose conversation isn't in the local cache) falls back to the schedule's
-  // own row on /schedules — ?task= arrives expanded and scrolled into view —
-  // so a row click is never a silent no-op.
+  // whose conversation isn't in the local cache) falls back to the trigger's
+  // own detail page, so a row click is never a silent no-op.
   // A trigger that has FIRED before also lands on its most recent firing (the
   // same target the newest run-history entry opens) instead of the tail. The
   // trigger message resolves synchronously from the loaded window when it's
@@ -3613,7 +3612,7 @@ function SessionListPanelImpl({
     const st = useInboxStore.getState();
     const sess = row.openId ? st.sessions[row.openId] : undefined;
     if (!sess) {
-      router.push(`/triggers?task=${row.task._id}`);
+      router.push(`/triggers/${row.task._id}`);
       return;
     }
     st.setScheduleStripExpand({ convId: sess._id, nonce: Date.now() });
@@ -3650,16 +3649,16 @@ function SessionListPanelImpl({
       .catch(() => {});
   }, [handleSelect, router, convex]);
   // Trigger view header click: the trigger IS the citizen there, so its row
-  // opens the trigger's own page (/triggers?task= arrives expanded and scrolled
-  // into view) — the sessions it drives are already sub rows right below.
-  // Pseudo rows (loops, live subagents) have no agent_tasks row for that page
-  // to show, so they keep the conversation-open path.
+  // opens the trigger's own detail page — the sessions it drives are already
+  // sub rows right below. Pseudo rows (loops, live subagents) have no
+  // agent_tasks row for that page to show, so they keep the
+  // conversation-open path.
   const openTriggerPage = useCallback((row: TriggerRow) => {
     if (row.kind) {
       openScheduleTarget(row);
       return;
     }
-    router.push(`/triggers?task=${row.task._id}`);
+    router.push(`/triggers/${row.task._id}`);
   }, [router, openScheduleTarget]);
   // Schedule bars under cards: the schedules bound to a VISIBLE session — the
   // ones it originates (inject, any type), the spawn triggers it created
