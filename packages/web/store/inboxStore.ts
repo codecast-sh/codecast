@@ -1082,12 +1082,24 @@ export type ClientUI = {
   active_team_id?: string;
   active_filter?: "my" | "team";
   inbox_shortcuts_hidden?: boolean;
-  // Session-event sounds (a session finishing, going idle, being killed).
+  // The master sound switch: off silences every cue the app can make.
   sounds_enabled?: boolean;
   // Chat toast sounds, split from the above: an agent fleet's chirps and a
   // teammate speaking are different interruptions, and people who mute one
   // usually still want the other. Absent = on, same as sounds_enabled.
   chat_sounds_enabled?: boolean;
+  // Per-category gates under the master switch (lib/sounds.ts maps each cue to
+  // one of these). Absent = on. Unstamped like sounds_enabled: whether this
+  // machine may chirp is a fact about the room it sits in, not about the
+  // person, so the choice must not follow them to another device.
+  session_sounds_enabled?: boolean; // a session arriving, finishing, going idle
+  call_sounds_enabled?: boolean;    // ring, join/leave, declined, a knock at the door
+  walkie_sounds_enabled?: boolean;  // the six push-to-talk cues
+  ui_sounds_enabled?: boolean;      // feedback for your own gestures: send, dismiss, kill
+  // Output level, a 0..1.5 multiplier over each cue's calibrated gain. 1 (and
+  // absent) = the exact levels every cue was measured at in lib/cueSpec.ts;
+  // the headroom above 1 is safe because master gains sit near 0.05.
+  sound_volume?: number;
   // Chat toasts stay quiet until this instant. Set from the snooze button on a
   // toast — the off switch has to be one gesture from the annoyance, or people
   // mute everything after one bad afternoon.
