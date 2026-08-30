@@ -38,7 +38,11 @@ export const NOTIFICATION_TYPE = v.union(
   v.literal("chat_reply"),
   v.literal("chat_here"),
   v.literal("chat_dm"),
-  v.literal("chat_added")
+  v.literal("chat_added"),
+  // An ordinary channel line, emitted only to members whose per-channel notify
+  // level is "all" (chat.ts gates it). For everyone else plain chatter stays
+  // unread state with no row and no push.
+  v.literal("chat_post")
 );
 
 export const PREFERENCE_MAP: Record<string, string> = {
@@ -69,6 +73,7 @@ export const PREFERENCE_MAP: Record<string, string> = {
   // A DM is addressed to you by construction — same class as a mention.
   chat_dm: "mention",
   chat_added: "chat_activity",
+  chat_post: "chat_activity",
 };
 
 function isNotificationEnabled(

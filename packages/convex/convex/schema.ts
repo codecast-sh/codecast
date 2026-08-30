@@ -2104,16 +2104,18 @@ export default defineSchema({
       v.literal("plan_status_changed"),
       v.literal("plan_task_completed"),
       v.literal("artifact_commented"),
-      // Team chat. There is deliberately no type for a plain channel message:
-      // ordinary chatter produces unread state only, never a notification row and
-      // never a push. A direct message is the exception — it is addressed to you
-      // by construction, so every DM line notifies exactly like a mention.
+      // Team chat. By default ordinary chatter produces unread state only —
+      // never a notification row, never a push. A direct message is one
+      // exception (addressed to you by construction, it notifies like a
+      // mention); chat_post is the other: a plain channel line, written only
+      // for members who set that channel's notify level to "all".
       v.literal("chat_mention"),
       v.literal("chat_reply"),
       v.literal("chat_here"),
       v.literal("chat_dm"),
       // Someone added you to a private channel or a group message.
-      v.literal("chat_added")
+      v.literal("chat_added"),
+      v.literal("chat_post")
     ),
     actor_user_id: v.optional(v.id("users")),
     // Display identity for actors without an account (an anonymous artifact

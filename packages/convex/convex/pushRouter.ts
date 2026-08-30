@@ -146,6 +146,7 @@ const TYPE_LABELS: Record<string, [string, string]> = {
   chat_here: ["channel announcement", "channel announcements"],
   chat_dm: ["direct message", "direct messages"],
   chat_added: ["channel invite", "channel invites"],
+  chat_post: ["channel message", "channel messages"],
 };
 
 export function summarizePushBatch(
@@ -309,7 +310,7 @@ export async function performPushFlush(ctx: any, userId: any): Promise<void> {
   // person (a mention, a DM line, @here), the time-sensitive interruption
   // level — a message TO you should raise a Focus-respecting banner, not sit
   // in the summary tray.
-  const CHAT_TYPES = new Set(["chat_mention", "chat_reply", "chat_here", "chat_dm", "chat_added"]);
+  const CHAT_TYPES = new Set(["chat_mention", "chat_reply", "chat_here", "chat_dm", "chat_added", "chat_post"]);
   const ADDRESSED = new Set(["chat_mention", "chat_dm", "chat_here"]);
   const isChat = sendable.some((r: any) => CHAT_TYPES.has(r.type));
   const addressed = sendable.some((r: any) => ADDRESSED.has(r.type));
