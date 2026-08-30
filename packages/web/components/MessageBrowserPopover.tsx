@@ -6,62 +6,23 @@ import { AvatarImg } from "../lib/avatarCache";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { isCommandMessage, cleanContent } from "../lib/conversationProcessor";
-import { parseMachineDeliveredMessage, isBareNudge, type MachineDeliveredKind } from "./sessionMessage";
+import {
+  buildNavigatorRows,
+  filterNavigatorRows,
+  hiddenRowsNoun,
+  formatTimeAgo,
+  sampleTicks,
+  activeTickIndex,
+  navigatorHeaderLabels,
+  countCommentsByMessage,
+  MACHINE_KIND_LABEL,
+  type HiddenKind,
+  type NavigatorRow,
+} from "../lib/messageNavigator";
+import { resolveSessionTitle } from "../lib/sessionTitle";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
 import { shareTokenArg } from "../lib/shareTokenScope";
-
-function getCommandLabel(content: string): string | null {
-  const m = content.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
-  return m ? `/${m[1].replace(/^\//, "")}` : null;
-}
-
-function processUserMessage(content: string): { display: string; isCmd: boolean } {
-  const isCmd = isCommandMessage(content);
-  if (isCmd) {
-    const label = getCommandLabel(content);
-    return { display: label || cleanContent(content), isCmd: true };
-  }
-  return { display: cleanContent(content), isCmd: false };
-}
-
-// Row kinds hidden behind the "other" chip: machine-delivered messages plus
-// bare "continue" nudges the human typed — navigation noise either way.
-type HiddenKind = MachineDeliveredKind | "continue";
-
-const MACHINE_KIND_LABEL: Record<HiddenKind, string> = {
-  schedule: "trigger", // user-facing vocabulary is "trigger" (ct-38953); the kind key mirrors the wire tag
-  session: "session",
-  teammate: "teammate",
-  chat: "chat",
-  continue: "continue",
-};
-
-// Chip/tooltip noun for the machine-delivered rows: precise when they're all
-// one kind ("2 sessions", "1 trigger"), neutral when mixed — "automated" would
-// mislabel a teammate or another session messaging in.
-function machineNoun(machines: { kind: "user" | HiddenKind }[]): string {
-  const kinds = new Set(machines.map((m) => m.kind));
-  if (kinds.size === 1) {
-    const noun = MACHINE_KIND_LABEL[machines[0].kind as HiddenKind];
-    return machines.length === 1 ? noun : `${noun}s`;
-  }
-  return "other";
-}
-
-// A `cast send` wire tag carries only the sender's 7-char short id (the prefix
-// of its conversation's Convex id). Resolve it to the session's title from the
-// local store when that session is synced; fall back to the short id.
-function resolveSessionTitle(shortId: string): string | null {
-  const s = useInboxStore.getState();
-  for (const coll of [s.sessions, s.conversations] as Record<string, { title?: string }>[]) {
-    for (const key in coll) {
-      if (key.startsWith(shortId) && coll[key].title) return coll[key].title!;
-    }
-  }
-  return null;
-}
 
 const SHORT_ID_RE = /^[a-z0-9]{7}$/;
 
@@ -92,28 +53,6 @@ function MachineKindIcon({ kind }: { kind: HiddenKind }) {
   );
 }
 
-function formatTimeAgo(ts: number): string {
-  const diff = Date.now() - ts;
-  const minutes = Math.floor(diff / 60000);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m`;
-  if (hours < 24) return `${hours}h`;
-  if (days < 30) return `${days}d`;
-  return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
-}
-
-type PM = {
-  _id: string;
-  display: string;
-  isCmd: boolean;
-  timestamp: number;
-  commentCount: number;
-  kind: "user" | HiddenKind;
-  source?: string;
-};
-
 type CommentEntry = {
   _id: string;
   message_id?: string;
@@ -122,11 +61,7 @@ type CommentEntry = {
   user: { name?: string; github_username?: string; github_avatar_url?: string };
 };
 
-// originalIndex is the human-message ordinal (what the row numbers show);
-// machine-delivered rows carry -1 and render unnumbered.
-type IndexedPM = PM & { originalIndex: number };
-
-function HoverPreview({ message, rect, onMouseEnter, onMouseLeave, onDropdownEnter, onDropdownLeave }: { message: IndexedPM; rect: DOMRect; onMouseEnter: () => void; onMouseLeave: () => void; onDropdownEnter: () => void; onDropdownLeave: () => void }) {
+function HoverPreview({ message, rect, onMouseEnter, onMouseLeave, onDropdownEnter, onDropdownLeave }: { message: NavigatorRow; rect: DOMRect; onMouseEnter: () => void; onMouseLeave: () => void; onDropdownEnter: () => void; onDropdownLeave: () => void }) {
   const previewWidth = 420;
   const bridgePad = 20;
   const left = Math.max(8, rect.left - previewWidth - bridgePad);
@@ -189,7 +124,7 @@ function NavDropdown({
   tab,
   onTabChange,
 }: {
-  messages: PM[];
+  messages: NavigatorRow[];
   comments: CommentEntry[];
   conversationId: string;
   currentMessageId: string | null;
@@ -214,7 +149,7 @@ function NavDropdown({
   const [hoveredRect, setHoveredRect] = useState<DOMRect | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewLeaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [previewMsg, setPreviewMsg] = useState<IndexedPM | null>(null);
+  const [previewMsg, setPreviewMsg] = useState<NavigatorRow | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const currentItemRef = useRef<HTMLDivElement>(null);
@@ -233,23 +168,12 @@ function NavDropdown({
     }
   }, [mounted]);
 
-  let humanOrdinal = 0;
-  const indexed: IndexedPM[] = messages.map((m) => ({
-    ...m,
-    originalIndex: m.kind === "user" ? humanOrdinal++ : -1,
-  }));
-  const humanCount = humanOrdinal;
-  const machineRows = indexed.filter((m) => m.kind !== "user");
-  const machineCount = machineRows.length;
-  const machineChipNoun = machineNoun(machineRows);
-  const pool = showMachine ? indexed : indexed.filter((m) => m.kind === "user");
-  const filtered = search
-    ? pool.filter(m => `${m.display} ${m.source ?? ""}`.toLowerCase().includes(search.toLowerCase()))
-    : pool;
+  const { humanCount, hiddenCount: machineCount, chipLabel } = navigatorHeaderLabels(messages);
+  const filtered = filterNavigatorRows(messages, { search, showHidden: showMachine });
 
   useEffect(() => { setFocusIndex(-1); }, [search]);
 
-  const navigateToMessage = useCallback((m: PM) => {
+  const navigateToMessage = useCallback((m: NavigatorRow) => {
     onPin();
     if (onScrollToMessage) {
       onScrollToMessage(m._id);
@@ -287,7 +211,7 @@ function NavDropdown({
     }
   }, [focusIndex]);
 
-  const handleItemHover = useCallback((id: string, el: HTMLElement, msg: IndexedPM) => {
+  const handleItemHover = useCallback((id: string, el: HTMLElement, msg: NavigatorRow) => {
     setHoveredId(id);
     if (previewLeaveTimerRef.current) clearTimeout(previewLeaveTimerRef.current);
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
@@ -363,7 +287,7 @@ function NavDropdown({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
                 <span className={showMachine ? "" : "line-through decoration-[1.5px] opacity-80"}>
-                  {machineCount} {machineChipNoun}
+                  {chipLabel}
                 </span>
               </button>
             )}
@@ -620,7 +544,7 @@ export function MessageNavButton({
       : "skip"
   );
 
-  const commentsByMessage = new Map<string, number>();
+  const commentsByMessage = countCommentsByMessage(commentSummary);
   const topLevelComments: CommentEntry[] = [];
   if (commentSummary) {
     for (const c of commentSummary) {
@@ -633,69 +557,18 @@ export function MessageNavButton({
           user: c.user,
         });
       }
-      if (c.message_id) {
-        const mid = c.message_id as string;
-        commentsByMessage.set(mid, (commentsByMessage.get(mid) || 0) + 1);
-      }
     }
   }
 
-  const processed: PM[] = messages
-    ? messages
-        .map((m: { _id: string; content?: string; timestamp: number }): PM => {
-          const content = m.content ?? "";
-          const commentCount = commentsByMessage.get(m._id) || 0;
-          // Machine-delivered messages (cast send, teammate broadcasts, schedule
-          // triggers) list as compact subdued rows rather than being dropped —
-          // human rows keep their numbering regardless.
-          const machine = parseMachineDeliveredMessage(content);
-          if (machine) {
-            const source =
-              machine.kind === "session"
-                ? resolveSessionTitle(machine.source) ?? machine.source
-                : machine.source;
-            return {
-              _id: m._id,
-              display: machine.body,
-              isCmd: false,
-              timestamp: m.timestamp,
-              commentCount,
-              kind: machine.kind,
-              source,
-            };
-          }
-          const user = processUserMessage(content);
-          // Bare "continue" nudges bucket with the machine rows: unnumbered,
-          // hidden until the "other" chip reveals them. The kind label carries
-          // the word, so the body would be pure repetition — drop it.
-          if (!user.isCmd && isBareNudge(user.display)) {
-            return {
-              _id: m._id,
-              display: "",
-              isCmd: false,
-              timestamp: m.timestamp,
-              commentCount,
-              kind: "continue" as const,
-            };
-          }
-          return {
-            _id: m._id,
-            ...user,
-            timestamp: m.timestamp,
-            commentCount,
-            kind: "user" as const,
-          };
-        })
-        .filter((m: PM) => m.kind !== "user" || m.display.length > 0)
+  const processed: NavigatorRow[] = messages
+    ? buildNavigatorRows(messages, commentsByMessage, resolveSessionTitle)
     : [];
 
   const total = processed.length;
   const humanTotal = processed.filter((m) => m.kind === "user").length;
   const machineTotal = total - humanTotal;
   const effectiveId = currentMessageId === "__fallback__" ? null : currentMessageId;
-  const currentIndex = effectiveId ? processed.findIndex((m) => m._id === effectiveId) : -1;
-  const activeIndex =
-    currentIndex >= 0 ? currentIndex : Math.min(total - 1, Math.floor(scrollProgress * total));
+  const activeIndex = activeTickIndex(processed, effectiveId, scrollProgress);
 
   const scheduleOpen = useCallback(() => {
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
@@ -759,7 +632,6 @@ export function MessageNavButton({
   if (!messages || total <= 1) return null;
 
   const MAX_BARS = 24;
-  const displayCount = Math.min(total, MAX_BARS);
   const hasComments = topLevelComments.length > 0;
 
   return (
@@ -779,14 +651,11 @@ export function MessageNavButton({
         className={`flex flex-col gap-[3px] items-end justify-center px-2 py-1.5 rounded transition-colors relative ${
           open ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"
         }`}
-        title={`${humanTotal} message${humanTotal !== 1 ? "s" : ""}${machineTotal > 0 ? ` / ${machineTotal} ${machineNoun(processed.filter((m) => m.kind !== "user"))}` : ""}${hasComments ? ` / ${topLevelComments.length} comment${topLevelComments.length !== 1 ? "s" : ""}` : ""}`}
+        title={`${humanTotal} message${humanTotal !== 1 ? "s" : ""}${machineTotal > 0 ? ` / ${machineTotal} ${hiddenRowsNoun(processed.filter((m) => m.kind !== "user"))}` : ""}${hasComments ? ` / ${topLevelComments.length} comment${topLevelComments.length !== 1 ? "s" : ""}` : ""}`}
       >
-        {Array.from({ length: displayCount }).map((_, i) => {
-          const mappedIndex = total <= MAX_BARS ? i : Math.round((i / (displayCount - 1)) * (total - 1));
-          const isActive = mappedIndex === activeIndex;
-          const msg = processed[mappedIndex];
-          const hasComment = msg && msg.commentCount > 0;
-          const isMachine = msg && msg.kind !== "user";
+        {sampleTicks(processed, MAX_BARS, activeIndex).map(({ row: msg, active: isActive }, i) => {
+          const hasComment = msg.commentCount > 0;
+          const isMachine = msg.kind !== "user";
           return (
             <span
               key={i}

@@ -156,6 +156,7 @@ import remarkBreaks from "remark-breaks";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK, renderMarkdownPre } from "./messageMarkdown";
 import { FilePathLink } from "./FilePathLink";
 import { FilePathContext } from "../lib/filePathLinks";
+import { isStickyEligible, pickStickyFallbackFromLoaded } from "../lib/messageNavigator";
 import { parseInboundSessionMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, stickyPromptContent, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt, type HuddleSummaryTag } from "./sessionMessage";
 import { CallTranscriptDisclosure } from "./calls/TranscriptTurns";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
@@ -13548,9 +13549,7 @@ const ConversationViewInner = (
     if (!serverUserMessages) return new Set<string>();
     const ids = new Set<string>();
     for (const m of serverUserMessages) {
-      if (stickyPromptContent(m.content) === null) continue;
-      const display = cleanContent(m.content);
-      if (display.length > 0 && !isSystemMessage(display)) ids.add(m._id);
+      if (isStickyEligible(m.content)) ids.add(m._id);
     }
     return ids;
   }, [serverUserMessages]);
@@ -13574,28 +13573,13 @@ const ConversationViewInner = (
   }, [timeline, processedServerMsgIds, userMsgKindMap]);
 
   const serverStickyFallback = useMemo(() => {
-    if (!serverUserMessages || serverUserMessages.length === 0 || !hasMoreAbove) return null;
-    const localIds = new Set<string>();
-    let earliestLoadedTs = Infinity;
+    if (!hasMoreAbove) return null;
+    const loaded: Message[] = [];
     for (const item of timeline) {
-      if (item.type !== 'message') continue;
-      const m = item.data as Message;
-      localIds.add(m._id);
-      if (typeof m.timestamp === 'number' && m.timestamp < earliestLoadedTs) earliestLoadedTs = m.timestamp;
+      if (item.type === 'message') loaded.push(item.data as Message);
     }
-    // Pick the latest user message that sits ABOVE the loaded window — the most
-    // recent prompt the reader scrolled past but that isn't paginated in yet.
-    // Returning the first not-loaded message instead would always surface the
-    // conversation's opening prompt when parked deep in a long thread.
-    for (let i = serverUserMessages.length - 1; i >= 0; i--) {
-      const msg = serverUserMessages[i];
-      if (msg.role !== 'user') continue;
-      if (localIds.has(msg._id) || !processedServerMsgIds.has(msg._id)) continue;
-      if (msg.timestamp >= earliestLoadedTs) continue;
-      return { id: msg._id, content: msg.content, fromUserId: (msg as any).from_user_id as string | undefined };
-    }
-    return null;
-  }, [serverUserMessages, timeline, hasMoreAbove, processedServerMsgIds]);
+    return pickStickyFallbackFromLoaded(serverUserMessages, loaded);
+  }, [serverUserMessages, timeline, hasMoreAbove]);
 
   const [activeStickyMsg, setActiveStickyMsgRaw] = useState<{ index: number; content: string; id: string; fromUserId?: string } | null>(null);
   const setActiveStickyMsg = useCallback((val: { index: number; content: string; id: string; fromUserId?: string } | null) => {
