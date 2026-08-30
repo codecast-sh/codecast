@@ -64,7 +64,7 @@ import {
   soundWalkieRoger,
   soundWalkieSquelch,
 } from "../sounds";
-import { announceJoin, youJoinedText } from "./joinAnnounce";
+import { announceJoin, clearJoinAnnouncement, youJoinedText } from "./joinAnnounce";
 
 const api = _api as any;
 
@@ -327,7 +327,14 @@ export function nextRoomMode(
 }
 
 function leaveLiveRoom(): void {
-  if (status.liveRoom) emit({ liveRoom: null });
+  if (!status.liveRoom) return;
+  // THE TITLE DIES WITH THE ROOM. "Jordan joined — it's a call now" is news
+  // about a room, and the room ending is the moment it stops being news: a
+  // hang-up inside the four seconds used to leave the sentence sitting on the
+  // next thing that opened, announcing a join into a room nobody was in.
+  clearJoinAnnouncement();
+  mutedByRelease = null;
+  emit({ liveRoom: null });
 }
 
 /**
@@ -652,6 +659,8 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
     done: false,
   };
   burst = b;
+  // A new hold supersedes whatever the last release decided about the mic.
+  mutedByRelease = null;
   // The bubble is on screen before anything is awaited — a voice message is a
   // message, and a message never waits for a round trip to appear.
   useInboxStore.getState().beginVoiceBurstRow(channelId, clientId, roomKey);
@@ -671,10 +680,15 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
       // into this very room (hold-to-reply inside a huddle). The unmute comes
       // first there, because a muted LiveKit track reads as silence and the
       // recorder would keep that silence.
-      const seated = inRoom(roomKey);
-      if (seated) await setMuted(false);
+      if (inRoom(roomKey)) await setMuted(false);
       if (b.done) return;
-      const track = (seated ? localMicTrack() : null) ?? (await acquireMic());
+      // THE TEST IS A PUBLICATION, NOT A SEAT. `inRoom` counts a room still
+      // CONNECTING, which is the ordinary shape of an answer into a burst this
+      // client only just started listening to: the seat exists, the microphone
+      // is not in the room yet. Reading that as "my mic is already here" made
+      // the burst skip the join it needed and then claim it was being heard.
+      const published = localMicTrack();
+      const track = published ?? (await acquireMic());
       if (b.done) return;
       if (!track) {
         emit({ error: await micFailureReason() });
@@ -723,8 +737,10 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
       publishSending(b);
 
       // 3. THE ROOM, behind all of it. Nothing above waits for this, and a
-      //    release that beats it still lands a complete message.
-      if (seated) {
+      //    release that beats it still lands a complete message. A track that
+      //    was ALREADY publishing is already being heard; anything else has to
+      //    be carried in.
+      if (published) {
         b.openAt = b.micAt;
         publishSending(b);
       } else {
@@ -797,6 +813,20 @@ export function noteBurstUnheard(): void {
   b.awayToned = true;
   soundWalkieAway();
 }
+
+/**
+ * THE ROOM WHOSE MICROPHONE THIS CLIENT'S OWN RELEASE CLOSED, and the only
+ * microphone the walkie may open again without being asked.
+ *
+ * A join stamp is a round trip behind the gesture that made it, so the far
+ * side pressing Join live a moment before the key comes up lands a moment
+ * after: the release still reads the room as a burst, mutes, and the person is
+ * left in a call that says "it's a call now" over a closed mic. Reopening it
+ * needs to know that the mic was closed BY THE RELEASE rather than by the
+ * person — otherwise the same rule would open the microphone of a muted
+ * lurker in a huddle the moment anybody stepped into a burst there.
+ */
+let mutedByRelease: string | null = null;
 
 /** Somebody stepped into the room this burst is being spoken into, so it is a
  *  call now and the release must treat it as one: no sign-off, no mute. Read
@@ -892,7 +922,12 @@ async function finishBurst(b: Burst, releasedAt: number): Promise<void> {
   // when the hold does — exactly wrong once somebody has stepped in: the person
   // is still talking, and the key coming up cut them off mid-sentence and left
   // them to discover it.
-  if (!burstUpgraded(b)) await setMuted(true);
+  if (!burstUpgraded(b)) {
+    await setMuted(true);
+    // Remembered, because a stamp already in flight may be about to make this
+    // the wrong answer — see `mutedByRelease`.
+    mutedByRelease = b.roomKey;
+  }
 
   // Measured BEFORE the room changes hands, because the handover depends on
   // the answer: a burst about to be thrown away must not be handed a room to
@@ -1067,6 +1102,16 @@ function releaseRoom(roomKey: string) {
 export function markWalkieUpgraded(roomKey: string): void {
   if (walkieJoinedRoom(status) === roomKey) return;
   enterLiveRoom(roomKey, "call");
+  // THE STAMP THAT ARRIVED A MOMENT TOO LATE. The release mutes a burst nobody
+  // had stepped into yet, and the stamp for the step they took while the key
+  // was still down lands after it — so the sender is in a call, told so in
+  // words and a sound, with the microphone the upgrade exists to keep open
+  // already closed. Only ever the mic this module itself closed, and only in
+  // the room the stamp names, so a person who muted themselves stays muted.
+  if (mutedByRelease === roomKey && inRoom(roomKey)) {
+    mutedByRelease = null;
+    void setMuted(false);
+  }
   refresh();
 }
 
@@ -1262,7 +1307,11 @@ function applyReport(): void {
         // this room chose their own mute state, and opening a microphone a
         // person deliberately closed is the one thing the door cannot consent
         // to on their behalf.
-        useInboxStore.getState().setCallState({ muted: false });
+        //
+        // The unmute is the JOIN'S to write, not this line's. Saying it here
+        // made `call.muted` a promise the media plane had not kept yet, and on
+        // a browser with the microphone refused the strip spent the two
+        // seconds before the failure landed claiming an open mic.
         void takeListeningSeat(incoming.roomKey);
       }
     }
