@@ -3,7 +3,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
 
 type ConversationResult = ReturnType<typeof useQuery<typeof api.conversations.listConversations>>;
 
@@ -19,7 +19,11 @@ export function useConversationsWithError(
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
 
-  const result = useQuery(api.conversations.listConversations, {
+  // A just-created team carries an optimistic stub id until the server
+  // echoes; a stub is not an Id<"teams">, so skip the team list for that
+  // window rather than throw (the new team has no server rows yet anyway).
+  const stubTeam = filter === "team" && !!activeTeamId && !isConvexId(String(activeTeamId));
+  const result = useQuery(api.conversations.listConversations, stubTeam ? "skip" : {
     filter,
     cursor,
     include_message_previews: true,

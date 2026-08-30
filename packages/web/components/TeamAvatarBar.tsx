@@ -3,9 +3,9 @@ import { useQuery } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { UserRound, Filter, Link2, Headphones, MessageSquare } from "lucide-react";
+import { UserRound, Filter, Link2, Headphones, MessageSquare, ChevronRight } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
@@ -43,7 +43,9 @@ interface TeamAvatarBarProps {
 export function TeamMembersPump({ teamId }: { teamId: Id<"teams"> | undefined }) {
   const teamMembersQuery = useQuery(
     api.teams.getTeamMembers,
-    teamId ? { team_id: teamId } : "skip"
+    // isConvexId: a just-created team holds an optimistic stub id until the
+    // server echoes, and a stub is not an Id<"teams">.
+    teamId && isConvexId(String(teamId)) ? { team_id: teamId } : "skip"
   );
   useConvexSync(teamMembersQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamMembers", d), []));
   return null;
@@ -252,7 +254,8 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
 // hovered — the wrapper span owns one hover scope with a close-grace timer,
 // so crossing from avatar into card never drops it. Session data is read only
 // here (transient subscription), never by the always-mounted bar.
-function MemberHoverCard({
+// Exported for the _membercard visual harness only.
+export function MemberHoverCard({
   member,
   displayName,
   isSelf,
@@ -321,17 +324,22 @@ function MemberHoverCard({
       className={`absolute top-full z-[80] cursor-default pt-2 ${alignLeft ? "left-0" : "right-0"}`}
     >
       <div className="w-[280px] rounded-lg border border-sol-border bg-sol-bg-alt p-3 text-left shadow-xl motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-150">
-        <div className="flex items-start gap-2.5">
+        {/* The whole identity block is the door to the profile — one large
+            target instead of a name-sized hot zone that read as a label. The
+            chevron is always there saying "this goes somewhere"; hovering
+            highlights the row and names the destination. */}
+        <button
+          type="button"
+          onClick={onOpenProfile}
+          title="Open profile"
+          className="group -m-1.5 flex w-[calc(100%+0.75rem)] items-start gap-2.5 rounded-md p-1.5 text-left transition-colors hover:bg-sol-bg-highlight/70"
+        >
           <MemberFace member={member} size={36} title="" />
           <div className="min-w-0 flex-1">
-            <button
-              onClick={onOpenProfile}
-              className="block max-w-full truncate text-sm font-semibold text-sol-text transition-colors hover:text-sol-cyan"
-              title="Open profile"
-            >
+            <div className="truncate text-sm font-semibold text-sol-text transition-colors group-hover:text-sol-cyan">
               {displayName}
               {isSelf && <span className="ml-1.5 text-[10px] font-normal text-sol-text-dim">you</span>}
-            </button>
+            </div>
             {/* What they are DOING leads; the presence fact and their clock
                 follow it, smaller. That order is the whole complaint: status
                 was legible only to someone who knew the color code, and the
@@ -350,7 +358,10 @@ function MemberHoverCard({
               </div>
             )}
           </div>
-        </div>
+          {/* Chevron only — a text label here reserved width and truncated
+              real names. The name's cyan shift + this slide say "profile". */}
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 self-center text-sol-text-dim transition-all group-hover:translate-x-0.5 group-hover:text-sol-cyan" />
+        </button>
 
         {fleet && (fleet.working > 0 || fleet.needsYou > 0) && (
           <div className="mt-2.5 border-t border-sol-border/60 pt-2">

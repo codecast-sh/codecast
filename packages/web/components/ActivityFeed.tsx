@@ -13,9 +13,11 @@ import { AgentIcon, type Conversation } from "./ConversationList";
 import { ImageLightbox } from "./ImageGallery";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { shouldShowSession, isWarmupSession } from "../lib/sessionFilters";
-import { useInboxStore, useTrackedStore, sessionsWakeSig, isAgentActive, sortSessions, feedPagePersistence, type InboxSession } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, sessionsWakeSig, isAgentActive, sortSessions, feedPagePersistence, isConvexId, type InboxSession } from "../store/inboxStore";
 import { feedCoverMetaKey, newestTs, oldestTs, planFeedCatchup, walkStep, FEED_CATCHUP_PAGE_LIMIT, FEED_CATCHUP_MAX_PAGES } from "../lib/feedCatchup";
 import { useCoarseNow } from "../hooks/useCoarseNow";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { FolderGit2 } from "lucide-react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 // Activity feed. Two sources, one rendering (FeedBody):
@@ -418,7 +420,7 @@ function DaySection({ date, convs, showActor, onNavigate, compact, projectColors
 
 // Shared rendering for both sources: window/actor/project filter, live rollup,
 // people row (team only), day grouping, FLIP animation, infinite scroll.
-function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoadingMore, onNavigate, compact, hidePeopleRow, initialActorId }: {
+function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoadingMore, onNavigate, compact, hidePeopleRow, initialActorId, shareNudge }: {
   source: "team" | "personal";
   sourceConvs: Conversation[];
   hasMore: boolean;
@@ -429,6 +431,8 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
   compact?: boolean;
   hidePeopleRow?: boolean;
   initialActorId?: string;
+  /** Team mode: a push to share workspaces, shown while the viewer shares none. */
+  shareNudge?: ReactNode;
 }) {
   const showActor = source === "team";
   const showPeople = source === "team" && !hidePeopleRow;
@@ -559,6 +563,8 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
     >
       <RollupHeader convs={visibleConvs} compact={compact} />
 
+      {shareNudge}
+
       {showPeople && <PeopleRow people={people} onSelect={setActorFilter} selectedId={actorFilter} />}
 
       {projectFilter && (
@@ -624,6 +630,29 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
 // pages) both dump into it; the feed renders from the store. The older-page cursor
 // is derived from the oldest cached row, so pagination resumes across reloads
 // instead of re-walking pages already cached. ---
+// Shown in the team feed while the viewer shares no workspace with the team:
+// their sessions are invisible to teammates, and this is the surface where that
+// absence is felt. One click lands in the guided setup (visibility + repos).
+function TeamShareNudge({ teamId }: { teamId: string }) {
+  const router = useRouter();
+  return (
+    <button
+      type="button"
+      onClick={() => router.push(`/settings/team/join?teamId=${teamId}&setup=1`)}
+      className="w-full flex items-center gap-3 rounded-lg border border-sol-cyan/30 bg-sol-cyan/5 hover:bg-sol-cyan/10 px-4 py-3 text-left transition-colors"
+    >
+      <FolderGit2 className="h-4 w-4 shrink-0 text-sol-cyan" />
+      <span className="flex-1 min-w-0">
+        <span className="block text-sm font-medium text-sol-text">Share your workspaces with the team</span>
+        <span className="block text-xs text-sol-text-muted">
+          Your sessions stay off this feed until you share the repos you work in.
+        </span>
+      </span>
+      <span className="shrink-0 text-sm font-medium text-sol-cyan">Set up sharing &rarr;</span>
+    </button>
+  );
+}
+
 function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePeopleRow }: ActivityFeedProps) {
   const convex = useConvex();
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
@@ -645,7 +674,21 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
   }), [activeTeamId, directoryFilter]);
 
   // Live newest page (reactive). Dump every result into the store; read it back.
-  const live = useQuery(api.conversations.listConversations, queryArgs);
+  // A just-created team holds an optimistic stub id until the server echoes;
+  // a stub is not an Id<"teams">, so skip for that window (the new team has
+  // no server rows yet anyway).
+  const stubTeam = !!activeTeamId && !isConvexId(String(activeTeamId));
+  const live = useQuery(api.conversations.listConversations, stubTeam ? "skip" : queryArgs);
+
+  // Enrichment only (the feed renders fine without it), so noThrow: a failure
+  // means no nudge, never a broken feed.
+  const mappings = useQueryNoThrow(
+    api.users.getDirectoryTeamMappings,
+    activeTeamId && !stubTeam ? {} : "skip",
+  ).data as { team_id?: Id<"teams">; auto_share?: boolean }[] | undefined;
+  const sharesNone =
+    !!activeTeamId && !stubTeam && Array.isArray(mappings) &&
+    !mappings.some((m) => m.team_id?.toString() === activeTeamId.toString() && m.auto_share);
   useEffect(() => {
     if (live) mergeFeed(key, live.conversations);
   }, [live, key, mergeFeed]);
@@ -803,6 +846,7 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
       compact={compact}
       hidePeopleRow={hidePeopleRow}
       initialActorId={initialActorId}
+      shareNudge={sharesNone ? <TeamShareNudge teamId={String(activeTeamId)} /> : undefined}
     />
   );
 }
