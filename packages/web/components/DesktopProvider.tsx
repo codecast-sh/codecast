@@ -31,6 +31,8 @@ import { showBrowserHandoffToast } from "./BrowserHandoffToast";
 import { installMeetingOfferListener } from "../lib/calls/meetingOffers";
 import { cleanNotificationBody } from "../lib/notificationText";
 import { notificationRoute } from "../lib/notificationTypes";
+import { recordNotificationMiss } from "../lib/notificationNudge";
+import { useNotificationReadiness } from "../hooks/useNotificationReadiness";
 import { soundChatMessage } from "../lib/sounds";
 import { useInboxStore } from "../store/inboxStore";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
@@ -96,6 +98,13 @@ export function DesktopProvider() {
 
   const permissionRequestedRef = useRef(false);
 
+  // Whether the OS can actually put a banner on screen (System Settings /
+  // browser site permission). Read through a ref inside the notification loop
+  // — the loop keys on arrivals, not on readiness changes.
+  const { readiness } = useNotificationReadiness();
+  const readinessRef = useRef(readiness);
+  readinessRef.current = readiness;
+
   useWatchEffect(() => {
     if (!notifications) return;
     const isPalette = typeof window !== "undefined" && window.location.pathname === "/palette";
@@ -131,6 +140,17 @@ export function DesktopProvider() {
         // `key` lets the desktop shell collapse the same row reported by every
         // open window into one banner.
         notifyNative(title, body, { conversationId: n.conversation_id, route, key: String(n._id) });
+        // A banner this row deserved could not be shown: the app is unfocused
+        // (a focused app is announced by the toast/bell — nothing missed) and
+        // the OS-level permission is not granted, so the notifyNative above
+        // silently vanished. Feed the nudge banner — a miss overrides its
+        // snooze (lib/notificationNudge.ts).
+        if (readinessRef.current !== "granted" && !document.hasFocus()) {
+          recordNotificationMiss({
+            actor,
+            fromPerson: typeof n.type === "string" && (n.type.startsWith("chat_") || n.type === "mention"),
+          });
+        }
         // Browser/Electron OS banners are silent by default; the page supplies
         // the same marimba the focused toast plays, so a chat message sounds
         // identical whether the window has focus or not. notifyNative already
