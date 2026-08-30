@@ -2,8 +2,7 @@
 
 import { useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { useInboxStore, classifySession, filterInboxScope, selectCommentRailOpen, selectNavCollapsed } from "../store/inboxStore";
-import { liftQuestions } from "../lib/decisionQueue";
+import { useInboxStore, selectCommentRailOpen, selectNavCollapsed } from "../store/inboxStore";
 import { isInboxSessionView } from "../lib/inboxRouting";
 import { overlayConversationId } from "../store/workspace";
 import { focusComposer } from "../lib/composerControl";
