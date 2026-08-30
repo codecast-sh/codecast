@@ -67,6 +67,38 @@ import {
   type SmallCallWindowSize,
 } from "../../lib/desktop";
 import { popOutCall } from "../../lib/calls/popOutCall";
+import { useOsPermissions } from "../../hooks/useOsPermissions";
+import { permissionActionLabel, requestOsPermission, type OsPermissionKind } from "../../lib/osPermissions";
+
+// The media notice, with the fix in reach: when the error is a device the OS
+// refused, the button is the one gesture that changes that (the OS prompt,
+// or System Settings). No button when the OS says it's granted — then the
+// trouble is the device itself, and the sentence already says so.
+function CallErrorNotice({ error, fix }: { error: string; fix: OsPermissionKind | null }) {
+  const { permissions, refresh } = useOsPermissions();
+  const readiness = fix ? permissions[fix] : null;
+  const action = fix && readiness ? permissionActionLabel(readiness) : null;
+  return (
+    <div className="mx-auto mb-1 flex max-w-lg items-start gap-2 rounded-full bg-sol-orange/10 px-3.5 py-1.5 text-[12px] text-sol-orange">
+      <span className="min-w-0 flex-1">{error}</span>
+      {fix && readiness && action && (
+        <button
+          onClick={() => requestOsPermission(fix, readiness).then(refresh)}
+          className="shrink-0 rounded-full bg-sol-orange/20 px-2 py-0.5 font-medium transition-colors hover:bg-sol-orange/30"
+        >
+          {action}
+        </button>
+      )}
+      <button
+        onClick={() => useInboxStore.getState().setCallState({ error: null, errorFix: null })}
+        className="shrink-0 rounded-full p-0.5 text-sol-orange/70 transition-colors hover:bg-sol-orange/15 hover:text-sol-orange"
+        title="Dismiss"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
 
 // The call stage: the full surface a huddle opens into when video or a screen
 // share deserves the room. Design intents, in order:
@@ -442,18 +474,7 @@ export function CallStage({
 
       {rail !== "transcript" && <CaptionsOverlay live={live ?? null} />}
 
-      {call.error && (
-        <div className="mx-auto mb-1 flex max-w-lg items-start gap-2 rounded-full bg-sol-orange/10 px-3.5 py-1.5 text-[12px] text-sol-orange">
-          <span className="min-w-0 flex-1">{call.error}</span>
-          <button
-            onClick={() => useInboxStore.getState().setCallState({ error: null })}
-            className="shrink-0 rounded-full p-0.5 text-sol-orange/70 transition-colors hover:bg-sol-orange/15 hover:text-sol-orange"
-            title="Dismiss"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
+      {call.error && <CallErrorNotice error={call.error} fix={call.errorFix} />}
 
       <ControlBar call={call} />
     </div>,

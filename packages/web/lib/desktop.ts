@@ -16,12 +16,12 @@ declare global {
         body: string,
         data?: NotifyNativeData,
       ) => Promise<{ shown: boolean; reason?: string } | void>;
-      // OS-level notification consent (System Settings, not the in-app prefs).
-      // All absent on older builds — gate on them; readiness is then "unknown"
-      // and nothing nags.
-      getOsNotificationState?: () => Promise<string>;
-      requestOsNotificationPermission?: () => Promise<void>;
-      openNotificationSettings?: () => Promise<void>;
+      // OS-level permissions (System Settings, not the in-app prefs) — see
+      // lib/osPermissions.ts for the vocabulary. All absent on older builds —
+      // gate on them; readiness is then "unknown" and nothing nags.
+      getOsPermissions?: () => Promise<Record<string, string>>;
+      requestOsPermission?: (kind: string) => Promise<string>;
+      openOsPermissionSettings?: (kind: string) => Promise<void>;
       // Multi-window notification routing (see main.js). Absent on older
       // builds — gate on them; without them this window behaves as the only one.
       reportWindowState?: (state: DesktopWindowState) => void;
@@ -96,6 +96,19 @@ declare global {
       setCallWindowInteractive?: (on: boolean) => void;
       setCallWindowContentSize?: (size: { width: number; height: number }) => void;
       setCallWindowDragging?: (on: boolean) => void;
+      // The faces overlay (route /faces): the team as photo circles floating
+      // over the work when there is no call — the same see-through window
+      // family as the call circles, sharing their saved spot and yielding to
+      // them while a call is minimized. Open state persists in the shell.
+      // The three setters are the same switches the call circles use,
+      // addressed to this window. Absent on older builds — gate on them.
+      isFacesWindow?: boolean;
+      openFacesWindow?: () => Promise<void>;
+      closeFacesWindow?: () => Promise<void>;
+      getFacesWindowOpen?: () => Promise<boolean>;
+      setFacesWindowInteractive?: (on: boolean) => void;
+      setFacesWindowContentSize?: (size: { width: number; height: number }) => void;
+      setFacesWindowDragging?: (on: boolean) => void;
       // Screen-share primitives (huddles). The shell lists capturable
       // screens/windows and lets the web pre-select one for the NEXT
       // getDisplayMedia; the picker UI itself is web-owned. Absent on older
@@ -566,6 +579,58 @@ export function setCallWindowDragging(on: boolean): void {
   bridge("setCallWindowDragging")?.(on);
 }
 
+// ---------------------------------------------------------------------------
+// The faces overlay: the team as photo circles floating over the work, when
+// there is no call. The same see-through window family as the call circles —
+// frameless, always on top, click-through except over a circle — and the same
+// spot on screen: the shell keeps one saved position for both, and the overlay
+// yields while a call is minimized to circles, returning when it ends.
+//
+// Desktop-only, like the call circles and for the same reason: a transparent
+// click-through always-on-top window is something only the shell can make, and
+// a browser has no approximation worth offering. The people window is the
+// browser's version of "keep the team beside your work".
+// ---------------------------------------------------------------------------
+
+export const FACES_ROUTE = "/faces";
+
+/** This renderer IS the faces overlay window. */
+export function isFacesWindow(): boolean {
+  return typeof window !== "undefined" && window.__CODECAST_ELECTRON__?.isFacesWindow === true;
+}
+
+/** Whether this build can open the overlay at all — the check is for the
+ *  function rather than "am I on the desktop", so an older shell reads as
+ *  "needs an update" instead of a button doing nothing. */
+export function canOpenFacesOverlay(): boolean {
+  return typeof bridge("openFacesWindow") === "function";
+}
+
+export async function openFacesWindow(): Promise<void> {
+  await bridge("openFacesWindow")?.();
+}
+
+export async function closeFacesWindow(): Promise<void> {
+  await bridge("closeFacesWindow")?.();
+}
+
+/** Whether an overlay window exists right now (it may be yielding to a call). */
+export async function getFacesWindowOpen(): Promise<boolean> {
+  return (await bridge("getFacesWindowOpen")?.()) ?? false;
+}
+
+export function setFacesWindowInteractive(on: boolean): void {
+  bridge("setFacesWindowInteractive")?.(on);
+}
+
+export function setFacesWindowContentSize(size: { width: number; height: number }): void {
+  bridge("setFacesWindowContentSize")?.(size);
+}
+
+export function setFacesWindowDragging(on: boolean): void {
+  bridge("setFacesWindowDragging")?.(on);
+}
+
 /**
  * Send a navigation to the MAIN window and raise it.
  *
@@ -758,66 +823,6 @@ export function shouldApplyAutoDeepLink(now: number = Date.now(), lastInputAt: n
 
 export function hasBrowserNotificationPermission(): boolean {
   return typeof Notification !== "undefined" && Notification.permission === "granted";
-}
-
-// Can this device actually put a banner on the user's screen? One answer for
-// both surfaces:
-//   granted — yes
-//   ask     — no, but one gesture can fix it (browser permission prompt, or
-//             the macOS Allow/Don't Allow dialog the shell can raise)
-//   off     — no, and only a settings screen can fix it (browser site
-//             settings, or macOS System Settings)
-//   unknown — can't tell (SSR, an old desktop shell) — never nag on unknown
-export type NotificationReadiness = "granted" | "ask" | "off" | "unknown";
-
-export async function getNotificationReadiness(): Promise<NotificationReadiness> {
-  if (isElectron()) {
-    const fn = bridge("getOsNotificationState");
-    if (!fn) return "unknown";
-    try {
-      const state = await fn();
-      return state === "granted" || state === "ask" || state === "off" ? state : "unknown";
-    } catch {
-      return "unknown";
-    }
-  }
-  if (typeof Notification === "undefined") return "unknown";
-  if (Notification.permission === "granted") return "granted";
-  if (Notification.permission === "denied") return "off";
-  return "ask";
-}
-
-// The one enable gesture per state. Resolves what happened so the caller can
-// re-poll or show follow-up copy:
-//   granted         — the browser prompt was accepted on the spot
-//   requested       — the OS is now showing its own prompt; poll for the answer
-//   opened-settings — a settings screen was opened; poll on refocus
-//   unsupported     — nothing programmatic exists (browser "off"): the caller
-//                     shows manual instructions
-export async function enableOsNotifications(
-  readiness: NotificationReadiness,
-): Promise<"granted" | "requested" | "opened-settings" | "unsupported"> {
-  if (isElectron()) {
-    if (readiness === "off") {
-      const open = bridge("openNotificationSettings");
-      if (open) {
-        await open();
-        return "opened-settings";
-      }
-      return "unsupported";
-    }
-    const request = bridge("requestOsNotificationPermission");
-    if (request) {
-      await request();
-      return "requested";
-    }
-    return "unsupported";
-  }
-  if (readiness === "ask" && typeof Notification !== "undefined") {
-    const result = await Notification.requestPermission();
-    return result === "granted" ? "granted" : "requested";
-  }
-  return "unsupported";
 }
 
 export async function requestNotificationPermission(): Promise<boolean> {
