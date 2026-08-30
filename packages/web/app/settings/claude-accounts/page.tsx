@@ -13,16 +13,18 @@ import { useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
+  exhaustionBannerCopy,
   isExhaustionCurrent,
   isValidProfileName,
   type CcUsage,
 } from "@codecast/convex/convex/ccAccountsShared";
-import { Card } from "../../../components/ui/card";
 import { AppLoader } from "../../../components/AppLoader";
 import { Button } from "../../../components/ui/button";
+import { Input } from "../../../components/ui/input";
 import { Switch } from "../../../components/ui/switch";
+import { SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { toast } from "sonner";
-import { Check, Copy, KeyRound, TimerReset, Trash2, Zap } from "lucide-react";
+import { Check, Copy, KeyRound, Laptop, TimerReset, Trash2, Zap } from "lucide-react";
 import { AccountUsageBars } from "../../../components/AccountUsageMeter";
 import { formatAgo } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
@@ -161,11 +163,12 @@ function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
           checked={autoContinue.on}
           onCheckedChange={autoContinue.set}
           disabled={autoContinue.pending}
+          aria-label="Resume at window reset"
         />
       </div>
       {enabled && exhausted && (
         <div className="mt-2 rounded bg-sol-red/10 px-2 py-1 text-[11px] text-sol-red">
-          All accounts are at their limits — auto-switch will retry at the next window reset.
+          {exhaustionBannerCopy(device.profiles, now)}
         </div>
       )}
       {(enabled || autoContinue.on) && !exhausted && state?.last_action && state.last_action_at && (
