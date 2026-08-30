@@ -83,6 +83,14 @@ export const list = query({
   },
 });
 
+// Owner, or a member of the project's team — the one project access rule,
+// shared by every read AND write here and by projectUpdates.ts. A team project
+// is the team's: any member may read it, update it, and post to it.
+export async function canAccessProject(ctx: any, userId: any, project: any): Promise<boolean> {
+  if (String(project.user_id) === String(userId)) return true;
+  return !!project.team_id && (await isTeamMember(ctx, userId, project.team_id));
+}
+
 export const get = query({
   args: {
     api_token: v.string(),
@@ -94,9 +102,7 @@ export const get = query({
 
     const project = await ctx.db.get(args.id);
     if (!project) return null;
-    // Owner, or a member of the project's team — mirrors webGet.
-    const isOwner = String(project.user_id) === String(auth.userId);
-    if (!isOwner && (!project.team_id || !(await isTeamMember(ctx, auth.userId, project.team_id)))) {
+    if (!(await canAccessProject(ctx, auth.userId, project))) {
       return null;
     }
 
@@ -120,7 +126,8 @@ export const update = mutation({
     title: v.optional(v.string()),
     description: v.optional(v.string()),
     status: v.optional(v.string()),
-    target_date: v.optional(v.number()),
+    // null clears the deadline; a Convex patch drops fields set to undefined.
+    target_date: v.optional(v.union(v.number(), v.null())),
     labels: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
@@ -128,13 +135,13 @@ export const update = mutation({
     if (!auth) throw new Error("Unauthorized");
 
     const project = await ctx.db.get(args.id);
-    if (!project || project.user_id !== auth.userId) throw new Error("Project not found");
+    if (!project || !(await canAccessProject(ctx, auth.userId, project))) throw new Error("Project not found");
 
     const updates: any = { updated_at: Date.now() };
     if (args.title) updates.title = args.title;
     if (args.description !== undefined) updates.description = args.description;
     if (args.status) updates.status = args.status;
-    if (args.target_date !== undefined) updates.target_date = args.target_date;
+    if (args.target_date !== undefined) updates.target_date = args.target_date ?? undefined;
     if (args.labels) updates.labels = args.labels;
 
     await ctx.db.patch(args.id, updates);
@@ -235,12 +242,7 @@ export const webGet = query({
     if (!project) return null;
     // Owner, or a member of the project's team. (The old check only rejected
     // *teamless* others' projects, so any team-tagged project was world-readable.)
-    const isOwner = String(project.user_id) === String(userId);
-    if (!isOwner) {
-      if (!project.team_id || !(await isTeamMember(ctx, userId, project.team_id))) {
-        return null;
-      }
-    }
+    if (!(await canAccessProject(ctx, userId, project))) return null;
 
     return enrichProject(ctx, userId, project);
   },
@@ -257,8 +259,7 @@ export const webGetByIds = query({
       if (!id) continue;
       const project = await ctx.db.get(id);
       if (!project) continue;
-      const isOwner = String(project.user_id) === String(userId);
-      if (!isOwner && (!project.team_id || !(await isTeamMember(ctx, userId, project.team_id)))) continue;
+      if (!(await canAccessProject(ctx, userId, project))) continue;
       rows.push(await enrichProject(ctx, userId, project));
     }
     return rows;
@@ -331,7 +332,8 @@ export const webUpdate = mutation({
     status: v.optional(v.string()),
     color: v.optional(v.string()),
     icon: v.optional(v.string()),
-    target_date: v.optional(v.number()),
+    // null clears the deadline; a Convex patch drops fields set to undefined.
+    target_date: v.optional(v.union(v.number(), v.null())),
     labels: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
@@ -339,12 +341,12 @@ export const webUpdate = mutation({
     if (!userId) throw new Error("Unauthorized");
 
     const project = await ctx.db.get(args.id);
-    if (!project || project.user_id !== userId) throw new Error("Project not found");
+    if (!project || !(await canAccessProject(ctx, userId, project))) throw new Error("Project not found");
 
     const { id, ...fields } = args;
     const updates: any = { updated_at: Date.now() };
     for (const [k, val] of Object.entries(fields)) {
-      if (val !== undefined) updates[k] = val;
+      if (val !== undefined) updates[k] = val === null ? undefined : val;
     }
 
     await ctx.db.patch(args.id, updates);

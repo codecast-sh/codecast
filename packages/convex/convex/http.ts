@@ -3692,6 +3692,18 @@ cliRoute("/cli/projects/get", async (ctx, body) => {
 cliRoute("/cli/projects/update", async (ctx, body) => {
   return await ctx.runMutation(api.projects.update, body);
 });
+cliRoute("/cli/projects/post", async (ctx, body) => {
+  return await ctx.runMutation(api.projectUpdates.post, body);
+});
+cliRoute("/cli/projects/updates", async (ctx, body) => {
+  return await ctx.runQuery(api.projectUpdates.listUpdates, body);
+});
+cliRoute("/cli/projects/comment-update", async (ctx, body) => {
+  return await ctx.runMutation(api.projectUpdates.comment, body);
+});
+cliRoute("/cli/projects/timeline", async (ctx, body) => {
+  return await ctx.runQuery(api.projectUpdates.timeline, body);
+});
 
 // Anchors (standing agent members)
 cliRoute("/cli/anchor/create", async (ctx, body) => {
