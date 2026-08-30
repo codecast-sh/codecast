@@ -16198,6 +16198,11 @@ const ConversationViewInner = (
                   <TmuxAttachPill tmuxSession={managedSession?.tmux_session} isLive={isSessionLive} conversationKey={conversation?._id.toString()} />
                 </span>
 
+                {/* Runs on a remote host whose daemon is struggling: say so
+                    here, on the session it actually affects — the header
+                    fleet chip deliberately ignores remote machines. */}
+                {conversation?._id && !guest && <SessionDaemonChip conversationId={String(conversation._id)} />}
+
                 {sessionGallerySrcs.length > 0 && <SessionGalleryButton srcs={sessionGallerySrcs} />}
 
                 {/* The project's files, one click away regardless of what the
