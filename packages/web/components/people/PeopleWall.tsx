@@ -220,6 +220,9 @@ export function WallFaceButton({
         }
         title={blocked ?? `Hold to talk to ${name} · click to open the DM`}
         className="people-face"
+        // The circle IS the hit area, said in the attribute the floating
+        // overlay's click-through test measures. Inert in the people window.
+        data-face-hit
         data-tx={sending ? "1" : undefined}
         data-rx={talking ? "1" : undefined}
         data-walkie-state={state}
