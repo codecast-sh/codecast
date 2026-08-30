@@ -196,13 +196,14 @@ test("the app table the settings UI reads names every app the matcher knows", ()
 // ---------------------------------------------------------------------------
 // The whole chain, as main.js composes it.
 //
-// This drives the four pure pieces in the exact order meetingTick /
-// offerToRecord call them, over a sequence of `ps` snapshots. It proves the
-// POLICY end to end — what fires, what does not, and where the offer is
-// addressed. It does not prove main.js's own plumbing (the timer, the spawn,
-// the send), which needs the shell; ct-46038's live run covers that.
+// This drives the pure pieces in the exact order meetingTick / offerToRecord
+// call them, over a sequence of `ps` snapshots. It proves the POLICY end to
+// end — what fires and what does not. Addressing needs no policy any more:
+// every offer goes to the dedicated meeting-offer window, which reveals
+// itself (without focus) when its renderer has content to show. It does not
+// prove main.js's own plumbing (the timer, the spawn, the send), which needs
+// the shell; ct-46038's live run covers that.
 // ---------------------------------------------------------------------------
-const { pickOfferWindow } = require("./notificationRouter");
 
 const ps = (...paths) => paths.join("\n");
 const ZOOM = "/Applications/zoom.us.app/Contents/MacOS/zoom.us";
@@ -210,7 +211,7 @@ const TEAMS = "/Applications/Microsoft Teams.app/Contents/MacOS/MSTeams";
 const IDLE = "/usr/sbin/distnoted";
 
 // One tick: what main.js does between reading ps and sending the event.
-function tick(state, psOutput, settings, windows) {
+function tick(state, psOutput, settings) {
   const observed = detectMeetingApps(psOutput);
   const started = startedApps(state.running, observed);
   state.running = observed;
@@ -218,65 +219,50 @@ function tick(state, psOutput, settings, windows) {
   for (const id of started) {
     const decision = decideOffer(settings, id);
     if (decision === "skip") continue;
-    const win = pickOfferWindow(windows);
-    if (!win) continue;
-    sent.push({ to: win.id, app: id, decision });
+    sent.push({ app: id, decision });
   }
   return sent;
 }
-
-const WINDOWS = [
-  { id: 1, isMain: true, focused: false, lastFocusedAt: 10 },
-  { id: 2, isMain: false, focused: true, lastFocusedAt: 20 },
-  { id: 9, isMain: false, isPeople: true, focused: false, lastFocusedAt: 5 },
-];
 
 test("trace: an idle machine, then Zoom opens, then a second meeting app", () => {
   const state = { running: null };
   const settings = { mode: "ask", never: [] };
 
-  assert.deepEqual(tick(state, ps(IDLE), settings, WINDOWS), [], "baseline is silent");
+  assert.deepEqual(tick(state, ps(IDLE), settings), [], "baseline is silent");
   assert.deepEqual(
-    tick(state, ps(IDLE, ZOOM), settings, WINDOWS),
-    [{ to: 2, app: "zoom", decision: "ask" }],
-    "Zoom opening asks, in the focused window",
+    tick(state, ps(IDLE, ZOOM), settings),
+    [{ app: "zoom", decision: "ask" }],
+    "Zoom opening asks",
   );
-  assert.deepEqual(tick(state, ps(IDLE, ZOOM), settings, WINDOWS), [], "and does not ask again");
+  assert.deepEqual(tick(state, ps(IDLE, ZOOM), settings), [], "and does not ask again");
   assert.deepEqual(
-    tick(state, ps(IDLE, ZOOM, TEAMS), settings, WINDOWS),
-    [{ to: 2, app: "teams", decision: "ask" }],
+    tick(state, ps(IDLE, ZOOM, TEAMS), settings),
+    [{ app: "teams", decision: "ask" }],
     "a second app asks for itself only",
   );
 });
 
 test("trace: auto records without asking, off never even looks", () => {
   const auto = { running: null };
-  assert.deepEqual(tick(auto, ps(IDLE), { mode: "auto" }, WINDOWS), []);
-  assert.deepEqual(tick(auto, ps(IDLE, ZOOM), { mode: "auto" }, WINDOWS), [
-    { to: 2, app: "zoom", decision: "auto" },
+  assert.deepEqual(tick(auto, ps(IDLE), { mode: "auto" }), []);
+  assert.deepEqual(tick(auto, ps(IDLE, ZOOM), { mode: "auto" }), [
+    { app: "zoom", decision: "auto" },
   ]);
 
   // main.js does not even run the timer when the mode is off; this is the
   // second gate, so a stale tick in flight across a setting change is silent.
   const off = { running: null };
-  assert.deepEqual(tick(off, ps(IDLE), { mode: "off" }, WINDOWS), []);
-  assert.deepEqual(tick(off, ps(IDLE, ZOOM), { mode: "off" }, WINDOWS), []);
+  assert.deepEqual(tick(off, ps(IDLE), { mode: "off" }), []);
+  assert.deepEqual(tick(off, ps(IDLE, ZOOM), { mode: "off" }), []);
 });
 
 test("trace: never for Zoom is silent while Teams still asks", () => {
   const state = { running: null };
   const settings = { mode: "ask", never: ["zoom"] };
-  assert.deepEqual(tick(state, ps(IDLE), settings, WINDOWS), []);
+  assert.deepEqual(tick(state, ps(IDLE), settings), []);
   assert.deepEqual(
-    tick(state, ps(IDLE, ZOOM, TEAMS), settings, WINDOWS),
-    [{ to: 2, app: "teams", decision: "ask" }],
+    tick(state, ps(IDLE, ZOOM, TEAMS), settings),
+    [{ app: "teams", decision: "ask" }],
     "Zoom is refused, Teams is not",
   );
-});
-
-test("trace: with only a buddy list open there is nowhere to ask, so nothing is", () => {
-  const state = { running: null };
-  const onlyPeople = [{ id: 9, isMain: false, isPeople: true, focused: true, lastFocusedAt: 5 }];
-  assert.deepEqual(tick(state, ps(IDLE), { mode: "ask" }, onlyPeople), []);
-  assert.deepEqual(tick(state, ps(IDLE, ZOOM), { mode: "ask" }, onlyPeople), []);
 });

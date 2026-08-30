@@ -20,6 +20,11 @@ import { getRecorderStatus, startRecording } from "../../lib/calls/recorder";
 import { getMeetingDetect, setMeetingDetect, type MeetingOffer } from "../../lib/desktop";
 import "./recorder.css";
 
+/** The offer's one paragraph, shared with the /meeting-offer window so the
+ *  question reads identically wherever it is asked. */
+export const RECORD_OFFER_COPY =
+  "Record it? Codecast listens through your microphone, writes the transcript live, and summarizes it when you stop. The recording is yours alone.";
+
 export function MeetingOfferCard({
   toastId,
   offer,
@@ -61,10 +66,7 @@ export function MeetingOfferCard({
       </span>
       <div className="rec-offer-body">
         <div className="rec-offer-title">{offer.name} looks like a meeting</div>
-        <p className="rec-offer-copy">
-          Record it? Codecast listens through your microphone, writes the transcript live, and
-          summarizes it when you stop. The recording is yours alone.
-        </p>
+        <p className="rec-offer-copy">{RECORD_OFFER_COPY}</p>
         {error && <p className="rec-offer-error">{error}</p>}
         <div className="rec-offer-actions">
           <button type="button" className="rec-offer-go" onClick={record} disabled={starting}>

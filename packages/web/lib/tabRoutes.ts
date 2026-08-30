@@ -37,6 +37,10 @@ const NON_TAB_EXACT = new Set([
   // intercepting it would rewrite the window's own URL and paint a blank pane,
   // with a live microphone behind it.
   "/call-panel",
+  // The meeting-offer window: the record-this-meeting card as a small
+  // chromeless corner window. Same rule again — the tab shell intercepting it
+  // would rewrite the window's own URL and blank the card.
+  "/meeting-offer",
 ]);
 // "/documentation" is a prefix (not exact) so the guide pages under
 // /documentation/<slug> stay outside the tab shell too.

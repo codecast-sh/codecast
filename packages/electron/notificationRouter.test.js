@@ -1,7 +1,7 @@
 // Run: node --test packages/electron/notificationRouter.test.js
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { classifyRoute, sameEntity, pickWindow, pickOfferWindow, chooseLeader, RecentKeys } = require("./notificationRouter");
+const { classifyRoute, sameEntity, pickWindow, chooseLeader, RecentKeys } = require("./notificationRouter");
 
 const main = (over = {}) => ({
   id: 1,
@@ -149,29 +149,3 @@ test("call and walkie banners land in the people window", () => {
   );
 });
 
-// The meeting-record offer is a question, not a banner: it goes where the
-// person is, and only to a window that could also show the stop.
-test("the record offer lands where the person is looking", () => {
-  const windows = [main(), tabWin(2, "/calls", { focused: true }), peopleWin()];
-  assert.equal(pickOfferWindow(windows).id, 2, "the focused window wins");
-  assert.equal(pickOfferWindow([main(), tabWin(2, "/calls")]).id, 1, "else the main window");
-  assert.equal(
-    pickOfferWindow([tabWin(2, "/calls", { lastFocusedAt: 3 }), tabWin(3, "/chat", { lastFocusedAt: 40 })]).id,
-    3,
-    "else whichever they looked at last",
-  );
-  assert.equal(pickOfferWindow([]), null);
-  assert.equal(pickOfferWindow(null), null);
-});
-
-// The pill that STOPS a recording lives in the dashboard layout, which the
-// buddy list and the call panel both bypass. An offer there could be accepted
-// and then not taken back.
-test("the record offer never lands in a window that cannot show the stop", () => {
-  const panel = tabWin(7, "/call-panel", { isCallPanel: true, focused: true });
-  assert.equal(pickOfferWindow([main(), panel]).id, 1, "not the call panel, even focused");
-  assert.equal(pickOfferWindow([main(), peopleWin({ focused: true })]).id, 1, "not the buddy list, even focused");
-  // With nothing but those two open there is nowhere honest to ask, so nothing
-  // is asked.
-  assert.equal(pickOfferWindow([peopleWin({ focused: true }), panel]), null);
-});

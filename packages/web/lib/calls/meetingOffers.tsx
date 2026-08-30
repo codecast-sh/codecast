@@ -60,9 +60,15 @@ export async function handleMeetingOffer(offer: MeetingOffer): Promise<void> {
 // Subscribe this window to the shell's offers. Installed once from
 // DesktopProvider, beside the other desktop trackers — the shell already chose
 // ONE window to ask in, so there is nothing here to de-duplicate.
+//
+// A shell new enough to have the dedicated /meeting-offer window routes offers
+// there and never here — this toast path survives for older shells. The offer
+// window itself must not install it either: the preload's meeting-detected
+// channel holds ONE handler, and this would displace the page's own.
 let installed = false;
 export function installMeetingOfferListener(): void {
   if (installed || !canDetectMeetings()) return;
+  if (typeof window !== "undefined" && window.location.pathname === "/meeting-offer") return;
   installed = true;
   onMeetingDetected((offer) => {
     void handleMeetingOffer(offer);

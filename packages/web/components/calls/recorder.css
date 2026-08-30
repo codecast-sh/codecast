@@ -276,3 +276,16 @@
 .rec-offer-failed {
   border-color: color-mix(in srgb, var(--sol-orange) 45%, transparent);
 }
+
+/* The /meeting-offer window's faces. The window is reshaped around the
+   content, so these own their width instead of inheriting the toast's 340px
+   or the window's current size. */
+.rec-offer-line {
+  width: max-content;
+  align-items: center;
+}
+
+.rec-winpill {
+  width: max-content;
+  max-width: 380px;
+}
