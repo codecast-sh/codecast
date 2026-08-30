@@ -3634,11 +3634,19 @@ export default defineSchema({
         v.literal("failed"),
       ),
     ),
+    // A recording (`rec:` room key) its creator shared into a team. Absent or
+    // false is every recording's birth state: private to the creator, whatever
+    // team_id says (team_id is routing, never access — canReadCall is the
+    // gate). Meaningless on huddles, which have the room's own rules.
+    rec_shared: v.optional(v.boolean()),
   })
     .index("by_room", ["room_key"])
     .index("by_status", ["status"])
     // The calls page / cast calls: a team's call history, newest first.
-    .index("by_team_started", ["team_id", "started_at"]),
+    .index("by_team_started", ["team_id", "started_at"])
+    // The same page's personal shelf: everything I started, newest first —
+    // how a recording is found regardless of which team it was filed under.
+    .index("by_creator_started", ["started_by", "started_at"]),
 
   transcript_segments: defineTable({
     transcript_id: v.id("transcripts"),
