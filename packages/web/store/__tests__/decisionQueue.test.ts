@@ -1,6 +1,8 @@
 import { describe, expect, it, beforeEach } from "bun:test";
 import {
   decisionQueueItems,
+  findDecisionAnchorMessage,
+  messagesSinceAsk,
   queueTier,
   sessionHasOpenQuestion,
   sortQueue,
@@ -45,6 +47,70 @@ const item = (extra: Partial<QueueItem> = {}): QueueItem => ({
   blocking: true,
   createdAt: 0,
   ...extra,
+});
+
+describe("finding the ask in the transcript", () => {
+  const did = convexId("dec1");
+  const msgs = [
+    { _id: "m1", content: "let me think", timestamp: 10 },
+    { _id: "m2", content: `cast decide "Which schema wins?" -o …`, timestamp: 20 },
+    { _id: "m3", content: `Decision posted: Which schema wins?\n  id: ${did}`, timestamp: 30 },
+    { _id: "m4", content: `cast decide edit ${did} --context …`, timestamp: 40 },
+  ];
+
+  it("anchors on the FIRST message carrying the decision id, not a later edit", () => {
+    expect(findDecisionAnchorMessage(msgs, did, "Which schema wins?")?._id).toBe("m3");
+  });
+
+  it("resolves a tool-result hit to the message carrying the CALL, which is the row that renders", () => {
+    const toolMsgs = [
+      { _id: "t1", content: "", timestamp: 10, tool_calls: [{ id: "tu9", name: "Bash", input: `{"command":"cast decide …"}` }] },
+      { _id: "t2", content: "", timestamp: 20, tool_results: [{ tool_use_id: "tu9", content: `Decision posted…\n  id: ${did}` }] },
+    ];
+    expect(findDecisionAnchorMessage(toolMsgs, did, "q")?._id).toBe("t1");
+    // No matching call loaded: the carrier row is still better than nothing.
+    expect(findDecisionAnchorMessage([toolMsgs[1]], did, "q")?._id).toBe("t2");
+    const callMsgs = [{ _id: "t3", timestamp: 30, tool_calls: [{ id: "tu1", name: "Bash", input: `{"command":"cast decide edit ${did}"}` }] }];
+    expect(findDecisionAnchorMessage(callMsgs, did, "q")?._id).toBe("t3");
+  });
+
+  it("falls back to the Bash decide command plus question when no id has synced", () => {
+    const noId = [
+      // An Edit call quoting both strings is a file edit, not the ask.
+      { _id: "e1", timestamp: 5, tool_calls: [{ name: "Edit", input: `cast decide "Which schema wins?"` }] },
+      { _id: "b1", timestamp: 15, tool_calls: [{ name: "Bash", input: `{"command":"cast decide \\"Which schema wins?\\" -o …"}` }] },
+    ];
+    expect(findDecisionAnchorMessage(noId, did, "Which schema wins?")?._id).toBe("b1");
+  });
+
+  it("returns null when the ask is outside the loaded window", () => {
+    expect(findDecisionAnchorMessage([{ _id: "m9", content: "later talk", timestamp: 99 }], did, "Which schema wins?")).toBeNull();
+    expect(findDecisionAnchorMessage(undefined, did, "q")).toBeNull();
+  });
+});
+
+describe("messages since the ask", () => {
+  it("prefers the server snapshot delta, which sees past the loaded window", () => {
+    const n = messagesSinceAsk(
+      { createdAt: 1000, askedMessageCount: 40 },
+      { message_count: 87 },
+      [{ _id: "m1", timestamp: 2000 }] // loaded window would say 1
+    );
+    expect(n).toBe(47);
+  });
+
+  it("never goes negative when counts reconcile out of order", () => {
+    expect(messagesSinceAsk({ createdAt: 0, askedMessageCount: 90 }, { message_count: 87 }, [])).toBe(0);
+  });
+
+  it("scans loaded messages when the row predates the snapshot", () => {
+    const n = messagesSinceAsk({ createdAt: 1000 }, { message_count: 87 }, [
+      { _id: "a", timestamp: 500 },
+      { _id: "b", timestamp: 1500 },
+      { _id: "c", timestamp: 2500 },
+    ]);
+    expect(n).toBe(2);
+  });
 });
 
 describe("decision queue ranking", () => {
