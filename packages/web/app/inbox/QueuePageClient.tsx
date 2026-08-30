@@ -2,7 +2,8 @@ import { useState, useCallback, useEffect, useRef, memo, useMemo, useDeferredVal
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useShortcutContext } from "../../shortcuts";
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useSearchParams } from "next/navigation";
 import { useTabContext } from "../../lib/tabParams";
 import { urlSessionId } from "../../lib/pathLabel";
@@ -307,10 +308,13 @@ export function QueuePageClient() {
 
   const shouldQueryDirect = pendingInjectId && isConvexId(pendingInjectId);
 
-  // Query conversation for sessions not in the queue
-  const directConv = useQuery(
+  // Query conversation for sessions not in the queue. No-throw: the id comes
+  // straight from the `?s=` URL param, so a server rejection (bad id, wrong
+  // table) must degrade to the "unavailable" note, not crash the inbox into
+  // its ErrorBoundary.
+  const { data: directConv, error: directConvError } = useQueryNoThrow(
     api.conversations.getConversation,
-    shouldQueryDirect ? { conversation_id: pendingInjectId as Id<"conversations">, limit: 1 } : "skip"
+    shouldQueryDirect ? { conversation_id: pendingInjectId, limit: 1 } : "skip"
   );
 
   // Select session from URL param -- only when the param actually changes
@@ -386,9 +390,11 @@ export function QueuePageClient() {
       paramProcessedRef.current = true;
       return;
     }
-    // directConv: undefined = still loading, null = not found/no access
-    if (directConv === undefined) return;
-    if (directConv === null) {
+    // directConv: undefined = still loading, null = not found/no access.
+    // A terminal server error resolves the same way as null — the target is
+    // unavailable, and the honest note beats an unmounted inbox.
+    if (directConv === undefined && !directConvError) return;
+    if (directConv == null) {
       setUnavailableId(pendingInjectId);
       setPendingInjectId(null);
       paramProcessedRef.current = true;
@@ -406,7 +412,7 @@ export function QueuePageClient() {
     }));
     setPendingInjectId(null);
     paramProcessedRef.current = true;
-  }, [pendingInjectId, directConv, sessions, navigateToSession, injectSession]);
+  }, [pendingInjectId, directConv, directConvError, sessions, navigateToSession, injectSession]);
 
   // Handle store-based navigation (from CommandPalette, bookmarks, etc.)
   const pendingNavigateId = useInboxStore((s) => s.pendingNavigateId);
