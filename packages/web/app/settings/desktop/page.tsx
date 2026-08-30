@@ -1,5 +1,9 @@
 import { useState, useCallback, useRef } from "react";
-import { Info, Keyboard, RotateCcw, Video, X } from "lucide-react";
+import { Info, Keyboard, RotateCcw, ShieldCheck, Video, X } from "lucide-react";
+import { useOsPermissions } from "../../../hooks/useOsPermissions";
+import { OS_PERMISSION_KINDS } from "../../../lib/osPermissions";
+import { PermissionRow } from "../../../components/permissions/PermissionRow";
+import { openDeviceSetup } from "../../../components/permissions/DeviceSetupDialog";
 import { useEventListener } from "../../../hooks/useEventListener";
 import { useMountEffect } from "../../../hooks/useMountEffect";
 import {
@@ -223,7 +227,7 @@ function MeetingDetectSection() {
               {neverApps.map((a) => (
                 <span
                   key={a.id}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-sol-border bg-sol-bg-alt px-2 py-1 text-xs text-sol-text"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-sol-bg-alt px-2 py-1 text-xs text-sol-text"
                 >
                   {a.name}
                   <button
@@ -240,6 +244,29 @@ function MeetingDetectSection() {
           </div>
         )}
       </div>
+    </SettingsSection>
+  );
+}
+
+// Every OS-level permission this Mac has decided about Codecast, with the
+// fix in reach. Hidden on shells too old to report them (all unknown).
+function PermissionsSection() {
+  const { permissions, refresh } = useOsPermissions();
+  if (OS_PERMISSION_KINDS.every((k) => permissions[k] === "unknown")) return null;
+  return (
+    <SettingsSection
+      title="Permissions"
+      icon={ShieldCheck}
+      description="What macOS lets Codecast do on this Mac. Changes made in System Settings show up here on their own."
+      actions={
+        <Button size="sm" variant="outline" onClick={openDeviceSetup}>
+          Run setup again
+        </Button>
+      }
+    >
+      {OS_PERMISSION_KINDS.map((k) => (
+        <PermissionRow key={k} kind={k} readiness={permissions[k]} onChange={refresh} />
+      ))}
     </SettingsSection>
   );
 }
@@ -286,6 +313,8 @@ export default function DesktopSettingsPage() {
       >
         <DesktopVersionRow />
       </SettingsSection>
+
+      <PermissionsSection />
 
       <MeetingDetectSection />
 

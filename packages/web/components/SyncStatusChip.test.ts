@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { selectSyncing } from "./SyncStatusChip";
+import { selectSyncing, selectSyncSummary } from "./SyncStatusChip";
 import { useInboxStore } from "../store/inboxStore";
 
 // Regression coverage for the header sync chip. The bug: the chip read
@@ -33,7 +33,7 @@ describe("selectSyncing", () => {
 
 describe("setLiveLoading + chip wiring", () => {
   beforeEach(() => {
-    useInboxStore.setState({ liveLoading: {}, syncProgress: {} });
+    useInboxStore.setState({ liveLoading: {}, syncProgress: {}, syncLogLag: {}, sessions: {}, tasks: {}, docs: {} } as any);
   });
 
   it("lights the chip on cold open and clears it once live loads land", () => {
@@ -62,5 +62,40 @@ describe("setLiveLoading + chip wiring", () => {
       useInboxStore.setState({ syncProgress: { docs: { loading: true, loaded } } });
       expect(selectSyncing(useInboxStore.getState())).toBe(false);
     }
+  });
+});
+
+// With the sync log owning catch-up (sync-log-migration.md), a warm cache is
+// complete once each scope's cursor reaches its head. The pill must reflect
+// THAT, and treat a live first-load as "syncing" only into a cold collection.
+describe("sync log era semantics", () => {
+  const warm = { sessions: { a: {} }, tasks: { t: {} }, docs: { d: {} } };
+
+  it("does not light for a live first-load into a warm cache", () => {
+    expect(selectSyncing({ ...warm, liveLoading: { sessions: true, tasks: true, docs: true } })).toBe(false);
+  });
+
+  it("lights for a live first-load into a cold collection only", () => {
+    expect(selectSyncing({ ...warm, sessions: {}, liveLoading: { sessions: true, tasks: true } })).toBe(true);
+    expect(selectSyncSummary({ ...warm, sessions: {}, liveLoading: { sessions: true, tasks: true } }))
+      .toEqual({ settled: 0, total: 1 }); // tasks is warm, not counted
+  });
+
+  it("lights while any scope's log cursor is behind its head, and settles at 0", () => {
+    expect(selectSyncing({ ...warm, liveLoading: {}, syncLogLag: { "user:u": 12 } })).toBe(true);
+    expect(selectSyncSummary({ ...warm, liveLoading: {}, syncLogLag: { "user:u": 12, "team:t": 0 } }))
+      .toEqual({ settled: 1, total: 2 });
+    expect(selectSyncing({ ...warm, liveLoading: {}, syncLogLag: { "user:u": 0, "team:t": 0 } })).toBe(false);
+  });
+
+  it("setSyncLogLag drives the chip through the store", () => {
+    useInboxStore.setState({ sessions: { a: {} }, tasks: { t: {} }, docs: { d: {} } } as any);
+    const store = useInboxStore.getState();
+    store.setLiveLoading("sessions", true); // warm → ignored
+    expect(selectSyncing(useInboxStore.getState())).toBe(false);
+    store.setSyncLogLag("user:u", 3);
+    expect(selectSyncing(useInboxStore.getState())).toBe(true);
+    store.setSyncLogLag("user:u", 0);
+    expect(selectSyncing(useInboxStore.getState())).toBe(false);
   });
 });

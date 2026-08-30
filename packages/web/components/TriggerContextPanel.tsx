@@ -224,9 +224,10 @@ export function TriggerContextPanel({
   const cadence = isLoop ? "self-paced loop" : describeTaskCadence(primary);
   const msUntil = primary.run_at !== undefined ? primary.run_at - now : undefined;
   const extraCount = matched.length - 1;
-  // Verbs act through the owner's account; a foreign (bot-owned) trigger is
-  // view-only here. Loops carry no server verbs at all.
-  const canManage = !isLoop && primary.is_own !== false;
+  // Verbs follow view access: anyone who can see the conversation can manage
+  // its triggers, foreign or not (founder decision 2026-08-30). Loops carry
+  // no server verbs at all.
+  const canManage = !isLoop;
   // The dedicated trigger page (real triggers only — a loop's pseudo id
   // addresses nothing).
   const triggerHref = isLoop ? null : `/triggers/${(primary as any).short_id ?? primary._id}`;
@@ -549,8 +550,8 @@ export function TriggerContextPanel({
           )}
 
           <div className="flex items-center gap-1.5 pt-0.5 flex-wrap">
-            {!canManage && !isLoop && primary.owner_name && (
-              <ShortcutTooltip label="This trigger runs under a different account — its verbs live with that owner">
+            {!isLoop && primary.is_own === false && primary.owner_name && (
+              <ShortcutTooltip label="This trigger runs under a different account; anyone who can see it can manage it">
                 <span className="px-1.5 py-px rounded border border-sol-border/50 text-[10px] text-sol-text-dim">
                   runs as {primary.owner_name}
                 </span>

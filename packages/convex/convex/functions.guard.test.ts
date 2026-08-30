@@ -40,6 +40,49 @@ describe("change-feed write interceptor coverage", () => {
     expect(offenders).toEqual([]);
   });
 
+  // Closure for the patch/delete class the insert scan cannot see (sync-
+  // convergence C9): a file that imports the raw mutation builders can patch or
+  // delete a tracked table without emitting a sync action, whatever it writes
+  // today. So the raw builders are allowed ONLY on this explicit list — each
+  // entry names the untracked table it writes — and adding a file to it is a
+  // review event, not a merge accident. Anything else imports from ./functions.
+  const RAW_BUILDER_ALLOWLIST: Record<string, string> = {
+    "apnsVoip.ts": "VoIP push token bookkeeping (apns tables) — untracked",
+    "artifacts.ts": "published pages, versions and comments — untracked",
+    "buckets.ts": "inbox_buckets / bucket_assignments through the revision-bound writer — untracked",
+    "callChat.ts": "call room chat rows — untracked",
+    "calls.ts": "call rooms and participants — untracked",
+    "debugTmp.ts": "temporary debug harness; deleted when its census is done — must never write a tracked table",
+    "oauthConnectors.ts": "oauth connector state — untracked",
+    "searchMirror.ts": "search mirror rows — untracked",
+    "storyMode.ts": "story mode state — untracked",
+    "transcripts.ts": "call transcripts and segments — untracked",
+  };
+
+  test("only allowlisted files import raw mutation builders, and none of them writes a tracked table", () => {
+    const offenders: string[] = [];
+    const trackedWriters: string[] = [];
+    for (const f of readdirSync(DIR)) {
+      if (!f.endsWith(".ts") || f.endsWith(".test.ts") || f === "functions.ts") continue;
+      const src = readFileSync(join(DIR, f), "utf8");
+      if (!importsRawBuilder(src)) continue;
+      if (!(f in RAW_BUILDER_ALLOWLIST)) offenders.push(f);
+      // A raw-builder file that queries a tracked table AND patches/deletes has
+      // the bypass in reach; the reason column above says it never does. The
+      // debug harness is exempt by name: it exists to poke rows and is slated
+      // for deletion, and its writes never reach a client through the sync log.
+      const readsTracked = TRACKED.some((t) => src.includes(`.query("${t}")`));
+      const writes = /\.(patch|delete)\(/.test(src);
+      if (readsTracked && writes && f !== "debugTmp.ts") trackedWriters.push(f);
+    }
+    expect(offenders).toEqual([]);
+    expect(trackedWriters).toEqual([]);
+    // The list is exact: an entry whose file no longer imports raw builders is stale.
+    for (const f of Object.keys(RAW_BUILDER_ALLOWLIST)) {
+      expect(importsRawBuilder(readFileSync(join(DIR, f), "utf8"))).toBe(true);
+    }
+  });
+
   test("the interceptor itself stays wired to the raw generated builders", () => {
     const src = readFileSync(join(DIR, "functions.ts"), "utf8");
     expect(importsRawBuilder(src)).toBe(true);

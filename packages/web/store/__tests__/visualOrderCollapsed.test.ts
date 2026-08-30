@@ -219,3 +219,57 @@ describe("computeVisualOrder lifts questions", () => {
     expect(order[0]).not.toBe("wk1");
   });
 });
+
+// Ctrl+I / queue advance walk computeVisualOrder(state, { yourMove: true }) —
+// the questions / NEEDS INPUT / DONE cards in render order, taken from the same
+// categorizeSessions verdicts the panel renders with. Regression: the handler
+// used to re-classify each row (classifySession().waiting), which is blind to
+// the staleness net — a "working" row quiet past the trust TTL that the panel
+// files under NEEDS INPUT, oldest first, so it sits at the very top once old
+// sessions are shown. Ctrl+I skipped it and landed on a lower card.
+describe("computeVisualOrder yourMove mirrors the panel's your-move sections", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const yourMove = (state: Parameters<typeof computeVisualOrder>[0]) =>
+    computeVisualOrder(state, { yourMove: true }).map((s) => s._id);
+  // stale: claims "working" but went quiet two days ago → the net files it in
+  // NEEDS INPUT above the fresh idle row (queues sort oldest first).
+  const staleWorking = session("stale", { is_idle: false, agent_status: "working", updated_at: Date.now() - 2 * DAY });
+  const idleFresh = session("idle", { is_idle: true, updated_at: Date.now() - DAY });
+  const working = session("wk", { is_idle: false, agent_status: "working" });
+  const withStale = { ...baseState, sessions: { stale: staleWorking, idle: idleFresh, wk: working } };
+
+  it("grouped view: the stale row the panel shows first in NEEDS INPUT is the first target", () => {
+    expect(yourMove(withStale)).toEqual(["stale", "idle"]);
+    // and the plain order keeps walking every card
+    expect(computeVisualOrder(withStale).map((s) => s._id)).toEqual(["stale", "idle", "wk"]);
+  });
+
+  it("flat views: same membership, walked in the flat order", () => {
+    const time = { ...withStale, clientState: { ui: { inbox_view_mode: "time" as const } } };
+    // creation order is by started_at, falling back to updated_at: idle (1d) is newer than stale (2d)
+    expect(yourMove(time)).toEqual(["idle", "stale"]);
+  });
+
+  it("an in-flight send lifts a row out (it renders under WORKING with its pending pill)", () => {
+    expect(yourMove({ ...withStale, sessionsWithQueuedMessages: new Set(["stale"]) })).toEqual(["idle"]);
+  });
+
+  it("a collapsed NEEDS INPUT section is not walked, exactly like the plain order", () => {
+    expect(yourMove({ ...withStale, collapsedSections: { needs_input: true } })).toEqual([]);
+  });
+
+  it("with old sessions hidden the stale row is off screen, so it is not the target", () => {
+    // Only a server-keyed (Convex id) row can be "old"; fixtures need real-shaped ids here.
+    const STALE = "jx7stale00000000000000000000stal", IDLE = "jx7idle000000000000000000000idle", WK = "jx7wk00000000000000000000000wk00";
+    const sessions = {
+      [STALE]: session(STALE, { is_idle: false, agent_status: "working", updated_at: Date.now() - 2 * DAY }),
+      [IDLE]: session(IDLE, { is_idle: true, updated_at: Date.now() - DAY }),
+      [WK]: session(WK, { is_idle: false, agent_status: "working" }),
+    };
+    const live = new Set([IDLE, WK]);
+    // Shown (the default): the stale row is on screen at the top of NEEDS INPUT.
+    expect(yourMove({ ...baseState, sessions, liveInboxIds: live })).toEqual([STALE, IDLE]);
+    // Hidden: it is not rendered, so it is not the target.
+    expect(yourMove({ ...baseState, sessions, liveInboxIds: live, clientState: { ui: { inbox_show_old: false } } })).toEqual([IDLE]);
+  });
+});

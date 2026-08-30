@@ -182,7 +182,10 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
         channelId={channelId}
         threadRootId={rootId}
         teamId={teamId}
-        placeholder="Reply…"
+        // A reply on a thread a session started is delivered into that
+        // session (chat.ts maybeRelayToOriginSession) — say so where the
+        // person is about to type, so it is not a surprise.
+        placeholder={root?.author.session ? `Reply to ${root.author.name} — delivered into its session` : "Reply…"}
         channelName={channelName}
         onSend={onSend}
         compact

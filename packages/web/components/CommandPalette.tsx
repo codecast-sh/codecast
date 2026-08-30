@@ -18,9 +18,10 @@ import { useDynamicModels } from "../hooks/useDynamicModels";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
 import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, filterInboxScopeFromState, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
-import { resolveRecentVisits, visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
+import { resolveRecentVisits, visitTimeAgo, VISIT_OBJECT_LABEL, type ResolvedVisit } from "../lib/recentVisits";
 import { inActiveWorkspace } from "../lib/workspaceScope";
-import { PageIcon } from "./RecentlyViewedMenu";
+import { RecentVisitGlyph } from "./RecentVisitRow";
+import { useOpenRecentVisit } from "../hooks/useOpenRecentVisit";
 import { isNonTabRoute } from "../src/compat/tabRouting";
 import { score, matchScore } from "../hooks/useMentionQuery";
 import { dmOtherIds } from "@codecast/shared/chat";
@@ -30,6 +31,13 @@ import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useCollectionRows } from "../hooks/useCollectionRows";
 import { triggerSig, useSyncTriggers } from "../hooks/useSyncTriggers";
 import { POP_OUT_PEOPLE_TITLE, isElectron, isPeopleWindow } from "../lib/desktop";
+import { stageIsSplit } from "../hooks/useStageShortcuts";
+import {
+  Columns2 as StageSplitGlyph,
+  SquareX as StageCloseGlyph,
+  Maximize2 as StageExpandGlyph,
+  ChevronsRight as StageNextGlyph,
+} from "lucide-react";
 import { popOutPeople } from "./people/popOutPeople";
 import { isInboxRoute } from "../lib/inboxRouting";
 import { sortedWorkbenches, switchToWorkbench } from "../lib/workbenchSwitch";
@@ -208,6 +216,10 @@ const GLOBAL_COMMANDS: ReadonlyArray<{
   { action: "ui.zenToggle", label: "Toggle zen mode", icon: Focus, keywords: "focus minimal distraction free" },
   { action: "sidebar.toggleLeft", label: "Toggle left sidebar", icon: PanelLeft, keywords: "nav collapse" },
   { action: "sidebar.toggleRight", label: "Toggle sessions panel", icon: PanelRight, keywords: "right rail collapse" },
+  { action: "pane.split", label: "Split: open this view beside itself", icon: StageSplitGlyph, keywords: "split pane side by side column duplicate stage" },
+  { action: "pane.close", label: "Close pane", icon: StageCloseGlyph, keywords: "split pane close stage", hidden: () => !stageIsSplit() },
+  { action: "pane.expand", label: "Pane takes the whole stage", icon: StageExpandGlyph, keywords: "split pane expand maximize full stage", hidden: () => !stageIsSplit() },
+  { action: "pane.next", label: "Focus next pane", icon: StageNextGlyph, keywords: "split pane focus cycle", hidden: () => !stageIsSplit() },
   { action: "inbox.toggleFlatView", label: "Cycle inbox view", icon: Rows3, keywords: "grouped time label flat layout" },
   { action: "ui.toggleShortcutsHelp", label: "Keyboard shortcuts help", icon: Keyboard, keywords: "keys bindings hotkeys cheatsheet" },
 ];
@@ -1786,28 +1798,24 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     [pick, finishPick, navigate],
   );
 
+  // Sessions go through navigateToSession (it injects rows the store lacks);
+  // the palette's own navigate closes the overlay with the move, and a chip
+  // view that stays on the page closes it here.
+  const openRecentSession = useCallback(
+    (id: string) => {
+      const conv = recentSessions.find((c) => c._id === id);
+      const row = recentVisitRows.find((r) => r.sessionId === id);
+      navigateToSession(conv ?? { _id: id, title: row?.title });
+    },
+    [recentSessions, recentVisitRows, navigateToSession],
+  );
+  const openRecentVisit = useOpenRecentVisit(openRecentSession, navigate);
   const handleRecentVisitSelect = useCallback(
     (row: ResolvedVisit) => {
-      if (row.sessionId) {
-        const conv = recentSessions.find((c) => c._id === row.sessionId) ?? { _id: row.sessionId, title: row.title };
-        navigateToSession(conv);
-        return;
-      }
-      if (row.bucketId || row.projectName) {
-        const store = useInboxStore.getState();
-        if (row.bucketId) store.setActiveBucketFilter(row.bucketId);
-        else store.setActiveProjectFilter(row.projectName!, row.projectPath ?? null);
-        if (!selectSessionRailOpen(store)) store.toggleSidePanel();
-        // The chip views live in the session panel; non-tab surfaces
-        // (Settings, auth) don't render it, so head home to the inbox. The
-        // real router URL decides — usePathname can report the carried tab.
-        if (isNonTabRoute(window.location.pathname)) navigate("/inbox");
-        else closePalette();
-        return;
-      }
-      if (row.path) navigate(row.path);
+      openRecentVisit(row);
+      if (row.bucketId || row.projectName) closePalette();
     },
-    [recentSessions, navigateToSession, navigate, closePalette],
+    [openRecentVisit, closePalette],
   );
 
   // Root action handlers
@@ -2262,19 +2270,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 onSelect={() => handleRecentVisitSelect(row)}
                 className={itemClass}
               >
-                {row.sessionId ? (
-                  <MessageSquare className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
-                ) : row.bucketId ? (
-                  <Tag className={`w-4 h-4 flex-shrink-0 ${getLabelColor(row.title).text}`} />
-                ) : row.projectName ? (
-                  <Folder className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
-                ) : (
-                  <PageIcon path={row.path!} className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
-                )}
+                <RecentVisitGlyph item={row} className="w-4 h-4 flex-shrink-0" />
                 <span className="truncate flex-1">{row.title}</span>
-                {(row.bucketId || row.projectName) && (
-                  <span className="text-[10px] text-sol-text-dim flex-shrink-0">view</span>
-                )}
+                <span className="text-[10px] text-sol-text-dim flex-shrink-0">{VISIT_OBJECT_LABEL[row.objectType].toLowerCase()}</span>
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{visitTimeAgo(row.ts)}</span>
               </CommandPrimitive.Item>
             ))}

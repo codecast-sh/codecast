@@ -10,6 +10,7 @@ import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { enqueuePush } from "./pushRouter";
 import { nextShortId } from "./counters";
 import { canAccessConversation } from "./lib/access";
+import { armedTriggerKindFor } from "./dormancy";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000; // 10 min
@@ -19,6 +20,33 @@ const LEASE_DURATION_MS = 5 * 60 * 1000; // 5 min
 // to a userId, then go through these so the two surfaces can't drift. ---
 
 type TaskCtx = { db: any; scheduler?: { runAfter: (delayMs: number, fn: any, args: any) => Promise<unknown> } };
+
+// Recompute conversations.armed_trigger_kind for one home from EVERY trigger
+// that injects into it (several can), and write it only when it changed — the
+// field is semantic, so each write is a sync-log action. This is the single
+// writer; every lifecycle transition below routes its patch through patchTask
+// so the denormalized answer can never lag the agent_tasks rows the inbox no
+// longer reads (sync-convergence C1).
+export async function refreshArmedTriggerKind(
+  ctx: TaskCtx,
+  conversationId: Id<"conversations">,
+): Promise<void> {
+  const tasks = await ctx.db
+    .query("agent_tasks")
+    .withIndex("by_originating_conversation", (q: any) => q.eq("originating_conversation_id", conversationId))
+    .collect();
+  const kind = armedTriggerKindFor(tasks);
+  const conv = await ctx.db.get(conversationId);
+  if (!conv) return;
+  if ((conv.armed_trigger_kind ?? "none") === kind) return;
+  await ctx.db.patch(conversationId, { armed_trigger_kind: kind });
+}
+
+// Patch a trigger and keep its home's armed_trigger_kind in step.
+async function patchTask(ctx: TaskCtx, task: Doc<"agent_tasks">, patch: Record<string, any>) {
+  await ctx.db.patch(task._id, patch);
+  if (task.originating_conversation_id) await refreshArmedTriggerKind(ctx, task.originating_conversation_id);
+}
 
 async function getOwnedTask(
   ctx: TaskCtx,
@@ -30,15 +58,29 @@ async function getOwnedTask(
   return task;
 }
 
+// Management verbs (pause/resume/run now/cancel/reactivate/edit) follow the
+// same rule as reads: anyone who can view the anchor conversation can manage
+// the trigger (founder decision 2026-08-30). Deleting the row stays owner-only
+// — cancel is the teammate's off switch; delete erases history.
+async function getManageableTask(
+  ctx: TaskCtx,
+  taskId: Id<"agent_tasks">,
+  userId: Id<"users">
+): Promise<Doc<"agent_tasks"> | null> {
+  const task = await ctx.db.get(taskId);
+  if (!task || !(await canViewTask(ctx as { db: any }, userId, task))) return null;
+  return task;
+}
+
 async function applyPause(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   if (task.status !== "scheduled" && task.status !== "running") return false;
-  await ctx.db.patch(task._id, { status: "paused" });
+  await patchTask(ctx, task, { status: "paused" });
   return true;
 }
 
 async function applyResume(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   if (task.status !== "paused") return false;
-  await ctx.db.patch(task._id, {
+  await patchTask(ctx, task, {
     status: "scheduled",
     run_at: task.run_at || Date.now(),
   });
@@ -46,12 +88,12 @@ async function applyResume(ctx: TaskCtx, task: Doc<"agent_tasks">) {
 }
 
 async function applyRunNow(ctx: TaskCtx, task: Doc<"agent_tasks">) {
-  await ctx.db.patch(task._id, { status: "scheduled", run_at: Date.now() });
+  await patchTask(ctx, task, { status: "scheduled", run_at: Date.now() });
   return true;
 }
 
 async function applyCancel(ctx: TaskCtx, task: Doc<"agent_tasks">) {
-  await ctx.db.patch(task._id, { status: "completed" });
+  await patchTask(ctx, task, { status: "completed" });
   return true;
 }
 
@@ -63,7 +105,7 @@ async function applyCancel(ctx: TaskCtx, task: Doc<"agent_tasks">) {
 // a once-task keeps its future run_at or re-arms a minute out.
 async function applyReactivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   if (task.status !== "completed" && task.status !== "failed") return false;
-  await ctx.db.patch(task._id, {
+  await patchTask(ctx, task, {
     status: "scheduled",
     canceled_on_kill_at: undefined,
     run_at:
@@ -126,7 +168,7 @@ export async function cancelTasksBoundToConversation(
       // Stamp WHY it completed: a restore of the killed session re-arms exactly
       // the schedules this kill took down (reactivateTasksCanceledOnKill),
       // without touching schedules that ran to natural completion.
-      await ctx.db.patch(task._id, { status: "completed", canceled_on_kill_at: Date.now() });
+      await patchTask(ctx, task, { status: "completed", canceled_on_kill_at: Date.now() });
       cancelled++;
     }
   }
@@ -223,6 +265,9 @@ async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) 
     run_count: 0,
     created_at: now,
   });
+  if (args.originating_conversation_id) {
+    await refreshArmedTriggerKind(ctx, args.originating_conversation_id as Id<"conversations">);
+  }
   // Distill a readable display_title/display_summary from the prompt (the
   // summarizer section below) — the stored title is usually prompt.slice(0,60).
   await ctx.scheduler?.runAfter(0, internal.agentTasks.generateDisplaySummary, { task_id: taskId });
@@ -236,7 +281,7 @@ const cliTaskAction = (apply: (ctx: TaskCtx, task: Doc<"agent_tasks">) => Promis
     handler: async (ctx, args) => {
       const auth = await verifyApiToken(ctx, args.api_token);
       if (!auth) throw new Error("Unauthorized");
-      const task = await getOwnedTask(ctx, args.task_id, auth.userId);
+      const task = await getManageableTask(ctx, args.task_id, auth.userId);
       if (!task) return false;
       return apply(ctx, task);
     },
@@ -248,7 +293,7 @@ const webTaskAction = (apply: (ctx: TaskCtx, task: Doc<"agent_tasks">) => Promis
     handler: async (ctx, args) => {
       const userId = await getAuthUserId(ctx);
       if (!userId) throw new Error("Unauthorized");
-      const task = await getOwnedTask(ctx, args.task_id, userId);
+      const task = await getManageableTask(ctx, args.task_id, userId);
       if (!task) return false;
       return apply(ctx, task);
     },
@@ -452,6 +497,36 @@ export const getTask = query({
     const task = await ctx.db.get(args.task_id);
     if (!task || task.user_id !== auth.userId) return null;
     return task;
+  },
+});
+
+// Turn a short id ("tr-42") or Convex id into a trigger the caller may
+// manage — same conversation-access rule as the web verbs, so `cast trigger
+// pause tr-42` works on a bot-owned trigger the CLI's own-only list can't see.
+export const resolveTask = query({
+  args: { api_token: v.string(), ref: v.string() },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) throw new Error("Unauthorized");
+    const ref = args.ref.trim();
+    let task: Doc<"agent_tasks"> | null = null;
+    if (/^tr-\w+$/i.test(ref)) {
+      task = await ctx.db
+        .query("agent_tasks")
+        .withIndex("by_short_id", (q) => q.eq("short_id", ref.toLowerCase()))
+        .unique();
+    } else {
+      const id = ctx.db.normalizeId("agent_tasks", ref);
+      task = id ? await ctx.db.get(id) : null;
+    }
+    if (!task || !(await canViewTask(ctx, auth.userId, task))) return null;
+    return {
+      _id: task._id,
+      short_id: task.short_id,
+      title: task.title,
+      status: task.status,
+      is_own: task.user_id === auth.userId,
+    };
   },
 });
 
@@ -670,7 +745,7 @@ export const completeTaskRun = mutation({
       }
     }
 
-    await ctx.db.patch(args.task_id, updates);
+    await patchTask(ctx, task, updates);
 
     if (task.target_conversation_id && args.summary) {
       const targetConv = await ctx.db.get(task.target_conversation_id);
@@ -751,7 +826,7 @@ export const failTaskRun = mutation({
     }
 
     if (newRetryCount < maxRetries) {
-      await ctx.db.patch(args.task_id, {
+      await patchTask(ctx, task, {
         status: "scheduled",
         retry_count: newRetryCount,
         run_at: Date.now() + 60_000 * newRetryCount, // backoff
@@ -762,7 +837,7 @@ export const failTaskRun = mutation({
         last_run_session_uuid: runUuid,
       });
     } else {
-      await ctx.db.patch(args.task_id, {
+      await patchTask(ctx, task, {
         status: "failed",
         retry_count: newRetryCount,
         lease_holder: undefined,
@@ -980,7 +1055,8 @@ export const webList = query({
 // per-user filtering made those triggers invisible on the very session that
 // created them. Read access piggybacks on conversation access (the workspace
 // rules), so this grants nothing a transcript view doesn't already show.
-// Management verbs stay owner-only (getOwnedTask).
+// Management verbs follow the same rule (getManageableTask); only delete
+// stays owner-only.
 async function canViewTask(
   ctx: { db: any },
   userId: Id<"users">,
@@ -1096,6 +1172,34 @@ export const backfillShortIds = internalMutation({
       await ctx.db.patch(task._id, { short_id: await nextShortId(ctx.db, "tr") });
     }
     return { filled: batch.length, more: missing.length > limit };
+  },
+});
+
+// One-shot backfill for conversations.armed_trigger_kind: every home of a
+// currently armed inject trigger gets its kind stamped. Bounded by the number of
+// armed triggers, not conversations; homes with no armed trigger stay unset,
+// which reads as "none". Idempotent — re-running writes nothing new.
+export const backfillArmedTriggerKind = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const homes = new Set<string>();
+    for (const status of ["scheduled", "running", "paused"] as const) {
+      const tasks = await ctx.db
+        .query("agent_tasks")
+        .withIndex("by_status_run_at", (q) => q.eq("status", status))
+        .collect();
+      for (const task of tasks) {
+        if (task.originating_conversation_id) homes.add(task.originating_conversation_id.toString());
+      }
+    }
+    let stamped = 0;
+    for (const id of homes) {
+      const before = await ctx.db.get(id as Id<"conversations">);
+      await refreshArmedTriggerKind(ctx, id as Id<"conversations">);
+      const after = await ctx.db.get(id as Id<"conversations">);
+      if (before && after && (before.armed_trigger_kind ?? "none") !== (after.armed_trigger_kind ?? "none")) stamped++;
+    }
+    return { homes: homes.size, stamped };
   },
 });
 
@@ -1236,7 +1340,7 @@ export const webRegenerateSummary = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-    const task = await getOwnedTask(ctx, args.task_id, userId);
+    const task = await getManageableTask(ctx, args.task_id, userId);
     if (!task) return false;
     await ctx.scheduler.runAfter(0, internal.agentTasks.generateDisplaySummary, { task_id: args.task_id });
     return true;
@@ -1267,7 +1371,7 @@ export const webUpdate = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-    const task = await getOwnedTask(ctx, args.task_id, userId);
+    const task = await getManageableTask(ctx, args.task_id, userId);
     if (!task) return false;
     if (task.status !== "scheduled" && task.status !== "paused") return false;
 
@@ -1308,7 +1412,7 @@ export const webUpdate = mutation({
       if (args.run_at !== undefined) patch.run_at = args.run_at;
     }
 
-    await ctx.db.patch(task._id, patch);
+    await patchTask(ctx, task, patch);
     if (promptChanged) {
       await ctx.scheduler.runAfter(0, internal.agentTasks.generateDisplaySummary, { task_id: task._id });
     }
@@ -1357,7 +1461,7 @@ export const reclaimStaleTasks = internalMutation({
       if (task.lease_expires_at && task.lease_expires_at < now) {
         const maxRetries = task.max_retries ?? DEFAULT_MAX_RETRIES;
         if (task.retry_count < maxRetries) {
-          await ctx.db.patch(task._id, {
+          await patchTask(ctx, task, {
             status: "scheduled",
             run_at: now,
             retry_count: task.retry_count + 1,
@@ -1366,7 +1470,7 @@ export const reclaimStaleTasks = internalMutation({
           });
           reclaimed++;
         } else {
-          await ctx.db.patch(task._id, {
+          await patchTask(ctx, task, {
             status: "failed",
             lease_holder: undefined,
             lease_expires_at: undefined,

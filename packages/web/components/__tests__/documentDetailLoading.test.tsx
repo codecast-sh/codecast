@@ -31,9 +31,6 @@ mock.module("../MessageReview", () => ({
 mock.module("../DocReviewBar", () => ({
   DocReviewBar: () => <div data-stub="review-bar" />,
 }));
-mock.module("../DetailSplitLayout", () => ({
-  PeekLayoutControls: () => null,
-}));
 mock.module("../workspace/Slot", () => ({
   SlotActions: () => null,
 }));

@@ -51,7 +51,7 @@ function ProgressBar({ progress }: { progress?: { total: number; done: number; i
 
 function StatCard({ label, value, color, sub }: { label: string; value: number; color: string; sub?: string }) {
   return (
-    <div className="px-3 py-2.5 rounded-lg bg-sol-bg-alt/30 border border-sol-border/15">
+    <div className="px-3 py-2.5 rounded-lg bg-sol-bg-alt/50">
       <div className="text-[10px] text-sol-text-dim uppercase tracking-wider mb-0.5">{label}</div>
       <div className="flex items-baseline gap-1.5">
         <span className={`text-xl font-semibold tabular-nums ${color}`}>{value}</span>
