@@ -1055,11 +1055,20 @@ async function canReadCall(
   userId: Id<"users">,
   t: Doc<"transcripts">,
 ): Promise<boolean> {
-  // A RECORDING IS ITS CREATOR'S, FULL STOP. No participant door (they are the
-  // only voice in it), no team door, no feature gate — a person recording the
-  // meeting in the room around them has not published anything to anybody, and
-  // the row lands in a team only so their own history list can find it.
-  if (isRecRoomKey(t.room_key)) return String(t.started_by) === String(userId);
+  // A RECORDING IS ITS CREATOR'S until they say otherwise. No participant
+  // door (they are the only voice in it), and for the creator no team door
+  // and no feature gate — a person recording the meeting in the room around
+  // them has not published anything to anybody. `rec_shared` is the creator
+  // having said otherwise: the recording was triaged into its team, and
+  // teammates read it under the ordinary team door, feature gate included.
+  if (isRecRoomKey(t.room_key)) {
+    if (String(t.started_by) === String(userId)) return true;
+    return (
+      !!t.rec_shared &&
+      (await isTeamMember(ctx, userId, t.team_id)) &&
+      (await teamHasFeature(ctx, t.team_id, "calls"))
+    );
+  }
   if ((t.participants ?? []).some((p) => String(p.id) === String(userId))) {
     return (
       (await isTeamMember(ctx, userId, t.team_id)) &&
@@ -1085,6 +1094,12 @@ function shapeCallRow(t: Doc<"transcripts">) {
     // recording waiting on the server to read its audio says so with this.
     transcribe_status: t.transcribe_status ?? null,
     last_seq: t.last_seq,
+    // For the calls page's recording scope chip: whose row this is, where it
+    // is filed, and whether the creator shared it there. Routing facts plus
+    // one flag — access already happened (canReadCall) before shaping.
+    started_by: String(t.started_by),
+    team_id: String(t.team_id),
+    rec_shared: t.rec_shared ?? false,
   };
 }
 
@@ -1102,10 +1117,23 @@ async function listCallsCore(ctx: any, userId: Id<"users">, limit: number) {
       .take(limit);
     rows.push(...ts);
   }
+  // The personal shelf: my own recordings, whatever team they were filed
+  // under. The team walk above only sees the CURRENT teams — a recording
+  // routed to a team I later left, or filed under a team this viewer stopped
+  // looking at, is still mine to read, and this is the index that finds it.
+  const mine = await ctx.db
+    .query("transcripts")
+    .withIndex("by_creator_started", (q: any) => q.eq("started_by", userId))
+    .order("desc")
+    .take(limit);
+  rows.push(...mine.filter((t: Doc<"transcripts">) => isRecRoomKey(t.room_key)));
   rows.sort((a, b) => b.started_at - a.started_at);
   const out = [];
+  const seen = new Set<string>();
   for (const t of rows) {
     if (out.length >= limit) break;
+    if (seen.has(String(t._id))) continue;
+    seen.add(String(t._id));
     if (await canReadCall(ctx, userId, t)) out.push(shapeCallRow(t));
   }
   return out;
@@ -1163,6 +1191,37 @@ export const webGetCall = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
     return getCallCore(ctx, userId, args.transcript_id);
+  },
+});
+
+// The triage gesture: a recording's creator files it into one of their teams
+// (or takes it back). Sharing sets BOTH fields on purpose — team_id so the
+// team's list walk finds the row, rec_shared so canReadCall opens the team
+// door. Unsharing only clears the flag: team_id is routing and keeps its last
+// honest value, and access never read it anyway.
+export const setRecordingScope = mutation({
+  args: {
+    transcript_id: v.id("transcripts"),
+    // A team to share into, or absent to make it private again.
+    team_id: v.optional(v.id("teams")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const t = await ctx.db.get(args.transcript_id);
+    // One error for "no row", "not a recording", and "not yours": naming
+    // which of the three failed would confirm the row exists.
+    if (!t || !isRecRoomKey(t.room_key) || String(t.started_by) !== String(userId)) {
+      throw new Error("Recording not found");
+    }
+    if (!args.team_id) {
+      await ctx.db.patch(t._id, { rec_shared: false });
+      return;
+    }
+    if (!(await isTeamMember(ctx, userId, args.team_id))) {
+      throw new Error("Not a member of that team");
+    }
+    await ctx.db.patch(t._id, { team_id: args.team_id, rec_shared: true });
   },
 });
 
