@@ -168,7 +168,10 @@ start_convex() {
 
     [ -n "$CONVEX_PID" ] && kill_tree $CONVEX_PID
     cd "$ROOT_DIR/packages/convex"
-    bun run dev &
+    # bun loads the workspace-root .env.local into `bun run` children, and its
+    # CONVEX_DEPLOYMENT=anonymous pointer makes the CLI refuse to start next to
+    # the self-hosted vars (same hijack deploy.sh guards against). Scrub it.
+    env -u CONVEX_DEPLOYMENT bun run dev &
     CONVEX_PID=$!
     cd "$ROOT_DIR"
     log "Convex started (pid $CONVEX_PID)"
