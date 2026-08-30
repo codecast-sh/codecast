@@ -1,0 +1,110 @@
+/*
+ * The idle presence overlay's own marks, layered over faces.css (the glass,
+ * the chrome pill) and people.css (the face keys, the rings, the refusal).
+ *
+ * Everything here follows the floating-faces law: a circle is the person and
+ * nothing else, and anything the surface says beyond the circles appears only
+ * under the pointer. The wall's floating label is the one thing the overlay
+ * OVERRIDES rather than inherits — a label wider than its face would hang
+ * outside the window's glass, so faces describe themselves into the slot
+ * above the chrome instead (useDescribeSlot).
+ */
+
+.presence-row {
+  display: flex;
+  /* Bottom-aligned, not centred: a row of mixed sizes reads as people
+     standing on one floor, and the hover band opens directly under it. */
+  align-items: flex-end;
+  justify-content: center;
+  gap: 8px; /* FACE_GAP — the same gap the call circles keep */
+}
+
+.presence-seat {
+  display: inline-flex;
+  flex: none;
+}
+
+/* The wall's floating label, off. The slot above the chrome carries the words. */
+.presence-faces .people-face-label {
+  display: none;
+}
+
+/* While a key is held the rest of the row steps back — the same gesture the
+   wall and the strip make (people.css keys this off the surface class). */
+.presence-faces[data-holding] .people-face-seat:not([data-hold]) {
+  opacity: 0.45;
+}
+
+/* Presence badges earn their place on a buddy list; floating over somebody's
+   work the SIZE already says presence, and a green dot per circle is clutter.
+   Keep only the ask ring and the huddle chip, which carry facts size cannot. */
+.presence-faces .pres {
+  display: none;
+}
+
+/* The empty state: your own face, draggable, quiet. */
+.presence-me {
+  display: inline-flex;
+  border-radius: 999px;
+  cursor: default;
+}
+
+/* The +N chip: the offline fold's handle, drawn like a face-shaped pebble. */
+.presence-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sol-bg) 82%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sol-text) 14%, transparent);
+  backdrop-filter: blur(6px);
+  color: var(--sol-text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  cursor: pointer;
+}
+.presence-chip:hover {
+  color: var(--sol-text);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sol-text) 28%, transparent);
+}
+
+/* The slot: name and activity line, in the band the window grows on hover,
+   sitting above the chrome. The dark plate matches the call circles' name
+   pill — this text sits over whatever application is underneath. */
+.presence-desc {
+  position: absolute;
+  left: 50%;
+  bottom: calc(8px + 34px + 4px); /* FACES_PADDING + CHROME_HEIGHT + ROW_GAP */
+  transform: translateX(-50%);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: calc(100vw - 16px);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(6px);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.presence-desc-name {
+  color: rgba(255, 255, 255, 0.94);
+  font-weight: 600;
+}
+.presence-desc-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The grip only moves the window; a pressed-button flash would say it does
+   something else. */
+.presence-grip {
+  cursor: grab;
+}
+.presence-grip:active {
+  cursor: grabbing;
+}

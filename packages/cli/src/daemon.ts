@@ -90,6 +90,7 @@ import {
   parsePsEtimeSeconds,
   judgeProcessIdentity,
   processDeclaredSessionId,
+  registrySupersedesCachedPid,
   type ProcessOwnership,
   type ProcessSessionClaim,
 } from "./sessionProcessMatcher.js";
@@ -10844,7 +10845,13 @@ export function toOpenTaskReports(tasks: OpenTaskInfo[]): OpenTaskReport[] {
   }));
 }
 // The pid behind a session, from the discovery cache; undefined until found.
+// Checks registry supersession first: the open-task process check runs off
+// this pid, and a stale one condemns every LIVE watcher the session's real
+// process armed — collapsing a genuine "waiting" park into needs_input.
+// Undefined (superseded, not yet rediscovered) fails toward "alive": exactly
+// the lenient bias verifyOpenTasks wants.
 function agentProcessPid(sessionId: string): number | undefined {
+  if (dropSupersededProcessCacheEntry(sessionId)) return undefined;
   return sessionProcessCache.get(sessionId)?.pid;
 }
 // The open tasks the daemon will vouch for: transcript-open, generation-fenced,
@@ -15083,10 +15090,53 @@ interface CachedProcessInfo {
   tmuxTarget?: string;
   termProgram?: string;
   lastVerified: number;
+  // When this mapping was FILLED (not last revalidated): the reference point a
+  // newer hook-written registry registration supersedes (see
+  // registrySupersedesCachedPid — the stale-pid self-heal).
+  filledAt: number;
 }
 
 const sessionProcessCache = new Map<string, CachedProcessInfo>();
 const PROCESS_CACHE_TTL_MS = 30_000;
+
+// ── Registry supersession probe ─────────────────────────────────────────────
+// The session's own registry file, read cheaply and memoized: the sync settle
+// paths (agentProcessPid → verifiedOpenTasks) consult it on every settle, so
+// the read must not hit disk each time. A short TTL keeps the heal window
+// close to the cache's own revalidation cadence.
+const REGISTRY_PROBE_TTL_MS = 30_000;
+const registryProbeCache = new Map<string, { at: number; reg: unknown }>();
+function registryRegistrationFor(sessionId: string): unknown {
+  const hit = registryProbeCache.get(sessionId);
+  if (hit && Date.now() - hit.at < REGISTRY_PROBE_TTL_MS) return hit.reg;
+  let reg: unknown = null;
+  try {
+    reg = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, "session-registry", `${sessionId}.json`), "utf-8"));
+  } catch {
+    reg = null;
+  }
+  // Bounded: entries are per live-ish session; a runaway caller must not grow
+  // this without limit.
+  if (registryProbeCache.size > 1000) registryProbeCache.clear();
+  registryProbeCache.set(sessionId, { at: Date.now(), reg });
+  return reg;
+}
+
+// Drop a cached session→pid mapping the session's own registry has proven
+// stale (a newer hook registration names a different pid). Returns true when
+// the entry was dropped; the next discovery re-fills from the registry
+// (Strategy 0). This is the self-heal for the "unknown verdict fails open"
+// hole: the old pid often can't be CONVICTED as foreign (it has no current
+// claims), but the session's own file can still outvote it.
+function dropSupersededProcessCacheEntry(sessionId: string): boolean {
+  const cached = sessionProcessCache.get(sessionId);
+  if (!cached) return false;
+  const reg = registryRegistrationFor(sessionId);
+  if (!registrySupersedesCachedPid(reg as { pid?: unknown; ts?: unknown; term?: unknown; src?: unknown } | null, cached.pid, cached.filledAt)) return false;
+  log(`[IDENTITY] session ${shortId(sessionId)}: registry hook claim names pid ${(reg as { pid: number }).pid}, newer than cached fill — dropping stale cached pid ${cached.pid}`);
+  sessionProcessCache.delete(sessionId);
+  return true;
+}
 
 // Server rows registered with their tmux name, so a later tmux discovery for
 // the same session (e.g. a session that started OUTSIDE tmux and was resumed
@@ -15102,7 +15152,11 @@ function cacheSessionProcess(sessionId: string, info: ClaudeSessionInfo, tmuxTar
     tmuxTarget,
     termProgram: info.termProgram,
     lastVerified: Date.now(),
+    filledAt: Date.now(),
   });
+  // A fresh fill is a fresh answer — don't let a pre-fill registry probe hide
+  // a registration written moments before this mapping was discovered.
+  registryProbeCache.delete(sessionId);
   // Backfill tmux_session on the server row when this cache fill is the first
   // place the tmux placement shows up. registerManagedSession patches the
   // existing row by session_id; conversation_id/device_id are omitted so the
@@ -15123,6 +15177,9 @@ function cacheSessionProcess(sessionId: string, info: ClaudeSessionInfo, tmuxTar
 }
 
 async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSessionInfo | null> {
+  // Supersession outranks the TTL: a registry hook claim newer than this
+  // mapping proves it stale however recently the pid checked out as alive.
+  if (dropSupersededProcessCacheEntry(sessionId)) return null;
   const cached = sessionProcessCache.get(sessionId);
   if (!cached) return null;
   if (Date.now() - cached.lastVerified > PROCESS_CACHE_TTL_MS) {
@@ -15139,6 +15196,7 @@ async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSession
 
 async function validateProcessCache(): Promise<void> {
   for (const [sessionId, cached] of sessionProcessCache) {
+    if (dropSupersededProcessCacheEntry(sessionId)) continue;
     if (!isProcessRunning(cached.pid) || !(await isAgentProcess(cached.pid))) {
       sessionProcessCache.delete(sessionId);
     }
