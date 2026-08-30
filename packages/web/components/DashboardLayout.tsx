@@ -3,7 +3,6 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
-import { openConversationAsCompanion } from "../hooks/useOpenLinkedSession";
 import { installOpenIntent, detachCurrentView } from "../lib/openIntent";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
@@ -31,6 +30,7 @@ import { NewSnippetsBanner } from "./NewSnippetsBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { NotificationNudgeBanner } from "./NotificationNudgeBanner";
+import { DeviceSetupDialog } from "./permissions/DeviceSetupDialog";
 import { ConnectionBanner } from "./ConnectionBanner";
 import { StorageHealthBanner } from "./StorageHealthBanner";
 import { DaemonStatusChip } from "./DaemonStatusChip";
@@ -52,10 +52,7 @@ import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from 
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron, isDetachedTabWindow } from "../lib/desktop";
 import { SessionListPanel } from "./GlobalSessionPanel";
-import { StageCompanion } from "./StageCompanion";
-import { StageFilesPane } from "./StageFilesPane";
 import { FilePathMenuHost } from "./FilePathMenuHost";
-import { companionId, companionMirrorStep, companionRenderable, surfaceForPath, slotPolicyFor } from "../store/workspace";
 import { EdgePeek } from "./EdgePeek";
 import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
 import { useSyncTeamInboxSessions } from "../hooks/useSyncTeamInboxSessions";
@@ -77,8 +74,8 @@ import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
 import { useSyncMentionPlans } from "../hooks/useSyncPlans";
 import { useSyncMentionTasks } from "../hooks/useSyncTasks";
 import { isInboxSessionView, resolveSessionSelectKind, sessionFocusKind } from "../lib/inboxRouting";
-import { useSessionSwitcher } from "../hooks/useSessionSwitcher";
-import { SessionSwitcher } from "./SessionSwitcher";
+import { useRecentSwitcher } from "../hooks/useRecentSwitcher";
+import { RecentSwitcher } from "./RecentSwitcher";
 import { TabBar, AttachTabButton } from "./TabBar";
 import { tabTitle } from "../lib/tabTitle";
 import { pathLabel } from "../lib/pathLabel";
@@ -319,19 +316,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.workspace.nav.size,
     s => s.workspace.context.size,
     s => s.workspace.context.pane?.kind,
-    s => s.workspace.secondary.size,
-    s => s.workspace.secondary.pane?.kind,
-    s => (s.workspace.secondary.pane as { ref?: string } | null)?.ref,
     s => s.currentConversation?.source,
     s => selectSessionRailOpen(s),
     s => s.sidePanelSessionId,
-    s => companionId(s.workspace),
-    // Row EXISTENCE for the companion and the attended session, as booleans:
-    // a slot or pointer can outlive its row (killed, pruned, stale tab stamp),
-    // and whether the row is there decides if the companion panel may open.
-    // Booleans, not rows — a row dep would re-render the shell every heartbeat.
-    s => companionRenderable(s.workspace, (id) => !!s.sessions[id]),
-    s => { const id = s.viewingDismissedId ?? s.currentSessionId; return !!id && !!s.sessions[id]; },
     s => s.currentSessionId,
     s => s.viewingDismissedId,
     s => selectCommentRailOpen(s),
@@ -449,20 +436,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // isFullWidthRoute folds in the self-contained full-bleed pages (sessions,
   // admin) so the non-tab path matches the tab shell; the inbox check stays
   // explicit because it is source-aware, not just path-based.
-  // Which slots this route may host comes from ONE table (slotPolicyFor), not
-  // from a predicate assembled per feature. Settings is resolved from the real
-  // router URL because the tab-aware pathname reports the carried inbox tab.
-  const surface = isOnSettingsPage ? "settings" : surfaceForPath(pathname ?? "");
-  const slotPolicy = slotPolicyFor(surface);
-  const isOnWorkingPage = slotPolicy.secondary === "split";
-  // Whether the rows behind the two pointers actually exist. Slot refs and
-  // session pointers outlive their rows (killed, pruned at boot, dropped from
-  // the live window, restored from a stale tab stamp); a companion panel may
-  // only open for a row that will render something. Without this gate the
-  // stage kept an expanded panel whose content rendered null — a giant empty
-  // column beside the page.
-  const companionRowExists = companionRenderable(s.workspace, (id) => !!s.sessions[id]);
-  const attendedRowExists = (() => { const id = s.viewingDismissedId ?? s.currentSessionId; return !!id && !!s.sessions[id]; })();
   const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnCallsPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
 
   // The teammate comment rail is a conversation-scoped overlay, so its header
@@ -507,57 +480,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // the rail still reach the list through the edge peek.
   const rightPeekEnabled = !showSessionList && !isMobile && !isZenMode;
 
-  // The conversation you're attending to stays visible wherever it CAN be: it
-  // owns the stage on the inbox, and rides along as the companion on a working
-  // surface. Without this carry, "open a session, then click Tasks" silently
-  // dropped it while "open Tasks, then click the session" worked — the same two
-  // objects behaving differently by order, which is the actual defect.
-  //
-  // This is not the old ambient column: it only ever mirrors the conversation
-  // you were JUST attending, only on surfaces that can hold it, and a hand
-  // close (✕) sticks until you attend a different one.
-  useWatchEffect(() => {
-    const store = useInboxStore.getState();
-    // Dismissed-peek first: navigating to a hidden session sets ONLY
-    // viewingDismissedId (currentSessionId keeps the last visible one), so the
-    // peek is what you're attending. The reverse order made clicking a stashed
-    // session on a working page a dead click — the mirror snapped the
-    // companion straight back to the stale currentSessionId.
-    //
-    // MIRROR, don't just fill: there is exactly one conversation you're
-    // attending to, and it shows either on the stage (inbox) or here. If it
-    // changes by any route while a companion is open, the companion follows —
-    // otherwise you sit watching a stale pane while the inbox has moved on,
-    // and going back would land somewhere you weren't.
-    //
-    // The rule itself is pure (companionMirrorStep): it refuses to open a
-    // companion for a session row the store doesn't hold, closes one whose row
-    // vanished (bookkeeping, not a dismissal — returning to a working surface
-    // brings a real one back), and off working surfaces closes splits while
-    // never touching overlays — an overlay is the fleet board's drill-in,
-    // owned by the board, and the URL cannot be trusted to say the board is up
-    // (a stamped tab path can read /conversation/<id> while the stage shows
-    // the inbox pane), so the gate is the presentation itself.
-    const attended = s.viewingDismissedId ?? s.currentSessionId ?? null;
-    const step = companionMirrorStep(
-      s.workspace,
-      attended,
-      isOnWorkingPage && !isMobile,
-      (id) => !!store.sessions[id],
-    );
-    if (step.op === "show") store.wsShow("secondary", step.pane, { presentation: "split" });
-    else if (step.op === "hide") store.wsHide("secondary", { remember: false });
-  }, [isOnWorkingPage, s.workspace.secondary.presentation, isMobile, companionId(s.workspace), s.currentSessionId, s.viewingDismissedId, companionRowExists, attendedRowExists]);
-
-  // A Files pane left over from a conversation surface: pure bookkeeping hide
-  // when the stage moves somewhere that can't host it (a working page's slot
-  // belongs to its companion; plain pages have no second pane).
-  useWatchEffect(() => {
-    const ws = useInboxStore.getState().workspace;
-    if (ws.secondary.pane?.kind === "files" && !slotPolicy.files) {
-      useInboxStore.getState().wsHide("secondary", { remember: false });
-    }
-  }, [slotPolicy.files, s.workspace.secondary.pane?.kind]);
+  // No route carries a conversation along as a second column any more: the
+  // page takes the full stage, and side by side is the tab's split layout,
+  // entered by a deliberate drag onto the stage (components/stage).
 
   const handleInboxSessionSelect = useCallback((id: string) => {
     const store = useInboxStore.getState();
@@ -585,12 +510,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     ? pathname.replace('/conversation/', '').split(/[/?#]/)[0]
     : null;
 
-  // On working pages the rail highlights the attended conversation (the one
-  // the companion mirrors) — same precedence as the inbox. sidePanelSessionId
-  // is a stale persisted pointer nothing on these surfaces writes anymore;
-  // reading it left the highlight frozen on whatever it last held. Which
-  // pointer is live comes from the shared helper, so whatever MOVES this
-  // highlight (the workbench filter's eviction) reads the same answer.
+  // Which pointer the rail highlights comes from the shared helper, so
+  // whatever MOVES this highlight (the workbench filter's eviction) reads the
+  // same answer.
   const focusKind = sessionFocusKind(pathname, s.currentConversation?.source);
   const sessionListActiveId = focusKind === "current"
     ? (s.viewingDismissedId ?? s.currentSessionId)
@@ -608,12 +530,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     router.push('/inbox');
   }, [router]);
 
-  const sessionSelectKind = resolveSessionSelectKind({ isOnSettingsPage, isOnInboxPage, isOnConversationPage, isOnWorkingPage });
+  const sessionSelectKind = resolveSessionSelectKind({ isOnSettingsPage, isOnInboxPage, isOnConversationPage });
   const sessionListOnSelect = sessionSelectKind === "leave"
     ? handleLeaveAndOpenSession
-    : sessionSelectKind === "inboxInPlace"
-    ? handleInboxSessionSelect
-    : openConversationAsCompanion;
+    : handleInboxSessionSelect;
 
   useMountEffect(() => {
     setIsMobile(window.innerWidth < 768);
@@ -850,7 +770,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
 
   useGlobalShortcutActions();
   useShortcutContext('desktop', isDesktopApp);
-  const switcherState = useSessionSwitcher();
+  const switcherState = useRecentSwitcher();
 
   // Ctrl+N / Ctrl+Shift+N → the compose palette (modal overlay here; the
   // always-on-top window on desktop). Ctrl+Alt+N → a full new session in the main
@@ -965,36 +885,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // peeks the sidebar; right edge peeks the session list (rightPeekEnabled above).
   const peekEnabled = sidebarCollapsed && !hideSidebar && !isZenMode && !isMobile;
 
-  // THE STAGE's secondary slot, computed up here because the collapse/expand
-  // effect below must run on every render path (hooks precede the guest
-  // return). Only working surfaces host a companion; elsewhere the page owns
-  // the stage.
-  // Row existence is part of "showable": a companion ref whose session row is
-  // gone renders nothing (StageCompanion), and an expanded panel with nothing
-  // in it is the empty-column bug. The mirror effect above also closes the
-  // slot; this render gate makes the pixel symptom impossible either way.
-  const showCompanion = !!companionId(s.workspace) && companionRowExists && isOnWorkingPage && !isMobile;
-  // The Files pane shares the slot: a conversation on stage may have the
-  // project's files beside it (slotPolicyFor(...).files).
-  const showFilesPane = !showCompanion && s.workspace.secondary.pane?.kind === "files" && s.workspace.secondary.presentation === "split" && slotPolicy.files && !isMobile;
-  const showStageSecondary = showCompanion || showFilesPane;
-  // The secondary slot owns the companion's share of the stage, so a workbench
-  // restores it.
-  const rawCompanionSize = s.workspace.secondary.size;
-  const companionSize = rawCompanionSize !== undefined && rawCompanionSize >= 20 && rawCompanionSize <= 65 ? rawCompanionSize : 42;
-  const stageCompanionPanelRef = usePanelRef();
-  const companionDragEchoRef = useRef<number | null>(companionSize);
-
   // The context slot owns the rail's width. Its size field serves whichever
   // pane holds the edge — a percent for the session list, pixels for the
   // comment rail — so only a plausibly-percent value is read here.
-  const handleStageLayoutChange = useDragGatedLayoutPersist((newLayout) => {
-    const size = newLayout["stage-companion"];
-    if (!size || size < 5 || !showStageSecondary) return;
-    companionDragEchoRef.current = size;
-    useInboxStore.getState().wsSetSize("secondary", size);
-  });
-
   const ctxSize = s.workspace.context.size;
   const railSize = ctxSize !== undefined && ctxSize >= 5 && ctxSize <= 50 ? ctxSize : 30;
   const railDragEchoRef = useRef<number | null>(railSize);
@@ -1020,25 +913,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       if (!ref.isCollapsed()) ref.collapse();
     }
   }, [showSessionList, railSize]);
-
-  // Same choreography for the stage's companion Panel. The Group is ALWAYS
-  // rendered and this collapses the Panel to 0 when nothing sits beside the
-  // page — swapping the Group in and out instead remounted everything under
-  // it, TabContent included, so every inbox↔working tab switch rebuilt all
-  // kept-mounted panes and re-armed the one-shot URL adoption (which then
-  // stamped the stale address-bar URL into the switched-to tab).
-  useWatchEffect(() => {
-    const ref = stageCompanionPanelRef.current;
-    if (!ref) return;
-    if (showStageSecondary) {
-      if (ref.isCollapsed() || companionDragEchoRef.current !== companionSize) {
-        companionDragEchoRef.current = companionSize;
-        ref.resize(`${companionSize}%`);
-      }
-    } else {
-      if (!ref.isCollapsed()) ref.collapse();
-    }
-  }, [showStageSecondary, companionSize]);
 
   // Guest/unauthenticated: minimal layout, no top header — branding lives in the
   // bottom bar. Always simple-view: anonymous share viewers get the calm reading
@@ -1066,36 +940,15 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   ) : (
     <PageShell pathname={pathname ?? ""}>{content}</PageShell>
   );
-  const pageContentInner = (
+  // THE STAGE: the page, full width. Splitting it is the tab's own layout
+  // (components/stage, rendered inside TabContent), never a shell slot — the
+  // stage's element structure is identical on every surface, so a tab switch
+  // across surfaces never unmounts the page subtree.
+  const pageContent = (
     <div className="h-full flex flex-col min-h-0">
       <BreadcrumbBar />
       <div className="flex-1 min-h-0">{pageBody}</div>
     </div>
-  );
-
-  // THE STAGE: at most two panes, ever — the page, and (optionally) one
-  // conversation running beside it. A second session swaps this one out
-  // (there is a single companionSessionId), so panes cannot accumulate.
-  // The Group is always rendered and the companion Panel collapses to 0 when
-  // not in use (same pattern as the session rail): the stage's element
-  // structure must be identical on every surface, or a tab switch across
-  // surfaces unmounts the whole page subtree.
-  const pageContent = (
-    <Group orientation="horizontal" className="h-full" defaultLayout={{ "stage-page": showStageSecondary ? 100 - companionSize : 100, "stage-companion": showStageSecondary ? companionSize : 0 }} onLayoutChange={handleStageLayoutChange}>
-      <Panel id="stage-page" minSize={320}>{pageContentInner}</Panel>
-      <Separator className={`${separatorClass} ${showStageSecondary ? "" : "invisible"}`} />
-      <Panel
-        id="stage-companion"
-        panelRef={stageCompanionPanelRef}
-        minSize={320}
-        maxSize="65%"
-        defaultSize={showStageSecondary ? companionSize : 0}
-        collapsible
-        collapsedSize={0}
-      >
-        {showCompanion ? <StageCompanion /> : showFilesPane ? <StageFilesPane /> : null}
-      </Panel>
-    </Group>
   );
 
   // ONE right rail, and it is only ever the session list. A conversation
@@ -1301,6 +1154,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <CliOfflineBanner />
         <TmuxMissingBanner />
         <NotificationNudgeBanner />
+        <DeviceSetupDialog />
       </ErrorBoundary>
 
       <ErrorBoundary name="TabBar" level="inline">
@@ -1504,8 +1358,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <FindBar />
       </ErrorBoundary>
       {switcherState.open && (
-        <SessionSwitcher
-          sessions={switcherState.mruSessions}
+        <RecentSwitcher
+          items={switcherState.items}
           selectedIndex={switcherState.selectedIndex}
         />
       )}

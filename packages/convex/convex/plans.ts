@@ -21,6 +21,7 @@ import {
   requireSameWorkspace,
   requireTeamMembership,
   requireWorkspaceMatch,
+  resolveSessionConversation,
   workspaceForConversation,
   workspaceForResource,
   workspacesMatch,
@@ -142,13 +143,13 @@ export const create = mutation({
     let created_from_conversation_id: Id<"conversations"> | undefined;
     let convTeamId: Id<"teams"> | undefined;
     if (args.conversation_id) {
-      const conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
-        .first();
-      if (!conv || !(await canAccessConversation(ctx, auth.userId, conv))) notFound("Conversation not found");
-      created_from_conversation_id = conv._id;
-      convTeamId = teamVisibleConvTeam(conv);
+      // Unresolvable session ref = create the plan without the link, never
+      // reject the create (see resolveSessionConversation).
+      const conv = await resolveSessionConversation(ctx, auth.userId, args.conversation_id);
+      if (conv) {
+        created_from_conversation_id = conv._id;
+        convTeamId = teamVisibleConvTeam(conv);
+      }
     }
 
     const db = await createDataContext(ctx, {
@@ -593,11 +594,11 @@ export const bindSession = mutation({
     if (!plan) throw new Error("Plan not found");
     if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
 
-    const conv = await ctx.db
-      .query("conversations")
-      .withIndex("by_session_id", (q) => q.eq("session_id", sessionId))
-      .first();
-    if (!conv || !(await canAccessConversation(ctx, auth.userId, conv))) {
+    // The link IS this mutation, so an unresolvable session still fails — but
+    // resolveSessionConversation lets a session whose stored uuid went stale
+    // (stranded stub, handover) resolve via its managed_sessions link.
+    const conv = await resolveSessionConversation(ctx, auth.userId, sessionId);
+    if (!conv) {
       notFound("Conversation not found");
     }
     requireWorkspaceMatch(
@@ -659,11 +660,11 @@ export const associatePlan = mutation({
     if (!plan) throw new Error("Plan not found");
     if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
 
-    const conv = await ctx.db
-      .query("conversations")
-      .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id))
-      .first();
-    if (!conv || !(await canAccessConversation(ctx, auth.userId, conv))) {
+    // The link IS this mutation, so an unresolvable session still fails — but
+    // resolveSessionConversation lets a session whose stored uuid went stale
+    // (stranded stub, handover) resolve via its managed_sessions link.
+    const conv = await resolveSessionConversation(ctx, auth.userId, args.conversation_id);
+    if (!conv) {
       notFound("Conversation not found");
     }
     requireWorkspaceMatch(

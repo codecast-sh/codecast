@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session, powerMonitor, desktopCapturer } = require("electron");
+const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session, powerMonitor, desktopCapturer, systemPreferences } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
@@ -45,7 +45,7 @@ const {
   startedApps,
   decideOffer,
 } = require("./meetingDetector");
-const { getOsNotificationState, notificationSettingsUrl } = require("./osNotificationState");
+const { createOsPermissions } = require("./osPermissions");
 
 let notificationRefs = [];
 
@@ -1492,7 +1492,7 @@ ipcMain.on("meeting-offer-size", (e, size) => {
   const win = meetingOfferWindow;
   if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
   const width = Math.max(60, Math.min(560, Math.round(Number(size?.width) || 360)));
-  const height = Math.max(40, Math.min(480, Math.round(Number(size?.height) || 64)));
+  const height = Math.max(26, Math.min(480, Math.round(Number(size?.height) || 64)));
   placeMeetingOfferWindow(width, height);
   if (!win.isVisible()) win.showInactive();
 });
@@ -1966,21 +1966,17 @@ ipcMain.handle("show-notification", (_e, payload) => {
   return { shown: true };
 });
 
-// OS-level notification consent (macOS). "granted" | "off" | "ask" | "unknown"
-// — see osNotificationState.js. Unpackaged dev runs register with the OS under
-// Electron's own bundle id, so query that one there.
-const notificationBundleId = () => (app.isPackaged ? "sh.codecast.desktop" : "com.github.Electron");
-ipcMain.handle("get-os-notification-state", () => getOsNotificationState(notificationBundleId()));
-// In the "ask" state macOS has never prompted: posting one real notification
-// is what raises the system Allow/Don't Allow dialog. Deliberately not gated
-// on app focus — the user just clicked "Enable".
-ipcMain.handle("request-os-notification-permission", () => {
-  showNativeNotification("Notifications are on", "Codecast will notify you when someone messages or a session needs you.");
+// OS-level permissions (notifications, microphone, camera, screen) read from
+// the OS itself — see osPermissions.js. Unpackaged dev runs register with
+// macOS under Electron's own bundle id, so query that one there.
+const osPermissions = createOsPermissions({
+  electron: { systemPreferences, desktopCapturer, shell },
+  bundleId: app.isPackaged ? "sh.codecast.desktop" : "com.github.Electron",
+  showNotification: (title, body) => showNativeNotification(title, body),
 });
-// In the "off" state only System Settings can flip it back.
-ipcMain.handle("open-notification-settings", () => {
-  shell.openExternal(notificationSettingsUrl(notificationBundleId()));
-});
+ipcMain.handle("get-os-permissions", () => osPermissions.getAll());
+ipcMain.handle("request-os-permission", (_e, kind) => osPermissions.request(String(kind)));
+ipcMain.handle("open-os-permission-settings", (_e, kind) => osPermissions.openSettings(String(kind)));
 
 // Sign-in hands its OAuth flow to the user's real browser (issue #20): the
 // embedded window has no Google/GitHub sessions. https-only — the renderer

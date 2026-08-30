@@ -32,6 +32,11 @@ export type ShortcutAction =
   | 'tab.close'
   | 'tab.next'
   | 'tab.prev'
+  | 'pane.split'
+  | 'pane.close'
+  | 'pane.expand'
+  | 'pane.next'
+  | 'pane.prev'
   | 'ui.zenToggle'
   | 'ui.toggleShortcutsHelp'
   | 'ui.openSettings'
@@ -141,7 +146,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+alt+n', action: 'session.create', skipInputCheck: true, description: 'New session (full page)' },
   { key: 'ctrl+shift+n', action: 'session.compose', skipInputCheck: true, description: 'Quick compose (palette)' },
   { key: 'ctrl+shift+e', action: 'session.rename', skipInputCheck: true, description: 'Rename session' },
-  { key: 'ctrl+tab', action: 'session.mruSwitch', skipInputCheck: true, description: 'Switch session (MRU)' },
+  { key: 'ctrl+tab', action: 'session.mruSwitch', skipInputCheck: true, description: 'Switch recently viewed (MRU)' },
 
   { key: 'ctrl+t', mac: 'meta+t', action: 'tab.new', skipInputCheck: true, description: 'New tab' },
   { key: 'ctrl+w', mac: 'meta+w', action: 'tab.close', skipInputCheck: true, description: 'Close tab' },

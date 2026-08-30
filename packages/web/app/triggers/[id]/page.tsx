@@ -216,10 +216,13 @@ export default function TriggerDetailPage() {
   }
 
   const t = trigger;
-  const canManage = t.is_own !== false;
+  // Verbs follow view access: whoever can see this page can manage the
+  // trigger (founder decision 2026-08-30). The "runs as X" chip stays as
+  // provenance for foreign triggers.
+  const isForeign = t.is_own === false;
   const isArmed = ARMED_STATUSES.has(t.status);
   const isTerminal = t.status === "completed" || t.status === "failed";
-  const isEditable = canManage && (t.status === "scheduled" || t.status === "paused");
+  const isEditable = t.status === "scheduled" || t.status === "paused";
   const msUntil = t.status === "scheduled" && t.run_at !== undefined ? t.run_at - now : undefined;
   const cycleProgress =
     t.schedule_type === "recurring" && t.interval_ms && msUntil !== undefined
@@ -298,8 +301,8 @@ export default function TriggerDetailPage() {
                       </span>
                     </ShortcutTooltip>
                   )}
-                  {!canManage && (
-                    <ShortcutTooltip label="This trigger runs under a different account — its verbs live with that owner">
+                  {isForeign && (
+                    <ShortcutTooltip label="This trigger runs under a different account; anyone who can see it can manage it">
                       <span className="inline-flex items-center gap-1 px-1.5 py-px rounded border border-sol-violet/40 bg-sol-violet/10 text-sol-violet">
                         <Bot className="w-3 h-3" />
                         runs as {t.owner_name || "another account"}
@@ -316,7 +319,7 @@ export default function TriggerDetailPage() {
             </div>
 
             {/* ── Verbs ── */}
-            {canManage && (isArmed || isTerminal) && (
+            {(isArmed || isTerminal) && (
               <div className="mt-4 flex items-center gap-1.5 flex-wrap">
                 {isArmed && (
                   <>
@@ -530,7 +533,7 @@ export default function TriggerDetailPage() {
                     <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
                       Briefing
                     </h2>
-                    {canManage && !brief && (
+                    {!brief && (
                       <button
                         disabled={summarizing}
                         onClick={() => {

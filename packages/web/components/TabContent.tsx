@@ -1,57 +1,25 @@
 import { isNonTabRoute } from "../lib/tabRoutes";
-import { lazyPage } from "../lib/tabLazyPages";
-import { Suspense, useEffect, useMemo } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
-import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
-import { TabParamsCtx } from "../lib/tabParams";
 import { isPrewarmTab, clearPrewarmTab } from "../lib/openIntent";
 import { tabSessionId } from "../lib/tabTitle";
 import { tabNeedsUrlRestore } from "../lib/pathLabel";
 import { useConversationMessages } from "../hooks/useConversationMessages";
+import { tabStageLayout } from "../lib/stage";
+import { RoutePane } from "./RoutePane";
+import { useNarrowStage } from "../hooks/useNarrowStage";
+import { StageDropLayer } from "./stage/StageDropLayer";
+
+// Only a tab that is actually split pays for the split renderer (and the
+// conversation pane it can host); a plain tab's import graph stays as it was.
+const StageSplitView = lazy(() => import("./stage/StageSplitView"));
 
 // -- Route map: path pattern → lazy component --
 //
-// The registry and the warm-up live in lib/tabLazyPages so this module stays a
-// Fast Refresh boundary.
-
-const Tasks = lazyPage("@/app/tasks/page", () => import("@/app/tasks/page"));
-const Docs = lazyPage("@/app/docs/page", () => import("@/app/docs/page"));
-const Capabilities = lazyPage("@/app/capabilities/page", () => import("@/app/capabilities/page"));
-const DocDetail = lazyPage("@/app/docs/[id]/page", () => import("@/app/docs/[id]/page"));
-const Plans = lazyPage("@/app/plans/page", () => import("@/app/plans/page"));
-const Calls = lazyPage("@/app/calls/page", () => import("@/app/calls/page"));
-const PlanDetail = lazyPage("@/app/plans/[id]/page", () => import("@/app/plans/[id]/page"));
-const Projects = lazyPage("@/app/projects/page", () => import("@/app/projects/page"));
-const ProjectDetail = lazyPage("@/app/projects/[id]/page", () => import("@/app/projects/[id]/page"));
-const Conversation = lazyPage("@/app/conversation/[id]/page", () => import("@/app/conversation/[id]/page"));
-const ConversationDiff = lazyPage("@/app/conversation/[id]/diff/page", () => import("@/app/conversation/[id]/diff/page"));
-const Inbox = lazyPage("@/app/inbox/page", () => import("@/app/inbox/page"));
-const Feed = lazyPage("@/app/feed/page", () => import("@/app/feed/page"));
-const Crosstalk = lazyPage("@/app/crosstalk/page", () => import("@/app/crosstalk/page"));
-const Timeline = lazyPage("@/app/timeline/page", () => import("@/app/timeline/page"));
-const Chat = lazyPage("@/app/chat/page", () => import("@/app/chat/page"));
-const Workflows = lazyPage("@/app/workflows/dashboard", () => import("@/app/workflows/dashboard"));
-const Routines = lazyPage("@/app/workflows/page", () => import("@/app/workflows/page"));
-// Triggers (renamed from "Schedules"; /schedules stays routable as an alias).
-const Triggers = lazyPage("@/app/triggers/page", () => import("@/app/triggers/page"));
-const TriggerDetail = lazyPage("@/app/triggers/[id]/page", () => import("@/app/triggers/[id]/page"));
-const Sessions = lazyPage("@/app/sessions/page", () => import("@/app/sessions/page"));
-const Anchor = lazyPage("@/app/anchor/page", () => import("@/app/anchor/page"));
-const Team = lazyPage("@/app/team/page", () => import("@/app/team/page"));
-const TeamActivity = lazyPage("@/app/team/activity/page", () => import("@/app/team/activity/page"));
-const TeamCharts = lazyPage("@/app/team/charts/page", () => import("@/app/team/charts/page"));
-const TeamMember = lazyPage("@/app/team/[username]/page", () => import("@/app/team/[username]/page"));
-const Search = lazyPage("@/app/search/page", () => import("@/app/search/page"));
-const Windows = lazyPage("@/app/windows/page", () => import("@/app/windows/page"));
-const ConfigPage = lazyPage("@/app/config/page", () => import("@/app/config/page"));
-const Vault = lazyPage("@/app/vault/page", () => import("@/app/vault/page"));
-const Artifacts = lazyPage("@/app/artifacts/page", () => import("@/app/artifacts/page"));
-const Notifications = lazyPage("@/app/notifications/page", () => import("@/app/notifications/page"));
-// The decision queue: one question at a time, full width.
-const Questions = lazyPage("@/app/questions/page", () => import("@/app/questions/page"));
-// The Threads inbox: every conversation the viewer is in, one page.
-const Threads = lazyPage("@/app/threads/page", () => import("@/app/threads/page"));
-const AdminDaemonLogs = lazyPage("@/app/admin/daemon-logs/page", () => import("@/app/admin/daemon-logs/page"));
+// The registry and the warm-up live in lib/tabLazyPages; matchRoute and the
+// pane renderer live in components/RoutePane (shared with the split stage).
+// This module keeps the tab lifecycle: which tabs mount, which is visible,
+// the one-shot entry-URL adoption.
 
 // The entry URL, adopted into the active tab ONCE PER DOCUMENT LOAD — not once
 // per TabContent mount. The component remounts when the layout around it
@@ -74,82 +42,6 @@ const navBoot: { url: string | null } = ((globalThis as any).__codecastTabNavBoo
 // tab remounts warm (hidden) instead of silently losing its pane.
 const mountedTabs: Set<string> = ((globalThis as any).__codecastMountedTabs ??= new Set());
 
-type RouteEntry = {
-  pattern: RegExp;
-  paramNames: string[];
-  component: React.LazyExoticComponent<any>;
-};
-
-const ROUTES: RouteEntry[] = [
-  // Parameterized routes first (more specific)
-  { pattern: /^\/conversation\/([^/]+)\/diff$/, paramNames: ["id"], component: ConversationDiff },
-  { pattern: /^\/conversation\/([^/]+)$/, paramNames: ["id"], component: Conversation },
-  // Same component as the list: /tasks and /tasks/<id> share one <Tasks> so
-  // selecting a task reconciles (instant) instead of swapping components (re-mount).
-  { pattern: /^\/tasks\/([^/]+)$/, paramNames: ["id"], component: Tasks },
-  // Same component for list and detail (the /tasks/<id> trick): selecting a
-  // call reconciles beside the list instead of remounting the page.
-  { pattern: /^\/calls\/([^/]+)$/, paramNames: ["id"], component: Calls },
-  { pattern: /^\/docs\/([^/]+)$/, paramNames: ["id"], component: DocDetail },
-  { pattern: /^\/plans\/([^/]+)$/, paramNames: ["id"], component: PlanDetail },
-  { pattern: /^\/triggers\/([^/]+)$/, paramNames: ["id"], component: TriggerDetail },
-  { pattern: /^\/schedules\/([^/]+)$/, paramNames: ["id"], component: TriggerDetail },
-  // A task opened from inside a project keeps the project mounted, same trick
-  // as /tasks/<id>: one component for both URLs, so selecting a task
-  // reconciles beside the project's list instead of navigating away from it.
-  { pattern: /^\/projects\/([^/]+)\/([^/]+)$/, paramNames: ["id", "taskId"], component: ProjectDetail },
-  { pattern: /^\/projects\/([^/]+)$/, paramNames: ["id"], component: ProjectDetail },
-  // Same component as the bare route, so opening a channel reconciles in place
-  // instead of remounting the whole surface and losing the scroll position.
-  { pattern: /^\/chat\/([^/]+)$/, paramNames: ["channelId"], component: Chat },
-  { pattern: /^\/team\/activity$/, paramNames: [], component: TeamActivity },
-  { pattern: /^\/team\/charts$/, paramNames: [], component: TeamCharts },
-  { pattern: /^\/team\/([^/]+)$/, paramNames: ["username"], component: TeamMember },
-  // Static routes
-  { pattern: /^\/tasks$/, paramNames: [], component: Tasks },
-  { pattern: /^\/docs$/, paramNames: [], component: Docs },
-  { pattern: /^\/capabilities$/, paramNames: [], component: Capabilities },
-  { pattern: /^\/plans$/, paramNames: [], component: Plans },
-  { pattern: /^\/calls$/, paramNames: [], component: Calls },
-  { pattern: /^\/projects$/, paramNames: [], component: Projects },
-  { pattern: /^\/inbox$/, paramNames: [], component: Inbox },
-  { pattern: /^\/feed$/, paramNames: [], component: Feed },
-  { pattern: /^\/crosstalk$/, paramNames: [], component: Crosstalk },
-  { pattern: /^\/timeline$/, paramNames: [], component: Timeline },
-  { pattern: /^\/chat$/, paramNames: [], component: Chat },
-  { pattern: /^\/workflows$/, paramNames: [], component: Workflows },
-  { pattern: /^\/routines$/, paramNames: [], component: Routines },
-  { pattern: /^\/triggers$/, paramNames: [], component: Triggers },
-  { pattern: /^\/schedules$/, paramNames: [], component: Triggers },
-  { pattern: /^\/sessions$/, paramNames: [], component: Sessions },
-  { pattern: /^\/anchor$/, paramNames: [], component: Anchor },
-  { pattern: /^\/team$/, paramNames: [], component: Team },
-  { pattern: /^\/search$/, paramNames: [], component: Search },
-  { pattern: /^\/files$/, paramNames: [], component: Vault },
-  { pattern: /^\/vault$/, paramNames: [], component: Vault }, // permanent pre-rename alias for /files
-  { pattern: /^\/pages$/, paramNames: [], component: Artifacts },
-  { pattern: /^\/artifacts$/, paramNames: [], component: Artifacts }, // pre-rename alias for /pages
-  { pattern: /^\/windows$/, paramNames: [], component: Windows },
-  { pattern: /^\/config$/, paramNames: [], component: ConfigPage },
-  { pattern: /^\/notifications$/, paramNames: [], component: Notifications },
-  { pattern: /^\/questions$/, paramNames: [], component: Questions },
-  { pattern: /^\/threads$/, paramNames: [], component: Threads },
-  { pattern: /^\/admin\/daemon-logs$/, paramNames: [], component: AdminDaemonLogs },
-];
-
-function matchRoute(path: string): { component: React.LazyExoticComponent<any>; params: Record<string, string> } | null {
-  const pathOnly = path.split("?")[0].split("#")[0];
-  for (const route of ROUTES) {
-    const match = pathOnly.match(route.pattern);
-    if (match) {
-      const params: Record<string, string> = {};
-      route.paramNames.forEach((name, i) => { params[name] = match[i + 1]; });
-      return { component: route.component, params };
-    }
-  }
-  return null;
-}
-
 // -- SessionPrewarm: warms a background session tab's messages --
 //
 // A background inbox pane cannot show its own `?s=` session — it paints the
@@ -167,18 +59,7 @@ function SessionPrewarm({ sessionId }: { sessionId: string }) {
 // -- TabPane: renders one tab's content with context --
 
 function TabPane({ tab, isActive, children }: { tab: AppTab; isActive: boolean; children?: React.ReactNode }) {
-  const matched = useMemo(() => matchRoute(tab.path), [tab.path]);
-  const ctxValue = useMemo(() => {
-    const [pathAndHash, queryString] = tab.path.split("?");
-    const pathname = pathAndHash.split("#")[0];
-    return {
-      tabId: tab.id,
-      pathname,
-      params: matched?.params ?? {},
-      searchParams: new URLSearchParams(queryString ?? ""),
-      isActive,
-    };
-  }, [tab.id, tab.path, matched, isActive]);
+  const pathname = tab.path.split("?")[0].split("#")[0];
 
   // Sync browser URL when this tab is active. tabNeedsUrlRestore stands down
   // when the live URL is this tab's own content in the other spelling — an
@@ -189,24 +70,16 @@ function TabPane({ tab, isActive, children }: { tab: AppTab; isActive: boolean; 
   // spelling), which collapsed browser back/forward across viewed sessions.
   useEffect(() => {
     if (!isActive) return;
-    if (window.location.pathname !== ctxValue.pathname) {
+    if (window.location.pathname !== pathname) {
       if (!tabNeedsUrlRestore(window.location.pathname, tab.path)) return;
       window.history.replaceState(null, "", tab.path);
     }
-  }, [isActive, tab.path, ctxValue.pathname]);
+  }, [isActive, tab.path, pathname]);
 
-  if (!matched) return null;
-  const Component = matched.component;
-
-  // Full-width pages own their scroll/padding; everything else gets the shared
-  // PageShell so it is padded and centered (the global "always pad views" rule).
-  const page = (
-    <TabParamsCtx.Provider value={ctxValue}>
-      <Suspense>
-        <Component />
-      </Suspense>
-    </TabParamsCtx.Provider>
-  );
+  // The stage: one route, or a split of them. A narrow screen renders the
+  // focused pane only — the layout survives untouched for a wider window.
+  const narrow = useNarrowStage();
+  const layout = narrow ? null : tabStageLayout(tab);
 
   return (
     <div
@@ -214,11 +87,15 @@ function TabPane({ tab, isActive, children }: { tab: AppTab; isActive: boolean; 
       className="h-full"
       style={{ display: isActive ? "block" : "none" }}
     >
-      {isFullWidthRoute(ctxValue.pathname) ? (
-        page
-      ) : (
-        <PageShell pathname={ctxValue.pathname}>{page}</PageShell>
-      )}
+      <StageDropLayer tab={tab} enabled={isActive && !narrow}>
+        {layout ? (
+          <Suspense fallback={null}>
+            <StageSplitView tab={tab} layout={layout} isTabActive={isActive} />
+          </Suspense>
+        ) : (
+          <RoutePane tabId={tab.id} path={tab.path} isActive={isActive} />
+        )}
+      </StageDropLayer>
       {children}
     </div>
   );

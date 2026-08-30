@@ -60,6 +60,7 @@ import { RESTART_GIVE_UP_AFTER_MS } from "../hooks/useSessionRestart";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { useAckAssignment } from "../hooks/useAckAssignment";
+import { sessionPanePath, startPaneDrag } from "../lib/stage";
 
 function formatIdleDuration(updatedAt: number): string {
   const diff = Date.now() - updatedAt;
@@ -2354,6 +2355,9 @@ export const SessionCard = memo(function SessionCard({
   const handleCardDragStart = useCallback((e: React.DragEvent) => {
     e.dataTransfer.setData("codecast/session-id", session._id);
     e.dataTransfer.effectAllowed = "move";
+    // The same drag is also a pane: dropped on the stage it splits in as this
+    // conversation (lib/stage). The label drop keeps reading its own type.
+    startPaneDrag(e, { path: sessionPanePath(session._id), title: displayTitle });
     const ghost = document.createElement("div");
     ghost.className = "flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-sol-bg text-sol-text border border-sol-cyan/60 shadow-xl";
     ghost.style.cssText = "position:fixed;top:-1000px;left:-1000px;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;z-index:9999";
@@ -3375,10 +3379,10 @@ function SessionListPanelImpl({
   // everywhere, OFF included). "Old" = a cached top-level session the live
   // (authoritative) subscription no longer returns; the completeness crawl
   // keeps it in the never-prune cache for search/open, so hiding it is a pure
-  // render decision, never a server re-fetch. Default hide, so the actionable
-  // inbox renders exactly the server's active set (store.liveInboxIds) —
-  // identical on every client — instead of each client's divergent,
-  // ever-growing local cache. liveInboxIds seeds from its persisted twin at
+  // render decision, never a server re-fetch. Shown by default (a new user
+  // sees their whole history); hiding narrows the inbox to exactly the
+  // server's active set (store.liveInboxIds) — identical on every client —
+  // instead of each client's divergent local cache. liveInboxIds seeds from its persisted twin at
   // hydration, so even the first cold frame filters correctly; an empty set
   // (fresh install) means "nothing old yet" and never blanks the list.
   // Optimistic stubs, pinned, the open session, and dismissed/stashed rows are
