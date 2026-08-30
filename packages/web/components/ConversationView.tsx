@@ -80,7 +80,7 @@ import { useConversationCommentsSync } from "../hooks/useConversationComments";
 import { parseTriggerCadence, fmtDuration, fmtClock } from "./triggerCadence";
 import { TriggerPromptView } from "./TriggerPromptView";
 import { CollapsibleBody, ExpandableLine } from "./CollapsibleBody";
-import { monitorRowsFor, effectiveMonitorStatus, isWatchHostDead, reportSaysDead, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, isOrphanSummaryNotification, monitorNotificationDescription, decodeEntities, type MonitorStatus } from "./monitorRows";
+import { monitorRowsFor, effectiveMonitorStatus, isWatchHostDead, reportSaysDead, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, isOrphanSummaryNotification, monitorNotificationDescription, parseNotificationSummary, decodeEntities, type MonitorStatus } from "./monitorRows";
 
 function messageLink(conversationId: string | undefined, messageId: string) {
   return `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;
@@ -6869,13 +6869,19 @@ function extractCompactionSummaryContent(content: string): string {
 // completion record, marked closed on the way in. Nothing is wrong and nothing
 // is owed, so it wears the same quiet grey as the "monitor ended" line, and the
 // unknown-status fallback lands there too rather than crying wolf.
-const taskStatusConfig: Record<string, { icon: string; color: string; bg: string }> = {
-  completed: { icon: '\u2713', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20' },
-  killed: { icon: '\u25A0', color: 'text-sol-orange', bg: 'bg-sol-orange/10 border-sol-orange/20' },
-  failed: { icon: '\u2717', color: 'text-sol-red', bg: 'bg-sol-red/10 border-sol-red/20' },
-  running: { icon: '\u25B6', color: 'text-sol-blue', bg: 'bg-sol-blue/10 border-sol-blue/20' },
-  stopped: { icon: '\u25A0', color: 'text-sol-text-dim', bg: 'bg-sol-bg-alt/30 border-sol-border/40' },
+const taskStatusConfig: Record<string, { icon: string; color: string; bg: string; eyebrow: string; chip: string }> = {
+  completed: { icon: '\u2713', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', eyebrow: 'text-emerald-400/70', chip: 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10' },
+  killed: { icon: '\u25A0', color: 'text-sol-orange', bg: 'bg-sol-orange/10 border-sol-orange/20', eyebrow: 'text-sol-orange/70', chip: 'border-sol-orange/40 text-sol-orange bg-sol-orange/10' },
+  failed: { icon: '\u2717', color: 'text-sol-red', bg: 'bg-sol-red/10 border-sol-red/20', eyebrow: 'text-sol-red/70', chip: 'border-sol-red/40 text-sol-red bg-sol-red/10' },
+  running: { icon: '\u25B6', color: 'text-sol-blue', bg: 'bg-sol-blue/10 border-sol-blue/20', eyebrow: 'text-sol-blue/70', chip: 'border-sol-blue/40 text-sol-blue bg-sol-blue/10' },
+  stopped: { icon: '\u25A0', color: 'text-sol-text-dim', bg: 'bg-sol-bg-alt/30 border-sol-border/40', eyebrow: 'text-sol-text-dim', chip: 'border-sol-border/60 text-sol-text-dim bg-sol-bg-alt/40' },
 };
+
+// The statuses whose notification the harness injects as a NEW user turn \u2014 the
+// message the reader is looking at is what pulled the agent back to work, and
+// the turn below it is the response. "stopped" is excluded: those notices are
+// resume-time bookkeeping riding a turn that was starting anyway.
+const WAKE_STATUSES = new Set(['completed', 'failed', 'killed']);
 
 function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { content: string; timestamp: number; agentNameToChildMap?: Record<string, string> }) {
   const parsed = parseTaskNotification(content);
@@ -6919,6 +6925,41 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
   const agentName = nameMatch?.[1];
   if (agentName && agentNameToChildMap?.[agentName]) {
     childId = agentNameToChildMap[agentName];
+  }
+
+  // The machine sentence split into visual parts (kind eyebrow, prominent
+  // description, status chip) \u2014 the unquoted prose notices (orphan cleanup)
+  // have no parts and keep the sentence. The wake cue marks the rows whose
+  // injection is what pulled the agent back to work.
+  const parts = parseNotificationSummary(parsed.summary);
+  const woke = WAKE_STATUSES.has(parsed.status);
+
+  if (parts) {
+    const chipText = `${parsed.status}${parts.exitCode ? ` \u00b7 exit ${parts.exitCode}` : ''}`;
+    return (
+      <div
+        className={`mb-2 px-3 py-2 flex items-start gap-2 text-xs border rounded ${cfg.bg}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
+        onClick={childId ? () => router.push(`/conversation/${childId}`) : undefined}
+      >
+        <span className={`font-mono text-sm leading-none shrink-0 mt-0.5 ${cfg.color}`}>{cfg.icon}</span>
+        <span className={`text-[10px] font-medium tracking-wide uppercase shrink-0 mt-px ${cfg.eyebrow}`}>{parts.kind}</span>
+        <ExpandableLine text={parts.description} className="text-sol-text font-medium" title={parsed.summary} />
+        <span className={`px-1 py-0 rounded border text-[9px] font-semibold shrink-0 mt-px ${cfg.chip}`}>{chipText}</span>
+        {childId && (
+          <svg className={`w-3 h-3 shrink-0 mt-0.5 ${cfg.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+        )}
+        {woke && (
+          <span className="flex items-center gap-1 text-[10px] text-sol-text-dim shrink-0 mt-px whitespace-nowrap" title="This notification woke the agent \u2014 the turn below is its response">
+            <Zap className="w-3 h-3" />
+            woke the agent
+          </span>
+        )}
+        <span className="text-sol-text-dim font-mono text-[10px] shrink-0">{parsed.taskId}</span>
+        <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      </div>
+    );
   }
 
   return (
