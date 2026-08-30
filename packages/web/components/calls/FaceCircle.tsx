@@ -2,6 +2,7 @@ import { useRef } from "react";
 import { Maximize2, Mic, MicOff, PhoneOff, User, Users, X } from "lucide-react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useFaceCrop } from "./useFaceCrop";
+import { useAvatarFaceCrop } from "./useAvatarFaceCrop";
 import { AvatarImg } from "../../lib/avatarCache";
 import { firstName } from "./speakers";
 import type { FacePerson, FacesMode } from "../../lib/calls/faceCrop";
@@ -117,6 +118,8 @@ export function FaceCircle({
   // writes `data-tracking` on the circle — "face" while the detector is holding
   // one, "center" otherwise — so the picture says which of the two it is.
   useFaceCrop({ hostRef, videoRef, active: !!track && shown, diameter, mirror: !!tile?.isLocal });
+  // Camera off: the same centring, once, on the picture that stands in.
+  useAvatarFaceCrop({ hostRef, src: person.image, active: !track && shown, diameter });
 
   return (
     // The slot is the circle's square and nothing more, so a row of them still
