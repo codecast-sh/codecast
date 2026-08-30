@@ -3469,6 +3469,107 @@ http.route({
   }),
 });
 
+// `cast trigger update` — edit a trigger in place; every effective edit is
+// recorded in agent_task_revisions (version history + audit log).
+http.route({
+  path: "/cli/tasks/update",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    try {
+      const body = await request.json();
+      const result = await ctx.runMutation(api.agentTasks.updateTask, {
+        api_token: body.api_token,
+        task_id: body.task_id,
+        title: body.title,
+        prompt: body.prompt,
+        schedule_type: body.schedule_type,
+        run_at: body.run_at,
+        interval_ms: body.interval_ms,
+        event_filter: body.event_filter,
+        mode: body.mode,
+        agent_type: body.agent_type,
+        project_path: body.project_path,
+        max_runtime_ms: body.max_runtime_ms,
+      });
+      return new Response(JSON.stringify({ success: result.ok, changed: result.changed }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ error: msg }), {
+        status: msg.includes("Unauthorized") ? 401 : 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/update",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+// `cast trigger history` — the trigger's edit log with actor names resolved.
+http.route({
+  path: "/cli/tasks/history",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    try {
+      const body = await request.json();
+      const result = await ctx.runQuery(api.agentTasks.listRevisions, {
+        api_token: body.api_token,
+        task_id: body.task_id,
+      });
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ error: msg }), {
+        status: msg.includes("Unauthorized") ? 401 : 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/history",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
 // --- Task Layer Routes ---
 
 // ── Slack webhook (Anchor inbound) ───────────────────────────────────────────
@@ -3980,8 +4081,10 @@ cliRoute("/cli/docs/get", async (ctx, body) => {
 });
 cliRoute("/cli/docs/update", async (ctx, body) => {
   const result = await ctx.runMutation(api.docs.update, body);
-  if (body.content !== undefined) {
-    await ctx.runMutation(api.docs.resetSync, { api_token: body.api_token, id: body.id, content: body.content });
+  // The mutation returns the content it stored whenever the text changed — a
+  // title edit rewrites the heading line, so it resets the editor snapshot too.
+  if (result.content !== undefined) {
+    await ctx.runMutation(api.docs.resetSync, { api_token: body.api_token, id: body.id, content: result.content });
   }
   return result;
 });
