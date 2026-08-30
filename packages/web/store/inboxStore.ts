@@ -48,7 +48,7 @@ import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, isLivenessStale, modelOptionKey } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, isLivenessStale, modelOptionKey, formatDecisionAnswer } from "@codecast/shared/contracts";
 import { liftQuestions, type QuestionResolutions } from "../lib/decisionQueue";
 import type { OpenTaskReport } from "@codecast/shared/contracts";
 import { isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
@@ -6051,8 +6051,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // reusing the standard optimistic-bubble + outbox send pair (the mobile
     // AUQ answer path does the identical two-step). Deferred to after this
     // draft commits because both are themselves decorated store functions.
-    const label = answer.index !== undefined ? row.options[answer.index]?.label : undefined;
-    const content = answer.text ?? (label ? `Decision: ${label}` : undefined);
+    const answerText = answer.text ?? (answer.index !== undefined ? row.options[answer.index]?.label : undefined);
+    // Wire format (shared contracts): "Decision: <answer>" plus a tag naming
+    // the decision and its question, so the bubble can render the answer
+    // against its ask and link back to the `cast decide` call.
+    const content = answerText ? formatDecisionAnswer({ id: decisionId, question: row.question, answer: answerText }) : undefined;
     const convId = row.conversation_id;
     if (content) {
       queueMicrotask(() => {
