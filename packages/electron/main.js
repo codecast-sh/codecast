@@ -1492,7 +1492,7 @@ ipcMain.on("meeting-offer-size", (e, size) => {
   const win = meetingOfferWindow;
   if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
   const width = Math.max(60, Math.min(560, Math.round(Number(size?.width) || 360)));
-  const height = Math.max(40, Math.min(480, Math.round(Number(size?.height) || 64)));
+  const height = Math.max(26, Math.min(480, Math.round(Number(size?.height) || 64)));
   placeMeetingOfferWindow(width, height);
   if (!win.isVisible()) win.showInactive();
 });

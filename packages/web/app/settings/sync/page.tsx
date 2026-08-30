@@ -3,7 +3,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
 import { Switch } from "../../../components/ui/switch";
-import { useRef, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   GitBranch, Folder, FolderGit2, Search, Eye, EyeOff, ChevronDown, AlertTriangle, RefreshCw, Terminal,
@@ -353,22 +353,19 @@ export default function SyncPage() {
             {editMode ? "Done" : "+ Add path"}
           </Button>
         }
-        padded
       >
-        <div className="mb-4 flex gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-sol-text-dim" />
-            <Input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search projects..."
-              className="bg-sol-bg border-sol-border pl-9 text-sol-text"
-            />
-          </div>
+        <div className="flex items-center gap-2.5 px-4 py-2.5 sm:px-5">
+          <Search className="h-4 w-4 flex-shrink-0 text-sol-text-dim" />
+          <input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search projects..."
+            className="w-full bg-transparent text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none"
+          />
         </div>
 
         {editMode && (
-          <div className="mb-4 flex gap-2 rounded-lg bg-sol-bg-highlight/30 p-3">
+          <div className="flex items-center gap-2 px-4 py-2.5 sm:px-5">
             <Input
               type="text"
               value={newProject}
@@ -384,31 +381,28 @@ export default function SyncPage() {
         )}
 
         {projectGroups.length > 0 ? (
-          <div className="space-y-4">
+          <>
             {projectGroups.map((group) => (
-              <div key={group.key}>
+              <Fragment key={group.key}>
                 {projectGroups.length > 1 && (
-                  <div className="mb-1.5 flex items-baseline gap-1.5 px-1">
+                  <div className="flex items-baseline gap-1.5 bg-sol-bg-alt/50 px-4 py-1.5 sm:px-5">
                     <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
                       {group.label}
                     </span>
                     <span className="text-[10px] text-sol-text-dim/70">{group.items.length}</span>
                   </div>
                 )}
-                <div className="space-y-1.5">
-                  {group.items.map((project) => {
-                    const synced = isSynced(project.path);
-                    const teamResult = getTeamForProject(project.path);
+                {group.items.map((project) => {
+                  const synced = isSynced(project.path);
+                  const teamResult = getTeamForProject(project.path);
 
-                    return (
-                      <div
-                        key={project.path}
-                        className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5 transition-colors ${
-                          synced
-                            ? "border-sol-border/50 bg-sol-bg/40 hover:border-sol-border"
-                            : "border-sol-border/30 bg-sol-bg/20 opacity-60"
-                        }`}
-                      >
+                  return (
+                    <div
+                      key={project.path}
+                      className={`flex items-center justify-between gap-3 px-4 py-2.5 transition-colors sm:px-5 ${
+                        synced ? "hover:bg-sol-bg-highlight/30" : "opacity-60"
+                      }`}
+                    >
                         <div className="flex min-w-0 flex-1 items-center gap-3">
                           {project.is_git_repo ? (
                             <GitBranch className={`h-4 w-4 flex-shrink-0 ${synced ? "text-sol-cyan" : "text-sol-text-dim"}`} />
@@ -509,12 +503,11 @@ export default function SyncPage() {
                       </div>
                     );
                   })}
-                </div>
-              </div>
+              </Fragment>
             ))}
-          </div>
+          </>
         ) : (
-          <div className="py-8 text-center text-sm text-sol-text-muted">
+          <div className="px-4 py-8 text-center text-sm text-sol-text-muted">
             {searchQuery ? (
               <p>No projects matching &ldquo;{searchQuery}&rdquo;</p>
             ) : (
@@ -565,9 +558,8 @@ export default function SyncPage() {
         title="CLI"
         icon={Terminal}
         description="Manage sync settings from the command line. Changes sync to your daemon on the next cycle."
-        padded
       >
-        <div className="space-y-1 rounded-lg border border-sol-border/60 bg-sol-bg p-3 font-mono text-sm">
+        <div className="space-y-1 px-4 py-3 font-mono text-sm sm:px-5">
           <p><span className="text-sol-cyan">cast sync-settings</span> <span className="text-sol-text-muted">- Interactive project selection</span></p>
           {hasTeams && (
             <>
@@ -592,7 +584,7 @@ export default function SyncPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 py-2">
-            <div className="truncate rounded-md border border-sol-border/60 bg-sol-bg-alt px-3 py-2 font-mono text-xs text-sol-text-muted">
+            <div className="truncate rounded-md bg-sol-bg-alt px-3 py-2 font-mono text-xs text-sol-text-muted">
               {pendingUnsync?.path}
             </div>
           </div>

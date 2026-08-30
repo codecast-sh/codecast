@@ -7880,7 +7880,16 @@ async function enrichInboxSessionRow(
 
   let implementationSession: { _id: string; title?: string } | undefined;
   const subagentChildren: any[] = [];
-  if (!skip?.children && conv.message_count > 0) {
+  // Parked (dismissed/stashed) rows skip the children scan entirely: every
+  // caller discards their subagent children (a parked parent's children never
+  // render), and the "producing child keeps parent working" refinement is
+  // deliberately never applied to parked rows — same rule as
+  // enrichLivenessFields, whose overlay value wins on the web client anyway.
+  // This scan was one indexed query per shown row, and parked rows are the
+  // bulk of a heavy account's window (483 of 547 on the census that hit
+  // "too many system operations"). Their implementation-session pointer is
+  // re-resolved from the candidate pool by computeInboxSessions.
+  if (!skip?.children && !dismissed && !stashed && conv.message_count > 0) {
     // Newest-first: a workflow orchestrator can have dozens of finished
     // children (jx70xxy stood at 72 across four runs); ascending order fills
     // the cap with the oldest wave and never reaches the agents running NOW,
@@ -8486,6 +8495,18 @@ export async function computeInboxSessions(
 
   let hiddenCount = 0;
   const results: any[] = [];
+  // Parked rows skip the per-row children scan (see enrichInboxSessionRow), so
+  // their implementation-session pointer resolves from the candidate pool
+  // instead — a recently active plan-handoff child is already in the recent
+  // window, zero extra reads. Newest child wins, matching the scan's order.
+  const implHandoffByParent = new Map<string, any>();
+  for (const c of conversations) {
+    if (c.parent_conversation_id && c.parent_message_uuid === "plan-handoff" && !c.is_subagent) {
+      const pid = c.parent_conversation_id.toString();
+      const prev = implHandoffByParent.get(pid);
+      if (!prev || (c.started_at ?? 0) > (prev.started_at ?? 0)) implHandoffByParent.set(pid, c);
+    }
+  }
   // User docs for run-by / owner display, cached across rows (both are sparse:
   // only second-party-owned sessions ever hit this).
   const userDocCache = new Map<string, any>();
@@ -8510,6 +8531,10 @@ export async function computeInboxSessions(
     // with explicit ids still lists it as needs input.
     const cutoff = deliberateIds.has(conv._id.toString()) ? 0 : clusterCutoff;
     const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, cutoff, enrichSkip);
+    if ((dismissed || stashed) && !row.implementation_session) {
+      const impl = implHandoffByParent.get(conv._id.toString());
+      if (impl) row.implementation_session = { _id: impl._id.toString(), title: impl.title };
+    }
     if (conv.user_id.toString() !== userId.toString()) {
       const author = await getUserDoc(conv.user_id);
       row.author_name = author?.name ?? author?.email ?? null;

@@ -223,7 +223,7 @@ function MeetingDetectSection() {
               {neverApps.map((a) => (
                 <span
                   key={a.id}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-sol-border bg-sol-bg-alt px-2 py-1 text-xs text-sol-text"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-sol-bg-alt px-2 py-1 text-xs text-sol-text"
                 >
                   {a.name}
                   <button

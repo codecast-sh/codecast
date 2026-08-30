@@ -149,6 +149,7 @@ import {
 } from "./vault/vaultCli.js";
 import { buildMatcher, contextWindow, matchingLines, resolveLineRange } from "./textView.js";
 import { resolveOwnTarget } from "./ownTarget.js";
+import { resolveCurrentConversationId } from "./linkResolve.js";
 
 const program = new Command();
 const isStableContextFastPath =
@@ -4097,7 +4098,7 @@ function resolveOwnerTarget(
   if (!r.ok) {
     console.error(
       `No session detected, so "${r.member}" has no session to apply to — ` +
-      `pass one explicitly: cast ${cmd} jx7c6zk ${r.member}`
+      `pass one explicitly (e.g. cast ${cmd} jx7c6zk ${r.member})`
     );
     process.exit(1);
   }
@@ -4995,13 +4996,7 @@ program
       });
 
       try {
-        let conversationCache: Record<string, string> = {};
-        try {
-          const cacheFile = path.join(os.homedir(), ".codecast", "conversations.json");
-          if (fs.existsSync(cacheFile)) {
-            conversationCache = JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as Record<string, string>;
-          }
-        } catch { /* fall through with empty cache */ }
+        const conversationCache = readLocalConversationMap();
 
         const result = await performReconciliation(
           syncService,
@@ -7650,6 +7645,21 @@ function claudeSessionPath(sessionId: string, projectPath?: string | null): stri
   return path.join(projectDir, `${sessionId}.jsonl`);
 }
 
+// The daemon's local sessionId -> conversationId map. It answers "which
+// conversation is this session" without the server, which matters in a
+// session's first seconds: the server-side session_id binding rides the
+// daemon's retry queue, so a just-started or just-resumed session misses on
+// the server while this file already has the answer.
+function readLocalConversationMap(): Record<string, string> {
+  try {
+    const cacheFile = path.join(os.homedir(), ".codecast", "conversations.json");
+    if (!fs.existsSync(cacheFile)) return {};
+    return JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
 // Pre-register a fresh sessionId -> conversationId mapping in the daemon's
 // cache *before* the daemon discovers the JSONL. Without this, the daemon
 // treats the reconstituted JSONL as a brand-new session and creates a
@@ -7661,11 +7671,7 @@ function linkSessionToConversation(sessionId: string, conversationId: string): v
   try {
     const cacheDir = path.join(os.homedir(), ".codecast");
     const cacheFile = path.join(cacheDir, "conversations.json");
-    let cache: Record<string, string> = {};
-    if (fs.existsSync(cacheFile)) {
-      try { cache = JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as Record<string, string>; }
-      catch { cache = {}; }
-    }
+    const cache = readLocalConversationMap();
     if (cache[sessionId] === conversationId) return;
     cache[sessionId] = conversationId;
     if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
@@ -8063,18 +8069,23 @@ program
     //
     // detectCurrentSessionId returns the LOCAL agent session id, which the read
     // path below cannot resolve (its resolver deliberately takes only short and
-    // full conversation ids). /cli/session-links is the existing mapping from
-    // one to the other — the same endpoint `cast links` uses, so an unsynced
-    // session gets synced here exactly as it does there.
+    // full conversation ids). The daemon's local map is checked first: it is
+    // written at session discovery, while the server-side session_id binding
+    // rides the retry queue — so a just-started or just-resumed session can
+    // miss on the server for its first minute. The short retry rides out the
+    // daemon discovering a brand-new JSONL.
     if (ref === undefined) {
       const current = detectCurrentSessionId();
       if (!current) {
-        console.error("No session detected — pass one explicitly: cast link jx7c6zk");
+        console.error("No session detected — run this inside an agent session, or pass a session id (from `cast sessions`).");
         process.exit(1);
       }
-      const resolved = await resolveSessionConversationId(config, current);
+      const resolved = await resolveCurrentConversationId(current, {
+        readLocalMap: readLocalConversationMap,
+        resolveOnServer: (id) => resolveSessionConversationId(config, id),
+      });
       if (!resolved) {
-        console.error("Could not resolve the current session — pass one explicitly: cast link jx7c6zk");
+        console.error("Could not resolve the current session — a session that just started may not have synced yet. Retry in a few seconds, or pass a session id (from `cast sessions`).");
         process.exit(1);
       }
       ref = resolved;
