@@ -1234,6 +1234,9 @@ export type ClientDismissed = {
   team_sharing_prompt?: number;
   // Blocked-sessions banner X (timestamp snooze, cross-device).
   blocked_sessions_banner?: number;
+  // "Turn on desktop notifications" nudge X (timestamp snooze; a missed
+  // message overrides it — lib/notificationNudge.ts).
+  notif_nudge?: number;
   // "Set up account switching" promo inside that banner — permanent opt-out.
   cc_accounts_promo?: boolean;
   // "New agent features" upsell — one stamp per snippet slug the user enabled
