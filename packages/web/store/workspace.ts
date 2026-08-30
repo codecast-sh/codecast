@@ -317,6 +317,50 @@ export function companionId(ws: WorkspaceState): string | null {
   return p && p.kind === "conversation" ? p.ref : null;
 }
 
+/**
+ * Does the companion slot name a conversation the store actually HOLDS? The
+ * slot ref alone is not enough to open the panel: rows vanish (killed, pruned
+ * at boot, dropped from the live window) while slot state and tab-stamped
+ * workspace snapshots keep pointing at them. A panel expanded for a ref that
+ * renders nothing is the "empty column" bug, so absence gates the panel shut.
+ */
+export function companionRenderable(ws: WorkspaceState, hasSession: (id: string) => boolean): boolean {
+  const id = companionId(ws);
+  return !!id && hasSession(id);
+}
+
+/**
+ * The working-surface mirror rule as one pure decision: what should happen to
+ * the companion slot given where the stage is and which session is attended.
+ *
+ *  - On a working surface the attended conversation rides along as the
+ *    companion — but only when its row EXISTS. Opening a pane for a pointer
+ *    the store cannot resolve shows nothing, so a dead attended id opens
+ *    nothing, and a companion whose own row vanished is closed (bookkeeping,
+ *    not a dismissal).
+ *  - Anywhere else a split companion is closed the same way. An overlay is
+ *    the fleet board's drill-in, owned by the board — never cleared here.
+ */
+export type CompanionMirrorStep = { op: "show"; pane: Pane } | { op: "hide" } | { op: "none" };
+
+export function companionMirrorStep(
+  ws: WorkspaceState,
+  attended: string | null,
+  onWorkingSurface: boolean,
+  hasSession: (id: string) => boolean,
+): CompanionMirrorStep {
+  const companion = companionId(ws);
+  if (onWorkingSurface) {
+    const pane =
+      attended && hasSession(attended) ? ({ kind: "conversation", ref: attended } as const) : null;
+    if (pane && companion !== attended && autoAllowed(ws, "secondary", pane)) return { op: "show", pane };
+    if (companion && !hasSession(companion)) return { op: "hide" };
+    return { op: "none" };
+  }
+  if (companion && ws.secondary.presentation !== "overlay") return { op: "hide" };
+  return { op: "none" };
+}
+
 /** The conversation drilled in as an overlay (the fleet board's dialog), if
     any. Distinct from a split companion: an overlay is what the user is
     LOOKING AT, so per-session chords and menus target it. */
