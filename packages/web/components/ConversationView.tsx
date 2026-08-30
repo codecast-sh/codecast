@@ -12294,7 +12294,21 @@ function settleTimelineItemAtOffset(
   virtualizer: { scrollToIndex: (index: number, opts: { align: "start" }) => void },
   itemIndex: number,
   offsetPx: number,
-  opts?: { initialDelayMs?: number; watchMs?: number; onSettled?: () => void },
+  opts?: {
+    initialDelayMs?: number;
+    watchMs?: number;
+    onSettled?: () => void;
+    // Identity of the target row (its data-vkey — the stable message key).
+    // The index is a snapshot of ONE timeline: a same-session jump starts on
+    // the tail timeline, then the target-mode window replaces it and every
+    // index shifts, so an index-only settle pins whatever row inherited the
+    // number (measured: every decision-card jump landed the same six rows
+    // late). The key survives the swap; resolveIndex re-derives the index on
+    // the CURRENT timeline for the scrollToIndex that brings the row into
+    // the render window.
+    itemKey?: string;
+    resolveIndex?: () => number;
+  },
 ) {
   cancelActiveItemSettle?.();
   let cancelled = false;
@@ -12308,7 +12322,23 @@ function settleTimelineItemAtOffset(
   container.addEventListener("wheel", cancel, { passive: true });
   container.addEventListener("touchstart", cancel, { passive: true });
 
-  virtualizer.scrollToIndex(itemIndex, { align: "start" });
+  const currentIndex = () => {
+    const i = opts?.resolveIndex ? opts.resolveIndex() : itemIndex;
+    return i >= 0 ? i : itemIndex;
+  };
+  const findEl = (idx: number) => {
+    if (opts?.itemKey) {
+      // With an identity, the index lookup is only a fallback — an index hit
+      // that isn't the keyed row is exactly the wrong-row pin this guards
+      // against, so verify before trusting it.
+      const byKey = container.querySelector(`[data-vkey="${CSS.escape(opts.itemKey)}"]`);
+      if (byKey) return byKey;
+      const byIndex = container.querySelector(`[data-index="${idx}"]`);
+      return byIndex?.getAttribute("data-vkey") === opts.itemKey ? byIndex : null;
+    }
+    return container.querySelector(`[data-index="${idx}"]`);
+  };
+  virtualizer.scrollToIndex(currentIndex(), { align: "start" });
   const scrollElToOffset = (el: Element) => {
     const elRect = el.getBoundingClientRect();
     const containerRect = container.getBoundingClientRect();
@@ -12316,23 +12346,30 @@ function settleTimelineItemAtOffset(
     container.scrollTop += (elRect.top - containerRect.top) / cssZoomOf(container) - offsetPx;
   };
   const watchMs = opts?.watchMs ?? 2500;
+  const start = performance.now();
   let findAttempts = 0;
+  let settledFired = false;
   const attempt = () => {
     if (cancelled) return;
     findAttempts++;
-    const el = container.querySelector(`[data-index="${itemIndex}"]`);
+    const idx = currentIndex();
+    const el = findEl(idx);
     if (el) {
       scrollElToOffset(el);
       // Pin the DOM node, not the index: rows are keyed by stable message key,
       // so the node survives re-renders, while data-index shifts whenever the
       // loaded window grows (target mode pages in above the anchor).
       let settleCount = 0;
-      let settledFired = false;
-      const start = performance.now();
       const settle = () => {
         if (cancelled) return;
         settleCount++;
-        if (!el.isConnected) { cancel(); return; }
+        if (!el.isConnected) {
+          // The row unmounted (a window swap re-rendered the list). The jump
+          // isn't done — re-find the row by identity while time remains.
+          if (performance.now() - start < watchMs && findAttempts < 20) setTimeout(attempt, 100);
+          else cancel();
+          return;
+        }
         const rect = el.getBoundingClientRect();
         const containerRect = container.getBoundingClientRect();
         const off = (rect.top - containerRect.top) / cssZoomOf(container) - offsetPx;
@@ -12346,7 +12383,7 @@ function settleTimelineItemAtOffset(
       };
       requestAnimationFrame(settle);
     } else if (findAttempts < 20) {
-      virtualizer.scrollToIndex(itemIndex, { align: "start" });
+      virtualizer.scrollToIndex(idx, { align: "start" });
       requestAnimationFrame(() => setTimeout(attempt, 100));
     } else {
       cancel();
@@ -13457,7 +13494,7 @@ const ConversationViewInner = (
         toast.error(err instanceof Error ? err.message : "Failed to send Escape");
       },
     );
-  }, [conversation, effectiveIsOwner, convCommand, convexConvId]);
+  }, [conversation, effectiveIsOwner, convCommand, convexConvId, liveAgentStatus]);
 
   const handleMessageSent = useCallback(() => {
     setUserScrolled(false);
@@ -15234,7 +15271,16 @@ const ConversationViewInner = (
       const container = containerRef.current;
       if (!container) return;
 
+      const targetItem = timeline[itemIndex];
       settleTimelineItemAtOffset(container, virtualizer, itemIndex, 50, {
+        // A same-session jump starts on the tail timeline and the target-mode
+        // window then replaces it — identity + re-resolution keep the settle
+        // on the target row across that swap.
+        itemKey: targetItem?.type === "message" ? messageRowKey(targetItem.data as Message) : undefined,
+        resolveIndex: () =>
+          timelineRef.current.findIndex(
+            (item: any) => item.type === "message" && item.data._id === targetMessageId,
+          ),
         onSettled: () => {
           setHighlightedMessageId(targetMessageId);
           setTimeout(() => setHighlightedMessageId(null), 3000);
