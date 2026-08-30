@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { BellOff, BellRing, X } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useMountEffect } from "../hooks/useMountEffect";
-import { useNotificationReadiness } from "../hooks/useNotificationReadiness";
-import { enableOsNotifications, isElectron } from "../lib/desktop";
+import { useOsPermission } from "../hooks/useOsPermissions";
+import { isElectron } from "../lib/desktop";
+import { permissionActionLabel, permissionHint, requestOsPermission } from "../lib/osPermissions";
 import {
   decideNotificationNudge,
   getLastNotificationMiss,
@@ -19,11 +20,11 @@ export function NotificationNudgeBanner() {
   const updateDismissed = useInboxStore((s) => s.updateClientDismissed);
   const [mounted, setMounted] = useState(false);
   const [miss, setMiss] = useState<NotificationMiss | null>(null);
-  // After "Enable": the OS is showing its own prompt somewhere else on screen —
+  // After "Turn on": the OS is showing its own prompt somewhere else on screen —
   // point at it, because the banner's button appearing to do nothing reads as
   // broken.
   const [awaitingPrompt, setAwaitingPrompt] = useState(false);
-  const { readiness, refresh } = useNotificationReadiness();
+  const { readiness, refresh } = useOsPermission("notifications");
 
   useMountEffect(() => {
     setMounted(true);
@@ -41,7 +42,7 @@ export function NotificationNudgeBanner() {
   if (!verdict.show) return null;
 
   const escalated = verdict.escalated;
-  const desktop = isElectron();
+  const action = permissionActionLabel(readiness);
 
   const message = escalated
     ? verdict.miss.fromPerson
@@ -50,9 +51,9 @@ export function NotificationNudgeBanner() {
     : "Desktop notifications are off — messages from your team arrive silently.";
 
   const handleEnable = async () => {
-    const result = await enableOsNotifications(readiness);
+    const result = await requestOsPermission("notifications", readiness);
     if (result === "requested" && readiness === "ask") setAwaitingPrompt(true);
-    // "granted" / "opened-settings": the refresh (and the hook's refocus +
+    // "granted" / "opened-settings": the refresh (and the store's refocus +
     // poll) pulls the banner down as soon as consent actually lands.
     refresh();
   };
@@ -72,22 +73,20 @@ export function NotificationNudgeBanner() {
             {message}{" "}
             {awaitingPrompt ? (
               <span className="text-sol-text-muted">
-                {desktop ? "Answer the macOS Allow prompt to finish." : "Answer the browser's permission prompt to finish."}
+                {isElectron() ? "Answer the macOS Allow prompt to finish." : "Answer the browser's permission prompt to finish."}
               </span>
-            ) : readiness === "off" && !desktop ? (
-              <span className="text-sol-text-muted">
-                They&rsquo;re blocked for this site — allow notifications from the icon next to the address bar.
-              </span>
+            ) : !action ? (
+              <span className="text-sol-text-muted">{permissionHint("notifications", readiness)}</span>
             ) : null}
           </span>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          {!awaitingPrompt && (readiness === "ask" || (readiness === "off" && desktop)) && (
+          {action && !awaitingPrompt && (
             <button
               onClick={handleEnable}
               className="px-2.5 py-1 text-xs font-medium rounded-md bg-sol-blue text-sol-bg hover:opacity-90 transition-opacity"
             >
-              {readiness === "off" ? "Open System Settings" : "Turn on notifications"}
+              {readiness === "off" ? action : "Turn on notifications"}
             </button>
           )}
           <button

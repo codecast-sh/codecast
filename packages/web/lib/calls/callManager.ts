@@ -29,6 +29,8 @@ import { startScribe, stopScribe } from "./transcription";
 import { micConstraints, readJoinPrefs, rememberCamera, rememberDevice } from "./joinPrefs";
 import { bindPrewarmAudio, bindPrewarmConvex, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
 import { CALL_HEARTBEAT_MS, humanizeConvexError } from "@codecast/shared/contracts";
+import { isElectron } from "../desktop";
+import { peekOsPermissions, permissionHint, refreshOsPermissions } from "../osPermissions";
 import {
   soundCallJoin,
   soundCallLeave,
@@ -380,7 +382,7 @@ export async function openMicForJoin(
     setCall({
       muted: true,
       micDenied: true,
-      ...(listen ? {} : { error: await mediaFailureReason("microphone", err) }),
+      ...(listen ? {} : { error: await mediaFailureReason("microphone", err), errorFix: "microphone" as const }),
     });
   }
 }
@@ -441,7 +443,7 @@ export async function joinCall(roomKey: string, opts?: JoinOpts): Promise<void> 
   setCall({
     phase: "connecting",
     roomKey,
-    error: null,
+    error: null, errorFix: null,
     micDenied: false,
     speaking: [],
     camera: false,
@@ -704,7 +706,7 @@ async function yieldRoomToOtherWindow(): Promise<void> {
     speaking: [],
     camera: false,
     sharing: false,
-    error: null,
+    error: null, errorFix: null,
     muted: true,
   });
 }
@@ -727,7 +729,7 @@ export async function leaveCall(): Promise<void> {
     speaking: [],
     camera: false,
     sharing: false,
-    error: null,
+    error: null, errorFix: null,
     muted: true,
     micDenied: false,
   });
@@ -780,7 +782,7 @@ export async function setMuted(muted: boolean): Promise<void> {
       // room it is already sitting in (applyDeliberateJoin), so a person who
       // steps into a burst with the microphone refused still gets the call —
       // subscribe-only, and told so.
-      setCall({ muted: true, micDenied: true, error: await mediaFailureReason("microphone", err) });
+      setCall({ muted: true, micDenied: true, error: await mediaFailureReason("microphone", err), errorFix: "microphone" });
       return;
     }
     // Only UNMUTING can clear it. Muting a seat that has no microphone
@@ -792,19 +794,19 @@ export async function setMuted(muted: boolean): Promise<void> {
 }
 
 // Why did capture fail? livekit resolves null (no throw) when getUserMedia
-// yields nothing, and the Permissions API tells the two cases apart: a
-// blocked site setting versus a machine with no such device. The message is
-// the fix, phrased for the person holding the mouse.
+// yields nothing, and the OS permission state tells the cases apart: a
+// denial (System Settings on the desktop, a site setting in a browser)
+// versus a machine with no such device. The message is the fix, phrased for
+// the person holding the mouse; the notice that shows it carries the fix
+// button (`call.errorFix`).
 export async function mediaFailureReason(kind: "camera" | "microphone", err?: any): Promise<string> {
   const label = kind === "camera" ? "Camera" : "Microphone";
   if (err?.name === "NotFoundError" || err?.name === "OverconstrainedError") {
     return `No ${kind} found`;
   }
-  try {
-    const state = (await navigator.permissions.query({ name: kind as PermissionName })).state;
-    if (state === "denied") return `${label} blocked — allow it in the site settings (the icon left of the address bar), then try again`;
-    if (state === "prompt") return `${label} permission needed — click the ${kind} icon in the address bar to allow`;
-  } catch {}
+  await refreshOsPermissions().catch(() => {});
+  const hint = permissionHint(kind, peekOsPermissions()[kind]);
+  if (hint) return hint;
   return err?.name === "NotAllowedError" ? `${label} permission denied` : `${label} unavailable`;
 }
 
@@ -825,9 +827,9 @@ export async function setCamera(on: boolean): Promise<void> {
       // sit lit over a black tile.
       const live = on ? !!pub?.track && !pub.isMuted : false;
       setCall({ camera: live });
-      if (on && !live) setCall({ error: await mediaFailureReason("camera") });
+      if (on && !live) setCall({ error: await mediaFailureReason("camera"), errorFix: "camera" });
     } catch (err: any) {
-      setCall({ camera: false, error: await mediaFailureReason("camera", err) });
+      setCall({ camera: false, error: await mediaFailureReason("camera", err), errorFix: "camera" });
       return;
     }
     rebuildTiles();
@@ -839,6 +841,17 @@ export async function setCamera(on: boolean): Promise<void> {
 // (window.__CODECAST_ELECTRON__.getDisplaySources); the shell honors it for
 // the very next getDisplayMedia. Browsers ignore it and show their own picker.
 export async function setScreenShare(on: boolean, sourceId?: string): Promise<void> {
+  // On the desktop a denied Screen Recording permission makes the capture
+  // resolve to a black frame rather than fail, so it is checked up front:
+  // the notice names the fix instead of publishing nothing.
+  if (on && isElectron()) {
+    await refreshOsPermissions().catch(() => {});
+    const screen = peekOsPermissions().screen;
+    if (screen === "off") {
+      setCall({ sharing: false, error: permissionHint("screen", screen), errorFix: "screen" });
+      return;
+    }
+  }
   setCall({ sharing: on });
   if (room) {
     try {
@@ -856,7 +869,7 @@ export async function setScreenShare(on: boolean, sourceId?: string): Promise<vo
       // NotAllowedError when the display-media handler yields no source.
       setCall({ sharing: false });
       if (err?.name === "NotAllowedError" && !/cancel|abort/i.test(String(err?.message))) {
-        setCall({ error: "Screen sharing not permitted" });
+        setCall({ error: "Screen sharing not permitted", errorFix: "screen" });
       }
       return;
     }
@@ -939,7 +952,7 @@ export async function startHuddle(opts: {
   anchorTitle?: string;
 }): Promise<void> {
   if (!convex) return;
-  setCall({ phase: "ringing_out" as const, roomKey: opts.roomKey, error: null, muted: false });
+  setCall({ phase: "ringing_out" as const, roomKey: opts.roomKey, error: null, errorFix: null, muted: false });
   try {
     await joinCall(opts.roomKey, { intent: "deliberate" });
     if (useInboxStore.getState().call.phase !== "connected") return;
@@ -1009,7 +1022,7 @@ export async function acceptInvite(inviteId: string, roomKey: string): Promise<v
   const switching =
     prior.roomKey !== roomKey &&
     (prior.phase === "connected" || prior.phase === "connecting");
-  setCall({ phase: "connecting", roomKey, error: null, speaking: [] });
+  setCall({ phase: "connecting", roomKey, error: null, errorFix: null, speaking: [] });
   try {
     const res = await convex.mutation(api.calls.respondInvite, {
       invite_id: inviteId,

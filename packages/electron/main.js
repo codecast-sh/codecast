@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session, powerMonitor, desktopCapturer } = require("electron");
+const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session, powerMonitor, desktopCapturer, systemPreferences } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
@@ -45,7 +45,7 @@ const {
   startedApps,
   decideOffer,
 } = require("./meetingDetector");
-const { getOsNotificationState, notificationSettingsUrl } = require("./osNotificationState");
+const { createOsPermissions } = require("./osPermissions");
 
 let notificationRefs = [];
 
@@ -711,7 +711,6 @@ let callWindowEnded = false;
 // Which of the three sizes the window is in. Remembered per machine, so the
 // next popout comes back the shape the person left it.
 let callWindowSize = "panel";
-let callDragTimer = null;
 // The app is going away. Every window gets `close` during a quit, including
 // this one, and a handback then would raise the main window on the way out and
 // ask it to join a room the process is about to stop existing for.
@@ -830,6 +829,9 @@ function applyCallWindowSize(win, size) {
   // left a circle and could never learn that it came back.
   win.setIgnoreMouseEvents(chrome.clickThrough, { forward: true });
   if (!chrome.clickThrough) stopCallWindowDrag();
+  // The idle faces overlay yields to the call's circles and returns when the
+  // call grows back to the stage — the two share one spot on screen.
+  syncFacesOverlayYield();
 }
 
 function defaultPanelBounds() {
@@ -958,6 +960,8 @@ function createCallWindow(roomKey, opts) {
       callWindowState = null;
       callWindowEnded = false;
     }
+    // The call is gone; the idle faces overlay it displaced comes back.
+    syncFacesOverlayYield();
     broadcastWindowRole();
   });
   broadcastWindowRole();
@@ -996,10 +1000,100 @@ function senderIsCallWindow(e) {
   return win && !win.isDestroyed() && win === callWindow ? win : null;
 }
 
-function stopCallWindowDrag() {
-  if (callDragTimer) clearInterval(callDragTimer);
-  callDragTimer = null;
+// ── The see-through switches, shared by the floating circle windows ────────
+//
+// Two windows draw circles over the person's work: the minimized call and the
+// idle faces overlay. Both need the same three runtime switches — lift
+// click-through while the pointer is over a circle, stay the size of their
+// circles, follow a held cursor — and the switches must behave identically or
+// the two surfaces drift into windows that feel different for no reason. Each
+// window registers its own channels; the logic is this one implementation.
+function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
+  const mayInteract = opts.mayInteract || (() => true);
+  const mayResize = opts.mayResize || (() => true);
+  const getWindow = opts.getWindow;
+  let dragTimer = null;
+  const stopDrag = () => {
+    if (dragTimer) clearInterval(dragTimer);
+    dragTimer = null;
+  };
+
+  // Click-through, lifted while the renderer says the pointer is over a
+  // circle. Only the click-through states have anything to lift: the call
+  // stage takes every click by construction, and letting a renderer turn that
+  // off would make the panel unclickable with no way back.
+  ipcMain.on(`set-${prefix}-interactive`, (e, on) => {
+    const win = resolveSender(e);
+    if (!win || !mayInteract()) return;
+    win.setIgnoreMouseEvents(on !== true, { forward: true });
+  });
+
+  // The circles are sized to their contents: the renderer measures them and
+  // says how big the window has to be.
+  ipcMain.on(`set-${prefix}-content-size`, (e, size) => {
+    const win = resolveSender(e);
+    if (!win || !mayResize()) return;
+    if (!size || typeof size !== "object") return;
+    const width = Math.round(Number(size.width));
+    const height = Math.round(Number(size.height));
+    if (!(width > 0) || !(height > 0) || width > 4000 || height > 4000) return;
+    // The renderer measures in CSS pixels and the window is sized in device-
+    // independent ones, and the two come apart the moment somebody zooms the
+    // page: at 1.5x a 112px row of circles needs a 168px window, and a window
+    // sized to 112 would clip its own faces.
+    const zoom = win.webContents.getZoomFactor();
+    const [w, h] = [Math.round(width * zoom), Math.round(height * zoom)];
+    const [curW, curH] = win.getContentSize();
+    if (curW === w && curH === h) return;
+    // A non-resizable window refuses setContentSize; lift the flag for the
+    // call and put it straight back, so the person still cannot drag an edge.
+    win.setResizable(true);
+    win.setContentSize(w, h);
+    win.setResizable(false);
+  });
+
+  // Held on a circle, the window follows the cursor. Not a
+  // `-webkit-app-region: drag` region: over one of those the window manager
+  // takes the mouse events, so the renderer would never learn the pointer had
+  // left and the window would stay stuck taking clicks that belong to the
+  // application underneath.
+  ipcMain.on(`set-${prefix}-dragging`, (e, on) => {
+    const win = resolveSender(e);
+    if (!win) return;
+    stopDrag();
+    if (!on || !mayInteract()) return;
+    const cursor = screen.getCursorScreenPoint();
+    const [x, y] = win.getPosition();
+    const offset = { x: x - cursor.x, y: y - cursor.y };
+    // The shell follows the cursor rather than the renderer sending a message
+    // per mouse move: one timer instead of a hundred IPC hops a second, and it
+    // keeps moving smoothly even while the renderer is busy drawing video.
+    // The renderer ends the drag on pointer up. A renderer that died mid-drag
+    // never will, and a window silently following the cursor around the screen
+    // has no way out short of closing it — so the drag also expires on its
+    // own. Nobody holds a window for half a minute.
+    const until = Date.now() + 30_000;
+    dragTimer = setInterval(() => {
+      const live = getWindow ? getWindow() : win;
+      if (!live || live.isDestroyed() || live !== win || Date.now() > until) return stopDrag();
+      const p = screen.getCursorScreenPoint();
+      live.setPosition(p.x + offset.x, p.y + offset.y);
+    }, 16);
+  });
+
+  return { stopDrag };
 }
+
+const { stopDrag: stopCallWindowDrag } = registerSeeThroughIpc("call-window", senderIsCallWindow, {
+  // Only the click-through sizes have anything to lift or drag; the stage
+  // drags by its own header row and takes every click by construction.
+  mayInteract: () => callWindowChrome(callWindowSize).clickThrough,
+  // Resizing is refused in the panel size, where the person's own bounds are
+  // the answer and a renderer resizing the window under them would be the
+  // window fighting the hand on its edge.
+  mayResize: () => callWindowSize !== "panel",
+  getWindow: () => callWindow,
+});
 
 ipcMain.handle("open-call-panel", (_e, roomKey, opts) => {
   createCallWindow(roomKey, opts && typeof opts === "object" ? opts : {});
@@ -1043,66 +1137,164 @@ ipcMain.handle("set-call-window-size", (e, size) => {
 
 ipcMain.handle("get-call-window-size", (e) => (senderIsCallWindow(e) ? callWindowSize : null));
 
-// The circles are sized to their contents: the renderer measures them and says
-// how big the window has to be. Refused in the panel size, where the person's
-// own bounds are the answer and a renderer resizing the window under them would
-// be the window fighting the hand on its edge.
-ipcMain.on("set-call-window-content-size", (e, size) => {
-  const win = senderIsCallWindow(e);
-  if (!win || callWindowSize === "panel") return;
-  if (!size || typeof size !== "object") return;
-  const width = Math.round(Number(size.width));
-  const height = Math.round(Number(size.height));
-  if (!(width > 0) || !(height > 0) || width > 4000 || height > 4000) return;
-  // The renderer measures in CSS pixels and the window is sized in device-
-  // independent ones, and the two come apart the moment somebody zooms the
-  // page: at 1.5x a 112px row of circles needs a 168px window, and a window
-  // sized to 112 would clip its own faces.
-  const zoom = win.webContents.getZoomFactor();
-  const [w, h] = [Math.round(width * zoom), Math.round(height * zoom)];
-  const [curW, curH] = win.getContentSize();
-  if (curW === w && curH === h) return;
-  // A non-resizable window refuses setContentSize; lift the flag for the call
-  // and put it straight back, so the person still cannot drag an edge.
-  win.setResizable(true);
-  win.setContentSize(w, h);
-  win.setResizable(false);
+// ---------------------------------------------------------------------------
+// The faces overlay: the team as circles floating over the work (route
+// /faces), when there is no call. Born see-through, frameless, always on top
+// and click-through, exactly like the call window's circle sizes — the same
+// spot on screen doing the same job, with photos where the call puts video.
+//
+// ONE FLOATING THING AT ONE SPOT. The overlay shares the call circles' saved
+// position (callPanelWindow.circles): dragging either one moves where both
+// live, so a call starting reads as the photos turning into video rather than
+// a second thing appearing. And while the call window is in a circle size the
+// overlay YIELDS — hidden, not closed — and returns when the call ends or
+// grows back to the stage.
+//
+// Open state persists: an overlay somebody keeps over their work comes back on
+// the next launch. Hiding for a call never touches that flag.
+// ---------------------------------------------------------------------------
+
+const FACES_PATH = "/faces";
+// What the overlay is born as; the renderer reports the true size a frame
+// later, same as the call circles. This only keeps the first frame from being
+// a full-screen sheet of invisible glass.
+const FACES_SEED_SIZE = { width: 112, height: 112 };
+
+let facesWindow = null;
+let facesPlaceTimer = null;
+
+function facesOverlayWanted() {
+  const saved = loadFullSettings().facesWindow;
+  return !!saved && typeof saved === "object" && saved.open === true;
+}
+
+function setFacesOverlayWanted(open) {
+  const saved = loadFullSettings().facesWindow;
+  updateSettings({
+    facesWindow: { ...(saved && typeof saved === "object" ? saved : {}), open: open === true },
+  });
+}
+
+// While the call is minimized to circles the overlay stands down — two rows of
+// floating circles at once is the collision the shared spot exists to avoid.
+// The call window in the STAGE is an ordinary window somewhere else on screen,
+// so the overlay stays.
+function callCirclesShowing() {
+  return !!callWindow && !callWindow.isDestroyed() && callWindowChrome(callWindowSize).clickThrough;
+}
+
+function syncFacesOverlayYield() {
+  if (!facesWindow || facesWindow.isDestroyed()) return;
+  if (callCirclesShowing()) {
+    if (facesWindow.isVisible()) facesWindow.hide();
+  } else if (!facesWindow.isVisible()) {
+    // showInactive, always: the overlay is a glance you keep beside your work,
+    // and one that stole the keyboard when a call ended would be worse than
+    // none at all.
+    facesWindow.showInactive();
+  }
+}
+
+function createFacesWindow() {
+  if (facesWindow && !facesWindow.isDestroyed()) {
+    syncFacesOverlayYield();
+    return facesWindow;
+  }
+  const zoom = getAutoZoomFactor();
+  const win = new BrowserWindow({
+    ...FACES_SEED_SIZE,
+    // Born see-through, same reason as the call window: `transparent` and
+    // `frame` are construction options, and everything this window ever shows
+    // is circles on glass.
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    hasShadow: false,
+    resizable: false,
+    // No taskbar entry: it has no title bar to recover it from, and closing it
+    // is the entry button's job, not the window manager's.
+    skipTaskbar: true,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      zoomFactor: zoom,
+      additionalArguments: [`--zoom-factor=${zoom}`, "--faces-window"],
+      // Presence must keep moving while the overlay sits unfocused over other
+      // apps — which is the only way it is ever used.
+      backgroundThrottling: false,
+      // Same flag as the call window, for the same reason: the overlay centres
+      // photo circles on faces with the Shape Detection API where available.
+      enableBlinkFeatures: "FaceDetector",
+    },
+    icon: path.join(__dirname, "assets", "icon.png"),
+    show: false,
+  });
+  facesWindow = win;
+  const pos = circlesPosition(FACES_SEED_SIZE);
+  win.setPosition(pos.x, pos.y);
+  win.setAlwaysOnTop(true, "floating");
+  // Follow the person between desktops and stay visible over a full-screen
+  // app — where a glance at the team is most needed and least reachable.
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  // `forward: true` keeps the renderer receiving mouse MOVES while it ignores
+  // clicks — without it the window would go deaf the moment the pointer left a
+  // circle and could never learn that it came back.
+  win.setIgnoreMouseEvents(true, { forward: true });
+  win.loadURL(`${currentBaseUrl}${FACES_PATH}`);
+  win.once("ready-to-show", () => {
+    if (win.isDestroyed()) return;
+    syncFacesOverlayYield();
+  });
+  win.webContents.on("did-finish-load", () => {
+    if (win.isDestroyed()) return;
+    win.webContents.setZoomFactor(getAutoZoomFactor());
+    win.webContents.executeJavaScript(
+      "document.documentElement.classList.add('electron-desktop')"
+    );
+  });
+  // Same rule as every window: new-window links open in the default browser.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+  // Its moves write the SHARED circles slot, debounced like every saver here.
+  win.on("move", () => {
+    clearTimeout(facesPlaceTimer);
+    facesPlaceTimer = setTimeout(() => {
+      if (win.isDestroyed() || win.isMinimized()) return;
+      const [x, y] = win.getPosition();
+      updateSettings({ callPanelWindow: { ...loadCallPanelState(), circles: { x, y } } });
+    }, 400);
+  });
+  win.on("closed", () => {
+    clearTimeout(facesPlaceTimer);
+    if (facesWindow === win) facesWindow = null;
+  });
+  return win;
+}
+
+function senderIsFacesWindow(e) {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  return win && !win.isDestroyed() && win === facesWindow ? win : null;
+}
+
+registerSeeThroughIpc("faces-window", senderIsFacesWindow, { getWindow: () => facesWindow });
+
+// Opening is a declaration — "keep the team over my work" — so it persists;
+// closing is its withdrawal. Any app window may ask: the entry button lives in
+// the people window, and the overlay's own chrome is what closes it.
+ipcMain.handle("open-faces-window", () => {
+  setFacesOverlayWanted(true);
+  createFacesWindow();
 });
 
-ipcMain.on("set-call-window-interactive", (e, on) => {
-  const win = senderIsCallWindow(e);
-  if (!win) return;
-  // Only the click-through sizes have anything to lift: the stage takes every
-  // click by construction, and letting a renderer turn that off would make the
-  // panel unclickable with no way back.
-  if (!callWindowChrome(callWindowSize).clickThrough) return;
-  win.setIgnoreMouseEvents(on !== true, { forward: true });
+ipcMain.handle("close-faces-window", () => {
+  setFacesOverlayWanted(false);
+  if (facesWindow && !facesWindow.isDestroyed()) facesWindow.close();
 });
 
-ipcMain.on("set-call-window-dragging", (e, on) => {
-  const win = senderIsCallWindow(e);
-  if (!win) return;
-  stopCallWindowDrag();
-  // The stage drags by its header row (a `-webkit-app-region: drag` region),
-  // which the window manager handles without the shell in the loop.
-  if (!on || !callWindowChrome(callWindowSize).clickThrough) return;
-  const cursor = screen.getCursorScreenPoint();
-  const [x, y] = win.getPosition();
-  const offset = { x: x - cursor.x, y: y - cursor.y };
-  // The shell follows the cursor rather than the renderer sending a message per
-  // mouse move: one timer instead of a hundred IPC hops a second, and it keeps
-  // moving smoothly even while the renderer is busy drawing video.
-  // The renderer ends the drag on pointer up. A renderer that died mid-drag
-  // never will, and a window silently following the cursor around the screen
-  // for the rest of the call has no way out short of hanging up — so the drag
-  // also expires on its own. Nobody holds a window for half a minute.
-  const until = Date.now() + 30_000;
-  callDragTimer = setInterval(() => {
-    if (!callWindow || callWindow.isDestroyed() || Date.now() > until) return stopCallWindowDrag();
-    const p = screen.getCursorScreenPoint();
-    callWindow.setPosition(p.x + offset.x, p.y + offset.y);
-  }, 16);
-});
+ipcMain.handle("get-faces-window-open", () => !!facesWindow && !facesWindow.isDestroyed());
 
 // ---------------------------------------------------------------------------
 // Multi-window notification routing. Every window runs the same web app and
@@ -1492,7 +1684,7 @@ ipcMain.on("meeting-offer-size", (e, size) => {
   const win = meetingOfferWindow;
   if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
   const width = Math.max(60, Math.min(560, Math.round(Number(size?.width) || 360)));
-  const height = Math.max(40, Math.min(480, Math.round(Number(size?.height) || 64)));
+  const height = Math.max(26, Math.min(480, Math.round(Number(size?.height) || 64)));
   placeMeetingOfferWindow(width, height);
   if (!win.isVisible()) win.showInactive();
 });
@@ -1576,6 +1768,10 @@ function toggleEnvironment() {
   // old origin would have it watching a different world than the main window.
   if (peopleWindow && !peopleWindow.isDestroyed()) {
     peopleWindow.loadURL(`${currentBaseUrl}${PEOPLE_PATH}`);
+  }
+  // Same rule for the faces overlay.
+  if (facesWindow && !facesWindow.isDestroyed()) {
+    facesWindow.loadURL(`${currentBaseUrl}${FACES_PATH}`);
   }
 }
 
@@ -1966,21 +2162,17 @@ ipcMain.handle("show-notification", (_e, payload) => {
   return { shown: true };
 });
 
-// OS-level notification consent (macOS). "granted" | "off" | "ask" | "unknown"
-// — see osNotificationState.js. Unpackaged dev runs register with the OS under
-// Electron's own bundle id, so query that one there.
-const notificationBundleId = () => (app.isPackaged ? "sh.codecast.desktop" : "com.github.Electron");
-ipcMain.handle("get-os-notification-state", () => getOsNotificationState(notificationBundleId()));
-// In the "ask" state macOS has never prompted: posting one real notification
-// is what raises the system Allow/Don't Allow dialog. Deliberately not gated
-// on app focus — the user just clicked "Enable".
-ipcMain.handle("request-os-notification-permission", () => {
-  showNativeNotification("Notifications are on", "Codecast will notify you when someone messages or a session needs you.");
+// OS-level permissions (notifications, microphone, camera, screen) read from
+// the OS itself — see osPermissions.js. Unpackaged dev runs register with
+// macOS under Electron's own bundle id, so query that one there.
+const osPermissions = createOsPermissions({
+  electron: { systemPreferences, desktopCapturer, shell },
+  bundleId: app.isPackaged ? "sh.codecast.desktop" : "com.github.Electron",
+  showNotification: (title, body) => showNativeNotification(title, body),
 });
-// In the "off" state only System Settings can flip it back.
-ipcMain.handle("open-notification-settings", () => {
-  shell.openExternal(notificationSettingsUrl(notificationBundleId()));
-});
+ipcMain.handle("get-os-permissions", () => osPermissions.getAll());
+ipcMain.handle("request-os-permission", (_e, kind) => osPermissions.request(String(kind)));
+ipcMain.handle("open-os-permission-settings", (_e, kind) => osPermissions.openSettings(String(kind)));
 
 // Sign-in hands its OAuth flow to the user's real browser (issue #20): the
 // embedded window has no Google/GitHub sessions. https-only — the renderer
@@ -2330,6 +2522,8 @@ app.whenReady().then(() => {
   createTray();
   buildAppMenu();
   createPaletteWindow();
+  // An overlay somebody kept over their work comes back where they left it.
+  if (facesOverlayWanted()) createFacesWindow();
   if (app.dock) {
     app.dock.setMenu(Menu.buildFromTemplate([
       { label: "New Session", click: () => openFullSessionInMain() },

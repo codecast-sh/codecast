@@ -7,7 +7,7 @@
 // exists to prevent, and the moment it happens is the moment the case for
 // enabling is strongest.
 
-import type { NotificationReadiness } from "./desktop";
+import type { PermissionReadiness } from "./osPermissions";
 
 export const NUDGE_SNOOZE_MS = 3 * 24 * 60 * 60 * 1000;
 
@@ -27,13 +27,13 @@ export type NudgeVerdict =
   | { show: true; escalated: true; miss: NotificationMiss };
 
 export function decideNotificationNudge(args: {
-  readiness: NotificationReadiness;
+  readiness: PermissionReadiness;
   snoozedAt: number; // 0 = never dismissed
   miss: NotificationMiss | null;
   now: number;
 }): NudgeVerdict {
   const { readiness, snoozedAt, miss, now } = args;
-  if (readiness === "granted" || readiness === "unknown") return { show: false };
+  if (readiness !== "ask" && readiness !== "off") return { show: false };
   // A miss AFTER the last dismiss re-surfaces the banner no matter how fresh
   // the snooze is; dismissing again waits for the next miss (or expiry).
   if (miss && miss.at > snoozedAt) return { show: true, escalated: true, miss };

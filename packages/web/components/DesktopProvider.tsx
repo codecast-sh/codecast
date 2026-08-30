@@ -32,7 +32,7 @@ import { installMeetingOfferListener } from "../lib/calls/meetingOffers";
 import { cleanNotificationBody } from "../lib/notificationText";
 import { notificationRoute } from "../lib/notificationTypes";
 import { recordNotificationMiss } from "../lib/notificationNudge";
-import { useNotificationReadiness } from "../hooks/useNotificationReadiness";
+import { useOsPermission } from "../hooks/useOsPermissions";
 import { soundChatMessage } from "../lib/sounds";
 import { useInboxStore } from "../store/inboxStore";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
@@ -101,7 +101,7 @@ export function DesktopProvider() {
   // Whether the OS can actually put a banner on screen (System Settings /
   // browser site permission). Read through a ref inside the notification loop
   // — the loop keys on arrivals, not on readiness changes.
-  const { readiness } = useNotificationReadiness();
+  const { readiness } = useOsPermission("notifications");
   const readinessRef = useRef(readiness);
   readinessRef.current = readiness;
 

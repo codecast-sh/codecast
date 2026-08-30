@@ -9,44 +9,15 @@ import {
   Bell, BellOff, Users, MessageSquare, Laptop, CheckCircle, Terminal, Mail,
 } from "lucide-react";
 import { SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
-import { useNotificationReadiness } from "../../../hooks/useNotificationReadiness";
-import { enableOsNotifications, isElectron } from "../../../lib/desktop";
+import { useOsPermission } from "../../../hooks/useOsPermissions";
+import { PermissionRow } from "../../../components/permissions/PermissionRow";
 
 /* This device's OS-level permission (System Settings / browser site
  * permission) — a separate axis from the in-app prefs below: with it off,
  * every banner silently vanishes no matter what the switches say. */
 function DevicePermissionRow() {
-  const { readiness, refresh } = useNotificationReadiness();
-  if (readiness === "unknown") return null;
-  const granted = readiness === "granted";
-  const desktop = isElectron();
-  const description = granted
-    ? "This device can show notification banners."
-    : readiness === "off" && !desktop
-      ? "Blocked for this site — allow notifications from the icon next to the address bar."
-      : readiness === "off"
-        ? "Turned off in System Settings — Codecast banners are silently discarded."
-        : "Not yet allowed on this device — messages arrive with no banner.";
-  return (
-    <SettingsRow
-      icon={granted ? CheckCircle : BellOff}
-      label="This device"
-      description={description}
-    >
-      {granted ? (
-        <span className="text-xs text-sol-green">On</span>
-      ) : readiness === "off" && !desktop ? (
-        <span className="text-xs text-sol-orange">Blocked</span>
-      ) : (
-        <button
-          onClick={() => enableOsNotifications(readiness).then(refresh)}
-          className="px-2.5 py-1 text-xs font-medium rounded-md bg-sol-blue text-sol-bg hover:opacity-90 transition-opacity"
-        >
-          {readiness === "off" ? "Open System Settings" : "Turn on"}
-        </button>
-      )}
-    </SettingsRow>
-  );
+  const { readiness, refresh } = useOsPermission("notifications");
+  return <PermissionRow kind="notifications" readiness={readiness} onChange={refresh} />;
 }
 
 type NotifType = "team_session_start" | "mention" | "permission_request" | "session_idle" | "session_error" | "task_activity" | "doc_activity" | "plan_activity" | "artifact_activity" | "chat_activity" | "email_notifications";

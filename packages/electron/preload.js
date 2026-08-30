@@ -84,13 +84,14 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   // Resolves { shown } — false when main dropped it (duplicate from another
   // window, or an app window is focused), so only the announcing window sounds.
   showNotification: (title, body, data) => ipcRenderer.invoke("show-notification", { title, body, data }),
-  // OS-level notification consent: are Codecast's banners actually allowed in
-  // System Settings? ("granted" | "off" | "ask" | "unknown"). The request
-  // variant posts a real notification, which on macOS raises the system
-  // Allow/Don't Allow prompt when the app was never registered.
-  getOsNotificationState: () => ipcRenderer.invoke("get-os-notification-state"),
-  requestOsNotificationPermission: () => ipcRenderer.invoke("request-os-notification-permission"),
-  openNotificationSettings: () => ipcRenderer.invoke("open-notification-settings"),
+  // OS-level permissions, read from the OS itself (osPermissions.js):
+  // { notifications, microphone, camera, screen } each "granted" | "ask" |
+  // "off" | "unknown". `request` performs the one gesture that makes the OS
+  // ask (a notification post, askForMediaAccess, a capture attempt);
+  // `openSettings` lands on the kind's System Settings pane.
+  getOsPermissions: () => ipcRenderer.invoke("get-os-permissions"),
+  requestOsPermission: (kind) => ipcRenderer.invoke("request-os-permission", kind),
+  openOsPermissionSettings: (kind) => ipcRenderer.invoke("open-os-permission-settings", kind),
   // Multi-window notification routing: each renderer tells main what it shows
   // ({ active, open: [{id,path}], inCall }); main answers with this window's
   // role ({ leader, appFocused, anyInCall }) whenever it changes.
@@ -191,6 +192,19 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   setCallWindowInteractive: (on) => ipcRenderer.send("set-call-window-interactive", on === true),
   setCallWindowContentSize: (size) => ipcRenderer.send("set-call-window-content-size", size),
   setCallWindowDragging: (on) => ipcRenderer.send("set-call-window-dragging", on === true),
+  // The faces overlay: the team as circles floating over the work (route
+  // /faces) when there is no call. Born see-through like the call window's
+  // circle sizes, sharing their saved spot — it yields while a call is
+  // minimized to circles and returns when the call ends. Its open state
+  // persists across launches; the three see-through setters are the same
+  // switches the call circles use, addressed to this window.
+  isFacesWindow: process.argv.includes("--faces-window"),
+  openFacesWindow: () => ipcRenderer.invoke("open-faces-window"),
+  closeFacesWindow: () => ipcRenderer.invoke("close-faces-window"),
+  getFacesWindowOpen: () => ipcRenderer.invoke("get-faces-window-open"),
+  setFacesWindowInteractive: (on) => ipcRenderer.send("set-faces-window-interactive", on === true),
+  setFacesWindowContentSize: (size) => ipcRenderer.send("set-faces-window-content-size", size),
+  setFacesWindowDragging: (on) => ipcRenderer.send("set-faces-window-dragging", on === true),
   // Meeting detection: the shell polls the names of running programs (and
   // nothing else) while the setting is on, and offers to record when a meeting
   // app starts. The ANSWER lives here in the web layer — main never starts a

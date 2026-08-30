@@ -31,6 +31,7 @@ import { NewSnippetsBanner } from "./NewSnippetsBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { NotificationNudgeBanner } from "./NotificationNudgeBanner";
+import { DeviceSetupDialog } from "./permissions/DeviceSetupDialog";
 import { ConnectionBanner } from "./ConnectionBanner";
 import { StorageHealthBanner } from "./StorageHealthBanner";
 import { DaemonStatusChip } from "./DaemonStatusChip";
@@ -1301,6 +1302,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <CliOfflineBanner />
         <TmuxMissingBanner />
         <NotificationNudgeBanner />
+        <DeviceSetupDialog />
       </ErrorBoundary>
 
       <ErrorBoundary name="TabBar" level="inline">
