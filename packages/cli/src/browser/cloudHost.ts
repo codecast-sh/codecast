@@ -33,6 +33,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { agentSpawnPath } from "../agentSpawnPath.js";
 import type { RemoteHost } from "../remote/session-move.js";
 
 export type HostState = "running" | "stopped" | "pending" | "missing";
@@ -77,30 +78,60 @@ export function upsertHost(host: CloudHost): void {
   writeHosts(hosts);
 }
 
-function aws(args: string[], region: string): any {
-  const out = execFileSync("aws", [...args, "--region", region, "--output", "json"], {
-    encoding: "utf-8",
-    timeout: 120_000,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, AWS_PAGER: "" },
-  });
-  return out.trim() ? JSON.parse(out) : null;
+/** The aws CLI failed to RUN (not an AWS "no" — the binary or its execution). */
+export class AwsCliFailed extends Error {
+  constructor(detail: string) {
+    super(detail);
+    this.name = "AwsCliFailed";
+  }
 }
 
-/** What the provider says about this machine right now. */
+function aws(args: string[], region: string): any {
+  try {
+    const out = execFileSync("aws", [...args, "--region", region, "--output", "json"], {
+      encoding: "utf-8",
+      timeout: 120_000,
+      stdio: ["ignore", "pipe", "pipe"],
+      // agentSpawnPath, not process.env.PATH: under launchd the daemon gets a
+      // bare system PATH, and a child that cannot find `aws` used to cascade
+      // into "host no longer exists" (ENOENT → catch → "missing" → HostGone)
+      // — a wrong diagnosis three layers from the cause. Seen live when the
+      // web's "Move to Cloud Linux" ran this through the daemon.
+      env: { ...process.env, PATH: agentSpawnPath(), AWS_PAGER: "" },
+    });
+    return out.trim() ? JSON.parse(out) : null;
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException & { stderr?: string | Buffer };
+    if (e.code === "ENOENT") {
+      throw new AwsCliFailed("the aws CLI is not installed (or not on any known PATH) on this machine");
+    }
+    const stderr = String(e.stderr ?? "").trim();
+    // The instance genuinely not existing is an ANSWER, not a failure —
+    // callers map it to "missing". Everything else (bad credentials, expired
+    // SSO, network) must surface as itself.
+    if (/InvalidInstanceID\.NotFound/.test(stderr)) return null;
+    throw new AwsCliFailed(stderr.split("\n")[0] || e.message || "aws CLI failed");
+  }
+}
+
+/**
+ * What the provider says about this machine right now.
+ *
+ * "missing" means AWS ANSWERED and the instance is not there. An aws CLI that
+ * could not run at all propagates as AwsCliFailed instead — collapsing the two
+ * made a daemon without `aws` on PATH report a healthy host as terminated,
+ * and the resulting HostGone advice ("remove it with hosts rm") would have
+ * had the user delete a perfectly good registration.
+ */
 export function hostState(host: CloudHost): { state: HostState; address?: string } {
   if (host.provider !== "aws") return { state: "running", address: host.address };
-  try {
-    const r = aws(["ec2", "describe-instances", "--instance-ids", host.id], host.region);
-    const inst = r?.Reservations?.[0]?.Instances?.[0];
-    if (!inst) return { state: "missing" };
-    const name = inst.State?.Name;
-    const state: HostState =
-      name === "running" ? "running" : name === "stopped" ? "stopped" : name === "terminated" ? "missing" : "pending";
-    return { state, address: inst.PublicIpAddress };
-  } catch {
-    return { state: "missing" };
-  }
+  const r = aws(["ec2", "describe-instances", "--instance-ids", host.id], host.region);
+  const inst = r?.Reservations?.[0]?.Instances?.[0];
+  if (!inst) return { state: "missing" };
+  const name = inst.State?.Name;
+  const state: HostState =
+    name === "running" ? "running" : name === "stopped" ? "stopped" : name === "terminated" ? "missing" : "pending";
+  return { state, address: inst.PublicIpAddress };
 }
 
 /**

@@ -258,9 +258,15 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         return;
       }
       for (const h of rows) {
-        const s = hostState(h);
-        const mark = s.state === "running" ? fmt.success("awake") : s.state === "stopped" ? fmt.muted("asleep") : fmt.warning(s.state);
-        console.log(`  ${h.id.padEnd(22)} ${h.provider.padEnd(13)} ${mark.padEnd(18)} ${s.address ?? fmt.muted("(no address until it wakes)")}`);
+        let line: string;
+        try {
+          const s = hostState(h);
+          const mark = s.state === "running" ? fmt.success("awake") : s.state === "stopped" ? fmt.muted("asleep") : fmt.warning(s.state);
+          line = `${mark.padEnd(18)} ${s.address ?? fmt.muted("(no address until it wakes)")}`;
+        } catch (err) {
+          line = fmt.warning(`state unknown — ${(err as Error).message}`);
+        }
+        console.log(`  ${h.id.padEnd(22)} ${h.provider.padEnd(13)} ${line}`);
       }
       console.log(
         fmt.muted(

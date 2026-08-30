@@ -113,3 +113,22 @@ export function whichBin(name: string): string | null {
   const found = r.status === 0 ? r.stdout.trim() : "";
   return found || null;
 }
+
+/**
+ * The human-readable cause inside a crashed child's output.
+ *
+ * A bun/node child that dies on an uncaught error prints the message first
+ * and then a wall of stack frames and source-context lines. Surfacing the
+ * TAIL of that (as a naive slice(-500) did) shows commander internals and
+ * hides the cause — the web's move strip once displayed "…command.js:1261:25)"
+ * for what was really "the aws CLI is not installed". Keep the non-frame
+ * lines, from the top.
+ */
+export function childErrorDetail(stderr: string, stdout = "", maxLen = 500): string {
+  return (stderr || stdout || "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("at ") && !/^\d+ \|/.test(l) && !/^\^+$/.test(l))
+    .join(" — ")
+    .slice(0, maxLen);
+}

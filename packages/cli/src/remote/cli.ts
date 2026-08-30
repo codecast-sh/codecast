@@ -199,8 +199,12 @@ export function registerRemoteCommand(program: Command): void {
       console.log(`this device: ${d.label}  (${d.deviceId})`);
       const cloud = readCloudHosts();
       for (const h of cloud) {
-        const s = hostState(h);
-        console.log(`  ${h.id}  ${h.user}@${s.address ?? "(asleep — wakes on use)"}  ${h.provider} ${s.state}  [default]`);
+        try {
+          const s = hostState(h);
+          console.log(`  ${h.id}  ${h.user}@${s.address ?? "(asleep — wakes on use)"}  ${h.provider} ${s.state}  [default]`);
+        } catch (err) {
+          console.log(`  ${h.id}  ${h.user}@?  ${h.provider} state unknown — ${(err as Error).message}`);
+        }
       }
       if (fs.existsSync(HOSTS_FILE)) {
         const { hosts } = JSON.parse(fs.readFileSync(HOSTS_FILE, "utf-8")) as { hosts: ScalewayHostMeta[] };
