@@ -6,7 +6,7 @@
  * `lib/links.ts` is the half that actually opens things.
  */
 
-import { parseEntityUrl, isAppHost, type EntityType } from '@codecast/shared/entities';
+import { parseEntityUrl, parseSharePath, isAppHost, type EntityType } from '@codecast/shared/entities';
 
 /**
  * One URL vocabulary for every surface. `www.` hosts count: people paste them
@@ -89,9 +89,15 @@ export function mobileRouteForUrl(url: string): string | null {
     return null;
   }
 
-  // A share token resolves to a conversation on the session screen.
-  const share = path.match(/^\/share\/([a-zA-Z0-9]+)/);
-  if (share) return `/session/${share[1]}`;
+  // Share links (all four kinds) land on the /share resolver screen, which
+  // turns the opaque token into an object id and replaces itself with the
+  // object's screen. The token, not the app, decides what it addresses.
+  const share = parseSharePath(path);
+  if (share) {
+    return share.kind === 'conversation'
+      ? `/share/${share.token}`
+      : `/share/${share.kind}/${share.token}`;
+  }
   // Team invites are completed on the web; the team tab is the nearest screen.
   if (path.startsWith('/join/')) return '/(tabs)/team';
   return null;
