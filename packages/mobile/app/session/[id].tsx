@@ -29,7 +29,7 @@ import { PulsingDot } from '@/components/SessionItem';
 import { AssignmentChip, AssignedToYouBanner } from '@/components/AssignmentChip';
 import { SessionHuddleButton } from '@/components/calls/SessionHuddleButton';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
-import { agentSupportsFork, ACTIVE_AGENT_STATUSES } from '@codecast/shared/contracts';
+import { agentSupportsFork, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE } from '@codecast/shared/contracts';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
 import { openLink } from '@/lib/links';
 import { EntityPill } from '@/components/EntityPill';
@@ -228,6 +228,8 @@ function stripSystemTags(content: string): string {
     .replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/g, '')
     .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, '')
     .replace(/<\/?(?:command-(?:name|message|args)|antml:[a-z_]+)[^>]*>/g, '')
+    // A `cast decide` answer's trailer tag (web renders it as a footer).
+    .replace(DECISION_ANSWER_TAG_RE, '')
     .replace(/^\s*Caveat:.*$/gm, '')
     .replace(/\n{3,}/g, '\n\n');
 }

@@ -78,3 +78,55 @@ export function isChatWakePrompt(rawContent: string | null | undefined): boolean
 export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
   return isSessionMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isChatWakePrompt(rawContent);
 }
+
+// --- Decision answers (cast decide) ------------------------------------------------
+// The human's answer to a `cast decide` question enters the session as a user
+// message (store answerDecision). The first line is the answer the agent acts
+// on; the trailing tag names the decision it answers and repeats the question,
+// so the transcript explains itself and every surface can render the answer
+// against its ask (the web bubble links back to the `cast decide` call and
+// unfolds the options and context).
+//
+//   Decision: Keep vendored (current)
+//   <cast-decision id="k97…" question="Keep the browser engine vendored?"/>
+//
+// The tag rides the same message as the text, so tmux injection collapsing
+// the newline to a space must not matter: the parser never requires one.
+export const DECISION_ANSWER_TAG_RE = /<cast-decision\s+id="([^"]*)"(?:\s+question="([^"]*)")?\s*\/>/;
+
+export interface DecisionAnswerMessage {
+  id: string;
+  question?: string;
+  // The chosen option's label, or the free text the human typed.
+  answer: string;
+}
+
+function escapeTagAttr(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\s*\r?\n\s*/g, " ");
+}
+
+function unescapeTagAttr(s: string): string {
+  return s.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+
+export function formatDecisionAnswer(a: { id: string; question: string; answer: string }): string {
+  return `Decision: ${a.answer}\n<cast-decision id="${a.id}" question="${escapeTagAttr(a.question)}"/>`;
+}
+
+export function parseDecisionAnswer(rawContent: string | null | undefined): DecisionAnswerMessage | null {
+  if (!rawContent) return null;
+  const text = stripInjectionNoise(rawContent);
+  const match = text.match(DECISION_ANSWER_TAG_RE);
+  if (!match) return null;
+  const answer = text.replace(DECISION_ANSWER_TAG_RE, "").trim().replace(/^Decision:\s*/, "");
+  return {
+    id: match[1],
+    question: match[2] !== undefined ? unescapeTagAttr(match[2]) : undefined,
+    answer,
+  };
+}

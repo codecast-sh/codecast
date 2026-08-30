@@ -13,6 +13,7 @@ import { mutation, query } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
+import { canAccessConversation } from "./lib/access";
 
 const optionValidator = v.object({
   label: v.string(),
@@ -301,6 +302,46 @@ export const resolve = mutation({
   },
 });
 
+// A decision row the signed-in viewer may read: anyone who can read the
+// conversation. The ask is already in that transcript as the `cast decide`
+// call, so the row shows a teammate nothing the thread does not.
+async function readableDecision(ctx: any, decisionId: any) {
+  const userId = await getAuthUserId(ctx);
+  if (!userId) return null;
+  const row = await ctx.db.get(decisionId);
+  if (!row) return null;
+  if (row.user_id.toString() === userId.toString()) return row;
+  const conversation = await ctx.db.get(row.conversation_id);
+  if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) return null;
+  return row;
+}
+
+// One decision by id, for the answer bubble in the transcript: the queue
+// subscription (listForUser) keeps resolved rows a day, so an older answer
+// reads its options and context here when the reader unfolds it.
+export const get = query({
+  args: { decision_id: v.id("session_decisions") },
+  handler: async (ctx, args) => {
+    const row = await readableDecision(ctx, args.decision_id);
+    if (!row) return null;
+    return {
+      _id: row._id,
+      conversation_id: row.conversation_id,
+      question: row.question,
+      context_md: row.context_md,
+      options: row.options,
+      report_slug: row.report_slug,
+      blocking: row.blocking,
+      default_option: row.default_option,
+      status: row.status,
+      answer_index: row.answer_index,
+      answer_text: row.answer_text,
+      created_at: row.created_at,
+      resolved_at: row.resolved_at,
+    };
+  },
+});
+
 // Where in the transcript a decision was asked. The `cast decide` run's tool
 // result carries the decision id, so the first message referencing the id —
 // in a tool result, a tool call's argv, or plain content — anchors the ask.
@@ -309,10 +350,8 @@ export const resolve = mutation({
 export const findAskMessage = query({
   args: { decision_id: v.id("session_decisions") },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return null;
-    const row = await ctx.db.get(args.decision_id);
-    if (!row || row.user_id.toString() !== userId.toString()) return null;
+    const row = await readableDecision(ctx, args.decision_id);
+    if (!row) return null;
 
     const id = args.decision_id.toString();
     const messages = await ctx.db
