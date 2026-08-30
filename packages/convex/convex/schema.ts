@@ -2265,6 +2265,10 @@ export default defineSchema({
     answer_index: v.optional(v.number()),
     answer_text: v.optional(v.string()),
     created_at: v.number(),
+    // conversation.message_count when the ask landed. The live count minus this
+    // is "messages since the ask" — how far the session has run past the
+    // question — correct even when the client hasn't loaded that far back.
+    asked_message_count: v.optional(v.number()),
     // Last `cast decide edit`. created_at stays the ask time because the queue
     // ranks by age; this is what wakes a card whose text changed underneath it.
     updated_at: v.optional(v.number()),

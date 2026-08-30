@@ -897,6 +897,9 @@ export type SessionDecisionItem = {
   answer_index?: number;
   answer_text?: string;
   created_at: number;
+  // conversation.message_count at ask time; live count minus this is
+  // "messages since the ask", correct beyond the loaded window.
+  asked_message_count?: number;
   // Last `cast decide edit`; created_at is the ask time (queue age).
   updated_at?: number;
   resolved_at?: number;
