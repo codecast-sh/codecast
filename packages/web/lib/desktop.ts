@@ -16,6 +16,12 @@ declare global {
         body: string,
         data?: NotifyNativeData,
       ) => Promise<{ shown: boolean; reason?: string } | void>;
+      // OS-level notification consent (System Settings, not the in-app prefs).
+      // All absent on older builds — gate on them; readiness is then "unknown"
+      // and nothing nags.
+      getOsNotificationState?: () => Promise<string>;
+      requestOsNotificationPermission?: () => Promise<void>;
+      openNotificationSettings?: () => Promise<void>;
       // Multi-window notification routing (see main.js). Absent on older
       // builds — gate on them; without them this window behaves as the only one.
       reportWindowState?: (state: DesktopWindowState) => void;
@@ -116,6 +122,16 @@ declare global {
         mode?: MeetingDetectMode;
         never?: string[];
       }) => Promise<{ mode: MeetingDetectMode; never: string[] }>;
+      // The meeting-offer window (route /meeting-offer): the offer as a small
+      // chromeless corner window. The renderer reports its content size — the
+      // shell reshapes the window around it, and the first report is the
+      // reveal signal; hide puts it away; openCall lands the transcript in
+      // the main window. All absent on older shells, which route offers to an
+      // app window's toasts instead.
+      isMeetingOfferWindow?: boolean;
+      meetingOfferSize?: (size: { width: number; height: number }) => void;
+      meetingOfferHide?: () => void;
+      meetingOfferOpenCall?: (transcriptId: string) => void;
       platform: string;
     };
   }
@@ -176,6 +192,27 @@ export function setMeetingDetect(patch: {
  *  the caller needs no gate of its own. */
 export function onMeetingDetected(cb: (offer: MeetingOffer) => void): void {
   bridge("onMeetingDetected")?.(cb);
+}
+
+/** True only in the shell's dedicated /meeting-offer window. */
+export function isMeetingOfferWindow(): boolean {
+  return isElectron() && !!window.__CODECAST_ELECTRON__?.isMeetingOfferWindow;
+}
+
+/** Report the offer window's content size; the shell reshapes the window and
+ *  reveals it (without focus) on the first report. */
+export function meetingOfferSize(size: { width: number; height: number }): void {
+  bridge("meetingOfferSize")?.(size);
+}
+
+export function meetingOfferHide(): void {
+  bridge("meetingOfferHide")?.();
+}
+
+/** Open a recording's transcript in the main window (the offer window is a
+ *  card, not a place to read). */
+export function meetingOfferOpenCall(transcriptId: string): void {
+  bridge("meetingOfferOpenCall")?.(transcriptId);
 }
 
 // What a banner carries besides its text. `key` is a stable id for the event
@@ -721,6 +758,66 @@ export function shouldApplyAutoDeepLink(now: number = Date.now(), lastInputAt: n
 
 export function hasBrowserNotificationPermission(): boolean {
   return typeof Notification !== "undefined" && Notification.permission === "granted";
+}
+
+// Can this device actually put a banner on the user's screen? One answer for
+// both surfaces:
+//   granted — yes
+//   ask     — no, but one gesture can fix it (browser permission prompt, or
+//             the macOS Allow/Don't Allow dialog the shell can raise)
+//   off     — no, and only a settings screen can fix it (browser site
+//             settings, or macOS System Settings)
+//   unknown — can't tell (SSR, an old desktop shell) — never nag on unknown
+export type NotificationReadiness = "granted" | "ask" | "off" | "unknown";
+
+export async function getNotificationReadiness(): Promise<NotificationReadiness> {
+  if (isElectron()) {
+    const fn = bridge("getOsNotificationState");
+    if (!fn) return "unknown";
+    try {
+      const state = await fn();
+      return state === "granted" || state === "ask" || state === "off" ? state : "unknown";
+    } catch {
+      return "unknown";
+    }
+  }
+  if (typeof Notification === "undefined") return "unknown";
+  if (Notification.permission === "granted") return "granted";
+  if (Notification.permission === "denied") return "off";
+  return "ask";
+}
+
+// The one enable gesture per state. Resolves what happened so the caller can
+// re-poll or show follow-up copy:
+//   granted         — the browser prompt was accepted on the spot
+//   requested       — the OS is now showing its own prompt; poll for the answer
+//   opened-settings — a settings screen was opened; poll on refocus
+//   unsupported     — nothing programmatic exists (browser "off"): the caller
+//                     shows manual instructions
+export async function enableOsNotifications(
+  readiness: NotificationReadiness,
+): Promise<"granted" | "requested" | "opened-settings" | "unsupported"> {
+  if (isElectron()) {
+    if (readiness === "off") {
+      const open = bridge("openNotificationSettings");
+      if (open) {
+        await open();
+        return "opened-settings";
+      }
+      return "unsupported";
+    }
+    const request = bridge("requestOsNotificationPermission");
+    if (request) {
+      await request();
+      return "requested";
+    }
+    return "unsupported";
+  }
+  if (readiness === "ask" && typeof Notification !== "undefined") {
+    const result = await Notification.requestPermission();
+    return result === "granted" ? "granted" : "requested";
+  }
+  return "unsupported";
 }
 
 export async function requestNotificationPermission(): Promise<boolean> {
