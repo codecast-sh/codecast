@@ -6,12 +6,10 @@ import { isUsageLimitDialog } from "@codecast/shared/contracts";
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { useInboxStore, getProjectName } from "../store/inboxStore";
 import { openQuestionFromMessages, lastAssistantText, visibleOptions, type DecisionStepper } from "../hooks/useDecisionQueue";
-import { queueTier, routeQueueKey, findDecisionAnchorMessage, messagesSinceAsk, type QueueItem } from "../lib/decisionQueue";
+import { queueTier, routeQueueKey, messagesSinceAsk, type QueueItem } from "../lib/decisionQueue";
+import { useJumpToDecisionAsk } from "../hooks/useJumpToDecisionAsk";
 import { formatTimeAgo } from "../lib/messageNavigator";
 import { useCoarseNow } from "../hooks/useCoarseNow";
-import { useConvex } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
-import { isConvexId } from "../store/inboxStore";
 import { buildSingleAnswerPayload, buildFreeTextPayload } from "../lib/pollPayload";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { KeyCap } from "./KeyboardShortcutsHelp";
@@ -130,27 +128,14 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const askedRel = askedAt !== undefined ? formatTimeAgo(askedAt, now) : null;
   const askedLabel = askedRel === null ? null : askedRel === "now" ? "asked just now" : /^\d+[mhd]$/.test(askedRel) ? `asked ${askedRel} ago` : `asked ${askedRel}`;
 
-  // Jump to the ask itself — the `cast decide` call rendered in the transcript.
-  // The anchor message is found locally when loaded; when the ask is older than
-  // the loaded window, the server locates it by the decision id, which the CLI
-  // printed into the call's output (findMessageByContent).
-  const convex = useConvex();
+  // Jump to the ask itself — the `cast decide` call rendered in the transcript
+  // (useJumpToDecisionAsk, shared with the answer bubble's "the ask" link).
   const canJumpToAsk = item.source === "decide";
+  const jumpToDecisionAsk = useJumpToDecisionAsk(item.conversationId, item.decisionId, item.question);
   const jumpToAsk = useCallback(async () => {
     if (!canJumpToAsk) return;
-    const { requestNavigate } = useInboxStore.getState();
-    const anchor = findDecisionAnchorMessage(messages as any[], item.decisionId, item.question);
-    let target = anchor ? { id: anchor._id, ts: anchor.timestamp } : null;
-    if (!target && item.decisionId && isConvexId(item.decisionId)) {
-      const found = await convex
-        .query(api.sessionDecisions.findAskMessage, { decision_id: item.decisionId as any })
-        .catch(() => null);
-      if (found) target = { id: found.message_id, ts: found.timestamp };
-    }
-    if (!target) return;
-    requestNavigate(item.conversationId, { scrollToMessageId: target.id, scrollToMessageTimestamp: target.ts ?? null });
-    stepper?.onExit?.();
-  }, [canJumpToAsk, messages, item.decisionId, item.question, item.conversationId, convex, stepper]);
+    if (await jumpToDecisionAsk()) stepper?.onExit?.();
+  }, [canJumpToAsk, jumpToDecisionAsk, stepper]);
 
   // The session title is WHO is asking, never WHAT. A poll-sourced card
   // renders no question text until the poll payload is readable from the

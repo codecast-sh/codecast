@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach } from "bun:test";
+import { parseDecisionAnswer } from "@codecast/shared/contracts";
 import {
   decisionQueueItems,
   findDecisionAnchorMessage,
@@ -229,7 +230,11 @@ describe("answering a decision", () => {
     await Promise.resolve();
     await new Promise((r) => setTimeout(r, 0));
     const pending = useInboxStore.getState().pendingMessages[convId] ?? [];
-    expect(pending.some((m: any) => m.content === "Decision: Approve")).toBe(true);
+    const sent = pending.find((m: any) => m.content.startsWith("Decision: Approve"));
+    expect(sent).toBeDefined();
+    // The answer names the decision and repeats its question, so the bubble
+    // renders against the ask without the (day-lived) queue row.
+    expect(parseDecisionAnswer(sent.content)).toEqual({ id: "d1", question: row.question, answer: "Approve" });
   });
 
   it("is idempotent — answering twice does not double-send", async () => {
