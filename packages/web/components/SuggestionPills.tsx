@@ -10,6 +10,7 @@ import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useEventListener } from "../hooks/useEventListener";
 import { isConvexId } from "../lib/entityLinks";
 import { suggestionChordIndex } from "../lib/suggestionChord";
+import { isDesktop } from "../lib/desktop";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { isMac } from "../shortcuts";
 
@@ -20,9 +21,11 @@ import { isMac } from "../shortcuts";
 // anchor), the agent spoke last, and the session is waiting on the user —
 // a stale pill is worse than none.
 //
-// Clicking a pill (or Ctrl+Shift+1/2/3) SENDS it — the suggestion is
-// press-send ready by contract, so the click is the confirmation. The hover
-// pencil is the escape hatch: it fills the composer for editing instead.
+// Clicking a pill SENDS it — the suggestion is press-send ready by contract,
+// so the click is the confirmation. On the desktop app ⌘1/2/3 (Ctrl on
+// Windows/Linux) sends the matching pill; the web surface is click-only
+// (chord rationale on suggestionChordIndex). The hover pencil is the escape
+// hatch: it fills the composer for editing instead.
 
 export const SuggestionPills = memo(function SuggestionPills({
   conversationId,

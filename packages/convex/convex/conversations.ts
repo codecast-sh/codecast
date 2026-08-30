@@ -800,7 +800,7 @@ async function findChildConversations(
   return { children, map, agentNameEntries: Object.entries(agentNameMap) };
 }
 
-function generateShareToken(): string {
+export function generateShareToken(): string {
   return crypto.randomUUID();
 }
 

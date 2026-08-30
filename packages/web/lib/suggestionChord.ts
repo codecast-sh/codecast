@@ -1,15 +1,21 @@
-// Resolves a keydown to a suggestion pill index (0-2), or -1. Ctrl+Shift+digit
-// only: bare Ctrl+digit is macOS Mission Control's Space switcher (dead at the
-// OS level on any machine with Spaces), Alt+digit is workbench switching,
-// Meta+digit is the browser's tab switcher — every lighter chord is owned by
-// someone who gets it before us.
-export function suggestionChordIndex(e: {
-  ctrlKey: boolean;
-  shiftKey: boolean;
-  metaKey: boolean;
-  altKey: boolean;
-  code: string;
-}): number {
-  if (!e.ctrlKey || !e.shiftKey || e.metaKey || e.altKey) return -1;
+// Resolves a keydown to a suggestion pill index (0-2), or -1. Desktop app
+// only: in a browser every digit chord is spoken for upstream — the Mac OS
+// takes ⌃digit (Mission Control's Space switcher), Chrome takes ⌘digit on Mac
+// and Ctrl+digit on Windows/Linux (tab switching, page can't override), and
+// the app itself takes ⌥digit (workbench layouts). Electron has no tab bar,
+// so the platform's ordinary "pick item N" chord — ⌘digit on Mac, Ctrl+digit
+// elsewhere — is free there, and the web surface stays click-only.
+export function suggestionChordIndex(
+  e: {
+    ctrlKey: boolean;
+    shiftKey: boolean;
+    metaKey: boolean;
+    altKey: boolean;
+    code: string;
+  },
+  env: { desktop: boolean; mac: boolean },
+): number {
+  if (!env.desktop || e.shiftKey || e.altKey) return -1;
+  if (env.mac ? !e.metaKey || e.ctrlKey : !e.ctrlKey || e.metaKey) return -1;
   return ["Digit1", "Digit2", "Digit3"].indexOf(e.code);
 }
