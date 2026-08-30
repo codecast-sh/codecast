@@ -82,6 +82,31 @@ describe("updateClientUI stamped view keys", () => {
     });
     expect(useInboxStore.getState().clientState.ui?.inbox_scope).toBe("team");
   });
+
+  // A mute is a per-user preference: sounds turned off on any device must
+  // silence every client, including a localhost dev origin whose bag never
+  // held the key. Regression for the sound gates sitting outside
+  // STAMPED_UI_KEYS, where local_wins froze each device at the first value
+  // it ever saw.
+  it("stamps the sound gates so a mute reaches every device", () => {
+    const before = Date.now();
+    useInboxStore.getState().updateClientUI({ sounds_enabled: false, chat_sounds_enabled: false });
+    const ui = useInboxStore.getState().clientState.ui as Record<string, any>;
+    expect(ui["sounds_enabled:ts"]).toBeGreaterThanOrEqual(before);
+    expect(ui["chat_sounds_enabled:ts"]).toBeGreaterThanOrEqual(before);
+  });
+
+  it("a stamped mute from another device beats a legacy unstamped local value", () => {
+    useInboxStore.setState({
+      clientState: { ui: { sounds_enabled: true } },
+      clientStateInitialized: true,
+      pending: {},
+    });
+    useInboxStore.getState().syncTable("clientState", {
+      ui: { sounds_enabled: false, "sounds_enabled:ts": Date.now() },
+    });
+    expect(useInboxStore.getState().clientState.ui?.sounds_enabled).toBe(false);
+  });
 });
 
 describe("updateClientDismissed", () => {
