@@ -9,7 +9,7 @@ import { createDataContext } from "./data";
 // gate). Directory mappings are now the whole rule: mapped → that team,
 // unmapped → personal.
 
-function mockDb(opts: { mappings?: any[]; isMember?: boolean } = {}) {
+function mockDb(opts: { mappings?: any[]; isMember?: boolean; deletedTeams?: string[] } = {}) {
   const inserted: Array<{ table: string; doc: any }> = [];
   const db = {
     query: (table: string) => ({
@@ -24,7 +24,9 @@ function mockDb(opts: { mappings?: any[]; isMember?: boolean } = {}) {
       inserted.push({ table, doc });
       return "id_1" as any;
     },
-    get: async () => null,
+    // Team rows exist unless the test deleted them; everything else is unknown.
+    get: async (id: any) =>
+      typeof id === "string" && id.startsWith("t") && !opts.deletedTeams?.includes(id) ? { _id: id } : null,
     patch: async () => {},
   };
   return { ctx: { db } as any, inserted };
@@ -54,6 +56,29 @@ describe("createDataContext — work items follow directory→team privacy", () 
     expect(dc.workspace).toEqual({ type: "team", teamId: UNION as any });
     await dc.insert("tasks", { title: "team work" });
     expect(inserted[0].doc.team_id).toBe(UNION as any);
+  });
+
+  // Regression (2026-08-30): the codecast checkout was mapped to a team deleted in
+  // April. The mapping survived, isTeamMember failed, and every task/plan/doc
+  // command from the repo was Forbidden with no way to self-heal. A mapping to a
+  // team that no longer exists is dangling data, not an access decision.
+  test("a mapping to a DELETED team resolves personal instead of bricking the directory", async () => {
+    const { ctx, inserted } = mockDb({ mappings: [mapping], isMember: false, deletedTeams: [UNION] });
+    const dc = await createDataContext(ctx, {
+      userId: "u1" as any,
+      project_path: "/Users/j/code/union-mobile/outreach",
+    });
+    expect(dc.workspace).toEqual({ type: "personal", userId: "u1" as any });
+    await dc.insert("tasks", { title: "still works" });
+    expect(inserted[0].doc.team_id).toBeUndefined();
+  });
+
+  test("a mapping to a LIVE team the user left still fails closed", async () => {
+    const { ctx } = mockDb({ mappings: [mapping], isMember: false });
+    await expect(createDataContext(ctx, {
+      userId: "u1" as any,
+      project_path: "/Users/j/code/union-mobile/outreach",
+    })).rejects.toThrow("Forbidden");
   });
 
   test("no project_path and no explicit workspace defaults to personal, never raw", async () => {
