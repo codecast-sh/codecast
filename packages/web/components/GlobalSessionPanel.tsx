@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { AvatarImg } from "../lib/avatarCache";
+import { imageBytes } from "../lib/imageByteCache";
 import { useConvex, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -8,7 +9,7 @@ import { useRouter } from "next/navigation";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
 import { SessionMenuItems } from "./menus/ObjectContextMenus";
-import { copyToClipboard } from "../lib/utils";
+import { copyToClipboard, formatRelative, formatDateFull } from "../lib/utils";
 import { ImageLightbox } from "./ImageGallery";
 import { SessionErrorBanner } from "./SessionErrorBanner";
 import { AppLoader } from "./AppLoader";
@@ -2172,7 +2173,10 @@ export const SessionCard = memo(function SessionCard({
   // an invisible broken img still reserves ~46px and wraps the text early.
   const [thumbBroken, setThumbBroken] = useState(false);
   useEffect(() => setThumbBroken(false), [session.image_preview_url]);
-  const hasThumb = showImageThumb && !!session.image_preview_url && !thumbBroken;
+  // Cache-first bytes: a thumbnail seen once paints locally (and offline)
+  // instead of re-fetching per scroll-through of the inbox.
+  const thumbSrc = imageBytes.useSrc(showImageThumb ? session.image_preview_url : undefined);
+  const hasThumb = showImageThumb && !!thumbSrc && !thumbBroken;
   // sessionLabel and isFavorite are now passed as scalar props (computed once in
   // the parent via labelByConv/cardIsFavorite) instead of per-card store scans —
   // see ct-37958. Only spawnedByTitle stays a local selector.
@@ -2905,7 +2909,7 @@ export const SessionCard = memo(function SessionCard({
           title="View image"
         >
           <img
-            src={session.image_preview_url!}
+            src={thumbSrc!}
             alt=""
             loading="lazy"
             draggable={false}
@@ -2915,8 +2919,8 @@ export const SessionCard = memo(function SessionCard({
         </button>
       )}
       </div>
-      {thumbZoom && session.image_preview_url && (
-        <ImageLightbox src={session.image_preview_url} onClose={() => setThumbZoom(false)} />
+      {thumbZoom && thumbSrc && (
+        <ImageLightbox src={thumbSrc} onClose={() => setThumbZoom(false)} />
       )}
       </div>
       {/* The ONE pin a pinned session shows: a persistent, interactive badge anchored
