@@ -1197,6 +1197,66 @@ describe("the anchor in a thread", () => {
     expect(plainRow.origin_session_title).toBeUndefined();
   });
 
+  test("a person's reply on a thread a session started is relayed into that session", async () => {
+    // The session posted the root (origin agent + its session id). A human
+    // reply in that thread lands in the session's conversation as a turn,
+    // quoted like the anchor wake, with the command that answers in place.
+    const seed = anchorTeamSeed({
+      conversations: [
+        { _id: CONV, user_id: BOB, title: "Anchor", status: "active", updated_at: 1 },
+        { _id: "conv-alice", user_id: ALICE, session_id: "sess-alice", short_id: "jx7alice", title: "Alice's build", agent_type: "claude_code", status: "active", updated_at: 1, is_private: true },
+      ],
+      session_owners: [{ _id: "so-1", conversation_id: "conv-alice", user_id: ALICE, added_at: 1 }],
+    });
+    const ctx = context(ALICE, seed);
+    const root = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "does the deploy look green?", origin: "agent", origin_session_id: "sess-alice",
+    });
+    expect(root.session_relay.delivered).toBe(false);
+    expect(ctx.db._tables.pending_messages.length).toBe(0);
+
+    // The owner replies as a human: relayed.
+    const reply = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "yes, all green", thread_root_id: root.message_id,
+    });
+    expect(reply.session_relay).toMatchObject({ delivered: true, skipped: null, session_short_id: "jx7alice" });
+    const queued = ctx.db._tables.pending_messages;
+    expect(queued.length).toBe(1);
+    expect(String(queued[0].conversation_id)).toBe("conv-alice");
+    expect(queued[0].client_id).toBe(`chat-relay:${reply.message_id}`);
+    expect(queued[0].content).toContain("[codecast team chat — #general");
+    expect(queued[0].content).toContain("replied in a thread you are part of.");
+    // The session's own root reads as its own words; the reply carries the name.
+    expect(queued[0].content).toContain("You (earlier): does the deploy look green?");
+    expect(queued[0].content).toContain("yes, all green");
+    expect(queued[0].content).toContain(`cast chat send --channel ${CHANNEL} --thread ${root.message_id}`);
+
+    // Idempotent on the message: a retried send does not inject twice.
+    await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "yes, all green", thread_root_id: root.message_id, client_id: "c-relay",
+    });
+    await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "yes, all green", thread_root_id: root.message_id, client_id: "c-relay",
+    });
+    expect(ctx.db._tables.pending_messages.length).toBe(2);
+
+    // A line another SESSION typed never wakes it — no machine-to-machine loop.
+    const machine = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "ack from a bot", thread_root_id: root.message_id, origin: "agent", origin_session_id: "sess-other",
+    });
+    expect(machine.session_relay.skipped).toBe("agent_authored");
+    expect(ctx.db._tables.pending_messages.length).toBe(2);
+
+    // A teammate without send access to the (private) session: the reply
+    // lands in the thread, the relay is withheld and says why.
+    const outsider = await call(sendMessage, as(ctx, BOB), {
+      channel_id: CHANNEL, content: "looks fine to me", thread_root_id: root.message_id,
+    });
+    expect(outsider.message_id).toBeTruthy();
+    expect(outsider.session_relay.skipped).toBe("no_access");
+    expect(ctx.db._tables.pending_messages.length).toBe(2);
+  });
+
   test("an anchor with no session yet keeps the message and reports why", async () => {
     const seed = anchorTeamSeed();
     delete (seed.anchors[0] as any).conversation_id;
