@@ -1,4 +1,5 @@
 import { mutation, query } from "./functions";
+import { docTitleFromContent } from "@codecast/shared/docs";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
@@ -182,7 +183,13 @@ export const submitSnapshot = mutation({
     try {
       const doc = docForGuard;
       if (doc && parsed) {
-        await ctx.db.patch(doc._id, { content: md, updated_at: Date.now() });
+        // The editor's first block is the title heading: the stored title
+        // follows it (docs.docTextUpdates is the same rule for the CLI paths).
+        await ctx.db.patch(doc._id, {
+          content: md,
+          title: docTitleFromContent(md, doc.title),
+          updated_at: Date.now(),
+        });
 
         const newMentions = extractPersonMentionIds(parsed);
         if (newMentions.size > 0) {
