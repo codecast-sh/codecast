@@ -170,6 +170,15 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
       setRailInMargin(inMargin);
       if (inMargin) setRailPx(Math.min(RAIL_MAX_PX, Math.round(avail)));
 
+      // Publish the visible gutter on each side so the hover handles can clamp
+      // to it: the scroller clips (left) or grows scrollable overflow (right)
+      // past these edges. Simple view flattens the pl-8 indent the handles'
+      // fixed offsets assumed, so their CSS reads these to hug the edge instead
+      // of getting cut or covering text.
+      region.style.setProperty("--cc-gutter-l", Math.max(0, Math.round(rr.left - left)) + "px");
+      const clipRight = sr && scroller ? sr.left + scroller.clientLeft + scroller.clientWidth : window.innerWidth;
+      region.style.setProperty("--cc-gutter-r", Math.max(0, Math.round(clipRight - rr.right)) + "px");
+
       // Mirror on the right: float in the empty right margin when it fits (the
       // text keeps full width, exactly like the left quote rail). When there's no
       // margin — the right edge already carries the toolbar + "files changed" chip
