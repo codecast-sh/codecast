@@ -326,7 +326,13 @@ export const FACES_PADDING = 8;
  * one line of 9.5px mono in a pill.
  */
 export const CHROME_BUTTON = 28;
-export const CHROME_WIDTH = CHROME_BUTTON * 4 + 4 * 3 + 3 * 2;
+/** The chrome's width for a row of `buttons` of them — the buttons, their 4px
+ *  gaps and the pill's own 3px padding. Both floating circle surfaces size
+ *  their hover chrome from this, whatever buttons each one carries. */
+export function chromeWidth(buttons: number): number {
+  return CHROME_BUTTON * buttons + 4 * (buttons - 1) + 3 * 2;
+}
+export const CHROME_WIDTH = chromeWidth(4);
 export const CHROME_HEIGHT = CHROME_BUTTON + 3 * 2;
 export const NAME_HEIGHT = 18;
 /** Between the circles and the name, and between the name and the chrome. */
