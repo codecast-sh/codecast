@@ -368,11 +368,13 @@ describe("who is allowed to sound which cue", () => {
   });
 });
 
-describe("the master switch", () => {
-  test("sounds_enabled off silences every cue and every preview", async () => {
+describe("the switches", () => {
+  // Previews are exempt on purpose: the Sounds panel is where the switches are
+  // decided, and auditioning a cue is the only honest basis for deciding.
+  const silence = async (ui: Record<string, unknown>) => {
     const { useInboxStore } = await import("../../store/inboxStore");
     const before = useInboxStore.getState().clientState;
-    useInboxStore.setState({ clientState: { ...(before ?? {}), ui: { ...(before?.ui ?? {}), sounds_enabled: false } } } as any);
+    useInboxStore.setState({ clientState: { ...(before ?? {}), ui: { ...(before?.ui ?? {}), ...ui } } } as any);
     oscStarts = 0;
     bufferStarts = 0;
     sounds.resetAudioContext();
@@ -383,11 +385,21 @@ describe("the master switch", () => {
       sounds.soundWalkieAway();
       sounds.soundWalkieOpen();
       sounds.soundWalkieSquelch();
-      for (const cue of sounds.WALKIE_PREVIEWS) sounds.previewWalkieCue(cue.spec);
       expect(oscStarts).toBe(0);
       expect(bufferStarts).toBe(0);
+      for (const cue of sounds.WALKIE_PREVIEWS) sounds.previewWalkieCue(cue.spec);
+      expect(oscStarts).toBe(10);
+      expect(bufferStarts).toBe(1);
     } finally {
       useInboxStore.setState({ clientState: before } as any);
     }
+  };
+
+  test("the master switch silences every cue; previews still audition", async () => {
+    await silence({ sounds_enabled: false });
+  });
+
+  test("the walkie category switch silences every cue; previews still audition", async () => {
+    await silence({ walkie_sounds_enabled: false });
   });
 });

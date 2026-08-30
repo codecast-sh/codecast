@@ -7,8 +7,10 @@ describe("settingsSectionForPath", () => {
     expect(settingsSectionForPath("/settings/profile")?.section).toBe("general");
     expect(settingsSectionForPath("/settings/accounts")?.section).toBe("accounts");
     expect(settingsSectionForPath("/settings/notifications")?.section).toBe("notifications");
+    expect(settingsSectionForPath("/settings/sounds")?.section).toBe("sounds");
     expect(settingsSectionForPath("/settings/team")?.section).toBe("team");
     expect(settingsSectionForPath("/settings/sync")?.section).toBe("sync");
+    expect(settingsSectionForPath("/settings/integrations")?.section).toBe("integrations");
     expect(settingsSectionForPath("/settings/integrations/github-app")?.section).toBe("integrations");
     expect(settingsSectionForPath("/settings/agents")?.section).toBe("agents");
     expect(settingsSectionForPath("/settings/claude-accounts")?.section).toBe("claude-accounts");
