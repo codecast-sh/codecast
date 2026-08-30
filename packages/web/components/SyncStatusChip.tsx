@@ -39,11 +39,54 @@ const scopeLabel = (scope: string) => SCOPE_LABELS[scope] ?? scope;
  * Color carries the health signal: cyan for a normal sync, amber once it drags
  * past STALL_MS so a genuinely slow backend looks different from a quick one.
  */
-// The pill shows iff some live subscription's first payload is still pending.
-// Reads ONLY `liveLoading`, never `syncProgress` — that conflation kept the
-// old spinner lit ~forever on every cold load. Exported for the regression test.
-export function selectSyncing(s: { liveLoading: Record<string, boolean> }): boolean {
-  return Object.values(s.liveLoading).some(Boolean);
+// What the pill waits on, in order of what "not caught up" honestly means now
+// that the sync log owns catch-up (docs/architecture/sync-log-migration.md):
+//   1. A scope whose log cursor is behind its head (`syncLogLag > 0`) — the
+//      store is provably missing changes until the applier replays them.
+//   2. A live subscription's first payload, but ONLY while its collection is
+//      genuinely cold (no cached rows). On a warm cache the store is already
+//      complete once the log is caught up; the live first load then merely
+//      refreshes the recent window and must not read as "data missing" — the
+//      same rule the store uses for when a skeleton is honest.
+// Never `syncProgress` (the background crawl) — that conflation kept the old
+// spinner lit ~forever on every cold load.
+type SyncSelectorState = {
+  liveLoading: Record<string, boolean>;
+  syncLogLag?: Record<string, number>;
+  sessions?: Record<string, unknown>;
+  tasks?: Record<string, unknown>;
+  docs?: Record<string, unknown>;
+};
+const LIVE_SCOPE_COLLECTION: Record<string, keyof SyncSelectorState> = {
+  sessions: "sessions",
+  tasks: "tasks",
+  docs: "docs",
+};
+function collectionIsCold(s: SyncSelectorState, scope: string): boolean {
+  const key = LIVE_SCOPE_COLLECTION[scope];
+  if (!key) return true; // unknown scope: assume cold (fail toward showing)
+  const coll = s[key] as Record<string, unknown> | undefined;
+  return !coll || Object.keys(coll).length === 0;
+}
+// Exported for the regression test: { settled, total } over everything the
+// pill watches. total === 0 means idle.
+export function selectSyncSummary(s: SyncSelectorState): { settled: number; total: number } {
+  let settled = 0;
+  let total = 0;
+  for (const lag of Object.values(s.syncLogLag ?? {})) {
+    total++;
+    if (lag <= 0) settled++;
+  }
+  for (const [scope, loading] of Object.entries(s.liveLoading)) {
+    if (!collectionIsCold(s, scope)) continue;
+    total++;
+    if (!loading) settled++;
+  }
+  return { settled, total };
+}
+export function selectSyncing(s: SyncSelectorState): boolean {
+  const { settled, total } = selectSyncSummary(s);
+  return total > 0 && settled < total;
 }
 
 export function SyncStatusChip() {
@@ -55,10 +98,8 @@ export function SyncStatusChip() {
   // panel, which mounts only while hovered.
   const syncing = useInboxStore((s) => selectSyncing(s));
   const scopeSummary = useInboxStore((s) => {
-    const keys = Object.keys(s.liveLoading);
-    if (keys.length <= 1) return "";
-    const settled = keys.filter((k) => !s.liveLoading[k]).length;
-    return ` ${settled}/${keys.length}`;
+    const { settled, total } = selectSyncSummary(s);
+    return total <= 1 ? "" : ` ${settled}/${total}`;
   });
   const [stalled, setStalled] = useState(false);
   // Mirror DaemonStatusChip: render nothing until mounted so SSR markup and the
@@ -125,12 +166,21 @@ export function SyncStatusChip() {
 function SyncDetailPanel({ stalled, color }: { stalled: boolean; color: string }) {
   const liveLoading = useInboxStore((s) => s.liveLoading);
   const syncProgress = useInboxStore((s) => s.syncProgress);
+  const syncLogLag = useInboxStore((s) => s.syncLogLag);
+  const coldScopes = useInboxStore((s) =>
+    Object.keys(s.liveLoading).filter((scope) => collectionIsCold(s, scope)).join(","));
   const known = Object.keys(SCOPE_LABELS);
   const rank = (s: string) => {
     const i = known.indexOf(s);
     return i === -1 ? known.length : i;
   };
-  const scopes = Object.keys(liveLoading).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+  const cold = new Set(coldScopes ? coldScopes.split(",") : []);
+  const scopes = Object.keys(liveLoading)
+    .filter((scope) => cold.has(scope))
+    .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+  const behind = Object.entries(syncLogLag).filter(([, lag]) => lag > 0);
+  const logScopeLabel = (scope: string) =>
+    scope.startsWith("user:") ? "Your workspace" : scope.startsWith("team:") ? "Team workspace" : scope;
   const crawls = Object.entries(syncProgress)
     .filter(([, p]) => p.loading)
     .sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
@@ -141,6 +191,15 @@ function SyncDetailPanel({ stalled, color }: { stalled: boolean; color: string }
           {stalled ? "Sync is taking longer than usual" : "Syncing the latest data"}
         </div>
         <div className="px-3 py-2 space-y-1.5">
+          {behind.map(([scope, lag]) => (
+                <div key={scope} className="flex items-center gap-2 text-xs">
+                  <span className="text-sol-text">{logScopeLabel(scope)}</span>
+                  <span className="ml-auto flex items-center gap-1.5 tabular-nums text-sol-text-dim">
+                    <Loader2 className="w-3 h-3 animate-spin" style={{ color }} />
+                    {lag.toLocaleString()} change{lag === 1 ? "" : "s"} behind
+                  </span>
+                </div>
+              ))}
           {scopes.map((scope) => (
                 <div key={scope} className="flex items-center gap-2 text-xs">
                   <span className="text-sol-text">{scopeLabel(scope)}</span>

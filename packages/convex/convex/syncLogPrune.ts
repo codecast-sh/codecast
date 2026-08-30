@@ -47,6 +47,71 @@ export function prunablePrefix<T extends { ts: number }>(
   return { toDelete, stoppedEarly: false };
 }
 
+// One scope's prune step, split out of the mutation so the floor contract is
+// unit-testable against a fake db (the two floor branches below are what a
+// returning client's `resync` verdict hangs on). Returns rows pruned and the
+// budget left; `done` is false when the walk ran out of budget mid-scope, so
+// the chain re-enters this scope on its next run.
+export async function pruneScope(
+  db: any,
+  head: { _id: any; scope_key: string; position: number; floor?: number },
+  cutoff: number,
+  budget: number,
+): Promise<{ pruned: number; budget: number; done: boolean }> {
+  let pruned = 0;
+  // Probe: the oldest retained action past the floor. Young (or absent with
+  // nothing to advance) → this scope costs exactly one read.
+  const oldest = await db
+    .query("sync_actions")
+    .withIndex("by_scope_position", (q: any) =>
+      q.eq("scope_key", head.scope_key).gt("position", head.floor ?? 0))
+    .order("asc")
+    .first();
+  if (!oldest) {
+    // Nothing above the floor: if the head advanced past the floor, every
+    // action aged out earlier — set floor = head so a returning client
+    // resyncs instead of mistaking emptiness for caught-up.
+    if ((head.floor ?? 0) < head.position) {
+      await db.patch(head._id, { floor: head.position });
+    }
+    return { pruned, budget, done: true };
+  }
+  if (oldest.ts >= cutoff) return { pruned, budget, done: true }; // fully drained for this window
+
+  // Walk the prunable prefix.
+  let from = head.floor ?? 0;
+  let newFloor = head.floor ?? 0;
+  let sawEnd = false;
+  let stoppedAtYoung = false;
+  while (budget > 0) {
+    const pageLimit = Math.min(PER_SCOPE_PAGE, budget);
+    const page = await db
+      .query("sync_actions")
+      .withIndex("by_scope_position", (q: any) =>
+        q.eq("scope_key", head.scope_key).gt("position", from))
+      .order("asc")
+      .take(pageLimit);
+    const { toDelete, stoppedEarly } = prunablePrefix(page, cutoff);
+    for (const row of toDelete) {
+      await db.delete(row._id);
+      newFloor = row.position;
+      pruned++;
+      budget--;
+    }
+    if (stoppedEarly) { stoppedAtYoung = true; break; }
+    if (page.length < pageLimit) { sawEnd = true; break; }
+    from = page[page.length - 1].position;
+  }
+  // The scope drained: every remaining position up to the head is a hole (a
+  // coalesced move left it), so the floor is the head — a cursor below it
+  // missed a row that is now gone and must resync.
+  if (sawEnd && newFloor < head.position) newFloor = head.position;
+  if (newFloor > (head.floor ?? 0)) {
+    await db.patch(head._id, { floor: newFloor });
+  }
+  return { pruned, budget, done: sawEnd || stoppedAtYoung };
+}
+
 export const pruneSyncActions = internalMutation({
   args: {
     // Continuation cursor: process heads with scope_key greater than this
@@ -74,52 +139,9 @@ export const pruneSyncActions = internalMutation({
 
     for (const head of batch) {
       if (budget <= 0) break;
-      // Probe: the oldest retained action past the floor. Young (or absent with
-      // nothing to advance) → this scope costs exactly one read.
-      const oldest = await ctx.db
-        .query("sync_actions")
-        .withIndex("by_scope_position", (q: any) =>
-          q.eq("scope_key", head.scope_key).gt("position", head.floor ?? 0))
-        .order("asc")
-        .first();
-      if (!oldest) {
-        // Nothing above the floor: if the head advanced past the floor, every
-        // action aged out earlier — set floor = head so a returning client
-        // resyncs instead of mistaking emptiness for caught-up.
-        if ((head.floor ?? 0) < head.position) {
-          await ctx.db.patch(head._id, { floor: head.position });
-        }
-        continue;
-      }
-      if (oldest.ts >= cutoff) continue; // fully drained for this window
-
-      // Walk the prunable prefix.
-      let from = head.floor ?? 0;
-      let newFloor = head.floor ?? 0;
-      let sawEnd = false;
-      while (budget > 0) {
-        const pageLimit = Math.min(PER_SCOPE_PAGE, budget);
-        const page = await ctx.db
-          .query("sync_actions")
-          .withIndex("by_scope_position", (q: any) =>
-            q.eq("scope_key", head.scope_key).gt("position", from))
-          .order("asc")
-          .take(pageLimit);
-        const { toDelete, stoppedEarly } = prunablePrefix(page, cutoff);
-        for (const row of toDelete) {
-          await ctx.db.delete(row._id);
-          newFloor = row.position;
-          pruned++;
-          budget--;
-        }
-        if (stoppedEarly) break;
-        if (page.length < pageLimit) { sawEnd = true; break; }
-        from = page[page.length - 1].position;
-      }
-      if (sawEnd && newFloor < head.position) newFloor = head.position;
-      if (newFloor > (head.floor ?? 0)) {
-        await ctx.db.patch(head._id, { floor: newFloor });
-      }
+      const r = await pruneScope(ctx.db, head, cutoff, budget);
+      pruned += r.pruned;
+      budget = r.budget;
     }
 
     const done = !hasMoreHeads && budget > 0;
