@@ -47,8 +47,10 @@ export const StageCompanion = memo(function StageCompanion() {
     if (id) animatedHideSession(id, "stash");
   }, [id]);
 
-  // A companion whose row vanished (killed, pruned) closes itself rather than
-  // holding an empty pane.
+  // A companion whose row vanished (killed, pruned). Rendering null here is
+  // only a same-commit stopgap: the layout collapses the panel and the mirror
+  // closes the slot (companionMirrorStep) — an expanded panel around a null
+  // render is the empty-column bug.
   if (!id || !session) return null;
 
   return (
