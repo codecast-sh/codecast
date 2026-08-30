@@ -164,13 +164,17 @@ describe("triggers as first-class referenceable objects", () => {
     expect(entityTypeFromId("tr-42")).toBe("trigger");
   });
 
-  test("a trigger routes to the list page's ?task= deep link", () => {
-    // Triggers have no detail page of their own; the list page opens one row.
-    expect(entityRoute("trigger", "tr-42")).toBe("/triggers?task=tr-42");
-    expect(buildEntityUrl("trigger", "tr-42")).toBe("https://codecast.sh/triggers?task=tr-42");
+  test("a trigger routes to its detail page", () => {
+    expect(entityRoute("trigger", "tr-42")).toBe("/triggers/tr-42");
+    expect(buildEntityUrl("trigger", "tr-42")).toBe("https://codecast.sh/triggers/tr-42");
   });
 
   test("a trigger url round-trips back to { type, id }", () => {
+    expect(parseEntityUrl("https://codecast.sh/triggers/tr-42")).toEqual({
+      type: "trigger",
+      id: "tr-42",
+    });
+    // Legacy ?task= links (pre-detail-page) still resolve, in both spellings.
     expect(parseEntityUrl("https://codecast.sh/triggers?task=tr-42")).toEqual({
       type: "trigger",
       id: "tr-42",
@@ -182,6 +186,7 @@ describe("triggers as first-class referenceable objects", () => {
     });
     // Pre-rename alias still resolves.
     expect(parseEntityUrl("/schedules?task=tr-7")).toEqual({ type: "trigger", id: "tr-7" });
+    expect(parseEntityUrl("/schedules/tr-7")).toEqual({ type: "trigger", id: "tr-7" });
     // The bare list page addresses no single object.
     expect(parseEntityUrl("/triggers")).toBeNull();
   });

@@ -81,6 +81,7 @@ const Routines = lazy(() => import("@/app/workflows/page"));
 const Workflows = lazy(() => import("@/app/workflows/dashboard"));
 // Triggers (renamed from "Schedules"; /schedules stays routable as an alias).
 const Triggers = lazy(() => import("@/app/triggers/page"));
+const TriggerDetail = lazy(() => import("@/app/triggers/[id]/page"));
 const Anchor = lazy(() => import("@/app/anchor/page"));
 
 const Team = lazy(() => import("@/app/team/page"));
@@ -213,7 +214,9 @@ export function App() {
               <Route path="workflows" element={<E name="Workflows"><Workflows /></E>} />
               <Route path="routines" element={<E name="Routines"><Routines /></E>} />
               <Route path="triggers" element={<E name="Triggers"><Triggers /></E>} />
+              <Route path="triggers/:id" element={<E name="TriggerDetail"><TriggerDetail /></E>} />
               <Route path="schedules" element={<E name="Triggers"><Triggers /></E>} />
+              <Route path="schedules/:id" element={<E name="TriggerDetail"><TriggerDetail /></E>} />
               <Route path="sessions" element={<E name="Sessions"><Sessions /></E>} />
               <Route path="anchor" element={<E name="Anchor"><Anchor /></E>} />
               <Route path="team" element={<E name="Team"><Team /></E>} />

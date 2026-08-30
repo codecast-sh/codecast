@@ -627,6 +627,16 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
         {/* Hover toolbar floats over the top-right corner instead of living
             in-flow — invisible buttons were reserving ~130px of every row. */}
         <div className="absolute right-2 top-2 z-10 flex items-center gap-0.5 rounded-lg border border-sol-border bg-sol-card-hover px-1 py-0.5 shadow-md shadow-black/20 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity">
+          <ShortcutTooltip label="Open trigger page" hint="full detail + run history">
+            <Link
+              href={`/triggers/${task.short_id ?? task._id}`}
+              aria-label="Open trigger page"
+              onClick={(e) => e.stopPropagation()}
+              className={iconBtn}
+            >
+              <ArrowUpRight className="w-3.5 h-3.5" />
+            </Link>
+          </ShortcutTooltip>
           {isEditable && (
             <ShortcutTooltip label="Edit">
               <button className={iconBtn} aria-label="Edit" onClick={openForm("edit")}>
@@ -808,6 +818,13 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
           </div>
 
           <div className="flex items-center gap-1.5 mt-3 pt-2.5 border-t border-sol-border/60">
+            <Link
+              href={`/triggers/${task.short_id ?? task._id}`}
+              onClick={(e) => e.stopPropagation()}
+              className={`${detailBtn} no-underline`}
+            >
+              <ArrowUpRight className="w-3 h-3" /> Full page
+            </Link>
             {isEditable && (
               <button onClick={openForm("edit")} className={detailBtn}>
                 <Pencil className="w-3 h-3" /> Edit

@@ -161,7 +161,7 @@ describe("inline trigger references", () => {
   test("a bare short id renders the trigger's name, not its id", () => {
     const html = render("Trigger tr-42 marked complete.");
     expect(html).toContain("Growth audit");
-    expect(html).toContain('href="/triggers?task=' + TRIGGER_CONVEX_ID + '"');
+    expect(html).toContain('href="/triggers/' + TRIGGER_CONVEX_ID + '"');
     // Reads as a sentence, with the reference standing in for the id.
     expect(html).toContain("Trigger ");
     expect(html).toContain("marked complete.");

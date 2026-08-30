@@ -77,11 +77,12 @@ const SEGMENT_TYPE: Record<string, EntityType> = {
 };
 
 /**
- * Triggers have no detail page of their own: the list page opens one row via
- * `?task=<id>`. Kept as an explicit exception so `entityRoute` stays the single
- * answer to "where does this object live" for every caller.
+ * Legacy query-param addressing, kept for PARSING old links only. Triggers
+ * used to have no detail page — the list page opened one row via `?task=<id>`
+ * — so those links are still live in old messages. New links always use the
+ * path route (`/triggers/<id>`).
  */
-const QUERY_PARAM_ROUTE: Partial<Record<EntityType, string>> = { trigger: "task" };
+const LEGACY_QUERY_PARAM: Partial<Record<EntityType, string>> = { trigger: "task" };
 
 /** Normalize a canonical type or a url-segment alias to a canonical EntityType. */
 export function normalizeEntityType(type: string): EntityType | null {
@@ -98,8 +99,6 @@ export function normalizeEntityType(type: string): EntityType | null {
 export function entityRoute(type: string, id: string): string | null {
   const norm = normalizeEntityType(type);
   if (!norm) return null;
-  const param = QUERY_PARAM_ROUTE[norm];
-  if (param) return `${ENTITY_ROUTE[norm]}?${param}=${encodeURIComponent(id)}`;
   return `${ENTITY_ROUTE[norm]}/${id}`;
 }
 
@@ -296,9 +295,10 @@ export function parseEntityUrl(
   const type = SEGMENT_TYPE[segs[0].toLowerCase()];
   if (!type) return null;
 
-  // Query-addressed types (triggers) carry their id in a param, not a segment.
-  const param = QUERY_PARAM_ROUTE[type];
-  if (param) {
+  // Legacy query-addressed links (old /triggers?task=<id>) still resolve; the
+  // path segment wins when both are present.
+  const param = LEGACY_QUERY_PARAM[type];
+  if (param && segs.length < 2) {
     const qId = search ? new URLSearchParams(search).get(param)?.trim() : null;
     return qId ? { type, id: qId } : null;
   }

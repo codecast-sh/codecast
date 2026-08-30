@@ -34,6 +34,7 @@ const Workflows = lazyPage("@/app/workflows/dashboard", () => import("@/app/work
 const Routines = lazyPage("@/app/workflows/page", () => import("@/app/workflows/page"));
 // Triggers (renamed from "Schedules"; /schedules stays routable as an alias).
 const Triggers = lazyPage("@/app/triggers/page", () => import("@/app/triggers/page"));
+const TriggerDetail = lazyPage("@/app/triggers/[id]/page", () => import("@/app/triggers/[id]/page"));
 const Sessions = lazyPage("@/app/sessions/page", () => import("@/app/sessions/page"));
 const Anchor = lazyPage("@/app/anchor/page", () => import("@/app/anchor/page"));
 const Team = lazyPage("@/app/team/page", () => import("@/app/team/page"));
@@ -91,6 +92,8 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/calls\/([^/]+)$/, paramNames: ["id"], component: Calls },
   { pattern: /^\/docs\/([^/]+)$/, paramNames: ["id"], component: DocDetail },
   { pattern: /^\/plans\/([^/]+)$/, paramNames: ["id"], component: PlanDetail },
+  { pattern: /^\/triggers\/([^/]+)$/, paramNames: ["id"], component: TriggerDetail },
+  { pattern: /^\/schedules\/([^/]+)$/, paramNames: ["id"], component: TriggerDetail },
   // A task opened from inside a project keeps the project mounted, same trick
   // as /tasks/<id>: one component for both URLs, so selecting a task
   // reconciles beside the project's list instead of navigating away from it.

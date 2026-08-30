@@ -9,6 +9,7 @@ import { isRefusalProse } from "./idleSummary";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { enqueuePush } from "./pushRouter";
 import { nextShortId } from "./counters";
+import { canAccessConversation } from "./lib/access";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000; // 10 min
@@ -972,6 +973,78 @@ export const webList = query({
   },
 });
 
+// A trigger owned by someone else is still VIEWABLE when the viewer can view
+// the conversation it is anchored to (creator, home, or last run). Agents on a
+// remote daemon arm triggers under whatever account that daemon is logged into
+// — often a team bot — while the conversation belongs to a human; strict
+// per-user filtering made those triggers invisible on the very session that
+// created them. Read access piggybacks on conversation access (the workspace
+// rules), so this grants nothing a transcript view doesn't already show.
+// Management verbs stay owner-only (getOwnedTask).
+async function canViewTask(
+  ctx: { db: any },
+  userId: Id<"users">,
+  task: Doc<"agent_tasks">
+): Promise<boolean> {
+  if (task.user_id.toString() === userId.toString()) return true;
+  const anchors = [
+    task.created_by_conversation_id,
+    task.originating_conversation_id,
+    task.target_conversation_id,
+    task.last_run_conversation_id,
+  ].filter(Boolean) as Id<"conversations">[];
+  for (const id of anchors) {
+    const conv = await ctx.db.get(id);
+    if (conv && (await canAccessConversation(ctx as any, userId, conv))) return true;
+  }
+  return false;
+}
+
+// Every trigger anchored to one conversation — own AND team-visible foreign
+// rows — for the conversation header strip. The per-user webList can't carry a
+// bot-owned trigger, so the strip merges this on top. Gated on the viewer's
+// access to the conversation itself; `is_own` tells the client whether to
+// offer the management verbs.
+export const webListForConversation = query({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || !(await canAccessConversation(ctx, userId, conv))) return [];
+
+    const [created, originating] = await Promise.all([
+      ctx.db
+        .query("agent_tasks")
+        .withIndex("by_created_by_conversation", (q) =>
+          q.eq("created_by_conversation_id", args.conversation_id)
+        )
+        .collect(),
+      ctx.db
+        .query("agent_tasks")
+        .withIndex("by_originating_conversation", (q) =>
+          q.eq("originating_conversation_id", args.conversation_id)
+        )
+        .collect(),
+    ]);
+    const seen = new Set<string>();
+    const tasks: Doc<"agent_tasks">[] = [];
+    for (const t of [...created, ...originating]) {
+      if (seen.has(t._id.toString())) continue;
+      seen.add(t._id.toString());
+      tasks.push(t);
+    }
+    const enriched = await withResolvedRunConversations(ctx, userId, tasks);
+    return await Promise.all(
+      enriched.map(async (t) => {
+        const is_own = t.user_id.toString() === userId.toString();
+        const owner = is_own ? null : await ctx.db.get(t.user_id);
+        return { ...t, is_own, owner_name: owner?.name ?? owner?.email };
+      })
+    );
+  },
+});
+
 /**
  * One trigger by short id ("tr-42") or Convex id — the getter behind the
  * inline trigger pill, matching tasks.webGet / plans.webGet / conversations.
@@ -994,10 +1067,13 @@ export const webGet = query({
         .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id!.toLowerCase()))
         .unique();
     }
-    if (!task || task.user_id.toString() !== userId.toString()) return null;
+    if (!task || !(await canViewTask(ctx, userId, task))) return null;
 
     const [enriched] = await withResolvedRunConversations(ctx, userId, [task]);
-    return enriched ?? task;
+    const row = enriched ?? task;
+    const is_own = task.user_id.toString() === userId.toString();
+    const owner = is_own ? null : await ctx.db.get(task.user_id);
+    return { ...row, is_own, owner_name: owner?.name ?? owner?.email };
   },
 });
 
@@ -1046,7 +1122,7 @@ export const webListRuns = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
     const task = await ctx.db.get(args.task_id);
-    if (!task || task.user_id.toString() !== userId.toString()) return [];
+    if (!task || !(await canViewTask(ctx, userId, task))) return [];
 
     if (task.originating_conversation_id) {
       const convId = task.originating_conversation_id;

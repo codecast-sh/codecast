@@ -2474,7 +2474,12 @@ export default defineSchema({
     .index("by_user_run_at", ["user_id", "run_at"])
     .index("by_status_run_at", ["status", "run_at"])
     .index("by_event_filter", ["status"])
-    .index("by_short_id", ["short_id"]),
+    .index("by_short_id", ["short_id"])
+    // Anchor lookups for conversation-scoped visibility (webListForConversation):
+    // a trigger armed from a session is findable from that session even when a
+    // different account (a remote daemon's bot login) owns the trigger row.
+    .index("by_created_by_conversation", ["created_by_conversation_id"])
+    .index("by_originating_conversation", ["originating_conversation_id"]),
 
   // --- Task Layer: Projects, Tasks, Docs ---
 

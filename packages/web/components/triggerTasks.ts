@@ -25,10 +25,12 @@ export const ARMED_STATUSES = new Set(["scheduled", "running", "paused"]);
 // The agentTasks.webList payload fields the client reads.
 export type TaskRow = {
   _id: string;
+  short_id?: string;
   title: string;
   prompt: string;
   status: string;
   mode?: string;
+  agent_type?: string;
   schedule_type: "once" | "recurring" | "event";
   run_at?: number;
   interval_ms?: number;
@@ -51,6 +53,7 @@ export type TaskRow = {
   created_by_conversation_title?: string;
   target_conversation_id?: string;
   retry_count?: number;
+  max_runtime_ms?: number;
   // Haiku-distilled presentation fields (agentTasks.generateDisplaySummary).
   // display_title only exists when the stored title was a prompt slice; an
   // explicit human title is left alone, so preferring display_title is safe.
@@ -60,6 +63,13 @@ export type TaskRow = {
   // conversation (vs. completing naturally). The server re-arms stamped tasks
   // when the session is restored; the client reads it to SAY so.
   canceled_on_kill_at?: number;
+  // Present on conversation-scoped rows (webListForConversation / webGet):
+  // false = a trigger anchored to a conversation the viewer can see but owned
+  // by another account (a daemon's bot login). Viewable, not manageable —
+  // verbs are owner-only. Absent (webList rows) = own.
+  is_own?: boolean;
+  // The owning account's display name, only when is_own is false.
+  owner_name?: string;
 };
 
 // Armed inject schedules bound to one conversation — exactly the set the
