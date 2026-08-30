@@ -1,3 +1,4 @@
+import type { Id } from "./_generated/dataModel";
 // The per-user inbox triage/visibility stamps, projected off a conversation
 // doc. EVERY query that emits a conversation summary the client may seed into
 // its sessions cache (fork children, fork parent details, palette recents,
@@ -20,4 +21,29 @@ export function inboxVisibilityFields(conv: {
     inbox_killed_at: conv.inbox_killed_at ?? null,
     inbox_pinned_at: conv.inbox_pinned_at ?? null,
   };
+}
+
+// Pinned rows are a deliberate, bounded set: the inbox scan reads the newest
+// INBOX_PINNED_CAP pins (by_user_pinned, descending) and flags overflow, so the
+// cap is enforced where the user can see it — a pin that would exceed it is
+// refused by every writer (conversations.patchConversation throws; the dispatch
+// patch rail drops the field). Sync-convergence C2.
+export const INBOX_PINNED_CAP = 100;
+
+export const PIN_CAP_ERROR = `Pin limit reached: you already hold ${INBOX_PINNED_CAP} pinned sessions. Unpin one to pin another.`;
+
+// True when `patch` pins a row that is not pinned yet and the user already
+// holds the cap. One indexed read, only on a pin.
+export async function pinCapExceeded(
+  ctx: { db: any },
+  userId: Id<"users">,
+  conv: { inbox_pinned_at?: number | null },
+  patch: Record<string, any>,
+): Promise<boolean> {
+  if (!patch.inbox_pinned_at || conv.inbox_pinned_at) return false;
+  const pinned = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_pinned", (q: any) => q.eq("user_id", userId).gt("inbox_pinned_at", 0))
+    .take(INBOX_PINNED_CAP);
+  return pinned.length >= INBOX_PINNED_CAP;
 }

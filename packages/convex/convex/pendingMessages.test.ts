@@ -330,9 +330,13 @@ const createDeliverCtx = (rows: Array<Record<string, any>>, convs: Record<string
             const q = { eq(field: string, value: any) { eqs[field] = value; return q; } };
             builder(q);
             const keyField = indexName === "by_owner_status" ? "owner_user_id" : "from_user_id";
+            const matching = () => rows.filter((r) => r[keyField] === eqs[keyField] && r.status === eqs.status);
             return {
               async collect() {
-                return rows.filter((r) => r[keyField] === eqs[keyField] && r.status === eqs.status);
+                return matching();
+              },
+              async take(n: number) {
+                return matching().slice(0, n);
               },
             };
           },
@@ -376,6 +380,23 @@ describe("collectDeliverableForOwner", () => {
 
     const out = await collectDeliverableForOwner(ctx as any, "u1" as any, "dev1");
     expect(out.map((r) => r._id)).toEqual(["both"]);
+  });
+
+  // Regression for the 2026-08-30 delivery outage: unbounded collects made this query's
+  // cost track the pending backlog, so a backend brownout (which grows the backlog) was
+  // exactly when the query timed out — wedging the daemon's subscription in a permanent
+  // server-side error state. The scan is bounded now; a deep backlog drains in waves.
+  test("bounds the scan so a deep backlog cannot make the query un-executable", async () => {
+    const rows = Array.from({ length: 600 }, (_, i) => ({
+      _id: `m${i}`, conversation_id: "cMine", from_user_id: "u1", owner_user_id: "u1", status: "pending",
+    }));
+    const convs = { cMine: { _id: "cMine", user_id: "u1" } };
+    const { ctx } = createDeliverCtx(rows, convs);
+
+    const out = await collectDeliverableForOwner(ctx as any, "u1" as any, "dev1");
+    expect(out.length).toBe(500);
+    // Index order = oldest first, so the oldest slice delivers first.
+    expect(out[0]._id).toBe("m0");
   });
 });
 

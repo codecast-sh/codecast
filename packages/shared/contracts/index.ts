@@ -52,3 +52,7 @@ export * from "./usageLimits";
 export * from "./appDescriptors";
 // The cross-entity review queue row — one shape for "what is waiting on a
 // human", fed by comment threads, page comments, and workflow gates alike.
+// The inbox projection: the bucket alphabet, the ONE placement function the
+// Convex overlay and the CLI inbox both call, the time-flip stamps and the
+// order-independent digest every client compares against (sync-convergence C3, C8).
+export * from "./inboxProjection";

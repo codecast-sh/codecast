@@ -267,7 +267,7 @@ export default function JoinTeamPage() {
         memberCount={teamInfo.memberCount}
       />
       {error && (
-        <div className="mt-4 rounded-lg border border-sol-red/20 bg-sol-red/10 p-3">
+        <div className="mt-4 rounded-lg bg-sol-red/10 p-3">
           <p className="text-center text-sm text-sol-red">{error}</p>
         </div>
       )}

@@ -66,6 +66,9 @@ function createDb(seed: Record<string, Rec[]>) {
             async first() {
               return run()[0] ?? null;
             },
+            async take(n: number) {
+              return run().slice(0, n);
+            },
           };
           return chain;
         },

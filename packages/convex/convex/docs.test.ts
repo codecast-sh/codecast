@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Doc, Id } from "./_generated/dataModel";
-import { generateShareLink, get, isWebDocOwner, mapWebDocDetail, search, unshare, webGet, webUpdate } from "./docs";
+import { docTextUpdates, generateShareLink, get, isWebDocOwner, mapWebDocDetail, search, unshare, webGet, webUpdate } from "./docs";
 import { webGetDocDetail } from "./taskMining";
 
 type Patch = { id: string; patch: Record<string, unknown> };
@@ -390,5 +390,44 @@ describe("CLI doc access is owner-or-team", () => {
     const stranger = createCliCtx({ userId: "stranger", docs: [teamDoc, privateDoc] });
     const strangerRes = await (search as any)._handler(stranger, { api_token: "t", query: "Goanna" });
     expect(strangerRes).toEqual([]);
+  });
+});
+
+// The doc is one text: its title is its leading heading. docTextUpdates is
+// the single rule every CLI/web text write goes through.
+describe("docTextUpdates", () => {
+  test("a content edit adopts the body's leading heading as the title", () => {
+    const existing = doc({ title: "Old", content: "# Old\n\nbody" });
+    expect(docTextUpdates(existing, { content: "# New Name\n\nnew body" })).toEqual({
+      title: "New Name",
+      content: "# New Name\n\nnew body",
+    });
+  });
+
+  test("a content edit with no heading keeps the title and writes it in as one", () => {
+    const existing = doc({ title: "Kept", content: "# Kept\n\nold" });
+    expect(docTextUpdates(existing, { content: "plain body" })).toEqual({
+      content: "# Kept\n\nplain body",
+    });
+  });
+
+  test("a title edit rewrites the leading heading and keeps the body", () => {
+    const existing = doc({ title: "Old", content: "# Old\n\nbody" });
+    expect(docTextUpdates(existing, { title: "Renamed" })).toEqual({
+      title: "Renamed",
+      content: "# Renamed\n\nbody",
+    });
+  });
+
+  test("a title edit on a legacy body without a heading gains one", () => {
+    const existing = doc({ title: "Old", content: "legacy body" });
+    expect(docTextUpdates(existing, { title: "Renamed" })).toEqual({
+      title: "Renamed",
+      content: "# Renamed\n\nlegacy body",
+    });
+  });
+
+  test("no text args, no changes", () => {
+    expect(docTextUpdates(doc(), {})).toEqual({});
   });
 });

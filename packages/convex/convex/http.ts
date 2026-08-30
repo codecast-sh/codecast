@@ -3021,6 +3021,35 @@ http.route({
 });
 
 http.route({
+  path: "/cli/tasks/resolve",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    try {
+      const body = await request.json();
+      const result = await ctx.runQuery(api.agentTasks.resolveTask, {
+        api_token: body.api_token,
+        ref: String(body.ref ?? ""),
+      });
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ error: msg }), {
+        status: msg.includes("Unauthorized") ? 401 : 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
   path: "/cli/tasks/list",
   method: "OPTIONS",
   handler: httpAction(async () => {
@@ -3951,8 +3980,10 @@ cliRoute("/cli/docs/get", async (ctx, body) => {
 });
 cliRoute("/cli/docs/update", async (ctx, body) => {
   const result = await ctx.runMutation(api.docs.update, body);
-  if (body.content !== undefined) {
-    await ctx.runMutation(api.docs.resetSync, { api_token: body.api_token, id: body.id, content: body.content });
+  // The mutation returns the content it stored whenever the text changed — a
+  // title edit rewrites the heading line, so it resets the editor snapshot too.
+  if (result.content !== undefined) {
+    await ctx.runMutation(api.docs.resetSync, { api_token: body.api_token, id: body.id, content: result.content });
   }
   return result;
 });

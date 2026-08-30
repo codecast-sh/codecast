@@ -29,6 +29,7 @@ import { uploadBlobToStorage } from "../uploadBlob";
 import { mutateOnUnload } from "../keepaliveMutation";
 import { createMicMeter, type MicMeter } from "./micMeter";
 import { createScribeEngine, type ConvexHandle } from "./scribeEngine";
+import { peekOsPermissions, permissionHint, refreshOsPermissions } from "../osPermissions";
 
 const api = _api as any;
 
@@ -179,7 +180,11 @@ export async function startRecording(): Promise<string | null> {
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true },
     });
   } catch {
-    setPhase("idle", "Recording needs the microphone. Allow it and press record again.");
+    // Name the actual remedy when the OS knows one (System Settings on the
+    // desktop, the site setting in a browser).
+    await refreshOsPermissions().catch(() => {});
+    const hint = permissionHint("microphone", peekOsPermissions().microphone);
+    setPhase("idle", hint ?? "Recording needs the microphone. Allow it and press record again.");
     return null;
   }
   const track = stream.getAudioTracks()[0];

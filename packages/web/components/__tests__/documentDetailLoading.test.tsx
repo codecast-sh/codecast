@@ -31,9 +31,6 @@ mock.module("../MessageReview", () => ({
 mock.module("../DocReviewBar", () => ({
   DocReviewBar: () => <div data-stub="review-bar" />,
 }));
-mock.module("../DetailSplitLayout", () => ({
-  PeekLayoutControls: () => null,
-}));
 mock.module("../workspace/Slot", () => ({
   SlotActions: () => null,
 }));
@@ -101,5 +98,47 @@ describe("DocumentDetailLayout body modes", () => {
     expect(html).toContain("The idea");
     expect(html).not.toContain("app-loader-bar");
     expect(html).not.toContain("Empty document");
+  });
+});
+
+// The title-in-body mode: the doc is one text whose first heading is the
+// title. Edit mode has NO separate h1 (the editor's first block is the
+// title); review mode splits the leading heading off the body and renders it
+// as a static heading in the same spot.
+describe("DocumentDetailLayout titleInBody", () => {
+  test("edit mode renders no separate title element", () => {
+    const html = render({ titleInBody: true, markdownContent: "# Real Title\n\nbody", contentReady: true });
+    expect(html).toContain('data-stub="collab-editor"');
+    expect(html).not.toContain("<h1");
+  });
+
+  test("review mode shows the leading heading as the title and strips it from the body", () => {
+    const html = render({
+      titleInBody: true,
+      markdownContent: "# Real Title\n\nbody text",
+      contentReady: true,
+      defaultEditing: false,
+    });
+    expect(html).toContain("Real Title");
+    const review = html.split('data-stub="message-review"')[1] ?? "";
+    expect(review).toContain("body text");
+    expect(review).not.toContain("Real Title");
+  });
+
+  test("review mode falls back to the stored title when the body has no heading yet", () => {
+    const html = render({
+      titleInBody: true,
+      markdownContent: "legacy body",
+      contentReady: true,
+      defaultEditing: false,
+    });
+    expect(html).toContain("My Doc");
+    expect(html).toContain("legacy body");
+  });
+
+  test("a doc that is only a title counts as empty in review mode", () => {
+    const html = render({ titleInBody: true, markdownContent: "# Just a Title\n", contentReady: true, defaultEditing: false });
+    expect(html).toContain("Empty document");
+    expect(html).toContain("Just a Title");
   });
 });

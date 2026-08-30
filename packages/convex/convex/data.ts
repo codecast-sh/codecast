@@ -313,6 +313,16 @@ async function resolveWorkspace(ctx: { db: any }, opts: DataContextOpts): Promis
       .collect();
     const result = resolveTeamForPath(mappings, opts.project_path, undefined);
     if (result.teamId) {
+      // A mapping whose team row was deleted is dangling data, not an access
+      // question: failing closed here bricked every task/plan/doc operation
+      // from the mapped directory with no way to self-heal (codecast repo,
+      // 2026-08-30 — the team died in April, the mapping survived). A missing
+      // team resolves as unmapped; a LIVE team without membership still fails
+      // closed exactly as before.
+      const team = await ctx.db.get(result.teamId);
+      if (!team) {
+        return { type: "personal", userId: opts.userId };
+      }
       if (!(await isTeamMember(ctx, opts.userId, result.teamId))) {
         forbidden("Forbidden: directory mapping points to a team the user cannot access");
       }

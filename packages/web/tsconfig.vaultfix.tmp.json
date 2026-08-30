@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [],
+  "files": [
+    "lib/terminal/endpoint.ts",
+    "store/vaultStore.ts",
+    "app/vault/page.tsx",
+    "lib/__tests__/terminalEndpoint.test.ts"
+  ]
+}
