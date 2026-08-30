@@ -150,6 +150,7 @@ import {
 } from "./vault/vaultCli.js";
 import { buildMatcher, contextWindow, matchingLines, resolveLineRange } from "./textView.js";
 import { resolveOwnTarget } from "./ownTarget.js";
+import { resolveCurrentConversationId } from "./linkResolve.js";
 
 const program = new Command();
 const isStableContextFastPath =
@@ -4088,7 +4089,7 @@ function resolveOwnerTarget(
   if (!r.ok) {
     console.error(
       `No session detected, so "${r.member}" has no session to apply to — ` +
-      `pass one explicitly: cast ${cmd} jx7c6zk ${r.member}`
+      `pass one explicitly (e.g. cast ${cmd} jx7c6zk ${r.member})`
     );
     process.exit(1);
   }
@@ -4986,13 +4987,7 @@ program
       });
 
       try {
-        let conversationCache: Record<string, string> = {};
-        try {
-          const cacheFile = path.join(os.homedir(), ".codecast", "conversations.json");
-          if (fs.existsSync(cacheFile)) {
-            conversationCache = JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as Record<string, string>;
-          }
-        } catch { /* fall through with empty cache */ }
+        const conversationCache = readLocalConversationMap();
 
         const result = await performReconciliation(
           syncService,
@@ -6507,14 +6502,18 @@ program
         id: c.id, session_id: c.session_id, title: c.title, project_path: c.project_path,
         updated_at: c.updated_at, message_count: c.message_count, agent_type: c.agent_type,
         agent_status: c.agent_status, work_state: c.work_state || "idle", is_pinned: !!c.is_pinned,
+        bucket: c.bucket ?? null, below_fold: !!c.below_fold,
         is_killed: !!c.is_killed,
         is_live: !!c.is_live, is_unresponsive: false, awaiting_input: false,
         idle_summary: null, last_user_message: null, active_plan: null, active_task: null,
       }));
-      const counts: any = { working: 0, needs_input: 0, done: 0, dormant: 0, idle: 0, pinned: 0, live: 0, total: 0 };
+      // The tally reads the server-stamped work_state (never classifies) and
+      // reports fold rows as their own figure, mirroring inboxForCLI's counts.
+      const counts: any = { working: 0, needs_input: 0, done: 0, dormant: 0, idle: 0, pinned: 0, live: 0, below_fold: 0, total: 0 };
       for (const s of sessions) {
         counts.total++; counts[s.work_state] = (counts[s.work_state] || 0) + 1;
         if (s.is_pinned) counts.pinned++; if (s.is_live) counts.live++;
+        if (s.below_fold) counts.below_fold++;
       }
       return { sessions, counts, scope: feed.scope };
     };
@@ -7641,6 +7640,21 @@ function claudeSessionPath(sessionId: string, projectPath?: string | null): stri
   return path.join(projectDir, `${sessionId}.jsonl`);
 }
 
+// The daemon's local sessionId -> conversationId map. It answers "which
+// conversation is this session" without the server, which matters in a
+// session's first seconds: the server-side session_id binding rides the
+// daemon's retry queue, so a just-started or just-resumed session misses on
+// the server while this file already has the answer.
+function readLocalConversationMap(): Record<string, string> {
+  try {
+    const cacheFile = path.join(os.homedir(), ".codecast", "conversations.json");
+    if (!fs.existsSync(cacheFile)) return {};
+    return JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
 // Pre-register a fresh sessionId -> conversationId mapping in the daemon's
 // cache *before* the daemon discovers the JSONL. Without this, the daemon
 // treats the reconstituted JSONL as a brand-new session and creates a
@@ -7652,11 +7666,7 @@ function linkSessionToConversation(sessionId: string, conversationId: string): v
   try {
     const cacheDir = path.join(os.homedir(), ".codecast");
     const cacheFile = path.join(cacheDir, "conversations.json");
-    let cache: Record<string, string> = {};
-    if (fs.existsSync(cacheFile)) {
-      try { cache = JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as Record<string, string>; }
-      catch { cache = {}; }
-    }
+    const cache = readLocalConversationMap();
     if (cache[sessionId] === conversationId) return;
     cache[sessionId] = conversationId;
     if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
@@ -8054,18 +8064,23 @@ program
     //
     // detectCurrentSessionId returns the LOCAL agent session id, which the read
     // path below cannot resolve (its resolver deliberately takes only short and
-    // full conversation ids). /cli/session-links is the existing mapping from
-    // one to the other — the same endpoint `cast links` uses, so an unsynced
-    // session gets synced here exactly as it does there.
+    // full conversation ids). The daemon's local map is checked first: it is
+    // written at session discovery, while the server-side session_id binding
+    // rides the retry queue — so a just-started or just-resumed session can
+    // miss on the server for its first minute. The short retry rides out the
+    // daemon discovering a brand-new JSONL.
     if (ref === undefined) {
       const current = detectCurrentSessionId();
       if (!current) {
-        console.error("No session detected — pass one explicitly: cast link jx7c6zk");
+        console.error("No session detected — run this inside an agent session, or pass a session id (from `cast sessions`).");
         process.exit(1);
       }
-      const resolved = await resolveSessionConversationId(config, current);
+      const resolved = await resolveCurrentConversationId(current, {
+        readLocalMap: readLocalConversationMap,
+        resolveOnServer: (id) => resolveSessionConversationId(config, id),
+      });
       if (!resolved) {
-        console.error("Could not resolve the current session — pass one explicitly: cast link jx7c6zk");
+        console.error("Could not resolve the current session — a session that just started may not have synced yet. Retry in a few seconds, or pass a session id (from `cast sessions`).");
         process.exit(1);
       }
       ref = resolved;
@@ -12045,6 +12060,12 @@ chat
       return;
     }
     console.log(`${c.green}✓${c.reset} sent ${c.dim}${result.message_id}${c.reset}`);
+    // A reply on a thread a session started goes back into that session.
+    if (result.session_relay?.delivered) {
+      console.log(`${c.dim}  delivered into session ${result.session_relay.session_short_id} — it can answer in this thread${c.reset}`);
+    } else if (result.session_relay?.skipped && result.session_relay.skipped !== "agent_authored") {
+      console.log(`${c.yellow}•${c.reset} not relayed to the thread's session: ${result.session_relay.skipped}`);
+    }
     if (result.anchor_thinking_message_id && result.anchor_listening) {
       console.log(`${c.dim}  the anchor follows this thread and is reading — it answers only if the line was for it${c.reset}`);
     } else if (result.anchor_thinking_message_id) {
@@ -12686,6 +12707,17 @@ async function resolveTaskId(config: any, siteUrl: string, idInput: string): Pro
     const exact = tasks.find((t: any) => t.short_id && t.short_id.toLowerCase() === input.toLowerCase());
     if (exact) return exact._id;
     if (isShortId) {
+      // Not in the own-only list: a trigger armed under another account (a
+      // team bot on a remote daemon) is still manageable when this user can
+      // view its conversation — resolve it through that rule.
+      const shared = await cliFetchRead(`${siteUrl}/cli/tasks/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_token: config.auth_token, ref: input }),
+      })
+        .then((r) => r.json())
+        .catch(() => null);
+      if (shared && typeof shared === "object" && shared._id) return shared._id;
       console.error(`No trigger found matching: ${input}`);
       return null;
     }
@@ -13925,8 +13957,8 @@ const doc = program
 
 doc
   .command("create")
-  .description("Create a new document")
-  .argument("<title>", "Document title")
+  .description("Create a new document. The title is the document's first heading: content that opens with one keeps it as the title.")
+  .argument("<title>", "Document title (written in as the first heading when the content has none)")
   .option("-c, --content <text>", "Document content (markdown); '-' reads it from stdin (heredoc-friendly)")
   .option("--content-file <path>", "Read content from file ('-' for stdin)")
   .option("-t, --type <type>", "Document type (note, plan, insight, decision, runbook)", "note")
@@ -13943,7 +13975,7 @@ doc
         ? readStdinBody()
         : options.content.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
     } else {
-      body.content = `# ${title}\n`;
+      body.content = "";
     }
     body.doc_type = options.type;
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
@@ -14102,7 +14134,7 @@ doc
   .option("--new <text>", "Replacement text")
   .option("--content <text>", "Full content replacement")
   .option("--content-file <path>", "Full content from file")
-  .option("--title <text>", "Update title")
+  .option("--title <text>", "Update title (rewrites the document's first heading)")
   .option("-t, --type <type>", "Change document type")
   .action(async (id: string, options: any) => {
     if (options.old && options.new !== undefined) {
