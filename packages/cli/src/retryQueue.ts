@@ -3,7 +3,7 @@ import { atomicWriteFile } from "./atomicWrite.js";
 
 export interface RetryOperation {
   id: string;
-  type: "createConversation" | "addMessage" | "addMessages";
+  type: "createConversation" | "addMessage" | "addMessages" | "updateSessionId";
   params: Record<string, unknown>;
   attempts: number;
   nextRetryAt: number;
@@ -14,7 +14,7 @@ export interface RetryOperation {
 
 export interface DroppedOperation {
   id: string;
-  type: "createConversation" | "addMessage" | "addMessages";
+  type: "createConversation" | "addMessage" | "addMessages" | "updateSessionId";
   params: Record<string, unknown>;
   attempts: number;
   createdAt: number;

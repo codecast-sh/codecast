@@ -1360,16 +1360,19 @@ export class SyncService {
     }
   }
 
+  // Throws on failure — callers must handle it. This is the one write that
+  // keeps a conversation answering to its live session uuid; a bare catch here
+  // silently stranded conversations on their spawn-time stub id, so every
+  // session-bound `cast` write from the agent failed "Conversation not found"
+  // while message sync (keyed by conversation _id) looked perfectly healthy.
   async updateSessionId(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string): Promise<void> {
-    try {
-      await this.mutate("conversations:updateSessionId" as any, {
-        conversation_id: conversationId,
-        session_id: sessionId,
-        project_path: projectPath,
-        git_root: gitRoot,
-        api_token: this.apiToken,
-      });
-    } catch {}
+    await this.mutate("conversations:updateSessionId" as any, {
+      conversation_id: conversationId,
+      session_id: sessionId,
+      project_path: projectPath,
+      git_root: gitRoot,
+      api_token: this.apiToken,
+    });
   }
 
   /** Owner device of a conversation (single-owner guard). null if unknown/unowned. */
