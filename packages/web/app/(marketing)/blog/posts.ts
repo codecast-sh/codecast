@@ -18,6 +18,15 @@ export type BlogPost = {
 
 export const POSTS: BlogPost[] = [
   {
+    slug: "a-url-for-everything-your-agent-makes",
+    title: "A URL for everything your agent makes",
+    dek: "Reports, dashboards, design proposals — agents produce them daily, and chat transcripts bury them. cast publish turns a file into a live page with versions, comments, and a link you can actually send.",
+    author: "the codecast team",
+    date: "2026-08-30",
+    dateLabel: "August 30, 2026",
+    readingMinutes: 5,
+  },
+  {
     slug: "this-post-wrote-itself",
     title: "This post wrote itself (on a schedule)",
     dek: "Codecast triggers run full agent sessions on a timer. The proof is this blog: last week's post and this one were both written, unattended, by runs of the same weekly trigger.",

@@ -343,3 +343,26 @@ export function parsePublishedPageUrl(href: string | undefined | null): { slug: 
   const m = /^\/(?:cli\/)?a\/([A-Za-z0-9]{8,24})$/.exec(path);
   return m ? { slug: m[1] } : null;
 }
+
+/**
+ * The /share URL family. A share link addresses an object through an opaque
+ * token (a UUID minted when the owner shares it) rather than an id:
+ *
+ *   /share/<token>            → a whole conversation
+ *   /share/message/<token>    → a message excerpt
+ *   /share/doc/<token>        → a doc
+ *   /share/plan/<token>       → a plan
+ *
+ * One grammar, three consumers: the web server (bot unfurls + SSR), the
+ * mobile deep-link router, and the mobile /share resolver screen. The
+ * sub-kind segment set is closed on purpose — an unknown segment is not a
+ * token, it is a URL we do not own yet.
+ */
+export type ShareKind = "conversation" | "message" | "doc" | "plan";
+
+export function parseSharePath(path: string): { kind: ShareKind; token: string } | null {
+  const clean = (path || "").split(/[?#]/)[0];
+  const m = /^\/share\/(?:(message|doc|plan)\/)?([A-Za-z0-9_-]{6,80})\/?$/.exec(clean);
+  if (!m) return null;
+  return { kind: (m[1] as ShareKind) ?? "conversation", token: m[2] };
+}
