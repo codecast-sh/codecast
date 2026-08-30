@@ -18,7 +18,7 @@ import rehypeHighlight from "rehype-highlight";
 import { rehypeSearchHighlight } from "../lib/rehypeSearchHighlight";
 import { compressImage } from "../lib/compressImage";
 import { textareaCaretRect } from "../lib/textareaCaret";
-import { useStorageImageUrl, useStorageImageUrls, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
+import { useStorageImageSrc, useStorageImageUrls, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
 import { AvatarImg } from "../lib/avatarCache";
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from "../lib/sessionImages";
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
@@ -6312,20 +6312,22 @@ function useSwipeToDismiss(onDismiss: () => void) {
 
 // Batched + cross-mount-cached URL resolution: one query for all visible
 // images, and a remount (virtualized scroll) reuses the cached URL instead of
-// re-subscribing and re-flashing "Loading…".
+// re-subscribing and re-flashing "Loading…". Bytes are cache-first too
+// (useStorageImageSrc): a seen image paints from the local byte cache, and the
+// history prefetch warms it before the block ever mounts.
 function useImageSrc(image: ImageData): { src: string | undefined; storageResolved: boolean; storageMissing: boolean } {
-  // storageUrl: undefined = still loading, null = not found, string = URL
-  const storageUrl = useStorageImageUrl(image.storage_id);
-  const storageResolved = image.storage_id ? storageUrl !== undefined : true;
-  const storageMissing = Boolean(image.storage_id) && storageUrl === null;
+  // storageSrc: undefined = still resolving, null = not found, string = src
+  const storageSrc = useStorageImageSrc(image.storage_id);
+  const storageResolved = image.storage_id ? storageSrc !== undefined : true;
+  const storageMissing = Boolean(image.storage_id) && storageSrc === null;
 
   // While uploading we only have the local blob: preview. After the upload
-  // resolves we prefer the real storage URL but fall back to the preview until
-  // the URL resolves, so the thumbnail never flickers to "Loading…".
+  // resolves we prefer the real storage src but fall back to the preview until
+  // it resolves, so the thumbnail never flickers to "Loading…".
   const src = image.uploading && image.preview_url
     ? image.preview_url
     : image.storage_id
-      ? (typeof storageUrl === "string" ? storageUrl : image.preview_url || undefined)
+      ? (typeof storageSrc === "string" ? storageSrc : image.preview_url || undefined)
       : image.data
         ? `data:${image.media_type};base64,${image.data}`
         : image.preview_url || undefined;
