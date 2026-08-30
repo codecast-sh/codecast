@@ -4,7 +4,7 @@ import * as path from "path";
 import { randomUUID, createHash } from "node:crypto";
 import * as http from "http";
 import { Database } from "bun:sqlite";
-import { execSync, execFileSync, exec, execFile, spawn, spawnSync, setSlowSyncSpawnSink } from "./proc.js";
+import { childErrorDetail, execSync, execFileSync, exec, execFile, spawn, spawnSync, setSlowSyncSpawnSink } from "./proc.js";
 import { parseProcessTable } from "./processTable.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
 import { watch as chokidarWatch } from "chokidar";
@@ -4854,7 +4854,7 @@ async function executeRemoteCommand(
           result = JSON.stringify({ moved: true, to: toDeviceId });
           log(`[MOVE] done — ${sessionId.slice(0, 8)} now owned by ${toDeviceId.slice(0, 8)}`);
         } else {
-          const detail = (moveRes.stderr || moveRes.stdout || "").trim().slice(-500);
+          const detail = childErrorDetail(moveRes.stderr, moveRes.stdout);
           error = `move failed (exit ${moveRes.code})${detail ? `: ${detail}` : ""}`;
           log(`[MOVE] FAILED ${sessionId.slice(0, 8)} -> ${toDeviceId.slice(0, 8)}: ${error}`);
         }
