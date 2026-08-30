@@ -20,6 +20,7 @@ import { useConvex } from "convex/react";
 import { useEffect, useReducer } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { shareTokenArg } from "../lib/shareTokenScope";
+import { imageBytes } from "../lib/imageByteCache";
 
 const api = _api as any;
 
@@ -115,6 +116,7 @@ function scheduleFlush(convex: ReturnType<typeof useConvex>, delayMs = 0) {
           : {}),
       });
       const unresolved: string[] = [];
+      const resolvedUrls: string[] = [];
       for (const id of ids) {
         const url = urls?.[id];
         // Absent from the response (the server answers null when the caller
@@ -126,11 +128,16 @@ function scheduleFlush(convex: ReturnType<typeof useConvex>, delayMs = 0) {
           continue;
         }
         urlCache.set(id, url);
+        if (typeof url === "string") resolvedUrls.push(url);
         const fns = waiters.get(id);
         waiters.delete(id);
         fns?.forEach((fn) => fn());
       }
       schedulePersist();
+      // Every id resolved here was asked for by a surface or a history
+      // prefetch — warm the BYTES too, so the image paints from local cache
+      // next time (or offline) instead of re-crossing the network.
+      imageBytes.prefetch(resolvedUrls);
       requeueLiveIds(convex, unresolved);
     } catch {
       // Transient failure (backend blip / deploy): do NOT cache or fire waiters.
@@ -177,11 +184,21 @@ export function prefetchStorageImageUrls(
   storageIds: Array<string | undefined | null>
 ) {
   let queued = false;
+  const knownUrls: string[] = [];
   for (const id of storageIds) {
-    if (!id || urlCache.has(id) || pendingIds.has(id)) continue;
+    if (!id) continue;
+    if (urlCache.has(id)) {
+      // The mapping is already known (this session or a persisted one) so the
+      // flush path will never see it — warm the bytes directly.
+      const url = urlCache.get(id);
+      if (typeof url === "string") knownUrls.push(url);
+      continue;
+    }
+    if (pendingIds.has(id)) continue;
     pendingIds.add(id);
     queued = true;
   }
+  imageBytes.prefetch(knownUrls);
   if (queued) scheduleFlush(convex);
 }
 
@@ -247,6 +264,19 @@ export function useStorageImageUrls(
     if (id && urlCache.has(id)) out[id] = urlCache.get(id)!;
   }
   return out;
+}
+
+/**
+ * Cache-first src for a storage id: URL resolution (above) composed with the
+ * shared byte cache. undefined = still resolving (id→URL or bytes), null =
+ * storage object missing, string = src to render — a local object URL when the
+ * bytes are cached, else the serving URL (byte-fetch failed; let <img> try).
+ */
+export function useStorageImageSrc(storageId: string | undefined | null): string | null | undefined {
+  const url = useStorageImageUrl(storageId);
+  const src = imageBytes.useSrc(typeof url === "string" ? url : undefined);
+  if (typeof url !== "string") return url;
+  return src;
 }
 
 export function hasDecodedSrc(src: string | undefined): boolean {
