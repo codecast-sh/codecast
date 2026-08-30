@@ -1,5 +1,4 @@
 import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { useEventListener } from "../../hooks/useEventListener";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useTrackedStore } from "../../store/inboxStore";
@@ -20,19 +19,26 @@ import {
   type CallWindowSize,
   type FacesMode,
 } from "../../lib/desktop";
+
+// Module-level so the hook's callbacks can treat it as a constant: this
+// component only ever runs inside the call window, and these are its switches.
+const CALL_WINDOW_BRIDGE = {
+  setInteractive: setCallWindowInteractive,
+  setContentSize: setCallWindowContentSize,
+  setDragging: setCallWindowDragging,
+};
 import {
   TIER_DIAMETER,
   facePeople,
   facesToShow,
   facesWindowSize,
-  hitsInteractive,
   pickSpeaker,
   type FacePerson,
   type FaceTier,
-  type HitRegion,
   type SpeakerPick,
 } from "../../lib/calls/faceCrop";
 import { FaceCircle, FacesChrome } from "./FaceCircle";
+import { useFloatingCircles } from "./useFloatingCircles";
 import "./faces.css";
 
 /**
@@ -54,10 +60,9 @@ import "./faces.css";
  * `CallPanel`; this draws the circles and says which size to be next.
  *
  * ── The two things a see-through size has to get right ────────────────────
- * CLICK-THROUGH. The window is a rectangle, the product is a few circles.
- * It ignores the mouse by default, and this component — the only side that
- * knows where the circles are — lifts that while the pointer is over one. Get
- * it wrong and an invisible pane eats clicks meant for the person's editor.
+ * CLICK-THROUGH AND SIZE live in `useFloatingCircles`, shared with the idle
+ * presence overlay: the window ignores the mouse except over a circle, and it
+ * is exactly as big as its circles plus what hovering adds.
  *
  * FRAME DISCIPLINE. Face tracking samples at 3Hz and the crop eases toward it
  * every frame, all of it in refs and one CSS transform per circle. Nothing per
@@ -80,8 +85,6 @@ export function CallFaces({
   /** Change the window's size, including back to the stage. */
   onSetSize: (size: CallWindowSize) => void;
 }) {
-  const [hovered, setHovered] = useState(false);
-
   // Only what the circles paint. The phase, the camera flag and the rest of the
   // call slice belong to CallPanel now, and subscribing to them here would
   // re-render a window full of video for a fact it does not draw.
@@ -126,96 +129,15 @@ export function CallFaces({
     return faces[0]?.id ?? null;
   }, [pick.id, faces]);
 
-  // ── The window is exactly as big as its circles ─────────────────────────
-  //
-  // Plus the 8px the speaking ring needs, and nothing else. `hovered` is the
-  // one thing that can widen it: the chrome overlays the circles rather than
-  // sitting under them, but at the speaker tier four buttons are wider than
-  // one face, and a window that clipped its own controls is a call you cannot
-  // leave. Away from the pointer it reserves nothing.
-  useWatchEffect(() => {
-    setCallWindowContentSize(facesWindowSize(mode, faces.length, { tier, hovered }));
-  }, [mode, faces.length, tier, hovered]);
-
-  // ── Click-through ───────────────────────────────────────────────────────
-  //
-  // Measured from the DOM rather than computed from the layout constants: the
-  // circles are what the person sees, so the circles are what the hit test has
-  // to agree with. Re-measured when the shape of the window changes, never per
-  // mouse move — reading a rect per move per circle would force layout at the
-  // pointer's rate on the one window that must stay cheap.
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const regionsRef = useRef<HitRegion[]>([]);
-  // Declared up here because the click-through test below reads it: a drag in
-  // progress is the one state in which the window must keep taking the mouse.
-  const dragging = useRef(false);
-  const interactiveRef = useRef(false);
-  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const measure = useCallback(() => {
-    const root = rootRef.current;
-    if (!root) return;
-    const regions: HitRegion[] = [];
-    for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-face-hit]"))) {
-      const r = el.getBoundingClientRect();
-      if (r.width > 0) regions.push({ kind: "circle", cx: r.left + r.width / 2, cy: r.top + r.height / 2, r: r.width / 2 });
-    }
-    const chrome = root.querySelector<HTMLElement>("[data-chrome-hit]");
-    if (chrome) {
-      const r = chrome.getBoundingClientRect();
-      if (r.width > 0) regions.push({ kind: "rect", x: r.left, y: r.top, width: r.width, height: r.height });
-    }
-    regionsRef.current = regions;
-  }, []);
-  // The window resizes itself a frame after the mode or the room changes, so
-  // measure on both — and once more when the chrome appears, since it is a
-  // region of its own that has to take the click that follows the hover.
-  useWatchEffect(() => {
-    const id = requestAnimationFrame(measure);
-    return () => cancelAnimationFrame(id);
-  }, [measure, mode, faces.length, hovered]);
-  useEventListener("resize", measure);
-
-  const hide = useCallback(() => {
-    if (hideTimer.current) clearTimeout(hideTimer.current);
-    hideTimer.current = null;
-    setHovered(false);
-  }, []);
-
-  useEventListener("mousemove", (e: MouseEvent) => {
-    // Mid-drag the window is following the cursor, so the pointer never really
-    // leaves the circle — but if a fast flick made this test say otherwise, the
-    // window would stop taking mouse events and the pointer-up that ends the
-    // drag would never arrive. The window would then follow the cursor until
-    // the shell's own expiry. So a drag holds interactivity open.
-    if (dragging.current) return;
-    const hit = hitsInteractive(regionsRef.current, e.clientX, e.clientY);
-    if (hit !== interactiveRef.current) {
-      interactiveRef.current = hit;
-      setCallWindowInteractive(hit);
-    }
-    setHovered(true);
-    if (hideTimer.current) clearTimeout(hideTimer.current);
-    // Over a circle, the chrome stays. Anywhere else in the window it is on its
-    // way out — including when the pointer leaves through the transparent
-    // margin, which is the last event this window ever sees of that gesture.
-    hideTimer.current = hit ? null : setTimeout(hide, 1500);
+  // The window's size, click-through and drag, shared with the presence
+  // overlay. `hovered` is the one thing that can widen the window: at the
+  // speaker tier four buttons are wider than one face, and a window that
+  // clipped its own controls is a call you cannot leave.
+  const { rootRef, hovered, startDrag, endDrag } = useFloatingCircles({
+    sizeFor: (hover) => facesWindowSize(mode, faces.length, { tier, hovered: hover }),
+    shapeSig: `${mode}|${faces.length}|${tier}`,
+    bridge: CALL_WINDOW_BRIDGE,
   });
-  useEventListener("mouseleave", hide, document);
-
-  // ── Dragging a circle moves the window ──────────────────────────────────
-  const startDrag = useCallback((e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    dragging.current = true;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    setCallWindowDragging(true);
-  }, []);
-  const endDrag = useCallback((e: React.PointerEvent) => {
-    if (!dragging.current) return;
-    dragging.current = false;
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
-    setCallWindowDragging(false);
-  }, []);
 
   // ── The ways out ────────────────────────────────────────────────────────
   //

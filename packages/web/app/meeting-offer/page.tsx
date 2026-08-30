@@ -12,21 +12,23 @@
 // its size (meetingOfferSize) and the shell reshapes the window around it,
 // which is also the reveal signal on first paint.
 //
-// Three faces, one honest lifecycle:
-//   pill       one line — "<App> looks like a meeting" — with the answer that
-//              matters (Record) right on it, and a chime when it appears.
-//   card       the pill, expanded: the full copy and all three answers
-//              (Record / Not now / Never for this app). Errors land here too,
-//              because the answer to most of them is to try again.
-//   recording  the recording runs IN THIS WINDOW — the same per-window
-//              recorder engine every surface uses — so the pill stays on
-//              screen as the floating stop button, with the elapsed clock and
-//              the last words heard as proof the microphone works.
+// Every face starts TINY — a one-line capsule, the size of a system
+// notification — and expands on a click of its body:
+//   offer     [mic] FaceTime  (Record) (x)   → the full question: copy, plus
+//             Not now and Never for this app. A chime when it appears.
+//   recording [dot] 12:04 ▮▮▮ (stop)         → the last words heard, the
+//             open-transcript jump, proof the microphone works. The recording
+//             runs IN THIS WINDOW (the same per-window recorder engine every
+//             surface uses), so the capsule is the floating stop button.
 //
 // NOTHING STARTS WITHOUT AN ANSWER: in ask mode the microphone is opened by
 // the Record button and by nothing else. An auto offer is the person having
 // answered in advance, in the setting — it starts at once and this window
 // says so instead of asking.
+//
+// The root carries the `dark` class: this surface floats over the desktop,
+// and theme tokens on a dark glass invert to navy-on-navy in light mode (the
+// call stage learned this the loud way).
 //
 // In-app toasts (MeetingOfferToast) remain the path for shells that predate
 // this window: those route offers to an app window, never here.
@@ -61,7 +63,7 @@ import "../../components/calls/recorder.css";
 
 export default function MeetingOfferPage() {
   return (
-    <div className="h-screen w-screen">
+    <div className="dark h-screen w-screen text-sol-text">
       <MeetingOfferRoot />
     </div>
   );
@@ -94,7 +96,11 @@ function MeetingOfferRoot() {
     setError(null);
     const id = await startRecording();
     setStarting(false);
-    if (id) return; // the recording face takes over
+    if (id) {
+      // The recording face begins the way the offer did: tiny.
+      setExpanded(false);
+      return;
+    }
     // The engine puts the honest reason on its status — a refused microphone,
     // a recognizer that would not start. Expand so the sentence has room, and
     // keep the card up: the answer to most of them is to try again.
@@ -163,66 +169,76 @@ function MeetingOfferRoot() {
     return () => ro.disconnect();
   }, [offer, recording, expanded]);
 
-  if (recording) return <RecordingFace bodyRef={bodyRef} name={offer?.name} />;
+  if (recording) {
+    return (
+      <RecordingFace
+        bodyRef={bodyRef}
+        name={offer?.name}
+        expanded={expanded}
+        onToggle={() => setExpanded((e) => !e)}
+      />
+    );
+  }
   if (!offer) return null;
 
   if (!expanded) {
     return (
-      <div ref={bodyRef} className="rec-offer rec-offer-line" role="status">
-        <span className="rec-offer-glyph" aria-hidden="true">
-          <Mic className="w-3.5 h-3.5" />
-        </span>
-        <div className="rec-offer-title whitespace-nowrap">
-          {offer.name} looks like a meeting
-        </div>
+      <div ref={bodyRef} className="rec-win" role="status">
         <button
           type="button"
-          className="rec-offer-go whitespace-nowrap"
-          onClick={record}
-          disabled={starting}
-        >
-          {starting ? "Waiting for the microphone" : "Record"}
-        </button>
-        <button
-          type="button"
-          className="rec-offer-action"
+          className="rec-win-expand"
           title="More choices"
-          aria-label="More choices"
           onClick={() => setExpanded(true)}
         >
-          <Maximize2 className="w-3 h-3" />
+          <span className="rec-win-mark" aria-hidden="true">
+            <Mic className="h-2.5 w-2.5" />
+          </span>
+          <span className="rec-win-name">{offer.name}</span>
+          <span className="rec-win-dim">meeting?</span>
+        </button>
+        <button type="button" className="rec-win-go" onClick={record} disabled={starting}>
+          {starting ? "Mic…" : "Record"}
         </button>
         <button
           type="button"
-          className="rec-offer-action"
+          className="rec-win-ghost"
           title="Not now"
           aria-label="Not now"
           onClick={hide}
         >
-          <X className="w-3 h-3" />
+          <X className="h-3 w-3" />
         </button>
       </div>
     );
   }
 
   return (
-    <div ref={bodyRef} className="rec-offer">
-      <span className="rec-offer-glyph" aria-hidden="true">
-        <Mic className="w-3.5 h-3.5" />
+    <div ref={bodyRef} className="rec-win rec-win-card">
+      <span className="rec-win-mark mt-0.5" aria-hidden="true">
+        <Mic className="h-2.5 w-2.5" />
       </span>
-      <div className="rec-offer-body">
-        <div className="rec-offer-title">{offer.name} looks like a meeting</div>
-        <p className="rec-offer-copy">{RECORD_OFFER_COPY}</p>
-        {error && <p className="rec-offer-error">{error}</p>}
-        <div className="rec-offer-actions">
-          <button type="button" className="rec-offer-go" onClick={record} disabled={starting}>
-            {starting ? "Waiting for the microphone" : error ? "Try again" : "Record"}
+      <div className="min-w-0 flex-1">
+        <button
+          type="button"
+          className="rec-win-expand w-full text-left"
+          title="Shrink"
+          onClick={() => setExpanded(false)}
+        >
+          <span className="rec-win-name">{offer.name} looks like a meeting</span>
+        </button>
+        <p className="mt-1 text-[11px] leading-relaxed text-sol-text-muted">
+          {RECORD_OFFER_COPY}
+        </p>
+        {error && <p className="mt-1.5 text-[11px] leading-snug text-sol-red">{error}</p>}
+        <div className="mt-2 flex items-center gap-1.5">
+          <button type="button" className="rec-win-go" onClick={record} disabled={starting}>
+            {starting ? "Waiting for the mic…" : error ? "Try again" : "Record"}
           </button>
-          <button type="button" className="rec-offer-action" onClick={hide}>
+          <button type="button" className="rec-win-quiet" onClick={hide}>
             Not now
           </button>
-          <button type="button" className="rec-offer-action" onClick={never}>
-            <Ban className="w-3 h-3" />
+          <button type="button" className="rec-win-quiet" onClick={never}>
+            <Ban className="h-3 w-3" />
             Never for {offer.name}
           </button>
         </div>
@@ -231,15 +247,20 @@ function MeetingOfferRoot() {
   );
 }
 
-/** The recording, as the window's whole face: the same pill RecordingPill
- *  draws in-app, minus the portal — here the window IS the pill. Stop is the
- *  only way it ends, and ending is what puts the window away. */
+/** The recording as a tiny capsule: dot, clock, level, stop. Expanding shows
+ *  the last words heard and the jump to the live transcript. Stop is the only
+ *  way this ends, and it is visible in every state — the capsule IS the
+ *  floating stop button. */
 function RecordingFace({
   bodyRef,
   name,
+  expanded,
+  onToggle,
 }: {
   bodyRef: React.RefObject<HTMLDivElement | null>;
   name?: string;
+  expanded: boolean;
+  onToggle: () => void;
 }) {
   const status = useRecorderStatus();
   const now = useCoarseNow(1000);
@@ -248,53 +269,62 @@ function RecordingFace({
   const levelRef = useRecorderLevelVar<HTMLSpanElement>(running);
   const last = status.tail[status.tail.length - 1]?.text ?? "";
 
-  return (
-    <div ref={bodyRef} className="rec-pill rec-winpill">
-      <span className="rec-pill-dot" aria-hidden="true" />
-      <span ref={levelRef} className="rec-pill-level" aria-hidden="true">
-        {[0.55, 1, 0.75, 0.4].map((b, i) => (
-          <i key={i} style={{ ["--b" as string]: b }} />
-        ))}
-      </span>
-      <div className="rec-pill-body">
-        <div className="rec-pill-head">
-          <span className="rec-pill-clock">
-            {fmtClock(status.startedAt ? now - status.startedAt : 0)}
+  const header = (
+    <>
+      <button type="button" className="rec-win-expand" title={expanded ? "Shrink" : "Details"} onClick={onToggle}>
+        <span className="rec-pill-dot" aria-hidden="true" />
+        <span className="rec-win-clock">
+          {fmtClock(status.startedAt ? now - status.startedAt : 0)}
+        </span>
+        {expanded && (
+          <span className="rec-win-dim">
+            {stopping ? "finishing" : `recording${name ? ` ${name}` : ""}`}
           </span>
-          <span className="rec-pill-what">
-            {stopping ? "finishing" : `recording${name ? ` ${name}` : " the room"}`}
-          </span>
-        </div>
-        {last ? (
-          <div className="rec-pill-tail" title={last}>
-            {last}
-          </div>
-        ) : (
-          <div className="rec-pill-quiet">
-            {status.error ?? "listening — words appear as people speak"}
-          </div>
         )}
-      </div>
-      {status.transcriptId && (
+        <span ref={levelRef} className="rec-pill-level" aria-hidden="true">
+          {[0.55, 1, 0.75, 0.4].map((b, i) => (
+            <i key={i} style={{ ["--b" as string]: b }} />
+          ))}
+        </span>
+      </button>
+      {expanded && status.transcriptId && (
         <button
           type="button"
-          className="rec-pill-open"
+          className="rec-win-ghost"
           title="Open the live transcript"
           aria-label="Open the live transcript"
           onClick={() => meetingOfferOpenCall(status.transcriptId!)}
         >
-          <Maximize2 className="h-3.5 w-3.5" />
+          <Maximize2 className="h-3 w-3" />
         </button>
       )}
       <button
         type="button"
-        className="rec-pill-stop"
+        className="rec-win-ghost rec-win-stop"
+        title={stopping ? "Saving" : "Stop recording"}
+        aria-label={stopping ? "Saving" : "Stop recording"}
         disabled={stopping}
         onClick={() => void stopRecording()}
       >
-        <Square className="h-3 w-3 fill-current" />
-        {stopping ? "Saving" : "Stop"}
+        <Square className="h-2.5 w-2.5 fill-current" />
       </button>
+    </>
+  );
+
+  if (!expanded) {
+    return (
+      <div ref={bodyRef} className="rec-win" role="status">
+        {header}
+      </div>
+    );
+  }
+
+  return (
+    <div ref={bodyRef} className="rec-win rec-win-col">
+      <div className="flex items-center gap-2">{header}</div>
+      <div className="rec-win-tail">
+        {last || status.error || "listening — words appear as people speak"}
+      </div>
     </div>
   );
 }
