@@ -25,7 +25,7 @@ import { MarkdownContent } from "@/components/MarkdownRenderer";
 type PlanStatus = keyof typeof PLAN_STATUS_CONFIG;
 
 export default function PlanDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, share } = useLocalSearchParams<{ id: string; share?: string }>();
   const router = useRouter();
   const plans = useInboxStore((s) => s.plans);
   const tasks = useInboxStore((s) => s.tasks);
@@ -38,10 +38,18 @@ export default function PlanDetailScreen() {
 
   const planDetail = useQuery(api.plans.webGet, id ? { short_id: id } : "skip");
 
+  // A share link carries the token along (?share=). For a viewer without
+  // access of their own (webGet answers null), the public token query renders
+  // the same screen from the shared snapshot.
+  const sharedPlan = useQuery(
+    (api as any).plans.getShared,
+    !storePlan && share ? { share_token: share } : "skip",
+  );
+
   // Fall back to the fetched server record when the plan isn't in the local
   // store yet (cold deep-link from a push/universal link, or a plan outside the
   // synced window). The store row is preferred so optimistic edits show live.
-  const plan = storePlan ?? planDetail ?? undefined;
+  const plan = storePlan ?? planDetail ?? (sharedPlan || undefined);
 
   const planTasks = useMemo(() => {
     // Store-derived (live) tasks when the plan is in the store, so a task status
@@ -53,8 +61,8 @@ export default function PlanDetailScreen() {
         (t) => t.plan?._id === storePlan._id && inActiveWorkspace(t, (storePlan as any).team_id),
       );
     }
-    return (planDetail?.tasks ?? []) as any[];
-  }, [tasks, storePlan, planDetail]);
+    return (planDetail?.tasks ?? sharedPlan?.tasks ?? []) as any[];
+  }, [tasks, storePlan, planDetail, sharedPlan]);
 
   const activeTasks = useMemo(
     () => planTasks.filter((t) => t.status !== "done" && t.status !== "dropped"),
@@ -65,10 +73,11 @@ export default function PlanDetailScreen() {
     [planTasks],
   );
 
-  // Only declare "not found" once the server query has actually resolved (null
-  // = no access / missing). While it's still loading (undefined) keep the
-  // spinner so a cold deep-link doesn't flash "not found" before the fetch lands.
-  const hasSynced = plansReady && planDetail !== undefined;
+  // Only declare "not found" once the server queries have actually resolved
+  // (null = no access / missing). While still loading (undefined) keep the
+  // spinner so a cold deep-link doesn't flash "not found" before the fetch
+  // lands. With a share token, its query must settle too.
+  const hasSynced = plansReady && planDetail !== undefined && (!share || storePlan || sharedPlan !== undefined);
 
   if (!plan) {
     return (
@@ -140,10 +149,10 @@ export default function PlanDetailScreen() {
           </RNView>
         )}
 
-        {planDetail?.doc_content && (
+        {(planDetail ?? sharedPlan)?.doc_content && (
           <RNView style={styles.section}>
             <RNText style={styles.sectionLabel}>Description</RNText>
-            <MarkdownContent text={planDetail.doc_content} baseStyle={styles.bodyText} />
+            <MarkdownContent text={(planDetail ?? sharedPlan).doc_content} baseStyle={styles.bodyText} />
           </RNView>
         )}
 

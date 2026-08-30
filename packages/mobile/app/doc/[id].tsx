@@ -20,24 +20,36 @@ import { DOC_TYPE_CONFIG } from "@/components/DocItem";
 import { MarkdownContent } from "@/components/MarkdownRenderer";
 
 export default function DocDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, share } = useLocalSearchParams<{ id: string; share?: string }>();
   const router = useRouter();
   const docs = useInboxStore((s) => s.docs);
   const { ready: docsReady } = useSyncDocs();
 
-  const doc = useMemo(() => {
+  const storeDoc = useMemo(() => {
     if (!id) return undefined;
     return docs[id] ?? Object.values(docs).find((d) => d._id === id);
   }, [docs, id]);
 
-  const docDetail = useQuery(api.docs.webGet as any, doc?._id ? { id: doc._id } : "skip");
+  // A share link carries the token along (?share=). When the doc isn't in the
+  // viewer's store — a guest, or a teammate before docs sync — the public
+  // token query renders the same screen from the shared snapshot.
+  const sharedDoc = useQuery(
+    (api as any).docs.getShared,
+    !storeDoc && share ? { share_token: share } : "skip",
+  );
+  const doc = storeDoc ?? (sharedDoc || undefined);
+
+  const docDetail = useQuery(api.docs.webGet as any, storeDoc?._id ? { id: storeDoc._id } : "skip");
+
+  // With a token present, "not found" is only true once ITS query settled.
+  const resolved = share ? sharedDoc !== undefined || !!storeDoc : docsReady;
 
   if (!doc) {
     return (
       <>
         <Stack.Screen options={{ title: "Doc" }} />
         <RNView style={styles.loading}>
-          {docsReady ? (
+          {resolved ? (
             <>
               <FontAwesome name="exclamation-circle" size={28} color={Theme.textMuted0} />
               <RNText style={styles.loadingText}>Document not found</RNText>
@@ -80,16 +92,20 @@ export default function DocDetailScreen() {
             <RNText style={[styles.badgeText, { color: cfg.color }]}>{cfg.label}</RNText>
           </RNView>
 
-          <RNView style={[styles.badge, { borderColor: Theme.borderLight }]}>
-            <FontAwesome
-              name={doc.source === "human" ? "user" : "bolt"}
-              size={10}
-              color={doc.source === "human" ? Theme.textMuted0 : Theme.cyan}
-            />
-            <RNText style={[styles.badgeText, { color: Theme.textMuted0 }]}>
-              {doc.source === "human" ? "Human" : doc.source || "Agent"}
-            </RNText>
-          </RNView>
+          {/* The shared-token snapshot carries no source; claiming "Agent"
+              for it would be a guess, so the badge only renders when known. */}
+          {doc.source && (
+            <RNView style={[styles.badge, { borderColor: Theme.borderLight }]}>
+              <FontAwesome
+                name={doc.source === "human" ? "user" : "bolt"}
+                size={10}
+                color={doc.source === "human" ? Theme.textMuted0 : Theme.cyan}
+              />
+              <RNText style={[styles.badgeText, { color: Theme.textMuted0 }]}>
+                {doc.source === "human" ? "Human" : doc.source}
+              </RNText>
+            </RNView>
+          )}
 
           {doc.pinned && (
             <RNView style={[styles.badge, { borderColor: Theme.accent + "40" }]}>

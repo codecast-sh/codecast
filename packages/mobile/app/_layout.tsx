@@ -5,7 +5,6 @@ import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments, usePathname } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import * as SecureStore from 'expo-secure-store';
-import * as Linking from 'expo-linking';
 import { AppState } from 'react-native';
 import { useEffect, useRef } from 'react';
 import 'react-native-reanimated';
@@ -19,7 +18,6 @@ import { Mono } from '@/constants/fonts';
 import { convex, CONVEX_URL } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
-import { mobileRouteForUrl } from '@/lib/linkRoutes';
 import { initAnalytics, identifyUser, resetUser, trackScreen, wrapRoot } from '@/lib/analytics';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { CallOverlay } from '@/components/calls/CallOverlay';
@@ -268,29 +266,13 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     if (isAuthenticated) republishVoipToken();
   }, [isAuthenticated]);
 
-  // Handle deep links from web URLs
-  useEffect(() => {
-    if (!isAuthenticated) return;
-
-    function handleUrl(event: { url: string }) {
-      const route = mobileRouteForUrl(event.url);
-      if (route) router.push(route as any);
-    }
-
-    const subscription = Linking.addEventListener('url', handleUrl);
-
-    // Handle initial URL (app opened via link)
-    Linking.getInitialURL().then((url) => {
-      if (url) {
-        const route = mobileRouteForUrl(url);
-        if (route) {
-          setTimeout(() => router.push(route as any), 500);
-        }
-      }
-    });
-
-    return () => subscription.remove();
-  }, [isAuthenticated, router]);
+  // Deep links route through expo-router itself (app/+native-intent.tsx maps
+  // web URL shapes onto screens), so by the time this gate runs, a link-opened
+  // app is already ON its destination. All that is left to handle is auth:
+  // when a signed-out launch lands on a deep screen, remember it, bounce
+  // through login, and restore it on top of the tabs afterwards.
+  const pathname = usePathname();
+  const pendingDeepLink = useRef<string | null>(null);
 
   useEffect(() => {
     if (isLoading) return;
@@ -298,11 +280,15 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     const inAuthGroup = segments[0] === 'auth';
 
     if (!isAuthenticated && !inAuthGroup) {
+      if (pathname && pathname !== '/') pendingDeepLink.current = pathname;
       router.replace('/auth/login');
     } else if (isAuthenticated && inAuthGroup) {
+      const target = pendingDeepLink.current;
+      pendingDeepLink.current = null;
       router.replace('/');
+      if (target) router.push(target as any);
     }
-  }, [isAuthenticated, isLoading, segments]);
+  }, [isAuthenticated, isLoading, segments, pathname]);
 
   return <>{children}</>;
 }
