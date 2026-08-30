@@ -1683,7 +1683,7 @@ export default function TasksPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        <DetailSplitLayout list={<TaskListContent />} surface="tasks" closeHref="/tasks">
+        <DetailSplitLayout list={<TaskListContent />} closeHref="/tasks">
           {id ? (
             <ErrorBoundary name="TaskDetail" level="panel">
               <TaskDetailContent taskId={id} variant="page" />
