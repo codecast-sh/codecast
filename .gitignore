@@ -122,3 +122,4 @@ packages/cli/*
 packages/convex/_*.mjs
 _tok.json
 packages/web/public/_tok.json
+packages/web/tsconfig.*.tmp.json
