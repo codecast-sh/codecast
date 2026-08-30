@@ -28,7 +28,7 @@ import { spawnSync } from "./proc.js";
 import { cliFetch } from "./cliHttp.js";
 import { fetchExport } from "./jsonlGenerator.js";
 import { claudeProjectDirName } from "./projectPathResolver.js";
-import { leakedTmuxGlobalMarkers } from "./agentEnv.js";
+import { ensureClaudeSettingsPersistence, leakedTmuxGlobalMarkers } from "./agentEnv.js";
 import { isProjectAllowedToSync, isPathExcluded } from "./syncScope.js";
 import { c, fmt } from "./colors.js";
 import type { Config } from "./config/types.js";
@@ -371,6 +371,28 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
         detail: `tmux global env carried ${leaked.join(", ")} (cleared) — panes opened before this ran may be saving no transcript; restart them`,
       });
     }
+  }
+
+  // Settings-level backstop for the same class: ~/.claude/settings.json pins
+  // CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 for every claude on the machine,
+  // so an inherited CLAUDE_CODE_CHILD_SESSION can never silence a transcript
+  // (agentEnv.ts). The daemon asserts this on boot; re-assert and report here.
+  try {
+    const pin = ensureClaudeSettingsPersistence();
+    record({
+      name: "transcript pin",
+      status: pin === "wrote" || pin === "already-pinned" ? "pass" : "warn",
+      detail:
+        pin === "wrote"
+          ? "pinned CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 in ~/.claude/settings.json"
+          : pin === "already-pinned"
+            ? "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 pinned in ~/.claude/settings.json"
+            : pin === "unparseable"
+              ? "~/.claude/settings.json is not valid JSON — cannot pin transcript persistence; fix the file"
+              : "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE set to a non-\"1\" value in ~/.claude/settings.json — a leaked CLAUDE_CODE_CHILD_SESSION would silence transcripts",
+    });
+  } catch (err) {
+    record({ name: "transcript pin", status: "warn", detail: `check failed: ${err instanceof Error ? err.message : String(err)}` });
   }
 
   // ── tmux server generations ──

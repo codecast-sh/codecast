@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { AGENT_ENV_SCRUB, AGENT_ENV_UNSET_SH, leakedTmuxGlobalMarkers, scrubAgentEnv } from "./agentEnv.js";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import {
+  AGENT_ENV_SCRUB,
+  AGENT_ENV_UNSET_SH,
+  ensureClaudeSettingsPersistence,
+  leakedTmuxGlobalMarkers,
+  planClaudeSettingsPersistence,
+  scrubAgentEnv,
+} from "./agentEnv.js";
 import { buildWatchdogShellScript } from "./supervision.js";
 
 // 2026-08-27: the tmux server and the launchd watchdog carried
@@ -34,5 +44,55 @@ describe("agent env scrub", () => {
   test("leakedTmuxGlobalMarkers reads `tmux show-environment -g` output", () => {
     expect(leakedTmuxGlobalMarkers("PATH=/bin\nCLAUDE_CODE_CHILD_SESSION=1\n-DISPLAY\n")).toEqual(["CLAUDE_CODE_CHILD_SESSION"]);
     expect(leakedTmuxGlobalMarkers("PATH=/bin\n")).toEqual([]);
+  });
+});
+
+// The settings-level pin: ~/.claude/settings.json `env` applies to every
+// claude on the machine (verified live 2026-08-28: an inherited
+// CLAUDE_CODE_CHILD_SESSION no longer disables transcript saving). The daemon
+// asserts it on boot, `cast doctor` re-asserts and reports it.
+describe("claude settings persistence pin", () => {
+  const PIN = '"CLAUDE_CODE_FORCE_SESSION_PERSISTENCE": "1"';
+
+  test("no file: plans a fresh settings.json with just the pin", () => {
+    const text = planClaudeSettingsPersistence(null)!;
+    expect(JSON.parse(text)).toEqual({ env: { CLAUDE_CODE_FORCE_SESSION_PERSISTENCE: "1" } });
+  });
+
+  test("adds the pin to an existing env block, keeping the file's indent", () => {
+    const text = planClaudeSettingsPersistence('{\n    "env": {\n        "A": "b"\n    },\n    "model": "opus"\n}\n')!;
+    expect(JSON.parse(text)).toEqual({ env: { A: "b", CLAUDE_CODE_FORCE_SESSION_PERSISTENCE: "1" }, model: "opus" });
+    expect(text).toContain('\n    "env"'); // 4-space indent preserved
+    expect(text.endsWith("\n")).toBe(true);
+  });
+
+  test("creates the env block when the file has none", () => {
+    const text = planClaudeSettingsPersistence('{\n  "model": "opus"\n}')!;
+    expect(JSON.parse(text)).toEqual({ model: "opus", env: { CLAUDE_CODE_FORCE_SESSION_PERSISTENCE: "1" } });
+    expect(text).toContain('\n  "env"'); // 2-space indent preserved
+  });
+
+  test("no-op when pinned, when authored to another value, and on junk", () => {
+    expect(planClaudeSettingsPersistence(`{"env": {${PIN}}}`)).toBeNull();
+    // An existing value — even an opt-out — is the user's, not ours to rewrite.
+    expect(planClaudeSettingsPersistence('{"env": {"CLAUDE_CODE_FORCE_SESSION_PERSISTENCE": "0"}}')).toBeNull();
+    expect(planClaudeSettingsPersistence("not json")).toBeNull();
+    expect(planClaudeSettingsPersistence("[1,2]")).toBeNull();
+  });
+
+  test("ensureClaudeSettingsPersistence creates, then converges", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-pin-"));
+    try {
+      expect(ensureClaudeSettingsPersistence(home)).toBe("wrote");
+      const file = path.join(home, ".claude", "settings.json");
+      expect(JSON.parse(fs.readFileSync(file, "utf-8")).env.CLAUDE_CODE_FORCE_SESSION_PERSISTENCE).toBe("1");
+      expect(ensureClaudeSettingsPersistence(home)).toBe("already-pinned");
+      fs.writeFileSync(file, '{"env": {"CLAUDE_CODE_FORCE_SESSION_PERSISTENCE": ""}}');
+      expect(ensureClaudeSettingsPersistence(home)).toBe("left-alone");
+      fs.writeFileSync(file, "{broken");
+      expect(ensureClaudeSettingsPersistence(home)).toBe("unparseable");
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 });
