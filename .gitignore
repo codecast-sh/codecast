@@ -120,3 +120,5 @@ packages/cli/*
 
 # Scratch convex probes (one-off prod queries, never shipped)
 packages/convex/_*.mjs
+_tok.json
+packages/web/public/_tok.json
