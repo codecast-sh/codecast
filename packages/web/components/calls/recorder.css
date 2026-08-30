@@ -277,15 +277,200 @@
   border-color: color-mix(in srgb, var(--sol-orange) 45%, transparent);
 }
 
-/* The /meeting-offer window's faces. The window is reshaped around the
-   content, so these own their width instead of inheriting the toast's 340px
-   or the window's current size. */
-.rec-offer-line {
-  width: max-content;
+/* ── the /meeting-offer window's faces ─────────────────────────────────────
+ *
+ * A system notification, not an app card: it floats over the desktop (often
+ * over the meeting itself), so it is a TINY capsule by default — one short
+ * line, the one action that matters, and nothing boxed. Clicking the body
+ * expands it; every face owns its width because the window is reshaped
+ * around the content.
+ *
+ * Denser glass than the in-app toast on purpose: over arbitrary desktops a
+ * translucent app surface reads as a smudge, so the capsule leans dark and
+ * lets the red dot and the Record fill be the only loud pixels. The page
+ * root carries the `dark` class, so these tokens never invert to the light
+ * palette over someone's desktop. */
+
+.rec-win {
+  display: flex;
   align-items: center;
+  gap: 8px;
+  width: max-content;
+  padding: 5px 6px 5px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--sol-red) 22%, rgb(255 255 255 / 0.07));
+  background: color-mix(in srgb, var(--sol-bg-alt) 62%, black);
+  box-shadow: 0 4px 18px rgb(0 0 0 / 0.45);
+  backdrop-filter: blur(12px);
+  user-select: none;
 }
 
-.rec-winpill {
-  width: max-content;
-  max-width: 380px;
+/* The expanded shapes keep the same glass, squarer. */
+.rec-win-card {
+  border-radius: 14px;
+  align-items: flex-start;
+  padding: 11px 12px;
+  width: 332px;
+}
+
+/* The expanded recording: the capsule's header row with a detail line under
+   it, barely wider than the capsule itself. The clickable region flexes so
+   the meter drifts right and the ghosts get breathing room. */
+.rec-win-col {
+  border-radius: 14px;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 8px 10px;
+  width: 300px;
+}
+
+.rec-win-col .rec-win-expand {
+  flex: 1;
+  min-width: 0;
+}
+
+.rec-win-col .rec-win-dim {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rec-win-col .rec-pill-level {
+  margin-left: auto;
+  margin-right: 4px;
+}
+
+.rec-win-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sol-text);
+  white-space: nowrap;
+}
+
+.rec-win-dim {
+  font-size: 11px;
+  color: var(--sol-text-dim);
+  white-space: nowrap;
+}
+
+/* The body regions that expand/collapse a face on click. */
+.rec-win-expand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+/* Record: the one filled control anywhere in this window. A small red
+   capsule with dark text — the macOS record idiom — instead of the boxed
+   outline buttons the toast uses. */
+.rec-win-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: var(--sol-red);
+  color: color-mix(in srgb, var(--sol-bg-alt) 30%, black);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  transition: background 120ms, transform 80ms;
+}
+
+.rec-win-go:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--sol-red) 84%, white);
+}
+
+.rec-win-go:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.rec-win-go:disabled {
+  opacity: 0.55;
+}
+
+/* Round ghost icon buttons: dismiss, stop, open. Quiet until hovered. */
+.rec-win-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  color: var(--sol-text-dim);
+  transition: color 120ms, background 120ms;
+}
+
+.rec-win-ghost:hover:not(:disabled) {
+  color: var(--sol-text);
+  background: rgb(255 255 255 / 0.09);
+}
+
+.rec-win-ghost:disabled {
+  opacity: 0.5;
+}
+
+/* The stop ghost stays red at rest — it is the recording's only off switch. */
+.rec-win-stop {
+  color: var(--sol-red);
+}
+
+.rec-win-stop:hover:not(:disabled) {
+  color: var(--sol-red);
+  background: color-mix(in srgb, var(--sol-red) 18%, transparent);
+}
+
+/* Quiet text answers in the expanded card (Not now, Never for X). */
+.rec-win-quiet {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  color: var(--sol-text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+  transition: color 120ms, background 120ms;
+}
+
+.rec-win-quiet:hover {
+  color: var(--sol-text);
+  background: rgb(255 255 255 / 0.07);
+}
+
+/* The tiny mic mark: a breathing red dot wearing the glyph's meaning — one
+   loud pixel, not a badge in a circle. */
+.rec-win-mark {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sol-red) 18%, transparent);
+  color: var(--sol-red);
+}
+
+.rec-win-clock {
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--sol-text);
+}
+
+/* Expanded recording detail block under the capsule header row. */
+.rec-win-tail {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--sol-text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
