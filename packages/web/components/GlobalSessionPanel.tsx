@@ -3202,6 +3202,88 @@ function scrollRowIntoView(container: HTMLElement, el: Element) {
   requestAnimationFrame(step);
 }
 
+// Floating "jump back to your open session" pill. Appears over the list edge
+// when the active card is scrolled out of view — top edge when the card is
+// above the fold, bottom edge when below — and one click glides back to it.
+// Visibility comes from an IntersectionObserver rooted at the scroll container
+// (fires on scroll AND container resize with zero per-frame work); a
+// per-render node check re-attaches it when a resort replaces the card's DOM
+// node without any scroll event.
+function ActiveSessionBeacon({
+  containerRef,
+  activeSessionId,
+  title,
+}: {
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  activeSessionId?: string | null;
+  title?: string | null;
+}) {
+  const [dir, setDir] = useState<"up" | "down" | null>(null);
+  const observedRef = useRef<Element | null>(null);
+  const ioRef = useRef<IntersectionObserver | null>(null);
+
+  // No dep array on purpose: the parent re-renders exactly when the list
+  // restructures, which is when the active card's node can change identity.
+  // The body is a single querySelector + ref compare, so the steady-state
+  // cost per render is negligible.
+  useEffect(() => {
+    const container = containerRef.current;
+    const el = container && activeSessionId
+      ? container.querySelector(`[data-session-id="${activeSessionId}"]`)
+      : null;
+    if (el === observedRef.current) return;
+    ioRef.current?.disconnect();
+    observedRef.current = el;
+    if (!el || !container) {
+      setDir(null);
+      return;
+    }
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry) return;
+        if (entry.isIntersecting) {
+          setDir(null);
+          return;
+        }
+        const rootTop = entry.rootBounds?.top ?? container.getBoundingClientRect().top;
+        setDir(entry.boundingClientRect.top < rootTop ? "up" : "down");
+      },
+      { root: container, threshold: 0 },
+    );
+    io.observe(el);
+    ioRef.current = io;
+  });
+  // Unmount teardown also forgets the node: under StrictMode's mount/unmount/
+  // mount rehearsal the effect above re-runs against the same node and must
+  // re-observe rather than short-circuit on the ref compare.
+  useEffect(() => () => {
+    ioRef.current?.disconnect();
+    ioRef.current = null;
+    observedRef.current = null;
+  }, []);
+
+  const handleJump = useCallback(() => {
+    const container = containerRef.current;
+    const el = observedRef.current;
+    if (container && el && el.isConnected) scrollRowIntoView(container, el);
+  }, [containerRef]);
+
+  if (!dir) return null;
+  return (
+    <button
+      onClick={handleJump}
+      data-dir={dir}
+      className={`cc-session-beacon absolute left-1/2 z-30 flex items-center gap-1.5 rounded-full border border-sol-cyan/40 bg-sol-bg/90 py-1 pl-2 pr-2.5 text-[10px] font-medium text-sol-cyan backdrop-blur-md hover:border-sol-cyan/70 hover:text-sol-cyan ${dir === "up" ? "top-2" : "bottom-2"}`}
+      title="Scroll to the open session"
+      aria-label="Scroll to the open session"
+    >
+      {dir === "up" ? <ArrowUp className="cc-session-beacon__arrow h-3 w-3" /> : <ArrowDown className="cc-session-beacon__arrow h-3 w-3" />}
+      <span className="cc-session-beacon__dot" aria-hidden />
+      <span className="max-w-[150px] truncate">{title || "Open session"}</span>
+    </button>
+  );
+}
+
 // Memoized (see the export at the bottom of the file): the layout re-renders
 // often with identical props, and every un-memoized pass here rebuilt ~100
 // cards' worth of elements.
@@ -4647,7 +4729,10 @@ function SessionListPanelImpl({
         </div>
         </div>
       </div>
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto scrollbar-auto">
+      {/* Relative wrapper so the out-of-view beacon can float over the list
+          edges without joining the scroll flow. */}
+      <div className="relative flex-1 min-h-0">
+      <div ref={scrollContainerRef} className="h-full overflow-y-auto scrollbar-auto">
         {favoritesView ? (
           favoriteGroups && favoriteGroups.count > 0 ? (
             <>
@@ -4882,6 +4967,12 @@ function SessionListPanelImpl({
           onKill: handleKillDismissed,
         })}
         </>)}
+      </div>
+      <ActiveSessionBeacon
+        containerRef={scrollContainerRef}
+        activeSessionId={focusedId}
+        title={(focusedId && s.sessions[focusedId]?.title) || null}
+      />
       </div>
       {/* The schedule dock is panel chrome, not list content: it renders under
           the scroll area in every view mode EXCEPT "by trigger" — there the
