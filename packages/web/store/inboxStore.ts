@@ -2354,6 +2354,14 @@ export function visualOrderSessions(
     // liftQuestions) — pending `cast decide` rows and the viewer's own
     // sessions, unscoped, so a question hidden by scope still walks.
     questions?: { decisions: Record<string, SessionDecisionItem>; mine: Record<string, InboxSession>; resolutions?: QuestionResolutions };
+    // Narrow the walk to the "your move" rows: questions, NEEDS INPUT and DONE
+    // exactly as the panel files them (Ctrl+I, queue advance). Membership comes
+    // from categorizeSessions' verdicts — the staleness net, the in-flight
+    // exclusion and trigger absorption included — never from a per-row
+    // classify re-run, so the target is always a card rendered in one of those
+    // sections. The predicate names the rows that ask (lifted out of any
+    // section on screen, so they qualify wherever they render).
+    yourMove?: { isQuestion: (s: InboxSession) => boolean };
   } = {},
 ): InboxSession[] {
   const { pinned, newSessions, needsInput, done, dormant, working } =
@@ -2392,6 +2400,13 @@ export function visualOrderSessions(
       }
       result.push(s);
     }
+  }
+  if (opts.yourMove) {
+    // Absorbed settled rows render under DORMANT (see above), so they are not
+    // the user's move even though categorize filed them as needs-input/done.
+    const keep = new Set([...stripAbsorbed(needsInput), ...stripAbsorbed(done)].map((s) => s._id));
+    const isQ = opts.yourMove.isQuestion;
+    return result.filter((s) => isQ(s) || keep.has(s._id));
   }
   return result;
 }
@@ -2746,12 +2761,13 @@ export function resolveInboxViewMode(ui: { inbox_view_mode?: InboxViewMode; inbo
 
 // Resolve the "show old sessions" toggle from client UI state. Shared by the
 // panel, the sidebar/dashboard badges, keyboard nav and mobile so every
-// consumer hides exactly the same rows. Reads ONLY inbox_show_old — the legacy
+// consumer hides exactly the same rows. On by default: a new user sees their
+// whole history and hides the aged-out rows by choice. Reads ONLY inbox_show_old — the legacy
 // show_old_sessions key (stale `true` values still linger in server client_state
 // docs from its pre-LWW era) must stay unread forever, or the permanent
 // cruft-mode bug resurrects.
 export function resolveShowOld(ui: { inbox_show_old?: boolean } | undefined): boolean {
-  return ui?.inbox_show_old ?? false;
+  return ui?.inbox_show_old ?? true;
 }
 
 // Resolve what the inbox opens on when no conversation is selected: the fleet
@@ -2972,14 +2988,38 @@ export function computeVisualOrder(state: {
   // walks exactly the QUESTIONS section on screen.
   questionResolutions?: QuestionResolutions;
   clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean } };
-}): InboxSession[] {
+}, opts: {
+  // Only the rows that are the user's move (questions, NEEDS INPUT, DONE), in
+  // the same on-screen order — see visualOrderSessions. Every mode honors it,
+  // so Ctrl+I lands on the first such card the user can see, whatever lens or
+  // flat view is up.
+  yourMove?: boolean;
+} = {}): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
   // the shelf, not the active desk underneath it.
   if (state.showFavorites) {
-    return favoritesVisualOrder(state.sessions, state.activeProjectFilter, state.favorites, state.chipFilterExclude);
+    const order = favoritesVisualOrder(state.sessions, state.activeProjectFilter, state.favorites, state.chipFilterExclude);
+    if (!opts.yourMove) return order;
+    const { needsInput, done } = categorizeSessions(state.sessions, state.sessionsWithQueuedMessages, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, reviveRequestedAt: state.blockedReviveRequestedAt });
+    const keep = new Set([...needsInput, ...done].map((s) => s._id));
+    return order.filter((s) => keep.has(s._id));
   }
   const bucketByConv = convBucketMap(state.bucketAssignments);
   const mode = resolveInboxViewMode(state.clientState.ui);
+  // The rows that ask — a pending `cast decide`, an open AskUserQuestion or
+  // permission prompt — over the viewer's own sessions unscoped, exactly the
+  // set the status view lifts into QUESTIONS. Only the status view and the
+  // your-move walk need it; the plain lens/flat walks skip the scan.
+  const questionInputs = mode === "grouped" || opts.yourMove
+    ? {
+        decisions: state.sessionDecisions ?? {},
+        mine: filterInboxScope(state.sessions, "mine", state.currentUser?._id?.toString?.() ?? null),
+        resolutions: state.questionResolutions,
+      }
+    : undefined;
+  const yourMove = opts.yourMove && questionInputs
+    ? { isQuestion: liftQuestions([], questionInputs.decisions, questionInputs.mine, questionInputs.resolutions).isQuestion }
+    : undefined;
   const collapsed = state.collapsedSections ?? {};
   // Hide "old" sessions before building ANY mode's order, exactly as the panel
   // does (partitionOldSessions over the same liveInboxIds / show_old flag), so
@@ -3554,6 +3594,10 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   setFeedCursor: (key: string, cursor: string | null) => void;
   sortedSessions: () => InboxSession[];
   visualOrder: () => InboxSession[];
+  // The on-screen rows that are the user's move (questions, NEEDS INPUT, DONE)
+  // in render order — what Ctrl+I and the queue's advance walk. Same verdicts
+  // as the panel, so the first entry is always the first such card visible.
+  yourMoveOrder: () => InboxSession[];
 
   // -- Navigation --
   advanceToNext: () => void;
@@ -7463,15 +7507,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
   },
 
   visualOrder: () => computeVisualOrder(get()),
+  yourMoveOrder: () => computeVisualOrder(get(), { yourMove: true }),
 
   // =====================
   // NAVIGATION
   // =====================
 
   advanceToNext: () => {
-    const ordered = get().visualOrder();
     const currentId = get().currentSessionId;
-    const idleSessions = ordered.filter((s: InboxSession) => isSessionWaitingForInput(s));
+    const idleSessions = get().yourMoveOrder();
     const currentIdleIdx = idleSessions.findIndex((s: InboxSession) => s._id === currentId);
     const nextIdle = idleSessions[currentIdleIdx + 1] || idleSessions[0];
     if (nextIdle && nextIdle._id !== currentId) {
