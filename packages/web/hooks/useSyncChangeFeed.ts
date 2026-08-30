@@ -323,9 +323,23 @@ async function catchUp(convex: any): Promise<void> {
   // scope revoked mid-run — its stale head must not restamp the cursor the
   // purge just dropped.
   const purgedTeams = new Set<string>();
+  // Publish how far behind each scope is BEFORE replaying, so the header pill
+  // can show a real catch-up (cursor < head) and nothing else on a warm cache.
+  // A cold scope (no cursor) stamps at head and is therefore never "behind".
   for (const head of heads) {
-    if (head.scope_key.startsWith("team:") && purgedTeams.has(head.scope_key.slice(5))) continue;
-    await catchUpScope(convex, head, purgedTeams);
+    const cursor = store.syncMeta[scopeMetaKey(head.scope_key)]?.cursor;
+    store.setSyncLogLag(head.scope_key, cursor === undefined ? 0 : Math.max(0, head.position - cursor));
+  }
+  try {
+    for (const head of heads) {
+      if (head.scope_key.startsWith("team:") && purgedTeams.has(head.scope_key.slice(5))) continue;
+      await catchUpScope(convex, head, purgedTeams);
+      useInboxStore.getState().setSyncLogLag(head.scope_key, 0);
+    }
+  } finally {
+    // A failed run must not leave the pill lit forever; the next wake retries.
+    const s = useInboxStore.getState();
+    for (const head of heads) s.setSyncLogLag(head.scope_key, 0);
   }
   // Heads-absence sweep (design D5 backstop): a persisted team cursor whose
   // scope getHeads no longer lists is a revoked membership whose scope_removed
