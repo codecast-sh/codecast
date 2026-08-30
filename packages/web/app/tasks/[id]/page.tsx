@@ -8,7 +8,7 @@ import { resolveTaskLinkedConversations, resolveTaskRelatedDocs, taskLinkedConve
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
 import { useSyncTasks, useSyncTaskDetail } from "../../../hooks/useSyncTasks";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
-import { DetailSplitLayout, PeekLayoutControls } from "../../../components/DetailSplitLayout";
+import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { AppLoader } from "../../../components/AppLoader";
 import { TaskListContent } from "../page";
 import { useMentionQuery, useActiveMentionScope } from "../../../hooks/useMentionQuery";
@@ -372,7 +372,7 @@ export default function TaskDetailPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        <DetailSplitLayout list={<TaskListContent />} surface="tasks" closeHref="/tasks">
+        <DetailSplitLayout list={<TaskListContent />} closeHref="/tasks">
           <ErrorBoundary name="TaskDetail" level="panel">
             <TaskDetailContent />
           </ErrorBoundary>
@@ -793,7 +793,6 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
                   <Forward className="w-3.5 h-3.5" />
                 </button>
               )}
-              <PeekLayoutControls />
               <OverflowMenu>
                 <WatchButton entityType="task" entityId={data._id} variant="menuItem" />
               </OverflowMenu>
