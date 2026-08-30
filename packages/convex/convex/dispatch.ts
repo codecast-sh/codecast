@@ -29,6 +29,7 @@ import { isSessionOwner } from "./sessionOwners";
 import { patchCommentWithRevision } from "./commentViewWrites";
 import { canAccessConversation, requireTeamMembership, patchConversationVisibility } from "./lib/access";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
+import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
 
 type TableConfig =
@@ -380,6 +381,15 @@ export async function applyPatches(
           && !("inbox_dismissed_at" in finalSafe && !(finalSafe as any).inbox_dismissed_at)
         ) {
           delete (finalSafe as any).inbox_killed_at;
+        }
+        // The pinned window is capped (conversations.INBOX_PINNED_CAP). This rail
+        // carries whole drafts, and a thrown error would fail the outbox entry
+        // (and every sibling patch in it) rather than one gesture — so the pin
+        // is dropped here and the server echo reverts the optimistic pin; the
+        // explicit patchConversation mutation refuses with the clear error.
+        if (table === "conversations" && await pinCapExceeded(ctx, userId, doc as any, finalSafe)) {
+          console.warn(`[dispatch] ${PIN_CAP_ERROR} (dropped pin on ${docKey})`);
+          delete (finalSafe as any).inbox_pinned_at;
         }
         if (Object.keys(finalSafe).length === 0) continue;
         // Capture the PRE-patch hide state. The un-kill mirror below decides on

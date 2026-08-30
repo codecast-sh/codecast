@@ -5,6 +5,11 @@ import type { Doc } from "./_generated/dataModel";
 import { ACTIVE_AGENT_STATUSES, TRUST_DECAYING_STATUSES, DECLARED_VERDICT_STATUSES, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, WORK_STATES, type WorkState } from "@codecast/shared/contracts";
 
 export { ACTIVE_AGENT_STATUSES, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, WORK_STATES, type WorkState };
+// The work-state classifier lives in @codecast/shared/contracts/inboxProjection
+// (the ONE placement function the liveness overlay, the CLI inbox and every
+// client share — sync-convergence C3). Re-exported so existing importers keep
+// working unchanged.
+export { classifyWorkState, DEAD_AGENT_STATUSES, type WorkStateInput } from "@codecast/shared/contracts";
 
 export type ConversationDoc = Doc<"conversations">;
 
@@ -101,12 +106,6 @@ export function isViableInboxParent(
 // the anti-flicker grace before a finished agent is treated as idle, shared
 // with the web client's statusless-row sweep so both sides settle a quiet
 // session on the same clock.
-
-// A daemon-reported status that means the agent process is gone. A dead session
-// with content still needs a human (to read the result / restart it), so the
-// classifier routes it to needs-input rather than working. Mirrors the web
-// store's DEAD_AGENT_STATUSES.
-export const DEAD_AGENT_STATUSES = new Set(["stopped"]);
 
 // STATUS_TRUST_TTL_MS (imported from @codecast/shared/contracts): how long a
 // daemon-reported "active" status is trusted with no new synced activity. When
@@ -449,59 +448,6 @@ export function subagentKeepsParentWorking(input: {
   return input.isLive && ACTIVE_AGENT_STATUSES.has(input.agentStatus ?? "");
 }
 
-// A single, coarse "who acts next on this session" label for CLI discovery,
-// the `cast monitor` dashboard, and the web inbox's sections. Collapses the
-// inbox's many derived flags into the WORK_STATES buckets (see
-// shared/contracts/workState.ts for the meaning of each), matching the web
-// inbox's categorization (isSessionWaitingForInput / sessionRestState):
-//   - "working":     the agent is actively producing, has deliverable queued
-//                    work, or the user just sent a message it hasn't picked up.
-//   - "needs_input": the ball is in the user's court to UNBLOCK — an open
-//                    question / permission prompt, a dead session with output,
-//                    or a settled turn nobody classified (pinned included — a
-//                    pin means "ping me when this is free").
-//   - "done":        settled, and the agent (or the settle classifier) says the
-//                    task is delivered.
-//   - "dormant":     settled, and a machine wake owns the next move — the agent
-//                    declared it, an open background task implies it, the home
-//                    of an armed inject trigger, or the user parked it.
-//   - "idle":        nothing to act on: blank sessions (no messages yet), and
-//                    KILLED sessions — the user retired those, so they never
-//                    read as working or needs-input again (see `killed` below).
-// This is the server-side mirror of the web store's classification, minus the
-// client-only queued-message signal, and is the ONE place the rule lives — the
-// CLI only ever string-matches the resulting work_state.
-//
-// Precedence among the settled states is the safety order: a hard block (open
-// question, permission, dead agent) beats every rest verdict, dormant beats
-// done (a session that both delivered and parked itself is parked — its next
-// move is still a machine's), and every rest verdict beats the "settled with
-// content → needs input" fallthrough. An armed ONCE inject trigger applies the
-// same "dormant beats done" only to the done verdict: delivered + a named wake
-// = parked, but a once reminder never softens needs_input.
-
-export interface WorkStateInput {
-  /** Heartbeat-fresh managed_sessions.agent_status, or undefined when stale/absent. */
-  agentStatus?: string;
-  isIdle: boolean;
-  awaitingInput: boolean;
-  hasPending: boolean;
-  isUnresponsive: boolean;
-  messageCount: number;
-  /** conversations.inbox_killed_at — the user retired this row. Outranks everything below. */
-  killed?: boolean;
-  /** The user parked this row (inbox_dormant_at) and nothing has happened since — see isUserDormant. */
-  userDormant?: boolean;
-  /** The home of an armed recurring/event trigger that injects into it (and whose last run did not fail or flag attention). */
-  armedTriggerHome?: boolean;
-  /** The home of an armed ONCE inject trigger. Weaker than a standing loop: it only demotes a `done` rest to dormant, never needs_input (see dormancy.ArmedTriggerHomes). */
-  armedOnceTriggerHome?: boolean;
-  /** The settle classifier's verdict for THIS settle (settle_verdict, current per isSettleVerdictCurrent), when no declaration exists. Only "done" carries weight. */
-  settleVerdict?: string | null;
-  /** conversations.thread_state_status — the agent's declaration ON THE ROW, for rows with no daemon status at all (see the fallback in classifyWorkState). */
-  declaredStatus?: string | null;
-}
-
 // The user's "dormant" gesture is a stamp that any later activity silently
 // expires — same contract as inbox_deferred_at: honored while newer than the
 // row's last activity, dead the moment a wake, a message, or a new turn bumps
@@ -608,82 +554,3 @@ export const NEEDS_INPUT_AUQ_CHECK_DELAY_MS = 2_000;
 // own local copies that predate this export.
 export const HEARTBEAT_ALIVE_MS = 90 * 1000;
 
-export function classifyWorkState(input: WorkStateInput): WorkState {
-  const { agentStatus, isIdle, awaitingInput, hasPending, isUnresponsive, messageCount, killed } = input;
-  const dead = !!agentStatus && DEAD_AGENT_STATUSES.has(agentStatus);
-  const canDeliver = !isUnresponsive && !dead;
-  const hasMsgs = messageCount > 0;
-  // The rest verdicts, resolved once so both settled arms below agree. Sources
-  // in trust order: the agent's own declaration (carried as the settle status),
-  // structure (an open background task, an armed inject trigger), the user's
-  // park gesture, and last the settle classifier — which only speaks when no
-  // declaration exists, and only for THIS settle.
-  const declaredDormant = agentStatus === "dormant" || agentStatus === "waiting";
-  // The daemon carries a declaration as the settle status while the session is
-  // live. When there is NO daemon status at all (the managed row aged out, the
-  // machine is gone, the row predates the feature), the row's own pinned
-  // thread_state_status is the best remaining evidence — a `done` there was
-  // the agent's last word and nothing can have moved since without a daemon.
-  // Only `done` rides this fallback: a `dormant` promise with no daemon has no
-  // one to deliver its wake, so it stays needs_input (a human must look).
-  const declaredDone = agentStatus === "done" || (!agentStatus && input.declaredStatus === "done");
-  // A `done` rest with an armed once trigger into the session parks instead:
-  // the follow-up names the next actor (the machine fires in N days), and
-  // nothing is left for the human to unblock. Only `done` demotes — a once
-  // trigger on a needs_input session is a reminder, and a reminder must never
-  // hide an open ask.
-  const doneRest = (): WorkState => (input.armedOnceTriggerHome ? "dormant" : "done");
-  const restState = (): WorkState => {
-    if (declaredDormant || input.armedTriggerHome || input.userDormant) return "dormant";
-    if (declaredDone) return doneRest();
-    if (agentStatus === "idle" || !agentStatus) {
-      // A blocked PIN is the agent's explicit claim on the human — the same
-      // claim that un-stashes (setThreadState) — so the classifier's soft
-      // verdict never overrides it. Cleared by the agent's own next
-      // declaration, never by a model.
-      if (input.declaredStatus === "blocked") return "needs_input";
-      // The classifier only ever files DONE: dormancy needs a wake the system
-      // can verify, and prose cannot supply one (see idleSummary.SETTLE_VERDICTS).
-      if (input.settleVerdict === "done") return doneRest();
-    }
-    return "needs_input";
-  };
-
-  // A KILLED row is triaged and outranks every signal below it: the user retired
-  // it, so nothing about it is actionable and it must never read as "working".
-  // Kill now cancels the messages queued before it, but a has_pending flag can
-  // still be stale (an in-flight fenced row, an older kill), and an agent_status
-  // can come from a worker a daemon bug revived — both used to park the dead row
-  // back in the Working bucket. inbox_killed_at is the right signal precisely
-  // because ANY new send clears it (pendingMessages.enqueue's wake-up rules), so
-  // a genuinely revived session classifies normally again. `status: "completed"`
-  // alone deliberately does NOT qualify — an ordinary finished session with a
-  // queued message really is about to work on it.
-  if (killed) return "idle";
-
-  // Blocked on the user right now (open AskUserQuestion poll, or a tool-use
-  // awaiting approve/deny) → needs input. A poll/permission on an empty session
-  // is just startup noise, so gate on having real content.
-  if (awaitingInput && hasMsgs) return "needs_input";
-  if (agentStatus === "permission_blocked" && hasMsgs) return "needs_input";
-
-  // Actively producing, or carrying deliverable queued work on a live daemon.
-  if (agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus)) return "working";
-  if (canDeliver && hasPending) return "working";
-
-  // Dead with output → a human needs to read/restart it. A dead daemon cannot
-  // deliver a wake, so no rest verdict survives this arm — except "done", which
-  // trustedAgentStatus never coerces to dead in the first place.
-  if (dead) return hasMsgs ? "needs_input" : "idle";
-
-  // Settled with content: who acts next? A rest verdict names a machine (dormant)
-  // or nobody (done); otherwise the ball is in the user's court — the web inbox
-  // files that under NEEDS INPUT, so the CLI matches. This also covers
-  // unresponsive sessions (a hanging user message on a dead daemon needs a human
-  // to restart it) — a hard block, so no verdict or park stamp outranks it.
-  if (isIdle) return hasMsgs ? (isUnresponsive ? "needs_input" : restState()) : "idle";
-
-  // Not idle but no active status either: mid-grace right after a turn, or the
-  // user just sent a message the agent hasn't picked up — work in flight.
-  return hasMsgs ? "working" : "idle";
-}

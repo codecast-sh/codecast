@@ -750,7 +750,7 @@ export const timeSessionsLiveness = internalQuery({
       .withIndex("by_user", (q: any) => q.eq("user_id", user._id))
       .collect();
     const t0 = Date.now();
-    const liveness = await computeSessionsLiveness(ctx, user._id);
+    const { liveness } = await computeSessionsLiveness(ctx, user._id);
     return {
       ms: Date.now() - t0,
       rows: Object.keys(liveness).length,
@@ -788,6 +788,54 @@ const inboxVariant = (skip: { children?: boolean; auq?: boolean; refs?: boolean 
       return { rows: sessions.length };
     },
   });
+
+// TEMPORARY: count db operations (query executions + gets) per inbox recompute
+// instead of timing it — "too many system operations" is an op-count budget,
+// and latency samples are too noisy on a loaded backend to show a cut of
+// hundreds of cheap batched reads. Wraps ctx.db so every read is tallied by
+// index name / table. Safe to delete.
+export const countInboxOps = internalQuery({
+  args: { who: v.string(), include_liveness: v.optional(v.boolean()), skip_children: v.optional(v.boolean()), _n: v.optional(v.number()) },
+  handler: async (ctx: any, args) => {
+    const user = await debugResolveUser(ctx, args.who);
+    if (!user) return { error: "no user" };
+    const byKey: Record<string, number> = {};
+    let total = 0;
+    const bump = (key: string) => { byKey[key] = (byKey[key] ?? 0) + 1; total++; };
+    const db = ctx.db;
+    const getIds = new Set<string>();
+    const getTables: Record<string, number> = {};
+    const countingDb = {
+      ...db,
+      get: async (id: any) => {
+        bump("get");
+        getIds.add(String(id));
+        const doc = await db.get(id);
+        // Ids are opaque; classify by doc shape so the get mix is readable.
+        const kind = !doc ? "missing"
+          : doc.session_id !== undefined ? "conversation"
+          : doc.node_statuses !== undefined || doc.workflow_name !== undefined ? "workflow_run"
+          : doc.goal !== undefined ? "plan"
+          : doc.priority !== undefined ? "task"
+          : doc.email !== undefined ? "user"
+          : "other";
+        getTables[kind] = (getTables[kind] ?? 0) + 1;
+        return doc;
+      },
+      query: (table: string) => {
+        const q = db.query(table);
+        const origWithIndex = q.withIndex.bind(q);
+        q.withIndex = (name: string, fn?: any) => { bump(`${table}.${name}`); return origWithIndex(name, fn); };
+        return q;
+      },
+    };
+    const { sessions } = await computeInboxSessions({ ...ctx, db: countingDb }, user._id, {
+      includeLiveness: args.include_liveness ?? false,
+      ...(args.skip_children ? { _skip: { children: true } } : {}),
+    });
+    return { rows: sessions.length, total_ops: total, by_key: byKey, distinct_get_ids: getIds.size, gets_by_kind: getTables };
+  },
+});
 
 export const timeInboxScanOnly = inboxVariant(null, true);
 export const timeInboxFull = inboxVariant(null);

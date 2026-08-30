@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { tallyInboxRows } from "./conversations";
+import { tallyInboxRows, placeConversationRow, ownAsk } from "./conversations";
 
 // The `cast sessions` tally. This logic has been wrong twice — a killed row
 // double-counted under a comment denying it, then `-a` zeroing the retirement
@@ -34,8 +34,16 @@ function session(overrides: Record<string, any> = {}) {
   };
 }
 
+// The tally never classifies: computeInboxSessions stamps every row through
+// the shared placeInboxRow (via placeConversationRow) before the tally sees
+// it. The test rows go through the same stamp.
+function stamped(s: any) {
+  const placement = placeConversationRow({ ...s, has_pending_messages: s.has_pending }, s, ownAsk(s), s.last_user_message);
+  return { ...s, ...placement, asking: ownAsk(s) };
+}
+
 const tally = (s: any[], showAll = false) =>
-  tallyInboxRows(s, { showAll, stateFilter: null, labelByConv });
+  tallyInboxRows(s.map(stamped), { showAll, stateFilter: null, labelByConv });
 
 // Which work-state bucket a listed row lands in depends on liveness signals
 // that are beside the point for a tally test; what matters is that it lands in
@@ -125,7 +133,7 @@ describe("tallyInboxRows — retirement figures are tallies, not a partition", (
       [
         session({ _id: "conversations_sub", session_id: "sess-sub", is_subagent: true }),
         session({ _id: "conversations_other", session_id: "sess-other", is_subagent: true }),
-      ],
+      ].map(stamped),
       { showAll: false, stateFilter: null, labelByConv, requestedIds: new Set(["conversations_sub"]) },
     );
     expect(rows.map((r) => r.id)).toEqual(["conversations_sub"]);
@@ -136,7 +144,7 @@ describe("tallyInboxRows — retirement figures are tallies, not a partition", (
   // the parent's child enumeration); the web dedups by _id, so must this.
   test("a requested subagent emitted twice lists and counts once", () => {
     const sub = session({ _id: "conversations_sub", session_id: "sess-sub", is_subagent: true });
-    const { counts, rows } = tallyInboxRows([sub, { ...sub }], {
+    const { counts, rows } = tallyInboxRows([sub, { ...sub }].map(stamped), {
       showAll: false, stateFilter: null, labelByConv, requestedIds: new Set(["conversations_sub"]),
     });
     expect(rows).toHaveLength(1);
@@ -157,7 +165,7 @@ describe("tallyInboxRows — retirement figures are tallies, not a partition", (
   // summary line would change meaning with every --state flag.
   test("stateFilter=pinned narrows rows to pinned without touching counts", () => {
     const { counts, rows } = tallyInboxRows(
-      [session({ _id: "a", is_pinned: true }), session({ _id: "b" })],
+      [session({ _id: "a", is_pinned: true }), session({ _id: "b" })].map(stamped),
       { showAll: false, stateFilter: "pinned", labelByConv },
     );
     expect(counts.total).toBe(2);
@@ -170,7 +178,7 @@ describe("tallyInboxRows — retirement figures are tallies, not a partition", (
     // needs_input (settled-with-content routes to the user), so these two rows
     // land in different buckets by construction.
     const { counts, rows } = tallyInboxRows(
-      [session({ _id: "a", inbox_killed_at: 111, is_pinned: true }), session({ _id: "b" })],
+      [session({ _id: "a", inbox_killed_at: 111, is_pinned: true }), session({ _id: "b" })].map(stamped),
       { showAll: false, stateFilter: "idle", labelByConv },
     );
     expect(counts.total).toBe(2);
@@ -181,7 +189,7 @@ describe("tallyInboxRows — retirement figures are tallies, not a partition", (
   test("labelByConv stamps the row label; absent entries read null", () => {
     const labels = new Map([["conversations_a", "fleet"]]);
     const { rows } = tallyInboxRows(
-      [session({ _id: "conversations_a" }), session({ _id: "conversations_b" })],
+      [session({ _id: "conversations_a" }), session({ _id: "conversations_b" })].map(stamped),
       { showAll: false, stateFilter: null, labelByConv: labels },
     );
     expect(rows.find((r) => r.id === "conversations_a")!.label).toBe("fleet");

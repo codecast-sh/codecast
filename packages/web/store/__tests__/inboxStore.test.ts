@@ -4347,12 +4347,13 @@ describe("liveInboxIds persistence + synced show-old", () => {
 
   it("setShowOldSessions writes the synced ui key with a ts stamp (sticky per-user view)", () => {
     const before = Date.now();
-    expect(resolveShowOld(useInboxStore.getState().clientState.ui)).toBe(false);
-    useInboxStore.getState().setShowOldSessions(true);
+    // Unset = shown: a new user sees their whole history and hides by choice.
+    expect(resolveShowOld(useInboxStore.getState().clientState.ui)).toBe(true);
+    useInboxStore.getState().setShowOldSessions(false);
     const ui = useInboxStore.getState().clientState.ui as Record<string, any>;
-    expect(ui.inbox_show_old).toBe(true);
+    expect(ui.inbox_show_old).toBe(false);
     expect(ui["inbox_show_old:ts"]).toBeGreaterThanOrEqual(before);
-    expect(resolveShowOld(ui)).toBe(true);
+    expect(resolveShowOld(ui)).toBe(false);
   });
 
   it("an OFF toggled on another device (newer stamp) wins on sync — sticky can't become stuck", () => {
@@ -4422,11 +4423,14 @@ describe("liveInboxIds persistence + synced show-old", () => {
     });
   });
 
-  it("the legacy show_old_sessions key is never read — a stale server `true` cannot resurrect cruft mode", () => {
+  it("the legacy show_old_sessions key is never read — only inbox_show_old decides", () => {
     // The pre-LWW synced flag once turned one browse click into a permanent
-    // all-clients cruft mode; stale `true` values still linger in server
-    // client_state docs. resolveShowOld must ignore them forever.
-    useInboxStore.getState().syncTable("clientState", { ui: { show_old_sessions: true } });
+    // all-clients setting; stale values still linger in server client_state
+    // docs. resolveShowOld must ignore them forever: a legacy `false` never
+    // hides, a legacy `true` never overrides an explicit inbox_show_old.
+    useInboxStore.getState().syncTable("clientState", { ui: { show_old_sessions: false } });
+    expect(resolveShowOld(useInboxStore.getState().clientState.ui)).toBe(true);
+    useInboxStore.getState().syncTable("clientState", { ui: { show_old_sessions: true, inbox_show_old: false } });
     expect(resolveShowOld(useInboxStore.getState().clientState.ui)).toBe(false);
   });
 });
