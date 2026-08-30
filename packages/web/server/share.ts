@@ -2,8 +2,7 @@ import type { Context, Hono, Next } from "hono";
 import { stream } from "hono/streaming";
 import { readFile } from "fs/promises";
 import { join } from "path";
-import { api } from "../../convex/convex/_generated/api.js";
-import { convex } from "./bot-meta";
+import { fetchShared } from "./shareData";
 
 /**
  * Share pages, made fast.
@@ -137,33 +136,6 @@ export async function getShellHtml(): Promise<string | null> {
   return shell?.html ?? null;
 }
 
-// --- Tiny TTL cache over the share queries ------------------------------------
-// Protects Convex from repeat loads of a hot link and keeps server TTFB flat.
-// A null QUERY RESULT is cached and inlined (the client shows its not-found
-// state instantly); a FAILED query is not cached and inlines nothing.
-
-const TTL_MS = 60_000;
-const MAX_ENTRIES = 500;
-const cache = new Map<string, { at: number; value: unknown }>();
-
-async function cached(key: string, fetch: () => Promise<unknown>): Promise<{ value: unknown } | null> {
-  const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < TTL_MS) return { value: hit.value };
-  try {
-    const value = await fetch();
-    cache.set(key, { at: Date.now(), value });
-    if (cache.size > MAX_ENTRIES) {
-      for (const k of cache.keys()) {
-        if (cache.size <= MAX_ENTRIES) break;
-        cache.delete(k);
-      }
-    }
-    return { value };
-  } catch {
-    return null; // query failed — serve the shell untouched, client retries live
-  }
-}
-
 // --- HTML assembly ------------------------------------------------------------
 
 /** JSON safe to embed in an inline <script>: no `</script>` breakout, no raw
@@ -187,13 +159,7 @@ const MAX_INLINE_JSON = 1_500_000;
 
 // --- Routes -------------------------------------------------------------------
 
-type ShareKind = "message" | "doc" | "plan";
-
-const SHARE_QUERIES: Record<ShareKind, (token: string) => Promise<unknown>> = {
-  message: (t) => convex.query(api.messages.getSharedMessage, { share_token: t }),
-  doc: (t) => convex.query((api as any).docs.getShared, { share_token: t }),
-  plan: (t) => convex.query((api as any).plans.getShared, { share_token: t }),
-};
+type SsrShareKind = "message" | "doc" | "plan";
 
 // Streamed in two parts: everything up to the root div goes out before the
 // share query is even sent, so the browser starts the chunk downloads while
@@ -201,7 +167,7 @@ const SHARE_QUERIES: Record<ShareKind, (token: string) => Promise<unknown>> = {
 // page, the rest of the shell, and the payload script just before </body> —
 // module scripts are deferred until parsing completes, so it always runs
 // before the hydration pass reads it.
-function shareHandler(kind: ShareKind) {
+function shareHandler(kind: SsrShareKind) {
   return async (c: Context, next: Next) => {
     const token = c.req.param("token") ?? "";
     const shell = await getShell();
@@ -213,7 +179,7 @@ function shareHandler(kind: ShareKind) {
     return stream(c, async (out) => {
       await out.write(shell.pre);
       const [result, render] = await Promise.all([
-        cached(`${kind}:${token}`, () => SHARE_QUERIES[kind](token)),
+        fetchShared(kind, token),
         getRenderer(),
       ]);
       const now = Date.now();
@@ -250,9 +216,7 @@ export function registerShareRoutes(app: Hono) {
   app.get("/share/:token", async (c, next) => {
     const token = c.req.param("token") ?? "";
     if (!TOKEN_RE.test(token)) return next();
-    const result = await cached(`conv:${token}`, () =>
-      convex.query(api.conversations.getSharedConversationMeta, { share_token: token })
-    );
+    const result = await fetchShared("conversation", token);
     const id = (result?.value as { conversation_id?: string } | null)?.conversation_id;
     // No id: unknown token (client renders its invalid-link page) or a convex
     // deploy that predates the field — either way the SPA path still works.
