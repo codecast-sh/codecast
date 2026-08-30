@@ -1,9 +1,10 @@
 import type { Context, Next } from "hono";
-import { ConvexHttpClient } from "convex/browser";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { api } from "../../convex/convex/_generated/api.js";
 import type { Id } from "../../convex/convex/_generated/dataModel";
+import { parseSharePath } from "@codecast/shared/entities";
+import { convex, fetchShared, shareMeta } from "./shareData";
 import { seoFor, SITE_URL } from "../lib/seoRoutes";
 
 /**
@@ -46,9 +47,6 @@ function matches(ua: string | undefined, patterns: string[]): boolean {
   const lower = ua.toLowerCase();
   return patterns.some((p) => lower.includes(p.toLowerCase()));
 }
-
-const convexUrl = process.env.VITE_CONVEX_URL || "https://convex.codecast.sh";
-export const convex = new ConvexHttpClient(convexUrl);
 
 const BASE_URL = SITE_URL;
 const DIST_DIR = join(import.meta.dirname, "../dist");
@@ -144,41 +142,13 @@ async function getConversationMeta(id: string, shareToken?: string) {
   }
 }
 
-async function getShareMeta(token: string) {
-  try {
-    const meta = await convex.query(api.conversations.getSharedConversationMeta, {
-      share_token: token,
-    });
-    if (!meta) return null;
-    const title = meta.title || "Shared Conversation";
-    const description = meta.description
-      || (meta.author ? `${meta.message_count} messages by ${meta.author}` : `${meta.message_count} messages`);
-    return { title: `Codecast: ${title}`, description, url: `${BASE_URL}/share/${token}`, type: "article" };
-  } catch {
-    return null;
-  }
-}
-
-async function getShareMessageMeta(token: string) {
-  try {
-    const meta = await convex.query(api.messages.getSharedMessageMeta, {
-      share_token: token,
-    });
-    if (!meta) return null;
-    const title = meta.title || "Shared Message";
-    const description = meta.description || "A shared coding conversation";
-    return { title: `Codecast: ${title}`, description, url: `${BASE_URL}/share/message/${token}`, type: "article" };
-  } catch {
-    return null;
-  }
-}
-
 // /a/<slug> (published artifacts) is absent on purpose: that page is
 // server-rendered by artifactPage.ts and carries its own og tags.
+// Every /share/* kind (conversation, message, doc, plan) goes through
+// parseSharePath + fetchShared, so a new share kind unfurls the moment it is
+// registered in shareData — this table only holds non-share routes.
 const ROUTES: Array<{ pattern: RegExp; handler: (match: RegExpMatchArray, search: URLSearchParams) => Promise<{ title: string; description: string; url: string; type?: string } | null> }> = [
   { pattern: /^\/conversation\/([a-z0-9]{32})$/, handler: (m, search) => getConversationMeta(m[1], search.get("share") ?? undefined) },
-  { pattern: /^\/share\/message\/(.+)$/, handler: (m) => getShareMessageMeta(m[1]) },
-  { pattern: /^\/share\/(.+)$/, handler: (m) => getShareMeta(m[1]) },
 ];
 
 export async function botMetaMiddleware(c: Context, next: Next) {
@@ -196,12 +166,19 @@ export async function botMetaMiddleware(c: Context, next: Next) {
   if (snapshot) return c.html(snapshot);
 
   if (social) {
-    for (const route of ROUTES) {
-      const match = path.match(route.pattern);
-      if (match) {
-        const meta = await route.handler(match, reqUrl.searchParams);
-        if (meta) return c.html(ogHtml(meta));
-        break;
+    const share = parseSharePath(path);
+    if (share) {
+      const result = await fetchShared(share.kind, share.token);
+      const meta = result ? shareMeta(share.kind, share.token, result.value, BASE_URL) : null;
+      if (meta) return c.html(ogHtml(meta));
+    } else {
+      for (const route of ROUTES) {
+        const match = path.match(route.pattern);
+        if (match) {
+          const meta = await route.handler(match, reqUrl.searchParams);
+          if (meta) return c.html(ogHtml(meta));
+          break;
+        }
       }
     }
     const entry = seoFor(path);
