@@ -30,6 +30,20 @@ async function getOwnedTask(
   return task;
 }
 
+// Management verbs (pause/resume/run now/cancel/reactivate/edit) follow the
+// same rule as reads: anyone who can view the anchor conversation can manage
+// the trigger (founder decision 2026-08-30). Deleting the row stays owner-only
+// — cancel is the teammate's off switch; delete erases history.
+async function getManageableTask(
+  ctx: TaskCtx,
+  taskId: Id<"agent_tasks">,
+  userId: Id<"users">
+): Promise<Doc<"agent_tasks"> | null> {
+  const task = await ctx.db.get(taskId);
+  if (!task || !(await canViewTask(ctx as { db: any }, userId, task))) return null;
+  return task;
+}
+
 async function applyPause(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   if (task.status !== "scheduled" && task.status !== "running") return false;
   await ctx.db.patch(task._id, { status: "paused" });
@@ -236,7 +250,7 @@ const cliTaskAction = (apply: (ctx: TaskCtx, task: Doc<"agent_tasks">) => Promis
     handler: async (ctx, args) => {
       const auth = await verifyApiToken(ctx, args.api_token);
       if (!auth) throw new Error("Unauthorized");
-      const task = await getOwnedTask(ctx, args.task_id, auth.userId);
+      const task = await getManageableTask(ctx, args.task_id, auth.userId);
       if (!task) return false;
       return apply(ctx, task);
     },
@@ -248,7 +262,7 @@ const webTaskAction = (apply: (ctx: TaskCtx, task: Doc<"agent_tasks">) => Promis
     handler: async (ctx, args) => {
       const userId = await getAuthUserId(ctx);
       if (!userId) throw new Error("Unauthorized");
-      const task = await getOwnedTask(ctx, args.task_id, userId);
+      const task = await getManageableTask(ctx, args.task_id, userId);
       if (!task) return false;
       return apply(ctx, task);
     },
@@ -980,7 +994,8 @@ export const webList = query({
 // per-user filtering made those triggers invisible on the very session that
 // created them. Read access piggybacks on conversation access (the workspace
 // rules), so this grants nothing a transcript view doesn't already show.
-// Management verbs stay owner-only (getOwnedTask).
+// Management verbs follow the same rule (getManageableTask); only delete
+// stays owner-only.
 async function canViewTask(
   ctx: { db: any },
   userId: Id<"users">,
@@ -1236,7 +1251,7 @@ export const webRegenerateSummary = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-    const task = await getOwnedTask(ctx, args.task_id, userId);
+    const task = await getManageableTask(ctx, args.task_id, userId);
     if (!task) return false;
     await ctx.scheduler.runAfter(0, internal.agentTasks.generateDisplaySummary, { task_id: args.task_id });
     return true;
@@ -1267,7 +1282,7 @@ export const webUpdate = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-    const task = await getOwnedTask(ctx, args.task_id, userId);
+    const task = await getManageableTask(ctx, args.task_id, userId);
     if (!task) return false;
     if (task.status !== "scheduled" && task.status !== "paused") return false;
 

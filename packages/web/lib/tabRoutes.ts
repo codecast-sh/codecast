@@ -90,14 +90,36 @@ export function shellTabPath(path: string | null | undefined): string {
 }
 
 /** Heal a persisted tab list in place of trust: same array back when every
- *  tab already holds a shell path, so callers can detect a no-op cheaply. */
-export function healTabPaths<T extends { path: string }>(tabs: T[]): T[] {
+ *  tab already holds a shell path (and a well-formed split layout), so
+ *  callers can detect a no-op cheaply. A tab's split layout comes from sync —
+ *  other devices, other versions — so it is validated wholesale and dropped
+ *  when malformed; the tab always keeps its plain path. A client that knows
+ *  nothing of layouts may have rewritten `path` alone, so the focused leaf is
+ *  re-synced to it here rather than trusted. */
+export function healTabPaths<T extends { path: string; layout?: unknown; focusedLeafId?: unknown }>(tabs: T[]): T[] {
   let changed = false;
   const out = tabs.map((t) => {
     const path = shellTabPath(t.path);
-    if (path === t.path) return t;
-    changed = true;
-    return { ...t, path };
+    let next: T = t;
+    if (path !== t.path) { next = { ...next, path }; changed = true; }
+    if (t.layout !== undefined || t.focusedLeafId !== undefined) {
+      const layout = sanitizeLayout(t.layout, (p) => !isNonTabRoute(p));
+      if (!layout || countLeaves(layout) < 2) {
+        next = { ...next, layout: undefined, focusedLeafId: undefined };
+        changed = true;
+      } else {
+        const focusedId =
+          typeof t.focusedLeafId === "string" && findLeaf(layout, t.focusedLeafId)
+            ? t.focusedLeafId
+            : leavesOf(layout)[0].id;
+        const synced = setLeafPath(layout, focusedId, next.path);
+        if (layout !== t.layout || synced !== t.layout || focusedId !== t.focusedLeafId) {
+          next = { ...next, layout: synced, focusedLeafId: focusedId };
+          changed = true;
+        }
+      }
+    }
+    return next;
   });
   return changed ? out : tabs;
 }

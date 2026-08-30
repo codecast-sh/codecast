@@ -26,6 +26,7 @@ import {
   requireAccessibleProject,
   requireSameWorkspace,
   requireTeamMembership,
+  resolveSessionConversation,
   workspaceForResource,
 } from "./lib/access";
 import { notFound } from "./lib/auth";
@@ -372,13 +373,13 @@ export const create = mutation({
     let conversation_id: Id<"conversations"> | undefined;
     let conversationTeamId: Id<"teams"> | undefined;
     if (args.conversation_id) {
-      const conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
-        .first();
-      if (!conv || !(await canAccessConversation(ctx, auth.userId, conv))) notFound("Conversation not found");
-      conversation_id = conv._id;
-      conversationTeamId = teamVisibleConvTeam(conv);
+      // Unresolvable session ref = create the doc without the link, never
+      // reject the create (see resolveSessionConversation).
+      const conv = await resolveSessionConversation(ctx, auth.userId, args.conversation_id);
+      if (conv) {
+        conversation_id = conv._id;
+        conversationTeamId = teamVisibleConvTeam(conv);
+      }
     }
 
     const db = await createDataContext(ctx, {

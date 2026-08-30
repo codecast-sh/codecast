@@ -97,6 +97,19 @@ import { isConvexId } from "../lib/entityLinks";
 import { pathOnMyMachines, type MachineCandidate } from "../lib/machinePicker";
 import { conversationTabPath } from "../lib/pathLabel";
 import { healTabPaths, isNonTabRoute, shellTabPath } from "../lib/tabRoutes";
+import {
+  countLeaves,
+  findLeaf as findStageLeaf,
+  insertLeaf as insertStageLeaf,
+  leavesOf as stageLeavesOf,
+  removeLeaf as removeStageLeaf,
+  setBranchSizes as setStageBranchSizes,
+  setLeafPath as setStageLeafPath,
+  MAX_STAGE_LEAVES,
+  type SplitEdge,
+  type SplitTarget,
+  type StageNode,
+} from "./stageSplit";
 import { divertSessionOpen } from "../lib/openIntent";
 import type { PalettePick } from "../lib/palettePick";
 export { isConvexId };
@@ -1281,7 +1294,25 @@ export type AppTab = {
   workspace?: WorkspaceState;
   /** The right rail's conversation at stamp time (sidePanelSessionId). */
   railSessionId?: string | null;
+  /**
+   * The stage as a split of panes (store/stageSplit). Absent = the ordinary
+   * single-path tab. When present, `path` mirrors the FOCUSED leaf's path —
+   * that invariant is what lets every consumer of a tab's path (highlight,
+   * breadcrumbs, URL sync, titles) stay ignorant of splits. Both chokepoints
+   * that rewrite `path` (updateTab, stampActiveTab) maintain it.
+   */
+  layout?: StageNode;
+  focusedLeafId?: string;
 };
+
+/** `path` and the focused leaf must say the same thing; every path write goes
+ *  through here so they cannot drift. */
+function withTabPath(tab: AppTab, path: string): AppTab {
+  if (tab.layout && tab.focusedLeafId) {
+    return { ...tab, path, layout: setStageLeafPath(tab.layout, tab.focusedLeafId, path) };
+  }
+  return { ...tab, path };
+}
 
 // The path to stamp onto a tab from the live browser URL when switching away.
 // Includes the query string so a tab's deep-link (`/inbox?s=<id>`) survives a
@@ -1311,8 +1342,7 @@ export function stampedTabPath(tab: AppTab): string {
 function stampActiveTab(draft: { activeTabId: string | null; tabs: AppTab[]; workspace: WorkspaceState; sidePanelSessionId: string | null }, patch?: Partial<AppTab>) {
   if (!draft.activeTabId) return;
   draft.tabs = draft.tabs.map((t: AppTab) => t.id === draft.activeTabId ? {
-    ...t,
-    path: stampedTabPath(t),
+    ...withTabPath(t, stampedTabPath(t)),
     workspace: draft.workspace,
     railSessionId: draft.sidePanelSessionId,
     ...patch,
@@ -3692,6 +3722,20 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   switchTab: (id: string) => void;
   updateTab: (id: string, patch: Partial<AppTab>) => void;
   saveCurrentTabState: (patch?: Partial<AppTab>) => void;
+
+  // -- Stage splits (active tab only: drops, focus and closes happen on the
+  //    visible stage; background tabs keep their layout frozen) --
+  /** Insert `path` as a pane beside `target` (or along a stage edge). Returns
+   *  the new leaf id, or null (cap reached / target gone). */
+  stageInsertLeaf: (target: SplitTarget, edge: SplitEdge, path: string) => string | null;
+  /** Point an existing pane at a different route (pane-local navigation). */
+  stageSetLeafPath: (leafId: string, path: string) => void;
+  stageFocusLeaf: (leafId: string) => void;
+  /** Close a pane; the last survivor collapses the tab back to a plain path. */
+  stageCloseLeaf: (leafId: string) => void;
+  /** This pane takes the whole stage: layout dissolves into a plain tab. */
+  stageExpandLeaf: (leafId: string) => void;
+  stageSetSizes: (branchId: string, sizes: number[]) => void;
 
   // -- Recent projects cache --
   recentProjects: Array<{ path: string; count: number; lastActive: number }>;
@@ -9437,12 +9481,109 @@ const inboxStoreConfig = (set: any, get: any) => ({
       if ((current as any)[k] !== (patch as any)[k]) { changed = true; break; }
     }
     if (!changed) return;
-    this.tabs = this.tabs.map((t: AppTab) => t.id === id ? { ...t, ...patch } : t);
+    this.tabs = this.tabs.map((t: AppTab) => {
+      if (t.id !== id) return t;
+      // A path write flows into the focused leaf (withTabPath) unless the
+      // patch replaces the layout itself — the split invariant's chokepoint.
+      const { path, ...rest } = patch;
+      const base = path !== undefined && rest.layout === undefined ? withTabPath(t, path) : t;
+      return { ...base, ...rest, ...(path !== undefined && rest.layout !== undefined ? { path } : {}) };
+    });
   }),
 
   saveCurrentTabState: action(function (this: Draft, patch?: Partial<AppTab>) {
     if (!this.activeTabId) return;
     stampActiveTab(this, patch);
+  }),
+
+  // =====================
+  // STAGE SPLITS
+  // =====================
+  //
+  // All ops act on the ACTIVE tab — drops, focus and closes only ever happen
+  // on the visible stage. Each op re-establishes the invariant that
+  // `tab.path` mirrors the focused leaf's path; the URL side (replaceState)
+  // belongs to lib/stage.ts, which wraps these for components.
+
+  stageInsertLeaf: action(function (this: Draft, target: SplitTarget, edge: SplitEdge, path: string): string | null {
+    const tab = this.tabs.find((t: AppTab) => t.id === this.activeTabId);
+    if (!tab || isNonTabRoute(path)) return null;
+    // A plain tab grows a layout on first split: its current path becomes the
+    // first leaf, so the split preserves what was on screen.
+    const firstLeafId = tab.layout ? null : `sl_seed_${tab.id}`;
+    const root: StageNode = tab.layout ?? { type: "leaf", id: firstLeafId!, path: tab.path };
+    if (countLeaves(root) >= MAX_STAGE_LEAVES) return null;
+    const resolvedTarget = target === "root" ? "root" : tab.layout ? target : { leafId: firstLeafId! };
+    const res = insertStageLeaf(root, resolvedTarget, edge, path);
+    if (!res) return null;
+    this.tabs = this.tabs.map((t: AppTab) =>
+      t.id === tab.id ? { ...t, layout: res.root, focusedLeafId: res.leafId, path } : t,
+    );
+    return res.leafId;
+  }),
+
+  stageSetLeafPath: action(function (this: Draft, leafId: string, path: string) {
+    const tab = this.tabs.find((t: AppTab) => t.id === this.activeTabId);
+    if (!tab?.layout || isNonTabRoute(path) || !findStageLeaf(tab.layout, leafId)) return;
+    const layout = setStageLeafPath(tab.layout, leafId, path);
+    this.tabs = this.tabs.map((t: AppTab) =>
+      t.id === tab.id
+        ? { ...t, layout, ...(t.focusedLeafId === leafId ? { path } : {}) }
+        : t,
+    );
+  }),
+
+  stageFocusLeaf: action(function (this: Draft, leafId: string) {
+    const tab = this.tabs.find((t: AppTab) => t.id === this.activeTabId);
+    if (!tab?.layout || tab.focusedLeafId === leafId) return;
+    const leaf = findStageLeaf(tab.layout, leafId);
+    if (!leaf) return;
+    this.tabs = this.tabs.map((t: AppTab) =>
+      t.id === tab.id ? { ...t, focusedLeafId: leafId, path: leaf.path } : t,
+    );
+  }),
+
+  stageCloseLeaf: action(function (this: Draft, leafId: string) {
+    const tab = this.tabs.find((t: AppTab) => t.id === this.activeTabId);
+    if (!tab?.layout) return;
+    const next = removeStageLeaf(tab.layout, leafId);
+    if (next === tab.layout) return;
+    if (!next || countLeaves(next) <= 1) {
+      // One pane left: the tab is a plain tab again.
+      const survivor = next ? stageLeavesOf(next)[0] : null;
+      this.tabs = this.tabs.map((t: AppTab) =>
+        t.id === tab.id
+          ? { ...t, layout: undefined, focusedLeafId: undefined, ...(survivor ? { path: survivor.path } : {}) }
+          : t,
+      );
+      return;
+    }
+    // Focus falls to the first remaining leaf when the focused one closed.
+    const focused = tab.focusedLeafId && findStageLeaf(next, tab.focusedLeafId)
+      ? tab.focusedLeafId
+      : stageLeavesOf(next)[0].id;
+    const path = findStageLeaf(next, focused)!.path;
+    this.tabs = this.tabs.map((t: AppTab) =>
+      t.id === tab.id ? { ...t, layout: next, focusedLeafId: focused, path } : t,
+    );
+  }),
+
+  stageExpandLeaf: action(function (this: Draft, leafId: string) {
+    const tab = this.tabs.find((t: AppTab) => t.id === this.activeTabId);
+    if (!tab?.layout) return;
+    const leaf = findStageLeaf(tab.layout, leafId);
+    if (!leaf) return;
+    this.tabs = this.tabs.map((t: AppTab) =>
+      t.id === tab.id ? { ...t, layout: undefined, focusedLeafId: undefined, path: leaf.path } : t,
+    );
+  }),
+
+  stageSetSizes: action(function (this: Draft, branchId: string, sizes: number[]) {
+    const tab = this.tabs.find((t: AppTab) => t.id === this.activeTabId);
+    if (!tab?.layout) return;
+    const layout = setStageBranchSizes(tab.layout, branchId, sizes);
+    if (layout === tab.layout) return;
+    this.tabs = this.tabs.map((t: AppTab) => (t.id === tab.id ? { ...t, layout } : t));
   }),
 
   // =====================

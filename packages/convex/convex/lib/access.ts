@@ -8,6 +8,7 @@
 // is materially more nuanced than tasks/docs/plans (see below).
 
 import { Id } from "../_generated/dataModel";
+import { findConversationBySessionReference } from "../conversationSessionLookup";
 import { canTeamMemberAccess, isTeamMember, teamVisibleConvTeam } from "../privacy";
 import { forbidden, notFound } from "./auth";
 
@@ -459,4 +460,27 @@ export async function canAccessConversation(
 ): Promise<boolean> {
   if (conversation.user_id.toString() === userId.toString()) return true;
   return await canTeamMemberAccess(ctx, userId, conversation);
+}
+
+// A CLI call names "this session" by its agent session uuid. The row's stored
+// session_id can lag the live uuid — the daemon's rebind at link/resume time
+// can lose (stranded task-run stub, cross-machine handover) — while the
+// managed_sessions link the daemon also writes stays current. Resolve through
+// both, then gate on conversation access. Returns null on miss or denial and
+// never throws: for most callers the session is enrichment (a comment
+// back-link, a team stamp) and a stale reference must never reject the write
+// it rides on — those callers drop the link and keep the write. Callers whose
+// whole point is the link (plan bind) throw on null themselves.
+export async function resolveSessionConversation(
+  ctx: AccessCtx,
+  userId: Id<"users">,
+  sessionRef: string,
+): Promise<any | null> {
+  const direct = await ctx.db
+    .query("conversations")
+    .withIndex("by_session_id", (q: any) => q.eq("session_id", sessionRef))
+    .first();
+  if (direct && (await canAccessConversation(ctx, userId, direct))) return direct;
+  // Owner-scoped resolution, including the managed_sessions fallback.
+  return await findConversationBySessionReference(ctx, sessionRef, userId);
 }
