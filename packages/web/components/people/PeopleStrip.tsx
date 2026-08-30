@@ -1,10 +1,10 @@
 // The window at its smallest: one row of faces you can hold, and the team in
 // a few words. This is what a buddy list pinned above other apps should cost.
-import { memo, useCallback, useRef, useState, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 import { MemberFace } from "../presence/MemberFace";
 import { LiveRoomAction } from "../calls/LiveNow";
-import { useMountEffect } from "../../hooks/useMountEffect";
 import { emptyRosterText } from "./peopleRoster";
+import { useDescribeSlot } from "./useDescribeSlot";
 import { STRIP_FACE_PX, STRIP_ROW_H } from "./peopleDensity";
 import { peopleHeadClass } from "./usePeopleDensity";
 import { WallFaceButton, type FaceDescription } from "./PeopleWall";
