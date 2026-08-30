@@ -40,6 +40,7 @@ import {
   requireAccessibleProject,
   requireSameWorkspace,
   requireTeamMembership,
+  resolveSessionConversation,
   workspaceForConversation,
   workspaceForResource,
   workspacesMatch,
@@ -709,19 +710,17 @@ export const create = mutation({
     let created_from_conversation: Id<"conversations"> | undefined;
     let convTeamId: Id<"teams"> | undefined;
     if (args.conversation_id) {
-      const conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
-        .first();
-      if (!conv || !(await canAccessConversation(ctx, auth.userId, conv))) {
-        notFound("Conversation not found");
+      // Unresolvable session ref = create the task without the link, never
+      // reject the create (see resolveSessionConversation).
+      const conv = await resolveSessionConversation(ctx, auth.userId, args.conversation_id);
+      if (conv) {
+        conversation_ids = [conv._id];
+        created_from_conversation = conv._id;
+        // Only team-visible conversations hand their team to the task — a
+        // private session's team_id is routing, and copying it here would make
+        // the task readable by the whole team (see teamVisibleConvTeam).
+        convTeamId = teamVisibleConvTeam(conv);
       }
-      conversation_ids = [conv._id];
-      created_from_conversation = conv._id;
-      // Only team-visible conversations hand their team to the task — a
-      // private session's team_id is routing, and copying it here would make
-      // the task readable by the whole team (see teamVisibleConvTeam).
-      convTeamId = teamVisibleConvTeam(conv);
     }
 
     const db = await createDataContext(ctx, {
@@ -912,12 +911,8 @@ export const snippet = query({
     let sessionPlans: { title: string; doc_type: string }[] = [];
     let activePlanSnippet = "";
     if (args.conversation_id) {
-      const conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
-        .first();
+      const conv = await resolveSessionConversation(ctx, auth.userId, args.conversation_id);
       if (conv) {
-        if (!(await canAccessConversation(ctx, auth.userId, conv))) notFound("Conversation not found");
         // Fetch only this conversation's docs through the by_conversation_id
         // index. Collecting the whole team docs table (every row's full markdown
         // content — which this snippet never even returns, only titles below)
@@ -1000,10 +995,7 @@ export const snippet = query({
       // This session's bound task gets its full subtask tree — the one place
       // the whole decomposition belongs in agent context.
       if (args.conversation_id) {
-        const conv = await ctx.db
-          .query("conversations")
-          .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
-          .first();
+        const conv = await resolveSessionConversation(ctx, auth.userId, args.conversation_id);
         const boundId = conv?.active_task_id ? String(conv.active_task_id) : null;
         const bound = boundId ? (tasks as any[]).find((t) => String(t._id) === boundId) : null;
         if (bound) {
@@ -1484,16 +1476,14 @@ export const update = mutation({
       updates.closed_at = now;
     }
 
-    // Link conversation if provided
+    // Link conversation if provided. Unresolvable session ref = apply the
+    // update without the link, never reject the update itself (see
+    // resolveSessionConversation).
     let linkedConvId: Id<"conversations"> | undefined;
-    if (args.conversation_id) {
-      const conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
-        .first();
-      if (!conv || !(await canAccessConversation(ctx, auth.userId, conv))) {
-        notFound("Conversation not found");
-      }
+    const conv = args.conversation_id
+      ? await resolveSessionConversation(ctx, auth.userId, args.conversation_id)
+      : null;
+    if (conv) {
       // A conversation in another workspace may still drive the write (an agent
       // working a cross-workspace task); only the conversation↔task linkage is
       // skipped, since relationships may not join authorization domains.
@@ -1709,16 +1699,13 @@ export const addComment = mutation({
 
     let conversation_id: Id<"conversations"> | undefined;
     if (args.conversation_id) {
-      const conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
-        .first();
-      if (!conv || !(await canAccessConversation(ctx, auth.userId, conv))) {
-        notFound("Conversation not found");
-      }
+      // A stale or unresolvable session ref drops the back-link, exactly like
+      // the cross-workspace case below — the comment text must always land
+      // (see resolveSessionConversation).
+      const conv = await resolveSessionConversation(ctx, auth.userId, args.conversation_id);
       // Cross-workspace commenters still get their text recorded; only the
       // conversation back-link is dropped (relationships stay within one domain).
-      if (workspacesMatch(workspaceForConversation(conv), workspaceForResource(task))) {
+      if (conv && workspacesMatch(workspaceForConversation(conv), workspaceForResource(task))) {
         conversation_id = conv._id;
       }
     }
