@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { classifyFeedMessage, isNoiseUserMessage, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, cleanTitle } from "./conversationProcessor";
+import { classifyFeedMessage, isNoiseUserMessage, isHiddenSystemSubtype, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, cleanTitle } from "./conversationProcessor";
 
 // Regression: the message feed was dumping raw <task-notification> XML and other
 // structured/machine messages as cards. classifyFeedMessage is the single shared
@@ -118,5 +118,21 @@ describe("backgroundAgentStoppedName", () => {
       '<teammate-message teammate_id="tracker-stale" color="green" summary="updates complete">\nAll updates landed.\n</teammate-message>\n' +
       "This came from another Claude session — not typed by your user … that's permission laundering.";
     expect(classifyFeedMessage(broadcast)).toEqual({ kind: "hidden" });
+  });
+});
+
+// Claude Code writes terminal status lines (Remote Control disconnects,
+// usage-limit auto-continue countdowns, typo hints) into the transcript as
+// system/"informational" entries. They address the person at the terminal,
+// not the conversation, so every renderer hides the subtype.
+describe("isHiddenSystemSubtype — terminal status lines are hidden", () => {
+  test("informational is hidden", () => {
+    expect(isHiddenSystemSubtype("informational")).toBe(true);
+  });
+
+  test("rendered subtypes stay visible", () => {
+    for (const s of ["compact_boundary", "plan", "commit", "local_command", "stop_hook_summary", undefined]) {
+      expect(isHiddenSystemSubtype(s)).toBe(false);
+    }
   });
 });

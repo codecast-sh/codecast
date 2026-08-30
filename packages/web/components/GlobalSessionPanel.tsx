@@ -1759,16 +1759,43 @@ function MonitorBars({ session, isActive, onOpen }: {
 // wake outside this session (another session's reply, an external job), or
 // the user parked the card — this row states the reason from what the row
 // itself carries, so a Dormant card never sits there unexplained.
-function DormantReasonRow({ session, isActive, hasOtherRows, onOpen }: {
+//
+// variant "claim" is the honest inverse, for a card filed under NEEDS INPUT
+// whose pinned state still declares dormant: the agent SAYS a machine wakes
+// it, but the system can verify no armed trigger, watch, loop or run — either
+// the wake already landed and the agent never re-declared, or the wake lives
+// outside anything the daemon can see (a tmux job, another machine). Without
+// this row the card reads as a contradiction: a "Dormant" chip sitting in
+// Needs Input with nothing under it. The row names the claim and marks it
+// unverified, so the reader knows why the card still asks for them.
+function DormantReasonRow({ session, isActive, hasOtherRows, variant, onOpen }: {
   session: InboxSession;
   isActive: boolean;
   hasOtherRows: boolean;
+  variant: "parked" | "claim";
   onOpen: (session: InboxSession) => void;
 }) {
   const now = useCoarseNow(30_000);
   const watchRows = useLiveWatchRows(session, now).length;
   if (hasOtherRows || watchRows > 0) return null;
   const ts = threadStateView(session, session.message_count ?? 0, now);
+  if (variant === "claim") {
+    // Only a state that still DECLARES dormant earns the row; a stale state
+    // reads as absent (threadStateView returns null), and any other declared
+    // status means no wake was claimed.
+    if (ts?.status !== "dormant") return null;
+    return (
+      <WakeReasonRowShell
+        isActive={isActive}
+        family="Wake"
+        title="state claims a machine wake"
+        detail={`unverified — no armed trigger, watch, or loop · ${ts.provenance}`}
+        badge="claimed"
+        badgeClass="bg-sol-yellow/10 text-sol-yellow border-sol-yellow/30"
+        onClick={() => onOpen(session)}
+      />
+    );
+  }
   let family: string;
   let title: string;
   let detail: string;
@@ -1789,12 +1816,37 @@ function DormantReasonRow({ session, isActive, hasOtherRows, onOpen }: {
     title = ts?.headline || "waiting on a machine wake";
     detail = ts?.provenance || "";
   }
+  return (
+    <WakeReasonRowShell
+      isActive={isActive}
+      family={family}
+      title={title}
+      detail={detail}
+      badge="parked"
+      badgeClass="bg-sol-blue/10 text-sol-blue border-sol-blue/30"
+      onClick={() => onOpen(session)}
+    />
+  );
+}
+
+// The one row anatomy both wake-reason variants wear: ↳ child glyph, family
+// eyebrow, title, badge, optional detail line. Kept identical to the trigger /
+// monitor bars' two-line shape so a card's children always read as one family.
+function WakeReasonRowShell({ isActive, family, title, detail, badge, badgeClass, onClick }: {
+  isActive: boolean;
+  family: string;
+  title: string;
+  detail: string;
+  badge: string;
+  badgeClass: string;
+  onClick: () => void;
+}) {
   const ariaLabel = `${family} — why this session is parked`;
   return (
     <div className={`group/dormrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
       <button
         className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-blue/[0.05] transition-colors"
-        onClick={() => onOpen(session)}
+        onClick={onClick}
         title="Open the session"
       >
         <div className="flex gap-1.5 min-w-0">
@@ -1809,8 +1861,8 @@ function DormantReasonRow({ session, isActive, hasOtherRows, onOpen }: {
             <div className="flex items-center gap-1.5 min-w-0">
               <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-blue/70 shrink-0">{family}</span>
               <span className="text-xs truncate min-w-0 text-gray-400 font-normal">{title}</span>
-              <span className="ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border bg-sol-blue/10 text-sol-blue border-sol-blue/30">
-                parked
+              <span className={`ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border ${badgeClass}`}>
+                {badge}
               </span>
             </div>
             {detail && (
@@ -1831,23 +1883,29 @@ function DormantReasonRow({ session, isActive, hasOtherRows, onOpen }: {
 // "full" gives each its own row, "hidden" removes them the way the subagent
 // toggle hides subagent rows. The dormant invariant (a parked card explains
 // its wake) holds in strip and full; "hidden" is an explicit opt-out and wins.
-function CardBars({ session, mode, scheduleRows, activeSessionId, dormant, onOpen, onOpenSchedule }: {
+function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, onOpenSchedule }: {
   session: InboxSession;
   mode: CardBarsMode;
   scheduleRows: TriggerRow[];
   activeSessionId?: string | null;
-  dormant?: boolean;
+  // "parked": the card sits in the Dormant bucket — its wake MUST show, so the
+  // reason row is the fallback when no trigger/workflow/watch bar draws.
+  // "claim": the card sits in Needs Input while its pinned state declares
+  // dormant — the row renders the claimed wake as unverified so the
+  // contradiction explains itself.
+  wake?: "parked" | "claim";
   onOpen: (session: InboxSession) => void;
   onOpenSchedule: (row: TriggerRow) => void;
 }) {
   if (mode === "hidden") return null;
   const isActive = session._id === activeSessionId;
   const bound = scheduleRows.map((r) => ({ ...r, openId: session._id }));
-  const dormantRow = dormant ? (
+  const dormantRow = wake ? (
     <DormantReasonRow
       session={session}
       isActive={isActive}
       hasOtherRows={bound.length > 0 || workflowBarVisible(session)}
+      variant={wake}
       onOpen={onOpen}
     />
   ) : null;
@@ -4504,7 +4562,7 @@ function SessionListPanelImpl({
                   mode={cardBars}
                   scheduleRows={viewMode !== "trigger" ? scheduleBarRowsFor(session) : []}
                   activeSessionId={activeSessionId}
-                  dormant={key === "dormant"}
+                  wake={key === "dormant" ? "parked" : key === "needs_input" ? "claim" : undefined}
                   onOpen={handleSelect}
                   onOpenSchedule={openScheduleTarget}
                 />

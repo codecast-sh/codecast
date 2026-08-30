@@ -50,7 +50,6 @@ export function useFloatingCircles(opts: {
   // ── The window is exactly as big as its circles ─────────────────────────
   useWatchEffect(() => {
     bridge.setContentSize(sizeForRef.current(hovered));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- shapeSig stands in for everything sizeFor reads
   }, [shapeSig, hovered]);
 
   // ── Click-through ───────────────────────────────────────────────────────
