@@ -1,5 +1,5 @@
-import {
-  useMemo } from "react";
+import { useMemo } from "react";
+import { stripTitleHeading } from "@codecast/shared/docs";
 import {
   StyleSheet,
   ScrollView,
@@ -57,7 +57,9 @@ export default function DocDetailScreen() {
   }
 
   const cfg = DOC_TYPE_CONFIG[doc.doc_type] ?? DOC_TYPE_CONFIG.note;
-  const content = docDetail?.content ?? doc.content ?? "";
+  // The stored body opens with the title heading; this screen prints the
+  // title in its own header, so the body renders without it.
+  const content = stripTitleHeading(docDetail?.content ?? doc.content ?? "");
 
   return (
     <>
