@@ -19,6 +19,10 @@ const buttonVariants = cva(
           "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
         ghost: "hover:bg-accent hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
+        // The settings surface's primary action. sol-cyan is a fixed accent
+        // that doesn't invert between themes, so the fixed dark base03 text
+        // keeps its contrast in both.
+        cyan: "bg-sol-cyan text-sol-base03 hover:bg-sol-cyan/80",
       },
       size: {
         default: "h-9 px-4 py-2",
