@@ -97,7 +97,7 @@ import { parseSessionFile, parseTranscriptFor, extractSlug, extractParentUuid, e
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
-import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, scrubAgentEnv } from "./agentEnv.js";
+import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, scrubAgentEnv } from "./agentEnv.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
 import { getMachineKey } from "./machineKey.js";
 import { markSynced, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
@@ -15051,6 +15051,18 @@ export function buildResumeEnvPrefix(agentType: string): string {
   return agentType === "claude"
     ? `${AGENT_ENV_SCRUB} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
     : AGENT_ENV_SCRUB;
+}
+
+// The settings-level transcript pin (agentEnv.ts): idempotent, respects an
+// authored value, logs only when it actually writes.
+function assertClaudePersistencePin(): void {
+  try {
+    if (ensureClaudeSettingsPersistence() === "wrote") {
+      log("[AGENT-ENV] pinned CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 in ~/.claude/settings.json");
+    }
+  } catch (err) {
+    log(`[AGENT-ENV] settings persistence pin failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 // The same markers persisted in the tmux server's global environment seed every
