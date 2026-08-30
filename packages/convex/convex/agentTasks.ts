@@ -10,6 +10,7 @@ import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { enqueuePush } from "./pushRouter";
 import { nextShortId } from "./counters";
 import { canAccessConversation } from "./lib/access";
+import { armedTriggerKindFor } from "./dormancy";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000; // 10 min
@@ -19,6 +20,33 @@ const LEASE_DURATION_MS = 5 * 60 * 1000; // 5 min
 // to a userId, then go through these so the two surfaces can't drift. ---
 
 type TaskCtx = { db: any; scheduler?: { runAfter: (delayMs: number, fn: any, args: any) => Promise<unknown> } };
+
+// Recompute conversations.armed_trigger_kind for one home from EVERY trigger
+// that injects into it (several can), and write it only when it changed — the
+// field is semantic, so each write is a sync-log action. This is the single
+// writer; every lifecycle transition below routes its patch through patchTask
+// so the denormalized answer can never lag the agent_tasks rows the inbox no
+// longer reads (sync-convergence C1).
+export async function refreshArmedTriggerKind(
+  ctx: TaskCtx,
+  conversationId: Id<"conversations">,
+): Promise<void> {
+  const tasks = await ctx.db
+    .query("agent_tasks")
+    .withIndex("by_originating_conversation", (q: any) => q.eq("originating_conversation_id", conversationId))
+    .collect();
+  const kind = armedTriggerKindFor(tasks);
+  const conv = await ctx.db.get(conversationId);
+  if (!conv) return;
+  if ((conv.armed_trigger_kind ?? "none") === kind) return;
+  await ctx.db.patch(conversationId, { armed_trigger_kind: kind });
+}
+
+// Patch a trigger and keep its home's armed_trigger_kind in step.
+async function patchTask(ctx: TaskCtx, task: Doc<"agent_tasks">, patch: Record<string, any>) {
+  await ctx.db.patch(task._id, patch);
+  if (task.originating_conversation_id) await refreshArmedTriggerKind(ctx, task.originating_conversation_id);
+}
 
 async function getOwnedTask(
   ctx: TaskCtx,
@@ -30,15 +58,29 @@ async function getOwnedTask(
   return task;
 }
 
+// Management verbs (pause/resume/run now/cancel/reactivate/edit) follow the
+// same rule as reads: anyone who can view the anchor conversation can manage
+// the trigger (founder decision 2026-08-30). Deleting the row stays owner-only
+// — cancel is the teammate's off switch; delete erases history.
+async function getManageableTask(
+  ctx: TaskCtx,
+  taskId: Id<"agent_tasks">,
+  userId: Id<"users">
+): Promise<Doc<"agent_tasks"> | null> {
+  const task = await ctx.db.get(taskId);
+  if (!task || !(await canViewTask(ctx as { db: any }, userId, task))) return null;
+  return task;
+}
+
 async function applyPause(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   if (task.status !== "scheduled" && task.status !== "running") return false;
-  await ctx.db.patch(task._id, { status: "paused" });
+  await patchTask(ctx, task, { status: "paused" });
   return true;
 }
 
 async function applyResume(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   if (task.status !== "paused") return false;
-  await ctx.db.patch(task._id, {
+  await patchTask(ctx, task, {
     status: "scheduled",
     run_at: task.run_at || Date.now(),
   });
@@ -46,12 +88,12 @@ async function applyResume(ctx: TaskCtx, task: Doc<"agent_tasks">) {
 }
 
 async function applyRunNow(ctx: TaskCtx, task: Doc<"agent_tasks">) {
-  await ctx.db.patch(task._id, { status: "scheduled", run_at: Date.now() });
+  await patchTask(ctx, task, { status: "scheduled", run_at: Date.now() });
   return true;
 }
 
 async function applyCancel(ctx: TaskCtx, task: Doc<"agent_tasks">) {
-  await ctx.db.patch(task._id, { status: "completed" });
+  await patchTask(ctx, task, { status: "completed" });
   return true;
 }
 
@@ -63,7 +105,7 @@ async function applyCancel(ctx: TaskCtx, task: Doc<"agent_tasks">) {
 // a once-task keeps its future run_at or re-arms a minute out.
 async function applyReactivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   if (task.status !== "completed" && task.status !== "failed") return false;
-  await ctx.db.patch(task._id, {
+  await patchTask(ctx, task, {
     status: "scheduled",
     canceled_on_kill_at: undefined,
     run_at:
@@ -126,7 +168,7 @@ export async function cancelTasksBoundToConversation(
       // Stamp WHY it completed: a restore of the killed session re-arms exactly
       // the schedules this kill took down (reactivateTasksCanceledOnKill),
       // without touching schedules that ran to natural completion.
-      await ctx.db.patch(task._id, { status: "completed", canceled_on_kill_at: Date.now() });
+      await patchTask(ctx, task, { status: "completed", canceled_on_kill_at: Date.now() });
       cancelled++;
     }
   }
@@ -223,6 +265,9 @@ async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) 
     run_count: 0,
     created_at: now,
   });
+  if (args.originating_conversation_id) {
+    await refreshArmedTriggerKind(ctx, args.originating_conversation_id as Id<"conversations">);
+  }
   // Distill a readable display_title/display_summary from the prompt (the
   // summarizer section below) — the stored title is usually prompt.slice(0,60).
   await ctx.scheduler?.runAfter(0, internal.agentTasks.generateDisplaySummary, { task_id: taskId });
@@ -236,7 +281,7 @@ const cliTaskAction = (apply: (ctx: TaskCtx, task: Doc<"agent_tasks">) => Promis
     handler: async (ctx, args) => {
       const auth = await verifyApiToken(ctx, args.api_token);
       if (!auth) throw new Error("Unauthorized");
-      const task = await getOwnedTask(ctx, args.task_id, auth.userId);
+      const task = await getManageableTask(ctx, args.task_id, auth.userId);
       if (!task) return false;
       return apply(ctx, task);
     },
@@ -248,7 +293,7 @@ const webTaskAction = (apply: (ctx: TaskCtx, task: Doc<"agent_tasks">) => Promis
     handler: async (ctx, args) => {
       const userId = await getAuthUserId(ctx);
       if (!userId) throw new Error("Unauthorized");
-      const task = await getOwnedTask(ctx, args.task_id, userId);
+      const task = await getManageableTask(ctx, args.task_id, userId);
       if (!task) return false;
       return apply(ctx, task);
     },
@@ -452,6 +497,36 @@ export const getTask = query({
     const task = await ctx.db.get(args.task_id);
     if (!task || task.user_id !== auth.userId) return null;
     return task;
+  },
+});
+
+// Turn a short id ("tr-42") or Convex id into a trigger the caller may
+// manage — same conversation-access rule as the web verbs, so `cast trigger
+// pause tr-42` works on a bot-owned trigger the CLI's own-only list can't see.
+export const resolveTask = query({
+  args: { api_token: v.string(), ref: v.string() },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) throw new Error("Unauthorized");
+    const ref = args.ref.trim();
+    let task: Doc<"agent_tasks"> | null = null;
+    if (/^tr-\w+$/i.test(ref)) {
+      task = await ctx.db
+        .query("agent_tasks")
+        .withIndex("by_short_id", (q) => q.eq("short_id", ref.toLowerCase()))
+        .unique();
+    } else {
+      const id = ctx.db.normalizeId("agent_tasks", ref);
+      task = id ? await ctx.db.get(id) : null;
+    }
+    if (!task || !(await canViewTask(ctx, auth.userId, task))) return null;
+    return {
+      _id: task._id,
+      short_id: task.short_id,
+      title: task.title,
+      status: task.status,
+      is_own: task.user_id === auth.userId,
+    };
   },
 });
 
@@ -670,7 +745,7 @@ export const completeTaskRun = mutation({
       }
     }
 
-    await ctx.db.patch(args.task_id, updates);
+    await patchTask(ctx, task, updates);
 
     if (task.target_conversation_id && args.summary) {
       const targetConv = await ctx.db.get(task.target_conversation_id);
@@ -751,7 +826,7 @@ export const failTaskRun = mutation({
     }
 
     if (newRetryCount < maxRetries) {
-      await ctx.db.patch(args.task_id, {
+      await patchTask(ctx, task, {
         status: "scheduled",
         retry_count: newRetryCount,
         run_at: Date.now() + 60_000 * newRetryCount, // backoff
@@ -762,7 +837,7 @@ export const failTaskRun = mutation({
         last_run_session_uuid: runUuid,
       });
     } else {
-      await ctx.db.patch(args.task_id, {
+      await patchTask(ctx, task, {
         status: "failed",
         retry_count: newRetryCount,
         lease_holder: undefined,
@@ -980,7 +1055,8 @@ export const webList = query({
 // per-user filtering made those triggers invisible on the very session that
 // created them. Read access piggybacks on conversation access (the workspace
 // rules), so this grants nothing a transcript view doesn't already show.
-// Management verbs stay owner-only (getOwnedTask).
+// Management verbs follow the same rule (getManageableTask); only delete
+// stays owner-only.
 async function canViewTask(
   ctx: { db: any },
   userId: Id<"users">,
@@ -1096,6 +1172,34 @@ export const backfillShortIds = internalMutation({
       await ctx.db.patch(task._id, { short_id: await nextShortId(ctx.db, "tr") });
     }
     return { filled: batch.length, more: missing.length > limit };
+  },
+});
+
+// One-shot backfill for conversations.armed_trigger_kind: every home of a
+// currently armed inject trigger gets its kind stamped. Bounded by the number of
+// armed triggers, not conversations; homes with no armed trigger stay unset,
+// which reads as "none". Idempotent — re-running writes nothing new.
+export const backfillArmedTriggerKind = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const homes = new Set<string>();
+    for (const status of ["scheduled", "running", "paused"] as const) {
+      const tasks = await ctx.db
+        .query("agent_tasks")
+        .withIndex("by_status_run_at", (q) => q.eq("status", status))
+        .collect();
+      for (const task of tasks) {
+        if (task.originating_conversation_id) homes.add(task.originating_conversation_id.toString());
+      }
+    }
+    let stamped = 0;
+    for (const id of homes) {
+      const before = await ctx.db.get(id as Id<"conversations">);
+      await refreshArmedTriggerKind(ctx, id as Id<"conversations">);
+      const after = await ctx.db.get(id as Id<"conversations">);
+      if (before && after && (before.armed_trigger_kind ?? "none") !== (after.armed_trigger_kind ?? "none")) stamped++;
+    }
+    return { homes: homes.size, stamped };
   },
 });
 
@@ -1224,6 +1328,13 @@ export const webDelete = mutation({
     if (!userId) throw new Error("Unauthorized");
     const task = await getOwnedTask(ctx, args.task_id, userId);
     if (!task) return false;
+    // Delete erases history (see getManageableTask's note) — the edit log
+    // goes with the row rather than orphaning.
+    const revisions = await ctx.db
+      .query("agent_task_revisions")
+      .withIndex("by_task", (q: any) => q.eq("task_id", args.task_id))
+      .collect();
+    for (const r of revisions) await ctx.db.delete(r._id);
     await ctx.db.delete(args.task_id);
     return true;
   },
@@ -1236,83 +1347,239 @@ export const webRegenerateSummary = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-    const task = await getOwnedTask(ctx, args.task_id, userId);
+    const task = await getManageableTask(ctx, args.task_id, userId);
     if (!task) return false;
     await ctx.scheduler.runAfter(0, internal.agentTasks.generateDisplaySummary, { task_id: args.task_id });
     return true;
   },
 });
 
-// Edit an existing schedule in place (web-only — the CLI has no update verb).
-// Mirrors insertTask's timing rules so the two surfaces can't drift. Only
-// scheduled/paused tasks are editable; a running or finished task is rejected.
+// --- Editing: shared core with version history + audit log ---
+
+type TaskUpdateArgs = {
+  title?: string;
+  prompt?: string;
+  schedule_type?: "once" | "recurring" | "event";
+  run_at?: number;
+  interval_ms?: number;
+  event_filter?: { event_type: string; action?: string; repository?: string };
+  mode?: string;
+  agent_type?: string;
+  project_path?: string;
+  max_runtime_ms?: number;
+};
+
+// The editable surface — exactly the fields agent_task_revisions.before
+// snapshots. Everything else on the row is lifecycle/bookkeeping state that
+// edits never touch.
+const EDITABLE_FIELDS = [
+  "title",
+  "prompt",
+  "schedule_type",
+  "run_at",
+  "interval_ms",
+  "event_filter",
+  "mode",
+  "agent_type",
+  "project_path",
+  "max_runtime_ms",
+] as const;
+
+function snapshotEditable(task: Doc<"agent_tasks">) {
+  return {
+    title: task.title,
+    prompt: task.prompt,
+    schedule_type: task.schedule_type,
+    run_at: task.run_at,
+    interval_ms: task.interval_ms,
+    event_filter: task.event_filter,
+    mode: task.mode,
+    agent_type: task.agent_type,
+    project_path: task.project_path,
+    max_runtime_ms: task.max_runtime_ms,
+  };
+}
+
+// Edit a schedule in place — the ONLY writer for trigger edits, shared by
+// `cast trigger update` (CLI) and the web edit dialog so the two surfaces
+// can't drift. Mirrors insertTask's timing rules. Only scheduled/paused tasks
+// are editable; a running or finished task is rejected. Every effective edit
+// appends an agent_task_revisions row (pre-edit snapshot + who/where/what),
+// so `cast trigger history` can show both the audit trail and any prior
+// version. A no-op edit (nothing actually differs) writes neither.
+export async function applyTaskUpdate(
+  ctx: TaskCtx,
+  task: Doc<"agent_tasks">,
+  args: TaskUpdateArgs,
+  actor: { userId: Id<"users">; source: "cli" | "web" },
+): Promise<{ ok: boolean; changed: string[] }> {
+  if (task.status !== "scheduled" && task.status !== "paused") return { ok: false, changed: [] };
+
+  const patch: Record<string, unknown> = {};
+  if (args.title !== undefined) patch.title = args.title.trim() || task.title;
+  const promptChanged =
+    args.prompt !== undefined && !!args.prompt.trim() && args.prompt.trim() !== task.prompt;
+  if (promptChanged) {
+    patch.prompt = args.prompt!.trim();
+    // Stale distillations must not describe the old prompt.
+    patch.display_title = undefined;
+    patch.display_summary = undefined;
+  }
+  if (args.mode !== undefined) patch.mode = args.mode === "apply" ? "apply" : "propose";
+  if (args.agent_type !== undefined) patch.agent_type = args.agent_type || "claude";
+  if (args.project_path !== undefined) patch.project_path = args.project_path || undefined;
+  if (args.max_runtime_ms !== undefined) patch.max_runtime_ms = args.max_runtime_ms;
+
+  if (args.schedule_type !== undefined) {
+    patch.schedule_type = args.schedule_type;
+    if (args.schedule_type === "recurring") {
+      if (!args.interval_ms) throw new Error("interval_ms required for recurring tasks");
+      patch.interval_ms = args.interval_ms;
+      patch.run_at = args.run_at ?? Date.now() + args.interval_ms;
+      patch.event_filter = undefined;
+    } else if (args.schedule_type === "event") {
+      if (!args.event_filter) throw new Error("event_filter required for event tasks");
+      patch.event_filter = args.event_filter;
+      patch.run_at = undefined;
+      patch.interval_ms = undefined;
+    } else {
+      patch.run_at = args.run_at ?? Date.now();
+      patch.interval_ms = undefined;
+      patch.event_filter = undefined;
+    }
+  } else {
+    if (args.interval_ms !== undefined) patch.interval_ms = args.interval_ms;
+    if (args.run_at !== undefined) patch.run_at = args.run_at;
+  }
+
+  // Which editable fields actually differ. The display_* resets ride along
+  // with a prompt change but aren't edits themselves, so they never appear in
+  // the audit line. event_filter is the one object field — compare by value.
+  const changed = (EDITABLE_FIELDS as readonly string[]).filter(
+    (k) =>
+      k in patch &&
+      JSON.stringify((patch as any)[k] ?? null) !== JSON.stringify((task as any)[k] ?? null)
+  );
+  if (changed.length === 0) return { ok: true, changed };
+
+  const prior = await ctx.db
+    .query("agent_task_revisions")
+    .withIndex("by_task", (q: any) => q.eq("task_id", task._id))
+    .collect();
+  const revision = prior.reduce((max: number, r: any) => Math.max(max, r.revision), 0) + 1;
+  await ctx.db.insert("agent_task_revisions", {
+    task_id: task._id,
+    revision,
+    actor_user_id: actor.userId,
+    source: actor.source,
+    changed_fields: changed,
+    before: snapshotEditable(task),
+    created_at: Date.now(),
+  });
+
+  await patchTask(ctx, task, patch);
+  if (promptChanged) {
+    await ctx.scheduler?.runAfter(0, internal.agentTasks.generateDisplaySummary, { task_id: task._id });
+  }
+  return { ok: true, changed };
+}
+
+const TASK_UPDATE_ARG_VALIDATORS = {
+  title: v.optional(v.string()),
+  prompt: v.optional(v.string()),
+  schedule_type: v.optional(v.union(v.literal("once"), v.literal("recurring"), v.literal("event"))),
+  run_at: v.optional(v.number()),
+  interval_ms: v.optional(v.number()),
+  event_filter: v.optional(v.object({
+    event_type: v.string(),
+    action: v.optional(v.string()),
+    repository: v.optional(v.string()),
+  })),
+  mode: v.optional(v.string()),
+  agent_type: v.optional(v.string()),
+  project_path: v.optional(v.string()),
+  max_runtime_ms: v.optional(v.number()),
+};
+
 export const webUpdate = mutation({
-  args: {
-    task_id: v.id("agent_tasks"),
-    title: v.optional(v.string()),
-    prompt: v.optional(v.string()),
-    schedule_type: v.optional(v.union(v.literal("once"), v.literal("recurring"), v.literal("event"))),
-    run_at: v.optional(v.number()),
-    interval_ms: v.optional(v.number()),
-    event_filter: v.optional(v.object({
-      event_type: v.string(),
-      action: v.optional(v.string()),
-      repository: v.optional(v.string()),
-    })),
-    mode: v.optional(v.string()),
-    agent_type: v.optional(v.string()),
-    project_path: v.optional(v.string()),
-    max_runtime_ms: v.optional(v.number()),
-  },
+  args: { task_id: v.id("agent_tasks"), ...TASK_UPDATE_ARG_VALIDATORS },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-    const task = await getOwnedTask(ctx, args.task_id, userId);
+    const task = await getManageableTask(ctx, args.task_id, userId);
     if (!task) return false;
-    if (task.status !== "scheduled" && task.status !== "paused") return false;
+    const { task_id: _id, ...rest } = args;
+    const result = await applyTaskUpdate(ctx, task, rest, { userId, source: "web" });
+    return result.ok;
+  },
+});
 
-    const patch: Record<string, unknown> = {};
-    if (args.title !== undefined) patch.title = args.title.trim() || task.title;
-    const promptChanged =
-      args.prompt !== undefined && !!args.prompt.trim() && args.prompt.trim() !== task.prompt;
-    if (promptChanged) {
-      patch.prompt = args.prompt!.trim();
-      // Stale distillations must not describe the old prompt.
-      patch.display_title = undefined;
-      patch.display_summary = undefined;
-    }
-    if (args.mode !== undefined) patch.mode = args.mode === "apply" ? "apply" : "propose";
-    if (args.agent_type !== undefined) patch.agent_type = args.agent_type || "claude";
-    if (args.project_path !== undefined) patch.project_path = args.project_path || undefined;
-    if (args.max_runtime_ms !== undefined) patch.max_runtime_ms = args.max_runtime_ms;
+// `cast trigger update` — same core, api_token auth. Returns the changed
+// field names so the CLI can echo what the edit actually did.
+export const updateTask = mutation({
+  args: { api_token: v.string(), task_id: v.id("agent_tasks"), ...TASK_UPDATE_ARG_VALIDATORS },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    const task = await getManageableTask(ctx, args.task_id, auth.userId);
+    if (!task) return { ok: false, changed: [] };
+    const { api_token: _token, task_id: _id, ...rest } = args;
+    return await applyTaskUpdate(ctx, task, rest, { userId: auth.userId, source: "cli" });
+  },
+});
 
-    if (args.schedule_type !== undefined) {
-      patch.schedule_type = args.schedule_type;
-      if (args.schedule_type === "recurring") {
-        if (!args.interval_ms) throw new Error("interval_ms required for recurring tasks");
-        patch.interval_ms = args.interval_ms;
-        patch.run_at = args.run_at ?? Date.now() + args.interval_ms;
-        patch.event_filter = undefined;
-      } else if (args.schedule_type === "event") {
-        if (!args.event_filter) throw new Error("event_filter required for event tasks");
-        patch.event_filter = args.event_filter;
-        patch.run_at = undefined;
-        patch.interval_ms = undefined;
-      } else {
-        patch.run_at = args.run_at ?? Date.now();
-        patch.interval_ms = undefined;
-        patch.event_filter = undefined;
-      }
-    } else {
-      if (args.interval_ms !== undefined) patch.interval_ms = args.interval_ms;
-      if (args.run_at !== undefined) patch.run_at = args.run_at;
-    }
+// Full edit history of one trigger, oldest first, with actor names resolved
+// and the task's current editable fields appended — revision N's "after" is
+// revision N+1's before, or `current` for the newest. Shared by the CLI
+// (`cast trigger history`, via /cli/tasks/history) and the web.
+async function listTaskRevisions(ctx: { db: any }, userId: Id<"users">, taskId: Id<"agent_tasks">) {
+  const task = await getManageableTask(ctx, taskId, userId);
+  if (!task) return null;
+  const revisions = await ctx.db
+    .query("agent_task_revisions")
+    .withIndex("by_task", (q: any) => q.eq("task_id", taskId))
+    .collect();
+  revisions.sort((a: any, b: any) => a.revision - b.revision);
+  const actorNames = new Map<string, string>();
+  await Promise.all(
+    [...new Set(revisions.map((r: any) => r.actor_user_id.toString()))].map(async (id) => {
+      const user = await ctx.db.get(id);
+      if (user) actorNames.set(id as string, user.name || user.email || "unknown");
+    })
+  );
+  return {
+    task_id: taskId,
+    short_id: task.short_id,
+    title: task.title,
+    status: task.status,
+    current: snapshotEditable(task),
+    revisions: revisions.map((r: any) => ({
+      revision: r.revision,
+      actor_user_id: r.actor_user_id,
+      actor_name: actorNames.get(r.actor_user_id.toString()) ?? "unknown",
+      source: r.source,
+      changed_fields: r.changed_fields,
+      before: r.before,
+      created_at: r.created_at,
+    })),
+  };
+}
 
-    await ctx.db.patch(task._id, patch);
-    if (promptChanged) {
-      await ctx.scheduler.runAfter(0, internal.agentTasks.generateDisplaySummary, { task_id: task._id });
-    }
-    return true;
+export const listRevisions = query({
+  args: { api_token: v.string(), task_id: v.id("agent_tasks") },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    return await listTaskRevisions(ctx, auth.userId, args.task_id);
+  },
+});
+
+export const webListRevisions = query({
+  args: { task_id: v.id("agent_tasks") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    return await listTaskRevisions(ctx, userId, args.task_id);
   },
 });
 
@@ -1357,7 +1624,7 @@ export const reclaimStaleTasks = internalMutation({
       if (task.lease_expires_at && task.lease_expires_at < now) {
         const maxRetries = task.max_retries ?? DEFAULT_MAX_RETRIES;
         if (task.retry_count < maxRetries) {
-          await ctx.db.patch(task._id, {
+          await patchTask(ctx, task, {
             status: "scheduled",
             run_at: now,
             retry_count: task.retry_count + 1,
@@ -1366,7 +1633,7 @@ export const reclaimStaleTasks = internalMutation({
           });
           reclaimed++;
         } else {
-          await ctx.db.patch(task._id, {
+          await patchTask(ctx, task, {
             status: "failed",
             lease_holder: undefined,
             lease_expires_at: undefined,

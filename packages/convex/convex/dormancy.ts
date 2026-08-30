@@ -88,8 +88,45 @@ export function isArmedTriggerHome(
   armedHomes: Set<string>,
 ): boolean {
   if (!armedHomes.has(conv._id.toString())) return false;
-  if (conv.last_message_preview && !isMachineDeliveredPreview(conv.last_message_preview)) return false;
-  return true;
+  return lastTurnAllowsPark(conv);
+}
+
+// The machine-delivered-last-turn half of isArmedTriggerHome, shared with the
+// denormalized path below.
+export function lastTurnAllowsPark(conv: { last_message_preview?: string | null }): boolean {
+  return !conv.last_message_preview || isMachineDeliveredPreview(conv.last_message_preview);
+}
+
+// ── Denormalized armed state (conversations.armed_trigger_kind) ─────────────
+//
+// The inbox projection must stamp every row with zero extra reads, so the
+// answer loadArmedTriggerHomes computes from agent_tasks is written onto the
+// conversation row whenever a trigger is armed, paused, resumed, completed,
+// cancelled or failed (agentTasks.refreshArmedTriggerKind). A semantic field:
+// it rides the sync log and the base list for free.
+export const ARMED_TRIGGER_KINDS = ["none", "standing", "once"] as const;
+export type ArmedTriggerKind = (typeof ARMED_TRIGGER_KINDS)[number];
+
+// The kind for one conversation given every agent_tasks row that injects into
+// it. Standing wins over once: a recurring loop owns the session outright.
+export function armedTriggerKindFor(tasks: InjectTriggerTask[]): ArmedTriggerKind {
+  let kind: ArmedTriggerKind = "none";
+  for (const task of tasks) {
+    if (!isArmedInjectTrigger(task)) continue;
+    if (isStandingInjectTrigger(task)) return "standing";
+    kind = "once";
+  }
+  return kind;
+}
+
+// isArmedTriggerHome over the row's own denormalized field instead of a loaded
+// set — same last-turn rule, no reads.
+export function isArmedTriggerHomeOfKind(
+  conv: { armed_trigger_kind?: string | null; last_message_preview?: string | null },
+  kind: Exclude<ArmedTriggerKind, "none">,
+): boolean {
+  if ((conv.armed_trigger_kind ?? "none") !== kind) return false;
+  return lastTurnAllowsPark(conv);
 }
 
 // Per-query memo over loadArmedTriggerHomes for callers that classify rows

@@ -6,20 +6,19 @@ import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from ".
 // naturally. The stamp (canceled_on_kill_at) is what makes the restore exact,
 // so these tests pin the full cancel → stamp → re-arm → clear cycle.
 
-// Minimal stand-in for the ctx.db surface the two helpers use:
-// query("agent_tasks").withIndex("by_user_status", q => q.eq(...).eq(...)).collect()
-// and patch(id, fields).
+// Minimal stand-in for the ctx.db surface the helpers use: an eq-filtered
+// withIndex(...).collect(), patch(id, fields) and get(id). The home
+// conversation is a row too, so the armed_trigger_kind stamp every lifecycle
+// transition writes (refreshArmedTriggerKind) is observable.
 function fakeDb(rows: any[]) {
   const db = {
     query: (_table: string) => ({
       withIndex: (_name: string, cb: (q: any) => any) => {
-        const eqs: any[] = [];
-        const q = { eq(_field: string, val: any) { eqs.push(val); return q; } };
+        const eqs: Array<[string, any]> = [];
+        const q = { eq(field: string, val: any) { eqs.push([field, val]); return q; } };
         cb(q);
-        const [user, status] = eqs;
         return {
-          collect: async () =>
-            rows.filter((r) => r.user_id === user && (status === undefined || r.status === status)),
+          collect: async () => rows.filter((r) => eqs.every(([f, v]) => r[f] === v)),
         };
       },
     }),
@@ -27,12 +26,14 @@ function fakeDb(rows: any[]) {
       const row = rows.find((r) => r._id === id);
       if (row) Object.assign(row, patch);
     },
+    get: async (id: string) => rows.find((r) => r._id === id) ?? null,
   };
   return { db };
 }
 
 const USER = "user1";
 const CONV = "conv1";
+const home = () => ({ _id: CONV, user_id: USER });
 
 function taskRow(overrides: Record<string, any>): Record<string, any> {
   return {
@@ -49,11 +50,13 @@ describe("cancelTasksBoundToConversation", () => {
   test("completes armed inject schedules and stamps canceled_on_kill_at", async () => {
     const loop = taskRow({ _id: "loop" });
     const paused = taskRow({ _id: "paused", status: "paused" });
-    const ctx = fakeDb([loop, paused]);
+    const conv = home();
+    const ctx = fakeDb([loop, paused, conv]);
 
     const n = await cancelTasksBoundToConversation(ctx as any, USER as any, CONV as any);
 
     expect(n).toBe(2);
+    expect((conv as any).armed_trigger_kind).toBe("none"); // the home's denormalized state follows
     expect(loop.status).toBe("completed");
     expect(loop.canceled_on_kill_at).toBeGreaterThan(0);
     expect(paused.status).toBe("completed");
