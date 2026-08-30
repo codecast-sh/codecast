@@ -4,15 +4,11 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { KeyRound, ExternalLink, Trash2, Loader2, Check } from "lucide-react";
 import { PROVIDER_KEYS, type ProviderKeySpec } from "@codecast/shared/contracts";
-import { Card } from "../../../components/ui/card";
-import {
-  useDevices,
-  deviceDisplayName,
-  deviceKindLabel,
-  relativeSeen,
-  DeviceDot,
-  type Device,
-} from "../../../components/DeviceBadge";
+import { Button } from "../../../components/ui/button";
+import { Input } from "../../../components/ui/input";
+import { SettingsPanel, SettingsSection } from "../../../components/settings/ui";
+import { DevicePanelHeader } from "../../../components/settings/DevicePanelHeader";
+import { useDevices, type Device } from "../../../components/DeviceBadge";
 import { useProviderKeyCommand, deviceManagedKeys } from "../../../lib/useProviderKeyCommand";
 
 /**
@@ -28,31 +24,19 @@ export default function ProviderKeysPage() {
   const device = mostRecentOnlineLocal;
 
   return (
-    <div className="max-w-2xl mx-auto space-y-5">
-      <header className="flex items-start gap-3">
-        <div className="mt-0.5 text-sol-cyan">
-          <KeyRound className="w-5 h-5" />
-        </div>
-        <div>
-          <h1 className="text-lg font-semibold text-sol-text">Provider keys</h1>
-          <p className="text-sm text-sol-base1 mt-1">
-            Optional API keys for opencode and pi. They&apos;re injected as each provider&apos;s
-            env var when a client launches — additive on top of the system default auth. Keys stay
-            on your devices, encrypted in transit and never stored as plaintext in the cloud.
-          </p>
-        </div>
-      </header>
-
+    <SettingsPanel>
       {!device ? (
-        <Card className="p-6 text-center text-sm text-sol-base1">
-          No online machine to manage keys on. Start the daemon with{" "}
-          <code className="font-mono text-sol-text">cast daemon</code> on a machine, then manage its
-          provider keys here.
-        </Card>
+        <SettingsSection title="Provider keys" icon={KeyRound} padded>
+          <p className="text-center text-sm text-sol-text-muted">
+            No online machine to manage keys on. Start the daemon with{" "}
+            <code className="font-mono text-sol-text">cast daemon</code> on a machine, then manage its
+            provider keys here.
+          </p>
+        </SettingsSection>
       ) : (
         <ProviderKeyList device={device} />
       )}
-    </div>
+    </SettingsPanel>
   );
 }
 
@@ -62,25 +46,25 @@ function ProviderKeyList({ device }: { device: Device }) {
 
   return (
     <>
-      <div className="flex items-center justify-between gap-3 px-1">
-        <div className="inline-flex items-center gap-2 text-sm">
-          <DeviceDot online={device.online} />
-          <span className="font-medium text-sol-text">{deviceDisplayName(device)}</span>
-          <span className="text-xs text-sol-base1">{deviceKindLabel(device)}</span>
-        </div>
-        <span className="text-[11px] text-sol-base1">
-          {device.online ? "Online — changes apply now" : `Offline — last seen ${relativeSeen(device.last_seen)}`}
-        </span>
-      </div>
+      <DevicePanelHeader selected={device} />
 
-      {!pubkey && (
-        <Card className="p-4 text-[13px] text-sol-base1">
-          This machine&apos;s daemon predates managed keys. Update it with{" "}
-          <code className="font-mono text-sol-text">cast update</code> to set keys from here.
-        </Card>
-      )}
-
-      <div className="space-y-2.5">
+      <SettingsSection
+        title="Providers"
+        icon={KeyRound}
+        description={
+          <>
+            Optional API keys for opencode and pi. They&apos;re injected as each provider&apos;s
+            env var when a client launches — additive on top of the system default auth. Keys stay
+            on your devices, encrypted in transit and never stored as plaintext in the cloud.
+          </>
+        }
+      >
+        {!pubkey && (
+          <div className="px-4 py-3.5 text-[13px] text-sol-text-muted sm:px-5">
+            This machine&apos;s daemon predates managed keys. Update it with{" "}
+            <code className="font-mono text-sol-text">cast update</code> to set keys from here.
+          </div>
+        )}
         {PROVIDER_KEYS.map((spec) => (
           <ProviderKeyRow
             key={spec.id}
@@ -90,7 +74,7 @@ function ProviderKeyList({ device }: { device: Device }) {
             isManaged={managed.has(spec.id)}
           />
         ))}
-      </div>
+      </SettingsSection>
     </>
   );
 }
@@ -143,17 +127,17 @@ function ProviderKeyRow({
   };
 
   return (
-    <Card className="p-4">
+    <div className="px-4 py-3.5 sm:px-5">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-sol-text">{spec.label}</span>
+            <span className="text-sm text-sol-text">{spec.label}</span>
             {isManaged ? (
               <span className="text-[10px] px-1.5 py-px rounded-full border bg-sol-green/10 text-sol-green border-sol-green/30">
                 Managed
               </span>
             ) : (
-              <span className="text-[10px] px-1.5 py-px rounded-full border bg-sol-bg-alt text-sol-base1 border-sol-border">
+              <span className="text-[10px] px-1.5 py-px rounded-full border bg-sol-bg-alt text-sol-text-muted border-sol-border">
                 — system default
               </span>
             )}
@@ -162,7 +146,7 @@ function ProviderKeyRow({
             href={spec.consoleUrl}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1 text-[11px] text-sol-base1 hover:text-sol-cyan mt-1"
+            className="inline-flex items-center gap-1 text-[11px] text-sol-text-muted hover:text-sol-cyan mt-1"
           >
             get a key
             <ExternalLink className="w-3 h-3" />
@@ -171,23 +155,27 @@ function ProviderKeyRow({
 
         {!editing && (
           <div className="flex items-center gap-2 shrink-0">
-            <button
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => canSet && setEditing(true)}
               disabled={!canSet || busy}
               title={pubkey ? undefined : "update your daemon to manage keys here"}
-              className="rounded-md border border-sol-border bg-sol-bg-alt px-2.5 py-1.5 text-xs text-sol-text hover:border-sol-cyan disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {isManaged ? "Replace" : "Set"}
-            </button>
+            </Button>
             {isManaged && (
-              <button
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={remove}
                 disabled={busy || !device.online}
+                aria-label="Remove key"
                 title="Remove key"
-                className="inline-flex items-center rounded-md border border-sol-border bg-sol-bg-alt px-2 py-1.5 text-xs text-sol-red hover:border-sol-red disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="px-2 text-sol-red hover:border-sol-red hover:text-sol-red"
               >
                 {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-              </button>
+              </Button>
             )}
           </div>
         )}
@@ -195,7 +183,7 @@ function ProviderKeyRow({
 
       {editing && (
         <div className="mt-3 flex items-center gap-2">
-          <input
+          <Input
             type="password"
             autoFocus
             value={value}
@@ -205,25 +193,27 @@ function ProviderKeyRow({
               if (e.key === "Escape") { setEditing(false); setValue(""); }
             }}
             placeholder={spec.keyPrefix ? `${spec.keyPrefix}…` : `${spec.label} API key`}
-            className="flex-1 rounded-md border border-sol-border bg-sol-bg px-2.5 py-1.5 text-sm text-sol-text font-mono placeholder:text-sol-base01 focus:border-sol-cyan focus:outline-none"
+            className="h-8 flex-1 font-mono bg-sol-bg border-sol-border"
           />
-          <button
+          <Button
+            size="sm"
             onClick={save}
             disabled={busy || !value.trim()}
-            className="inline-flex items-center gap-1 rounded-md border border-sol-cyan bg-sol-cyan/10 px-2.5 py-1.5 text-xs text-sol-cyan hover:bg-sol-cyan/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            variant="cyan"
           >
             {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
             Save
-          </button>
-          <button
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
             onClick={() => { setEditing(false); setValue(""); }}
             disabled={busy}
-            className="rounded-md px-2 py-1.5 text-xs text-sol-base1 hover:text-sol-text transition-colors"
           >
             Cancel
-          </button>
+          </Button>
         </div>
       )}
-    </Card>
+    </div>
   );
 }

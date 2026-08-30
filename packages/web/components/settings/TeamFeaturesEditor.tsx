@@ -15,8 +15,9 @@ import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
-import { Card } from "../ui/card";
+import { ToggleLeft } from "lucide-react";
 import { Switch } from "../ui/switch";
+import { SettingsRow, SettingsSection } from "./ui";
 import { TEAM_FEATURES, teamFeatureEnabled, type TeamFeatureKey } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
 
@@ -47,34 +48,30 @@ export function TeamFeaturesEditor({ teamId, isAdmin }: { teamId: Id<"teams">; i
   };
 
   return (
-    <Card className="p-6 bg-sol-bg border-sol-border">
-      <div className="mb-4">
-        <h2 className="text-lg font-semibold text-sol-text">Features</h2>
-        <p className="text-xs text-sol-text-muted mt-0.5">
-          Off by default. Turning one on shows it to everyone on this team and adds the matching agent commands on their machines.
-        </p>
-      </div>
-      <div className="divide-y divide-sol-border/40">
-        {TEAM_FEATURES.map((f) => {
-          const on = teamFeatureEnabled(team, f.key);
-          return (
-            <div key={f.key} className="flex items-center justify-between gap-4 py-3">
-              <div className="min-w-0">
-                <div className="text-sm text-sol-text">{f.name}</div>
-                <div className="text-xs text-sol-text-muted mt-0.5">{f.desc}</div>
-              </div>
-              <Switch
-                checked={on}
-                disabled={!isAdmin || busy === f.key}
-                onCheckedChange={(v) => void flip(f.key, v)}
-              />
-            </div>
-          );
-        })}
-      </div>
-      {!isAdmin && (
-        <p className="mt-3 text-xs text-sol-text-dim">Only team admins can change these.</p>
-      )}
-    </Card>
+    <SettingsSection
+      title="Features"
+      icon={ToggleLeft}
+      description={
+        <>
+          Off by default. Turning one on shows it to everyone on this team and adds the matching
+          agent commands on their machines.
+          {!isAdmin && " Only team admins can change these."}
+        </>
+      }
+    >
+      {TEAM_FEATURES.map((f) => {
+        const on = teamFeatureEnabled(team, f.key);
+        return (
+          <SettingsRow key={f.key} label={f.name} description={f.desc}>
+            <Switch
+              checked={on}
+              disabled={!isAdmin || busy === f.key}
+              onCheckedChange={(v) => void flip(f.key, v)}
+              aria-label={f.name}
+            />
+          </SettingsRow>
+        );
+      })}
+    </SettingsSection>
   );
 }

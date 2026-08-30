@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from "react";
-import { RotateCcw, X } from "lucide-react";
+import { Info, Keyboard, RotateCcw, Video, X } from "lucide-react";
 import { useEventListener } from "../../../hooks/useEventListener";
 import { useMountEffect } from "../../../hooks/useMountEffect";
 import {
@@ -20,7 +20,9 @@ import {
   type MeetingDetectMode,
 } from "../../../lib/desktop";
 import { AppLoader } from "../../../components/AppLoader";
+import { Button } from "../../../components/ui/button";
 import { KeyCap } from "../../../components/KeyboardShortcutsHelp";
+import { SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
 import { formatAcceleratorParts } from "../../../shortcuts";
 
 function ShortcutRecorder({
@@ -98,7 +100,7 @@ function ShortcutRecorder({
 // At-a-glance version readout + update control, mirroring the global banner's
 // state machine (DesktopProvider) but as a passive settings row. Reflects the
 // in-process updater's live IPC status (downloading % / ready) when present.
-function DesktopVersionSection() {
+function DesktopVersionRow() {
   const [current, setCurrent] = useState<string | null>(null);
   const [available, setAvailable] = useState<string | null>(null);
   const [ipc, setIpc] = useState<{ status: string; version?: string; percent?: number } | null>(null);
@@ -133,41 +135,26 @@ function DesktopVersionSection() {
   };
 
   return (
-    <div className="flex items-center justify-between gap-4 py-3 px-4 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30">
-      <div className="min-w-0">
-        <div className="text-sm font-medium text-sol-text">Codecast Desktop</div>
-        <div className="text-xs text-sol-text-dim mt-0.5">
-          {current ? `Version ${current} — ${statusLine}` : statusLine}
-        </div>
-      </div>
-      <div className="flex items-center gap-2 flex-shrink-0">
-        {ready ? (
-          <button
-            onClick={() => restartForUpdate()}
-            className="rounded-md bg-sol-cyan px-3 py-1.5 text-xs font-medium text-sol-bg transition-opacity hover:opacity-90"
-          >
-            Restart now
-          </button>
-        ) : downloading ? (
-          <span className="text-xs text-sol-cyan">{ipc?.percent ?? 0}%</span>
-        ) : latest ? (
-          <button
-            onClick={() => checkForUpdate({ manual: false })}
-            className="rounded-md bg-sol-cyan px-3 py-1.5 text-xs font-medium text-sol-bg transition-opacity hover:opacity-90"
-          >
-            Update now
-          </button>
-        ) : (
-          <button
-            onClick={runCheck}
-            disabled={checking}
-            className="rounded-md border border-sol-border px-3 py-1.5 text-xs text-sol-text hover:border-sol-text-dim transition-colors disabled:opacity-50"
-          >
-            {checking ? "Checking…" : "Check for updates"}
-          </button>
-        )}
-      </div>
-    </div>
+    <SettingsRow
+      label="Codecast Desktop"
+      description={current ? `Version ${current} — ${statusLine}` : statusLine}
+    >
+      {ready ? (
+        <Button size="sm" onClick={() => restartForUpdate()} variant="cyan">
+          Restart now
+        </Button>
+      ) : downloading ? (
+        <span className="text-xs text-sol-cyan">{ipc?.percent ?? 0}%</span>
+      ) : latest ? (
+        <Button size="sm" onClick={() => checkForUpdate({ manual: false })} variant="cyan">
+          Update now
+        </Button>
+      ) : (
+        <Button size="sm" variant="outline" onClick={runCheck} disabled={checking}>
+          {checking ? "Checking…" : "Check for updates"}
+        </Button>
+      )}
+    </SettingsRow>
   );
 }
 
@@ -203,29 +190,20 @@ function MeetingDetectSection() {
   const neverApps = cfg.apps.filter((a) => cfg.never.includes(a.id));
 
   return (
-    <div>
-      <h2 className="text-lg font-semibold text-sol-text mb-1">Meetings</h2>
-      <p className="text-sm text-sol-text-dim mb-3">
-        Codecast can notice a meeting starting on this machine and record it — live transcript
-        while it runs, a summary and action items when you stop.
-      </p>
-
-      <div className="rounded-lg border border-sol-border/60 bg-sol-bg-alt/30 p-4 space-y-3">
-        <div className="flex items-center gap-1.5">
-          {MEETING_MODES.map((m) => (
-            <button
-              key={m.value}
-              onClick={() => patch({ mode: m.value })}
-              className={`px-3 py-1.5 rounded-md border text-sm transition-colors ${
-                cfg.mode === m.value
-                  ? "border-sol-cyan bg-sol-cyan/10 text-sol-cyan"
-                  : "border-sol-border bg-sol-bg-alt text-sol-text hover:border-sol-text-dim"
-              }`}
-            >
-              {m.label}
-            </button>
-          ))}
-        </div>
+    <SettingsSection
+      title="Meetings"
+      icon={Video}
+      description="Codecast can notice a meeting starting on this machine and record it — live transcript while it runs, a summary and action items when you stop."
+      padded
+    >
+      <div className="space-y-3">
+        <SettingsOptionGroup
+          label="When a meeting starts"
+          variant="pill"
+          value={cfg.mode}
+          onChange={(v) => patch({ mode: v as MeetingDetectMode })}
+          options={MEETING_MODES.map((m) => ({ value: m.value, label: m.label }))}
+        />
         <p className="text-xs text-sol-text-dim">
           {MEETING_MODES.find((m) => m.value === cfg.mode)?.hint}
         </p>
@@ -262,7 +240,7 @@ function MeetingDetectSection() {
           </div>
         )}
       </div>
-    </div>
+    </SettingsSection>
   );
 }
 
@@ -300,74 +278,71 @@ export default function DesktopSettingsPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold text-sol-text mb-1">About</h2>
-        <p className="text-sm text-sol-text-dim mb-3">
-          Updates download in the background; you choose when to restart and install.
-        </p>
-        <DesktopVersionSection />
-      </div>
+    <SettingsPanel>
+      <SettingsSection
+        title="About"
+        icon={Info}
+        description="Updates download in the background; you choose when to restart and install."
+      >
+        <DesktopVersionRow />
+      </SettingsSection>
 
       <MeetingDetectSection />
 
-      <div>
-        <h2 className="text-lg font-semibold text-sol-text mb-1">Keyboard Shortcuts</h2>
-        <p className="text-sm text-sol-text-dim">
-          Global shortcuts work from anywhere on your system, even when Codecast is in the background.
-        </p>
-      </div>
-
-      <div className="space-y-3">
+      <SettingsSection
+        title="Keyboard shortcuts"
+        icon={Keyboard}
+        description="Global shortcuts work from anywhere on your system, even when Codecast is in the background."
+      >
         {DESKTOP_SHORTCUTS.map(({ key, label, description }) => {
           const value = cfg.shortcuts[key] || "";
           const conflict = !!cfg.issues[key];
           const isDefault = cfg.defaults ? value === cfg.defaults[key] : true;
           return (
-            <div
+            <SettingsRow
               key={key}
-              className="flex items-center justify-between gap-4 py-3 px-4 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30"
+              label={label}
+              description={
+                <>
+                  {description}
+                  {conflict && (
+                    <span className="mt-0.5 block text-sol-orange">
+                      Couldn't register — another app may be using this shortcut.
+                    </span>
+                  )}
+                </>
+              }
             >
-              <div>
-                <div className="text-sm font-medium text-sol-text">{label}</div>
-                <div className="text-xs text-sol-text-dim mt-0.5">{description}</div>
-                {conflict && (
-                  <div className="text-xs text-sol-orange mt-0.5">
-                    Couldn't register — another app may be using this shortcut.
-                  </div>
-                )}
-              </div>
-              <div className="flex items-center gap-1.5">
-                {saved === key && <span className="text-xs text-sol-cyan">Saved</span>}
-                <ShortcutRecorder value={value} onChange={(acc) => updateShortcut(key, acc)} />
-                {!isDefault && cfg.defaults && (
-                  <button
-                    onClick={() => updateShortcut(key, cfg.defaults![key])}
-                    aria-label="Reset to default"
-                    title="Reset to default"
-                    className="p-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                  </button>
-                )}
+              {saved === key && <span className="text-xs text-sol-cyan">Saved</span>}
+              <ShortcutRecorder value={value} onChange={(acc) => updateShortcut(key, acc)} />
+              {!isDefault && cfg.defaults && (
                 <button
-                  onClick={() => updateShortcut(key, "")}
-                  aria-label="Remove shortcut"
-                  title="Remove shortcut"
-                  disabled={!value}
-                  className="p-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors disabled:opacity-30 disabled:pointer-events-none"
+                  onClick={() => updateShortcut(key, cfg.defaults![key])}
+                  aria-label="Reset to default"
+                  title="Reset to default"
+                  className="p-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <RotateCcw className="w-3.5 h-3.5" />
                 </button>
-              </div>
-            </div>
+              )}
+              <button
+                onClick={() => updateShortcut(key, "")}
+                aria-label="Remove shortcut"
+                title="Remove shortcut"
+                disabled={!value}
+                className="p-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors disabled:opacity-30 disabled:pointer-events-none"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </SettingsRow>
           );
         })}
-      </div>
+      </SettingsSection>
 
-      <p className="text-xs text-sol-text-dim">
-        Click a shortcut to re-record it, press Escape to cancel, or remove it with the × button.
+      <p className="px-1 text-xs text-sol-text-dim">
+        Click a shortcut to re-record it, press <KeyCap size="xs">Esc</KeyCap> to cancel, or remove
+        it with the remove button.
       </p>
-    </div>
+    </SettingsPanel>
   );
 }

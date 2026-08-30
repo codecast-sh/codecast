@@ -1,10 +1,14 @@
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useState } from "react";
+import { Download, Terminal } from "lucide-react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { copyToClipboard } from "../../../lib/utils";
 import { track } from "../../../lib/analytics";
 import { AppLoader } from "../../../components/AppLoader";
+import { Button } from "../../../components/ui/button";
+import { SegmentedToggle } from "../../../components/SegmentedToggle";
+import { SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 
 type InstallOs = "unix" | "windows";
 
@@ -22,6 +26,12 @@ function installCommand(os: InstallOs, token: string): string {
     ? `$env:CODECAST_SETUP_TOKEN="${token}"; irm codecast.sh/install.ps1 | iex`
     : `curl -fsSL codecast.sh/install | sh -s -- ${token}`;
 }
+
+const CLI_COMMANDS = [
+  { cmd: "cast start", desc: "Start the sync daemon" },
+  { cmd: "cast stop", desc: "Stop the sync daemon" },
+  { cmd: "cast status", desc: "Check daemon status" },
+];
 
 export default function CliSettingsPage() {
   const { isAuthenticated } = useConvexAuth();
@@ -72,76 +82,73 @@ export default function CliSettingsPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="bg-sol-bg-alt/50 rounded-lg p-6 border border-sol-border">
-        <h2 className="text-lg font-medium text-sol-text mb-4">Install</h2>
-        <p className="text-sol-text-muted text-sm mb-4">
-          Run this command on any machine to install and link to your account:
-        </p>
-
+    <SettingsPanel>
+      <SettingsSection
+        title="Install"
+        icon={Download}
+        description="Run this command on any machine to install and link to your account."
+        padded
+      >
         {!setupToken || isTokenExpired ? (
-          <button
+          <Button
+            size="sm"
             onClick={generateSetupToken}
             disabled={isGenerating}
-            className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
+            variant="cyan"
           >
-            {isGenerating ? "Generating..." : "Generate Install Command"}
-          </button>
+            {isGenerating ? "Generating..." : "Generate install command"}
+          </Button>
         ) : (
           <div className="space-y-3">
-            <div className="inline-flex rounded-lg border border-sol-border overflow-hidden text-xs">
-              {(["unix", "windows"] as const).map((value) => (
-                <button
-                  key={value}
-                  onClick={() => setOs(value)}
-                  className={`px-3 py-1.5 transition-colors ${
-                    os === value
-                      ? "bg-amber-600 text-white"
-                      : "bg-sol-bg text-sol-text-muted hover:bg-sol-bg-highlight"
-                  }`}
-                >
-                  {value === "unix" ? "macOS / Linux" : "Windows"}
-                </button>
-              ))}
-            </div>
-            <p className="text-sol-text-dim text-xs">
-              Token expires in 60 minutes:
-            </p>
+            <SegmentedToggle
+              value={os}
+              onChange={(key) => setOs(key as InstallOs)}
+              items={[
+                { key: "unix", label: "macOS / Linux" },
+                { key: "windows", label: "Windows" },
+              ]}
+            />
+            <p className="text-xs text-sol-text-dim">Token expires in 60 minutes:</p>
             {os === "windows" && (
-              <p className="text-sol-text-dim text-xs">
+              <p className="text-xs text-sol-text-dim">
                 Runs in PowerShell. Installs codecast into WSL (Windows Subsystem for Linux) and sets WSL up first if needed.
               </p>
             )}
             <div className="relative">
-              <code className="block bg-sol-bg rounded-lg p-4 text-sm text-green-400 overflow-x-auto pr-20 break-all">
+              <code className="block overflow-x-auto break-all rounded-lg bg-sol-bg p-4 pr-20 text-sm text-sol-green">
                 {installCommand(os, setupToken)}
               </code>
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() => handleCopy(installCommand(os, setupToken), "install")}
-                className="absolute top-2 right-2 px-3 py-1.5 bg-sol-bg-highlight hover:bg-amber-600/20 text-sol-text-muted text-xs rounded transition-colors"
+                className="absolute right-2 top-2 h-7 px-2.5 text-xs"
               >
                 {copied === "install" ? "Copied!" : "Copy"}
-              </button>
+              </Button>
             </div>
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={generateSetupToken}
-              className="text-sol-text-dim text-xs hover:text-sol-text-muted transition-colors"
+              className="h-6 px-1 text-xs text-sol-text-dim hover:text-sol-text-muted"
             >
               Generate new token
-            </button>
+            </Button>
           </div>
         )}
-      </div>
+      </SettingsSection>
 
-      <div className="bg-sol-bg-alt/50 rounded-lg p-6 border border-sol-border">
-        <h2 className="text-lg font-medium text-sol-text mb-4">CLI Commands</h2>
-        <div className="bg-sol-base03 p-3 rounded font-mono text-sm space-y-1">
-          <p><span className="text-sol-cyan">cast start</span> <span className="text-sol-base1">- Start the sync daemon</span></p>
-          <p><span className="text-sol-cyan">cast stop</span> <span className="text-sol-base1">- Stop the sync daemon</span></p>
-          <p><span className="text-sol-cyan">cast status</span> <span className="text-sol-base1">- Check daemon status</span></p>
+      <SettingsSection title="CLI commands" icon={Terminal} padded>
+        <div className="space-y-1 rounded-lg bg-sol-bg p-3 font-mono text-sm">
+          {CLI_COMMANDS.map(({ cmd, desc }) => (
+            <p key={cmd}>
+              <span className="text-sol-cyan">{cmd}</span>{" "}
+              <span className="text-sol-text-muted">- {desc}</span>
+            </p>
+          ))}
         </div>
-      </div>
-
-    </div>
+      </SettingsSection>
+    </SettingsPanel>
   );
 }
