@@ -22,6 +22,7 @@ import { SlashCommandExtension } from "./SlashCommandExtension";
 import { DateMentionExtension } from "./DateMentionExtension";
 import { TabIndentExtension } from "./TabIndentExtension";
 import { ImageUploadPlaceholder } from "./ImageUploadPlugin";
+import { DocTitleExtension, TitleFirstDocument } from "./DocTitleExtension";
 
 const lowlight = createLowlight(common);
 
@@ -98,7 +99,14 @@ export function createMentionSuggestion(queryFn: MentionQueryFn) {
 export function createBaseExtensions(opts: {
   placeholder?: string;
   withTables?: boolean;
+  /**
+   * Title-first document (see DocTitleExtension): the first block is the
+   * title, a required level 1 heading. `fallbackTitle` is the stored title,
+   * written in when a body opens without one.
+   */
+  titleFirst?: { fallbackTitle: () => string };
 }) {
+  const bodyPlaceholder = opts.placeholder || "Start writing...";
   const exts: any[] = [
     StarterKit.configure({
       codeBlock: false,
@@ -107,8 +115,21 @@ export function createBaseExtensions(opts: {
         openOnClick: true,
         HTMLAttributes: { class: "editor-link" },
       },
+      ...(opts.titleFirst ? { document: false } : {}),
     }),
-    Placeholder.configure({ placeholder: opts.placeholder || "Start writing..." }),
+    ...(opts.titleFirst
+      ? [
+          TitleFirstDocument,
+          DocTitleExtension.configure({ fallbackTitle: opts.titleFirst.fallbackTitle }),
+          // The title block always reads "Untitled" while empty (not only when
+          // focused); the body hint sits on the first paragraph below it —
+          // editor.css scopes which empty blocks show theirs.
+          Placeholder.configure({
+            showOnlyCurrent: false,
+            placeholder: ({ pos }) => (pos === 0 ? "Untitled" : bodyPlaceholder),
+          }),
+        ]
+      : [Placeholder.configure({ placeholder: bodyPlaceholder })]),
     TaskList,
     TaskItem.configure({ nested: true }),
     SlashCommandExtension,

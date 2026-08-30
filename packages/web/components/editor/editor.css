@@ -37,6 +37,34 @@
   margin-top: 0;
 }
 
+/* The title. One rule for the document's title wherever it renders: the
+   editor's first block in a title-first doc (DocTitleExtension), the static
+   heading review mode puts in the same spot, and the separate title field a
+   plan still has. Same box either way, so switching modes reflows nothing. */
+.doc-title,
+.doc-editor--title-first .tiptap > h1:first-child {
+  font-size: 1.875rem;
+  font-weight: 700;
+  color: var(--sol-text);
+  line-height: 1.25;
+  margin-top: 0;
+  margin-bottom: 1.25rem;
+  overflow-wrap: break-word;
+}
+
+/* Placeholders in a title-first doc: the empty title always reads "Untitled";
+   the body hint shows only on the first paragraph under it while that is
+   empty. The Placeholder extension decorates every empty block, so CSS picks. */
+.doc-editor--title-first .tiptap > h1.is-empty:first-child::before,
+.doc-editor--title-first .tiptap > h1:first-child + p.is-empty::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: var(--sol-text-dim);
+  pointer-events: none;
+  height: 0;
+  opacity: 0.6;
+}
+
 .doc-editor .tiptap h2 {
   font-size: 17px;
   font-weight: 600;

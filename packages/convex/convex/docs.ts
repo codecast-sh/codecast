@@ -26,10 +26,12 @@ import {
   requireAccessibleProject,
   requireSameWorkspace,
   requireTeamMembership,
+  resolveSessionConversation,
   workspaceForResource,
 } from "./lib/access";
 import { notFound } from "./lib/auth";
 import { packSnapshotContent } from "./lib/docSnapshot";
+import { docTitleFromContent, setTitleHeading, withTitleHeading } from "@codecast/shared/docs";
 export { canAccessDoc };
 
 function generatePlanShortId(): string {
@@ -343,6 +345,31 @@ function markdownToDoc(text: string): DocNode {
   return { type: "doc", content };
 }
 
+/**
+ * A doc is one text and its title is its leading heading (@codecast/shared/docs).
+ * The (title, content) pair to store for any text write, given the row as it
+ * is now:
+ * - a title edit rewrites the leading heading of the content;
+ * - a content edit adopts the body's own leading heading as the title, and
+ *   when the body has none, writes the current title in as one.
+ * Returns only the fields that changed.
+ */
+export function docTextUpdates(
+  doc: { title: string; content?: string },
+  args: { title?: string; content?: string },
+): { title?: string; content?: string } {
+  if (args.title === undefined && args.content === undefined) return {};
+  const content =
+    args.title !== undefined
+      ? setTitleHeading(args.title, args.content ?? doc.content)
+      : withTitleHeading(doc.title, args.content);
+  const title = docTitleFromContent(content, args.title ?? doc.title);
+  const out: { title?: string; content?: string } = {};
+  if (content !== (doc.content ?? "")) out.content = content;
+  if (title !== doc.title) out.title = title;
+  return out;
+}
+
 function extractPlanInfo(content: string): { title: string; goal?: string } {
   const titleMatch = content.match(/^#\s+(.+)/m);
   const title = titleMatch ? titleMatch[1].trim() : "";
@@ -372,13 +399,13 @@ export const create = mutation({
     let conversation_id: Id<"conversations"> | undefined;
     let conversationTeamId: Id<"teams"> | undefined;
     if (args.conversation_id) {
-      const conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
-        .first();
-      if (!conv || !(await canAccessConversation(ctx, auth.userId, conv))) notFound("Conversation not found");
-      conversation_id = conv._id;
-      conversationTeamId = teamVisibleConvTeam(conv);
+      // Unresolvable session ref = create the doc without the link, never
+      // reject the create (see resolveSessionConversation).
+      const conv = await resolveSessionConversation(ctx, auth.userId, args.conversation_id);
+      if (conv) {
+        conversation_id = conv._id;
+        conversationTeamId = teamVisibleConvTeam(conv);
+      }
     }
 
     const db = await createDataContext(ctx, {
@@ -387,6 +414,9 @@ export const create = mutation({
       ...(conversationTeamId ? { workspace: "team" as const, team_id: conversationTeamId } : {}),
     });
     const now = Date.now();
+    // One text: the body opens with its title heading, and the title is that heading.
+    const content = withTitleHeading(args.title, args.content);
+    const title = docTitleFromContent(content, args.title);
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
@@ -405,14 +435,10 @@ export const create = mutation({
         .first();
       if (existing && existing.user_id === auth.userId) {
         requireSameWorkspace(existing, db.workspace, "existing doc");
-        await ctx.db.patch(existing._id, {
-          title: args.title,
-          content: args.content,
-          updated_at: now,
-        });
+        await ctx.db.patch(existing._id, { title, content, updated_at: now });
         const userTeamId = db.workspace.type === "team" ? db.workspace.teamId : undefined;
         if ((args.source || existing.source) === "plan_mode") {
-          await syncDocToPlanEntity(ctx, existing._id, args.content, auth.userId, userTeamId, existing.project_id, existing.conversation_id);
+          await syncDocToPlanEntity(ctx, existing._id, content, auth.userId, userTeamId, existing.project_id, existing.conversation_id);
         }
         return { id: existing._id, updated: true };
       }
@@ -423,8 +449,8 @@ export const create = mutation({
     const id = await ctx.db.insert("docs", {
       user_id: auth.userId,
       team_id,
-      title: args.title,
-      content: args.content,
+      title,
+      content,
       doc_type: (args.doc_type || "note") as any,
       source: (args.source || "human") as any,
       source_file: args.source_file,
@@ -624,9 +650,8 @@ export const update = mutation({
 
     const doc = await requireAccessibleDoc(ctx, auth.userId, args.id);
 
-    const updates: any = { updated_at: Date.now() };
-    if (args.title) updates.title = args.title;
-    if (args.content !== undefined) updates.content = args.content;
+    const text = docTextUpdates(doc, { title: args.title || undefined, content: args.content });
+    const updates: any = { updated_at: Date.now(), ...text };
     if (args.doc_type) updates.doc_type = args.doc_type;
     if (args.labels) updates.labels = args.labels;
     if (args.pinned !== undefined) updates.pinned = args.pinned;
@@ -648,9 +673,9 @@ export const update = mutation({
 
     await ctx.db.patch(args.id, updates);
 
-    // sync state reset is handled by docs.resetSync called from the HTTP route
-
-    return { success: true };
+    // The HTTP route resets the collab snapshot from the returned content, so a
+    // title edit (which rewrites the heading line) reaches open editors too.
+    return { success: true, content: text.content };
   },
 });
 
@@ -752,7 +777,12 @@ export const patch = mutation({
 
     const newContent = content.slice(0, idx) + args.new_string + content.slice(idx + args.old_string.length);
     const now = Date.now();
-    await ctx.db.patch(args.id, { content: newContent, updated_at: now, cli_edited_at: now });
+    await ctx.db.patch(args.id, {
+      content: newContent,
+      title: docTitleFromContent(newContent, doc.title),
+      updated_at: now,
+      cli_edited_at: now,
+    });
 
     if (doc.plan_id) {
       const plan = await ctx.db.get(doc.plan_id);
@@ -1303,9 +1333,7 @@ export const webUpdate = mutation({
     if (!doc) throw new Error("Doc not found");
     if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
 
-    const updates: any = { updated_at: Date.now() };
-    if (args.title !== undefined) updates.title = args.title;
-    if (args.content !== undefined) updates.content = args.content;
+    const updates: any = { updated_at: Date.now(), ...docTextUpdates(doc, args) };
     if (args.doc_type !== undefined) updates.doc_type = args.doc_type;
     if (args.labels !== undefined) updates.labels = args.labels;
     if (args.pinned !== undefined) updates.pinned = args.pinned;
@@ -2255,9 +2283,10 @@ export const webCreate = mutation({
         : 0;
     }
 
+    const content = withTitleHeading(args.title, args.content);
     const id = await db.insert("docs", {
-      title: args.title,
-      content: args.content || "",
+      title: docTitleFromContent(content, args.title),
+      content,
       doc_type: (args.doc_type || "note") as any,
       source: "human" as any,
       labels: args.labels,

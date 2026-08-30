@@ -28,6 +28,7 @@ import {
   shouldResyncOnExternalEdit,
 } from "../../lib/docSyncCache";
 import type { SyncApi } from "@convex-dev/prosemirror-sync";
+import { withTitleHeading } from "@codecast/shared/docs";
 
 const api = _api as any;
 
@@ -45,6 +46,14 @@ interface CollabDocEditorProps {
   placeholder?: string;
   getMarkdownRef?: React.MutableRefObject<(() => string) | null>;
   cliEditedAt?: number;
+  /**
+   * Title-first mode (DocTitleExtension): the doc's stored title. The first
+   * block of the editor is the title, a required level 1 heading; the seed and
+   * the loading preview open with `# title` when the body has no heading of its
+   * own, and a legacy snapshot gets one on open. `markdownContent` stays the raw
+   * stored body so the "is the content loaded yet" seed guard is untouched.
+   */
+  title?: string;
   /**
    * Whether `markdownContent` reflects the loaded doc (vs. a lite list row whose
    * content hasn't arrived yet). When false and there's no content, the editor
@@ -69,9 +78,13 @@ interface CollabDocEditorProps {
 // block chrome) plus the collab surface's extras. This file used to hold a
 // full copy of the mention extension; it had already drifted from the shared
 // one when the copy was deleted.
-function buildExtensions(onMentionQuery: MentionQueryFn, placeholder: string) {
+function buildExtensions(
+  onMentionQuery: MentionQueryFn,
+  placeholder: string,
+  titleFirst?: { fallbackTitle: () => string },
+) {
   return [
-    ...createBaseExtensions({ placeholder }),
+    ...createBaseExtensions({ placeholder, titleFirst }),
     createMentionExtension(onMentionQuery),
     EntityIdExtension,
     EntityRefExtension,
@@ -339,6 +352,7 @@ function CollabDocEditorLive({
   placeholder = "Start writing, use / for commands, @ to mention, # for dates...",
   getMarkdownRef,
   cliEditedAt,
+  title,
   contentReady = true,
   onSubmit,
   onExit,
@@ -348,6 +362,13 @@ function CollabDocEditorLive({
 }: CollabDocEditorProps & { onSyncGap: () => void }) {
   const onImageUploadRef = useRef(onImageUpload);
   onImageUploadRef.current = onImageUpload;
+  const titleFirst = title !== undefined;
+  const titleRef = useRef(title ?? "");
+  titleRef.current = title ?? "";
+  // What the editor shows: the raw body in compose mode; the body opened by its
+  // title heading in title-first mode (`# title` only when it has none).
+  const seedMarkdown = titleFirst ? withTitleHeading(title, markdownContent) : markdownContent;
+  const editorClass = `doc-editor ${titleFirst ? "doc-editor--title-first " : ""}${className}`;
   const syncApi = api.docSync as unknown as SyncApi;
   const sync = useTiptapSync(syncApi, docId);
   const presences = useQuery(api.docSync.getPresence, { doc_id: docId }) || [];
@@ -375,18 +396,22 @@ function CollabDocEditorLive({
   }
 
   if (!extensionsRef.current) {
-    extensionsRef.current = buildExtensions(onMentionQuery, placeholder);
+    extensionsRef.current = buildExtensions(
+      onMentionQuery,
+      placeholder,
+      titleFirst ? { fallbackTitle: () => titleRef.current } : undefined,
+    );
   }
 
   if (sync.isLoading) {
     // Paint the content we already have (store-cached markdown) as a read-only
     // editor while the snapshot loads; the live editor swaps in when ready.
-    if (markdownContent) {
+    if (seedMarkdown) {
       return (
-        <div className={`doc-editor ${className}`} style={{ position: "relative" }}>
+        <div className={editorClass} style={{ position: "relative" }}>
           <EditorProvider
-            key={`preview-${markdownContent.length}`}
-            content={markdownContent}
+            key={`preview-${seedMarkdown.length}`}
+            content={seedMarkdown}
             extensions={extensionsRef.current}
             editable={false}
             editorProps={{
@@ -397,7 +422,7 @@ function CollabDocEditorLive({
       );
     }
     return (
-      <div className={`doc-editor ${className}`}>
+      <div className={editorClass}>
         <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
       </div>
     );
@@ -411,13 +436,13 @@ function CollabDocEditorLive({
     const canSeed = !!markdownContent || contentReady;
     if (canSeed && !createdRef.current) {
       createdRef.current = true;
-      const json = markdownContent
-        ? markdownToJson(markdownContent, extensionsRef.current)
+      const json = seedMarkdown
+        ? markdownToJson(seedMarkdown, extensionsRef.current)
         : EMPTY_PM_DOC;
       (sync as any).create(json);
     }
     return (
-      <div className={`doc-editor ${className}`}>
+      <div className={editorClass}>
         <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
       </div>
     );
@@ -430,7 +455,7 @@ function CollabDocEditorLive({
   ];
 
   return (
-    <div className={`doc-editor ${className}`} style={{ position: "relative" }}>
+    <div className={editorClass} style={{ position: "relative" }}>
       <EditorProvider
         key="live"
         content={sync.initialContent}

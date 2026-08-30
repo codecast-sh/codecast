@@ -11,7 +11,6 @@ import { ContextChatInput } from "./ContextChatInput";
 import { MessageReview } from "./MessageReview";
 import { MarkdownBlocks, MD_COMPONENTS } from "./tools/MarkdownRenderer";
 import { DocReviewBar } from "./DocReviewBar";
-import { PeekLayoutControls } from "./DetailSplitLayout";
 import { SlotActions } from "./workspace/Slot";
 import { useInboxStore } from "../store/inboxStore";
 import { ArrowLeft, Edit3, MoreHorizontal, Copy, Check, MessageSquareQuote } from "lucide-react";
@@ -21,6 +20,7 @@ import { toast } from "sonner";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { isMac } from "../shortcuts";
+import { leadingHeading, stripTitleHeading } from "@codecast/shared/docs";
 
 // The reading view uses the EDITOR's type scale (editor.css), not chat's
 // compact one, so toggling edit mode doesn't reflow the whole document.
@@ -52,7 +52,15 @@ interface DocumentDetailLayoutProps {
   markdownContent: string;
   editable?: boolean;
   placeholder?: string;
-  onTitleChange: (title: string) => void;
+  /**
+   * The document is one text and its title is its first heading: no separate
+   * title field, the editor's first block is the title (DocTitleExtension),
+   * and review mode splits the leading heading off the body to render it in
+   * the same place. `title` is then only the fallback for a body that has no
+   * heading yet, and `onTitleChange` is not used.
+   */
+  titleInBody?: boolean;
+  onTitleChange?: (title: string) => void;
   backHref: string;
   topBarLeft?: React.ReactNode;
   topBarRight?: React.ReactNode;
@@ -80,6 +88,7 @@ export function DocumentDetailLayout({
   markdownContent,
   editable: initialEditable = true,
   placeholder = "Start writing, use / for commands, @ to mention...",
+  titleInBody = false,
   onTitleChange,
   backHref,
   topBarLeft,
@@ -133,9 +142,15 @@ export function DocumentDetailLayout({
     [markdownContent]
   );
 
+  // The title as the reader sees it and the body under it. With the title in
+  // the body, both come from the markdown itself; otherwise the title is the
+  // separate field and the body is the whole content.
+  const shownTitle = (titleInBody ? leadingHeading(markdownContent) : null) || title || "Untitled";
+  const bodyMarkdown = titleInBody ? stripTitleHeading(markdownContent) : markdownContent;
+
   const handleCopyMarkdown = () => {
     const md = getMarkdownRef.current?.() ?? markdownContent;
-    const full = title ? `# ${title}\n\n${md}` : md;
+    const full = title && !titleInBody ? `# ${title}\n\n${md}` : md;
     copyToClipboard(full)
       .then(() => {
         setCopied(true);
@@ -188,13 +203,9 @@ export function DocumentDetailLayout({
             </button>
           )}
           {topBarRight}
-          {/* Layout (pin/full) controls from the surrounding list surface —
-              they live IN this header so the detail has exactly one chrome
-              row and one close button. Null outside a DetailSplitLayout. */}
           {/* Shared controls in the detail's own header. Closing here is a
               navigation, so the slot's default hide is overridden — the
               affordance stays identical either way. */}
-          <PeekLayoutControls />
           <SlotActions slot="primary" onClose={() => router.push(backHref)} />
           {metaContent && (
             <button
@@ -217,28 +228,34 @@ export function DocumentDetailLayout({
       <div className="flex-1 overflow-y-auto">
         <div className="flex flex-col min-h-full">
         <div className="flex-1 max-w-5xl mx-auto px-10 pt-10 pb-8 w-full">
-          <h1
-            contentEditable={isEditing}
-            suppressContentEditableWarning
-            onBlur={(e) => {
-              const text = e.currentTarget.textContent || "";
-              if (text !== title) onTitleChange(text);
-            }}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLElement).blur(); } }}
-            className={`text-3xl font-bold text-sol-text leading-tight mb-1 break-words ${isEditing ? "outline-none cursor-text" : ""}`}
-          >
-            {title || "Untitled"}
-          </h1>
+          {titleInBody && isEditing ? null : (
+            // Editing the title here only applies to the separate-field mode;
+            // with the title in the body the editor's first block is the title
+            // and review mode shows it as a static heading in the same spot.
+            <h1
+              contentEditable={isEditing && !titleInBody}
+              suppressContentEditableWarning
+              onBlur={(e) => {
+                const text = e.currentTarget.textContent || "";
+                if (text !== title) onTitleChange?.(text);
+              }}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLElement).blur(); } }}
+              className={`doc-title ${isEditing ? "outline-none cursor-text" : ""}`}
+            >
+              {shownTitle}
+            </h1>
+          )}
 
           {leadContent && <div className="mt-2">{leadContent}</div>}
 
-          <div className="mt-4">
+          <div className={titleInBody && isEditing ? "" : "mt-4"}>
             {isEditing ? (
               <ErrorBoundary name="DocEditor" level="panel">
                 <CollabDocEditor
                   key={docId}
                   docId={docId}
                   markdownContent={markdownContent}
+                  title={titleInBody ? title : undefined}
                   onMentionQuery={handleMentionQuery}
                   onImageUpload={handleImageUpload}
                   editable
@@ -248,11 +265,11 @@ export function DocumentDetailLayout({
                   contentReady={contentReady}
                 />
               </ErrorBoundary>
-            ) : !markdownContent.trim() && !contentReady ? (
+            ) : !bodyMarkdown.trim() && !contentReady ? (
               // The detail (which carries the content) hasn't synced yet — an
               // empty body here means "loading", never "empty document".
               <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
-            ) : !markdownContent.trim() && initialEditable ? (
+            ) : !bodyMarkdown.trim() && initialEditable ? (
               // An empty doc in read mode is a dead end (nothing to read,
               // nothing clickable) — offer the way in directly.
               <button
@@ -274,7 +291,7 @@ export function DocumentDetailLayout({
                 <MessageReview
                   conversationId={reviewKey}
                   messageId={reviewKey}
-                  content={markdownContent}
+                  content={bodyMarkdown}
                   renderBlock={renderDocBlocks}
                 />
               </div>
@@ -296,13 +313,13 @@ export function DocumentDetailLayout({
           <DocReviewBar
             reviewKey={reviewKey}
             docId={docId}
-            title={title || "Untitled"}
+            title={shownTitle}
             ownerConversationId={ownerConversationId}
           />
         ) : (
           <ContextChatInput
             contextType={contextType}
-            contextTitle={title || "Untitled"}
+            contextTitle={shownTitle}
             getContextBody={getContextBody}
             linkedObjectId={linkedObjectId}
           />

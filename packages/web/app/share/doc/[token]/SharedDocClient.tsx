@@ -1,5 +1,6 @@
 "use client";
 import { useQuery } from "convex/react";
+import { stripTitleHeading } from "@codecast/shared/docs";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams } from "next/navigation";
 import { AvatarImg } from "../../../../lib/avatarCache";
@@ -87,7 +88,7 @@ export default function SharedDocClient() {
 
         {/* Content */}
         <article className="prose prose-invert max-w-none">
-          <MarkdownRenderer content={doc.content} />
+          <MarkdownRenderer content={stripTitleHeading(doc.content)} />
         </article>
 
         {/* Entries/Comments */}

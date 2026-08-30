@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import { stripTitleHeading } from "@codecast/shared/docs";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
@@ -76,7 +77,7 @@ export function DocEmbed({ id }: { id: string }) {
         className="block px-3 py-2 [&_ul]:!list-outside [&_ul]:!pl-5 [&_ol]:!list-outside [&_ol]:!pl-5"
       >
         <EmbedDepth.Provider value={depth + 1}>
-          <MarkdownBlocks content={doc.content || ""} />
+          <MarkdownBlocks content={stripTitleHeading(doc.content)} />
         </EmbedDepth.Provider>
       </span>
     </span>
