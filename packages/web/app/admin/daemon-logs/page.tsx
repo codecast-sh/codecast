@@ -188,7 +188,7 @@ function CommandPanel({
                     )}
                   </div>
                   {isExpanded && (cmd.result || cmd.error) && (
-                    <pre className="mt-2 ml-[18px] p-3 bg-zinc-950 rounded text-[11px] leading-relaxed font-mono text-zinc-400 whitespace-pre-wrap break-words max-h-[200px] overflow-y-auto border border-zinc-800/50">
+                    <pre className="mt-2 ml-[18px] p-3 bg-zinc-950 rounded text-[11px] leading-relaxed font-mono text-zinc-400 whitespace-pre-wrap break-words max-h-[200px] overflow-y-auto">
                       {(() => {
                         const raw = cmd.error || cmd.result || "";
                         try {
@@ -770,7 +770,7 @@ function AdminDaemonLogs() {
                                 <summary className="text-[11px] text-zinc-600 cursor-pointer hover:text-zinc-400 font-mono">
                                   stack trace
                                 </summary>
-                                <pre className="mt-1.5 p-2.5 bg-zinc-950 rounded text-[11px] text-zinc-500 overflow-x-auto font-mono border border-zinc-800/50 leading-relaxed">
+                                <pre className="mt-1.5 p-2.5 bg-zinc-950 rounded text-[11px] text-zinc-500 overflow-x-auto font-mono leading-relaxed">
                                   {log.metadata.stack}
                                 </pre>
                               </details>
