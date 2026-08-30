@@ -1228,9 +1228,10 @@ export const getConversations = query({
 async function resolveActingAuthor(
   ctx: any,
   conv: { acting_user_id?: Id<"users"> | null },
+  getDoc: (id: any) => Promise<any> = (id) => ctx.db.get(id),
 ): Promise<{ name: string; avatar: string | null } | null> {
   if (!conv.acting_user_id) return null;
-  const bot = await ctx.db.get(conv.acting_user_id);
+  const bot = await getDoc(conv.acting_user_id);
   if (!bot) return null;
   return {
     name: (bot as any).name || "Anchor",
@@ -7771,6 +7772,22 @@ export type InboxEnrichSkip = {
   refs?: boolean;
 };
 
+// A db.get memoized on the PROMISE for one recompute: rows enrich concurrently,
+// and two rows asking for the same plan, task, workflow run or user must share
+// one read — every duplicate counts against the system-operation budget.
+export function makeMemoGet(ctx: any): (id: any) => Promise<any> {
+  const cache = new Map<string, Promise<any>>();
+  return (id: any) => {
+    const key = id.toString();
+    let hit = cache.get(key);
+    if (!hit) {
+      hit = Promise.resolve(ctx.db.get(id)).catch(() => null);
+      cache.set(key, hit);
+    }
+    return hit;
+  };
+}
+
 async function enrichInboxSessionRow(
   ctx: any,
   conv: any,
@@ -7778,6 +7795,7 @@ async function enrichInboxSessionRow(
   now: number,
   clusterCutoff: number,
   skip?: InboxEnrichSkip,
+  getDoc: (id: any) => Promise<any> = (id) => ctx.db.get(id),
 ): Promise<{ row: any; subagentChildren: any[]; dismissed: boolean; stashed: boolean; hidden: boolean }> {
   let hasPending = !!conv.has_pending_messages;
   let lastMsgRole = conv.last_message_role;
@@ -7880,7 +7898,16 @@ async function enrichInboxSessionRow(
 
   let implementationSession: { _id: string; title?: string } | undefined;
   const subagentChildren: any[] = [];
-  if (!skip?.children && conv.message_count > 0) {
+  // Parked (dismissed/stashed) rows skip the children scan entirely: every
+  // caller discards their subagent children (a parked parent's children never
+  // render), and the "producing child keeps parent working" refinement is
+  // deliberately never applied to parked rows — same rule as
+  // enrichLivenessFields, whose overlay value wins on the web client anyway.
+  // This scan was one indexed query per shown row, and parked rows are the
+  // bulk of a heavy account's window (483 of 547 on the census that hit
+  // "too many system operations"). Their implementation-session pointer is
+  // re-resolved from the candidate pool by computeInboxSessions.
+  if (!skip?.children && !dismissed && !stashed && conv.message_count > 0) {
     // Newest-first: a workflow orchestrator can have dozens of finished
     // children (jx70xxy stood at 72 across four runs); ascending order fills
     // the cap with the oldest wave and never reaches the agents running NOW,
@@ -7925,13 +7952,13 @@ async function enrichInboxSessionRow(
 
   let active_plan: { _id: string; short_id: string; title: string; status: string } | undefined;
   if (!skip?.refs && conv.active_plan_id) {
-    const p = await ctx.db.get(conv.active_plan_id);
+    const p = await getDoc(conv.active_plan_id);
     if (p) active_plan = { _id: p._id, short_id: p.short_id, title: p.title, status: p.status };
   }
 
   let active_task: { _id: string; short_id: string; title: string; status: string } | undefined;
   if (!skip?.refs && conv.active_task_id) {
-    const t = await ctx.db.get(conv.active_task_id);
+    const t = await getDoc(conv.active_task_id);
     if (t) active_task = { _id: t._id, short_id: t.short_id, title: t.title, status: t.status };
   }
 
@@ -7945,7 +7972,7 @@ async function enrichInboxSessionRow(
   let workflow_run_activity: string | null = null;
   let workflow_run_started_at: number | null = null;
   if (!skip?.refs && conv.workflow_run_id) {
-    const run = await ctx.db.get(conv.workflow_run_id);
+    const run = await getDoc(conv.workflow_run_id);
     if (run) {
       workflow_run_status = run.status;
       workflow_run_name = run.workflow_name ?? null;
@@ -7961,7 +7988,7 @@ async function enrichInboxSessionRow(
   // Anchor identity: a personal anchor's bot isn't in the team roster, so the
   // client can't resolve it — stamp the bot's name/avatar here (self-guarded:
   // returns null for ordinary rows) so the sidebar shows the bot chip.
-  const acting = skip?.refs ? null : await resolveActingAuthor(ctx, conv);
+  const acting = skip?.refs ? null : await resolveActingAuthor(ctx, conv, getDoc);
 
   // Open teammate-comment threads (message, code-line, or global anchors) so
   // the card can surface "someone flagged this" without the conversation being
@@ -8486,18 +8513,22 @@ export async function computeInboxSessions(
 
   let hiddenCount = 0;
   const results: any[] = [];
-  // User docs for run-by / owner display, cached across rows (both are sparse:
-  // only second-party-owned sessions ever hit this).
-  const userDocCache = new Map<string, any>();
-  const getUserDoc = (id: any) => {
-    const key = id.toString();
-    if (!userDocCache.has(key)) {
-      // Cache the PROMISE, not the value: rows enrich concurrently and two rows
-      // asking for the same user must share one read.
-      userDocCache.set(key, Promise.resolve(ctx.db.get(id)).catch(() => null));
+  // Parked rows skip the per-row children scan (see enrichInboxSessionRow), so
+  // their implementation-session pointer resolves from the candidate pool
+  // instead — a recently active plan-handoff child is already in the recent
+  // window, zero extra reads. Newest child wins, matching the scan's order.
+  const implHandoffByParent = new Map<string, any>();
+  for (const c of conversations) {
+    if (c.parent_conversation_id && c.parent_message_uuid === "plan-handoff" && !c.is_subagent) {
+      const pid = c.parent_conversation_id.toString();
+      const prev = implHandoffByParent.get(pid);
+      if (!prev || (c.started_at ?? 0) > (prev.started_at ?? 0)) implHandoffByParent.set(pid, c);
     }
-    return userDocCache.get(key);
-  };
+  }
+  // One memoized get for every per-row reference (plan/task/workflow run, the
+  // acting bot, run-by / owner users): rows share these ids heavily, and each
+  // duplicate read counts against the same system-operation budget.
+  const getDoc = makeMemoGet(ctx);
   // Rows are independent — enrich them concurrently (sequential per-row awaits
   // made this heartbeat-hot path slow enough to time out under load; see
   // computeSessionsLiveness). Assembly below stays in candidate order.
@@ -8509,9 +8540,13 @@ export async function computeInboxSessions(
     // handed over on Friday is silently gone by Monday while `cast sessions`
     // with explicit ids still lists it as needs input.
     const cutoff = deliberateIds.has(conv._id.toString()) ? 0 : clusterCutoff;
-    const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, cutoff, enrichSkip);
+    const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, cutoff, enrichSkip, getDoc);
+    if ((dismissed || stashed) && !row.implementation_session) {
+      const impl = implHandoffByParent.get(conv._id.toString());
+      if (impl) row.implementation_session = { _id: impl._id.toString(), title: impl.title };
+    }
     if (conv.user_id.toString() !== userId.toString()) {
-      const author = await getUserDoc(conv.user_id);
+      const author = await getDoc(conv.user_id);
       row.author_name = author?.name ?? author?.email ?? null;
       row.author_email = author?.email ?? null;
     }
@@ -8525,7 +8560,7 @@ export async function computeInboxSessions(
     // ackSessionAssignment (or the in-conversation banner) clears it.
     const myRow = myOwnerRowById.get(conv._id.toString());
     if (myRow && !myRow.seen_at && myRow.added_by?.toString() !== userId.toString()) {
-      const byDoc = await getUserDoc(myRow.added_by);
+      const byDoc = await getDoc(myRow.added_by);
       row.assigned_ping = {
         by_name: byDoc?.name ?? byDoc?.email ?? "A teammate",
         note: myRow.note ?? null,
@@ -8533,7 +8568,7 @@ export async function computeInboxSessions(
       };
     }
     if (conv.owner_user_id) {
-      const ownerDoc = await getUserDoc(conv.owner_user_id);
+      const ownerDoc = await getDoc(conv.owner_user_id);
       row.owner_name = ownerDoc?.name ?? null;
       row.owner_email = ownerDoc?.email ?? null;
     }
@@ -9287,11 +9322,12 @@ export const listInboxSessionsPaginated = query({
 
     const result = await q.paginate(args.paginationOpts);
 
+    const getDoc = makeMemoGet(ctx);
     const rows: any[] = [];
     for (const conv of result.page) {
       if (conv.inbox_dismissed_at || conv.inbox_stashed_at) continue; // dismissed/stashed: own accumulation path
       if (!shouldShowInInbox(conv)) continue;
-      const { row, subagentChildren } = await enrichInboxSessionRow(ctx, conv, maps, now, 0);
+      const { row, subagentChildren } = await enrichInboxSessionRow(ctx, conv, maps, now, 0, undefined, getDoc);
       rows.push(row);
       for (const child of subagentChildren) {
         rows.push(buildSubagentChildRow(child, maps, now, conv._id));

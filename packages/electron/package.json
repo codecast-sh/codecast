@@ -29,7 +29,7 @@
       "callWindowPolicy.js",
       "meetingDetector.js",
       "notificationRouter.js",
-      "osNotificationState.js",
+      "osPermissions.js",
       "shortcutSettings.js",
       "updaterNet.js",
       "preload.js",

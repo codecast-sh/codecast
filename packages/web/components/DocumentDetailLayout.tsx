@@ -11,7 +11,6 @@ import { ContextChatInput } from "./ContextChatInput";
 import { MessageReview } from "./MessageReview";
 import { MarkdownBlocks, MD_COMPONENTS } from "./tools/MarkdownRenderer";
 import { DocReviewBar } from "./DocReviewBar";
-import { PeekLayoutControls } from "./DetailSplitLayout";
 import { SlotActions } from "./workspace/Slot";
 import { useInboxStore } from "../store/inboxStore";
 import { ArrowLeft, Edit3, MoreHorizontal, Copy, Check, MessageSquareQuote } from "lucide-react";
@@ -188,13 +187,9 @@ export function DocumentDetailLayout({
             </button>
           )}
           {topBarRight}
-          {/* Layout (pin/full) controls from the surrounding list surface —
-              they live IN this header so the detail has exactly one chrome
-              row and one close button. Null outside a DetailSplitLayout. */}
           {/* Shared controls in the detail's own header. Closing here is a
               navigation, so the slot's default hide is overridden — the
               affordance stays identical either way. */}
-          <PeekLayoutControls />
           <SlotActions slot="primary" onClose={() => router.push(backHref)} />
           {metaContent && (
             <button

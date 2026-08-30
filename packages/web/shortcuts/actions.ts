@@ -2,8 +2,7 @@
 
 import { useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { useInboxStore, classifySession, filterInboxScope, selectCommentRailOpen, selectNavCollapsed } from "../store/inboxStore";
-import { liftQuestions } from "../lib/decisionQueue";
+import { useInboxStore, selectCommentRailOpen, selectNavCollapsed } from "../store/inboxStore";
 import { isInboxSessionView } from "../lib/inboxRouting";
 import { overlayConversationId } from "../store/workspace";
 import { focusComposer } from "../lib/composerControl";
@@ -76,28 +75,16 @@ export function useGlobalShortcutActions() {
   }, [isOnInboxPage]));
 
   useShortcutAction('session.jumpIdle', useCallback(() => {
-    // Ctrl+I: top of the your-move stack — Questions/Needs Input first, then
-    // Done, which sits directly below Needs Input and reads as its extension.
-    // Never a Dormant row: a machine wakes those, so it's nobody's move to
-    // jump to (the bare waiting predicate matches parked rows too).
-    // Questions need their own rule, not an approximation via `waiting`: an
-    // advisory `cast decide` (and a working parent lifted by an asking
-    // subagent) renders at the top of the QUESTIONS section while the agent is
-    // still WORKING, so classifySession().waiting is false and the visibly
-    // first card would be skipped. Mirror the section's own membership.
+    // Ctrl+I: top of the your-move stack — Questions first, then Needs Input,
+    // then Done (which reads as its extension); never Dormant, a machine wakes
+    // those. The store hands back exactly the cards the panel files in those
+    // sections, in render order (yourMoveOrder), so the target is always the
+    // first such card the user can see — whatever view mode or old-session
+    // toggle is up. Re-deriving membership here from a per-row classify is
+    // what drifted: it missed the staleness net that files a quiet "working"
+    // row under NEEDS INPUT and the in-flight send that lifts one out.
     const store = useInboxStore.getState();
-    const ordered = store.visualOrder();
-    const { isQuestion } = liftQuestions(
-      [],
-      store.sessionDecisions,
-      filterInboxScope(store.sessions, "mine", store.currentUser?._id?.toString?.() ?? null),
-      store.questionResolutions,
-    );
-    const first = ordered.find(s => {
-      if (isQuestion(s)) return true;
-      const c = classifySession(s);
-      return c.waiting && c.rest !== "dormant";
-    });
+    const first = store.yourMoveOrder()[0];
     if (!first) return;
     if (isOnInboxPage) store.setCurrentSession(first._id);
     else store.selectPanelSession(first._id);

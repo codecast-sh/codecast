@@ -1,4 +1,5 @@
-import { useCallback, useRef, useEffect } from "react";
+import { useCallback, useRef, useEffect, useState } from "react";
+import { activePaneDrag, dragCarriesPane, readPaneDrop, stageMoveLeafToTab, startPaneDrag } from "../lib/stage";
 import { X, Plus, XCircle, ArrowRightToLine, Copy as CopyIcon, ExternalLink, AppWindow, PanelsTopLeft } from "lucide-react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
 import { useShortcutAction, formatShortcutLabel } from "../shortcuts";
@@ -146,12 +147,48 @@ export function TabBar() {
   // detachTab, shared with Cmd+N). Available only when the shell knows the verb.
   const canDetach = isDesktop() && !!bridge("detachTab");
 
+  // The strip is a drop target: a pane, session or section dropped here opens
+  // as a new tab (a dragged pane leaves its split). Tabs themselves are drag
+  // sources — onto the stage they split in, and a background tab dissolves
+  // into the pane it becomes (lib/stage).
+  const [dropHot, setDropHot] = useState(false);
+  const stripDragOver = useCallback((e: React.DragEvent) => {
+    if (!dragCarriesPane(e.dataTransfer)) return;
+    if (activePaneDrag()?.from?.kind === "tab") return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setDropHot(true);
+  }, []);
+  const stripDrop = useCallback((e: React.DragEvent) => {
+    setDropHot(false);
+    if (!dragCarriesPane(e.dataTransfer)) return;
+    const payload = readPaneDrop(e.dataTransfer);
+    if (!payload || payload.from?.kind === "tab") return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (payload.from?.kind === "leaf") {
+      stageMoveLeafToTab(payload.from.leafId);
+      return;
+    }
+    const state = useInboxStore.getState();
+    state.saveCurrentTabState();
+    state.openTab({ path: payload.path, title: payload.title ?? pathLabel(payload.path), makeActive: true });
+  }, []);
+
   if (detached) return null;
   // Only show tab bar when there are 2+ tabs
   if (tabs.length <= 1) return null;
 
   return (
-    <div ref={titlebarRef} className="flex-shrink-0 bg-sol-bg-alt/50 border-b border-sol-border/20 flex items-center h-[32px] pl-2 pr-1 gap-1 overflow-hidden">
+    <div
+      ref={titlebarRef}
+      onDragOver={stripDragOver}
+      onDragLeave={() => setDropHot(false)}
+      onDrop={stripDrop}
+      className={`flex-shrink-0 border-b flex items-center h-[32px] pl-2 pr-1 gap-1 overflow-hidden transition-colors ${
+        dropHot ? "bg-sol-cyan/10 border-sol-cyan/40" : "bg-sol-bg-alt/50 border-sol-border/20"
+      }`}
+    >
       <div
         ref={scrollRef}
         className="flex items-center gap-1 overflow-x-auto scrollbar-none flex-1 min-w-0"
@@ -168,6 +205,8 @@ export function TabBar() {
               onClick={() => handleSwitch(tab)}
               onMouseDown={(e) => handleMiddleClick(e, tab.id)}
               onContextMenu={(e) => ctxMenu.open(e, tab)}
+              draggable
+              onDragStart={(e) => startPaneDrag(e, { path: tab.path, title, from: { kind: "tab", tabId: tab.id } })}
               title={title}
               className={`
                 group relative flex items-center gap-1.5 pl-2.5 pr-1.5 h-[25px] rounded-md text-[11px] leading-none

@@ -60,6 +60,7 @@ import { RESTART_GIVE_UP_AFTER_MS } from "../hooks/useSessionRestart";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { useAckAssignment } from "../hooks/useAckAssignment";
+import { sessionPanePath, startPaneDrag } from "../lib/stage";
 
 function formatIdleDuration(updatedAt: number): string {
   const diff = Date.now() - updatedAt;
@@ -2354,6 +2355,9 @@ export const SessionCard = memo(function SessionCard({
   const handleCardDragStart = useCallback((e: React.DragEvent) => {
     e.dataTransfer.setData("codecast/session-id", session._id);
     e.dataTransfer.effectAllowed = "move";
+    // The same drag is also a pane: dropped on the stage it splits in as this
+    // conversation (lib/stage). The label drop keeps reading its own type.
+    startPaneDrag(e, { path: sessionPanePath(session._id), title: displayTitle });
     const ghost = document.createElement("div");
     ghost.className = "flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-sol-bg text-sol-text border border-sol-cyan/60 shadow-xl";
     ghost.style.cssText = "position:fixed;top:-1000px;left:-1000px;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;z-index:9999";
