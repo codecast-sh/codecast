@@ -784,6 +784,10 @@ type ConversationViewProps = {
   embedded?: boolean;
   showMessageInput?: boolean;
   targetMessageId?: string;
+  /** Distinguishes a NEW jump request to the same message: the reset below
+   *  compares ids, so without this a second "jump to the ask" click on the
+   *  same decision would be a silent no-op. */
+  targetNonce?: number;
   /** True while a targetMessageId jump is still fetching its message window
    * (from useConversationMessages.isJumpingToTarget). Drives the
    * "Jumping to message..." indicator so mid-conversation jumps aren't silent. */
@@ -12272,7 +12276,7 @@ const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "d
 // The body is a plain function (not the forwardRef callback itself) so the dev
 // wrapper below can size the element tree each pass returns.
 const ConversationViewInner = (
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, isJumpingToTarget, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, targetNonce, isJumpingToTarget, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
   devRenderCount("ConversationView2");
   const fallbackStickyContent = useMemo(() => stickyPromptContent(rawFallbackStickyContent), [rawFallbackStickyContent]);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -12508,10 +12512,12 @@ const ConversationViewInner = (
     cancelActiveItemSettle?.();
   }
 
-  // Reset scroll target tracking when targetMessageId changes (same-session navigation)
-  const [_trackedTargetMsgId, _setTrackedTargetMsgId] = useState(targetMessageId);
-  if (_trackedTargetMsgId !== targetMessageId) {
-    _setTrackedTargetMsgId(targetMessageId);
+  // Reset scroll target tracking when the jump request changes — a new message
+  // id, or a new nonce for the same id (clicking "jump to the ask" twice).
+  const _targetReqKey = `${targetNonce ?? ""}:${targetMessageId ?? ""}`;
+  const [_trackedTargetReq, _setTrackedTargetReq] = useState(_targetReqKey);
+  if (_trackedTargetReq !== _targetReqKey) {
+    _setTrackedTargetReq(_targetReqKey);
     if (targetMessageId) {
       hasScrolledToTarget.current = false;
     }
@@ -15154,7 +15160,7 @@ const ConversationViewInner = (
         },
       });
     }
-  }, [targetMessageId, timeline, virtualizer]);
+  }, [targetMessageId, targetNonce, timeline, virtualizer]);
 
   // Land a branch switch scroll-stable: once the target conversation renders,
   // find the fork-point message (same message_uuid — fork copies preserve it)
