@@ -186,6 +186,8 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Devices", path: "/settings/devices", icon: "cpu", keywords: "machines daemons keys cli hosts", secondary: true },
   { label: "Integrations", path: "/settings/integrations", icon: "link", keywords: "github slack webhooks connect", secondary: true },
   { label: "Provider Keys", path: "/settings/provider-keys", icon: "settings", keywords: "api keys openrouter anthropic openai", secondary: true },
+  { label: "Notifications", path: "/settings/notifications", icon: "settings", keywords: "push email digest mentions mute", secondary: true },
+  { label: "Sounds", path: "/settings/sounds", icon: "settings", keywords: "audio volume mute chime walkie", secondary: true },
 ];
 
 // Global command rows: each fires the SAME registered handler its keyboard
@@ -2609,7 +2611,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               <CommandPrimitive.Item
                 key={`trigger-${t._id}`}
                 value={`__entity__ ${t.title} ${t.short_id || ""}|||${t._id}`}
-                onSelect={() => navigate(`/triggers?task=${t._id}`)}
+                onSelect={() => navigate(`/triggers/${t._id}`)}
                 className={itemClass}
               >
                 {t.schedule_type === "recurring" ? (
