@@ -20,7 +20,8 @@ const webRoot = join(here, ".."); // packages/web
 const read = (rel: string) => readFileSync(join(webRoot, rel), "utf8");
 
 const appSrc = read("src/App.tsx");
-const tabContentSrc = read("components/TabContent.tsx");
+// The route map lives in RoutePane (shared by plain tabs and split panes).
+const tabContentSrc = read("components/RoutePane.tsx");
 const dashLayoutSrc = read("components/DashboardLayout.tsx");
 const tabRoutingSrc = read("lib/tabRoutes.ts");
 

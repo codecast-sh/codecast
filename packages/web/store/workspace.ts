@@ -24,9 +24,6 @@ export type Pane =
   | { kind: "comments"; ref: string }
   | { kind: "detail"; ref: string }
   | { kind: "diff"; ref?: string }
-  // The Files surface beside a conversation. `ref` is its URL (/files?…), so
-  // in-pane navigation is one field changing, not a second router.
-  | { kind: "files"; ref?: string }
   | { kind: "terminal" };
 
 export type PaneKind = Pane["kind"];
@@ -317,50 +314,6 @@ export function companionId(ws: WorkspaceState): string | null {
   return p && p.kind === "conversation" ? p.ref : null;
 }
 
-/**
- * Does the companion slot name a conversation the store actually HOLDS? The
- * slot ref alone is not enough to open the panel: rows vanish (killed, pruned
- * at boot, dropped from the live window) while slot state and tab-stamped
- * workspace snapshots keep pointing at them. A panel expanded for a ref that
- * renders nothing is the "empty column" bug, so absence gates the panel shut.
- */
-export function companionRenderable(ws: WorkspaceState, hasSession: (id: string) => boolean): boolean {
-  const id = companionId(ws);
-  return !!id && hasSession(id);
-}
-
-/**
- * The working-surface mirror rule as one pure decision: what should happen to
- * the companion slot given where the stage is and which session is attended.
- *
- *  - On a working surface the attended conversation rides along as the
- *    companion — but only when its row EXISTS. Opening a pane for a pointer
- *    the store cannot resolve shows nothing, so a dead attended id opens
- *    nothing, and a companion whose own row vanished is closed (bookkeeping,
- *    not a dismissal).
- *  - Anywhere else a split companion is closed the same way. An overlay is
- *    the fleet board's drill-in, owned by the board — never cleared here.
- */
-export type CompanionMirrorStep = { op: "show"; pane: Pane } | { op: "hide" } | { op: "none" };
-
-export function companionMirrorStep(
-  ws: WorkspaceState,
-  attended: string | null,
-  onWorkingSurface: boolean,
-  hasSession: (id: string) => boolean,
-): CompanionMirrorStep {
-  const companion = companionId(ws);
-  if (onWorkingSurface) {
-    const pane =
-      attended && hasSession(attended) ? ({ kind: "conversation", ref: attended } as const) : null;
-    if (pane && companion !== attended && autoAllowed(ws, "secondary", pane)) return { op: "show", pane };
-    if (companion && !hasSession(companion)) return { op: "hide" };
-    return { op: "none" };
-  }
-  if (companion && ws.secondary.presentation !== "overlay") return { op: "hide" };
-  return { op: "none" };
-}
-
 /** The conversation drilled in as an overlay (the fleet board's dialog), if
     any. Distinct from a split companion: an overlay is what the user is
     LOOKING AT, so per-session chords and menus target it. */
@@ -390,32 +343,20 @@ export function surfaceForPath(pathname: string): SurfaceKind {
 /**
  * Which slots a surface may host, and HOW the secondary slot may present.
  * Anything not listed is emptied on arrival.
- *  - "split"   the working-page companion: a real column beside the stage
  *  - "overlay" the fleet board's drill-in: a transient visit OVER the stage
  *  - false     the slot stays empty on this surface
+ * Side by side on the stage is no longer a slot at all: it is the tab's split
+ * layout (store/stageSplit), entered by a deliberate drag, never by a route
+ * default — the page takes the full stage by default everywhere.
  */
 export function slotPolicyFor(surface: SurfaceKind): {
   context: boolean;
-  secondary: false | "split" | "overlay";
-  /** May the Files surface open as a split beside this stage? Only where a
-   *  conversation is what's on stage: reading a session and glancing at the
-   *  files it names. Working pages keep the slot for their companion. */
-  files: boolean;
+  secondary: false | "overlay";
 } {
   switch (surface) {
     // The inbox stage can be the fleet board; a tile click drills in as an
     // overlay that returns to the board. Never a split — the board is the home.
-    case "inbox": return { context: true, secondary: "overlay", files: true };
-    case "conversation": return { context: true, secondary: false, files: true };
-    // A task/doc on the stage can run one conversation beside it.
-    case "working": return { context: true, secondary: "split", files: false };
-    case "settings": return { context: true, secondary: false, files: false };
-    default: return { context: true, secondary: false, files: false };
+    case "inbox": return { context: true, secondary: "overlay" };
+    default: return { context: true, secondary: false };
   }
-}
-
-/** The Files pane's URL when the secondary slot shows one, else null. */
-export function filesPaneHref(ws: WorkspaceState): string | null {
-  const p = ws.secondary.pane;
-  return p && p.kind === "files" ? p.ref ?? "/files" : null;
 }

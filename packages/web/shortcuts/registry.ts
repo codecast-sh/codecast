@@ -32,6 +32,11 @@ export type ShortcutAction =
   | 'tab.close'
   | 'tab.next'
   | 'tab.prev'
+  | 'pane.split'
+  | 'pane.close'
+  | 'pane.expand'
+  | 'pane.next'
+  | 'pane.prev'
   | 'ui.zenToggle'
   | 'ui.toggleShortcutsHelp'
   | 'ui.openSettings'
@@ -141,7 +146,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+alt+n', action: 'session.create', skipInputCheck: true, description: 'New session (full page)' },
   { key: 'ctrl+shift+n', action: 'session.compose', skipInputCheck: true, description: 'Quick compose (palette)' },
   { key: 'ctrl+shift+e', action: 'session.rename', skipInputCheck: true, description: 'Rename session' },
-  { key: 'ctrl+tab', action: 'session.mruSwitch', skipInputCheck: true, description: 'Switch session (MRU)' },
+  { key: 'ctrl+tab', action: 'session.mruSwitch', skipInputCheck: true, description: 'Switch recently viewed (MRU)' },
 
   { key: 'ctrl+t', mac: 'meta+t', action: 'tab.new', skipInputCheck: true, description: 'New tab' },
   { key: 'ctrl+w', mac: 'meta+w', action: 'tab.close', skipInputCheck: true, description: 'Close tab' },
@@ -151,6 +156,14 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+shift+{', mac: 'meta+shift+{', action: 'tab.prev', skipInputCheck: true, description: 'Previous tab' },
   { key: 'ctrl+shift+]', mac: 'meta+shift+]', action: 'tab.next', skipInputCheck: true, description: 'Next tab' },
   { key: 'ctrl+shift+}', mac: 'meta+shift+}', action: 'tab.next', skipInputCheck: true, description: 'Next tab' },
+
+  // Stage panes (the tab's split layout). Handlers return false when the
+  // stage isn't split so the chords fall through to whatever else owns them.
+  { key: 'ctrl+alt+d', action: 'pane.split', skipInputCheck: true, description: 'Split: open this view beside itself' },
+  { key: 'ctrl+shift+w', mac: 'meta+shift+w', action: 'pane.close', skipInputCheck: true, description: 'Close pane' },
+  { key: 'ctrl+alt+enter', action: 'pane.expand', skipInputCheck: true, description: 'Pane takes the whole stage' },
+  { key: 'ctrl+alt+]', action: 'pane.next', skipInputCheck: true, description: 'Focus next pane' },
+  { key: 'ctrl+alt+[', action: 'pane.prev', skipInputCheck: true, description: 'Focus previous pane' },
 
   { key: 'ctrl+.', action: 'ui.zenToggle', skipInputCheck: true, description: 'Toggle zen mode' },
   { key: 'ctrl+,', action: 'inbox.toggleFlatView', skipInputCheck: true, description: 'Cycle inbox view (grouped / time / label)' },
