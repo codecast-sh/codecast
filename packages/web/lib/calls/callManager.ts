@@ -27,7 +27,7 @@ import { mutateOnUnload } from "../keepaliveMutation";
 import { memberDisplayName } from "../liveEntities";
 import { startScribe, stopScribe } from "./transcription";
 import { micConstraints, readJoinPrefs, rememberCamera, rememberDevice } from "./joinPrefs";
-import { bindPrewarmConvex, takePrewarmedRoom } from "./roomPrewarm";
+import { bindPrewarmAudio, bindPrewarmConvex, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
 import { CALL_HEARTBEAT_MS, humanizeConvexError } from "@codecast/shared/contracts";
 import {
   soundCallJoin,
@@ -65,6 +65,10 @@ export function bindConvex(client: ConvexHandle) {
   // prewarm that silently never runs is exactly the kind of thing nobody
   // notices until a join is slow again.
   bindPrewarmConvex(client);
+  // The prewarm plays what it hears through THIS module's audio elements —
+  // one map, one host, one idempotent attach — so a room adopted mid-voice
+  // does not end up with two elements for one person.
+  bindPrewarmAudio({ attach: attachAudio, detach: detachAudio });
 }
 
 function setCall(patch: Parameters<ReturnType<typeof useInboxStore.getState>["setCallState"]>[0]) {
@@ -261,6 +265,9 @@ function stopHeartbeat() {
 
 function attachAudio(track: RemoteTrack, participantId: string) {
   if (track.kind !== Track.Kind.Audio) return;
+  // Idempotent: the prewarm sweep below and the TrackSubscribed listener can
+  // both reach the same track, and a second element would play the voice twice.
+  if (audioEls.has(`${participantId}:${track.sid}`)) return;
   const el = track.attach();
   el.dataset.participant = participantId;
   ensureAudioHost().appendChild(el);
@@ -351,15 +358,29 @@ export type JoinOpts = {
  */
 export async function openMicForJoin(
   participant: { setMicrophoneEnabled: (on: boolean) => Promise<unknown> },
-  opts: { muted: boolean; listen: boolean },
+  opts: { intent?: JoinOpts["intent"] },
 ): Promise<void> {
+  // A LISTEN OPENS THE MICROPHONE — hearing a teammate means they can hear you
+  // — and every other join publishes in whatever mute state the person is
+  // already in. The rule lives here rather than at the call site so that the
+  // store write below is the only thing that ever claims an open microphone.
+  const listen = opts.intent === "listen";
+  const muted = listen ? false : useInboxStore.getState().call.muted;
   try {
-    await participant.setMicrophoneEnabled(!opts.muted);
+    await participant.setMicrophoneEnabled(!muted);
+    // THE CLAIM FOLLOWS THE PUBLICATION AND NEVER PRECEDES IT. Writing
+    // `muted: false` before the join — which is what the walkie's auto-listen
+    // used to do — made the store's mute an intention rather than a fact, and
+    // the gap between the SFU connecting and the device refusing is real: two
+    // seconds, measured in a headless browser with the microphone denied. The
+    // strip spent them saying "your mic is open, Riley can hear you" to a
+    // person who had no microphone at all.
+    if (!muted) setCall({ muted: false });
   } catch (err: any) {
     setCall({
       muted: true,
       micDenied: true,
-      ...(opts.listen ? {} : { error: await mediaFailureReason("microphone", err) }),
+      ...(listen ? {} : { error: await mediaFailureReason("microphone", err) }),
     });
   }
 }
@@ -438,7 +459,22 @@ export async function joinCall(roomKey: string, opts?: JoinOpts): Promise<void> 
   const warm = takePrewarmedRoom(roomKey);
   let r: Room | undefined = warm ?? undefined;
   try {
-    await controlJoin(roomKey, opts);
+    // THE SEAT ROW DOES NOT GATE THE VOICE.
+    //
+    // Both halves of a join are authorized by the SAME rule — `mintAccessToken`
+    // runs `authorizeRoom` exactly as `joinRoom` does, and a warm room's token
+    // was minted through it too — so this row is bookkeeping: who the dock
+    // draws, who "X hears you" counts. Awaiting it here spent a whole
+    // control-plane round trip before the handshake, which on the rig was most
+    // of what remained between a press and the far side hearing it once both
+    // rooms were warm.
+    //
+    // Still awaited, below, before the call is declared connected: a refusal
+    // tears the media down a beat later rather than never.
+    let seatError: unknown = null;
+    const seated = controlJoin(roomKey, opts).catch((e) => {
+      seatError = e;
+    });
     if (superseded(r)) return;
     const conn = warm
       ? null
@@ -538,12 +574,46 @@ export async function joinCall(roomKey: string, opts?: JoinOpts): Promise<void> 
     if (conn) {
       await r.connect(conn.url, conn.token);
       if (superseded(r)) return;
+    } else {
+      // THE TRACKS THAT ARRIVED BEFORE ANYBODY WAS LISTENING.
+      //
+      // A warm room was connected long before the handlers above existed, and
+      // RoomEvent.TrackSubscribed fires ONCE, at subscription time. So a voice
+      // that started while the room was still a prewarm has already been
+      // subscribed with no listener to hear it, and `attachAudio` never ran for
+      // it — leaving a client that is connected, subscribed, and completely
+      // silent, with nothing in its state to say so.
+      //
+      // Measured on the rig: adopting a warm room after the far side began
+      // publishing gave 0 audio elements against a subscribed track. The
+      // ordinary path only escaped it by 25ms.
+      for (const p of r.remoteParticipants.values()) {
+        for (const pub of p.trackPublications.values()) {
+          if (pub.isSubscribed && pub.track) attachAudio(pub.track as RemoteTrack, p.identity);
+        }
+      }
     }
     // Publish the mic in the muted state the user chose — join is silent by
     // default (the shoulder-tap contract), one keypress to speak.
     const muted = useInboxStore.getState().call.muted;
     const given = opts?.micTrack;
-    if (given && given.readyState === "live") {
+    // A WARM ROOM ARRIVES ALREADY HOLDING A MICROPHONE, muted, published and
+    // negotiated by the far side before anybody pressed — which is the whole
+    // point of it, and the reason a press is now an unmute rather than a
+    // publish. So there is nothing to publish here, and publishing anyway
+    // would put two copies of one person's voice in the room.
+    //
+    // A track the caller handed over is redundant in that case and must be
+    // STOPPED rather than dropped: `startBurst` clones the shared device for
+    // this hand-off, and a clone nobody stops is a capture nobody closes.
+    if (r && warmRoomPublishesMic(r)) {
+      if (given) {
+        try {
+          given.stop();
+        } catch {}
+      }
+      await openMicForJoin(r.localParticipant, { intent: opts?.intent });
+    } else if (given && given.readyState === "live") {
       await r.localParticipant.publishTrack(given, { source: Track.Source.Microphone });
       if (superseded(r)) return;
       // The publication now answers to setMicrophoneEnabled like any other, so
@@ -552,8 +622,14 @@ export async function joinCall(roomKey: string, opts?: JoinOpts): Promise<void> 
     } else {
       // The one call in this function that opens a device, and the one that
       // may fail without failing the join.
-      await openMicForJoin(r.localParticipant, { muted, listen: opts?.intent === "listen" });
+      await openMicForJoin(r.localParticipant, { intent: opts?.intent });
     }
+    if (superseded(r)) return;
+    // The bookkeeping catches up here, and a refusal is still this join's
+    // failure — it falls to the catch below, which frees the row and tears the
+    // media down exactly as it always did.
+    await seated;
+    if (seatError) throw seatError;
     if (superseded(r)) return;
     setCall({ phase: "connected" });
     soundCallJoin();
@@ -808,6 +884,23 @@ function pushFlags() {
 // taps its audio tracks). Null when no call is up.
 export function getRoom(): Room | null {
   return room;
+}
+
+/** How many voices are actually attached to the page.
+ *
+ *  The one honest measure of "can this person hear the room": connected and
+ *  subscribed say the media arrived, and a rig proved those can both be true
+ *  while the count here is zero and nobody hears anything. Exported for the
+ *  test that pins that case, and for a console checking the same thing by
+ *  hand. */
+export function getAudioElementCount(): number {
+  return audioEls.size;
+}
+
+/** The attach path itself, for the test that proves it is idempotent — a track
+ *  reaching it twice must not play the voice twice. */
+export function __attachAudioForTest(track: RemoteTrack, participantId: string): void {
+  attachAudio(track, participantId);
 }
 
 export async function listDevices(kind: MediaDeviceKind): Promise<MediaDeviceInfo[]> {

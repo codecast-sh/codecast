@@ -37,6 +37,7 @@ import {
   authorizeRoom,
   authorizeRoomNoGrant,
   isRoomTranscribeOff,
+  isSeat,
   liveMembers,
 } from "./callRooms";
 import { isTeamMember } from "./privacy";
@@ -533,7 +534,13 @@ export const sweepOrphanedLive = internalMutation({
       if (liveMembers(seated, now).length > 0) continue;
       // The honest end is when the last lease was refreshed, not when the
       // sweep noticed — otherwise an orphan's duration grows until it runs.
-      const lastSeen = seated.reduce((m, r) => Math.max(m, r.last_seen), 0);
+      //
+      // SEATS ONLY. A prewarm row is a connection held open ahead of a burst
+      // by somebody who opened this DM after the huddle died, so its lease is
+      // the freshest thing in the room and means nothing about when people
+      // stopped talking. Counting it would date the end up to ninety seconds
+      // late and inflate the recording by exactly that.
+      const lastSeen = seated.filter(isSeat).reduce((m, r) => Math.max(m, r.last_seen), 0);
       await endTranscript(ctx, t, lastSeen || now);
       ended++;
     }
