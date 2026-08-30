@@ -2,6 +2,7 @@
 
 import { copyToClipboard } from "../lib/utils";
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
@@ -24,8 +25,9 @@ import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { ARMED_STATUSES, isLoopFresh, loopTaskRow, taskDisplayTitle, type TaskRow } from "./triggerTasks";
 import type { InboxSession } from "../store/inboxStore";
 import { TriggerRunRail, useTriggerRuns } from "./TriggerRunHistory";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useTriggers } from "../hooks/useSyncTriggers";
 import { TriggerPromptView } from "./TriggerPromptView";
 
@@ -98,6 +100,7 @@ export function TriggerContextPanel({
   // Local-first verbs are synchronous; nothing is ever "busy".
   const busy = false;
 
+  const router = useRouter();
   // Verbs are store actions (local-first): the row flips on the draft the
   // instant it's clicked and the dispatch side effect runs the real mutation.
   const triggerAction = useInboxStore((s) => s.triggerAction);
@@ -106,9 +109,19 @@ export function TriggerContextPanel({
   // subscription, at which point the briefing swaps in and the button goes.
   const [summarizing, setSummarizing] = useState(false);
 
+  // The viewer's own roster can't carry a trigger armed under a different
+  // account (a remote daemon logged in as a team bot). This per-conversation
+  // query returns every trigger anchored HERE that the viewer may see — own
+  // and foreign alike — so the strip never goes missing on the session that
+  // created the trigger. No-throw: pure enrichment, and the query is newer
+  // than some deployed backends.
+  const { data: convTasks } = useQueryNoThrow(
+    api.agentTasks.webListForConversation,
+    isConvexId(conversationId) ? { conversation_id: conversationId } : "skip"
+  );
+
   const matched = useMemo(() => {
-    if (!tasks) return [] as TaskRow[];
-    return tasks.filter(
+    const own = (tasks ?? []).filter(
       (t) =>
         (agentTaskId && t._id === agentTaskId) ||
         t.originating_conversation_id === conversationId ||
@@ -117,7 +130,10 @@ export function TriggerContextPanel({
         t.last_run_conversation_id === conversationId ||
         (sessionId && t.last_run_session_uuid === sessionId)
     );
-  }, [tasks, conversationId, sessionId, agentTaskId]);
+    const seen = new Set(own.map((t) => t._id));
+    const foreign = ((convTasks ?? []) as TaskRow[]).filter((t) => !seen.has(t._id));
+    return [...own, ...foreign];
+  }, [tasks, convTasks, conversationId, sessionId, agentTaskId]);
 
   // Armed schedule with the soonest fire wins the strip. With nothing armed,
   // fall back ONLY to a schedule this conversation is a RUN of — that
@@ -208,6 +224,12 @@ export function TriggerContextPanel({
   const cadence = isLoop ? "self-paced loop" : describeTaskCadence(primary);
   const msUntil = primary.run_at !== undefined ? primary.run_at - now : undefined;
   const extraCount = matched.length - 1;
+  // Verbs act through the owner's account; a foreign (bot-owned) trigger is
+  // view-only here. Loops carry no server verbs at all.
+  const canManage = !isLoop && primary.is_own !== false;
+  // The dedicated trigger page (real triggers only — a loop's pseudo id
+  // addresses nothing).
+  const triggerHref = isLoop ? null : `/triggers/${(primary as any).short_id ?? primary._id}`;
 
   const rightStatus = (() => {
     switch (primary.status) {
@@ -271,8 +293,21 @@ export function TriggerContextPanel({
         className="w-full flex items-center gap-2 px-4 py-2 text-xs hover:bg-sol-bg-alt/40 transition-colors"
       >
         <Clock className="w-3.5 h-3.5 text-sol-orange flex-shrink-0" />
-        <ShortcutTooltip label={taskDisplayTitle(primary)}>
-          <span className="font-medium text-sol-orange truncate">{cleanTitle(taskDisplayTitle(primary))}</span>
+        <ShortcutTooltip label={triggerHref ? "Open the trigger's page" : taskDisplayTitle(primary)}>
+          <span
+            role={triggerHref ? "link" : undefined}
+            onClick={
+              triggerHref
+                ? (e) => {
+                    e.stopPropagation();
+                    router.push(triggerHref);
+                  }
+                : undefined
+            }
+            className={`font-medium text-sol-orange truncate ${triggerHref ? "hover:underline underline-offset-2" : ""}`}
+          >
+            {cleanTitle(taskDisplayTitle(primary))}
+          </span>
         </ShortcutTooltip>
         {/* Health at a glance while collapsed: only bad outcomes earn a dot. */}
         {(primary.last_run_failed || primary.last_run_needs_attention) && (
@@ -514,7 +549,14 @@ export function TriggerContextPanel({
           )}
 
           <div className="flex items-center gap-1.5 pt-0.5 flex-wrap">
-            {!isLoop && ARMED_STATUSES.has(primary.status) && (
+            {!canManage && !isLoop && primary.owner_name && (
+              <ShortcutTooltip label="This trigger runs under a different account — its verbs live with that owner">
+                <span className="px-1.5 py-px rounded border border-sol-border/50 text-[10px] text-sol-text-dim">
+                  runs as {primary.owner_name}
+                </span>
+              </ShortcutTooltip>
+            )}
+            {canManage && ARMED_STATUSES.has(primary.status) && (
               <>
                 <ShortcutTooltip label="Queue a run immediately — doesn't shift the regular cadence">
                   <button
@@ -589,8 +631,13 @@ export function TriggerContextPanel({
                   />
                 </button>
               )}
+              {triggerHref && (
+                <Link href={triggerHref} className="text-[10px] text-sol-cyan hover:underline">
+                  Open trigger page
+                </Link>
+              )}
               <Link href="/triggers" className="text-[10px] text-sol-cyan hover:underline">
-                Manage triggers
+                All triggers
               </Link>
             </span>
           </div>
