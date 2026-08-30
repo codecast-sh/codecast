@@ -84,6 +84,13 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   // Resolves { shown } — false when main dropped it (duplicate from another
   // window, or an app window is focused), so only the announcing window sounds.
   showNotification: (title, body, data) => ipcRenderer.invoke("show-notification", { title, body, data }),
+  // OS-level notification consent: are Codecast's banners actually allowed in
+  // System Settings? ("granted" | "off" | "ask" | "unknown"). The request
+  // variant posts a real notification, which on macOS raises the system
+  // Allow/Don't Allow prompt when the app was never registered.
+  getOsNotificationState: () => ipcRenderer.invoke("get-os-notification-state"),
+  requestOsNotificationPermission: () => ipcRenderer.invoke("request-os-notification-permission"),
+  openNotificationSettings: () => ipcRenderer.invoke("open-notification-settings"),
   // Multi-window notification routing: each renderer tells main what it shows
   // ({ active, open: [{id,path}], inCall }); main answers with this window's
   // role ({ leader, appFocused, anyInCall }) whenever it changes.
@@ -191,5 +198,15 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   onMeetingDetected,
   getMeetingDetect: () => ipcRenderer.invoke("get-meeting-detect"),
   setMeetingDetect: (patch) => ipcRenderer.invoke("set-meeting-detect", patch ?? {}),
+  // The meeting-offer window: the record-this-meeting card as a small
+  // chromeless corner window (route /meeting-offer). It renders the offer AND
+  // runs the recording it starts, so the shell only reshapes the window
+  // around the content it reports (the first report is the reveal — always
+  // without focus), hides it on request, and lands "open the transcript" in
+  // the main window.
+  isMeetingOfferWindow: process.argv.includes("--meeting-offer-window"),
+  meetingOfferSize: (size) => ipcRenderer.send("meeting-offer-size", size),
+  meetingOfferHide: () => ipcRenderer.send("meeting-offer-hide"),
+  meetingOfferOpenCall: (id) => ipcRenderer.send("meeting-offer-open-call", id),
   platform: process.platform,
 });
