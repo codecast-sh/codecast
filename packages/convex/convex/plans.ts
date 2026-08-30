@@ -630,11 +630,13 @@ export const bindSession = mutation({
     if (!planIds.some((pid: any) => pid === plan._id)) {
       planIds.push(plan._id);
     }
-    const patchFields: Record<string, any> = { plan_ids: planIds };
-    if (!conv.active_plan_id || conv.active_plan_id === plan._id) {
-      patchFields.active_plan_id = plan._id;
-    }
-    await ctx.db.patch(conv._id, patchFields);
+    // Last bind wins on BOTH sides of the pointer pair. This mutation already
+    // takes over plan.current_session_id unconditionally above; guarding the
+    // conversation side (as this did from 2026-03 to 2026-08) left a rebound
+    // session's header stuck on its first plan forever: unbindSession clears
+    // the pointer only while the old plan still points back at this
+    // conversation, so once the old plan moved on, nothing could ever flip it.
+    await ctx.db.patch(conv._id, { plan_ids: planIds, active_plan_id: plan._id });
 
     return { success: true };
   },
