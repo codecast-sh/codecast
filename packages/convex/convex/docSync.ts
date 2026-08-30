@@ -52,9 +52,12 @@ async function requireSyncableEntity(ctx: any, userId: Id<"users">, id: string):
  *
  * 1. First open of a doc with no snapshot yet: the editor seeds one from the
  *    markdown prop. An empty prop seeds an empty v1 snapshot.
- * 2. First open of a CLI-edited doc (`cli_edited_at` set): ExternalEditSync
- *    pushes the markdown prop into the live editor via setContent, arriving as
- *    a whole-doc replace step at version > 1.
+ * 2. A client still running a JS bundle from before the "Inconsistent open
+ *    depths" fix: its ExternalEditSync pushed the markdown prop into the live
+ *    editor via setContent, arriving as a whole-doc replace step at version
+ *    > 1. Current clients instead remount from the server snapshot on a CLI
+ *    edit (see `shouldResyncOnExternalEdit` in the web `docSyncCache`), so this
+ *    shape should only come from a stale tab that hasn't reloaded yet.
  *
  * Either way, submitSnapshot would then overwrite the real markdown in
  * `doc.content` with "". This predicate detects both shapes so the mutation
