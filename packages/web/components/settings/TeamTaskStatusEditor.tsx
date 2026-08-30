@@ -277,12 +277,12 @@ export function TeamTaskStatusEditor({
         <p className="text-[11px] text-sol-text-dim mt-3">Only team admins can edit statuses.</p>
       )}
       {isAdmin && dirty && (
-        // Sticky pins to the scroller's content box, so -bottom-5 cancels the
-        // settings modal's py-5 and the bar sits on the visible edge. The
-        // negative margins cancel the card's p-4 sm:p-5.
-        <div className="sticky -bottom-5 -mx-4 -mb-4 mt-4 flex items-center justify-between gap-3 rounded-b-xl border-t border-sol-border bg-sol-bg px-4 py-3 sm:-mx-5 sm:-mb-5 sm:px-5">
-          <span className="flex items-center gap-2 text-xs text-sol-yellow">
-            <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow" />
+        // Floating save pill: sticky keeps it in view however far the list
+        // scrolls; its own tinted surface, border and shadow separate it from
+        // the card, so content passing beneath reads as elevation, not a seam.
+        <div className="sticky bottom-2 z-10 mt-5 flex items-center justify-between gap-3 rounded-lg border border-sol-yellow/40 bg-[color-mix(in_srgb,var(--sol-yellow)_10%,var(--sol-bg))] py-2 pl-4 pr-2 shadow-lg shadow-black/15">
+          <span className="flex items-center gap-2 text-xs font-medium text-sol-yellow">
+            <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" />
             Unsaved changes
           </span>
           <div className="flex items-center gap-2">

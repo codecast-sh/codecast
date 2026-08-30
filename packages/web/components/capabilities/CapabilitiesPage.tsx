@@ -310,7 +310,7 @@ function RowDetail({
           return (
             <div
               key={d.deviceId}
-              className="flex items-center gap-2 px-2 py-1.5 rounded border border-sol-border bg-sol-bg-alt"
+              className="flex items-center gap-2 px-2 py-1.5 rounded bg-sol-bg-alt"
             >
               <span className="text-[11px] text-sol-text truncate flex-1" title={d.name}>
                 {d.name}

@@ -229,7 +229,7 @@ export function WorkspaceSharePicker({
             Codecast CLI. Install and authenticate, then your repos will
             be available to share.
           </p>
-          <div className="font-mono text-xs text-sol-text-muted bg-sol-bg rounded-md border border-sol-border/50 px-3 py-2 select-all">
+          <div className="font-mono text-xs text-sol-text-muted bg-sol-bg rounded-md px-3 py-2 select-all">
             curl -fsSL codecast.sh/install | sh
           </div>
           <p className="text-[11px] text-sol-text-dim">
@@ -277,7 +277,7 @@ export function WorkspaceSharePicker({
               <Terminal className="tf-accent-text w-3.5 h-3.5" />
               Share a repo via CLI
             </div>
-            <div className="font-mono text-xs text-sol-text-muted bg-sol-bg rounded-md border border-sol-border/50 px-3 py-2 select-all">
+            <div className="font-mono text-xs text-sol-text-muted bg-sol-bg rounded-md px-3 py-2 select-all">
               {/* Quoted, so a multi-word team name still copies as one
                   argument through the select-all. */}
               cast teams map /path/to/repo "{teamName}"

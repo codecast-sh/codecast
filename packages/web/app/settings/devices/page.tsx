@@ -39,7 +39,7 @@ function RepoPlaneRow({ r }: { r: RepoPlane }) {
       {(r.ahead ?? 0) > 0 && <span className="text-sol-cyan shrink-0">↑{r.ahead}</span>}
       {(r.behind ?? 0) > 0 && <span className="text-sol-orange shrink-0">↓{r.behind}</span>}
       {r.identity === "device" && (
-        <span className="px-1 py-px rounded border border-sol-violet/30 bg-sol-violet/10 text-sol-violet shrink-0">
+        <span className="px-1 py-px rounded bg-sol-violet/10 text-sol-violet shrink-0">
           device key
         </span>
       )}
@@ -60,7 +60,7 @@ function GrantAccessCard({ d, blocked }: { d: Device; blocked: RepoPlane[] }) {
   if (!blocked.length) return null;
   const repoNames = blocked.map((r) => repoBase(r.root)).join(", ");
   return (
-    <div className="mt-2 rounded-md border border-sol-yellow/30 bg-sol-yellow/5 p-3 space-y-2">
+    <div className="mt-2 rounded-md bg-sol-yellow/[0.07] p-3 space-y-2">
       <div className="text-[11px] text-sol-yellow font-medium">
         This machine needs access to {repoNames}
       </div>

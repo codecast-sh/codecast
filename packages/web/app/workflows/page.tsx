@@ -136,7 +136,7 @@ function NodeDetail({ node, onClose }: { node: WFNode; onClose: () => void }) {
         {node.prompt && (
           <div className="space-y-1">
             <div className="text-[10px] text-sol-text-dim uppercase tracking-wider">Prompt</div>
-            <div className="text-xs text-sol-text-muted bg-sol-bg rounded-lg p-3 max-h-40 overflow-y-auto leading-relaxed whitespace-pre-wrap font-mono border border-sol-border/20">
+            <div className="text-xs text-sol-text-muted bg-sol-bg rounded-lg p-3 max-h-40 overflow-y-auto leading-relaxed whitespace-pre-wrap font-mono">
               {node.prompt}
             </div>
           </div>
@@ -145,7 +145,7 @@ function NodeDetail({ node, onClose }: { node: WFNode; onClose: () => void }) {
         {node.script && (
           <div className="space-y-1">
             <div className="text-[10px] text-sol-text-dim uppercase tracking-wider">Script</div>
-            <div className="text-xs text-sol-green bg-sol-bg rounded-lg p-3 max-h-40 overflow-y-auto leading-relaxed whitespace-pre-wrap font-mono border border-sol-border/20">
+            <div className="text-xs text-sol-green bg-sol-bg rounded-lg p-3 max-h-40 overflow-y-auto leading-relaxed whitespace-pre-wrap font-mono">
               {node.script}
             </div>
           </div>
