@@ -455,10 +455,10 @@ export function SignInCta({
   const who = email ?? "your Claude account";
   const flowWho = flow?.email ?? who;
 
-  const handleClick = async () => {
+  const handleClick = async (force = false) => {
     setLaunching(true);
     try {
-      await requestLogin({ device_id: device.device_id });
+      await requestLogin({ device_id: device.device_id, ...(force ? { force: true } : {}) });
       // The device row's pending stamp echoes back through listAccountProfiles;
       // keep the local flag briefly so the button can't double-fire meanwhile.
       setTimeout(() => setLaunching(false), 5_000);
@@ -477,6 +477,14 @@ export function SignInCta({
           <div className="text-sol-text-dim">
             The sign-in page opened on {device.label || "your machine"} — the blocked sessions restart on their own once it completes.
           </div>
+          <button
+            onClick={() => handleClick(true)}
+            disabled={disabled}
+            title={`Kill the running sign-in on ${device.label || "your machine"} and open a fresh browser page`}
+            className="mt-1 font-medium text-amber-500 underline underline-offset-2 transition-colors hover:text-amber-400 disabled:opacity-60"
+          >
+            Page didn&apos;t open? Relaunch the sign-in
+          </button>
         </div>
       </div>
     );
@@ -513,7 +521,7 @@ export function SignInCta({
       )}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         <button
-          onClick={handleClick}
+          onClick={() => handleClick()}
           disabled={disabled}
           title={`Run /login on ${device.label || "your machine"} — opens the browser sign-in${email ? ` for ${email}` : ""}`}
           className="inline-flex items-center gap-1.5 rounded-md bg-amber-500 px-3.5 py-1.5 text-[12px] font-bold text-sol-bg shadow-sm transition-colors hover:bg-amber-400 disabled:opacity-60"
