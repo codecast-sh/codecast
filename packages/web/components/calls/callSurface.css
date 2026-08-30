@@ -14,8 +14,17 @@
   user-select: none;
 }
 
-/* Wider than the dock it stands in for, because the strip holds three
-   decisions rather than one. The corner is what stops the eye moving. */
+/* THE STRIP'S OWN BOX, which used to be `.walkie-strip-host` in walkie.css.
+ * 420px is the width the strip was designed at: a face big enough to
+ * recognise, two lines of what is being said, and two answers that can be hit
+ * without aiming. A phone, or a narrow window, still gets the whole card and no
+ * horizontal scrollbar under it. */
+.call-surface-root[data-shape="walkie"] {
+  width: 420px;
+  max-width: calc(100vw - 2rem);
+}
+
+/* The pill hugs its own contents, and stops before it becomes a strip. */
 .call-surface-root[data-shape="pill"] {
   max-width: 420px;
 }

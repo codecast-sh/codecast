@@ -21,7 +21,6 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -31,11 +30,13 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { useEventListener } from "../../hooks/useEventListener";
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   DOCK_MIN,
   DOCK_SIZE,
   HOME_CORNER,
-  STRIP_WIDTH,
   clampCorner,
   clampSize,
   savePlacement,
@@ -52,6 +53,19 @@ import "./callSurface.css";
  * one surface — and pinning morphs for free because of it.
  */
 export type SurfaceShape = "walkie" | "pill" | "window" | "stage";
+
+/**
+ * The dock's surface, and the pin, read as one shape.
+ *
+ * The pin is not a surface — the same call is behind both — so it belongs here
+ * with the box rather than beside the walkie's lookup: unpinning is the corner
+ * changing shape, and it morphs for exactly the same reason the upgrade does.
+ */
+export function surfaceShape(surface: "walkie" | "dock" | "stage", pinned: boolean): SurfaceShape {
+  if (surface === "walkie") return "walkie";
+  if (surface === "stage") return "stage";
+  return pinned ? "window" : "pill";
+}
 
 /** Grab the surface and move it. Given to the content, which owns the handle. */
 type DragHandles = {
@@ -121,18 +135,16 @@ export function CallSurfaceRoot({ shape, children }: { shape: SurfaceShape; chil
     });
   }, []);
 
-  useEffect(() => {
+  useEventListener("resize", reclamp);
+  useMountEffect(() => {
     const el = rootRef.current;
     if (!el) return;
     reclamp();
-    window.addEventListener("resize", reclamp);
-    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(reclamp);
-    ro?.observe(el);
-    return () => {
-      window.removeEventListener("resize", reclamp);
-      ro?.disconnect();
-    };
-  }, [reclamp]);
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(reclamp);
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
 
   // One pointer gesture, two jobs. The surface is anchored to the bottom-right
   // corner, so moving it SUBTRACTS the pointer delta from both offsets, and
@@ -150,7 +162,15 @@ export function CallSurfaceRoot({ shape, children }: { shape: SurfaceShape; chil
       const x0 = e.clientX;
       const y0 = e.clientY;
       const base = placeRef.current;
-      target.setPointerCapture?.(e.pointerId);
+      // The window carries the gesture, not the handle: a pointer that leaves
+      // the header — which is most of a drag — must not drop the surface
+      // halfway. Capture is a nicety on top of that and is allowed to fail
+      // (a synthetic pointer has no id to capture), never to end the drag.
+      try {
+        target.setPointerCapture?.(e.pointerId);
+      } catch {
+        /* no capture, the window listeners still see every move */
+      }
       const move = (ev: PointerEvent) => {
         const vp = viewport();
         const next = apply(base, ev.clientX - x0, ev.clientY - y0);
@@ -158,14 +178,18 @@ export function CallSurfaceRoot({ shape, children }: { shape: SurfaceShape; chil
         setPlace({ corner: clampCorner(next.corner, size, vp), size });
       };
       const up = () => {
-        target.releasePointerCapture?.(e.pointerId);
-        target.removeEventListener("pointermove", move);
-        target.removeEventListener("pointerup", up);
-        target.removeEventListener("pointercancel", up);
+        try {
+          target.releasePointerCapture?.(e.pointerId);
+        } catch {
+          /* never captured */
+        }
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", up);
       };
-      target.addEventListener("pointermove", move);
-      target.addEventListener("pointerup", up);
-      target.addEventListener("pointercancel", up);
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
       e.preventDefault();
     };
     return {
@@ -188,7 +212,7 @@ export function CallSurfaceRoot({ shape, children }: { shape: SurfaceShape; chil
   // The drag is what the person wants remembered, so it is written on every
   // change rather than on pointer-up: a call that ends mid-drag still leaves
   // the next one where this one was put.
-  useEffect(() => {
+  useWatchEffect(() => {
     savePlacement(place.corner, place.size);
   }, [place]);
 
@@ -198,12 +222,10 @@ export function CallSurfaceRoot({ shape, children }: { shape: SurfaceShape; chil
       : {
           right: place.corner.right,
           bottom: place.corner.bottom,
-          width:
-            shape === "window"
-              ? place.size.width
-              : shape === "walkie"
-                ? `min(${STRIP_WIDTH}px, calc(100vw - ${2 * HOME_CORNER.right}px))`
-                : undefined,
+          // The strip's and the pill's widths belong to the stylesheet beside
+          // the cards they hold; only the dock's is state, because only the
+          // dock's can be dragged.
+          width: shape === "window" ? place.size.width : undefined,
           height: shape === "window" ? place.size.height : undefined,
         };
 

@@ -14,7 +14,7 @@ import { HangUpButton, MicButton } from "./CallControls";
 import { RoomKnocks, RoomLockButton } from "./RoomDoor";
 import { WalkieBanner } from "./WalkieDock";
 import { callDockSurface, useWalkieStatus } from "../../hooks/useWalkie";
-import { CallSurfaceRoot, useSurfaceHandles, type SurfaceShape } from "./CallSurfaceRoot";
+import { CallSurfaceRoot, surfaceShape, useSurfaceHandles } from "./CallSurfaceRoot";
 import { firstName } from "./speakers";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
 import { POP_OUT_CALL_TITLE, canPopOutCall, isCallPanelWindow } from "../../lib/desktop";
@@ -101,8 +101,7 @@ export function CallDock() {
   // being destroyed and another built. The stage is the exception the other
   // way round: it draws its own full-screen surface, so the root goes empty and
   // simply grows into it.
-  const shape: SurfaceShape =
-    surface === "walkie" ? "walkie" : surface === "stage" ? "stage" : pinned ? "window" : "pill";
+  const shape = surfaceShape(surface, pinned);
   return (
     <>
       <CallSurfaceRoot shape={shape}>

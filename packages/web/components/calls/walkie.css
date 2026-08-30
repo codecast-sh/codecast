@@ -235,56 +235,15 @@
  * being said as it is said, and two answers that can be hit without aiming.
  */
 
-.walkie-strip-host {
-  position: fixed;
-  right: 1rem;
-  bottom: 5rem;
-  z-index: 150;
-  width: 420px;
-  /* A phone, or a narrow window, still gets the whole strip and no horizontal
-     scrollbar under it. */
-  max-width: calc(100vw - 2rem);
-  user-select: none;
-}
-
-/* ── The morph ──────────────────────────────────────────────────────────────
- *
- * Somebody pressed Join live and this strip is about to be a call dock. It is
- * the same room, the same seat and the same open microphone — nothing is
- * ending — so it must not read as one surface being destroyed and another
- * built. The dock arrives in this corner, at this radius, with this shadow,
- * and the two overlap for a sixth of a second: what the eye follows is one
- * thing growing, which is what actually happened.
- */
-.walkie-strip-leaving {
-  pointer-events: none;
-  animation: walkie-morph-out 180ms ease-in forwards;
-}
-
-@keyframes walkie-morph-out {
-  from { opacity: 1; transform: scale(1); }
-  to   { opacity: 0; transform: scale(1.04); }
-}
-
-.call-dock-morph {
-  animation: walkie-morph-in 200ms cubic-bezier(0.2, 0.7, 0.3, 1);
-}
-
-@keyframes walkie-morph-in {
-  from { opacity: 0; transform: scale(0.94); }
-  to   { opacity: 1; transform: scale(1); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  /* Shortened rather than removed. The strip's exit is what tells React the
-     morph is over (`animationend`), so an animation that never runs is an
-     animation that never ends — and the strip would sit there over the dock
-     for good. One millisecond is not motion, and it still fires. */
-  .walkie-strip-leaving { animation-duration: 1ms; }
-  .call-dock-morph { animation: none; }
-}
+/* WHERE THE STRIP IS is no longer this file's business. The strip, the pill and
+ * the dock are three contents of ONE node now (components/calls/CallSurfaceRoot
+ * + callSurface.css), which is what makes a burst becoming a call a change of
+ * shape rather than a swap of surfaces — so the corner, the width, the z-index
+ * and the whole of the morph moved there with it. What is left here is the
+ * card: what it is made of, and what it says. */
 
 .walkie-strip {
+  width: 100%;
   border: 1px solid var(--sol-border);
   border-radius: 12px;
   background: color-mix(in srgb, var(--sol-bg-alt) 95%, transparent);
@@ -367,17 +326,6 @@
   border-color: color-mix(in srgb, var(--sol-text) 26%, transparent);
 }
 
-/* SOMEBODY STEPPED IN. Four seconds, and the only moment this surface is
- * violet: violet is what a call is everywhere else in the product, and the
- * sentence on the card at this instant is that a burst just became one. */
-.walkie-strip-joined {
-  border-color: color-mix(in srgb, var(--sol-violet) 60%, transparent);
-  box-shadow:
-    0 10px 30px rgb(0 0 0 / 0.28),
-    0 0 0 1px color-mix(in srgb, var(--sol-violet) 30%, transparent),
-    0 0 26px color-mix(in srgb, var(--sol-violet) 20%, transparent);
-}
-
 /* ── The level bars ─────────────────────────────────────────────────────────
  *
  * Four bars that rise with the voice, off the same `--level` custom property
@@ -457,17 +405,27 @@
   color: var(--sol-text);
 }
 
+/* THE SENTENCE IS THE LINE, when it already names the person. Two lines that
+ * both begin "Riley Chen" is a stutter, so the name above appears only when the
+ * sentence does not carry the name (WalkieStripView), and the sentence takes
+ * the weight the name would have had. */
+.walkie-strip-headline-lead {
+  font-weight: 600;
+  color: var(--sol-text);
+}
+
 /* What is happening, in the words the engine decided (hooks/useWalkie
- * walkieStripState). Two lines at most: every one of these sentences is short,
- * and a name long enough to wrap should push the second line rather than the
- * card's height. */
+ * walkieStripState). Three lines, which is what the longest of those sentences
+ * needs beside a 56px face: "You can hear Riley Chen, your mic is off
+ * (permission denied)" is the one that sets this number, and a sentence about a
+ * microphone that cannot be read to the end is worse than a card 20px taller. */
 .walkie-strip-headline {
   margin-top: 1px;
   font-size: 15px;
   line-height: 1.3;
   color: var(--sol-text-muted);
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -521,8 +479,8 @@
   justify-content: flex-end;
   /* So a clipped first line reads as "there is more behind this" rather than as
      a line someone cut in half. */
-  mask-image: linear-gradient(to bottom, transparent 0, black 1.1em);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 1.1em);
+  mask-image: linear-gradient(to bottom, transparent 0, black 0.9em);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 0.9em);
 }
 
 /* ── The two answers ────────────────────────────────────────────────────────
@@ -657,13 +615,14 @@
   45%      { opacity: 1;    transform: scale(1); }
 }
 
+/* NEVER ELIDED. Every other line on this card can lose its tail to a narrow
+ * window; this one is the sentence a person must not discover afterwards, so a
+ * long name wraps it to a second line rather than cutting it. */
 .walkie-hot-text {
   min-width: 0;
   flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: 13px;
+  line-height: 1.35;
   color: var(--sol-text);
 }
 
@@ -689,6 +648,17 @@
   .walkie-hot-dot { animation: none; }
 }
 
+/* SOMEBODY STEPPED IN. Four seconds, and the only moment this surface is
+ * violet: violet is what a call is everywhere else in the product, and the
+ * sentence on the card at this instant is that a burst just became one. */
+.walkie-strip-joined {
+  border-color: color-mix(in srgb, var(--sol-violet) 60%, transparent);
+  box-shadow:
+    0 10px 30px rgb(0 0 0 / 0.28),
+    0 0 0 1px color-mix(in srgb, var(--sol-violet) 30%, transparent),
+    0 0 26px color-mix(in srgb, var(--sol-violet) 20%, transparent);
+}
+
 /* ── The last line ──────────────────────────────────────────────────────────
  *
  * What the strip says after the seat has gone back: snoozed, until when, and
@@ -703,7 +673,7 @@
 }
 
 .walkie-strip-note-text {
-  font-size: 14px;
+  font-size: 13.5px;
   color: var(--sol-text-muted);
 }
 

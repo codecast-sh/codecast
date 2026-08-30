@@ -36,7 +36,6 @@
 // stylesheet (components/__tests__/walkieStrip.test.tsx). WalkieBanner is the
 // half that knows where those props come from.
 import { useCallback, useSyncExternalStore, type ReactNode, type RefCallback } from "react";
-import { createPortal } from "react-dom";
 import { BellOff, MessageSquare, MicOff, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -81,10 +80,7 @@ const TAIL = 160;
  *  when a voice arrives and a name is a slower way to answer "who". */
 const FACE = 56;
 
-export function WalkieBanner({
-  leaving = false,
-  onLeft,
-}: { leaving?: boolean; onLeft?: () => void } = {}) {
+export function WalkieBanner() {
   const status = useWalkieStatus();
   const router = useRouter();
   const incoming = status.incoming;
@@ -161,10 +157,12 @@ export function WalkieBanner({
   const strip = walkieStripState(status, s, { name, now });
   const headline = joinTitle(announcement, target.roomKey, Date.now(), strip.headline);
 
-  return createPortal(
+  // No portal and no placement: the strip is one of the contents of the call
+  // surface root (components/calls/CallSurfaceRoot), which owns the corner, the
+  // width and the morph between this card and the dock's. Rendering itself
+  // somewhere else is what used to make the upgrade a swap of two surfaces.
+  return (
     <WalkieStripView
-      leaving={leaving}
-      onLeft={onLeft}
       name={name}
       headline={headline}
       words={words}
@@ -181,10 +179,12 @@ export function WalkieBanner({
       // row would only make the strip taller mid-hold. Both keys down is the
       // opposite case: somebody is talking to me, and joining is exactly what
       // that moment is for.
-      actions={!strip.tx || strip.rx}
+      // …and never while the join is being announced: the question this row
+      // asks has just been answered, and the dock is a moment away.
+      actions={(!strip.tx || strip.rx) && headline === strip.headline}
       onMute={() => void setMuted(true)}
       onJoin={() => void joinWalkieLive(target.roomKey, { name })}
-      onSnooze={() => snoozeWalkie(name)}
+      onSnooze={snoozeWalkie}
       onOpenDm={() => router.push(`/chat/${target.channelId}`)}
       onLeave={() => void leaveCall()}
       replyKey={
@@ -195,8 +195,7 @@ export function WalkieBanner({
           title="Hold to reply"
         />
       }
-    />,
-    document.body,
+    />
   );
 }
 
@@ -217,12 +216,12 @@ export function WalkieBanner({
  * room does. So the last line is a toast carrying the strip's own markup —
  * same corner, same stylesheet, three seconds, gone.
  */
-function snoozeWalkie(name: string): void {
+function snoozeWalkie(): void {
   const until = Date.now() + SNOOZE_MS;
   useInboxStore.getState().snoozeWalkie(until);
   void setMuted(true);
   shutWalkieDoor();
-  toast.custom(() => <WalkieSnoozedNote until={until} name={name} />, {
+  toast.custom(() => <WalkieSnoozedNote until={until} />, {
     duration: SNOOZE_NOTE_MS,
     unstyled: true,
   });
@@ -236,8 +235,6 @@ function snoozeWalkie(name: string): void {
  * them be rendered alone and checked against the stylesheet that draws it.
  */
 export function WalkieStripView(props: {
-  leaving?: boolean;
-  onLeft?: () => void;
   name: string;
   headline: string;
   /** The live transcript tail. Empty until the recognizer says something. */
@@ -264,105 +261,109 @@ export function WalkieStripView(props: {
   replyKey?: ReactNode;
 }) {
   const { tx, rx } = props;
+  // NEVER THE SAME NAME TWICE. Every sentence the engine writes names the
+  // person in it ("Riley is talking", "You and Riley are both talking"), so a
+  // name line above it would stutter on every ordinary state. It appears for
+  // the sentences that do not, and the sentence carries the weight otherwise.
+  const showName = !props.headline.includes(props.name);
   return (
     <div
-      className={`walkie-strip-host ${props.leaving ? "walkie-strip-leaving" : ""}`}
-      onAnimationEnd={props.leaving ? props.onLeft : undefined}
+      className={[
+        "walkie-strip",
+        tx || rx ? "walkie-strip-live" : "",
+        // Both at once is one room with a voice going each way, so both edges
+        // are drawn rather than one of them winning.
+        tx ? "walkie-strip-tx" : "",
+        rx ? "walkie-strip-rx" : "",
+        props.hotMic ? "walkie-strip-hot" : "",
+        props.micDenied ? "walkie-strip-denied" : "",
+        props.joined ? "walkie-strip-joined" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
     >
-      <div
-        className={[
-          "walkie-strip",
-          tx || rx ? "walkie-strip-live" : "",
-          // Both at once is one room with a voice going each way, so both edges
-          // are drawn rather than one of them winning.
-          tx ? "walkie-strip-tx" : "",
-          rx ? "walkie-strip-rx" : "",
-          props.hotMic ? "walkie-strip-hot" : "",
-          props.micDenied ? "walkie-strip-denied" : "",
-          props.joined ? "walkie-strip-joined" : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-      >
-        {props.hotMic && <HotMicLine name={props.name} onMute={props.onMute} />}
+      {props.hotMic && <HotMicLine name={props.name} onMute={props.onMute} />}
 
-        <div className="walkie-strip-head">
-          {props.face && (
-            <span ref={props.faceRef} className="walkie-strip-face" aria-hidden="true">
-              <Avatar m={{ user_image: props.face.image, user_name: props.face.name }} size={FACE} />
-            </span>
-          )}
-          <div className="walkie-strip-who">
-            <div className="walkie-strip-name">{props.name}</div>
-            {/* A teammate's voice arriving is the one thing here that happens TO
-                you rather than because of you, and it was announced only by the
-                sound and the strip appearing. Polite, not assertive: it is worth
-                saying, and never worth cutting somebody off mid-sentence to say. */}
-            <div className="walkie-strip-headline" role="status" aria-live="polite">
-              {props.headline}
-            </div>
+      <div className="walkie-strip-head">
+        {props.face && (
+          <span ref={props.faceRef} className="walkie-strip-face" aria-hidden="true">
+            <Avatar m={{ user_image: props.face.image, user_name: props.face.name }} size={FACE} />
+          </span>
+        )}
+        <div className="walkie-strip-who">
+          {showName && <div className="walkie-strip-name">{props.name}</div>}
+          {/* A teammate's voice arriving is the one thing here that happens TO
+              you rather than because of you, and it was announced only by the
+              sound and the strip appearing. Polite, not assertive: it is worth
+              saying, and never worth cutting somebody off mid-sentence to say. */}
+          <div
+            className={`walkie-strip-headline ${showName ? "" : "walkie-strip-headline-lead"}`}
+            role="status"
+            aria-live="polite"
+          >
+            {props.headline}
           </div>
-          <div className="walkie-strip-tools">
-            <button
-              type="button"
-              className="walkie-strip-icon"
-              aria-label="Open the DM"
-              title="Open the DM"
-              onClick={props.onOpenDm}
-            >
-              <MessageSquare className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              className="walkie-strip-icon"
-              aria-label="Leave the room"
-              title="Leave the room"
-              onClick={props.onLeave}
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-          {/* Talking back without joining anything: the walkie, still. Beside
-              the face rather than in the button row, because it is a different
-              kind of thing from the two decisions below — a hold, not a click —
-              and because while both keys are down this is where my own warm
-              ring sits against their cool one. */}
-          {props.replyKey && <div className="walkie-strip-reply">{props.replyKey}</div>}
         </div>
-
-        {!!props.words && (
-          <div className="walkie-strip-words" title={props.words}>
-            {props.words}
-          </div>
-        )}
-        {props.quiet && <div className="walkie-strip-quiet">recording, no live words</div>}
-
-        {props.actions && (
-          <div className="walkie-strip-actions">
-            {/* THE UPGRADE, and the reason this strip exists. Warm, because warm
-                is this client's own voice going out everywhere else on this
-                surface and that is exactly what pressing it does: the
-                microphone that is already open stops carrying a burst and
-                starts carrying a conversation. */}
-            <button type="button" className="walkie-strip-join" onClick={props.onJoin}>
-              Join live
-            </button>
-            {/* And the honest opposite of it. The answer to a voice arriving is
-                as often "not now" as it is "yes", and with a hot microphone
-                that answer has to be reachable in the same glance rather than
-                in a settings page. */}
-            <button
-              type="button"
-              className="walkie-strip-snooze"
-              title="No bursts play here for an hour. They still arrive as messages."
-              onClick={props.onSnooze}
-            >
-              <BellOff className="h-4 w-4" />
-              Snooze 1h
-            </button>
-          </div>
-        )}
+        <div className="walkie-strip-tools">
+          <button
+            type="button"
+            className="walkie-strip-icon"
+            aria-label="Open the DM"
+            title="Open the DM"
+            onClick={props.onOpenDm}
+          >
+            <MessageSquare className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            className="walkie-strip-icon"
+            aria-label="Leave the room"
+            title="Leave the room"
+            onClick={props.onLeave}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        {/* Talking back without joining anything: the walkie, still. Beside
+            the face rather than in the button row, because it is a different
+            kind of thing from the two decisions below — a hold, not a click —
+            and because while both keys are down this is where my own warm
+            ring sits against their cool one. */}
+        {props.replyKey && <div className="walkie-strip-reply">{props.replyKey}</div>}
       </div>
+
+      {!!props.words && (
+        <div className="walkie-strip-words" title={props.words}>
+          {props.words}
+        </div>
+      )}
+      {props.quiet && <div className="walkie-strip-quiet">recording, no live words</div>}
+
+      {props.actions && (
+        <div className="walkie-strip-actions">
+          {/* THE UPGRADE, and the reason this strip exists. Warm, because warm
+              is this client's own voice going out everywhere else on this
+              surface and that is exactly what pressing it does: the
+              microphone that is already open stops carrying a burst and
+              starts carrying a conversation. */}
+          <button type="button" className="walkie-strip-join" onClick={props.onJoin}>
+            Join live
+          </button>
+          {/* And the honest opposite of it. The answer to a voice arriving is
+              as often "not now" as it is "yes", and with a hot microphone
+              that answer has to be reachable in the same glance rather than
+              in a settings page. */}
+          <button
+            type="button"
+            className="walkie-strip-snooze"
+            title="No bursts play here for an hour. They still arrive as messages."
+            onClick={props.onSnooze}
+          >
+            <BellOff className="h-4 w-4" />
+            Snooze 1h
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -398,13 +399,11 @@ function HotMicLine({ name, onMute }: { name: string; onMute: () => void }) {
 
 /** The strip's last line, after the seat has gone back. Carried by a toast
  *  rather than by the strip, for the reason in `snoozeWalkie` above. */
-export function WalkieSnoozedNote({ until, name }: { until: number; name: string }) {
+export function WalkieSnoozedNote({ until }: { until: number }) {
   const clock = new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return (
     <div className="walkie-strip walkie-strip-note">
-      <span className="walkie-strip-note-text">
-        Snoozed until {clock}. {name}&apos;s message is in the DM.
-      </span>
+      <span className="walkie-strip-note-text">Snoozed until {clock}. The message is in the DM.</span>
     </div>
   );
 }

@@ -19,7 +19,8 @@ export type Size = { width: number; height: number };
 export type Viewport = { width: number; height: number };
 export type Rect = { left: number; top: number; width: number; height: number };
 
-/** The strip's corner, in pixels: `right: 1rem`, `bottom: 5rem` (walkie.css). */
+/** The corner every surface opens in: `1rem` from the right, `5rem` up, which
+ *  is where the walkie strip and the unpinned pill have always sat. */
 export const HOME_CORNER: Corner = { right: 16, bottom: 80 };
 
 /** The smallest gap between the surface and the edge of the screen. */
@@ -28,9 +29,6 @@ export const EDGE_MARGIN = 8;
 /** The floating dock at rest, and the smallest it can be dragged to. */
 export const DOCK_SIZE: Size = { width: 320, height: 250 };
 export const DOCK_MIN: Size = { width: 240, height: 180 };
-
-/** The strip's width. Wider than the dock because it holds three decisions. */
-export const STRIP_WIDTH = 420;
 
 /**
  * The corner, made safe for the viewport it is about to be used in.
@@ -96,7 +94,8 @@ export function savePlacement(corner: Corner, size: Size): void {
   placed = { corner, size };
 }
 
-/** Tests, and the end of a call: forget the drag. */
+/** Forget the drag. Nothing in the app calls this — a placement is meant to
+ *  outlive a call — but a test that asserts the default needs the default. */
 export function forgetPlacement(): void {
   placed = null;
 }
