@@ -1,7 +1,8 @@
-import { lazy, Suspense, useCallback, useRef } from "react";
+import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
+  Search, Volume2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -17,6 +18,7 @@ const PANELS: Record<SettingsSectionId, React.LazyExoticComponent<React.Componen
   general: lazy(() => import("../../app/settings/profile/page")),
   accounts: lazy(() => import("../../app/settings/accounts/page")),
   notifications: lazy(() => import("../../app/settings/notifications/page")),
+  sounds: lazy(() => import("../../app/settings/sounds/page")),
   team: lazy(() => import("../../app/settings/team/page")),
   sync: lazy(() => import("../../app/settings/sync/page")),
   integrations: lazy(() => import("../../app/settings/integrations/github-app/page")),
