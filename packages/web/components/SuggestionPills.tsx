@@ -9,6 +9,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useEventListener } from "../hooks/useEventListener";
 import { isConvexId } from "../lib/entityLinks";
+import { suggestionChordIndex } from "../lib/suggestionChord";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { isMac } from "../shortcuts";
 
@@ -19,9 +20,9 @@ import { isMac } from "../shortcuts";
 // anchor), the agent spoke last, and the session is waiting on the user —
 // a stale pill is worse than none.
 //
-// Clicking a pill (or Ctrl+1/2/3) SENDS it — the suggestion is press-send
-// ready by contract, so the click is the confirmation. The hover pencil is
-// the escape hatch: it fills the composer for editing instead.
+// Clicking a pill (or Ctrl+Shift+1/2/3) SENDS it — the suggestion is
+// press-send ready by contract, so the click is the confirmation. The hover
+// pencil is the escape hatch: it fills the composer for editing instead.
 
 export const SuggestionPills = memo(function SuggestionPills({
   conversationId,
@@ -105,11 +106,10 @@ export const SuggestionPills = memo(function SuggestionPills({
     row.anchor_message_uuid === tailKey &&
     dismissedAnchor !== row.anchor_message_uuid;
 
-  // Ctrl+1/2/3 sends the matching pill (Alt+digit is taken by workbench
-  // switching — stealing it here would turn a navigation habit into an
-  // accidental send). Capture phase so a focused textarea doesn't swallow the
-  // chord, and armed only while the row is visible so nothing leaks into the
-  // global shortcut layer when there are no pills.
+  // Ctrl+Shift+1/2/3 sends the matching pill (chord choice rationale on
+  // suggestionChordIndex). Capture phase so a focused textarea doesn't
+  // swallow the chord, and armed only while the row is visible so nothing
+  // leaks into the global shortcut layer when there are no pills.
   const suggestions = visible ? row!.suggestions : [];
   const suggestionsRef = useRef(suggestions);
   suggestionsRef.current = suggestions;
@@ -117,8 +117,7 @@ export const SuggestionPills = memo(function SuggestionPills({
     "keydown",
     useCallback(
       (e: KeyboardEvent) => {
-        if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-        const idx = ["Digit1", "Digit2", "Digit3"].indexOf(e.code);
+        const idx = suggestionChordIndex(e);
         if (idx === -1) return;
         const text = suggestionsRef.current[idx];
         if (!text) return;
@@ -155,7 +154,7 @@ export const SuggestionPills = memo(function SuggestionPills({
             <span className="truncate">{text}</span>
             {i < 3 && (
               <span className="shrink-0 opacity-50">
-                <KeyCap size="xs">{isMac ? `⌃${i + 1}` : `Ctrl+${i + 1}`}</KeyCap>
+                <KeyCap size="xs">{isMac ? `⌃⇧${i + 1}` : `Ctrl+Shift+${i + 1}`}</KeyCap>
               </span>
             )}
           </button>
