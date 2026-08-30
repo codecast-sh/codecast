@@ -8,6 +8,7 @@ import { useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing } from '@/constants/Theme';
+import { deviceDisplayName } from '@codecast/shared/contracts';
 
 /**
  * Device awareness for the phone. A session runs on exactly one device; these
@@ -26,11 +27,8 @@ export type Device = {
   online: boolean;
 };
 
-export function deviceDisplayName(d: Device | undefined | null): string {
-  if (!d) return 'Unknown device';
-  if (d.is_remote) return 'Remote Mac';
-  return d.label.replace(/^(macOS|Linux|Windows)\s*-\s*/i, '').replace(/\.local$/i, '') || d.label;
-}
+/** Naming lives in the shared contract so the phone and the web agree. */
+export { deviceDisplayName };
 
 export function deviceColor(d: Device): string {
   if (d.is_remote) return Theme.violet;
