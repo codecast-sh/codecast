@@ -45,6 +45,7 @@ const {
   startedApps,
   decideOffer,
 } = require("./meetingDetector");
+const { getOsNotificationState, notificationSettingsUrl } = require("./osNotificationState");
 
 let notificationRefs = [];
 
@@ -1963,6 +1964,22 @@ ipcMain.handle("show-notification", (_e, payload) => {
   // conversationId form predates it and stays as the fallback.
   showNativeNotification(title, body, () => openNotificationTarget(data));
   return { shown: true };
+});
+
+// OS-level notification consent (macOS). "granted" | "off" | "ask" | "unknown"
+// — see osNotificationState.js. Unpackaged dev runs register with the OS under
+// Electron's own bundle id, so query that one there.
+const notificationBundleId = () => (app.isPackaged ? "sh.codecast.desktop" : "com.github.Electron");
+ipcMain.handle("get-os-notification-state", () => getOsNotificationState(notificationBundleId()));
+// In the "ask" state macOS has never prompted: posting one real notification
+// is what raises the system Allow/Don't Allow dialog. Deliberately not gated
+// on app focus — the user just clicked "Enable".
+ipcMain.handle("request-os-notification-permission", () => {
+  showNativeNotification("Notifications are on", "Codecast will notify you when someone messages or a session needs you.");
+});
+// In the "off" state only System Settings can flip it back.
+ipcMain.handle("open-notification-settings", () => {
+  shell.openExternal(notificationSettingsUrl(notificationBundleId()));
 });
 
 // Sign-in hands its OAuth flow to the user's real browser (issue #20): the
