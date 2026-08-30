@@ -125,7 +125,7 @@ function DocTypeSelector({
 export default function DocDetailPage() {
   return (
     <AuthGuard>
-      <DetailSplitLayout list={<DocListContent />} surface="docs" closeHref="/docs">
+      <DetailSplitLayout list={<DocListContent />} closeHref="/docs">
         <ErrorBoundary name="DocDetail" level="panel">
           <DocDetailContent />
         </ErrorBoundary>
@@ -174,14 +174,6 @@ function DocDetailContent() {
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const promoteToPlan = useInboxStore((s) => s.promoteDocToPlan);
   const generateShareLink = useMutation(api.docs.generateShareLink);
-
-  const handleTitleChange = useCallback(
-    (title: string) => {
-      if (!data) return;
-      updateDoc(data._id, { title });
-    },
-    [data, updateDoc]
-  );
 
   const handlePin = useCallback(async () => {
     if (!data) return;
@@ -251,7 +243,7 @@ function DocDetailContent() {
           docId={doc._id}
           title={(doc as any).display_title ?? doc.title}
           markdownContent={listItem?.content || doc.content || ""}
-          onTitleChange={handleTitleChange}
+          titleInBody
           backHref="/docs"
           linkedObjectId={doc._id}
           ownerConversationId={(doc as any).conversation_id}
