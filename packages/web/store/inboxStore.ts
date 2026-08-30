@@ -8665,6 +8665,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   resolveTeamStub: sync(function (this: Draft, stubId: string, teamId: string) {
     this.teams = (this.teams ?? []).map((t: any) => (t?._id === stubId ? { ...t, _id: teamId } : t));
+    // Conditional: a user who switched workspaces during the round trip keeps
+    // their choice; the mirror only advances stub -> real id.
     if (this.clientState.ui?.active_team_id === stubId) this.clientState.ui.active_team_id = teamId;
   }),
 
