@@ -52,21 +52,46 @@ function forceRelay(): boolean {
 const RESULT_POLL_MS = 400;
 const RESULT_POLL_TIMEOUT_MS = 10_000;
 const PROBE_TIMEOUT_MS = 1500;
+// A probe that TIMES OUT proves something is listening on that port — a
+// browser block or a closed port fails in milliseconds. So a timeout earns one
+// slower second look before the daemon is declared unreachable: the local
+// daemon's loop stalls for seconds under load (sync tmux calls, watcher walks),
+// and giving up at 1.5s turned every stall into a "can't reach" dead end.
+const PROBE_RETRY_TIMEOUT_MS = 6000;
 
 // Keyed by the device asked for ("" = any), so a targeted lookup can't be
 // served by an in-flight broadcast one.
 const inflight = new Map<string, Promise<TerminalEndpoint | null>>();
 
 /** Why the last discovery produced no endpoint. Callers surface cause-specific
- *  guidance: a relay that returned no devices means the daemon isn't running
- *  (or you're signed in as someone else), while candidates that all failed to
- *  probe means the BROWSER blocked the loopback request — on a hosted origin
- *  that's Chrome's local-network permission, which no amount of restarting the
- *  daemon will fix. */
-export type DiscoveryFailure = "none" | "no-devices" | "probe-failed" | "other-device";
+ *  guidance:
+ *  - "no-devices": the relay found no live daemon — it isn't running, or you're
+ *    signed in as someone else.
+ *  - "daemon-slow": a daemon is live but didn't answer in time — either its
+ *    discovery reply never came back within the budget, or the loopback probe
+ *    timed out. A timeout means something IS listening; the daemon is busy,
+ *    not blocked, and a retry usually lands.
+ *  - "probe-failed": every candidate answered and every probe was rejected
+ *    outright. Either the answering daemons live on other machines, or the
+ *    browser refused the loopback request — on a hosted origin that's Chrome's
+ *    local-network permission. Restarting the daemon fixes neither.
+ *  - "other-device": a targeted lookup missed; the pane lives elsewhere. */
+export type DiscoveryFailure = "none" | "no-devices" | "daemon-slow" | "probe-failed" | "other-device";
 let lastFailure: DiscoveryFailure = "none";
 export function lastDiscoveryFailure(): DiscoveryFailure {
   return lastFailure;
+}
+
+/** How the last probe missed. fetch() folds every failure into one rejection,
+ *  but the error NAME still separates "nothing answered in time" from "the
+ *  request was refused before it got anywhere" — and that is the difference
+ *  between a busy daemon and a blocked one. */
+type ProbeMiss = "timeout" | "rejected";
+let lastProbeMiss: ProbeMiss | null = null;
+
+function isTimeoutError(e: unknown): boolean {
+  const name = (e as { name?: unknown } | null)?.name;
+  return name === "TimeoutError" || name === "AbortError";
 }
 
 function readOverride(): TerminalEndpoint | null {
@@ -108,19 +133,41 @@ export function termWsUrl(ep: TerminalEndpoint): string {
 }
 
 /** Probe an endpoint: does a daemon with this token answer on loopback? */
-export async function probeEndpoint(ep: TerminalEndpoint): Promise<TerminalSessionInfo[] | null> {
+export async function probeEndpoint(
+  ep: TerminalEndpoint,
+  timeoutMs: number = PROBE_TIMEOUT_MS,
+): Promise<TerminalSessionInfo[] | null> {
+  lastProbeMiss = null;
   try {
     const res = await fetch(`${termHttpBase(ep)}/term/sessions`, {
       headers: { Authorization: `Bearer ${ep.token}` },
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      lastProbeMiss = "rejected";
+      return null;
+    }
     const body = (await res.json()) as { sessions?: TerminalSessionInfo[]; tmux?: boolean };
-    if (!body.tmux) return null;
+    if (!body.tmux) {
+      lastProbeMiss = "rejected";
+      return null;
+    }
     return body.sessions ?? [];
-  } catch {
+  } catch (e) {
+    lastProbeMiss = isTimeoutError(e) ? "timeout" : "rejected";
     return null;
   }
+}
+
+/** Probe, and give a daemon that timed out one slower second chance. */
+async function probeWithPatience(ep: TerminalEndpoint): Promise<TerminalSessionInfo[] | null> {
+  const first = await probeEndpoint(ep);
+  if (first !== null || lastProbeMiss !== "timeout") return first;
+  const second = await probeEndpoint(ep, PROBE_RETRY_TIMEOUT_MS);
+  // A second timeout is still a timeout: the caller reports the daemon as
+  // slow, not the browser as blocking.
+  if (second === null) lastProbeMiss = "timeout";
+  return second;
 }
 
 async function discover(convex: ConvexReactClient, deviceId?: string): Promise<TerminalEndpoint | null> {
@@ -131,11 +178,9 @@ async function discover(convex: ConvexReactClient, deviceId?: string): Promise<T
     lastFailure = "no-devices";
     return null;
   }
-  // Candidates exist; anything that goes wrong from here is the probe.
-  lastFailure = "probe-failed";
-
   const deadline = Date.now() + (deviceId ? TARGETED_POLL_TIMEOUT_MS : RESULT_POLL_TIMEOUT_MS);
   const unresolved = new Map(commands.map((c) => [c.command_id, c] as const));
+  let sawTimeout = false;
 
   while (unresolved.size > 0 && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, RESULT_POLL_MS));
@@ -158,13 +203,19 @@ async function discover(convex: ConvexReactClient, deviceId?: string): Promise<T
           tmux: parsed.tmux,
         };
         // First endpoint that actually answers on loopback wins.
-        if (ep.port > 0 && (await probeEndpoint(ep)) !== null) {
+        if (ep.port > 0 && (await probeWithPatience(ep)) !== null) {
           lastFailure = "none";
           return ep;
         }
+        if (lastProbeMiss === "timeout") sawTimeout = true;
       } catch {}
     }
   }
+  // "Blocked" is only a fair verdict when every daemon answered and every
+  // probe was refused outright. A daemon that never posted its reply, or a
+  // port that timed out, is a daemon that is slow — and that reads very
+  // differently to the person deciding whether to restart it.
+  lastFailure = unresolved.size > 0 || sawTimeout ? "daemon-slow" : "probe-failed";
   return null;
 }
 
@@ -199,7 +250,7 @@ export async function getTerminalEndpoint(
     //                  the discovery budget proving a machine isn't itself
     // Probing the wrong machine's cached endpoint and returning it would be
     // the most misleading possible outcome, so the id check comes first.
-    if (cached && (await probeEndpoint(cached)) !== null) {
+    if (cached && (await probeWithPatience(cached)) !== null) {
       if (!want || cached.deviceId === want) {
         lastFailure = "none";
         return cached;
