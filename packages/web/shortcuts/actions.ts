@@ -9,8 +9,7 @@ import { focusComposer } from "../lib/composerControl";
 import { isPeopleWindow } from "../lib/desktop";
 import { useShortcutAction } from "./ShortcutProvider";
 import { performUndo, performRedo } from "../store/undoStack";
-import { animatedHideSession, undoableDeferSession, undoableDormantSession, undoablePinSession } from "../store/undoActions";
-import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
+import { useTriageActions } from "../components/triage/useTriageActions";
 import { checkMilestone } from "../tips/useTips";
 import { switchToWorkbench, sortedWorkbenches } from "../lib/workbenchSwitch";
 
@@ -107,75 +106,37 @@ export function useGlobalShortcutActions() {
     useInboxStore.getState().togglePeopleWall();
   }, []));
 
+  // The verb bodies live in components/triage/useTriageActions — ONE
+  // implementation shared with the triage bar's buttons, so a chord and its
+  // button can never diverge (advance order, drill-in close, milestones).
+  const triage = useTriageActions(isOnInboxPage);
+  const focusedId = useCallback(() =>
+    focusedActionSessionId(useInboxStore.getState(), isOnInboxPage), [isOnInboxPage]);
+
   useShortcutAction('session.pin', useCallback(() => {
-    const store = useInboxStore.getState();
-    const currentId = focusedActionSessionId(store, isOnInboxPage);
-    if (currentId) {
-      const session = store.sessions[currentId];
-      if (session && !session.is_pinned) checkMilestone('m-first-pin');
-      undoablePinSession(currentId);
-    }
-  }, [isOnInboxPage]));
+    const currentId = focusedId();
+    if (currentId) triage.pin(currentId);
+  }, [focusedId, triage]));
 
-  // A triage verb that removes the row from its band finishes by closing the
-  // fleet drill-in when it was the target: the board behind it is what shows
-  // the result (the tile moves bands), and leaving the just-parked
-  // conversation on top would hide exactly that. Returns true when it closed
-  // one — that IS the advance for the board (setCurrentSession would leave
-  // the board for the next row's conversation page).
-  const closeOverlayIfCurrent = useCallback((id: string): boolean => {
-    const store = useInboxStore.getState();
-    if (overlayConversationId(store.workspace) !== id) return false;
-    store.wsHide("secondary", { remember: false });
-    return true;
-  }, []);
+  useShortcutAction('session.stash', useCallback(() => {
+    const currentId = focusedId();
+    if (currentId) triage.hide(currentId, "stash", "key");
+  }, [focusedId, triage]));
 
-  // Shared body of the stash/kill chords; the only difference is the mode.
-  // The kill itself happens SERVER-side on the hide data transition
-  // (dispatch.applyPatches), so neither handler asks for it. The kill chord
-  // routes through the notice hook so it names any schedules the kill cancels,
-  // same as the sidebar button and the palette.
-  const { killWithNotice } = useTriggerKillNotice();
-  const hideCurrent = useCallback((mode: "stash" | "kill") => {
-    const store = useInboxStore.getState();
-    const currentId = focusedActionSessionId(store, isOnInboxPage);
-    if (!currentId) return;
-    if (mode === "stash") checkMilestone('m-first-stash');
-    if (!isOnInboxPage) {
-      const ordered = store.visualOrder();
-      const idx = ordered.findIndex(s => s._id === currentId);
-      const next = ordered.slice(idx + 1).find(s => s._id !== currentId)
-        ?? ordered.find(s => s._id !== currentId);
-      if (next) store.selectPanelSession(next._id);
-    }
-    if (mode === "kill") killWithNotice(currentId);
-    else animatedHideSession(currentId, mode);
-    closeOverlayIfCurrent(currentId);
-  }, [isOnInboxPage, killWithNotice, closeOverlayIfCurrent]);
+  useShortcutAction('session.kill', useCallback(() => {
+    const currentId = focusedId();
+    if (currentId) triage.hide(currentId, "kill", "key");
+  }, [focusedId, triage]));
 
-  useShortcutAction('session.stash', useCallback(() => hideCurrent("stash"), [hideCurrent]));
+  useShortcutAction('session.deferAdvance', useCallback(() => {
+    const currentId = focusedId();
+    if (currentId) triage.park(currentId, "defer", "key");
+  }, [focusedId, triage]));
 
-  useShortcutAction('session.kill', useCallback(() => hideCurrent("kill"), [hideCurrent]));
-
-  // Defer and dormant share one shape: stamp the focused row, then advance the
-  // selection to the next row in visual order.
-  const stampAndAdvance = useCallback((stamp: (id: string) => void) => {
-    const store = useInboxStore.getState();
-    const currentId = focusedActionSessionId(store, isOnInboxPage);
-    if (!currentId) return;
-    const ordered = store.visualOrder();
-    const idx = ordered.findIndex(s => s._id === currentId);
-    const next = ordered[idx + 1] ?? ordered.find(s => s._id !== currentId);
-    stamp(currentId);
-    if (closeOverlayIfCurrent(currentId)) return;
-    if (next) {
-      if (isOnInboxPage) store.setCurrentSession(next._id);
-      else store.selectPanelSession(next._id);
-    }
-  }, [isOnInboxPage, closeOverlayIfCurrent]);
-
-  useShortcutAction('session.deferAdvance', useCallback(() => stampAndAdvance(undoableDeferSession), [stampAndAdvance]));
-  useShortcutAction('session.dormantAdvance', useCallback(() => stampAndAdvance(undoableDormantSession), [stampAndAdvance]));
+  useShortcutAction('session.dormantAdvance', useCallback(() => {
+    const currentId = focusedId();
+    if (currentId) triage.park(currentId, "dormant", "key");
+  }, [focusedId, triage]));
 
   useShortcutAction('session.rename', useCallback(() => {
     const store = useInboxStore.getState();
@@ -184,11 +145,9 @@ export function useGlobalShortcutActions() {
   }, [isOnInboxPage]));
 
   useShortcutAction('session.moveToBucket', useCallback(() => {
-    const store = useInboxStore.getState();
-    const currentId = focusedActionSessionId(store, isOnInboxPage);
-    const session = currentId ? store.sessions[currentId] : null;
-    if (session) store.openPalette({ targets: [session], targetType: 'session', mode: 'bucket' });
-  }, [isOnInboxPage]));
+    const currentId = focusedId();
+    if (currentId) triage.label(currentId);
+  }, [focusedId, triage]));
 
   useShortcutAction('view.switch', useCallback(() => {
     // Straight into the palette's label/project view submenu (no targets —

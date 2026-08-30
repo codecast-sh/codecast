@@ -1096,6 +1096,10 @@ export type ClientUI = {
   active_team_id?: string;
   active_filter?: "my" | "team";
   inbox_shortcuts_hidden?: boolean;
+  // The inbox triage bar (components/triage/TriageBar) with the labels
+  // dropped: icons + tooltips only. A per-user preference, stamped LWW
+  // (STAMPED_UI_KEYS) like the other view prefs.
+  triage_bar_compact?: boolean;
   // The master sound switch: off silences every cue the app can make.
   sounds_enabled?: boolean;
   // Chat toast sounds, split from the above: an agent fleet's chirps and a
@@ -3985,6 +3989,10 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // -- Shortcuts panel --
   shortcutsPanelOpen: boolean;
   toggleShortcutsPanel: () => void;
+  // The intro tour (components/triage/TriageNux). Ephemeral modal toggle;
+  // whether it has RUN is durable, in clientState.tips.
+  triageNuxOpen: boolean;
+  setTriageNuxOpen: (open: boolean) => void;
   // The global anchor panel: a slide-over holding one anchor's conversation,
   // reachable from every page. Ephemeral (a modal toggle, never persisted).
   // `anchorId` is the LAST anchor shown, so re-opening lands where you were.
@@ -4429,7 +4437,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 export const STAMPED_UI_KEYS = new Set([
   "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "show_triggers", "card_bars", "inbox_show_old",
   "simple_view", "inbox_image_thumbs", "composer_suggestions", "inbox_home", "threads_include_sessions",
-  "walkie_hold_seen", "call_camera_on",
+  "walkie_hold_seen", "call_camera_on", "triage_bar_compact",
   // The sound gates and volume: a mute is a per-user preference, not a
   // per-device one — turning sounds off anywhere must silence every client,
   // localhost dev origins included.
@@ -9273,6 +9281,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   shortcutsPanelOpen: false,
   toggleShortcutsPanel: () => set({ shortcutsPanelOpen: !get().shortcutsPanelOpen }),
+  triageNuxOpen: false,
+  setTriageNuxOpen: (open: boolean) => set({ triageNuxOpen: open }),
   anchorPanel: { open: false, anchorId: null },
   openAnchorPanel: (anchorId?: string | null) => set({
     anchorPanel: { open: true, anchorId: anchorId === undefined ? get().anchorPanel.anchorId : anchorId },

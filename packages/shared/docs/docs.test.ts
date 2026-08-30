@@ -69,6 +69,13 @@ describe("title = leading heading", () => {
     expect(leadingHeading(undefined)).toBeNull();
   });
 
+  test("a leading horizontal rule is not frontmatter", () => {
+    const md = "---\n\nTimeline notes\n\n# Later\n\n---\nmore";
+    expect(leadingHeading(md)).toBeNull();
+    expect(withTitleHeading("Weekly Plan", md)).toBe(`# Weekly Plan\n\n${md}`);
+    expect(stripTitleHeading(md)).toBe(md);
+  });
+
   test("frontmatter is skipped, never read as the title", () => {
     const md = "---\ntitle: Front\n---\n# Real\n\nbody";
     expect(leadingHeading(md)).toBe("Real");
