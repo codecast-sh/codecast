@@ -128,7 +128,7 @@ function TabDropdown({
         <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0 cq-caret" />
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 w-52 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1">
+        <div className="absolute top-full left-0 mt-1 w-52 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1">
           {tabs.map((t, i) => {
             const TIcon = t.icon;
             const isActive = activeKeys.has(t.key);
@@ -274,7 +274,7 @@ function DisplayMenu({
         <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0 cq-caret" />
       </button>
       {open && (
-        <div className="absolute top-full right-0 mt-1 w-56 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] p-2 space-y-3">
+        <div className="absolute top-full right-0 mt-1 w-56 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] p-2 space-y-3">
           {extra && <div className="flex flex-col gap-2">{extra}</div>}
           {hasGrouping && (
             <div>
@@ -423,7 +423,7 @@ function AddFilterMenu({
         </button>
       )}
       {open && (
-        <div className={`absolute top-full ${variant === "header" ? "right-0" : "left-0"} mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1 max-h-72 overflow-y-auto`}>
+        <div className={`absolute top-full ${variant === "header" ? "right-0" : "left-0"} mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1 max-h-72 overflow-y-auto`}>
           {!cat ? (
             available.length === 0 ? (
               <div className="px-3 py-1.5 text-xs text-sol-text-dim">All filters added</div>
