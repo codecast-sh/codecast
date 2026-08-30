@@ -31,7 +31,7 @@ import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { devRenderCount } from "../../lib/devRenderCount";
 
-export const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, targetTimestamp, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; targetTimestamp?: number; highlightQuery?: string; onClearHighlight?: () => void }) {
+export const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, targetNonce, targetTimestamp, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; targetNonce?: number; targetTimestamp?: number; highlightQuery?: string; onClearHighlight?: () => void }) {
   devRenderCount("InboxConversation2");
   // Non-blocking switch: the heavy work of a session switch is mounting the new
   // conversation's message tree (every block keyed by msg._id unmounts/remounts,
@@ -57,7 +57,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
     jumpToTimestamp,
     effectiveTargetMessageId,
     isJumpingToTarget,
-  } = useConversationMessages(sessionId, targetMessageId, undefined, targetTimestamp);
+  } = useConversationMessages(sessionId, targetMessageId, undefined, targetTimestamp, targetNonce);
 
   const convCommand = useInboxStore((s) => s.convCommand);
   const setPrivacy = useInboxStore((s) => s.setPrivacy);
@@ -223,6 +223,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
           backHref="/inbox"
           onBack={onBack}
           targetMessageId={effectiveTargetMessageId}
+          targetNonce={targetNonce}
           isJumpingToTarget={isJumpingToTarget}
           highlightQuery={highlightQuery}
           onClearHighlight={onClearHighlight}
@@ -301,7 +302,7 @@ export function QueuePageClient() {
   // A deep-link target the server would not hand over (deleted, or private to
   // someone else). Rendered as an honest note instead of an empty pane.
   const [unavailableId, setUnavailableId] = useState<string | null>(null);
-  const [scrollTarget, setScrollTarget] = useState<{ sessionId: string; messageId: string; timestamp?: number } | null>(null);
+  const [scrollTarget, setScrollTarget] = useState<{ sessionId: string; messageId: string; timestamp?: number; nonce: number } | null>(null);
   const [activeHighlight, setActiveHighlight] = useState<string | undefined>(undefined);
 
   const shouldQueryDirect = pendingInjectId && isConvexId(pendingInjectId);
@@ -342,7 +343,7 @@ export function QueuePageClient() {
         useInboxStore.setState({ pendingHighlightQuery: null });
       }
       if (store.pendingScrollToMessageId) {
-        setScrollTarget({ sessionId: paramSessionId, messageId: store.pendingScrollToMessageId, timestamp: store.pendingScrollToMessageTimestamp ?? undefined });
+        setScrollTarget({ sessionId: paramSessionId, messageId: store.pendingScrollToMessageId, timestamp: store.pendingScrollToMessageTimestamp ?? undefined, nonce: Date.now() });
         useInboxStore.setState({ pendingScrollToMessageId: null, pendingScrollToMessageTimestamp: null });
       }
     }
@@ -420,7 +421,7 @@ export function QueuePageClient() {
     useInboxStore.setState({ pendingNavigateId: null, pendingScrollToMessageId: null, pendingScrollToMessageTimestamp: null, pendingHighlightQuery: null, showMySessions: false });
     if (highlight) setActiveHighlight(highlight);
     if (scrollTarget) {
-      setScrollTarget({ sessionId: pendingNavigateId, messageId: scrollTarget, timestamp: scrollTs ?? undefined });
+      setScrollTarget({ sessionId: pendingNavigateId, messageId: scrollTarget, timestamp: scrollTs ?? undefined, nonce: Date.now() });
     }
     if (sessions[pendingNavigateId]) {
       setPendingInjectId(null);
@@ -451,7 +452,7 @@ export function QueuePageClient() {
     useInboxStore.setState({ pendingScrollToMessageId: null, pendingScrollToMessageTimestamp: null, pendingHighlightQuery: null });
     if (highlight) setActiveHighlight(highlight);
     if (scrollTarget) {
-      setScrollTarget({ sessionId: viewSessionId, messageId: scrollTarget, timestamp: scrollTs ?? undefined });
+      setScrollTarget({ sessionId: viewSessionId, messageId: scrollTarget, timestamp: scrollTs ?? undefined, nonce: Date.now() });
     }
   }, [currentSessionId, viewingDismissedId, pendingNavigateId, pendingScrollToMessageId, pendingScrollToMessageTimestamp, pendingHighlightQuery]);
 
@@ -649,6 +650,7 @@ export function QueuePageClient() {
             sessionError={renderDismissedSession.session_error}
             onBack={handleBack}
             targetMessageId={scrollTarget?.sessionId === renderDismissedSession._id ? scrollTarget.messageId : undefined}
+            targetNonce={scrollTarget?.sessionId === renderDismissedSession._id ? scrollTarget.nonce : undefined}
             targetTimestamp={scrollTarget?.sessionId === renderDismissedSession._id ? scrollTarget.timestamp : undefined}
             highlightQuery={activeHighlight}
             onClearHighlight={handleClearHighlight}          />
@@ -664,6 +666,7 @@ export function QueuePageClient() {
             sessionError={renderSession.session_error}
             onBack={handleBack}
             targetMessageId={scrollTarget?.sessionId === renderSession._id ? scrollTarget.messageId : undefined}
+            targetNonce={scrollTarget?.sessionId === renderSession._id ? scrollTarget.nonce : undefined}
             targetTimestamp={scrollTarget?.sessionId === renderSession._id ? scrollTarget.timestamp : undefined}
             highlightQuery={activeHighlight}
             onClearHighlight={handleClearHighlight}          />
