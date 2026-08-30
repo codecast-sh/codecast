@@ -101,6 +101,7 @@ const Windows = lazy(() => import("@/app/windows/page"));
 const Palette = lazy(() => import("@/app/palette/page"));
 const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
+const Faces = lazy(() => import("@/app/faces/page"));
 const MeetingOffer = lazy(() => import("@/app/meeting-offer/page"));
 
 const Settings = lazy(() => import("@/app/settings/page"));
@@ -265,6 +266,7 @@ export function App() {
             <Route element={<TransparentWindowLayout />}>
               <Route path="palette" element={<E name="Palette"><Palette /></E>} />
               <Route path="call-panel" element={<E name="CallPanel"><CallPanel /></E>} />
+              <Route path="faces" element={<E name="Faces"><Faces /></E>} />
               <Route path="meeting-offer" element={<E name="MeetingOffer"><MeetingOffer /></E>} />
             </Route>
 
