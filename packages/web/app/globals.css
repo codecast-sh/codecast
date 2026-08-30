@@ -1232,6 +1232,25 @@ pre[class*="language-"] {
   padding-left: 0;
 }
 
+/* The gutter handles (.cc-block-quote / .cc-block-comment) hang 1.95rem into
+   the body indent this view just flattened, so the feed scroller clipped them
+   at its padding edge. MessageReview measures the real visible gutter into
+   --cc-gutter-l / --cc-gutter-r (set in measure(), fresh whenever the handle
+   is up); clamp the offset to it so the handle sits as deep in the gutter as
+   fits — never clipped, and off the text whenever the gutter allows. Sized
+   down to match the compact type. */
+.simple-view .cc-block-quote,
+.simple-view .cc-block-comment {
+  width: 1.2rem;
+  height: 1.15rem;
+}
+.simple-view .cc-block-quote {
+  left: calc(-1 * min(1.45rem, var(--cc-gutter-l, 1.45rem) - 0.2rem));
+}
+.simple-view .cc-block-comment {
+  right: calc(-1 * min(1.45rem, var(--cc-gutter-r, 1.45rem) - 0.2rem));
+}
+
 /* Assistant turns sit closer together; the receipt chips go flatter (the
    mock's plain "Bash …" line and one-line edit receipts). */
 .simple-view [data-sv-feed] button[class*="border-dashed"] {
