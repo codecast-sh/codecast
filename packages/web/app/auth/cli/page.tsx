@@ -251,7 +251,7 @@ function CliAuthContent() {
                 will open a fresh page here.
               </p>
             ) : (
-            <div className="text-left bg-sol-bg/50 border border-sol-border rounded-lg p-4 text-sm">
+            <div className="text-left bg-sol-bg-alt/60 rounded-lg p-4 text-sm">
               <p className="text-sol-text-muted mb-2">To finish connecting:</p>
               <ol className="list-decimal list-inside space-y-1.5 text-sol-text-muted">
                 <li>

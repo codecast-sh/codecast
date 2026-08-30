@@ -592,6 +592,13 @@ export default defineSchema({
     // and backfilled on run completion/failure, so EVERY run — not just the
     // latest — stays attributable to its schedule (panel, badges, provenance).
     agent_task_id: v.optional(v.id("agent_tasks")),
+    // Denormalized: is this conversation the home of an armed inject trigger,
+    // and of which strength (dormancy.ts ArmedTriggerHomes)? Written by the
+    // agent_tasks lifecycle (agentTasks.refreshArmedTriggerKind) so the inbox
+    // projection classifies dormancy off the row alone, with no agent_tasks
+    // read per execution. Absent = "none". Semantic (not churn), so it rides
+    // the sync log.
+    armed_trigger_kind: v.optional(v.union(v.literal("none"), v.literal("standing"), v.literal("once"))),
     // Harness /loop state, folded from the message stream at ingest (see
     // loopState.ts): the agent scheduled its own wakeup (ScheduleWakeup) or is
     // mid-wakeup-turn. Lets the inbox trigger set treat a self-pacing loop

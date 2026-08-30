@@ -16,6 +16,13 @@ import { cn } from "@/lib/utils";
  *  hard-coded base0X scale — those hexes ignore the light theme. The card is
  *  a hairline border over a barely raised surface; rows divide with a fainter
  *  hairline. Nothing here owns color beyond that: accents belong to controls.
+ *
+ *  One border per surface. The section card owns the only decorative border;
+ *  everything inside it is flat — rows divided by hairlines, grouping via
+ *  micro-headers, state via background tint and opacity. Interactive controls
+ *  (inputs, dropdown triggers, option pills) keep their compact borders;
+ *  containers, callouts and code blocks never add a second stroke — use
+ *  SettingsCallout or a bg-tinted inset instead of a nested bordered box.
  */
 
 export function SettingsPanel({ children, className }: { children: React.ReactNode; className?: string }) {
@@ -162,6 +169,30 @@ export function SettingsField({ label, htmlFor, hint, children, className }: Fie
       </label>
       <div className="mt-1.5">{children}</div>
       {hint && <div className="mt-1.5 text-xs text-sol-text-muted">{hint}</div>}
+    </div>
+  );
+}
+
+/** A flat tinted notice inside a section card — the borderless replacement for
+ *  nested warning/danger boxes. Color comes from background tint alone. */
+export function SettingsCallout({
+  tone = "info",
+  className,
+  children,
+}: {
+  tone?: "info" | "warning" | "danger";
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const tint =
+    tone === "danger"
+      ? "bg-sol-red/10 text-sol-red"
+      : tone === "warning"
+        ? "bg-sol-yellow/10 text-sol-text"
+        : "bg-sol-bg-highlight/40 text-sol-text-muted";
+  return (
+    <div className={cn("rounded-md px-3 py-2 text-xs leading-relaxed", tint, className)}>
+      {children}
     </div>
   );
 }

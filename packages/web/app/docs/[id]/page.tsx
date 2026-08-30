@@ -125,7 +125,7 @@ function DocTypeSelector({
 export default function DocDetailPage() {
   return (
     <AuthGuard>
-      <DetailSplitLayout list={<DocListContent />} surface="docs" closeHref="/docs">
+      <DetailSplitLayout list={<DocListContent />} closeHref="/docs">
         <ErrorBoundary name="DocDetail" level="panel">
           <DocDetailContent />
         </ErrorBoundary>

@@ -214,7 +214,7 @@ function AccountsContent() {
           </SettingsRow>
         ) : (
           <div className="space-y-4 px-4 py-4 sm:px-5">
-            <div className="rounded-lg border border-sol-red/30 bg-sol-red/10 p-4">
+            <div className="rounded-lg bg-sol-red/10 p-4">
               <p className="mb-2 text-sm font-medium text-sol-red">This will permanently delete:</p>
               <ul className="list-inside list-disc space-y-1 text-sm text-sol-red/80">
                 <li>All your conversations and messages</li>

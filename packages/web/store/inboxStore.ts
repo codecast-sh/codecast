@@ -16,6 +16,7 @@ import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } 
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { isDraft, original } from "mutative";
 import { soundDismiss, soundKill } from "../lib/sounds";
+import type { OsPermissionKind } from "../lib/osPermissions";
 import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, writeConversationUserMessages, enqueueDispatch, removeDispatch, loadOutbox, salvageLocalFirstV2Data, PERSISTENCE_AVAILABLE } from "./idbCache";
 import {
   DISPATCH_TABLE_MAP,
@@ -47,7 +48,7 @@ import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, isLivenessStale, modelOptionKey } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, isLivenessStale, modelOptionKey, formatDecisionAnswer } from "@codecast/shared/contracts";
 import { liftQuestions, type QuestionResolutions } from "../lib/decisionQueue";
 import type { OpenTaskReport } from "@codecast/shared/contracts";
 import { isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
@@ -97,6 +98,19 @@ import { isConvexId } from "../lib/entityLinks";
 import { pathOnMyMachines, type MachineCandidate } from "../lib/machinePicker";
 import { conversationTabPath } from "../lib/pathLabel";
 import { healTabPaths, isNonTabRoute, shellTabPath } from "../lib/tabRoutes";
+import {
+  countLeaves,
+  findLeaf as findStageLeaf,
+  insertLeaf as insertStageLeaf,
+  leavesOf as stageLeavesOf,
+  removeLeaf as removeStageLeaf,
+  setBranchSizes as setStageBranchSizes,
+  setLeafPath as setStageLeafPath,
+  MAX_STAGE_LEAVES,
+  type SplitEdge,
+  type SplitTarget,
+  type StageNode,
+} from "./stageSplit";
 import { divertSessionOpen } from "../lib/openIntent";
 import type { PalettePick } from "../lib/palettePick";
 export { isConvexId };
@@ -1281,7 +1295,25 @@ export type AppTab = {
   workspace?: WorkspaceState;
   /** The right rail's conversation at stamp time (sidePanelSessionId). */
   railSessionId?: string | null;
+  /**
+   * The stage as a split of panes (store/stageSplit). Absent = the ordinary
+   * single-path tab. When present, `path` mirrors the FOCUSED leaf's path —
+   * that invariant is what lets every consumer of a tab's path (highlight,
+   * breadcrumbs, URL sync, titles) stay ignorant of splits. Both chokepoints
+   * that rewrite `path` (updateTab, stampActiveTab) maintain it.
+   */
+  layout?: StageNode;
+  focusedLeafId?: string;
 };
+
+/** `path` and the focused leaf must say the same thing; every path write goes
+ *  through here so they cannot drift. */
+function withTabPath(tab: AppTab, path: string): AppTab {
+  if (tab.layout && tab.focusedLeafId) {
+    return { ...tab, path, layout: setStageLeafPath(tab.layout, tab.focusedLeafId, path) };
+  }
+  return { ...tab, path };
+}
 
 // The path to stamp onto a tab from the live browser URL when switching away.
 // Includes the query string so a tab's deep-link (`/inbox?s=<id>`) survives a
@@ -1311,8 +1343,7 @@ export function stampedTabPath(tab: AppTab): string {
 function stampActiveTab(draft: { activeTabId: string | null; tabs: AppTab[]; workspace: WorkspaceState; sidePanelSessionId: string | null }, patch?: Partial<AppTab>) {
   if (!draft.activeTabId) return;
   draft.tabs = draft.tabs.map((t: AppTab) => t.id === draft.activeTabId ? {
-    ...t,
-    path: stampedTabPath(t),
+    ...withTabPath(t, stampedTabPath(t)),
     workspace: draft.workspace,
     railSessionId: draft.sidePanelSessionId,
     ...patch,
@@ -2354,6 +2385,14 @@ export function visualOrderSessions(
     // liftQuestions) — pending `cast decide` rows and the viewer's own
     // sessions, unscoped, so a question hidden by scope still walks.
     questions?: { decisions: Record<string, SessionDecisionItem>; mine: Record<string, InboxSession>; resolutions?: QuestionResolutions };
+    // Narrow the walk to the "your move" rows: questions, NEEDS INPUT and DONE
+    // exactly as the panel files them (Ctrl+I, queue advance). Membership comes
+    // from categorizeSessions' verdicts — the staleness net, the in-flight
+    // exclusion and trigger absorption included — never from a per-row
+    // classify re-run, so the target is always a card rendered in one of those
+    // sections. The predicate names the rows that ask (lifted out of any
+    // section on screen, so they qualify wherever they render).
+    yourMove?: { isQuestion: (s: InboxSession) => boolean };
   } = {},
 ): InboxSession[] {
   const { pinned, newSessions, needsInput, done, dormant, working } =
@@ -2392,6 +2431,13 @@ export function visualOrderSessions(
       }
       result.push(s);
     }
+  }
+  if (opts.yourMove) {
+    // Absorbed settled rows render under DORMANT (see above), so they are not
+    // the user's move even though categorize filed them as needs-input/done.
+    const keep = new Set([...stripAbsorbed(needsInput), ...stripAbsorbed(done)].map((s) => s._id));
+    const isQ = opts.yourMove.isQuestion;
+    return result.filter((s) => isQ(s) || keep.has(s._id));
   }
   return result;
 }
@@ -2746,12 +2792,13 @@ export function resolveInboxViewMode(ui: { inbox_view_mode?: InboxViewMode; inbo
 
 // Resolve the "show old sessions" toggle from client UI state. Shared by the
 // panel, the sidebar/dashboard badges, keyboard nav and mobile so every
-// consumer hides exactly the same rows. Reads ONLY inbox_show_old — the legacy
+// consumer hides exactly the same rows. On by default: a new user sees their
+// whole history and hides the aged-out rows by choice. Reads ONLY inbox_show_old — the legacy
 // show_old_sessions key (stale `true` values still linger in server client_state
 // docs from its pre-LWW era) must stay unread forever, or the permanent
 // cruft-mode bug resurrects.
 export function resolveShowOld(ui: { inbox_show_old?: boolean } | undefined): boolean {
-  return ui?.inbox_show_old ?? false;
+  return ui?.inbox_show_old ?? true;
 }
 
 // Resolve what the inbox opens on when no conversation is selected: the fleet
@@ -2972,14 +3019,38 @@ export function computeVisualOrder(state: {
   // walks exactly the QUESTIONS section on screen.
   questionResolutions?: QuestionResolutions;
   clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean } };
-}): InboxSession[] {
+}, opts: {
+  // Only the rows that are the user's move (questions, NEEDS INPUT, DONE), in
+  // the same on-screen order — see visualOrderSessions. Every mode honors it,
+  // so Ctrl+I lands on the first such card the user can see, whatever lens or
+  // flat view is up.
+  yourMove?: boolean;
+} = {}): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
   // the shelf, not the active desk underneath it.
   if (state.showFavorites) {
-    return favoritesVisualOrder(state.sessions, state.activeProjectFilter, state.favorites, state.chipFilterExclude);
+    const order = favoritesVisualOrder(state.sessions, state.activeProjectFilter, state.favorites, state.chipFilterExclude);
+    if (!opts.yourMove) return order;
+    const { needsInput, done } = categorizeSessions(state.sessions, state.sessionsWithQueuedMessages, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, reviveRequestedAt: state.blockedReviveRequestedAt });
+    const keep = new Set([...needsInput, ...done].map((s) => s._id));
+    return order.filter((s) => keep.has(s._id));
   }
   const bucketByConv = convBucketMap(state.bucketAssignments);
   const mode = resolveInboxViewMode(state.clientState.ui);
+  // The rows that ask — a pending `cast decide`, an open AskUserQuestion or
+  // permission prompt — over the viewer's own sessions unscoped, exactly the
+  // set the status view lifts into QUESTIONS. Only the status view and the
+  // your-move walk need it; the plain lens/flat walks skip the scan.
+  const questionInputs = mode === "grouped" || opts.yourMove
+    ? {
+        decisions: state.sessionDecisions ?? {},
+        mine: filterInboxScope(state.sessions, "mine", state.currentUser?._id?.toString?.() ?? null),
+        resolutions: state.questionResolutions,
+      }
+    : undefined;
+  const yourMove = opts.yourMove && questionInputs
+    ? { isQuestion: liftQuestions([], questionInputs.decisions, questionInputs.mine, questionInputs.resolutions).isQuestion }
+    : undefined;
   const collapsed = state.collapsedSections ?? {};
   // Hide "old" sessions before building ANY mode's order, exactly as the panel
   // does (partitionOldSessions over the same liveInboxIds / show_old flag), so
@@ -3016,13 +3087,13 @@ export function computeVisualOrder(state: {
     if (collapsed["all"]) return [];
     // Mirror the panel's flatList exactly (categorize the visible set, share
     // flatViewSessions) so nav walks every rendered row, blanks included.
-    const { sorted, subsByParent } = categorizeSessions(
+    const { sorted, subsByParent, needsInput, done } = categorizeSessions(
       visibleSessions,
       state.sessionsWithQueuedMessages,
       sessionsWithPendingSend(state.pendingMessages),
       { currentSessionId: focusedId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), reviveRequestedAt: state.blockedReviveRequestedAt },
     );
-    return flatViewSessions(sorted, subsByParent, {
+    const flat = flatViewSessions(sorted, subsByParent, {
       mode,
       showSubagents: state.clientState.ui?.show_subagents ?? true,
       focusedId,
@@ -3030,6 +3101,12 @@ export function computeVisualOrder(state: {
       freezeOrder: mode === "recent" ? state.recentFreezeOrder : null,
       chipMatches: (s) => chipMatchesSession(s, { projectFilter: state.activeProjectFilter, bucketFilter: state.activeBucketFilter, exclude: state.chipFilterExclude, bucketByConv }),
     });
+    if (!yourMove) return flat;
+    // A flat card still wears the bucket verdict (its badge reads from the same
+    // staleness-aware classification), so "your move" is the same membership
+    // walked in the flat order.
+    const keep = new Set([...needsInput, ...done].map((s) => s._id));
+    return flat.filter((s) => yourMove.isQuestion(s) || keep.has(s._id));
   }
   // Grouped/bucket: the categorized status buckets over the SAME visible set, so
   // old sessions hidden from the render are skipped by nav too. The bucket branch
@@ -3044,9 +3121,8 @@ export function computeVisualOrder(state: {
     absorbedIds: mode === "grouped" || mode === "bucket" || mode === "plan" ? state.scheduleNavSets?.absorbed : undefined,
     reviveRequestedAt: state.blockedReviveRequestedAt,
     // Only the status view renders QUESTIONS; the lenses dissolve it.
-    questions: mode === "grouped"
-      ? { decisions: state.sessionDecisions ?? {}, mine: filterInboxScope(state.sessions, "mine", state.currentUser?._id?.toString?.() ?? null), resolutions: state.questionResolutions }
-      : undefined,
+    questions: mode === "grouped" ? questionInputs : undefined,
+    yourMove,
   });
   if (mode === "bucket") {
     const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
@@ -3554,6 +3630,10 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   setFeedCursor: (key: string, cursor: string | null) => void;
   sortedSessions: () => InboxSession[];
   visualOrder: () => InboxSession[];
+  // The on-screen rows that are the user's move (questions, NEEDS INPUT, DONE)
+  // in render order — what Ctrl+I and the queue's advance walk. Same verdicts
+  // as the panel, so the first entry is always the first such card visible.
+  yourMoveOrder: () => InboxSession[];
 
   // -- Navigation --
   advanceToNext: () => void;
@@ -3692,6 +3772,20 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   switchTab: (id: string) => void;
   updateTab: (id: string, patch: Partial<AppTab>) => void;
   saveCurrentTabState: (patch?: Partial<AppTab>) => void;
+
+  // -- Stage splits (active tab only: drops, focus and closes happen on the
+  //    visible stage; background tabs keep their layout frozen) --
+  /** Insert `path` as a pane beside `target` (or along a stage edge). Returns
+   *  the new leaf id, or null (cap reached / target gone). */
+  stageInsertLeaf: (target: SplitTarget, edge: SplitEdge, path: string) => string | null;
+  /** Point an existing pane at a different route (pane-local navigation). */
+  stageSetLeafPath: (leafId: string, path: string) => void;
+  stageFocusLeaf: (leafId: string) => void;
+  /** Close a pane; the last survivor collapses the tab back to a plain path. */
+  stageCloseLeaf: (leafId: string) => void;
+  /** This pane takes the whole stage: layout dissolves into a plain tab. */
+  stageExpandLeaf: (leafId: string) => void;
+  stageSetSizes: (branchId: string, sizes: number[]) => void;
 
   // -- Recent projects cache --
   recentProjects: Array<{ path: string; count: number; lastActive: number }>;
@@ -4014,6 +4108,9 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
     sharing: boolean;
     speaking: string[];
     error: string | null;
+    /** When `error` is a device that could not be opened, the OS permission
+     *  behind it — so the notice can carry the fix (lib/osPermissions). */
+    errorFix: OsPermissionKind | null;
   };
   setCallState: (patch: Partial<InboxStoreState["call"]>) => void;
   teamUnreadCount: number | null;
@@ -6003,8 +6100,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // reusing the standard optimistic-bubble + outbox send pair (the mobile
     // AUQ answer path does the identical two-step). Deferred to after this
     // draft commits because both are themselves decorated store functions.
-    const label = answer.index !== undefined ? row.options[answer.index]?.label : undefined;
-    const content = answer.text ?? (label ? `Decision: ${label}` : undefined);
+    const answerText = answer.text ?? (answer.index !== undefined ? row.options[answer.index]?.label : undefined);
+    // Wire format (shared contracts): "Decision: <answer>" plus a tag naming
+    // the decision and its question, so the bubble can render the answer
+    // against its ask and link back to the `cast decide` call.
+    const content = answerText ? formatDecisionAnswer({ id: decisionId, question: row.question, answer: answerText }) : undefined;
     const convId = row.conversation_id;
     if (content) {
       queueMicrotask(() => {
@@ -7463,15 +7563,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
   },
 
   visualOrder: () => computeVisualOrder(get()),
+  yourMoveOrder: () => computeVisualOrder(get(), { yourMove: true }),
 
   // =====================
   // NAVIGATION
   // =====================
 
   advanceToNext: () => {
-    const ordered = get().visualOrder();
     const currentId = get().currentSessionId;
-    const idleSessions = ordered.filter((s: InboxSession) => isSessionWaitingForInput(s));
+    const idleSessions = get().yourMoveOrder();
     const currentIdleIdx = idleSessions.findIndex((s: InboxSession) => s._id === currentId);
     const nextIdle = idleSessions[currentIdleIdx + 1] || idleSessions[0];
     if (nextIdle && nextIdle._id !== currentId) {
@@ -9437,12 +9537,113 @@ const inboxStoreConfig = (set: any, get: any) => ({
       if ((current as any)[k] !== (patch as any)[k]) { changed = true; break; }
     }
     if (!changed) return;
-    this.tabs = this.tabs.map((t: AppTab) => t.id === id ? { ...t, ...patch } : t);
+    this.tabs = this.tabs.map((t: AppTab) => {
+      if (t.id !== id) return t;
+      // A path write flows into the focused leaf (withTabPath) unless the
+      // patch replaces the layout itself — the split invariant's chokepoint.
+      const { path, ...rest } = patch;
+      const base = path !== undefined && rest.layout === undefined ? withTabPath(t, path) : t;
+      return { ...base, ...rest, ...(path !== undefined && rest.layout !== undefined ? { path } : {}) };
+    });
   }),
 
   saveCurrentTabState: action(function (this: Draft, patch?: Partial<AppTab>) {
     if (!this.activeTabId) return;
     stampActiveTab(this, patch);
+  }),
+
+  // =====================
+  // STAGE SPLITS
+  // =====================
+  //
+  // All ops act on the ACTIVE tab — drops, focus and closes only ever happen
+  // on the visible stage. Each op re-establishes the invariant that
+  // `tab.path` mirrors the focused leaf's path; the URL side (replaceState)
+  // belongs to lib/stage.ts, which wraps these for components.
+
+  stageInsertLeaf: action(function (this: Draft, target: SplitTarget, edge: SplitEdge, path: string): string | null {
+    const tab = this.tabs.find((t: AppTab) => t.id === this.activeTabId);
+    if (!tab || isNonTabRoute(path)) return null;
+    // A plain tab grows a layout on first split: its current path becomes the
+    // first leaf, so the split preserves what was on screen.
+    const firstLeafId = tab.layout ? null : `sl_seed_${tab.id}`;
+    const root: StageNode = tab.layout ?? { type: "leaf", id: firstLeafId!, path: tab.path };
+    if (countLeaves(root) >= MAX_STAGE_LEAVES) return null;
+    const resolvedTarget = target === "root" ? "root" : tab.layout ? target : { leafId: firstLeafId! };
+    const res = insertStageLeaf(root, resolvedTarget, edge, path);
+    if (!res) return null;
+    this.tabs = this.tabs.map((t: AppTab) =>
+      t.id === tab.id ? { ...t, layout: res.root, focusedLeafId: res.leafId, path } : t,
+    );
+    return res.leafId;
+  }),
+
+  stageSetLeafPath: action(function (this: Draft, leafId: string, path: string) {
+    const tab = this.tabs.find((t: AppTab) => t.id === this.activeTabId);
+    if (!tab?.layout || isNonTabRoute(path) || !findStageLeaf(tab.layout, leafId)) return;
+    const layout = setStageLeafPath(tab.layout, leafId, path);
+    this.tabs = this.tabs.map((t: AppTab) =>
+      t.id === tab.id
+        ? { ...t, layout, ...(t.focusedLeafId === leafId ? { path } : {}) }
+        : t,
+    );
+  }),
+
+  stageFocusLeaf: action(function (this: Draft, leafId: string) {
+    const tab = this.tabs.find((t: AppTab) => t.id === this.activeTabId);
+    if (!tab?.layout || tab.focusedLeafId === leafId) return;
+    const leaf = findStageLeaf(tab.layout, leafId);
+    if (!leaf) return;
+    this.tabs = this.tabs.map((t: AppTab) =>
+      t.id === tab.id ? { ...t, focusedLeafId: leafId, path: leaf.path } : t,
+    );
+  }),
+
+  stageCloseLeaf: action(function (this: Draft, leafId: string) {
+    const tab = this.tabs.find((t: AppTab) => t.id === this.activeTabId);
+    if (!tab?.layout) return;
+    const next = removeStageLeaf(tab.layout, leafId);
+    if (next === tab.layout) return;
+    if (!next || countLeaves(next) <= 1) {
+      // One pane left: the tab is a plain tab again. Through the inbox
+      // spelling — a tab must never SIT on /conversation/<id> (that route is
+      // a one-shot redirect against global view state; see conversationTabPath).
+      const survivor = next ? stageLeavesOf(next)[0] : null;
+      this.tabs = this.tabs.map((t: AppTab) =>
+        t.id === tab.id
+          ? { ...t, layout: undefined, focusedLeafId: undefined, ...(survivor ? { path: conversationTabPath(survivor.path) } : {}) }
+          : t,
+      );
+      return;
+    }
+    // Focus falls to the first remaining leaf when the focused one closed.
+    const focused = tab.focusedLeafId && findStageLeaf(next, tab.focusedLeafId)
+      ? tab.focusedLeafId
+      : stageLeavesOf(next)[0].id;
+    const path = findStageLeaf(next, focused)!.path;
+    this.tabs = this.tabs.map((t: AppTab) =>
+      t.id === tab.id ? { ...t, layout: next, focusedLeafId: focused, path } : t,
+    );
+  }),
+
+  stageExpandLeaf: action(function (this: Draft, leafId: string) {
+    const tab = this.tabs.find((t: AppTab) => t.id === this.activeTabId);
+    if (!tab?.layout) return;
+    const leaf = findStageLeaf(tab.layout, leafId);
+    if (!leaf) return;
+    // Same rule as the collapse in stageCloseLeaf: a plain tab never sits on
+    // the /conversation/<id> redirect route.
+    this.tabs = this.tabs.map((t: AppTab) =>
+      t.id === tab.id ? { ...t, layout: undefined, focusedLeafId: undefined, path: conversationTabPath(leaf.path) } : t,
+    );
+  }),
+
+  stageSetSizes: action(function (this: Draft, branchId: string, sizes: number[]) {
+    const tab = this.tabs.find((t: AppTab) => t.id === this.activeTabId);
+    if (!tab?.layout) return;
+    const layout = setStageBranchSizes(tab.layout, branchId, sizes);
+    if (layout === tab.layout) return;
+    this.tabs = this.tabs.map((t: AppTab) => (t.id === tab.id ? { ...t, layout } : t));
   }),
 
   // =====================
@@ -9474,6 +9675,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     sharing: false,
     speaking: [],
     error: null,
+    errorFix: null,
   },
   // Raw set() by convention: ephemeral UI/media state, never shared or
   // persisted (same class as modal toggles).

@@ -1417,9 +1417,10 @@ pre[class*="language-"] {
   height: 15px;
 }
 /* Count badges hug the right edge (mock: badge margin-left auto), and shrink
-   from pill to whisper. Scoped to the count pills, not avatar/dot circles. */
-.simple-view [data-sv-nav] span.rounded-full[class*="bg-sol-cyan"],
-.simple-view [data-sv-nav] span.rounded-full[class*="bg-teal"] {
+   from pill to whisper. Keyed on the NavCount marker, never on colour: a
+   colour-keyed selector also caught project dots that hashed to teal or cyan
+   and rendered them as right-aligned pale badges. */
+.simple-view [data-sv-nav] [data-sv-count] {
   margin-left: auto;
   min-width: 16px;
   height: 16px;
@@ -2871,4 +2872,106 @@ pre[class*="language-"] {
   .entity-card-expand {
     transition: none;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Stage splits (components/stage). Cells and seams animate their percent
+   rects, so a split or close morphs instead of remounting; a live handle
+   drag turns the motion off (stage-resizing) so the seam tracks the pointer.
+   --------------------------------------------------------------------------- */
+.stage-cell {
+  position: absolute;
+  overflow: hidden;
+  background: var(--sol-bg);
+  transition:
+    left var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
+    top var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
+    width var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
+    height var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1);
+}
+.stage-cell--focused::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 30;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-cyan) 32%, transparent);
+}
+.stage-handle {
+  position: absolute;
+  z-index: 20;
+  touch-action: none;
+  transition:
+    left var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
+    top var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
+    width var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
+    height var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1);
+}
+.stage-handle__line {
+  position: absolute;
+  background: var(--cc-panel-rule);
+  transition: background-color 150ms;
+}
+.stage-handle:hover .stage-handle__line,
+.stage-handle--active .stage-handle__line { background: var(--sol-cyan); }
+.stage-resizing .stage-cell,
+.stage-resizing .stage-handle { transition: none; }
+
+/* The drop preview: a wash over the stage, every cell at its predicted rect,
+   the newcomer filled. Keyed cells transition between zones — the grid morphs. */
+.stage-drop-veil {
+  background: color-mix(in srgb, var(--sol-bg) 42%, transparent);
+  animation: stage-veil-in 120ms ease-out;
+}
+@keyframes stage-veil-in { from { opacity: 0; } to { opacity: 1; } }
+.stage-drop-cell {
+  position: absolute;
+  transition:
+    left 170ms cubic-bezier(.2,.8,.25,1),
+    top 170ms cubic-bezier(.2,.8,.25,1),
+    width 170ms cubic-bezier(.2,.8,.25,1),
+    height 170ms cubic-bezier(.2,.8,.25,1);
+}
+.stage-drop-cell::before {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border-radius: 10px;
+  border: 1px dashed color-mix(in srgb, var(--sol-text-dim) 45%, transparent);
+  transition: border-color 150ms, background-color 150ms, box-shadow 150ms;
+}
+.stage-drop-cell--target::before {
+  border: 1.5px solid color-mix(in srgb, var(--sol-cyan) 78%, transparent);
+  background: color-mix(in srgb, var(--sol-cyan) 11%, transparent);
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--sol-cyan) 8%, transparent),
+    inset 0 0 40px color-mix(in srgb, var(--sol-cyan) 6%, transparent);
+}
+.stage-drop-chip {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 32px);
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--sol-bg);
+  border: 1px solid color-mix(in srgb, var(--sol-cyan) 55%, transparent);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--sol-cyan) 14%, transparent);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  animation: stage-chip-in 160ms cubic-bezier(.2,.8,.25,1);
+}
+.stage-drop-chip__verb { color: var(--sol-cyan); font-weight: 600; letter-spacing: .01em; }
+.stage-drop-chip__title { color: var(--sol-text-muted); overflow: hidden; text-overflow: ellipsis; }
+@keyframes stage-chip-in {
+  from { opacity: 0; transform: translate(-50%, -46%) scale(.94); }
+  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage-cell, .stage-handle, .stage-drop-cell, .stage-drop-chip, .stage-drop-veil { transition: none; animation: none; }
 }

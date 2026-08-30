@@ -96,7 +96,7 @@ function SaveCurrentForm({ device, suggestedName }: { device: DeviceAccounts; su
   // attention here. Normally transient — the daemon auto-saves new logins on
   // its next heartbeat — so when this persists, the manual save IS the path.
   return (
-    <div className="mt-3 rounded-md border border-sol-yellow/40 bg-sol-yellow/[0.06] p-3">
+    <div className="bg-sol-yellow/[0.06] px-4 py-3 sm:px-5">
       <div className="text-xs font-medium text-sol-text">
         New login: <span className="text-sol-yellow">{device.active_email}</span> isn't saved as a profile yet
       </div>
@@ -130,12 +130,8 @@ function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
   const exhausted = isExhaustionCurrent(state?.exhausted_at, device.profiles, now);
 
   return (
-    <div
-      className={`mt-3 rounded-md border p-3 ${
-        enabled ? "border-sol-cyan/30 bg-sol-cyan/[0.04]" : "border-sol-border/50"
-      }`}
-    >
-      <div className="flex items-center gap-2.5">
+    <>
+      <div className="flex items-center gap-2.5 px-4 py-3 sm:px-5">
         <Zap className={`h-4 w-4 shrink-0 ${enabled ? "text-sol-cyan" : "text-sol-text-dim"}`} />
         <div className="min-w-0 flex-1">
           <div className="text-xs font-medium text-sol-text">Auto-switch accounts on usage limits</div>
@@ -152,7 +148,7 @@ function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
           aria-label="Auto-switch accounts on usage limits"
         />
       </div>
-      <div className="mt-3 flex items-center gap-2.5 border-t border-sol-border/40 pt-3">
+      <div className="flex items-center gap-2.5 px-4 py-3 sm:px-5">
         <TimerReset
           className={`h-4 w-4 shrink-0 ${autoContinue.on ? "text-sol-cyan" : "text-sol-text-dim"}`}
         />
@@ -172,17 +168,17 @@ function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
         />
       </div>
       {enabled && exhausted && (
-        <div className="mt-2 rounded bg-sol-red/10 px-2 py-1 text-[11px] text-sol-red">
+        <div className="bg-sol-red/10 px-4 py-2 text-[11px] text-sol-red sm:px-5">
           {exhaustionBannerCopy(device.profiles, now)}
         </div>
       )}
       {(enabled || autoContinue.on) && !exhausted && state?.last_action && state.last_action_at && (
-        <div className="mt-2 text-[11px] text-sol-text-dim">
+        <div className="px-4 py-2 text-[11px] text-sol-text-dim sm:px-5">
           Last action: {state.last_action.replace("switch:", "switched to ")}{" "}
           {formatAgo(now - state.last_action_at)}.
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -233,11 +229,10 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
     <SettingsSection
       title={device.label}
       icon={Laptop}
-      padded
       actions={
         <>
           {device.is_remote && (
-            <span className="px-1.5 py-0.5 rounded text-[10px] border bg-sol-violet/10 text-sol-violet border-sol-violet/30">
+            <span className="px-1.5 py-0.5 rounded text-[10px] bg-sol-violet/10 text-sol-violet">
               remote — mirrors the primary's account
             </span>
           )}
@@ -249,29 +244,26 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
       }
     >
       {!online && (
-        <p className="mb-3 text-[11px] leading-relaxed text-sol-text-dim">
+        <p className="px-4 py-2.5 text-[11px] leading-relaxed text-sol-text-dim sm:px-5">
           The daemon on this machine isn't reporting right now (<CopyableCommand cmd="cast restart" /> brings
           it back). Account switching needs it; the auto-switch setting below still saves.
         </p>
       )}
 
-      <div className="space-y-1.5">
-        {device.profiles.map((p) => {
+      {device.profiles.map((p) => {
           const isActive = !!p.email && p.email === device.active_email;
           const plan = planLabel(p);
           return (
             <div
               key={p.name}
-              className={`rounded-md border px-3 py-2 ${
-                isActive ? "border-sol-green/30 bg-sol-green/[0.05]" : "border-sol-border/50"
-              }`}
+              className={`px-4 py-2.5 sm:px-5 ${isActive ? "bg-sol-green/[0.05]" : ""}`}
             >
               <div className="flex items-center gap-2.5">
                 <span className={`h-2 w-2 shrink-0 rounded-full ${isActive ? "bg-sol-green" : "bg-sol-border"}`} />
                 <span className="text-sm font-medium text-sol-text">{p.name}</span>
                 <span className="min-w-0 flex-1 truncate text-xs text-sol-text-muted">{p.email}</span>
                 {plan && (
-                  <span className="shrink-0 rounded border border-sol-cyan/30 bg-sol-cyan/10 px-1.5 py-0.5 text-[10px] text-sol-cyan">
+                  <span className="shrink-0 rounded bg-sol-cyan/10 px-1.5 py-0.5 text-[10px] text-sol-cyan">
                     {plan}
                   </span>
                 )}
@@ -328,12 +320,11 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
             </div>
           );
         })}
-        {device.profiles.length === 0 && (
-          <div className="rounded-md border border-dashed border-sol-border/60 px-3 py-2 text-xs text-sol-text-dim">
-            No saved profiles on this machine yet.
-          </div>
-        )}
-      </div>
+      {device.profiles.length === 0 && (
+        <div className="px-4 py-3 text-xs text-sol-text-dim sm:px-5">
+          No saved profiles on this machine yet.
+        </div>
+      )}
 
       {!device.is_remote && <AutoSwitchToggle device={device} />}
 
@@ -341,7 +332,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
         <SaveCurrentForm device={device} suggestedName={suggested} />
       )}
       {!device.is_remote && activeProfile && (
-        <div className="mt-2 text-[11px] text-sol-text-dim">
+        <div className="px-4 py-2 text-[11px] text-sol-text-dim sm:px-5">
           Currently logged in as <span className="text-sol-text">{device.active_email}</span> (saved as "{activeProfile.name}").
         </div>
       )}
