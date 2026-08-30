@@ -8,6 +8,8 @@
 // there would interrupt and discard live work. Only when the agent is genuinely idle
 // (or gone) and STILL hasn't taken the message is a restart the right escalation.
 
+import { MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
+
 export type LiveAgentStatus =
   | "working"
   | "idle"
@@ -25,7 +27,7 @@ export type LiveAgentStatus =
 // behind any of these will deliver when the turn ends. Mirrors MessageInput's
 // isAgentActive so the per-message banner and the composer banner agree.
 export const isActiveAgentStatus = (s?: LiveAgentStatus): boolean =>
-  s === "working" || s === "thinking" || s === "compacting" || s === "permission_blocked";
+  MID_TURN_AGENT_STATUSES.has(s ?? "");
 
 // Agent states that mean the session is alive but hasn't begun this turn yet: it's
 // launching ("starting"), reattaching after a resume ("resuming"), or up with the

@@ -13286,8 +13286,15 @@ const ConversationViewInner = (
   const cachedUserMessages = useInboxStore(
     (s) => (conversation?._id ? s.userMessages[conversation._id] : undefined)
   );
+  // Escape in an empty composer interrupts the agent. Only forward it while the
+  // agent is provably mid-turn: an idle session has nothing to interrupt, and a
+  // message still pending delivery is the dangerous case. On 2026-08-28 an
+  // Escape pressed seconds after send reached the daemon 400ms after it had
+  // injected that message and cancelled the turn the message had just started.
+  const liveAgentStatus = managedSession?.agent_status as LiveAgentStatus | undefined;
   const handleSendEscape = useCallback(() => {
     if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
+    if (!isActiveAgentStatus(liveAgentStatus)) return;
     void convCommand(convexConvId, "sendEscapeToSession").then(
       () => toast.info("Escape sent to session"),
       (err) => {

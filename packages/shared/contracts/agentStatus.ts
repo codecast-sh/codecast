@@ -94,6 +94,21 @@ export const ACTIVE_AGENT_STATUSES: ReadonlySet<string> = new Set<string>([
   "resuming",
 ]);
 
+// A turn is in progress: the agent is producing, or stopped inside the turn on a
+// permission prompt. This is the set an interrupt (web Escape -> daemon "escape"
+// -> double Escape / SIGINT) has something to cancel. Narrower than
+// ACTIVE_AGENT_STATUSES on purpose: "connected" / "starting" / "resuming" are a
+// session coming up with no turn yet, and a SIGINT that reaches claude at its
+// prompt EXITS the process instead of interrupting anything (2026-08-28).
+// Consumed by web/lib/pendingBanner.ts (composer + per-message banner) and the
+// daemon's escape handler so the two agree on "there is a turn to interrupt".
+export const MID_TURN_AGENT_STATUSES: ReadonlySet<string> = new Set<string>([
+  "working",
+  "thinking",
+  "compacting",
+  "permission_blocked",
+]);
+
 // Statuses the quiet-time trust decay (STATUS_TRUST_TTL_MS) applies to: every
 // ACTIVE status, plus the INFERRED settle verdict. "waiting" is scraped from
 // the transcript, so a background task that never emits a terminal notification
