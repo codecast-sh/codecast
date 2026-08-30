@@ -391,6 +391,48 @@ const MD_COMPONENTS_NO_PRE = { ...MD_COMPONENTS_CODE_LINK, img: MESSAGE_MD_COMPO
 // costs only element instantiation. Map insertion order doubles as LRU.
 const MD_RENDER_CACHE = new Map<string, ReactElement>();
 const MD_RENDER_CACHE_MAX = 500;
+
+// Above this size an assistant body is parsed per block (split at blank lines
+// outside code fences) with each block cached separately. A streaming message
+// grows at its END, so every prefix block hits the cache and only the last
+// block reparses per push — without this, each streaming push reparsed the
+// whole growing body (70-300ms for giant code/table bodies). Only giant
+// bodies take this path: splitting can change loose-list grouping
+// cosmetically, so ordinary messages keep exact single-parse semantics.
+const MD_BLOCK_SPLIT_THRESHOLD = 8000;
+
+// Split at blank-line runs, but never inside a ``` / ~~~ fence.
+function splitMarkdownBlocks(content: string): string[] {
+  const lines = content.split("\n");
+  const blocks: string[] = [];
+  let cur: string[] = [];
+  let inFence = false;
+  let fenceMark = "";
+  for (const line of lines) {
+    const fence = line.match(/^\s*(`{3,}|~{3,})/);
+    if (fence) {
+      if (!inFence) { inFence = true; fenceMark = fence[1][0]; }
+      else if (fence[1][0] === fenceMark) inFence = false;
+    }
+    if (!inFence && line.trim() === "" && cur.length > 0) {
+      blocks.push(cur.join("\n"));
+      cur = [];
+      continue;
+    }
+    cur.push(line);
+  }
+  if (cur.length > 0) blocks.push(cur.join("\n"));
+  return blocks;
+}
+
+function mdCachePut(key: string, el: ReactElement): ReactElement {
+  MD_RENDER_CACHE.set(key, el);
+  if (MD_RENDER_CACHE.size > MD_RENDER_CACHE_MAX) {
+    MD_RENDER_CACHE.delete(MD_RENDER_CACHE.keys().next().value!);
+  }
+  return el;
+}
+
 function renderMessageMarkdownCached(content: string, userText?: boolean): ReactElement {
   const key = userText ? "\u0000u" + content : content;
   const hit = MD_RENDER_CACHE.get(key);
@@ -399,29 +441,45 @@ function renderMessageMarkdownCached(content: string, userText?: boolean): React
     MD_RENDER_CACHE.set(key, hit);
     return hit;
   }
+  if (!userText && content.length > MD_BLOCK_SPLIT_THRESHOLD) {
+    const blocks = splitMarkdownBlocks(content);
+    const el = (
+      <>
+        {blocks.map((b, i) => (
+          <Fragment key={i}>{renderMessageMarkdownCached(b)}</Fragment>
+        ))}
+      </>
+    );
+    return mdCachePut(key, el);
+  }
   const el = ReactMarkdownBase({
     children: content,
     remarkPlugins: userText ? USER_MD_REMARK : entityRemarkPlugins,
     rehypePlugins: MESSAGE_MD_REHYPE,
     components: MESSAGE_MD_COMPONENTS,
   });
-  MD_RENDER_CACHE.set(key, el);
-  if (MD_RENDER_CACHE.size > MD_RENDER_CACHE_MAX) {
-    MD_RENDER_CACHE.delete(MD_RENDER_CACHE.keys().next().value!);
-  }
-  return el;
+  return mdCachePut(key, el);
 }
 
 // Memoized message-body renderer. With no active search, render through the
 // cross-mount cache above. An active search query changes the rendered output
 // (rehypeSearchHighlight), so that rare path bypasses the cache and goes
 // through the context-aware ReactMarkdown wrapper instead.
+// Above this size a pasted user body renders as plain text: the remark parse
+// costs 70-300ms on giant pastes (logs, stack traces) and markdown semantics
+// add nothing to them — pre-wrap even keeps their line breaks exact where
+// markdown would collapse them. Assistant bodies keep markdown at any size.
+const USER_PLAIN_TEXT_THRESHOLD = 4000;
+
 const MessageMarkdown = memo(function MessageMarkdown({ content, userText }: { content: string; userText?: boolean }) {
   const query = useContext(HighlightContext);
   // An all-HTML body renders as a sanitized canvas — the markdown pipeline
   // escapes raw tags into garbled source.
   const html = tryRenderHtmlMessage(content);
   if (html) return html;
+  if (userText && !query && content.length > USER_PLAIN_TEXT_THRESHOLD) {
+    return <div className="whitespace-pre-wrap break-words">{content}</div>;
+  }
   if (query) {
     return (
       <ReactMarkdown remarkPlugins={userText ? USER_MD_REMARK : entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
