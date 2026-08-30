@@ -126,8 +126,9 @@ import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { AssignmentBadge } from "./AssignmentBadge";
-import { AssignedToYouBanner } from "./OwnersBadge";
+import { AssignedToYouBanner, useOwnersFromStore } from "./OwnersBadge";
 import { TmuxAttachPill } from "./TmuxAttachPill";
+import { SessionDaemonChip } from "./DaemonStatusChip";
 import { SessionFilesButton } from "./SessionFilesButton";
 import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
 import { BrowserWatchSplit, toggleBrowserWatch, useBrowserWatchOpen } from "./browser/BrowserWatchSplit";
@@ -13274,6 +13275,24 @@ const ConversationViewInner = (
   const firstUnseenIndex = useMemo(
     () => computeNewDividerIndex(timeline, unreadAnchorAt, enteredAt),
     [timeline, unreadAnchorAt, enteredAt],
+  );
+  // The handoff anchor, drawn the same way: the "assigned to you" line sits
+  // above the first row at or after the moment a teammate made you an owner.
+  // A session handed over after its last message (the usual case: a finished
+  // thread passed on) anchors below the final row instead. -1 = no handoff.
+  const handoff = useOwnersFromStore(pendingConvId).handoff;
+  const handoffAt = handoff?.added_at ?? 0;
+  const handoffIndex = useMemo(() => {
+    if (!handoffAt || timeline.length === 0) return -1;
+    const idx = timeline.findIndex((it) => it.timestamp >= handoffAt);
+    return idx === -1 ? timeline.length : idx;
+  }, [timeline, handoffAt]);
+  const handoffRule = handoff && handoffIndex >= 0 && (
+    <TimelineRule color="var(--sol-violet)" label="Assigned to you">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-violet" title={formatFullTimestamp(handoffAt)}>
+        {handoff.added_by_name || "A teammate"} assigned this to you · {formatRelativeTime(handoffAt)}
+      </span>
+    </TimelineRule>
   );
 
 
