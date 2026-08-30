@@ -12,6 +12,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
+import { deviceDisplayName, deviceKindLabel } from "@codecast/shared/contracts";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useSyncDevices } from "../hooks/useSyncDevices";
 import type { RestartPhase, RestartProgressRow, RestartStage } from "../hooks/useSessionRestart";
@@ -68,28 +69,9 @@ export function deviceWakesOnUse(d: Device): boolean {
   return d.is_remote && /linux/i.test(d.platform);
 }
 
-/** A clean display name: the cloud box by kind, hostname for a laptop/desktop. */
-export function deviceDisplayName(d: Device | undefined | null): string {
-  if (!d) return "Unknown device";
-  if (d.is_remote && /linux/i.test(d.platform)) return "Cloud Linux";
-  if (d.is_remote) return "Remote Mac";
-  // "macOS - MacBook-Pro-4.local" → "MacBook-Pro-4";
-  // "macOS - ip-172-31-29-96.us-east-2.compute.internal" → "ip-172-31-29-96"
-  const stripped = d.label
-    .replace(/^(macOS|Linux|Windows)\s*-\s*/i, "")
-    .replace(/\.local$/i, "")
-    .replace(/\.([a-z0-9-]+\.)*(compute\.)?internal$/i, "");
-  return stripped || d.label;
-}
-
-export function deviceKindLabel(d: Device): string {
-  if (d.is_remote) return "Remote";
-  if (/linux/i.test(d.platform)) return "Linux";
-  // process.platform is "win32" — match that (or a friendly "Windows"), NOT a
-  // bare "win", which the "win" inside "darwin" would falsely trip.
-  if (/win32|windows/i.test(d.platform)) return "Windows";
-  return "Mac";
-}
+/** Naming lives in the shared contract so web and mobile agree; re-exported so
+ * every existing import site keeps working. */
+export { deviceDisplayName, deviceKindLabel };
 
 /** Per-kind accent classes. Literal strings so Tailwind's JIT keeps them. */
 export function deviceAccentClasses(d: Device): string {
@@ -288,7 +270,7 @@ export function RunOnDeviceItems({
         <DropdownMenuItem disabled>
           <DeviceIcon d={foreignOwner} className="w-3 h-3 mr-1.5" />
           <span className="flex-1 truncate">{deviceDisplayName(foreignOwner)}</span>
-          <span className="ml-2 flex items-center gap-1 text-[10px] text-gray-400">
+          <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] text-gray-400">
             running here ·{" "}
             {foreignOwner.runner?.is_bot
               ? "agent box"
@@ -309,7 +291,7 @@ export function RunOnDeviceItems({
           >
             <DeviceIcon d={d} className="w-3 h-3 mr-1.5" />
             <span className="flex-1 truncate">{deviceDisplayName(d)}</span>
-            <span className="ml-2 flex items-center gap-1 text-[10px] text-gray-400">
+            <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] text-gray-400">
               {isOwner ? "running here" : d.online ? "run here" : "offline"}
               <DeviceDot online={d.online} />
             </span>
@@ -331,7 +313,7 @@ export function RunOnDeviceItems({
           >
             <DeviceIcon d={d} className="w-3 h-3 mr-1.5" />
             <span className="flex-1 truncate">{isOwner ? name : `Move to ${name}`}</span>
-            <span className="ml-2 flex items-center gap-1 text-[10px] text-gray-400">
+            <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] text-gray-400">
               {isOwner ? "running here" : d.online ? "" : usable ? "asleep — wakes on move" : "offline"}
               <DeviceDot online={d.online} />
             </span>

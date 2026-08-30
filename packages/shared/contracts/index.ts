@@ -12,6 +12,7 @@ export * from "./modelOptions";
 export * from "./workState";
 export * from "./threadState";
 export * from "./apiErrorBanner";
+export * from "./deviceName";
 export * from "./providerKeys";
 export * from "./providerKeyCrypto";
 export * from "./snippets";
