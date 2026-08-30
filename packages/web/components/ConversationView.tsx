@@ -909,6 +909,32 @@ function ForkCopyingState({ copied, total }: { copied: number; total?: number })
   );
 }
 
+// A captioned rule across the timeline: two gradient lines meeting the caption
+// in the middle. One shape for every anchor the feed draws — the "New" unread
+// line, the "assigned to you" handoff line, the idle-gap stamp at the tail.
+function TimelineRule({
+  color,
+  className = "mt-1 mb-3",
+  faint,
+  label,
+  children,
+}: {
+  color: string;
+  className?: string;
+  faint?: boolean;
+  label?: string;
+  children: ReactNode;
+}) {
+  const line = `flex-1 h-px${faint ? " opacity-40" : ""}`;
+  return (
+    <div className={`flex items-center gap-3 select-none ${className}`} aria-label={label}>
+      <div className={line} style={{ background: `linear-gradient(to right, transparent, ${color})` }} />
+      {children}
+      <div className={line} style={{ background: `linear-gradient(to left, transparent, ${color})` }} />
+    </div>
+  );
+}
+
 // Single sticky pill at the top/bottom edge of the message list. The leading
 // icon is a directional chevron when idle and a spinner while a page is
 // loading — same pill, glyph swaps in place (no second stacked pill).
@@ -16945,20 +16971,18 @@ const ConversationViewInner = (
                   {content && (
                     <div className={`conv-col mx-auto px-4 sm:px-5 md:px-6 ${condensedFeed ? "py-px" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
                       {virtualItem.index === firstUnseenIndex && (
-                        <div className="flex items-center gap-3 mt-1 mb-3 select-none" aria-label="New messages">
-                          <div className="flex-1 h-px" style={{ background: 'linear-gradient(to right, transparent, var(--sol-orange))' }} />
-                          <span className="text-[10px] font-semibold uppercase tracking-[0.15em]" style={{ color: 'var(--sol-orange)' }}>New</span>
-                          <div className="flex-1 h-px" style={{ background: 'linear-gradient(to left, transparent, var(--sol-orange))' }} />
-                        </div>
+                        <TimelineRule color="var(--sol-orange)" label="New messages">
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-orange">New</span>
+                        </TimelineRule>
                       )}
+                      {virtualItem.index === handoffIndex && handoffRule}
                       {content}
                       {virtualItem.index === timeline.length - 1 && !hasMoreBelow && (now - lastActivityAt) > 5 * 60 * 1000 && (
-                        <div className="flex items-center gap-3 mt-5 mb-1">
-                          <div className="flex-1 h-px opacity-40" style={{ background: 'linear-gradient(to right, transparent, var(--sol-border))' }} />
+                        <TimelineRule color="var(--sol-border)" className="mt-5 mb-1" faint>
                           <span className="text-[11px] text-sol-text-dim/60">{formatRelativeTime(lastActivityAt)}</span>
-                          <div className="flex-1 h-px opacity-40" style={{ background: 'linear-gradient(to left, transparent, var(--sol-border))' }} />
-                        </div>
+                        </TimelineRule>
                       )}
+                      {virtualItem.index === timeline.length - 1 && !hasMoreBelow && handoffIndex === timeline.length && handoffRule}
                     </div>
                   )}
                 </div>
