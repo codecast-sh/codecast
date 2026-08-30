@@ -52,8 +52,23 @@ import {
   type HandleSets,
 } from "../lib/chatViews";
 import type { ChatMessageView } from "../components/chat/chatTypes";
+import { prefetchStorageImageUrls } from "./useStorageImageUrl";
 
 const api = _api as any;
+
+/** Warm the image cache (id→URL mapping AND bytes) for every image attachment
+ *  in a batch of ingested messages — so the history a channel just loaded
+ *  paints its images from local cache, online or off. Audio stays out: a
+ *  recording resolves its URL when its play button mounts. */
+function prefetchAttachmentImages(convex: ReturnType<typeof useConvex>, messages: ChatMessageRow[]): void {
+  const ids: string[] = [];
+  for (const m of messages) {
+    for (const a of m.attachments ?? []) {
+      if (a.storage_id && !a.mime?.startsWith("audio/")) ids.push(a.storage_id);
+    }
+  }
+  if (ids.length) prefetchStorageImageUrls(convex, ids);
+}
 
 /** One live page. Deliberately at the server's own default so a cold open costs
  *  one round trip and lands on a full screen of history. */
@@ -274,11 +289,12 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
           "chatThreadSummaries",
           (data.threads ?? []).map((t: any) => ({ ...t, _id: String(t.root_id) })),
         );
+        prefetchAttachmentImages(convex, messages);
         // Only seed the history cursor; never let a live re-push rewind a
         // cursor the reader has already paged past.
         setOlderCursor((prev) => (prev === null ? (data.next_cursor ?? null) : prev));
       },
-      [syncTable],
+      [syncTable, convex],
     ),
   );
 
@@ -300,6 +316,7 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
         useInboxStore
           .getState()
           .syncTable("chatThreadSummaries", (page?.threads ?? []).map((t: any) => ({ ...t, _id: String(t.root_id) })));
+        prefetchAttachmentImages(convex, messages);
         setOlderCursor(page?.next_cursor ?? null);
         if (!page?.has_more) setOlderExhausted(true);
       })
@@ -324,6 +341,7 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
         useInboxStore
           .getState()
           .syncTable("chatReactions", page?.reactions ?? [], chatReactionSyncOpts(messages.map((m) => m._id)));
+        prefetchAttachmentImages(convex, messages);
         setOlderCursor((prev) => (prev === null ? (page?.next_cursor ?? null) : prev));
         setRecovered(true);
       })
@@ -349,6 +367,7 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
  *  server's page is 200), so this has no backwards paging of its own. */
 export function useThreadSync(rootId: string | undefined): { loading: boolean; error?: Error } {
   const syncTable = useInboxStore((s) => s.syncTable);
+  const convex = useConvex();
   const live = rootId && isConvexId(rootId);
   const { data: result, error } = useQueryNoThrow(api.chat.getThread, live ? { root_id: rootId } : "skip");
 
@@ -364,8 +383,9 @@ export function useThreadSync(rootId: string | undefined): { loading: boolean; e
           data.reactions ?? [],
           chatReactionSyncOpts(rows.map((m) => m._id)),
         );
+        prefetchAttachmentImages(convex, rows);
       },
-      [syncTable],
+      [syncTable, convex],
     ),
   );
 

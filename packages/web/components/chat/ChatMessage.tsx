@@ -32,11 +32,12 @@ import "../editor/editor.css";
 // renderable from a fixture and cheap to memo under a virtualizer, where rows
 // remount constantly.
 
-/** One attached image: resolves its storage URL, opens the shared lightbox.
+/** One attached image: resolves its storage URL cache-first (byte cache, so a
+ *  seen image paints locally and offline), opens the shared lightbox.
  *  A tile that is still resolving keeps its footprint (no reflow when the URL
  *  lands); one that failed says so instead of leaving a hole. */
 function AttachmentTile({ att, onOpen }: { att: ChatAttachmentView; onOpen: (src: string) => void }) {
-  const url = useStorageImageUrl(att.storage_id);
+  const url = useStorageImageSrc(att.storage_id);
   if (url === null) {
     return <span className="ch-att ch-att-missing">image unavailable</span>;
   }
