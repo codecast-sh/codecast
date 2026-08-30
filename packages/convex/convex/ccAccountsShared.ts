@@ -160,6 +160,25 @@ export function isExhaustionCurrent(
   return profiles.some((p) => isUsageExhausted(p.usage, now));
 }
 
+/** The words for a current exhaustion stamp. "ALL accounts are at their
+ * limits" is only supportable when every account's own meter shows a pegged
+ * window — the stamp also stands on attempt evidence alone (every switch or
+ * continue re-parked while meters show headroom: enforcement leads the probe,
+ * and a stale snapshot lags a burst). This banner renders next to those live
+ * meters, so a claim any meter contradicts reads as a bug: make the strong
+ * claim only when every meter backs it, otherwise say what actually
+ * happened. */
+export function exhaustionBannerCopy(
+  profiles: { usage?: CcUsage | null }[],
+  now: number,
+): string {
+  const allPegged =
+    profiles.length > 0 && profiles.every((p) => isUsageExhausted(p.usage, now));
+  return allPegged
+    ? "All accounts are at their limits — auto-switch will retry at the next window reset."
+    : "Auto-switch tried every account and sessions still hit limits — it will retry at the next window reset.";
+}
+
 export interface AutoSwitchProfile {
   name: string;
   email?: string;

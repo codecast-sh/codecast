@@ -19,7 +19,7 @@ import { Switch } from "./ui/switch";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useAccountRecoveryToggles } from "../hooks/useAccountRecoveryToggles";
 import { useTrackedStore } from "../store/inboxStore";
-import { isExhaustionCurrent, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { exhaustionBannerCopy, isExhaustionCurrent, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { formatAgo } from "@codecast/shared/contracts";
 import { usageTone } from "../lib/usageTone";
 import { AccountUsageBars } from "./AccountUsageMeter";
@@ -416,7 +416,7 @@ export function AccountUsageChip() {
           </div>
           {autoOn && exhausted && (
             <div className="mt-1.5 rounded bg-sol-red/10 px-2 py-1 text-[10px] text-sol-red">
-              All accounts are at their limits — will retry at the next window reset.
+              {exhaustionBannerCopy([...profiles, ...codexProfiles], now)}
             </div>
           )}
           {(autoOn || recovery.autoContinue.on) &&

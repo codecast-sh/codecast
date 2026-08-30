@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isAgentSpawnedConversation, isSubagentConversation, subagentLinkFields } from "./ccAccountsShared";
+import { exhaustionBannerCopy, isAgentSpawnedConversation, isSubagentConversation, subagentLinkFields } from "./ccAccountsShared";
 
 // Regression (ct-37439): a subagent active in the last 30d is pulled into the
 // inbox via the top-level scan (recentConversations), NOT only as a child of its
@@ -101,5 +101,52 @@ describe("isAgentSpawnedConversation", () => {
     const idObj = { toString: () => "jx7parent" };
     expect(isAgentSpawnedConversation({ spawned_by_conversation_id: idObj })).toBe(true);
     expect(isAgentSpawnedConversation({ parent_conversation_id: idObj })).toBe(true);
+  });
+});
+
+// Regression (ct-46989): the "all accounts are at their limits" banner rendered
+// next to usage meters showing headroom on every account. The exhaustion stamp
+// can stand on attempt evidence alone (every switch re-parked while no meter is
+// pegged — enforcement leads the probe), so the banner must only claim "at
+// their limits" when some meter actually backs it.
+describe("exhaustionBannerCopy", () => {
+  const now = 1_000_000_000;
+  const future = now + 60 * 60 * 1000;
+
+  test("every account pegged backs the 'all at their limits' claim", () => {
+    const profiles = [
+      { usage: { fetched_at: now, session: { percent: 100, resets_at: future } } },
+      { usage: { fetched_at: now, weekly: { percent: 100, resets_at: future } } },
+    ];
+    expect(exhaustionBannerCopy(profiles, now)).toContain("at their limits");
+  });
+
+  test("one pegged account next to one with headroom cannot claim ALL — attempts copy", () => {
+    const profiles = [
+      { usage: { fetched_at: now, session: { percent: 100, resets_at: future } } },
+      { usage: { fetched_at: now, session: { percent: 40, resets_at: future } } },
+    ];
+    expect(exhaustionBannerCopy(profiles, now)).not.toContain("at their limits");
+  });
+
+  test("headroom on every meter says attempts failed, not 'at their limits'", () => {
+    const profiles = [
+      { usage: { fetched_at: now, session: { percent: 80, resets_at: future } } },
+      { usage: { fetched_at: now, session: { percent: 0, resets_at: future } } },
+    ];
+    const copy = exhaustionBannerCopy(profiles, now);
+    expect(copy).not.toContain("at their limits");
+    expect(copy).toContain("still hit limits");
+  });
+
+  test("a pegged window whose reset passed is history — attempts copy", () => {
+    const profiles = [
+      { usage: { fetched_at: now - 6 * 60 * 60 * 1000, session: { percent: 100, resets_at: now - 1 } } },
+    ];
+    expect(exhaustionBannerCopy(profiles, now)).not.toContain("at their limits");
+  });
+
+  test("no usage data at all — attempts copy (nothing to back the claim)", () => {
+    expect(exhaustionBannerCopy([{}, { usage: null }], now)).not.toContain("at their limits");
   });
 });
