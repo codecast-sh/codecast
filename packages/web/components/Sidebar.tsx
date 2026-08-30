@@ -47,6 +47,7 @@ import { LiveNowRail } from "./calls/LiveNow";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
+import { startPaneDrag } from "../lib/stage";
 
 const api = _api as any;
 
@@ -146,6 +147,21 @@ function SectionRow({ row, className }: { row: SectionRowSpec; className?: strin
   );
 }
 
+/** A numeric count on a nav row. Every count in the rail renders through this
+ *  so simple view restyles counts by the `data-sv-count` marker, never by
+ *  colour: a colour-keyed selector cannot tell a count pill from a project dot
+ *  that happens to share its hue. `small` is the pinned rail's scale. */
+function NavCount({ n, tone, small }: { n: number; tone: string; small?: boolean }) {
+  return (
+    <span
+      data-sv-count
+      className={`${small ? "min-w-[16px] h-[15px] px-1 text-[9.5px]" : "-ml-0.5 min-w-[20px] h-[20px] px-1.5 text-[11px]"} flex items-center justify-center font-bold rounded-full flex-shrink-0 ${tone}`}
+    >
+      {n > 99 ? "99+" : n}
+    </span>
+  );
+}
+
 function NavSection({
   label,
   href,
@@ -198,6 +214,10 @@ function NavSection({
           href={href}
           onClick={onMobileClose}
           data-nav-row
+          // A section is a pane waiting to happen: drag it onto the stage to
+          // split it in beside whatever is there (lib/stage).
+          draggable
+          onDragStart={(e) => startPaneDrag(e, { path: href, title: label })}
           className={`flex-1 flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 min-w-0`}
           title={title ?? label}
         >
@@ -241,11 +261,7 @@ function NavSection({
 const NeedsInputCountBadge = memo(function NeedsInputCountBadge() {
   const needsInputCount = useNeedsInputCount();
   if (needsInputCount === 0) return null;
-  return (
-    <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-teal-600 text-white rounded-full">
-      {needsInputCount}
-    </span>
-  );
+  return <NavCount n={needsInputCount} tone="bg-teal-600 text-white" />;
 });
 
 // The decision queue's row. Same isolation rule as the badge above: the count
@@ -284,9 +300,7 @@ const QuestionsNavRow = memo(function QuestionsNavRow({
       {!isNarrow && (
         <>
           <span>Questions</span>
-          <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-sol-violet text-white rounded-full">
-            {pending}
-          </span>
+          <NavCount n={pending} tone="bg-sol-violet text-white" />
         </>
       )}
     </Link>
@@ -328,11 +342,7 @@ const ThreadsNavRow = memo(function ThreadsNavRow({
       ) : (
         <>
           <span>Threads</span>
-          {unread > 0 && (
-            <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-sol-cyan text-sol-bg rounded-full">
-              {unread > 99 ? "99+" : unread}
-            </span>
-          )}
+          {unread > 0 && <NavCount n={unread} tone="bg-sol-cyan text-sol-bg" />}
         </>
       )}
     </Link>
@@ -362,9 +372,7 @@ function ChannelSignals({
     <>
       <OccupancyChip roomKey={chatViewRoomKey(channel, viewer, teamMembers)} className="flex-shrink-0" />
       {(channel.mentionCount ?? 0) > 0 ? (
-        <span className="min-w-[16px] h-[15px] px-1 flex items-center justify-center text-[9.5px] font-bold bg-sol-orange text-sol-bg rounded-full flex-shrink-0">
-          {(channel.mentionCount ?? 0) > 99 ? "99+" : channel.mentionCount}
-        </span>
+        <NavCount n={channel.mentionCount ?? 0} tone="bg-sol-orange text-sol-bg" small />
       ) : (channel.unreadCount ?? 0) > 0 ? (
         <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan flex-shrink-0" aria-label="Unread" />
       ) : null}
@@ -507,9 +515,7 @@ const ChatNavRow = memo(function ChatNavRow({
         unread={channels > 0 || mentions > 0}
         badge={
           mentions > 0 ? (
-            <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-sol-orange text-sol-bg rounded-full">
-              {mentions > 99 ? "99+" : mentions}
-            </span>
+            <NavCount n={mentions} tone="bg-sol-orange text-sol-bg" />
           ) : channels > 0 && !isActive ? (
             <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan" aria-label="Unread messages" />
           ) : null
@@ -661,11 +667,7 @@ function PinnedRail({
         name: "Threads",
         icon: <MessagesSquare className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
         trailing:
-          threadsUnread > 0 ? (
-            <span className="min-w-[16px] h-[15px] px-1 flex items-center justify-center text-[9.5px] font-bold bg-sol-cyan text-sol-bg rounded-full flex-shrink-0">
-              {threadsUnread > 99 ? "99+" : threadsUnread}
-            </span>
-          ) : null,
+          threadsUnread > 0 ? <NavCount n={threadsUnread} tone="bg-sol-cyan text-sol-bg" small /> : null,
         active: pathname === "/threads",
         onSelect: () => onNavigate("/threads"),
       };
@@ -1155,9 +1157,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
                 <>
                   <span>Feed</span>
                   {teamUnreadCount != null && teamUnreadCount > 0 && !isTeamActivity && (
-                    <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-xs font-semibold bg-sol-cyan text-sol-bg rounded-full">
-                      {teamUnreadCount}
-                    </span>
+                    <NavCount n={teamUnreadCount} tone="bg-sol-cyan text-sol-bg" />
                   )}
                 </>
               )}

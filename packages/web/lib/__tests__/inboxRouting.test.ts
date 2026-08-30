@@ -22,19 +22,12 @@ describe("resolveSessionSelectKind", () => {
     })).toBe("leave");
   });
 
-  // The stage's second pane: a task/doc already owns the stage, so a clicked
-  // session opens BESIDE it rather than replacing the page.
-  it("opens beside the page on a working surface (tasks/docs/plans)", () => {
+  // A working page (tasks/docs/plans) is no different: a click takes the
+  // conversation to the stage. Side by side is a drag, never a click.
+  it("leaves the page on a working surface too", () => {
     expect(resolveSessionSelectKind({
-      isOnSettingsPage: false, isOnInboxPage: false, isOnConversationPage: false, isOnWorkingPage: true,
-    })).toBe("companion");
-  });
-
-  // Precedence: the inbox IS conversations — never open a companion there.
-  it("keeps in-place selection on the inbox even if a working flag leaks in", () => {
-    expect(resolveSessionSelectKind({
-      isOnSettingsPage: false, isOnInboxPage: true, isOnConversationPage: false, isOnWorkingPage: true,
-    })).toBe("inboxInPlace");
+      isOnSettingsPage: false, isOnInboxPage: false, isOnConversationPage: false,
+    })).toBe("leave");
   });
 
   it("selects in place on the inbox", () => {

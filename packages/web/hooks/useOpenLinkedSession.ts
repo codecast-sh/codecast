@@ -2,9 +2,9 @@ import { useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
 import { useInboxStore, sessionRowFromSummary } from "../store/inboxStore";
-import { slotPolicyFor, surfaceForPath } from "../store/workspace";
 import { isInboxSessionView, resolveSessionSelectKind, type SessionSelectKind } from "../lib/inboxRouting";
 import { divertSessionOpen } from "../lib/openIntent";
+import { openBeside, sessionPanePath } from "../lib/stage";
 
 // Mirrors DashboardLayout's `isMobile` threshold (window.innerWidth < 768).
 // Below it the desktop stage/rail layout is gone; route to the full page.
@@ -12,37 +12,32 @@ const MOBILE_MAX_WIDTH = 768;
 
 /**
  * What a click on a linked session should do, given which surface is mounted.
- * A conversation always opens on the STAGE — never in a side column (that
- * surface is retired; the right rail is only ever the session list).
- *  - "companion": open it beside the task/doc already on the stage
+ * A click always takes the conversation to the STAGE — side by side is a
+ * deliberate gesture (a drag onto the stage, or openConversationBeside), never
+ * a click's side effect.
  *  - "select": make it the current inbox conversation (instant, same path fork
  *    chips and parent links use)
  *  - "route": go to /conversation/<id> -- the universal target: an authenticated
  *    owner is redirected into the inbox with the session selected, a guest gets
  *    the read-only viewer
  */
-export function resolveLinkedSessionOpen(kind: SessionSelectKind, narrow: boolean): "select" | "route" | "companion" {
+export function resolveLinkedSessionOpen(kind: SessionSelectKind, narrow: boolean): "select" | "route" {
   if (narrow) return "route";
   if (kind === "inboxInPlace") return "select";
-  if (kind === "companion") return "companion";
   return "route";
 }
 
 /**
- * The companion gesture in full: show the conversation beside the working page
- * AND move the attended pointer to it. The second half is load-bearing --
- * DashboardLayout mirrors the attended conversation into the companion pane,
- * so a bare wsShow is snapped straight back to the previously attended
- * session on the next effect pass. No route change: navigateToSession only
- * moves the pointer while the working surface stays on screen.
+ * Open a conversation BESIDE what's on stage, as a split pane — the
+ * programmatic form of dragging a session onto the stage. Falls back to the
+ * stage itself when a pane can't open (narrow window, pane cap).
  */
-export function openConversationAsCompanion(id: string) {
+export function openConversationBeside(id: string) {
   // A Cmd-click opens the session in a background tab / detached window
-  // instead of beside the page — and must not reshape the companion slot.
+  // instead of beside the page — and must not reshape the stage.
   if (divertSessionOpen(id)) return;
-  const store = useInboxStore.getState();
-  store.wsShow("secondary", { kind: "conversation", ref: id }, { presentation: "split" });
-  store.navigateToSession(id);
+  if (openBeside(sessionPanePath(id))) return;
+  useInboxStore.getState().navigateToSession(id);
 }
 
 /**
@@ -81,13 +76,10 @@ export function useOpenLinkedSession() {
       isOnSettingsPage: routerLocation.pathname.startsWith("/settings"),
       isOnInboxPage: isInboxSessionView(pathname, store.currentConversation?.source),
       isOnConversationPage: pathname?.includes("/conversation/") ?? false,
-      isOnWorkingPage: slotPolicyFor(surfaceForPath(pathname ?? "")).secondary === "split",
     });
     const open = resolveLinkedSessionOpen(kind, narrow);
     if (open === "route") {
       router.push(`/conversation/${sid}`);
-    } else if (open === "companion") {
-      openConversationAsCompanion(sid);
     } else {
       store.navigateToSession(sid);
     }

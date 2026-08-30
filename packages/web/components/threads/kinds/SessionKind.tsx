@@ -7,7 +7,7 @@ import { sessionLabel } from "../../../lib/notificationTypes";
 import { classifyFeedMessage } from "../../../lib/conversationProcessor";
 import { useConversationMessages, type Message } from "../../../hooks/useConversationMessages";
 import { parseInboundSessionMessage, isSessionMessage } from "../../sessionMessage";
-import { openConversationAsCompanion } from "../../../hooks/useOpenLinkedSession";
+import { openConversationBeside } from "../../../hooks/useOpenLinkedSession";
 import { AgentIcon } from "../../ConversationList";
 import { MessageInput } from "../../ConversationView";
 import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
@@ -192,9 +192,9 @@ export function SessionExpanded({ card, seen, focusComposer }: { card: ThreadCar
         <button
           type="button"
           className="th-session-openpanel"
-          onClick={() => openConversationAsCompanion(sessionId)}
+          onClick={() => openConversationBeside(sessionId)}
         >
-          <PanelRight className="w-3 h-3" /> Side panel
+          <PanelRight className="w-3 h-3" /> Open beside
         </button>
       </div>
     </div>

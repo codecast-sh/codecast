@@ -520,7 +520,6 @@ export default function ProjectDetailPage() {
       <DashboardLayout>
         <DetailSplitLayout
           list={<ProjectDetailContent />}
-          surface="projects"
           closeHref={`/projects/${projectId}`}
         >
           {taskId ? (

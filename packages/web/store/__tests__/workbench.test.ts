@@ -420,15 +420,15 @@ describe("focus eviction after the chip changes", () => {
     expect(useInboxStore.getState().currentSessionId).toBeNull();
   });
 
-  // A working page highlights the attended conversation exactly as the inbox
-  // does (DashboardLayout's sessionListActiveId); sidePanelSessionId is a dead
-  // pointer there, so moving IT would leave the highlight stranded off-list.
-  it("a working page moves the attended conversation, not the dead panel pointer", () => {
+  // A working page no longer carries a conversation beside it, so its rail
+  // highlights the panel's own selection like any plain surface — that is
+  // the pointer the eviction moves, and the attended conversation stays put.
+  it("a working page moves the panel pointer, like any plain surface", () => {
     focus({ currentSessionId: "s1", sidePanelSessionId: "s1" });
     useInboxStore.getState().applyWorkbench(triage, undefined, "/tasks");
     const s = useInboxStore.getState();
-    expect(s.currentSessionId).toBe("s2");
-    expect(s.sidePanelSessionId).toBe("s1");
+    expect(s.sidePanelSessionId).toBe("s2");
+    expect(s.currentSessionId).toBe("s1");
   });
 
   it("a plain surface is where the side panel's selection moves instead", () => {
