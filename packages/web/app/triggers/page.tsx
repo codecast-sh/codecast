@@ -331,9 +331,9 @@ function LastResultCard({ task, failed, runSession }: { task: any; failed: boole
   const { headline, detail } = splitResultSummary(text);
   const Icon = failed ? XCircle : CheckCircle2;
   return (
-    <div className={`mt-3 rounded-lg border overflow-hidden ${failed ? "border-sol-red/30" : "border-sol-border"}`}>
+    <div className={`mt-3 rounded-md overflow-hidden ${failed ? "bg-sol-red/[0.06]" : "bg-sol-bg-alt/60"}`}>
       <div className={`flex items-center gap-2 px-3 py-1.5 border-b ${
-        failed ? "bg-sol-red/10 border-sol-red/20" : "bg-sol-bg-alt border-sol-border/60"
+        failed ? "border-sol-red/20" : "border-sol-border/40"
       }`}>
         <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${failed ? "text-sol-red" : "text-emerald-400"}`} />
         <span className={`text-[10px] uppercase tracking-widest ${failed ? "text-sol-red" : "text-sol-text-dim"}`}>

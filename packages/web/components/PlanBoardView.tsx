@@ -151,12 +151,12 @@ export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortI
                       </div>
                     )}
                     {task.execution_status === "needs_context" && (
-                      <div className="mt-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-sol-orange/15 text-sol-orange border border-sol-orange/25">
+                      <div className="mt-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-sol-orange/15 text-sol-orange">
                         Needs input
                       </div>
                     )}
                     {task.execution_status === "blocked" && (
-                      <div className="mt-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-sol-red/15 text-sol-red border border-sol-red/25">
+                      <div className="mt-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-sol-red/15 text-sol-red">
                         Blocked
                       </div>
                     )}
