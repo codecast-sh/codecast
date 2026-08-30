@@ -4,6 +4,7 @@ import { ArrowUp } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
+import { resolveContextRow, resolveContextProjectPath } from "../lib/contextProjectPath";
 import { soundNewSession } from "../lib/sounds";
 import { AgentTypeIcon } from "./AgentTypeIcon";
 import { fromConvexAgentType, type AgentClientId } from "@codecast/shared/contracts";
@@ -97,23 +98,25 @@ export function ContextChatInput({
 
     soundNewSession();
 
-    // Resolve linked object for optimistic rendering (task badge in header/sidebar).
-    // Task's own project_path is preferred over the viewer's currentConversation, which may belong
-    // to an unrelated repo (~/src etc). The server will further resolve via team directory mappings
-    // if neither is set, so the daemon command always gets the right cwd.
+    // The linked object's OWN project wins over the viewer's
+    // currentConversation, which may belong to an unrelated repo (~/src etc) —
+    // resolution chain in lib/contextProjectPath. The server will further
+    // resolve via team directory mappings if nothing is set, so the daemon
+    // command always gets the right cwd. activeTask is a side product for
+    // optimistic rendering (task badge in header/sidebar).
     let activeTask: { _id: string; short_id: string; title: string; status: string } | undefined;
-    let taskDerivedPath: string | undefined;
-    if (contextType === "task" && linkedObjectId) {
-      const t = store.tasks[linkedObjectId] as any;
-      if (t) {
-        activeTask = { _id: t._id, short_id: t.short_id, title: t.title, status: t.status };
-        if (t.project_path) taskDerivedPath = t.project_path;
+    let contextDerivedPath: string | undefined;
+    if (linkedObjectId) {
+      const row = resolveContextRow(store, contextType, linkedObjectId);
+      contextDerivedPath = resolveContextProjectPath(store, row);
+      if (contextType === "task" && row) {
+        activeTask = { _id: row._id, short_id: row.short_id, title: row.title, status: row.status };
       }
     }
-    const contextPath = projectPathProp || taskDerivedPath;
+    const contextPath = projectPathProp || contextDerivedPath;
     const path = contextPath || projectPath || gitRoot;
     // The viewer's gitRoot describes currentConversation's repo and only
-    // applies when the path came from there too. Sent alongside a task-derived
+    // applies when the path came from there too. Sent alongside a context-derived
     // path it routes the daemon into whatever repo the viewer had open — the
     // daemon prefers git_root over project_path when resolving a cwd.
     const resolvedGitRoot = contextPath || gitRoot || path;
