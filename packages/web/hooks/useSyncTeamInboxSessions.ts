@@ -65,12 +65,17 @@ export function useSyncTeamInboxSessions() {
     lastSyncRef.current = Date.now();
   }, [syncTable, activeTeamId]), { coalesceMs: 300 });
 
+  // Facts merge onto rows; stamps + the projection envelope land in the TEAM
+  // slot of sessionsProjection — keyed by team id, so the personal overlay and
+  // the team overlay never write the same slot (sync-convergence C1). Team
+  // stamps ship but are not compared (the replica lacks team visibility
+  // inputs); they exist for freshness scheduling.
   useConvexSync(teamLiveness, useCallback((data: any) => {
     const liveness = data?.liveness ?? data;
     if (!liveness || typeof liveness !== "object") return;
-    useInboxStore.getState().syncOverlay("sessions", liveness as Record<string, Record<string, any>>);
+    useInboxStore.getState().applyInboxLivenessPayload(`team:${activeTeamId ?? ""}`, data);
     lastLivenessRef.current = Date.now();
-  }, []), { coalesceMs: 300 });
+  }, [activeTeamId]), { coalesceMs: 300 });
 
   // Leaving team mode clears the active set (the teammate rows stay in the
   // never-prune cache; the "mine" scope filter is what hides them). This is
@@ -109,7 +114,8 @@ export function useSyncTeamInboxSessions() {
     });
     const liveness = fresh?.liveness;
     if (!liveness) return;
-    useInboxStore.getState().syncOverlay("sessions", liveness as Record<string, Record<string, any>>);
+    // Same applier as the subscription — a recovery pass must not fork shapes.
+    useInboxStore.getState().applyInboxLivenessPayload(`team:${activeTeamId ?? ""}`, fresh);
     lastLivenessRef.current = Date.now();
   }, [convex, active, activeTeamId]), 15_000);
 

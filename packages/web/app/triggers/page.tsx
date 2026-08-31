@@ -418,14 +418,22 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
   // page mounted, so a later click on another trigger changes only the query —
   // a mount-time read would leave that click landing on the page with nothing
   // expanded.
-  const deepLinkRef = useSearchParams().get("task");
+  const searchParams = useSearchParams();
+  const deepLinkRef = searchParams.get("task");
+  // &edit=1 (the detail page's Edit verb) lands with the edit form already open
+  // instead of a read-only expanded row.
+  const deepLinkEdit = searchParams.get("edit") === "1";
   const isDeepLinked =
     !!deepLinkRef && (deepLinkRef === task._id || deepLinkRef.toLowerCase() === task.short_id);
   const [expanded, setExpanded] = useState(isDeepLinked);
+  const [formMode, setFormMode] = useState<null | "edit" | "duplicate">(
+    isDeepLinked && deepLinkEdit ? "edit" : null,
+  );
   const rowRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (isDeepLinked) {
       setExpanded(true);
+      if (deepLinkEdit) setFormMode("edit");
       rowRef.current?.scrollIntoView({ block: "center" });
     }
     // Keyed on the param VALUE so each new ?task= target re-fires; a row that
@@ -433,7 +441,6 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLinkRef]);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [formMode, setFormMode] = useState<null | "edit" | "duplicate">(null);
   // Verbs are store actions (local-first): the agent_tasks row flips on the
   // draft synchronously and the dispatch side effect runs the real mutation.
   // Same actions the inbox schedule rows and the conversation strip use.

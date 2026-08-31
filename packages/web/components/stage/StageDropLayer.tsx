@@ -33,7 +33,10 @@ type Hover = {
   key: string;
   zone: DropZone;
   geometry: StageGeometry;
-  newLeafId: string;
+  /** Null while hovering a dragged pane's own center: the veil stays up (no
+   *  blink as the pointer crosses it) but nothing is highlighted — the drop
+   *  would be a no-op. */
+  newLeafId: string | null;
   title: string | null;
 };
 
@@ -103,9 +106,15 @@ export function StageDropLayer({
       if (!zone) { setHover(null); return; }
       const payload = activePaneDrag();
       const path = payload?.path ?? "/__incoming";
-      // A dragged pane hovering its own center: nothing would change.
+      // A dragged pane hovering its own center: nothing would change, but the
+      // veil holds steady (dropping it to nothing mid-gesture reads as flicker).
       if (zone.kind === "center" && payload?.from?.kind === "leaf" && payload.from.leafId === zone.leafId) {
-        setHover(null);
+        const key = JSON.stringify(zone);
+        setHover((prev) =>
+          prev && prev.key === key
+            ? prev
+            : { key, zone, geometry: stageGeometry(root), newLeafId: null, title: null },
+        );
         return;
       }
       let predicted = predictDrop(root, zone, path);
@@ -137,7 +146,7 @@ export function StageDropLayer({
       const h = hover;
       clear();
       const payload = readPaneDrop(dt);
-      if (!payload || !h) return;
+      if (!payload || !h || h.newLeafId === null) return;
       performStageDrop(h.zone, payload);
     },
     [enabled, hover, clear],

@@ -15,6 +15,7 @@ const FAKE_TASK = {
   status: "in_progress",
   priority: "high",
   comments: [
+    { _id: "c0", author: "Ashot", text: "An earlier note", created_at: Date.now() - 7200_000, comment_type: "note" },
     { _id: "c1", author: "Ashot", text: "Looks great so far", created_at: Date.now() - 3600_000, comment_type: "note" },
   ],
   plan: { short_id: "pl-476", title: "Rich inline object embeds", status: "active" },
@@ -208,12 +209,16 @@ describe("shared-object detection", () => {
 });
 
 describe("card previews per type", () => {
-  test("a session card shows state, summary and last message", () => {
+  test("a session card is the inbox card: title, summary, user line, project footer", () => {
     const html = render("jx84qtv");
     expect(html).toContain("Build the card system");
-    expect(html).toContain("Active");
     expect(html).toContain("Goal:");
+    // The blue `>` last-user-message line, straight from the inbox card.
     expect(html).toContain("Wired the plugin into chat.");
+    // Project chip derived from project_path, colored like inbox labels.
+    expect(html).toContain("codecast");
+    // Flat inbox look — no accent header strip on session cards.
+    expect(html).not.toContain("bg-sol-blue/10 dark:bg-sol-blue");
   });
 
   test("a plan card shows goal and progress", () => {
@@ -228,8 +233,9 @@ describe("card previews per type", () => {
     expect(html).toContain("Accent per type, grid rows, expand inline.");
   });
 
-  test("expanded-only detail (task comments) stays out of the collapsed card", () => {
+  test("a collapsed task shows its LATEST comment; older ones wait for expand", () => {
     const html = render("ct-46943");
-    expect(html).not.toContain("Looks great so far");
+    expect(html).toContain("Looks great so far");
+    expect(html).not.toContain("An earlier note");
   });
 });

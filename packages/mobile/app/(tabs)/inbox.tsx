@@ -11,10 +11,10 @@ import {
   formatRelativeTime, projectName, styles as sessionStyles,
 } from '@/components/SessionItem';
 import {
-  useInboxStore, isConvexId, type InboxSession, type InboxViewMode, type BucketItem, categorizeSessions, partitionOldSessions, sessionsWithPendingSend,
+  useInboxStore, isConvexId, type InboxSession, type InboxViewMode, type BucketItem, categorizeSessions, computeInboxVisible, sessionsWithPendingSend,
   chipMatchesSession, getProjectName, resolveInboxViewMode, resolveShowOld, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels, computeChipCounts,
-  sessionsWakeSig, pendingSendWakeSig, filterInboxScope,
+  sessionsWakeSig, pendingSendWakeSig,
 } from '@codecast/web/store/inboxStore';
 import {
   AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, featuredModelOptions, launchRailOptions, toConvexAgentType,
@@ -1106,7 +1106,6 @@ export default function InboxScreen() {
   const visibleBuckets = useMemo(() => sortLabels(buckets), [buckets]);
 
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
-  const liveInboxIds = useInboxStore((s) => s.liveInboxIds);
   // Hide "old" rows exactly like web (GlobalSessionPanel): the never-prune cache
   // holds every session ever synced (including teammates' threads opened from the
   // feed), but only rows the live inbox subscription still returns are actionable.
@@ -1119,12 +1118,15 @@ export default function InboxScreen() {
   const inboxScope = useInboxStore((s) => s.clientState.ui?.inbox_scope ?? "mine");
   const teamInboxIds = useInboxStore((s) => s.teamInboxIds);
   const meId = useInboxStore((s) => s.currentUser?._id?.toString?.() ?? null);
+  // THE COUNTING CHOKEPOINT (store computeInboxVisible): scope → shared
+  // working-set selection → fold — the exact set web renders, so the phone and
+  // desktop can never disagree about membership. Reads the LATEST store state
+  // on each recompute (coarseNow re-runs it), so the epoch tick never sweeps a
+  // frozen snapshot.
   const { visibleSessions } = useMemo(
-    () => partitionOldSessions(
-      filterInboxScope(sessions, inboxScope, meId, teamInboxIds, currentSessionId),
-      liveInboxIds, showOld, currentSessionId),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig stands in for the churny sessions ref
-    [sessionsSig, inboxScope, meId, teamInboxIds, liveInboxIds, showOld, currentSessionId],
+    () => computeInboxVisible(useInboxStore.getState(), { focusedId: currentSessionId }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig stands in for the churny sessions ref; coarseNow drives the epoch tick
+    [sessionsSig, inboxScope, meId, teamInboxIds, showOld, currentSessionId, coarseNow],
   );
   // Full-args categorize (matches web): pendingSendIds keeps optimistic sends
   // in Working, and opts make isEngagedBlank work so the New section actually
@@ -1154,7 +1156,7 @@ export default function InboxScreen() {
   );
 
   const chipMatches = useCallback((s: InboxSession) =>
-    chipMatchesSession(s, { projectFilter: activeProjectFilter, bucketFilter: activeBucketFilter, bucketByConv }),
+    chipMatchesSession(s, { projectFilter: activeProjectFilter, bucketFilters: activeBucketFilter ? [{ id: activeBucketFilter, exclude: false }] : undefined, bucketByConv }),
     [activeProjectFilter, activeBucketFilter, bucketByConv]);
   const chipFilter = useCallback((items: InboxSession[]) => {
     if (!activeProjectFilter && !activeBucketFilter) return items;

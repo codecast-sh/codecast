@@ -58,7 +58,10 @@ export function CallDock() {
 
   // Which of the four surfaces this is, decided once, by the lookup that lives
   // beside the walkie because it is a fact about the walkie.
-  const surface = callDockSurface(walkie, call, { expanded });
+  const surface = callDockSurface(walkie, call, {
+    expanded,
+    video: remoteVideo || !!call.camera || !!call.sharing,
+  });
   const walkieOwns = surface === "walkie";
 
   // THE STAGE BELONGS TO THE CALL THAT WAS EXPANDED, and to no call after it

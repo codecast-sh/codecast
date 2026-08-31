@@ -17,10 +17,12 @@ import {
   type CategorizedSessions,
   categorizeSessions,
   classifySession,
+  computeInboxMembership,
   isAgentActive,
+  isConvexId,
   getProjectName,
 } from "../store/inboxStore";
-import { isLivenessStale, THREAD_STATE_STALE_MSGS } from "@codecast/shared/contracts";
+import { inboxEpoch, isLivenessStale, THREAD_STATE_STALE_MSGS } from "@codecast/shared/contracts";
 import { makeCollectionSig } from "../store/wakeSig";
 import { threadStateView, compactAge } from "../lib/threadState";
 import { sessionCardSummary } from "../lib/sessionSummary";
@@ -70,12 +72,9 @@ export function fleetBandFor(s: InboxSession, opts: FleetBandOpts): FleetBand {
 }
 
 export interface FleetCountOpts extends FleetBandOpts {
-  /** Server-authoritative personal live set (store.liveInboxIds). Covers the
-   *  viewer's own sessions across every project and machine. */
-  liveInboxIds: Set<string>;
-  /** The team subscription's active set (store.teamInboxIds). Empty outside
-   *  team scope — where teammate rows lingering in the cache have frozen
-   *  liveness and must not be counted at all. */
+  /** The team subscription's active set (store.teamInboxIds). Team rows the
+   *  cache holds that the personal working-set selection can't claim; empty
+   *  outside team scope. */
   teamInboxIds: ReadonlySet<string>;
   currentSessionId?: string | null;
   reviveRequestedAt?: Record<string, number>;
@@ -89,12 +88,13 @@ export interface FleetCountOpts extends FleetBandOpts {
  * agents counted as "working", while a needs-input row older than an ad-hoc
  * recency window (but still in the inbox) silently dropped out.
  *
- * categorizeSessions applies the hiding rules in one place (stashed/dismissed/
- * killed rows, orphan subagents, non-blocked anchors, never-engaged blanks,
- * rows aged out of the server's inbox window), so this can never drift from
- * the board. The old-row partition runs against the union of the personal and
- * team live sets: own rows survive via liveInboxIds, teammates' via
- * teamInboxIds — each windowed by its own subscription.
+ * Membership is the SHARED working-set selection (sync-convergence C4) — the
+ * same computation every inbox surface counts with — with folded (12h-stale)
+ * members left out, exactly the default rendered set. Team rows the selection
+ * can't claim survive via teamInboxIds, windowed by their own subscription.
+ * categorizeSessions then applies the bucket rules (stashed/dismissed/killed
+ * rows, orphan subagents, non-blocked anchors, never-engaged blanks) in one
+ * place, so this can never drift from the board.
  *
  * The row list is the same union splitFleetBands bands, including just-spawned
  * blanks with a live agent or a send in flight.
@@ -103,12 +103,23 @@ export function fleetCountedSessions(
   sessions: Record<string, InboxSession>,
   opts: FleetCountOpts,
 ): InboxSession[] {
-  const windowIds = opts.teamInboxIds.size
-    ? new Set<string>([...opts.liveInboxIds, ...opts.teamInboxIds])
-    : opts.liveInboxIds;
-  const cat = categorizeSessions(sessions, opts.queued, opts.pendingSendIds, {
+  const membership = computeInboxMembership(sessions, inboxEpoch(opts.now));
+  let visible: Record<string, InboxSession> = sessions;
+  let dropped = false;
+  const rebuilt: Record<string, InboxSession> = {};
+  for (const [id, s] of Object.entries(sessions)) {
+    const kept =
+      !isConvexId(id) ||
+      !!s.parent_conversation_id ||
+      id === opts.currentSessionId ||
+      (membership.members.has(id) && !membership.belowFold.has(id)) ||
+      opts.teamInboxIds.has(id);
+    if (kept) rebuilt[id] = s;
+    else dropped = true;
+  }
+  if (dropped) visible = rebuilt;
+  const cat = categorizeSessions(visible, opts.queued, opts.pendingSendIds, {
     currentSessionId: opts.currentSessionId,
-    liveInboxIds: windowIds,
     reviveRequestedAt: opts.reviveRequestedAt,
   });
   return [

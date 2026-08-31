@@ -45,7 +45,6 @@ export function useFleetSummaries(): Map<string, FleetSummary> {
     (st: any) => fleetSessionsWakeSig(st.sessions),
     (st: any) => st.sessionsWithQueuedMessages,
     (st: any) => pendingSendWakeSig(st.pendingMessages),
-    (st: any) => st.liveInboxIds,
     (st: any) => st.teamInboxIds,
   ]);
   const sessionsSig = fleetSessionsWakeSig(s.sessions);
@@ -60,14 +59,13 @@ export function useFleetSummaries(): Map<string, FleetSummary> {
     };
     const counted = fleetCountedSessions(st.sessions ?? {}, {
       ...opts,
-      liveInboxIds: st.liveInboxIds,
       teamInboxIds: st.teamInboxIds,
       currentSessionId: st.currentSessionId,
       reviveRequestedAt: st.blockedReviveRequestedAt,
     });
     return fleetSummariesByMember(counted, opts);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the signatures stand in for the churny collections
-  }, [sessionsSig, pendingSig, s.sessionsWithQueuedMessages, s.liveInboxIds, s.teamInboxIds, now]);
+  }, [sessionsSig, pendingSig, s.sessionsWithQueuedMessages, s.teamInboxIds, now]);
 }
 
 export interface MemberActivity {

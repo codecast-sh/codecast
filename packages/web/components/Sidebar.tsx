@@ -47,7 +47,7 @@ import { LiveNowRail } from "./calls/LiveNow";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
-import { startPaneDrag } from "../lib/stage";
+import { requestStagePlacement, startPaneDrag } from "../lib/stage";
 
 const api = _api as any;
 
@@ -212,7 +212,15 @@ function NavSection({
       }`}>
         <Link
           href={href}
-          onClick={onMobileClose}
+          onClick={(e) => {
+            onMobileClose?.();
+            // On a SPLIT stage a plain click is ambiguous — which pane? Hand
+            // the choice to the user (StagePickLayer) instead of guessing.
+            // Modified clicks keep their browser meaning.
+            if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && requestStagePlacement(href, label)) {
+              e.preventDefault();
+            }
+          }}
           data-nav-row
           // A section is a pane waiting to happen: drag it onto the stage to
           // split it in beside whatever is there (lib/stage).

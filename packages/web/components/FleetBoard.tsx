@@ -5,8 +5,7 @@ import {
   useTrackedStore,
   sessionsWakeSig,
   categorizeSessions,
-  filterInboxScope,
-  partitionOldSessions,
+  computeInboxVisible,
   sessionsWithPendingSend,
   resolveShowOld,
   resolveInboxHome,
@@ -218,7 +217,7 @@ function FleetDrillIn() {
   const s = useTrackedStore([
     (st) => overlayConversationId(st.workspace),
     // Only this row — the whole map would re-render the overlay on every
-    // other session's heartbeat (same rule as StageCompanion).
+    // other session's heartbeat (same rule as the stage's SessionPane).
     (st) => {
       const id = overlayConversationId(st.workspace);
       return id ? st.sessions[id] : null;
@@ -270,6 +269,20 @@ function FleetDrillIn() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [open, handleClose]);
 
+  // The board OWNS this slot, so leaving the board takes the visit with it.
+  // Without this, navigating to another surface mid-drill-in stranded the
+  // overlay pane in the store: nothing rendered it, yet overlayConversationId
+  // kept answering — and the triage chords (stash/defer/kill) target exactly
+  // that id, so a destructive key could hit an invisible session.
+  useEffect(() => {
+    return () => {
+      const st = useInboxStore.getState();
+      if (st.workspace.secondary.presentation === "overlay" && st.workspace.secondary.pane?.kind === "conversation") {
+        st.wsHide("secondary", { remember: false });
+      }
+    };
+  }, []);
+
   // A drilled-in row that vanished (killed, pruned) closes itself.
   if (!open || !id || !session) return null;
 
@@ -307,7 +320,6 @@ export function FleetBoard() {
     (st) => sessionsWakeSig(st.sessions),
     (st) => st.sessionsWithQueuedMessages,
     (st) => st.pendingMessages,
-    (st) => st.liveInboxIds,
     (st) => resolveShowOld(st.clientState.ui),
     (st) => st.clientState.ui?.inbox_scope ?? "mine",
     (st) => st.currentUser?._id?.toString?.() ?? null,
@@ -327,16 +339,12 @@ export function FleetBoard() {
   const meId = s.currentUser?._id?.toString?.() ?? null;
   const focusedId = s.currentSessionId;
 
-  const scoped = useMemo(
-    () => filterInboxScope(s.sessions, inboxScope, meId, s.teamInboxIds, focusedId),
-    [s.sessions, inboxScope, meId, s.teamInboxIds, focusedId],
-  );
+  // The counting chokepoint (store computeInboxVisible): scope → shared
+  // working-set selection → fold — the same set the panel renders.
   const { visibleSessions } = useMemo(
-    () =>
-      inboxScope === "team"
-        ? { visibleSessions: scoped, oldCount: 0 }
-        : partitionOldSessions(scoped, s.liveInboxIds, showOld, focusedId),
-    [scoped, inboxScope, s.liveInboxIds, showOld, focusedId],
+    () => computeInboxVisible(s, { focusedId }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showOld, focusedId, coarseNow],
   );
   const pendingSendIds = useMemo(() => sessionsWithPendingSend(s.pendingMessages), [s.pendingMessages]);
   const blankOpts = useMemo(

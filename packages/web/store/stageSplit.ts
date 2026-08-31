@@ -128,9 +128,39 @@ export function insertLeaf(
   edge: SplitEdge,
   path: string,
 ): { root: StageNode; leafId: string } | null {
+  return insertNode(root, target, edge, leafNode(path));
+}
+
+/**
+ * Move an existing leaf to a new position in ONE tree operation. The leaf
+ * keeps its identity (no remount) and the tree never passes through the
+ * collapsed single-pane state — the trap where a two-pane rearrange rewrote
+ * the stationary pane's path through the plain-tab conversion. Null when the
+ * move is meaningless: unknown leaf, moving onto itself, or the only leaf.
+ */
+export function moveLeaf(
+  root: StageNode,
+  leafId: string,
+  target: SplitTarget,
+  edge: SplitEdge,
+): StageNode | null {
+  const leaf = findLeaf(root, leafId);
+  if (!leaf) return null;
+  if (target !== "root" && target.leafId === leafId) return null;
+  const without = removeLeaf(root, leafId);
+  if (!without) return null;
+  const res = insertNode(without, target, edge, leaf);
+  return res ? res.root : null;
+}
+
+function insertNode(
+  root: StageNode,
+  target: SplitTarget,
+  edge: SplitEdge,
+  fresh: StageLeaf,
+): { root: StageNode; leafId: string } | null {
   const dir = edgeDir(edge);
   const before = edgeBefore(edge);
-  const fresh = leafNode(path);
 
   if (target === "root") {
     if (root.type === "split" && root.dir === dir) {

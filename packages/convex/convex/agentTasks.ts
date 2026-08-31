@@ -566,7 +566,10 @@ export const claimTask = mutation({
     if (task.status !== "scheduled") return null;
 
     const now = Date.now();
-    await ctx.db.patch(args.task_id, {
+    // Through patchTask (scheduled → running are both armed statuses, so the
+    // home's armed_trigger_kind is unchanged — but every lifecycle writer
+    // routes through the one restamping chokepoint; see the exhaustive test).
+    await patchTask(ctx, task, {
       status: "running",
       lease_holder: args.daemon_id,
       lease_expires_at: now + LEASE_DURATION_MS,
@@ -1321,6 +1324,23 @@ export const webReactivate = webTaskAction(applyReactivate);
 export const webRunNow = webTaskAction(applyRunNow);
 export const webCancel = webTaskAction(applyCancel);
 
+// Delete a trigger row with its revision history, then restamp the old home:
+// deleting an armed trigger is a lifecycle transition like cancel, and the
+// home's denormalized armed_trigger_kind must not keep parking a session whose
+// wake no longer exists (sync-convergence C1). Exported so the restamp-on-
+// delete contract is unit-testable without the mutation wrapper.
+export async function deleteTaskCascade(ctx: TaskCtx, task: Doc<"agent_tasks">): Promise<void> {
+  // Delete erases history (see getManageableTask's note) — the edit log
+  // goes with the row rather than orphaning.
+  const revisions = await ctx.db
+    .query("agent_task_revisions")
+    .withIndex("by_task", (q: any) => q.eq("task_id", task._id))
+    .collect();
+  for (const r of revisions) await ctx.db.delete(r._id);
+  await ctx.db.delete(task._id);
+  if (task.originating_conversation_id) await refreshArmedTriggerKind(ctx, task.originating_conversation_id);
+}
+
 export const webDelete = mutation({
   args: { task_id: v.id("agent_tasks") },
   handler: async (ctx, args) => {
@@ -1328,14 +1348,7 @@ export const webDelete = mutation({
     if (!userId) throw new Error("Unauthorized");
     const task = await getOwnedTask(ctx, args.task_id, userId);
     if (!task) return false;
-    // Delete erases history (see getManageableTask's note) — the edit log
-    // goes with the row rather than orphaning.
-    const revisions = await ctx.db
-      .query("agent_task_revisions")
-      .withIndex("by_task", (q: any) => q.eq("task_id", args.task_id))
-      .collect();
-    for (const r of revisions) await ctx.db.delete(r._id);
-    await ctx.db.delete(args.task_id);
+    await deleteTaskCascade(ctx, task);
     return true;
   },
 });
