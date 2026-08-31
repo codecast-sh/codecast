@@ -15,6 +15,7 @@
 import {
   type InboxSession,
   type CategorizedSessions,
+  categorizeSessions,
   classifySession,
   isAgentActive,
   getProjectName,
@@ -68,6 +69,58 @@ export function fleetBandFor(s: InboxSession, opts: FleetBandOpts): FleetBand {
   return "finished";
 }
 
+export interface FleetCountOpts extends FleetBandOpts {
+  /** Server-authoritative personal live set (store.liveInboxIds). Covers the
+   *  viewer's own sessions across every project and machine. */
+  liveInboxIds: Set<string>;
+  /** The team subscription's active set (store.teamInboxIds). Empty outside
+   *  team scope — where teammate rows lingering in the cache have frozen
+   *  liveness and must not be counted at all. */
+  teamInboxIds: ReadonlySet<string>;
+  currentSessionId?: string | null;
+  reviveRequestedAt?: Record<string, number>;
+}
+
+/**
+ * The rows a fleet COUNT may consider at all: exactly the set the inbox/board
+ * renders, never the raw session cache. The cache deliberately holds 30 days
+ * of rows plus everything the user set aside, and counting it raw made the
+ * presence card disagree with every surface next to it — stashed/dismissed
+ * agents counted as "working", while a needs-input row older than an ad-hoc
+ * recency window (but still in the inbox) silently dropped out.
+ *
+ * categorizeSessions applies the hiding rules in one place (stashed/dismissed/
+ * killed rows, orphan subagents, non-blocked anchors, never-engaged blanks,
+ * rows aged out of the server's inbox window), so this can never drift from
+ * the board. The old-row partition runs against the union of the personal and
+ * team live sets: own rows survive via liveInboxIds, teammates' via
+ * teamInboxIds — each windowed by its own subscription.
+ *
+ * The row list is the same union splitFleetBands bands, including just-spawned
+ * blanks with a live agent or a send in flight.
+ */
+export function fleetCountedSessions(
+  sessions: Record<string, InboxSession>,
+  opts: FleetCountOpts,
+): InboxSession[] {
+  const windowIds = opts.teamInboxIds.size
+    ? new Set<string>([...opts.liveInboxIds, ...opts.teamInboxIds])
+    : opts.liveInboxIds;
+  const cat = categorizeSessions(sessions, opts.queued, opts.pendingSendIds, {
+    currentSessionId: opts.currentSessionId,
+    liveInboxIds: windowIds,
+    reviveRequestedAt: opts.reviveRequestedAt,
+  });
+  return [
+    ...cat.pinned,
+    ...cat.needsInput,
+    ...cat.done,
+    ...cat.dormant,
+    ...cat.working,
+    ...cat.newSessions.filter((s) => isAgentActive(s) || inFlight(s, opts)),
+  ];
+}
+
 /**
  * A wake signature over exactly what `fleetBandFor` and the fleet summary
  * BRANCH ON — nothing else.
@@ -110,6 +163,13 @@ export function fleetSessionSig(s: InboxSession): string {
     // merges it in), and the fleet filter branches on it.
     (s as any).is_live ? 1 : 0,
     s.inbox_killed_at ? 1 : 0,
+    // Visibility inputs of fleetCountedSessions: setting a row aside, pinning
+    // it, or an anchor flipping in/out of hard-blocked all change which rows
+    // the fleet counts, and must wake subscribers between coarse ticks.
+    s.inbox_dismissed_at ? 1 : 0,
+    s.inbox_stashed_at ? 1 : 0,
+    s.is_pinned ? 1 : 0,
+    (s as any).is_anchor ? 1 : 0,
     s.awaiting_input ? 1 : 0,
     s.session_error ? 1 : 0,
     s.pending_api_error ? 1 : 0,

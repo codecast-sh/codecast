@@ -241,11 +241,12 @@ export interface FleetSummary {
   topSessionKey: string | null;
 }
 
-// "3 working · 1 needs input" for one member, derived from the sessions the
-// store ALREADY holds (team-scoped inbox rows) — the server sends no fleet
-// counts, so this is always consistent with the board/sidebar the viewer sees
-// and costs nothing extra. Sessions of members outside the current team scope
-// simply aren't in the store, and the card omits the line.
+// "3 working · 1 needs input" for one member — the server sends no fleet
+// counts, so these are derived client-side. Callers must hand in the
+// inbox-VISIBLE rows (fleetCountedSessions), never the raw session cache: the
+// cache holds 30 days of rows plus everything the user set aside, and counting
+// it raw produced numbers that matched no surface the viewer could see. A
+// member with no visible sessions gets no summary, and the card omits the line.
 export function memberFleetSummary(
   sessions: InboxSession[],
   memberId: string,

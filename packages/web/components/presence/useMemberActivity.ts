@@ -5,7 +5,7 @@ import {
   sessionsWithPendingSend,
   pendingSendWakeSig,
 } from "../../store/inboxStore";
-import { fleetSessionsWakeSig } from "../fleetBands";
+import { fleetCountedSessions, fleetSessionsWakeSig } from "../fleetBands";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useLiveRoomOfMember } from "../../hooks/useLiveRooms";
 import { useWalkieStatus } from "../../hooks/useWalkie";
@@ -17,13 +17,13 @@ import {
   type PresenceVisual,
 } from "./memberPresence";
 
-/** Only sessions with a live agent or recent activity count. The store's
- *  session cache is deliberately liberal (30 days of rows), and counting it raw
- *  produced absurdities like "608 need input". */
-const RECENT_MS = 6 * 3600_000;
-
 /**
- * Fleet counts for every teammate, from the sessions the store ALREADY holds.
+ * Fleet counts for every teammate, from the sessions the store ALREADY holds —
+ * restricted to the rows the inbox itself renders (fleetCountedSessions), so
+ * the card's numbers always agree with the board and the sidebar badges. The
+ * viewer's own set spans every project and machine (the personal inbox
+ * subscription is user-wide); teammates' rows count only while the team
+ * subscription is live, since outside it their liveness is frozen.
  *
  * Signature-gated, because the people window's roster mounts this and never
  * unmounts. `s.sessions` is a mutative draft: a heartbeat or a streamed
@@ -33,11 +33,11 @@ const RECENT_MS = 6 * 3600_000;
  * the list instead of per row bounds the call COUNT; only the signature bounds
  * the churn.
  *
- * `fleetSessionsWakeSig` projects exactly what the band branches on and lives
- * beside `fleetBandFor`, so the two are edited together. The transitions that
- * are driven by TIME rather than by a field — a status going stale, a row
- * aging out of the recent window — are not in it by design; the coarse clock
- * below is what carries those.
+ * `fleetSessionsWakeSig` projects exactly what the band and the visibility
+ * rules branch on and lives beside `fleetBandFor`, so the two are edited
+ * together. The transitions that are driven by TIME rather than by a field —
+ * a status going stale — are not in it by design; the coarse clock below is
+ * what carries those.
  */
 export function useFleetSummaries(): Map<string, FleetSummary> {
   const now = useCoarseNow(15_000);
@@ -45,22 +45,29 @@ export function useFleetSummaries(): Map<string, FleetSummary> {
     (st: any) => fleetSessionsWakeSig(st.sessions),
     (st: any) => st.sessionsWithQueuedMessages,
     (st: any) => pendingSendWakeSig(st.pendingMessages),
+    (st: any) => st.liveInboxIds,
+    (st: any) => st.teamInboxIds,
   ]);
   const sessionsSig = fleetSessionsWakeSig(s.sessions);
   const pendingSig = pendingSendWakeSig(s.pendingMessages);
   return useMemo(() => {
     // The signatures are the real deps; the raw collections are read fresh here.
     const st = useInboxStore.getState();
-    const sessions = (Object.values(st.sessions ?? {}) as any[]).filter(
-      (x) => x && (x.is_live || now - (x.updated_at ?? 0) < RECENT_MS),
-    );
-    return fleetSummariesByMember(sessions, {
-      queued: st.sessionsWithQueuedMessages ?? new Set(),
+    const opts = {
+      queued: st.sessionsWithQueuedMessages ?? new Set<string>(),
       pendingSendIds: sessionsWithPendingSend(st.pendingMessages),
       now,
+    };
+    const counted = fleetCountedSessions(st.sessions ?? {}, {
+      ...opts,
+      liveInboxIds: st.liveInboxIds,
+      teamInboxIds: st.teamInboxIds,
+      currentSessionId: st.currentSessionId,
+      reviveRequestedAt: st.blockedReviveRequestedAt,
     });
+    return fleetSummariesByMember(counted, opts);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the signatures stand in for the churny collections
-  }, [sessionsSig, pendingSig, s.sessionsWithQueuedMessages, now]);
+  }, [sessionsSig, pendingSig, s.sessionsWithQueuedMessages, s.liveInboxIds, s.teamInboxIds, now]);
 }
 
 export interface MemberActivity {
