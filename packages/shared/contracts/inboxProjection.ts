@@ -93,6 +93,8 @@ export interface WorkStateInput {
   userDormant?: boolean;
   /** The home of an armed recurring/event trigger that injects into it (and whose last run did not fail or flag attention). */
   armedTriggerHome?: boolean;
+  /** The session sleeps on a live harness /loop wakeup (loop_state armed, not overdue — see dormancy.isArmedLoopHome). Same standing strength as armedTriggerHome: the machine owns the next move. */
+  armedLoopHome?: boolean;
   /** The home of an armed ONCE inject trigger. Weaker than a standing loop: it only demotes a `done` rest to dormant, never needs_input (see dormancy.ArmedTriggerHomes). */
   armedOnceTriggerHome?: boolean;
   /** The settle classifier's verdict for THIS settle (settle_verdict, current per isSettleVerdictCurrent), when no declaration exists. Only "done" carries weight. */
@@ -156,7 +158,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // hide an open ask.
   const doneRest = (): WorkState => (input.armedOnceTriggerHome ? "dormant" : "done");
   const restState = (): WorkState => {
-    if (declaredDormant || input.armedTriggerHome || input.userDormant) return "dormant";
+    if (declaredDormant || input.armedTriggerHome || input.armedLoopHome || input.userDormant) return "dormant";
     if (declaredDone) return doneRest();
     if (agentStatus === "idle" || !agentStatus) {
       // A blocked PIN is the agent's explicit claim on the human — the same

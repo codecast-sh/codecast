@@ -1,17 +1,14 @@
 "use client";
 
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useAction, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { Sparkles, Pencil, X } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
-import { useEventListener } from "../hooks/useEventListener";
 import { isConvexId } from "../lib/entityLinks";
-import { suggestionChordIndex } from "../lib/suggestionChord";
 import { KeyCap } from "./KeyboardShortcutsHelp";
-import { isMac } from "../shortcuts";
 
 // Suggested replies above the composer. Mounted only when the pref is on;
 // stays mounted while the user types (hidden via the `hidden` prop) so the
@@ -20,17 +17,36 @@ import { isMac } from "../shortcuts";
 // anchor), the agent spoke last, and the session is waiting on the user —
 // a stale pill is worse than none.
 //
-// Clicking a pill (or Ctrl+Shift+1/2/3) SENDS it — the suggestion is
-// press-send ready by contract, so the click is the confirmation. The hover
-// pencil is the escape hatch: it fills the composer for editing instead.
+// Clicking a pill SENDS it — the suggestion is press-send ready by contract,
+// so the click is the confirmation. The keyboard path is arrow selection: the
+// composer's ↑ ladder (images → queue → pills) hands off here through the
+// SuggestionPillsHandle, Enter sends the selected pill, Tab fills the
+// composer for editing instead. No modifier chords: bare Ctrl+digit is
+// macOS Mission Control's Space switcher, Cmd+digit is the browser's tab
+// switcher, Alt+digit is workbench switching — every digit chord is owned
+// upstream, which is how the original Ctrl+1/2/3 binding shipped dead.
 
-export const SuggestionPills = memo(function SuggestionPills({
-  conversationId,
-  idle,
-  hidden,
-  onSend,
-  onEdit,
-}: {
+// Imperative selection surface for the composer's keydown ladder. Selection
+// state lives in here (the pill list is this component's server row), but the
+// keys arrive on the composer textarea, which keeps DOM focus the whole time —
+// the same split the queue and image regions use in ConversationView.
+export interface SuggestionPillsHandle {
+  // Row is rendered with at least one pill.
+  visible(): boolean;
+  // A pill is currently selected.
+  active(): boolean;
+  // Select the first pill; false when the row isn't visible.
+  enter(): boolean;
+  // Move selection left/right. Right past the last pill exits (clears);
+  // left of the first clamps. Returns whether a selection remains.
+  move(delta: 1 | -1): boolean;
+  // Send / edit the selected pill (clears selection).
+  send(): boolean;
+  edit(): boolean;
+  clear(): void;
+}
+
+export const SuggestionPills = memo(forwardRef<SuggestionPillsHandle, {
   conversationId: string;
   // The session is waiting on the user (not streaming, not mid-task).
   idle: boolean;
@@ -38,7 +54,7 @@ export const SuggestionPills = memo(function SuggestionPills({
   hidden: boolean;
   onSend: (text: string) => void;
   onEdit: (text: string) => void;
-}) {
+}>(function SuggestionPills({ conversationId, idle, hidden, onSend, onEdit }, ref) {
   const isRealId = isConvexId(conversationId);
 
   // Tail signature of the last real turn, as a primitive so the selector
@@ -66,6 +82,7 @@ export const SuggestionPills = memo(function SuggestionPills({
   const recordOutcome = useMutation(api.composerSuggestions.recordSuggestionOutcome);
   const attemptedRef = useRef<string | null>(null);
   const [dismissedAnchor, setDismissedAnchor] = useState<string | null>(null);
+  const [selIdx, setSelIdx] = useState<number | null>(null);
 
   // Fire-and-forget outcome telemetry — ground truth for judging the
   // suggester. Never blocks or fails the user gesture it rides on.
@@ -106,31 +123,55 @@ export const SuggestionPills = memo(function SuggestionPills({
     row.anchor_message_uuid === tailKey &&
     dismissedAnchor !== row.anchor_message_uuid;
 
-  // Ctrl+Shift+1/2/3 sends the matching pill (chord choice rationale on
-  // suggestionChordIndex). Capture phase so a focused textarea doesn't
-  // swallow the chord, and armed only while the row is visible so nothing
-  // leaks into the global shortcut layer when there are no pills.
   const suggestions = visible ? row!.suggestions : [];
-  const suggestionsRef = useRef(suggestions);
-  suggestionsRef.current = suggestions;
-  useEventListener(
-    "keydown",
-    useCallback(
-      (e: KeyboardEvent) => {
-        const idx = suggestionChordIndex(e);
-        if (idx === -1) return;
-        const text = suggestionsRef.current[idx];
-        if (!text) return;
-        e.preventDefault();
-        e.stopPropagation();
-        report(text, "sent");
-        onSend(text);
-      },
-      [onSend, report],
-    ),
-    visible ? document : null,
-    { capture: true },
-  );
+
+  // Selection can't outlive the row or the list it points into.
+  useEffect(() => {
+    if (!visible) setSelIdx(null);
+    else setSelIdx((i) => (i !== null && i >= suggestions.length ? suggestions.length - 1 : i));
+  }, [visible, suggestions.length]);
+
+  const stateRef = useRef({ visible, suggestions, selIdx });
+  stateRef.current = { visible, suggestions, selIdx };
+  useImperativeHandle(ref, () => ({
+    visible: () => stateRef.current.visible && stateRef.current.suggestions.length > 0,
+    active: () => stateRef.current.visible && stateRef.current.selIdx !== null,
+    enter: () => {
+      if (!stateRef.current.visible || stateRef.current.suggestions.length === 0) return false;
+      setSelIdx(0);
+      return true;
+    },
+    move: (delta) => {
+      const { selIdx: cur, suggestions: list } = stateRef.current;
+      if (cur === null) return false;
+      const next = cur + delta;
+      if (next >= list.length) {
+        setSelIdx(null);
+        return false;
+      }
+      setSelIdx(Math.max(0, next));
+      return true;
+    },
+    send: () => {
+      const { selIdx: cur, suggestions: list } = stateRef.current;
+      const text = cur !== null ? list[cur] : undefined;
+      if (!text) return false;
+      setSelIdx(null);
+      report(text, "sent");
+      onSend(text);
+      return true;
+    },
+    edit: () => {
+      const { selIdx: cur, suggestions: list } = stateRef.current;
+      const text = cur !== null ? list[cur] : undefined;
+      if (!text) return false;
+      setSelIdx(null);
+      report(text, "edited");
+      onEdit(text);
+      return true;
+    },
+    clear: () => setSelIdx(null),
+  }), [report, onSend, onEdit]);
 
   if (!visible) return null;
 
@@ -140,7 +181,11 @@ export const SuggestionPills = memo(function SuggestionPills({
       {suggestions.map((text, i) => (
         <span
           key={text}
-          className="group inline-flex items-center max-w-full rounded-full border border-sol-border/50 bg-sol-bg-alt/70 hover:border-sol-violet/40 hover:bg-sol-violet/10 transition-colors animate-fadeSlideIn"
+          className={`group inline-flex items-center max-w-full rounded-full border transition-colors animate-fadeSlideIn ${
+            selIdx === i
+              ? "border-sol-violet/60 bg-sol-violet/15"
+              : "border-sol-border/50 bg-sol-bg-alt/70 hover:border-sol-violet/40 hover:bg-sol-violet/10"
+          }`}
           style={{ animationDelay: `${i * 70}ms`, animationFillMode: "backwards" }}
         >
           <button
@@ -149,21 +194,20 @@ export const SuggestionPills = memo(function SuggestionPills({
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => { report(text, "sent"); onSend(text); }}
             title="Send"
-            className="flex items-center gap-1.5 min-w-0 pl-2.5 pr-1 py-1 text-[11px] leading-none text-sol-text-muted group-hover:text-sol-text transition-colors"
+            className={`flex items-center gap-1.5 min-w-0 pl-2.5 pr-1 py-1 text-[11px] leading-none transition-colors ${
+              selIdx === i ? "text-sol-text" : "text-sol-text-muted group-hover:text-sol-text"
+            }`}
           >
             <span className="truncate">{text}</span>
-            {i < 3 && (
-              <span className="shrink-0 opacity-50">
-                <KeyCap size="xs">{isMac ? `⌃⇧${i + 1}` : `Ctrl+Shift+${i + 1}`}</KeyCap>
-              </span>
-            )}
           </button>
           <button
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => { report(text, "edited"); onEdit(text); }}
             title="Edit before sending"
-            className="shrink-0 pl-0.5 pr-2 py-1 text-sol-text-dim/0 group-hover:text-sol-text-dim hover:!text-sol-text transition-colors"
+            className={`shrink-0 pl-0.5 pr-2 py-1 transition-colors hover:!text-sol-text ${
+              selIdx === i ? "text-sol-text-dim" : "text-sol-text-dim/0 group-hover:text-sol-text-dim"
+            }`}
           >
             <Pencil className="w-2.5 h-2.5" />
           </button>
@@ -178,6 +222,18 @@ export const SuggestionPills = memo(function SuggestionPills({
       >
         <X className="w-3 h-3" />
       </button>
+      {selIdx !== null ? (
+        <span className="text-[9px] text-sol-text-dim flex items-center gap-2 pl-1">
+          <span className="inline-flex items-center gap-1"><KeyCap size="xs">←</KeyCap><KeyCap size="xs">→</KeyCap> navigate</span>
+          <span className="inline-flex items-center gap-1"><KeyCap size="xs">Enter</KeyCap> send</span>
+          <span className="inline-flex items-center gap-1"><KeyCap size="xs">Tab</KeyCap> edit</span>
+          <span className="inline-flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> deselect</span>
+        </span>
+      ) : (
+        <span className="text-[9px] text-sol-text-dim/60 flex items-center gap-1 pl-1">
+          <KeyCap size="xs">↑</KeyCap> select
+        </span>
+      )}
     </div>
   );
-});
+}));

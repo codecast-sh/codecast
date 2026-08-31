@@ -7,7 +7,7 @@ import { installOpenIntent, detachCurrentView } from "../lib/openIntent";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
 import { isNonTabRoute } from "../src/compat/tabRouting";
-import { withApplyingViewHistory, type InboxViewSnapshot } from "../lib/inboxViewHistory";
+import { withApplyingViewHistory, sameBucketExtras, type InboxViewSnapshot } from "../lib/inboxViewHistory";
 import { RecentlyViewedMenu } from "./RecentlyViewedMenu";
 import { useMutation, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -74,6 +74,7 @@ import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
 import { useSyncMentionPlans } from "../hooks/useSyncPlans";
 import { useSyncMentionTasks } from "../hooks/useSyncTasks";
 import { isInboxSessionView, resolveSessionSelectKind, sessionFocusKind } from "../lib/inboxRouting";
+import { requestStagePlacement, sessionPanePath } from "../lib/stage";
 import { useRecentSwitcher } from "../hooks/useRecentSwitcher";
 import { RecentSwitcher } from "./RecentSwitcher";
 import { TabBar, AttachTabButton } from "./TabBar";
@@ -526,11 +527,17 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // alongside". Routes through navigateToSession so forks/dismissed/pending all
   // resolve correctly.
   const handleLeaveAndOpenSession = useCallback((id: string) => {
-    useInboxStore.getState().navigateToSession(id);
+    const store = useInboxStore.getState();
+    // A SPLIT stage makes "open this session" ambiguous — which pane? Offer
+    // the pane picker with the conversation as the payload; the session opens
+    // as a pane right where the user points. Un-split stages keep the direct
+    // path: the conversation takes the stage.
+    if (requestStagePlacement(sessionPanePath(id), store.sessions[id]?.title ?? undefined)) return;
+    store.navigateToSession(id);
     router.push('/inbox');
   }, [router]);
 
-  const sessionSelectKind = resolveSessionSelectKind({ isOnSettingsPage, isOnInboxPage, isOnConversationPage });
+  const sessionSelectKind = resolveSessionSelectKind({ isOnSettingsPage, isOnInboxPage });
   const sessionListOnSelect = sessionSelectKind === "leave"
     ? handleLeaveAndOpenSession
     : handleInboxSessionSelect;
@@ -741,8 +748,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         const v = popped.inboxView;
         const store = useInboxStore.getState();
         withApplyingViewHistory(() => {
-          if (v.bucket !== store.activeBucketFilter || v.project !== store.activeProjectFilter || !!v.exclude !== store.chipFilterExclude) {
-            if (v.bucket) store.setActiveBucketFilter(v.bucket, v.exclude);
+          if (v.bucket !== store.activeBucketFilter || v.project !== store.activeProjectFilter || !!v.exclude !== store.chipFilterExclude || !sameBucketExtras(v.extras, store.extraBucketFilters)) {
+            if (v.bucket) store.setActiveBucketFilter(v.bucket, v.exclude, v.extras);
             else if (v.project) store.setActiveProjectFilter(v.project, v.projectPath, v.exclude);
             else {
               store.setActiveBucketFilter(null);
