@@ -35,7 +35,6 @@ export function useNeedsInputCount(enabled = true): number {
     s => s.blockedReviveRequestedAt,
     s => pendingSendWakeSig(s.pendingMessages),
     s => s.currentUser?._id,
-    s => s.liveInboxIds,
     s => resolveShowOld(s.clientState.ui),
   ]);
   // Mine-scoped: this is your personal attention count, so a teammate row cached
@@ -45,15 +44,15 @@ export function useNeedsInputCount(enabled = true): number {
   // time-driven, not field-driven — keep it alive with a coarse clock (shared
   // timer, so extra subscribers are free).
   const coarseNow = useCoarseNow(15_000);
-  // And count only the AUTHORITATIVE active set, not the raw never-prune cache —
-  // otherwise this tallies every aged-out "needs input" card the panel already
-  // hides, and the number never matches what you see. liveInboxIds + showOld make
-  // categorizeSessions drop "old" rows (see its opts).
+  // And count only the shared WORKING SET (sync-convergence C4), not the raw
+  // never-prune cache — otherwise this tallies every aged-out "needs input"
+  // card the panel already hides, and the number never matches what you see.
+  // categorizeMineSessions runs the selection internally.
   return useMemo(
     () => enabled
       ? categorizeMineSessions(s, coarseNow).needsInput.length
       : 0,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [enabled, sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), s.liveInboxIds, resolveShowOld(s.clientState.ui), coarseNow],
+    [enabled, sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), resolveShowOld(s.clientState.ui), coarseNow],
   );
 }

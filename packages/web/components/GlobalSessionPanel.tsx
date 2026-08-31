@@ -11,7 +11,7 @@ import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from ".
 import { SessionMenuItems } from "./menus/ObjectContextMenus";
 import { copyToClipboard, formatRelative, formatDateFull } from "../lib/utils";
 import { ImageLightbox } from "./ImageGallery";
-import { SessionErrorBanner } from "./SessionErrorBanner";
+import { SessionErrorBanner, SessionResumeBanner } from "./SessionErrorBanner";
 import { AppLoader } from "./AppLoader";
 import { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
@@ -20,7 +20,7 @@ import { threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } fro
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, filterInboxScope, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, computeInboxVisible, filterInboxScope, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, chipBucketFilters, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { sessionsWakeSig, resolveShowOld, showsBlockedBadge } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
@@ -51,7 +51,7 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, ZapOff, Pin, Copy, ArrowUp, ArrowDown } from "lucide-react";
+import { X, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, ZapOff, Pin, Copy, ArrowUp, ArrowDown } from "lucide-react";
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -61,6 +61,7 @@ import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { useAckAssignment } from "../hooks/useAckAssignment";
 import { sessionPanePath, startPaneDrag } from "../lib/stage";
+import { PaneControls } from "./stage/PaneControls";
 
 function formatIdleDuration(updatedAt: number): string {
   const diff = Date.now() - updatedAt;
@@ -199,27 +200,11 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
 
   return (
     <div className="relative h-full flex flex-col">
-      {(resumeState === "resuming" || resumeState === "sent") && (
-        <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-orange/90 text-sol-bg text-xs backdrop-blur-sm">
-          <span className="w-1.5 h-1.5 rounded-full bg-sol-bg animate-pulse" />
-          Resuming session...
-        </div>
-      )}
-      {resumeState === "reconstituting" && (
-        <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-orange/90 text-sol-bg text-xs backdrop-blur-sm">
-          <span className="w-1.5 h-1.5 rounded-full bg-sol-bg animate-pulse" />
-          Reconstituting session from database...
-        </div>
-      )}
-      {resumeState === "failed" && (
-        <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-red/90 text-sol-bg text-xs backdrop-blur-sm">
-          <span className="w-1.5 h-1.5 rounded-full bg-sol-bg" />
-          Resume timed out
-          <button onClick={handleManualResume} className="ml-1 px-1.5 py-0.5 rounded bg-sol-bg/20 hover:bg-sol-bg/30 transition-colors">
-            Retry
-          </button>
-        </div>
-      )}
+      <SessionResumeBanner
+        resumeState={resumeState}
+        looksAbandoned={looksAbandoned && !sessionError}
+        onResume={handleManualResume}
+      />
       {sessionError && resumeState === "idle" && (
         <SessionErrorBanner
           // Remount per session: the dismiss state is keyed by error TEXT, and
@@ -231,29 +216,15 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
           onResume={handleManualResume}
         />
       )}
-      {looksAbandoned && !sessionError && resumeState === "idle" && (
-        <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-bg-alt/90 border-b border-sol-border/50 text-sol-text-dim text-xs backdrop-blur-sm">
-          <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/50" />
-          Session unresponsive — send a message or
-          <button onClick={handleManualResume} className="px-1.5 py-0.5 rounded bg-sol-cyan/10 hover:bg-sol-cyan/20 border border-sol-cyan/30 text-sol-cyan transition-colors">
-            Resume
-          </button>
-        </div>
-      )}
       <div className="flex-1 min-h-0">
         <ConversationDiffLayout
           conversation={conversation as ConversationData}
           embedded
           headerExtra={shareControls}
-          headerEnd={onClose ? (
-            <button onClick={onClose} className="cc-panel__btn is-close" title="Close">
-              <X className="w-3.5 h-3.5" />
-            </button>
-          ) : undefined}
-          headerLeft={onExpandToMain ? (
-            <button onClick={onExpandToMain} className="cc-panel__btn flex-shrink-0" title="Open full — take the stage">
-              <ChevronsLeft className="w-4 h-4" />
-            </button>
+          headerEnd={onClose || onExpandToMain ? (
+            // The standard pane cluster (expand, close) — same icons and
+            // order as every other pane's strip (components/stage/PaneControls).
+            <PaneControls onExpand={onExpandToMain} onClose={onClose} />
           ) : undefined}
           hasMoreAbove={hasMoreAbove}
           hasMoreBelow={hasMoreBelow}
@@ -1759,16 +1730,43 @@ function MonitorBars({ session, isActive, onOpen }: {
 // wake outside this session (another session's reply, an external job), or
 // the user parked the card — this row states the reason from what the row
 // itself carries, so a Dormant card never sits there unexplained.
-function DormantReasonRow({ session, isActive, hasOtherRows, onOpen }: {
+//
+// variant "claim" is the honest inverse, for a card filed under NEEDS INPUT
+// whose pinned state still declares dormant: the agent SAYS a machine wakes
+// it, but the system can verify no armed trigger, watch, loop or run — either
+// the wake already landed and the agent never re-declared, or the wake lives
+// outside anything the daemon can see (a tmux job, another machine). Without
+// this row the card reads as a contradiction: a "Dormant" chip sitting in
+// Needs Input with nothing under it. The row names the claim and marks it
+// unverified, so the reader knows why the card still asks for them.
+function DormantReasonRow({ session, isActive, hasOtherRows, variant, onOpen }: {
   session: InboxSession;
   isActive: boolean;
   hasOtherRows: boolean;
+  variant: "parked" | "claim";
   onOpen: (session: InboxSession) => void;
 }) {
   const now = useCoarseNow(30_000);
   const watchRows = useLiveWatchRows(session, now).length;
   if (hasOtherRows || watchRows > 0) return null;
   const ts = threadStateView(session, session.message_count ?? 0, now);
+  if (variant === "claim") {
+    // Only a state that still DECLARES dormant earns the row; a stale state
+    // reads as absent (threadStateView returns null), and any other declared
+    // status means no wake was claimed.
+    if (ts?.status !== "dormant") return null;
+    return (
+      <WakeReasonRowShell
+        isActive={isActive}
+        family="Wake"
+        title="state claims a machine wake"
+        detail={`unverified — no armed trigger, watch, or loop · ${ts.provenance}`}
+        badge="claimed"
+        badgeClass="bg-sol-yellow/10 text-sol-yellow border-sol-yellow/30"
+        onClick={() => onOpen(session)}
+      />
+    );
+  }
   let family: string;
   let title: string;
   let detail: string;
@@ -1789,12 +1787,37 @@ function DormantReasonRow({ session, isActive, hasOtherRows, onOpen }: {
     title = ts?.headline || "waiting on a machine wake";
     detail = ts?.provenance || "";
   }
+  return (
+    <WakeReasonRowShell
+      isActive={isActive}
+      family={family}
+      title={title}
+      detail={detail}
+      badge="parked"
+      badgeClass="bg-sol-blue/10 text-sol-blue border-sol-blue/30"
+      onClick={() => onOpen(session)}
+    />
+  );
+}
+
+// The one row anatomy both wake-reason variants wear: ↳ child glyph, family
+// eyebrow, title, badge, optional detail line. Kept identical to the trigger /
+// monitor bars' two-line shape so a card's children always read as one family.
+function WakeReasonRowShell({ isActive, family, title, detail, badge, badgeClass, onClick }: {
+  isActive: boolean;
+  family: string;
+  title: string;
+  detail: string;
+  badge: string;
+  badgeClass: string;
+  onClick: () => void;
+}) {
   const ariaLabel = `${family} — why this session is parked`;
   return (
     <div className={`group/dormrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
       <button
         className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-blue/[0.05] transition-colors"
-        onClick={() => onOpen(session)}
+        onClick={onClick}
         title="Open the session"
       >
         <div className="flex gap-1.5 min-w-0">
@@ -1809,8 +1832,8 @@ function DormantReasonRow({ session, isActive, hasOtherRows, onOpen }: {
             <div className="flex items-center gap-1.5 min-w-0">
               <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-blue/70 shrink-0">{family}</span>
               <span className="text-xs truncate min-w-0 text-gray-400 font-normal">{title}</span>
-              <span className="ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border bg-sol-blue/10 text-sol-blue border-sol-blue/30">
-                parked
+              <span className={`ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border ${badgeClass}`}>
+                {badge}
               </span>
             </div>
             {detail && (
@@ -1831,23 +1854,29 @@ function DormantReasonRow({ session, isActive, hasOtherRows, onOpen }: {
 // "full" gives each its own row, "hidden" removes them the way the subagent
 // toggle hides subagent rows. The dormant invariant (a parked card explains
 // its wake) holds in strip and full; "hidden" is an explicit opt-out and wins.
-function CardBars({ session, mode, scheduleRows, activeSessionId, dormant, onOpen, onOpenSchedule }: {
+function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, onOpenSchedule }: {
   session: InboxSession;
   mode: CardBarsMode;
   scheduleRows: TriggerRow[];
   activeSessionId?: string | null;
-  dormant?: boolean;
+  // "parked": the card sits in the Dormant bucket — its wake MUST show, so the
+  // reason row is the fallback when no trigger/workflow/watch bar draws.
+  // "claim": the card sits in Needs Input while its pinned state declares
+  // dormant — the row renders the claimed wake as unverified so the
+  // contradiction explains itself.
+  wake?: "parked" | "claim";
   onOpen: (session: InboxSession) => void;
   onOpenSchedule: (row: TriggerRow) => void;
 }) {
   if (mode === "hidden") return null;
   const isActive = session._id === activeSessionId;
   const bound = scheduleRows.map((r) => ({ ...r, openId: session._id }));
-  const dormantRow = dormant ? (
+  const dormantRow = wake ? (
     <DormantReasonRow
       session={session}
       isActive={isActive}
       hasOtherRows={bound.length > 0 || workflowBarVisible(session)}
+      variant={wake}
       onOpen={onOpen}
     />
   ) : null;
@@ -3300,7 +3329,6 @@ function SessionListPanelImpl({
 }) {
   const s = useTrackedStore([
     s => s.clientState.ui,
-    s => s.liveInboxIds,
     // Team-mode active set + viewer identity — gate the scope pre-filter below.
     s => s.teamInboxIds,
     s => s.currentUser?._id,
@@ -3318,6 +3346,7 @@ function SessionListPanelImpl({
     s => s.activeProjectFilter,
     s => s.activeBucketFilter,
     s => s.chipFilterExclude,
+    s => s.extraBucketFilters,
     s => s.buckets,
     s => s.bucketAssignments,
     s => s.collapsedSections,
@@ -3376,28 +3405,14 @@ function SessionListPanelImpl({
   );
   // "Show old sessions" — a sticky per-user view preference (clientState.ui.
   // inbox_show_old, stamped LWW so the newest toggle on any device wins
-  // everywhere, OFF included). "Old" = a cached top-level session the live
-  // (authoritative) subscription no longer returns; the completeness crawl
-  // keeps it in the never-prune cache for search/open, so hiding it is a pure
-  // render decision, never a server re-fetch. Shown by default (a new user
-  // sees their whole history); hiding narrows the inbox to exactly the
-  // server's active set (store.liveInboxIds) — identical on every client —
-  // instead of each client's divergent local cache. liveInboxIds seeds from its persisted twin at
-  // hydration, so even the first cold frame filters correctly; an empty set
-  // (fresh install) means "nothing old yet" and never blanks the list.
-  // Optimistic stubs, pinned, the open session, and dismissed/stashed rows are
-  // always kept.
+  // everywhere, OFF included). "Old" is the FOLD of the shared working-set
+  // selection (sync-convergence C4): show-old selects shown + folded INSIDE
+  // the shared computation, never a filter bypass. Read here only to render
+  // the toggle; the counting read happens inside computeInboxVisible.
   const showAllSessions = resolveShowOld(s.clientState.ui);
   const focusedId = activeSessionId ?? s.currentSessionId;
-  // Inbox scope: "mine" (personal inbox) or "team" (shared team board). The
-  // scope pre-filter (filterInboxScope) runs BEFORE the old-session partition so
-  // "mine" never shows a teammate row and "team" shows exactly the team set.
   const inboxScope = s.clientState.ui?.inbox_scope ?? "mine";
   const meId = s.currentUser?._id?.toString?.() ?? null;
-  const scopedSessions = useMemo(
-    () => filterInboxScope(s.sessions, inboxScope, meId, s.teamInboxIds, focusedId),
-    [s.sessions, inboxScope, meId, s.teamInboxIds, focusedId],
-  );
   // The wake signature ignores updated_at, so the panel no longer re-renders on
   // every heartbeat. categorizeSessions still retires a stale "working" to
   // needs-input by comparing updated_at to Date.now() (the trust-TTL sweep), which
@@ -3405,16 +3420,17 @@ function SessionListPanelImpl({
   // sweep alive without coupling it back to heartbeat churn. 15s is well under the
   // minutes-scale TTL. See useCoarseNow / store/wakeSig.ts.
   const coarseNow = useCoarseNow(15_000);
-  // Team mode has no "old" partition — the board is already a bounded, team-
-  // visible set, so every scoped row shows and the show-old toggle stays hidden
-  // (oldCount 0). Mine mode keeps the completeness-crawl old-session hiding.
-  // visibleSessions (cache minus "old") backs BOTH the categorize buckets and the
-  // schedule-inbox partition below, so the panel keeps this explicit pass.
+  // THE COUNTING CHOKEPOINT (store computeInboxVisible): scope → shared
+  // working-set selection → fold. Team mode renders the server-gated team set
+  // unpartitioned (oldCount 0, membership is server truth there); mine mode
+  // renders exactly the shared selection every replica computes.
+  // visibleSessions backs BOTH the categorize buckets and the schedule-inbox
+  // partition below.
   const { visibleSessions, oldCount } = useMemo(
-    () => inboxScope === "team"
-      ? { visibleSessions: scopedSessions, oldCount: 0 }
-      : partitionOldSessions(scopedSessions, s.liveInboxIds, showAllSessions, focusedId),
-    [scopedSessions, inboxScope, s.liveInboxIds, showAllSessions, focusedId],
+    () => computeInboxVisible(s, { focusedId }),
+    // Structural change + the view keys + the epoch tick (coarseNow).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, coarseNow],
   );
 
   const { sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent } = useMemo(
@@ -3507,9 +3523,9 @@ function SessionListPanelImpl({
   const filterByChip = useCallback(
     (items: InboxSession[]) =>
       items.filter((sess) =>
-        chipMatchesSession(sess, { projectFilter: s.activeProjectFilter, bucketFilter: s.activeBucketFilter, exclude: s.chipFilterExclude, bucketByConv }),
+        chipMatchesSession(sess, { projectFilter: s.activeProjectFilter, exclude: s.chipFilterExclude, bucketFilters: chipBucketFilters(s), bucketByConv }),
       ),
-    [s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, bucketByConv],
+    [s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, bucketByConv],
   );
 
   // The Stashed / Killed buckets' open state is ephemeral and CLOSED by
@@ -3896,9 +3912,9 @@ function SessionListPanelImpl({
         manualOrder,
         freezeOrder: viewMode === "recent" ? recentFreezeOrder : null,
         chipMatches: (sess) =>
-          chipMatchesSession(sess, { projectFilter: s.activeProjectFilter, bucketFilter: s.activeBucketFilter, exclude: s.chipFilterExclude, bucketByConv }),
+          chipMatchesSession(sess, { projectFilter: s.activeProjectFilter, exclude: s.chipFilterExclude, bucketFilters: chipBucketFilters(s), bucketByConv }),
       }),
-    [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, bucketByConv],
+    [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, bucketByConv],
   );
   const totalSubagentCount = useMemo(() => {
     let count = 0;
@@ -4504,7 +4520,7 @@ function SessionListPanelImpl({
                   mode={cardBars}
                   scheduleRows={viewMode !== "trigger" ? scheduleBarRowsFor(session) : []}
                   activeSessionId={activeSessionId}
-                  dormant={key === "dormant"}
+                  wake={key === "dormant" ? "parked" : key === "needs_input" ? "claim" : undefined}
                   onOpen={handleSelect}
                   onOpenSchedule={openScheduleTarget}
                 />

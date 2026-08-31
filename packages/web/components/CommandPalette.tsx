@@ -407,7 +407,10 @@ export function ActionSubmenu({
       scoped,
       st.sessionsWithQueuedMessages,
       sessionsWithPendingSend(st.pendingMessages),
-      { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)), showOld: true, reviveRequestedAt: st.blockedReviveRequestedAt },
+      // No working-set partition here on purpose (the show-old-ON view of the
+      // scoped cache): the palette enumerates for search, and membership counts
+      // migrate onto the chokepoint in ct-47202.
+      { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)), reviveRequestedAt: st.blockedReviveRequestedAt },
     );
     const bucketByConv = convBucketMap(st.bucketAssignments as Record<string, BucketAssignmentItem>);
     const counts = computeChipCounts([...cat.sorted, ...cat.stashed, ...cat.dismissed], bucketByConv);

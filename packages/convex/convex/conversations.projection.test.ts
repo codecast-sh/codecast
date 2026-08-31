@@ -6,6 +6,9 @@ import {
   collectInboxSessionsPaginated,
   tallyInboxRows,
   INBOX_PROJECTION_FIELDS,
+  INBOX_LIVENESS_FIELDS,
+  INBOX_FAST_FIELDS,
+  _resetChildAuqProbeCacheForTests,
 } from "./conversations";
 import { INBOX_PINNED_CAP } from "./inboxProjection";
 import {
@@ -13,7 +16,7 @@ import {
   STATUS_TRUST_TTL_MS,
   HEARTBEAT_ALIVE_MS,
 } from "./inboxFilters";
-import { digestProjection, inboxEpoch, type InboxBucket } from "@codecast/shared/contracts";
+import { digestProjection, inboxEpoch, INBOX_FACT_FIELDS, INBOX_PROJECTION_VERSION, type InboxBucket } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
 
 // The server half of sync-convergence (docs/architecture/sync-convergence.md):
@@ -72,7 +75,7 @@ function countingCtx(fake: any) {
 }
 
 let nowSpy: ReturnType<typeof spyOn>;
-beforeEach(() => { nowSpy = spyOn(Date, "now").mockReturnValue(NOW); });
+beforeEach(() => { nowSpy = spyOn(Date, "now").mockReturnValue(NOW); _resetChildAuqProbeCacheForTests(); });
 afterEach(() => { nowSpy.mockRestore(); delete process.env.INBOX_DIGEST_DISABLED; });
 
 describe("overlay projection — determinism", () => {
@@ -90,21 +93,20 @@ describe("overlay projection — determinism", () => {
     const first = await computeSessionsLiveness({ db: db(tables) }, ME as any);
     nowSpy.mockReturnValue(NOW + 20_000); // still the same minute
     const second = await computeSessionsLiveness({ db: db(tables) }, ME as any);
-    expect(second.liveness).toEqual(first.liveness);
-    expect(second.projection.tally).toEqual(first.projection.tally);
-    expect(second.projection.set_digest).toBe(first.projection.set_digest);
+    // BYTE identical (C2): no raw execution timestamp may reach the payload,
+    // so Convex suppresses the push between real changes.
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
     expect(first.projection.epoch).toBe(EPOCH);
-    expect(first.projection.as_of).toBe(NOW);
-    expect(second.projection.as_of).toBe(NOW + 20_000);
-    expect(first.projection).toMatchObject({ v: 1, user_id: ME, scope: "mine", team_id: null, truncated: [] });
+    expect((first.projection as any).as_of).toBeUndefined();
+    expect(first.projection).toMatchObject({ v: INBOX_PROJECTION_VERSION, user_id: ME, scope: "mine", team_id: null, truncated: [] });
   });
 
-  test("the digest is the shared algorithm over every (id, bucket) pair, hidden included; the kill switch nulls it", async () => {
+  test("the digest is the shared algorithm over every (id, bucket, fold) triple, hidden included; the kill switch nulls it", async () => {
     const tables = {
       conversations: [conv("a"), conv("anchor", { anchor_id: "anchors_1" }), conv("d", { inbox_dismissed_at: EPOCH - H })],
     };
     const { liveness, projection } = await computeSessionsLiveness({ db: db(tables) }, ME as any);
-    const pairs = Object.entries(liveness).map(([id, row]) => [id, row.bucket] as [string, string]);
+    const pairs = Object.entries(liveness).map(([id, row]) => [id, row.bucket!, row.below_fold!] as [string, string, boolean]);
     expect(pairs.map(([, b]) => b).sort()).toEqual(["dismissed", "hidden", "needs_input"]);
     expect(projection.set_digest).toBe(digestProjection(pairs));
     expect(projection.set_digest).toMatch(/^[0-9a-f]{16}$/);
@@ -176,9 +178,16 @@ describe("overlay projection — placement rules", () => {
     expect(liveness.conversations_parent_perm).toMatchObject({ asking: true, bucket: "questions" });
     expect(liveness.conversations_parent_auq).toMatchObject({ asking: true, bucket: "questions" });
     expect(liveness.conversations_parent_quiet).toMatchObject({ asking: false });
-    // Children are never projection members.
-    expect(Object.keys(liveness)).not.toContain("conversations_child_perm");
-    expect(Object.keys(liveness)).not.toContain("conversations_child_auq");
+    // Children are never projection MEMBERS — no bucket, no digest entry —
+    // but the live probed ones ride the map as FACT-ONLY rows so a replica can
+    // compute the parent rollup itself (C1).
+    expect(liveness.conversations_child_perm.agent_status).toBe("permission_blocked");
+    expect(liveness.conversations_child_perm.bucket).toBeUndefined();
+    expect(liveness.conversations_child_auq.awaiting_input).toBe(true);
+    expect(liveness.conversations_child_auq.bucket).toBeUndefined();
+    expect(liveness.conversations_child_auq.last_turn_allows_park).toBeDefined();
+    // An idle child is not probed and ships no fact row.
+    expect(Object.keys(liveness)).not.toContain("conversations_child_quiet");
   });
 
   test("armed_trigger_kind on the row drives dormancy with no agent_tasks read", async () => {
@@ -438,6 +447,65 @@ describe("overlay read budget", () => {
     expect(by("session_owners")).toBe(1);
     expect(by("get")).toBe(0);
     expect(ops.length).toBe(12);
+  });
+});
+
+describe("overlay read budget — the child probe cache", () => {
+  test("child AUQ probes are cached by (child id, message_count): a repeat execution pays zero message reads and emits the same payload", async () => {
+    const tables = () => ({
+      conversations: [
+        conv("parent", { updated_at: EPOCH - MIN }),
+        conv("child", { is_subagent: true, parent_conversation_id: "conversations_parent", updated_at: EPOCH - MIN }),
+      ],
+      managed_sessions: [
+        { _id: "ms_parent", user_id: ME, conversation_id: "conversations_parent", last_heartbeat: EPOCH - 1000, agent_status: "working", agent_status_updated_at: EPOCH - MIN },
+        { _id: "ms_child", user_id: ME, conversation_id: "conversations_child", last_heartbeat: EPOCH - 1000, agent_status: "working", agent_status_updated_at: EPOCH - MIN },
+      ],
+      messages: [
+        { _id: "messages_auq", conversation_id: "conversations_child", role: "assistant", timestamp: EPOCH - MIN, tool_calls: [{ name: "AskUserQuestion" }] },
+      ],
+    });
+    const cold = countingCtx(db(tables()));
+    const first = await computeSessionsLiveness(cold.ctx, ME as any);
+    expect(first.liveness.conversations_parent.asking).toBe(true);
+    expect(first.liveness.conversations_child.awaiting_input).toBe(true); // the fact-only child row
+    const coldChildReads = cold.ops.filter((o) => o.startsWith("messages")).length;
+    expect(coldChildReads).toBeGreaterThanOrEqual(1);
+
+    const warm = countingCtx(db(tables()));
+    const second = await computeSessionsLiveness(warm.ctx, ME as any);
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+    // The child probe answered from the (id, message_count) cache. The
+    // parent's own reads are unchanged.
+    expect(warm.ops.filter((o) => o.startsWith("messages")).length).toBe(coldChildReads - 1);
+  });
+
+  test("a message_count change invalidates the cached probe", async () => {
+    const base = {
+      conversations: [
+        conv("parent", { updated_at: EPOCH - MIN }),
+        conv("child", { is_subagent: true, parent_conversation_id: "conversations_parent", updated_at: EPOCH - MIN }),
+      ],
+      managed_sessions: [
+        { _id: "ms_child", user_id: ME, conversation_id: "conversations_child", last_heartbeat: EPOCH - 1000, agent_status: "working", agent_status_updated_at: EPOCH - MIN },
+      ],
+      messages: [
+        { _id: "messages_auq", conversation_id: "conversations_child", role: "assistant", timestamp: EPOCH - MIN, tool_calls: [{ name: "AskUserQuestion" }] },
+      ],
+    };
+    const first = await computeSessionsLiveness({ db: db(base) }, ME as any);
+    expect(first.liveness.conversations_parent.asking).toBe(true);
+    // The answer arrives: a newer tool_result message, message_count bumped.
+    const answered = {
+      ...base,
+      conversations: base.conversations.map((c: any) => c._id === "conversations_child" ? { ...c, message_count: 5 } : c),
+      messages: [
+        ...base.messages,
+        { _id: "messages_answer", conversation_id: "conversations_child", role: "user", timestamp: EPOCH - MIN + 1000, tool_results: [{}] },
+      ],
+    };
+    const second = await computeSessionsLiveness({ db: db(answered) }, ME as any);
+    expect(second.liveness.conversations_parent.asking).toBe(false);
   });
 });
 

@@ -128,9 +128,39 @@ export function insertLeaf(
   edge: SplitEdge,
   path: string,
 ): { root: StageNode; leafId: string } | null {
+  return insertNode(root, target, edge, leafNode(path));
+}
+
+/**
+ * Move an existing leaf to a new position in ONE tree operation. The leaf
+ * keeps its identity (no remount) and the tree never passes through the
+ * collapsed single-pane state — the trap where a two-pane rearrange rewrote
+ * the stationary pane's path through the plain-tab conversion. Null when the
+ * move is meaningless: unknown leaf, moving onto itself, or the only leaf.
+ */
+export function moveLeaf(
+  root: StageNode,
+  leafId: string,
+  target: SplitTarget,
+  edge: SplitEdge,
+): StageNode | null {
+  const leaf = findLeaf(root, leafId);
+  if (!leaf) return null;
+  if (target !== "root" && target.leafId === leafId) return null;
+  const without = removeLeaf(root, leafId);
+  if (!without) return null;
+  const res = insertNode(without, target, edge, leaf);
+  return res ? res.root : null;
+}
+
+function insertNode(
+  root: StageNode,
+  target: SplitTarget,
+  edge: SplitEdge,
+  fresh: StageLeaf,
+): { root: StageNode; leafId: string } | null {
   const dir = edgeDir(edge);
   const before = edgeBefore(edge);
-  const fresh = leafNode(path);
 
   if (target === "root") {
     if (root.type === "split" && root.dir === dir) {
@@ -363,21 +393,22 @@ export function resolveDropZone(
   // Position within the leaf, 0..1 per axis.
   const fx = (px - leaf.rect.left) / leaf.rect.width;
   const fy = (py - leaf.rect.top) / leaf.rect.height;
-  // Nearest edge wins when inside a band; compare against aspect-corrected
-  // distances so a wide pane doesn't make top/bottom unreachable.
+  // Bands rank by aspect-corrected (pixel-space) nearness so a wide pane
+  // doesn't make top/bottom unreachable — but ANY band containing the pointer
+  // may win: testing only the nearest one carved dead zones out of the long
+  // edges of stretched panes (a failed nearer band shadowed a valid one).
   const leafW = (leaf.rect.width / 100) * stage.width;
   const leafH = (leaf.rect.height / 100) * stage.height;
-  const bands: Array<{ edge: SplitEdge; depth: number }> = [
-    { edge: "left", depth: fx },
-    { edge: "right", depth: 1 - fx },
-    { edge: "top", depth: fy * (leafH / leafW) },
-    { edge: "bottom", depth: (1 - fy) * (leafH / leafW) },
+  const bands: Array<{ edge: SplitEdge; depth: number; rawDepth: number }> = [
+    { edge: "left", depth: fx, rawDepth: fx },
+    { edge: "right", depth: 1 - fx, rawDepth: 1 - fx },
+    { edge: "top", depth: fy * (leafH / leafW), rawDepth: fy },
+    { edge: "bottom", depth: (1 - fy) * (leafH / leafW), rawDepth: 1 - fy },
   ];
   bands.sort((a, b) => a.depth - b.depth);
-  const nearest = bands[0];
-  const rawDepth =
-    nearest.edge === "left" ? fx : nearest.edge === "right" ? 1 - fx : nearest.edge === "top" ? fy : 1 - fy;
-  if (rawDepth <= EDGE_BAND) return { kind: "edge", leafId: leaf.id, edge: nearest.edge };
+  for (const band of bands) {
+    if (band.rawDepth <= EDGE_BAND) return { kind: "edge", leafId: leaf.id, edge: band.edge };
+  }
   return { kind: "center", leafId: leaf.id };
 }
 
