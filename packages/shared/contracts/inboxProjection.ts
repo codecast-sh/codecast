@@ -6,6 +6,8 @@
 // PURE isomorphic code: no Node or DOM APIs, no BigInt, so the Convex runtime,
 // the daemon, the browser and React Native all run the same bytes.
 import { ACTIVE_AGENT_STATUSES } from "./agentStatus";
+import { isMachineDeliveredMessage } from "./machineMessages";
+import { isLoopFresh, type LoopState } from "./loopState";
 import type { WorkState } from "./workState";
 
 // ── Buckets ──────────────────────────────────────────────────────────────────
@@ -51,11 +53,19 @@ export const INBOX_TRUNCATION_KINDS = [
 
 export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 
-export const INBOX_PROJECTION_VERSION = 1 as const;
+// Bumped on ANY behavior change to the shared computation (membership, fold,
+// placement, digest). The golden fixtures assert their hash against it, and a
+// client compares only when the payload's `v` equals its own constant — a
+// deploy skew window becomes silence plus a metric, never a heal storm (C6).
+// v2: digest over (id, bucket, below_fold) triples; the shared working-set
+// selection and fold; `as_of` removed from the envelope.
+export const INBOX_PROJECTION_VERSION = 2 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
-  as_of: number;
+  // The projection's clock — the ONLY time term in the envelope. No raw
+  // execution timestamp may join it: two executions inside one minute over the
+  // same data must be byte identical so Convex suppresses the push (C2).
   epoch: number;
   user_id: string;
   scope: "mine" | "team";
@@ -93,6 +103,8 @@ export interface WorkStateInput {
   userDormant?: boolean;
   /** The home of an armed recurring/event trigger that injects into it (and whose last run did not fail or flag attention). */
   armedTriggerHome?: boolean;
+  /** The session sleeps on a live harness /loop wakeup (loop_state armed, not overdue — see dormancy.isArmedLoopHome). Same standing strength as armedTriggerHome: the machine owns the next move. */
+  armedLoopHome?: boolean;
   /** The home of an armed ONCE inject trigger. Weaker than a standing loop: it only demotes a `done` rest to dormant, never needs_input (see dormancy.ArmedTriggerHomes). */
   armedOnceTriggerHome?: boolean;
   /** The settle classifier's verdict for THIS settle (settle_verdict, current per isSettleVerdictCurrent), when no declaration exists. Only "done" carries weight. */
@@ -156,7 +168,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // hide an open ask.
   const doneRest = (): WorkState => (input.armedOnceTriggerHome ? "dormant" : "done");
   const restState = (): WorkState => {
-    if (declaredDormant || input.armedTriggerHome || input.userDormant) return "dormant";
+    if (declaredDormant || input.armedTriggerHome || input.armedLoopHome || input.userDormant) return "dormant";
     if (declaredDone) return doneRest();
     if (agentStatus === "idle" || !agentStatus) {
       // A blocked PIN is the agent's explicit claim on the human — the same
@@ -314,16 +326,412 @@ function hex8(n: number): string {
   return (n >>> 0).toString(16).padStart(8, "0");
 }
 
-// Order-independent digest over (id, bucket) pairs: per pair h = fnv1a32(id:bucket),
-// folded into two 32-bit lanes (a plain sum and a sum of imul(h, h|1)), rendered
-// as 16 lowercase hex characters. No sorting, no BigInt, no whole-set string.
-export function digestProjection(pairs: Iterable<readonly [string, string]>): string {
+// Order-independent digest over (id, bucket, below_fold) triples: per entry
+// h = fnv1a32(`id:bucket:fold`), folded into two 32-bit lanes (a plain sum and
+// a sum of imul(h, h|1)), rendered as 16 lowercase hex characters. No sorting,
+// no BigInt, no whole-set string. Fold is in the digest on purpose: with show
+// old off the headline count is the shown tally, so two replicas that agree on
+// every bucket but cut the fold differently are diverged, and the digest must
+// say so.
+export function digestProjection(entries: Iterable<readonly [string, string, boolean]>): string {
   let laneA = 0;
   let laneB = 0;
-  for (const [id, bucket] of pairs) {
-    const h = fnv1a32(`${id}:${bucket}`);
+  for (const [id, bucket, fold] of entries) {
+    const h = fnv1a32(`${id}:${bucket}:${fold ? "1" : "0"}`);
     laneA = (laneA + h) >>> 0;
     laneB = (laneB + Math.imul(h, h | 1)) >>> 0;
   }
   return hex8(laneA) + hex8(laneB);
 }
+
+// ── Membership: the visibility rule ─────────────────────────────────────────
+
+// Lifted from convex/inboxFilters.ts so the server scan and every replica run
+// ONE implementation (design C4); convex re-exports these back.
+export const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"] as const;
+
+export function isNoiseTitle(title: string | null | undefined): boolean {
+  const t = title?.trim() || "";
+  if (!t) return false;
+  if (t.toLowerCase() === "warmup") return true;
+  return NOISE_TITLE_PREFIXES.some((p) => t.startsWith(p));
+}
+
+// A row that can never be its own projection member: subagents, workflow subs,
+// and rows with a parent pointer but no parent message (orphans). Their state
+// surfaces only on the parent (asking rollup, producing grace).
+export interface InboxRowIdentity {
+  is_subagent?: boolean | null;
+  is_workflow_sub?: boolean | null;
+  parent_conversation_id?: unknown;
+  parent_message_uuid?: string | null;
+}
+
+export function isOrphanOrSubagent(conv: InboxRowIdentity): boolean {
+  if (conv.is_subagent === true) return true;
+  if (conv.is_workflow_sub === true) return true;
+  if (conv.parent_conversation_id && !conv.parent_message_uuid) return true;
+  return false;
+}
+
+export interface InboxVisibilityRow extends InboxRowIdentity {
+  status?: string;
+  message_count?: number | null;
+  title?: string | null;
+  inbox_killed_at?: number | null;
+  inbox_pinned_at?: number | null;
+}
+
+// A stash that survives machine wakes ("stash and hide"). A plain stash is
+// cleared by any send into the session, a trigger wake included — the user
+// wants to see the row when something happens to it. A hidden stash keeps the
+// agent working out of sight; only an ask (blocked declaration, needs-attention
+// run, a stall) brings it back. The flag is honored only while the stash stamp
+// is set, so a stale `true` on an unstashed row means nothing.
+export function isStashHidden(
+  row: { inbox_stashed_at?: number | null; inbox_stash_hidden?: boolean | null },
+): boolean {
+  return !!row.inbox_stashed_at && !!row.inbox_stash_hidden;
+}
+
+// `inbox_dismissed_at` is an absolute flag: a truthy value means dismissed until
+// a user action clears it. Never compare it against `updated_at`. Dismissed
+// conversations are still part of the inbox — they place in their own bucket.
+// Drops subagent/orphan rows, completed rows with zero messages, noise titles,
+// and killed rows unless pinned.
+export function shouldShowInInbox(conv: InboxVisibilityRow): boolean {
+  if (isOrphanOrSubagent(conv)) return false;
+  if (conv.status === "completed" && (conv.message_count ?? 0) === 0) return false;
+  if (isNoiseTitle(conv.title)) return false;
+  if (conv.inbox_killed_at && !conv.inbox_pinned_at) return false;
+  return true;
+}
+
+// ── Stamp currency (dormant gesture, settle verdict) ────────────────────────
+
+// The user's "dormant" gesture is a stamp that any later activity silently
+// expires: honored while newer than the row's last activity, dead the moment a
+// wake, a message, or a new turn bumps updated_at. No write un-parks; the row
+// simply moves on.
+export function isUserDormant(
+  conv: { inbox_dormant_at?: number | null; updated_at: number },
+): boolean {
+  return !!conv.inbox_dormant_at && conv.inbox_dormant_at >= conv.updated_at;
+}
+
+// The settle classifier writes its verdict AFTER the settle it describes, so a
+// current verdict is always newer than the row's last activity. The next turn
+// bumps updated_at past it and the verdict is stale until the next settle —
+// during which the active arms of classifyWorkState win anyway. Same contract
+// as isUserDormant, deliberately.
+export function isSettleVerdictCurrent(
+  conv: { settle_verdict_at?: number | null; updated_at: number },
+): boolean {
+  return !!conv.settle_verdict_at && conv.settle_verdict_at >= conv.updated_at;
+}
+
+// ── The working set (design C4) ─────────────────────────────────────────────
+
+// The five capped windows the server scan reads and an honest replica must
+// select identically. Single source: convex derives INBOX_WINDOW_CAP and
+// INBOX_PINNED_CAP from this map.
+export const INBOX_WINDOW_CAPS = {
+  recent: 200,
+  pinned: 100,
+  dismissed: 200,
+  stashed: 200,
+  owned: 200,
+} as const;
+
+export type WorkingSetWindow = keyof typeof INBOX_WINDOW_CAPS;
+
+const WORKING_SET_WINDOWS = Object.keys(INBOX_WINDOW_CAPS) as WorkingSetWindow[];
+
+// How far back a row's stamp may be and still hold its window seat.
+export const WORKING_SET_RECENCY_MS = 30 * 24 * 60 * 60 * 1000;
+// The fold: a clean gap this wide in the recent members' activity hides
+// everything older behind the show-old toggle.
+export const INBOX_FOLD_GAP_MS = 12 * 60 * 60 * 1000;
+
+// The row fields membership and fold read. Facts (updated_at) ride the
+// overlay, so the selection input is fresh for every covered row.
+export interface WorkingSetRow extends InboxVisibilityRow {
+  _id: string | { toString(): string };
+  updated_at: number;
+  inbox_dismissed_at?: number | null;
+  inbox_stashed_at?: number | null;
+  has_pending_messages?: boolean | null;
+  /** Membership in the viewer's session_owners set, stamped by the caller. */
+  owned_by_me?: boolean | null;
+}
+
+// Window eligibility BEFORE caps ([] = nonmember). Top-level rows only, after
+// shouldShowInInbox — both checks live here so a caller cannot forget them.
+export function inWorkingSet(row: WorkingSetRow, epoch: number): WorkingSetWindow[] {
+  if (!shouldShowInInbox(row)) return [];
+  const windows: WorkingSetWindow[] = [];
+  const horizon = epoch - WORKING_SET_RECENCY_MS;
+  const recentEligible =
+    (row.status === "active" || row.status === "completed") && row.updated_at >= horizon;
+  if (recentEligible) windows.push("recent");
+  if (row.inbox_pinned_at) windows.push("pinned");
+  if (!row.inbox_killed_at) {
+    if (row.inbox_dismissed_at && row.inbox_dismissed_at >= horizon) windows.push("dismissed");
+    if (row.inbox_stashed_at && row.inbox_stashed_at >= horizon) windows.push("stashed");
+  }
+  if (row.owned_by_me && recentEligible) windows.push("owned");
+  return windows;
+}
+
+const WINDOW_SORT_KEY: Record<Exclude<WorkingSetWindow, "owned">, (row: WorkingSetRow) => number> = {
+  recent: (r) => r.updated_at,
+  pinned: (r) => r.inbox_pinned_at ?? 0,
+  dismissed: (r) => r.inbox_dismissed_at ?? 0,
+  stashed: (r) => r.inbox_stashed_at ?? 0,
+};
+
+export type WorkingSetMember<Row extends WorkingSetRow = WorkingSetRow> = {
+  row: Row;
+  /** ELIGIBILITY windows (before caps): what the row's own stamps claim. */
+  windows: WorkingSetWindow[];
+};
+
+// The shared selection, caps included: the union of the per-window top K over
+// eligible rows. When a window overflows it names itself in `truncated` and the
+// compare drops that window's rows on both sides — a capped window is dark to
+// the proof. The owned window has no replicated order (server owner-row order),
+// so under overflow it keeps an arbitrary K and relies on the flag.
+export function selectWorkingSet<Row extends WorkingSetRow>(
+  rows: Iterable<Row>,
+  epoch: number,
+): { members: Map<string, WorkingSetMember<Row>>; truncated: InboxTruncation[] } {
+  const eligible: Array<{ id: string; member: WorkingSetMember<Row> }> = [];
+  for (const row of rows) {
+    const windows = inWorkingSet(row, epoch);
+    if (windows.length === 0) continue;
+    eligible.push({ id: String(row._id), member: { row, windows } });
+  }
+  const truncated = new Set<InboxTruncation>();
+  const members = new Map<string, WorkingSetMember<Row>>();
+  for (const w of WORKING_SET_WINDOWS) {
+    const cap = INBOX_WINDOW_CAPS[w];
+    let inWindow = eligible.filter((e) => e.member.windows.includes(w));
+    if (inWindow.length > cap) {
+      truncated.add(w);
+      if (w !== "owned") {
+        const key = WINDOW_SORT_KEY[w];
+        inWindow = [...inWindow].sort((a, b) => key(b.member.row) - key(a.member.row));
+      }
+      inWindow = inWindow.slice(0, cap);
+    }
+    for (const e of inWindow) if (!members.has(e.id)) members.set(e.id, e.member);
+  }
+  return { members, truncated: INBOX_TRUNCATION_KINDS.filter((k) => truncated.has(k)) };
+}
+
+// ── The fold (design C4) ────────────────────────────────────────────────────
+
+// A row someone filed on purpose is never fold material: a pin, a dismiss or a
+// stash STAMP (the same stamps placement reads — a dismissed row sits in the
+// dismissed bucket whether or not its stamp still holds a window seat), or an
+// owner seat. ONE rule for the shared fold and the server's per-row flag
+// (convex isBelowInboxFold); a parallel predicate keyed on window membership
+// instead of the stamp diverged exactly at the 30-day stamp horizon (found by
+// the generated-world property test, 2026-09-01).
+export function isFoldExempt(row: WorkingSetRow, windows?: readonly WorkingSetWindow[]): boolean {
+  if (row.inbox_pinned_at || row.inbox_dismissed_at || row.inbox_stashed_at) return true;
+  if (row.owned_by_me || windows?.includes("owned")) return true;
+  return false;
+}
+
+// Deterministic 12h gap cut by updated_at over members NOT filed on purpose
+// (isFoldExempt): pinned, dismissed, stashed and owned rows are someone's
+// explicit act and never fold (nor bridge a gap that should hide the caller's
+// cruft). Rows outside the selection (CLI label extras, foreign channels) are
+// fold exempt on every channel — they are simply not in `members`. Queued work
+// (has_pending_messages) is about to move, so it never folds either, though
+// it still counts toward the gap. Fold never changes membership; it splits
+// the tally and the default rendering.
+export function computeFold(
+  members: ReadonlyMap<string, WorkingSetMember>,
+  _epoch: number,
+): { belowFold: Set<string>; cutoff: number } {
+  const candidates: Array<{ id: string; row: WorkingSetRow }> = [];
+  for (const [id, m] of members) {
+    if (isFoldExempt(m.row, m.windows)) continue;
+    candidates.push({ id, row: m.row });
+  }
+  candidates.sort((a, b) => b.row.updated_at - a.row.updated_at);
+  let cutoff = 0;
+  for (let i = 1; i < candidates.length; i++) {
+    if (candidates[i - 1].row.updated_at - candidates[i].row.updated_at > INBOX_FOLD_GAP_MS) {
+      cutoff = candidates[i].row.updated_at;
+      break;
+    }
+  }
+  const belowFold = new Set<string>();
+  if (cutoff > 0) {
+    for (const c of candidates) {
+      if (c.row.has_pending_messages) continue;
+      if (c.row.updated_at < cutoff) belowFold.add(c.id);
+    }
+  }
+  return { belowFold, cutoff };
+}
+
+// ── Row placement from replicated fields (design C3/C5) ─────────────────────
+
+// Everything projectInbox needs on a row: the conversation's own semantic
+// fields plus the overlay-owned facts. All optional except updated_at — a
+// classifier must read an absent fact as unknown and fall back honestly.
+export interface ProjectableInboxRow extends WorkingSetRow {
+  inbox_dormant_at?: number | null;
+  anchor_id?: unknown;
+  armed_trigger_kind?: string | null;
+  loop_state?: Pick<LoopState, "status" | "wakeup_at" | "fired_at" | "event_at"> | null;
+  settle_verdict?: string | null;
+  settle_verdict_at?: number | null;
+  thread_state_status?: string | null;
+  pending_api_error?: boolean | null;
+  /** The last USER message (conversations.last_message_preview / last_user_message). */
+  last_message_preview?: string | null;
+  last_user_message?: string | null;
+  // Overlay-owned facts (INBOX_FACT_FIELDS).
+  agent_status?: string | null;
+  is_idle?: boolean | null;
+  is_unresponsive?: boolean | null;
+  awaiting_input?: boolean | null;
+  last_turn_allows_park?: boolean | null;
+}
+
+// The machine-delivered-last-turn rule behind every structural park: an armed
+// trigger/loop home parks only while the machine delivered the last user turn
+// (or there is none) — a human who spoke last is triaging the session. Prefers
+// the replicated `last_turn_allows_park` fact (the server computed it from the
+// newest message, including the probed fallback the preview lacks); falls back
+// to the preview fields for rows the overlay has not covered.
+export function rowLastTurnAllowsPark(row: Pick<ProjectableInboxRow, "last_turn_allows_park" | "last_message_preview" | "last_user_message">): boolean {
+  if (typeof row.last_turn_allows_park === "boolean") return row.last_turn_allows_park;
+  const preview = row.last_message_preview ?? row.last_user_message ?? null;
+  return !preview || isMachineDeliveredMessage(preview);
+}
+
+// The one row → placement adapter: builds the InboxPlacementInput from
+// replicated fields and runs the shared placeInboxRow. The server's
+// placeConversationRow and every replica surface delegate here, so a rule can
+// never exist on one side only.
+export function placeProjectableRow(
+  row: ProjectableInboxRow,
+  asking: boolean,
+  epoch: number,
+): InboxPlacement {
+  const park = rowLastTurnAllowsPark(row);
+  const loop = row.loop_state;
+  return placeInboxRow({
+    agentStatus: row.agent_status ?? undefined,
+    isIdle: !!row.is_idle,
+    awaitingInput: !!row.awaiting_input,
+    hasPending: !!row.has_pending_messages,
+    isUnresponsive: !!row.is_unresponsive,
+    messageCount: row.message_count ?? 0,
+    killed: !!row.inbox_killed_at,
+    userDormant: isUserDormant(row as { inbox_dormant_at?: number | null; updated_at: number }),
+    armedTriggerHome: (row.armed_trigger_kind ?? "none") === "standing" && park,
+    armedLoopHome: !!loop && loop.status === "armed" && isLoopFresh(loop, epoch) && park,
+    armedOnceTriggerHome: (row.armed_trigger_kind ?? "none") === "once" && park,
+    settleVerdict: isSettleVerdictCurrent(row as { settle_verdict_at?: number | null; updated_at: number }) ? (row.settle_verdict ?? null) : null,
+    declaredStatus: row.thread_state_status ?? null,
+    pendingApiError: row.pending_api_error === true,
+    dismissed: !!row.inbox_dismissed_at,
+    stashed: !!row.inbox_stashed_at,
+    pinned: !!row.inbox_pinned_at,
+    isAnchor: !!row.anchor_id,
+    asking,
+  });
+}
+
+// ── The whole projection in one call (design C5/C6) ─────────────────────────
+
+// Inputs a replica derives outside the row (never stored on it): the asking
+// flag — own open prompt, pending `cast decide`, or a child's open ask.
+export type InboxProjectionInputs = {
+  asking?: (id: string) => boolean;
+};
+
+// Membership, fold, placement, tallies and digest over a replica's rows at one
+// epoch. `viewState.showOld` does not change the computation — it names which
+// tally is the headline (`shown` vs `shown + folded`); both are always
+// returned so a toggle costs no recompute. Hidden-bucket rows enter `entries`
+// and the digest but never the tallies.
+export function projectInbox<Row extends ProjectableInboxRow>(
+  rows: Iterable<Row>,
+  _viewState: { showOld: boolean },
+  epoch: number,
+  overlays?: InboxProjectionInputs,
+): {
+  entries: Array<readonly [string, InboxBucket, boolean]>;
+  placements: Map<string, InboxPlacement & { below_fold: boolean }>;
+  tally: { shown: InboxTally; folded: InboxTally };
+  set_digest: string;
+  truncated: InboxTruncation[];
+  /** Each member's windows — the compare drops a member whose every window
+   *  overflowed (C6), so it needs the selection's view of the row. */
+  windows: Map<string, WorkingSetWindow[]>;
+} {
+  const { members, truncated } = selectWorkingSet(rows, epoch);
+  const { belowFold } = computeFold(members, epoch);
+  const entries: Array<readonly [string, InboxBucket, boolean]> = [];
+  const placements = new Map<string, InboxPlacement & { below_fold: boolean }>();
+  const windows = new Map<string, WorkingSetWindow[]>();
+  const tally = { shown: emptyInboxTally(), folded: emptyInboxTally() };
+  for (const [id, m] of members) {
+    const asking = overlays?.asking?.(id) ?? false;
+    const placement = placeProjectableRow(m.row as ProjectableInboxRow, asking, epoch);
+    const below_fold = belowFold.has(id);
+    entries.push([id, placement.bucket, below_fold]);
+    placements.set(id, { ...placement, below_fold });
+    windows.set(id, m.windows);
+    if (placement.bucket !== "hidden") (below_fold ? tally.folded : tally.shown)[placement.bucket]++;
+  }
+  return { entries, placements, tally, set_digest: digestProjection(entries), truncated, windows };
+}
+
+// ── Field ownership (design C1) ─────────────────────────────────────────────
+
+// The overlay-owned FACT fields: one writer (sessionsLiveness / its team twin).
+// The server strip list (every other sessions channel nulls these) and the
+// client preserve list both derive from this constant, with a signature test,
+// so no channel can write a torn or stale fact over a fresher one.
+export const INBOX_FACT_FIELDS = [
+  "agent_status",
+  "is_idle",
+  "is_unresponsive",
+  "awaiting_input",
+  "is_connected",
+  "tmux_session",
+  "permission_mode",
+  "agent_started_at",
+  "open_tasks",
+  "open_tasks_at",
+  "message_count",
+  "updated_at",
+  "last_turn_allows_park",
+] as const;
+
+export type InboxFactField = (typeof INBOX_FACT_FIELDS)[number];
+
+// The projection STAMP fields — checking data, never render sources on a
+// replica: stripped from every row channel, stored only in the client's
+// per-scope sessionsProjection buffer, and never merged onto session rows.
+// `bucket_stale_at` is a client recompute scheduling hint and payload
+// staleness signal; `stale_bucket` is never rendered.
+export const INBOX_PROJECTION_FIELDS = [
+  "bucket",
+  "work_state",
+  "asking",
+  "below_fold",
+  "bucket_stale_at",
+  "stale_bucket",
+] as const;
+
+export type InboxProjectionField = (typeof INBOX_PROJECTION_FIELDS)[number];

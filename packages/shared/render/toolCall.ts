@@ -13,6 +13,43 @@ export interface ToolCallLike {
   input: string;
 }
 
+// Family classifiers — one set per kind so web, mobile, and the share view
+// don't keep growing parallel `name === "Bash" || name === "bash" || …` lists.
+// Grok's snake_case ids (`run_terminal_command`, `read_file`, `search_replace`)
+// belong in the same families as Claude's capitalized names and Codex's
+// `shell_command` / `file_read` synonyms.
+const SHELL_TOOL_IDS = new Set([
+  "Bash", "bash", "shell_command", "shell", "exec_command", "container.exec",
+  "commandExecution", "run_terminal_command",
+]);
+const READ_TOOL_IDS = new Set(["Read", "read", "file_read", "read_file"]);
+const WRITE_TOOL_IDS = new Set(["Write", "write", "file_write"]);
+const EDIT_TOOL_IDS = new Set(["Edit", "edit", "file_edit", "search_replace"]);
+const GREP_TOOL_IDS = new Set(["Grep", "grep"]);
+const GLOB_TOOL_IDS = new Set(["Glob", "glob", "list_dir"]);
+const TODO_TOOL_IDS = new Set(["TodoWrite", "todo_write", "todowrite"]);
+const ASK_TOOL_IDS = new Set(["AskUserQuestion", "ask_user_question"]);
+const PLAN_MODE_TOOL_IDS = new Set(["EnterPlanMode", "ExitPlanMode", "enter_plan_mode", "exit_plan_mode"]);
+const AGENT_TOOL_IDS = new Set(["Task", "Agent", "spawn_subagent"]);
+
+export const isShellTool = (name: string) => SHELL_TOOL_IDS.has(name);
+export const isReadTool = (name: string) => READ_TOOL_IDS.has(name);
+export const isWriteTool = (name: string) => WRITE_TOOL_IDS.has(name);
+export const isEditTool = (name: string) => EDIT_TOOL_IDS.has(name);
+export const isGrepTool = (name: string) => GREP_TOOL_IDS.has(name);
+export const isGlobTool = (name: string) => GLOB_TOOL_IDS.has(name);
+export const isTodoTool = (name: string) => TODO_TOOL_IDS.has(name);
+export const isAskTool = (name: string) => ASK_TOOL_IDS.has(name);
+export const isPlanModeTool = (name: string) => PLAN_MODE_TOOL_IDS.has(name);
+export const isAgentTool = (name: string) => AGENT_TOOL_IDS.has(name);
+
+/** Path argument across Claude (`file_path`), Codex (`path`), opencode (`filePath`), and Grok (`target_file` / `target_directory`). */
+export function toolPathFromInput(parsed: Record<string, unknown>): string {
+  return String(
+    parsed.file_path || parsed.filePath || parsed.path || parsed.target_file || parsed.target_directory || "",
+  );
+}
+
 // One real tool invocation recovered from a wrapper tool call. Three wrappers
 // exist: Codex's `exec` program (`tools.<name>(...)` expressions), the Chrome
 // extension's `browser_batch` (`{actions:[{name,input}]}`), and — parsed by the
@@ -418,26 +455,30 @@ export function toolSummary(tc: ToolCallLike): string {
   }
 
   // File-based tools. opencode/pi lower-case their names (`read`/`edit`/`write`)
-  // and key the path off `filePath` (camelCase); codex uses `path`; claude file_path.
-  if (tc.name === "Read" || tc.name === "Edit" || tc.name === "Write"
-      || tc.name === "read" || tc.name === "edit" || tc.name === "write") {
-    return getRelativePath(String(parsedInput.file_path || parsedInput.filePath || parsedInput.path || ""));
-  }
-  if (tc.name === "file_read" || tc.name === "file_write" || tc.name === "file_edit") {
-    return getRelativePath(String(parsedInput.file_path || parsedInput.path || ""));
+  // and key the path off `filePath` (camelCase); codex uses `path`; claude file_path;
+  // grok read_file uses `target_file`, list_dir uses `target_directory`.
+  if (isReadTool(tc.name) || isEditTool(tc.name) || isWriteTool(tc.name) || tc.name === "list_dir") {
+    const path = toolPathFromInput(parsedInput);
+    if (path) return getRelativePath(path);
   }
 
   // Shell/Terminal tools
-  if (tc.name === "Bash" || tc.name === "bash" || tc.name === "shell_command" || tc.name === "shell" || tc.name === "exec_command" || tc.name === "container.exec" || tc.name === "commandExecution") {
+  if (isShellTool(tc.name)) {
     const cmd = String(parsedInput.command || parsedInput.cmd || "");
     return cmd ? truncateStr(cmd, 100) : "";
   }
 
   // Search tools
-  if ((tc.name === "Glob" || tc.name === "glob") && parsedInput.pattern) return String(parsedInput.pattern);
-  if ((tc.name === "Grep" || tc.name === "grep") && parsedInput.pattern) return String(parsedInput.pattern);
-  if (tc.name === "WebSearch" || tc.name === "web_search" || tc.name === "code_search") return parsedInput.query ? truncateStr(String(parsedInput.query), 40) : "";
+  if (isGrepTool(tc.name) && parsedInput.pattern) return String(parsedInput.pattern);
+  if (isGlobTool(tc.name) && parsedInput.pattern) return String(parsedInput.pattern);
+  if (tc.name === "WebSearch" || tc.name === "web_search" || tc.name === "code_search" || tc.name === "Web search:") {
+    return parsedInput.query ? truncateStr(String(parsedInput.query), 40) : "";
+  }
   if (tc.name === "WebFetch" || tc.name === "web_fetch" || tc.name === "webfetch") return parsedInput.url ? shortenUrl(String(parsedInput.url)) : "";
+  if (tc.name === "open_page" || tc.name === "open_page_with_find") {
+    if (parsedInput.pattern) return truncateStr(String(parsedInput.pattern), 40);
+    return parsedInput.url ? shortenUrl(String(parsedInput.url)) : "";
+  }
 
   // Patch tool
   if (tc.name === "apply_patch") {
@@ -509,12 +550,12 @@ export function toolSummary(tc: ToolCallLike): string {
   if (tc.name === "StructuredOutput") return structuredPayloadSummary(parsedInput);
 
   // Task tools
-  if (tc.name === "Task") return parsedInput.description ? truncateStr(String(parsedInput.description), 40) : "";
-  if (tc.name === "AskUserQuestion") {
+  if (isAgentTool(tc.name)) return parsedInput.description ? truncateStr(String(parsedInput.description), 40) : "";
+  if (isAskTool(tc.name)) {
     const questions = parsedInput.questions as any[];
     return questions?.[0]?.question ? truncateStr(String(questions[0].question), 50) : "";
   }
-  if (tc.name === "TodoWrite") {
+  if (isTodoTool(tc.name)) {
     const todos = parsedInput.todos as any[];
     return `${todos?.length || 0} tasks`;
   }
@@ -566,8 +607,31 @@ export function toolSummary(tc: ToolCallLike): string {
   if (tc.name === "mcp__node_repl__js") {
     return parsedInput.title ? truncateStr(String(parsedInput.title), 60) : "";
   }
-  if (tc.name === "image_gen__imagegen") {
+  if (tc.name === "image_gen__imagegen" || tc.name === "image_gen" || tc.name === "image_edit" || tc.name === "image_to_video" || tc.name === "reference_to_video") {
     return parsedInput.prompt ? truncateStr(String(parsedInput.prompt), 60) : "";
+  }
+  if (tc.name === "get_command_or_subagent_output") {
+    const ids = parsedInput.task_ids;
+    if (Array.isArray(ids) && ids[0]) return truncateStr(String(ids[0]), 24);
+    return "";
+  }
+  if (tc.name === "kill_command_or_subagent") {
+    return parsedInput.task_id ? truncateStr(String(parsedInput.task_id), 24) : "";
+  }
+  if (tc.name === "use_tool") {
+    return parsedInput.tool_name ? String(parsedInput.tool_name) : "";
+  }
+  if (tc.name === "search_tool") {
+    return parsedInput.query ? truncateStr(String(parsedInput.query), 50) : "";
+  }
+  if (tc.name === "x_user_search" || tc.name === "x_semantic_search" || tc.name === "x_keyword_search") {
+    return parsedInput.query ? truncateStr(String(parsedInput.query), 50) : "";
+  }
+  if (tc.name === "x_thread_fetch") {
+    return parsedInput.post_id ? String(parsedInput.post_id) : "";
+  }
+  if (tc.name === "scheduler_create") {
+    return parsedInput.interval ? String(parsedInput.interval) : (parsedInput.prompt ? truncateStr(String(parsedInput.prompt), 40) : "");
   }
   if (tc.name === "web__run") {
     if (Array.isArray(parsedInput.search_query) && parsedInput.search_query[0]?.q) {
@@ -605,43 +669,30 @@ export function toolSummary(tc: ToolCallLike): string {
 type ToolPhrase = { verb?: string; path?: boolean; one: string; many: (n: number) => string };
 
 function toolPhrase(rawName: string): ToolPhrase {
+  if (isReadTool(rawName)) return { verb: "read", path: true, one: "read 1 file", many: (n) => `read ${n} files` };
+  if (isEditTool(rawName) || rawName === "apply_patch" || rawName === "fileChange" || rawName === "NotebookEdit") {
+    return { verb: "edited", path: true, one: "1 edit", many: (n) => `${n} edits` };
+  }
+  if (isWriteTool(rawName)) return { verb: "wrote", path: true, one: "wrote 1 file", many: (n) => `wrote ${n} files` };
+  if (isShellTool(rawName)) return { verb: "ran", one: "ran 1 command", many: (n) => `ran ${n} commands` };
+  if (isGrepTool(rawName) || isGlobTool(rawName) || rawName === "code_search" || rawName === "code_analysis") {
+    return { verb: "searched", one: "1 search", many: (n) => `${n} searches` };
+  }
+  if (rawName === "WebFetch" || rawName === "web_fetch" || rawName === "WebSearch" || rawName === "web_search" || rawName === "web__run" || rawName === "open_page" || rawName === "open_page_with_find" || rawName === "Web search:") {
+    return { verb: "looked up", one: "1 web lookup", many: (n) => `${n} web lookups` };
+  }
+  if (isAgentTool(rawName)) return { one: "ran 1 agent", many: (n) => `ran ${n} agents` };
+  if (isTodoTool(rawName)) return { one: "updated todos", many: () => "updated todos" };
   switch (rawName) {
-    case "Read":
-    case "read":
-    case "file_read": return { verb: "read", path: true, one: "read 1 file", many: (n) => `read ${n} files` };
-    case "Edit":
-    case "edit":
-    case "file_edit":
-    case "apply_patch":
-    case "fileChange":
-    case "NotebookEdit": return { verb: "edited", path: true, one: "1 edit", many: (n) => `${n} edits` };
-    case "Write":
-    case "write":
-    case "file_write": return { verb: "wrote", path: true, one: "wrote 1 file", many: (n) => `wrote ${n} files` };
-    case "Bash":
-    case "bash":
-    case "shell":
-    case "shell_command":
-    case "exec_command":
-    case "container.exec":
-    case "commandExecution": return { verb: "ran", one: "ran 1 command", many: (n) => `ran ${n} commands` };
-    case "Grep":
-    case "grep":
-    case "Glob":
-    case "glob":
-    case "code_search":
-    case "code_analysis": return { verb: "searched", one: "1 search", many: (n) => `${n} searches` };
-    case "WebFetch":
-    case "web_fetch":
-    case "WebSearch":
-    case "web_search":
-    case "web__run": return { verb: "looked up", one: "1 web lookup", many: (n) => `${n} web lookups` };
-    case "Task":
-    case "Agent": return { one: "ran 1 agent", many: (n) => `ran ${n} agents` };
-    case "TodoWrite": return { one: "updated todos", many: () => "updated todos" };
-    case "update_plan": return { one: "updated plan", many: () => "updated plan" };
+    case "update_plan":
+    case "enter_plan_mode":
+    case "exit_plan_mode":
+    case "EnterPlanMode":
+    case "ExitPlanMode": return { one: "updated plan", many: () => "updated plan" };
     case "view_image": return { verb: "viewed", path: true, one: "viewed 1 image", many: (n) => `viewed ${n} images` };
-    case "image_gen__imagegen": return { verb: "generated", one: "generated 1 image", many: (n) => `generated ${n} images` };
+    case "image_gen__imagegen":
+    case "image_gen":
+    case "image_edit": return { verb: "generated", one: "generated 1 image", many: (n) => `generated ${n} images` };
     default: {
       const label = formatToolName(rawName) || rawName;
       return { verb: label, one: label, many: (n) => `${label} ×${n}` };

@@ -499,10 +499,17 @@ export default defineSchema({
     // Stash = set aside WITHOUT killing: hides the session from the active inbox
     // buckets into the "Stashed" group (above Dismissed) while the agent keeps
     // running. Same absolute-flag semantics as inbox_dismissed_at (cleared by
-    // a HUMAN send or an explicit restore — a scheduler-origin injection
-    // deliberately leaves it set, see enqueuePendingMessage); unlike dismiss it
-    // never triggers a kill. A dismiss clears it (the row moves to Dismissed).
+    // any send — human or a trigger wake — or an explicit restore, see
+    // enqueuePendingMessage); unlike dismiss it never triggers a kill. A
+    // dismiss clears it (the row moves to Dismissed).
     inbox_stashed_at: v.optional(v.number()),
+    // "Stash and hide": the stash survives machine wakes. A trigger firing into
+    // a plain stash pulls the row back into the inbox ("something happened,
+    // show me"); into a hidden stash it keeps working out of sight. Asks still
+    // surface both (blocked declaration, --needs-attention, a stall). Honored
+    // only while inbox_stashed_at is set — every stash write sets it (true or
+    // cleared), so a clear of the stamp needs no companion clear here.
+    inbox_stash_hidden: v.optional(v.boolean()),
     inbox_killed_at: v.optional(v.number()),
     inbox_deferred_at: v.optional(v.number()),
     // The user's "dormant" gesture: "a machine owns this, wake me when something

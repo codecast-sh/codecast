@@ -29,7 +29,8 @@ import { startScribe, stopScribe } from "./transcription";
 import { micConstraints, readJoinPrefs, rememberCamera, rememberDevice } from "./joinPrefs";
 import { bindPrewarmAudio, bindPrewarmConvex, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
 import { CALL_HEARTBEAT_MS, humanizeConvexError } from "@codecast/shared/contracts";
-import { isElectron } from "../desktop";
+import { hasCallPanel, isCallPanelWindow, isElectron } from "../desktop";
+import { shouldYieldCallOnDisconnect } from "./callHandoff";
 import { peekOsPermissions, permissionHint, refreshOsPermissions } from "../osPermissions";
 import {
   soundCallJoin,
@@ -552,7 +553,17 @@ export async function joinCall(roomKey: string, opts?: JoinOpts): Promise<void> 
       // or the main window taking it back as the panel closes). Not a
       // disconnect to recover from and not a hang-up: the call is still going,
       // one room over. Hand the room across quietly.
-      if (reason === DisconnectReason.DUPLICATE_IDENTITY) {
+      //
+      // The policy lives in callHandoff so a LiveKit version that reports the
+      // eviction as a number, a name, or PARTICIPANT_REMOVED cannot hang up a
+      // call you just popped out — leaveRoom would delete the seat the other
+      // window is sitting in.
+      if (
+        shouldYieldCallOnDisconnect(reason, {
+          elsewhere: hasCallPanel() && !isCallPanelWindow(),
+          outlivesWindow: callOutlivesWindow,
+        })
+      ) {
         void yieldRoomToOtherWindow();
         return;
       }
@@ -698,6 +709,7 @@ export function setCallOutlivesWindow(on: boolean): void {
 async function yieldRoomToOtherWindow(): Promise<void> {
   callGen++;
   deliberateRoomKey = null;
+  callOutlivesWindow = false;
   await stopScribe({ keepLive: true });
   teardownMedia();
   setCall({

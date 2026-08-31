@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { awaitTrackedSessionCreateResult, categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, selectNavCollapsed, selectSessionRailOpen, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { awaitTrackedSessionCreateResult, computeInboxVisible, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, selectNavCollapsed, selectSessionRailOpen, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
+import { placeSections } from "./placeTestHarness";
 import { DispatchNotWiredError } from "../mutativeMiddleware";
 import { declareViewNav } from "../viewNav";
 
@@ -196,7 +197,7 @@ describe("getSessionRenderKey", () => {
   });
 });
 
-describe("categorizeSessions", () => {
+describe("placeSections (the placement chokepoint)", () => {
   it("puts interrupted sessions in Needs Input", () => {
     const interrupted: InboxSession = {
       ...baseSession,
@@ -213,7 +214,7 @@ describe("categorizeSessions", () => {
       last_user_message: "Can you finish the refactor?",
     };
 
-    const { needsInput } = categorizeSessions(
+    const { needsInput } = placeSections(
       {
         [interrupted._id]: interrupted,
         [needsReply._id]: needsReply,
@@ -243,7 +244,7 @@ describe("categorizeSessions", () => {
       is_idle: true,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working } = placeSections(
       {
         [stopped._id]: stopped,
         [idle._id]: idle,
@@ -280,7 +281,7 @@ describe("categorizeSessions", () => {
       agent_status: "working",
     };
 
-    const { needsInput, working: workingBucket } = categorizeSessions(
+    const { needsInput, working: workingBucket } = placeSections(
       {
         [signedOut._id]: signedOut,
         [working._id]: working,
@@ -314,7 +315,7 @@ describe("categorizeSessions", () => {
       has_pending: false,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working } = placeSections(
       {
         [idleWithPending._id]: idleWithPending,
         [idleNoPending._id]: idleNoPending,
@@ -340,7 +341,7 @@ describe("categorizeSessions", () => {
       has_pending: false,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working } = placeSections(
       { [idleSession._id]: idleSession },
       new Set(["conv-queued"]),
     );
@@ -363,7 +364,7 @@ describe("categorizeSessions", () => {
       has_pending: false,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working } = placeSections(
       { [idleSession._id]: idleSession },
       new Set(),
       new Set(["conv-pending-send"]),
@@ -388,7 +389,7 @@ describe("categorizeSessions", () => {
       is_unresponsive: true,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working } = placeSections(
       { [deadDaemon._id]: deadDaemon },
       new Set(),
     );
@@ -407,7 +408,7 @@ describe("categorizeSessions", () => {
       is_unresponsive: false,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working } = placeSections(
       { [liveDaemon._id]: liveDaemon },
       new Set(),
     );
@@ -426,7 +427,7 @@ describe("categorizeSessions", () => {
       agent_status: "stopped",
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working } = placeSections(
       { [stoppedPending._id]: stoppedPending },
       new Set(),
     );
@@ -443,7 +444,7 @@ describe("categorizeSessions", () => {
       is_idle: true,
     };
 
-    const withPending = categorizeSessions(
+    const withPending = placeSections(
       { [newSession._id]: newSession },
       new Set(),
       new Set(["conv-new-pending"]),
@@ -453,7 +454,7 @@ describe("categorizeSessions", () => {
 
     // Without a pending send the same session stays in New while engaged
     // (here: it's the session being viewed).
-    const withoutPending = categorizeSessions(
+    const withoutPending = placeSections(
       { [newSession._id]: newSession },
       new Set(),
       undefined,
@@ -476,7 +477,7 @@ describe("categorizeSessions", () => {
       session_id: "session-prewarm",
       message_count: 0,
     };
-    const buckets = categorizeSessions({ [blank._id]: blank }, new Set());
+    const buckets = placeSections({ [blank._id]: blank }, new Set());
     expect(buckets.newSessions).toHaveLength(0);
     expect(buckets.working).toHaveLength(0);
     expect(buckets.needsInput).toHaveLength(0);
@@ -491,7 +492,7 @@ describe("categorizeSessions", () => {
       session_id: stub,
       message_count: 0,
     };
-    const buckets = categorizeSessions(
+    const buckets = placeSections(
       { [blank._id]: blank },
       new Set(),
       undefined,
@@ -514,7 +515,7 @@ describe("categorizeSessions", () => {
       last_user_message: "[Request interrupted by user]",
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working } = placeSections(
       { [resumedAfterInterrupt._id]: resumedAfterInterrupt },
       new Set(),
     );
@@ -539,7 +540,7 @@ describe("categorizeSessions", () => {
       last_user_message: "Earlier user prompt",
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working } = placeSections(
       { [justFinished._id]: justFinished },
       new Set(),
     );
@@ -560,7 +561,7 @@ describe("categorizeSessions", () => {
       is_idle: true,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working } = placeSections(
       { [workingButStaleIdle._id]: workingButStaleIdle },
       new Set(),
     );
@@ -587,7 +588,7 @@ describe("categorizeSessions", () => {
       updated_at: Date.now() - 10 * 60 * 1000,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working } = placeSections(
       { [orphanImport._id]: orphanImport },
       new Set(),
     );
@@ -610,7 +611,7 @@ describe("categorizeSessions", () => {
       updated_at: Date.now() - 10 * 60 * 1000,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working } = placeSections(
       { [frozenFalse._id]: frozenFalse },
       new Set(),
     );
@@ -632,7 +633,7 @@ describe("categorizeSessions", () => {
       updated_at: Date.now() - 10 * 1000,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working } = placeSections(
       { [freshImport._id]: freshImport },
       new Set(),
     );
@@ -654,7 +655,7 @@ describe("categorizeSessions", () => {
       updated_at: Date.now() - 10 * 60 * 1000,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working } = placeSections(
       { [quietWorking._id]: quietWorking },
       new Set(),
     );
@@ -663,7 +664,7 @@ describe("categorizeSessions", () => {
     expect(needsInput.map((s) => s._id)).not.toContain("conv-quiet-working");
   });
 
-  it("classifies an open poll as Needs Input even when agent_status is raced to working", () => {
+  it("classifies an open poll as a QUESTION even when agent_status is raced to working", () => {
     // The bug: an AskUserQuestion poll blocks the agent on the user, but the
     // daemon races agent_status back to "working" while the poll is still open,
     // burying it in the Working bucket. awaiting_input (derived server-side from
@@ -679,16 +680,18 @@ describe("categorizeSessions", () => {
       awaiting_input: true,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { questions, working, isQuestion } = placeSections(
       { [openPoll._id]: openPoll },
       new Set(),
     );
 
-    expect(needsInput.map((s) => s._id)).toContain("conv-open-poll");
+    // An open ask is the QUESTIONS bucket (asking outranks the work state).
+    expect(questions.map((s) => s._id)).toContain("conv-open-poll");
+    expect(isQuestion(openPoll)).toBe(true);
     expect(working.map((s) => s._id)).not.toContain("conv-open-poll");
   });
 
-  it("classifies a permission_blocked agent as Needs Input even within the 45s recency grace", () => {
+  it("classifies a permission_blocked agent as a QUESTION even within the 45s recency grace", () => {
     // A permission prompt (Bash approval, resume menu, AskUserQuestion) reports
     // agent_status=permission_blocked. The block event itself bumps updated_at, so
     // the backend's is_idle stays false for the 45s recentlyUpdated grace, and a
@@ -705,16 +708,16 @@ describe("categorizeSessions", () => {
       awaiting_input: false,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { questions, working } = placeSections(
       { [blocked._id]: blocked },
       new Set(),
     );
 
-    expect(needsInput.map((s) => s._id)).toContain("conv-perm-blocked");
+    expect(questions.map((s) => s._id)).toContain("conv-perm-blocked");
     expect(working.map((s) => s._id)).not.toContain("conv-perm-blocked");
   });
 
-  it("an open poll overrides a stuck queued message → Needs Input", () => {
+  it("an open poll overrides a stuck queued message → a QUESTION, never Working", () => {
     // Deadlock case: a message is queued for the agent, but the agent is blocked
     // on a poll, so the message can't be delivered (you can't paste into a
     // blocking menu). The poll must win over has_pending, otherwise the session
@@ -729,12 +732,12 @@ describe("categorizeSessions", () => {
       has_pending: true,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { questions, working } = placeSections(
       { [polled._id]: polled },
       new Set(),
     );
 
-    expect(needsInput.map((s) => s._id)).toContain("conv-poll-queued");
+    expect(questions.map((s) => s._id)).toContain("conv-poll-queued");
     expect(working.map((s) => s._id)).not.toContain("conv-poll-queued");
   });
 
@@ -757,7 +760,7 @@ describe("categorizeSessions", () => {
       has_pending: false,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working, questions } = placeSections(
       { [polledWithSend._id]: polledWithSend },
       new Set(),
       new Set(["conv-poll-sent"]),
@@ -765,6 +768,7 @@ describe("categorizeSessions", () => {
 
     expect(working.map((s) => s._id)).toContain("conv-poll-sent");
     expect(needsInput.map((s) => s._id)).not.toContain("conv-poll-sent");
+    expect(questions.map((s) => s._id)).not.toContain("conv-poll-sent");
   });
 
   it("a fresh client send moves a permission-blocked LIVE session into Working", () => {
@@ -778,7 +782,7 @@ describe("categorizeSessions", () => {
       awaiting_input: false,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working, questions } = placeSections(
       { [blockedWithSend._id]: blockedWithSend },
       new Set(),
       new Set(["conv-perm-sent"]),
@@ -786,6 +790,7 @@ describe("categorizeSessions", () => {
 
     expect(working.map((s) => s._id)).toContain("conv-perm-sent");
     expect(needsInput.map((s) => s._id)).not.toContain("conv-perm-sent");
+    expect(questions.map((s) => s._id)).not.toContain("conv-perm-sent");
   });
 
   it("a client send to a STOPPED session stays in Working (pending pill, retried forever)", () => {
@@ -807,7 +812,7 @@ describe("categorizeSessions", () => {
       awaiting_input: false,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working } = placeSections(
       { [stoppedWithSend._id]: stoppedWithSend },
       new Set(),
       new Set(["conv-dead-sent"]),
@@ -830,7 +835,7 @@ describe("categorizeSessions", () => {
       is_unresponsive: true,
     };
 
-    const { needsInput, working } = categorizeSessions(
+    const { needsInput, working } = placeSections(
       { [unresponsiveWithSend._id]: unresponsiveWithSend },
       new Set(),
       new Set(["conv-unresp-sent"]),
@@ -840,7 +845,7 @@ describe("categorizeSessions", () => {
     expect(needsInput.map((s) => s._id)).not.toContain("conv-unresp-sent");
   });
 
-  it("a pinned poll stays in its own group, not duplicated into Needs Input", () => {
+  it("a pinned poll files under QUESTIONS once — asking outranks pinned, never duplicated into Needs Input", () => {
 
     const pinnedPoll: InboxSession = {
       ...baseSession,
@@ -851,12 +856,13 @@ describe("categorizeSessions", () => {
       is_pinned: true,
     };
 
-    const { needsInput, pinned } = categorizeSessions(
+    const { needsInput, pinned, questions } = placeSections(
       { [pinnedPoll._id]: pinnedPoll },
       new Set(),
     );
 
-    expect(pinned.map((s) => s._id)).toContain("conv-pinned-poll");
+    expect(questions.map((s) => s._id)).toEqual(["conv-pinned-poll"]);
+    expect(pinned.map((s) => s._id)).not.toContain("conv-pinned-poll");
     expect(needsInput.map((s) => s._id)).not.toContain("conv-pinned-poll");
   });
 
@@ -882,7 +888,8 @@ describe("categorizeSessions", () => {
       message_count: 5,
       is_pinned: true,
       inbox_pinned_at: 200,
-      awaiting_input: true, // would sort first under sortSessions
+      agent_status: "done", // a delivered settle — would sort ahead of working under sortSessions
+      is_idle: true,
     };
     const newestPin: InboxSession = {
       ...baseSession,
@@ -901,7 +908,7 @@ describe("categorizeSessions", () => {
       [newestPin._id]: newestPin,
     };
 
-    const { pinned } = categorizeSessions(sessions, new Set());
+    const { pinned } = placeSections(sessions, new Set());
     expect(pinned.map((s) => s._id)).toEqual([
       "conv-pin-oldest",
       "conv-pin-middle",
@@ -912,10 +919,10 @@ describe("categorizeSessions", () => {
     // the order must be byte-for-byte identical — no reshuffle on status churn.
     const churned = {
       [oldestPin._id]: { ...oldestPin, agent_status: "idle" as const, is_idle: true },
-      [middlePin._id]: { ...middlePin, awaiting_input: false, agent_status: "working" as const, is_idle: false },
+      [middlePin._id]: { ...middlePin, agent_status: "working" as const, is_idle: false },
       [newestPin._id]: { ...newestPin, agent_status: "working" as const, is_idle: false },
     };
-    const after = categorizeSessions(churned, new Set());
+    const after = placeSections(churned, new Set());
     expect(after.pinned.map((s) => s._id)).toEqual([
       "conv-pin-oldest",
       "conv-pin-middle",
@@ -931,14 +938,14 @@ describe("categorizeSessions", () => {
       _id: "conv-early",
       session_id: "session-early",
       message_count: 3,
-      updated_at: 100,
+      updated_at: Date.now() - 300,
     };
     const late: InboxSession = {
       ...baseSession,
       _id: "conv-late",
       session_id: "session-late",
       message_count: 3,
-      updated_at: 200,
+      updated_at: Date.now() - 200,
     };
     // Deferred and OLDEST — a pure updated_at sort would float it to the top,
     // so this only passes if is_deferred overrides the timestamp ordering.
@@ -947,11 +954,11 @@ describe("categorizeSessions", () => {
       _id: "conv-deferred",
       session_id: "session-deferred",
       message_count: 3,
-      updated_at: 50,
+      updated_at: Date.now() - 400,
       is_deferred: true,
     };
 
-    const { needsInput } = categorizeSessions(
+    const { needsInput } = placeSections(
       {
         [deferred._id]: deferred,
         [early._id]: early,
@@ -972,12 +979,12 @@ describe("categorizeSessions", () => {
     // Same gesture, same rule: shift+backspace on a Done card must send it to
     // the bottom of the Done queue, not leave it in timestamp order.
     const doneBase = { ...baseSession, message_count: 3, agent_status: "done" as const };
-    const early: InboxSession = { ...doneBase, _id: "conv-done-early", session_id: "sd-early", updated_at: 100 };
-    const late: InboxSession = { ...doneBase, _id: "conv-done-late", session_id: "sd-late", updated_at: 200 };
+    const early: InboxSession = { ...doneBase, _id: "conv-done-early", session_id: "sd-early", updated_at: Date.now() - 300 };
+    const late: InboxSession = { ...doneBase, _id: "conv-done-late", session_id: "sd-late", updated_at: Date.now() - 200 };
     // Deferred and OLDEST — a pure updated_at sort would put it first.
-    const deferred: InboxSession = { ...doneBase, _id: "conv-done-deferred", session_id: "sd-deferred", updated_at: 50, is_deferred: true };
+    const deferred: InboxSession = { ...doneBase, _id: "conv-done-deferred", session_id: "sd-deferred", updated_at: Date.now() - 400, is_deferred: true };
 
-    const { done } = categorizeSessions(
+    const { done } = placeSections(
       {
         [deferred._id]: deferred,
         [early._id]: early,
@@ -1727,7 +1734,7 @@ describe("dismiss is absolute — navigation/injection must not resurrect", () =
     expect(isSessionStashed(s)).toBe(false);
     expect(s.inbox_stashed_at ?? null).toBeNull();
 
-    const buckets = categorizeSessions({ [realId]: s }, new Set());
+    const buckets = placeSections({ [realId]: s }, new Set());
     expect(buckets.dismissed.map((x) => x._id)).toEqual([realId]);
     expect(buckets.stashed).toHaveLength(0);
   });
@@ -1735,7 +1742,7 @@ describe("dismiss is absolute — navigation/injection must not resurrect", () =
   it("stashed sessions leave the active buckets into `stashed`", () => {
     const realId = "f".repeat(32);
     const sess = { ...alive, _id: realId, inbox_stashed_at: Date.now() } as InboxSession;
-    const buckets = categorizeSessions({ [realId]: sess }, new Set());
+    const buckets = placeSections({ [realId]: sess }, new Set());
     expect(buckets.sorted).toHaveLength(0);
     expect(buckets.stashed.map((x) => x._id)).toEqual([realId]);
     expect(buckets.dismissed).toHaveLength(0);
@@ -1796,7 +1803,7 @@ describe("kill/stash cascade takes the whole nested group", () => {
 
     // The point of the sweep: nothing from the group floats back into the
     // active buckets as a loose top-level card.
-    const buckets = categorizeSessions(s.sessions, new Set());
+    const buckets = placeSections(s.sessions, new Set());
     const activeIds = buckets.sorted.map((x) => x._id);
     expect(activeIds).not.toContain(LEAD);
     expect(activeIds).not.toContain(TASK_SUB);
@@ -1967,7 +1974,7 @@ describe("syncTable sessions — status flip without updated_at bump", () => {
       has_pending: false, updated_at: recentTs,
     };
     store.syncTable("sessions", [working]);
-    let cat = categorizeSessions(useInboxStore.getState().sessions, new Set());
+    let cat = placeSections(useInboxStore.getState().sessions, new Set());
     expect(cat.working.map((s) => s._id)).toContain("conv-flip");
 
     // Agent finished its turn: server recomputes idle/stopped, but writes no new
@@ -1975,7 +1982,7 @@ describe("syncTable sessions — status flip without updated_at bump", () => {
     store.syncTable("sessions", [{
       ...working, agent_status: "idle" as const, is_idle: true, updated_at: recentTs,
     }]);
-    cat = categorizeSessions(useInboxStore.getState().sessions, new Set());
+    cat = placeSections(useInboxStore.getState().sessions, new Set());
     expect(cat.needsInput.map((s) => s._id)).toContain("conv-flip");
     expect(cat.working.map((s) => s._id)).not.toContain("conv-flip");
   });
@@ -2335,13 +2342,13 @@ describe("orchestration grouping", () => {
     // undercounting the sidebar's needs-input badge. Grouping by plan is now
     // exclusively the "By plan" view's job (groupSessionsByPlan).
     const sessions = {
-      a: mk("a", { active_plan: PLAN, project_path: "/Users/x/src/codecast", updated_at: 3 }),
-      b: mk("b", { active_plan: PLAN, project_path: "/Users/x/src/codecast", updated_at: 2 }),
-      wt1: mk("wt1", { project_path: WT, updated_at: 3 }),
-      wt2: mk("wt2", { project_path: WT, updated_at: 2 }),
-      main: mk("main", { project_path: "/Users/x/src/codecast", updated_at: 4 }),
+      a: mk("a", { active_plan: PLAN, project_path: "/Users/x/src/codecast", updated_at: Date.now() - 300 }),
+      b: mk("b", { active_plan: PLAN, project_path: "/Users/x/src/codecast", updated_at: Date.now() - 400 }),
+      wt1: mk("wt1", { project_path: WT, updated_at: Date.now() - 300 }),
+      wt2: mk("wt2", { project_path: WT, updated_at: Date.now() - 400 }),
+      main: mk("main", { project_path: "/Users/x/src/codecast", updated_at: Date.now() - 200 }),
     };
-    const r = categorizeSessions(sessions, new Set());
+    const r = placeSections(sessions, new Set());
     const flat = new Set([...r.pinned, ...r.newSessions, ...r.needsInput, ...r.working].map((s) => s._id));
     for (const id of ["a", "b", "wt1", "wt2", "main"]) expect(flat.has(id)).toBe(true);
   });
@@ -2352,7 +2359,7 @@ describe("orchestration grouping", () => {
       a: mk("a", { active_plan: PLAN, parent_conversation_id: "parent" }),
       b: mk("b", { active_plan: PLAN, parent_conversation_id: "parent" }),
     };
-    const r = categorizeSessions(sessions, new Set());
+    const r = placeSections(sessions, new Set());
     expect(r.subsByParent.get("parent")?.length).toBe(2);
     const flat = new Set([...r.needsInput, ...r.working].map((s) => s._id));
     expect(flat.has("a")).toBe(false);
@@ -2364,7 +2371,7 @@ describe("orchestration grouping", () => {
       a: mk("a", { active_plan: PLAN, is_pinned: true, inbox_pinned_at: 5 }),
       b: mk("b", { active_plan: PLAN, is_pinned: true, inbox_pinned_at: 6 }),
     };
-    const r = categorizeSessions(sessions, new Set());
+    const r = placeSections(sessions, new Set());
     expect(r.pinned.map((s) => s._id).sort()).toEqual(["a", "b"]);
   });
 });
@@ -2527,7 +2534,7 @@ describe("inboxStore.beginOptimisticSession", () => {
     expect(state.pendingMessages[stubId]).toBeUndefined();
     expect(state.pendingMessages[REAL_ID]?.[0]?.content).toBe("hello world");
 
-    const cat = categorizeSessions(
+    const cat = placeSections(
       state.sessions,
       new Set(),
       sessionsWithPendingSend(state.pendingMessages),
@@ -3415,7 +3422,7 @@ describe("inbox markSessionsDismissed — bulk local dismiss", () => {
     expect(isSessionDismissed(st.sessions["keep"])).toBe(false);
 
     // Categorization reflects it: a/b in dismissed bucket, keep stays out.
-    const cat = categorizeSessions(st.sessions, new Set());
+    const cat = placeSections(st.sessions, new Set());
     expect(cat.dismissed.map((x) => x._id).sort()).toEqual(["a", "b"]);
     expect(cat.dismissed.map((x) => x._id)).not.toContain("keep");
   });
@@ -3639,7 +3646,7 @@ describe("killSessions — bulk kill from the Stashed bucket", () => {
       expect(isSessionDismissed(s.sessions[id])).toBe(true);
       expect(isSessionStashed(s.sessions[id])).toBe(false);
     }
-    const buckets = categorizeSessions(s.sessions, new Set());
+    const buckets = placeSections(s.sessions, new Set());
     expect(buckets.stashed).toHaveLength(0);
     expect(buckets.dismissed.map((x) => x._id).sort()).toEqual([a, b].sort());
   });
@@ -4146,11 +4153,15 @@ describe("dismiss/kill advances in the ACTIVE view order, like j/k", () => {
   // doesn't revert currentSessionId (undeclared non-null view writes are
   // reverted in tests exactly as in production).
   const seed = (viewMode?: "grouped" | "time") => {
+    // Now-relative stamps: membership is the shared working-set selection
+    // (30d recent window + 12h fold), so the fixture rows must be current to
+    // be walked at all. Relative order mirrors the original fixture exactly.
+    const now = Date.now();
     seedCurrentSession({
       sessions: {
-        [A]: waiting(A, 100, 200),
-        [B]: waiting(B, 200, 100),
-        [C]: waiting(C, 300, 150),
+        [A]: waiting(A, now - 300, now - 10),
+        [B]: waiting(B, now - 200, now - 30),
+        [C]: waiting(C, now - 100, now - 20),
       },
       conversations: {
         [A]: { _id: A } as any,
@@ -4191,13 +4202,15 @@ describe("dismiss/kill advances in the ACTIVE view order, like j/k", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Authoritative active set (hide-old): categorizeSessions must render exactly the
-// server's live inbox set (liveInboxIds) in the active buckets when showOld is off
-// — the invariant that converges the inbox across web / desktop / mobile and keeps
-// aged-out cruft out of Needs Input while it stays in the cache for search/open.
-// See inbox_no_authoritative_sessions_floor / the fold in categorizeSessions.
+// Authoritative active set: membership is DATA now — the shared working-set
+// selection over row fields (sync-convergence C4/C5), evaluated by the
+// computeInboxVisible chokepoint. The liveInboxIds gate (a per-device memory of
+// the last payload, with exemptions and a no-filter fallback) is deleted;
+// categorizeSessions only buckets the rows the chokepoint hands it. These pin
+// the invariant that converges counts across web / desktop / mobile and keeps
+// aged-out cruft out of Needs Input while it stays cached for search/open.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("categorizeSessions — authoritative active set (hide-old)", () => {
+describe("computeInboxVisible — the authoritative active set (working-set membership)", () => {
   const cid = (tag: string) => tag.padEnd(32, "0").slice(0, 32).toLowerCase();
   // An idle session with messages classifies as needs-input (see the stopped/idle
   // test above). Fresh updated_at so the trust-TTL sweep never touches it.
@@ -4210,80 +4223,75 @@ describe("categorizeSessions — authoritative active set (hide-old)", () => {
     is_idle: true,
     updated_at: Date.now() - ageMs,
   });
+  const state = (sessions: Record<string, InboxSession>, ui: Record<string, unknown> = {}) =>
+    ({ sessions, clientState: { ui }, currentUser: null, teamInboxIds: new Set<string>() }) as any;
 
-  it("hides cached rows absent from liveInboxIds; keeps live-set rows; counts old", () => {
+  it("drops a row outside the 30-day recent window from every count — cached for search, never counted", () => {
     const live = needsInputRow("liveactive");
     const old = needsInputRow("oldcruft", 40 * 24 * 60 * 60 * 1000); // 40d stale
     const sessions = { [live._id]: live, [old._id]: old };
-    const liveInboxIds = new Set([live._id]);
 
-    const hidden = categorizeSessions(sessions, new Set(), undefined, { liveInboxIds, showOld: false });
-    expect(hidden.needsInput.map((s) => s._id)).toEqual([live._id]);
-    expect(hidden.needsInput.map((s) => s._id)).not.toContain(old._id);
-    expect(hidden.oldCount).toBe(1);
+    const res = computeInboxVisible(state(sessions, { inbox_show_old: false }));
+    expect(Object.keys(res.visibleSessions)).toEqual([live._id]);
+    const cat = placeSections(res.visibleSessions, new Set());
+    expect(cat.needsInput.map((s) => s._id)).toEqual([live._id]);
 
-    // The old row is only hidden from the buckets — it is still in the input map
-    // (categorize never mutates it), so search/open still resolve it.
+    // The old row is only outside the working set — it is still in the input map
+    // (the cache never prunes), so search/open still resolve it.
     expect(sessions[old._id]).toBe(old);
   });
 
-  it("showOld: true reveals the old rows and reports oldCount 0", () => {
+  it("GATE INVERSION: show-old is NOT a bypass — a nonmember stays invisible with the toggle ON", () => {
+    // The old gate skipped filtering entirely when inbox_show_old was on, so
+    // every device counted its whole never-prune cache (2,270 rows vs 1,062
+    // authoritative on one live client). Show-old only reveals FOLDED members.
     const live = needsInputRow("liveactive2");
     const old = needsInputRow("oldcruft2", 40 * 24 * 60 * 60 * 1000);
-    const sessions = { [live._id]: live, [old._id]: old };
-    const res = categorizeSessions(sessions, new Set(), undefined, {
-      liveInboxIds: new Set([live._id]),
-      showOld: true,
-    });
-    expect(res.needsInput.map((s) => s._id).sort()).toEqual([live._id, old._id].sort());
-    expect(res.oldCount).toBe(0);
+    const res = computeInboxVisible(state({ [live._id]: live, [old._id]: old }, { inbox_show_old: true }));
+    expect(Object.keys(res.visibleSessions)).toEqual([live._id]);
+    expect(res.oldCount).toBe(0); // a nonmember is not "old" — it is not in the set at all
   });
 
-  it("no liveInboxIds → safe fallback: show everything (pre-live-payload / legacy callers)", () => {
-    const a = needsInputRow("rowa");
-    const b = needsInputRow("rowb", 40 * 24 * 60 * 60 * 1000);
-    const sessions = { [a._id]: a, [b._id]: b };
-    // omitted opts (legacy call sites)
-    expect(categorizeSessions(sessions, new Set()).needsInput.length).toBe(2);
-    // explicit empty set (cold start, before the first live payload) also shows all
-    const cold = categorizeSessions(sessions, new Set(), undefined, { liveInboxIds: new Set(), showOld: false });
-    expect(cold.needsInput.length).toBe(2);
-    expect(cold.oldCount).toBe(0);
+  it("show-old selects shown + folded INSIDE the computation (the 12h fold gap)", () => {
+    const now = Date.now();
+    const fresh = { ...needsInputRow("freshrow"), updated_at: now };
+    const edge = { ...needsInputRow("edgerow"), updated_at: now - 13 * 60 * 60 * 1000 };
+    const folded = { ...needsInputRow("foldedrow"), updated_at: now - 14 * 60 * 60 * 1000 };
+    const sessions = { [fresh._id]: fresh, [edge._id]: edge, [folded._id]: folded };
+
+    // Off: the folded member hides; the row AT the cut stays (shared computeFold).
+    const off = computeInboxVisible(state(sessions, { inbox_show_old: false }));
+    expect(Object.keys(off.visibleSessions).sort()).toEqual([fresh._id, edge._id].sort());
+    expect(off.oldCount).toBe(1);
+
+    // On: the folded member renders; oldCount still names the folded set.
+    const on = computeInboxVisible(state(sessions, { inbox_show_old: true }));
+    expect(Object.keys(on.visibleSessions).sort()).toEqual([fresh._id, edge._id, folded._id].sort());
+    expect(on.oldCount).toBe(1);
   });
 
-  it("never hides a working session (working rows are always newest → always in the live set)", () => {
+  it("never hides a working session with current activity", () => {
     const working = { ...needsInputRow("workingnow"), agent_status: "working", is_idle: false };
-    // Even if a race left it momentarily out of liveInboxIds, it must not vanish
-    // from Working — but in practice it is always present. Assert the guaranteed
-    // case: a working row IN the live set stays in Working under hide-old.
-    const sessions = { [working._id]: working };
-    const res = categorizeSessions(sessions, new Set(), undefined, {
-      liveInboxIds: new Set([working._id]),
-      showOld: false,
-    });
-    expect(res.working.map((s) => s._id)).toEqual([working._id]);
-    expect(res.oldCount).toBe(0);
+    const res = computeInboxVisible(state({ [working._id]: working }, { inbox_show_old: false }));
+    const cat = placeSections(res.visibleSessions, new Set());
+    expect(cat.working.map((s) => s._id)).toEqual([working._id]);
   });
 
-  it("pinned rows are exempt from hide-old even when absent from the live set", () => {
+  it("pinned rows hold their seat through the pinned window even when aged out of recent", () => {
     const pinned = { ...needsInputRow("pinnedold", 60 * 24 * 60 * 60 * 1000), is_pinned: true, inbox_pinned_at: Date.now() };
-    const sessions = { [pinned._id]: pinned };
-    const res = categorizeSessions(sessions, new Set(), undefined, { liveInboxIds: new Set(["someotherid".padEnd(32, "0")]), showOld: false });
-    expect(res.pinned.map((s) => s._id)).toEqual([pinned._id]);
-    expect(res.oldCount).toBe(0);
+    const res = computeInboxVisible(state({ [pinned._id]: pinned }, { inbox_show_old: false }));
+    expect(Object.keys(res.visibleSessions)).toEqual([pinned._id]);
+    const cat = placeSections(res.visibleSessions, new Set());
+    expect(cat.pinned.map((s) => s._id)).toEqual([pinned._id]);
   });
 
-  it("the sidebar/dashboard count path matches the panel (same authoritative set)", () => {
-    // Regression for the divergence: the badges used raw s.sessions (no partition),
-    // so their counts included cruft the panel hid. With the fold both paths use the
-    // same opts → identical needsInput length.
+  it("the sidebar/dashboard count path matches the panel (both read the chokepoint's set)", () => {
     const live = needsInputRow("livea");
     const old1 = needsInputRow("old1", 40 * 24 * 60 * 60 * 1000);
     const old2 = needsInputRow("old2", 40 * 24 * 60 * 60 * 1000);
-    const sessions = { [live._id]: live, [old1._id]: old1, [old2._id]: old2 };
-    const opts = { liveInboxIds: new Set([live._id]), showOld: false };
-    const panel = categorizeSessions(sessions, new Set(), undefined, opts).needsInput.length;
-    const badge = categorizeSessions(sessions, new Set(), undefined, opts).needsInput.length;
+    const st = state({ [live._id]: live, [old1._id]: old1, [old2._id]: old2 }, { inbox_show_old: false });
+    const panel = placeSections(computeInboxVisible(st).visibleSessions, new Set()).needsInput.length;
+    const badge = placeSections(computeInboxVisible(st).visibleSessions, new Set()).needsInput.length;
     expect(panel).toBe(1);
     expect(badge).toBe(panel);
   });

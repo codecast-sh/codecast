@@ -63,6 +63,19 @@ describe("filterUserMessages", () => {
     expect(out.map((m) => m._id)).toEqual(["u2"]);
   });
 
+  test("drops the in-place agent-switch divider", () => {
+    const out = filterUserMessages([
+      msg({
+        _id: "u1",
+        role: "user",
+        content: "[codecast] Now using Codex (was Claude).\n\nThis session continues here.",
+        timestamp: 1,
+      }),
+      msg({ _id: "u2", role: "user", content: "real question", timestamp: 2 }),
+    ]);
+    expect(out.map((m) => m._id)).toEqual(["u2"]);
+  });
+
   test("strips context tags from user content before noise checks", () => {
     const out = filterUserMessages([
       msg({

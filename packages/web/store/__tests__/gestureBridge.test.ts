@@ -138,6 +138,20 @@ describe("gesture bridge senders", () => {
     useInboxStore.getState().stashSession(REAL_A);
     expect(hub.posted).toHaveLength(1);
     expect(hub.posted[0].data.mode).toBe("stash");
+    expect(hub.posted[0].data.hidden).toBeUndefined();
+    // A plain stash writes the mode flag explicitly (null), so a re-stash
+    // never inherits an earlier "stash and hide".
+    expect(useInboxStore.getState().sessions[REAL_A].inbox_stash_hidden).toBeNull();
+  });
+
+  it("stash and hide carries hidden:true and stamps the mode on the row", () => {
+    seed({ sessions: { [REAL_A]: session(REAL_A) }, conversations: { [REAL_A]: { _id: REAL_A } } });
+    useInboxStore.getState().stashSession(REAL_A, { hidden: true });
+    expect(hub.posted[0].data.mode).toBe("stash");
+    expect(hub.posted[0].data.hidden).toBe(true);
+    const s = useInboxStore.getState();
+    expect(s.sessions[REAL_A].inbox_stash_hidden).toBe(true);
+    expect((s.conversations[REAL_A] as any).inbox_stash_hidden).toBe(true);
   });
 
   it("a stub in the cascade rides the SAME message as a forget list", () => {
@@ -430,6 +444,26 @@ describe("gesture bridge receiver", () => {
     expect(s.sessions[REAL_A].is_pinned).toBe(false);
     expect(s.sessions[REAL_A].inbox_pinned_at).toBeNull();
     expect((s.conversations[REAL_A] as any).inbox_pinned_at).toBeNull();
+  });
+
+  it("a sibling's stash-and-hide lands with the same mode flag", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A) },
+      conversations: { [REAL_A]: { _id: REAL_A } },
+    });
+    useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "stash", hidden: true, ids: [REAL_A], ts: 500 });
+    let s = useInboxStore.getState();
+    expect(s.sessions[REAL_A].inbox_stashed_at).toBe(500);
+    expect(s.sessions[REAL_A].inbox_stash_hidden).toBe(true);
+    // A later plain stash from a sibling rewrites the mode, and a restore
+    // clears it with the stamp.
+    useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "stash", ids: [REAL_A], ts: 600 });
+    s = useInboxStore.getState();
+    expect(s.sessions[REAL_A].inbox_stash_hidden).toBeNull();
+    useInboxStore.getState().applyGestureBridge({ kind: "restore", ids: [REAL_A], ts: 700 });
+    s = useInboxStore.getState();
+    expect(s.sessions[REAL_A].inbox_stashed_at).toBeNull();
+    expect(s.sessions[REAL_A].inbox_stash_hidden).toBeNull();
   });
 
   it("restore clears both hide flags", () => {

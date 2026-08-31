@@ -11,10 +11,11 @@ import {
 
 export type { PendingEntry } from "@platform/engine";
 
-// Convex omits optional conversation inbox timestamps when they are clear,
-// while optimistic bridge transitions retain the local `null` spelling.  That
-// is the same server acknowledgement for these four fields only; all other
-// fields keep strict null/undefined semantics.  inbox_killed_at belongs here
+// Convex omits optional conversation inbox stamps when they are clear, while
+// optimistic bridge transitions retain the local `null` spelling.  That is
+// the same server acknowledgement for these fields only; all other fields
+// keep strict null/undefined semantics.  inbox_stash_hidden is the stash's
+// mode flag and clears the same way.  inbox_killed_at belongs here
 // for the same reason as the rest: the /sessions restore gesture nulls it
 // (an un-kill patch clears all three stamps), and the server acknowledges by
 // dropping the field — without the equivalence that pending lock would never
@@ -22,6 +23,7 @@ export type { PendingEntry } from "@platform/engine";
 const OPTIONAL_INBOX_TIMESTAMPS: ReadonlySet<string> = new Set([
   "inbox_dismissed_at",
   "inbox_stashed_at",
+  "inbox_stash_hidden",
   "inbox_pinned_at",
   "inbox_killed_at",
 ]);
@@ -33,13 +35,18 @@ export function applySyncTable<T extends { _id: string }>(
   prev?: Record<string, T>,
   opts?: {
     isDelta?: boolean;
-    ignoreFields?: string[];
-    preserveFields?: string[];
+    ignoreFields?: readonly string[];
+    // Readonly on purpose: the sessions preserve list derives from the shared
+    // INBOX_FACT_FIELDS `as const` tuple. The engine only iterates the list,
+    // so the cast below is sound.
+    preserveFields?: readonly string[];
     pruneAbsentScope?: (record: T) => boolean;
   },
 ): { table: Record<string, T>; pending: Record<string, PendingEntry> } {
   return engineApplySyncTable(tableName, incoming, pending, prev, {
     ...opts,
+    ignoreFields: opts?.ignoreFields as string[] | undefined,
+    preserveFields: opts?.preserveFields as string[] | undefined,
     optionalClearFields: OPTIONAL_INBOX_TIMESTAMPS,
   });
 }

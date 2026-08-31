@@ -17,6 +17,55 @@ import { AlertTriangle, X } from "lucide-react";
 import { useDevices } from "./DeviceBadge";
 import { deviceSeesPath } from "../lib/machinePicker";
 
+/**
+ * The transient resume-lifecycle banners (resuming, reconstituting, timed out,
+ * unresponsive), shared by the same hosts as SessionErrorBanner. In normal flow
+ * for the same reason: an absolute overlay at the top of the conversation area
+ * stretches across the diff panel and its backdrop blur obscures the diff
+ * view's header.
+ */
+export function SessionResumeBanner({
+  resumeState,
+  looksAbandoned,
+  onResume,
+}: {
+  resumeState: "idle" | "resuming" | "sent" | "reconstituting" | "failed";
+  looksAbandoned?: boolean;
+  onResume: () => void;
+}) {
+  if (resumeState === "resuming" || resumeState === "sent" || resumeState === "reconstituting") {
+    return (
+      <div className="shrink-0 flex items-center gap-2 px-4 py-1.5 bg-sol-orange/90 text-sol-bg text-xs">
+        <span className="w-1.5 h-1.5 rounded-full bg-sol-bg animate-pulse" />
+        {resumeState === "reconstituting" ? "Reconstituting session from database..." : "Resuming session..."}
+      </div>
+    );
+  }
+  if (resumeState === "failed") {
+    return (
+      <div className="shrink-0 flex items-center gap-2 px-4 py-1.5 bg-sol-red/90 text-sol-bg text-xs">
+        <span className="w-1.5 h-1.5 rounded-full bg-sol-bg" />
+        Resume timed out
+        <button onClick={onResume} className="ml-1 px-1.5 py-0.5 rounded bg-sol-bg/20 hover:bg-sol-bg/30 transition-colors">
+          Retry
+        </button>
+      </div>
+    );
+  }
+  if (looksAbandoned) {
+    return (
+      <div className="shrink-0 flex items-center gap-2 px-4 py-1.5 bg-sol-bg-alt/90 border-b border-sol-border/50 text-sol-text-dim text-xs">
+        <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/50" />
+        Session unresponsive — send a message or
+        <button onClick={onResume} className="px-1.5 py-0.5 rounded bg-sol-cyan/10 hover:bg-sol-cyan/20 border border-sol-cyan/30 text-sol-cyan transition-colors">
+          Resume
+        </button>
+      </div>
+    );
+  }
+  return null;
+}
+
 export function SessionErrorBanner({
   error,
   projectPath,

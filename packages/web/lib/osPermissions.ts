@@ -63,7 +63,7 @@ export const OS_PERMISSIONS: Record<OsPermissionKind, OsPermissionInfo> = {
   screen: {
     kind: "screen",
     label: "Screen recording",
-    why: "Sharing your screen in a huddle.",
+    why: "Sharing your screen in a huddle, and hearing the computer's audio when recording a meeting.",
     required: false,
   },
 };

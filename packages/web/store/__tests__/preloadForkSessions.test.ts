@@ -1,11 +1,11 @@
 import { describe, expect, it, beforeEach } from "bun:test";
 import {
   useInboxStore,
-  categorizeSessions,
   isSessionHidden,
   sessionRowFromSummary,
   type ForkChild,
 } from "../inboxStore";
+import { placeSections } from "./placeTestHarness";
 
 // Regression coverage for ct-42666 — "forks flash in the inbox on reload".
 // preloadForkSessions seeds branch rows into the sessions cache so branch-chip
@@ -97,7 +97,7 @@ describe("preloadForkSessions triage state", () => {
     expect(row.inbox_stashed_at).toBe(stashedAt);
     expect(isSessionHidden(row)).toBe(true);
 
-    const cat = categorizeSessions(useInboxStore.getState().sessions, new Set());
+    const cat = placeSections(useInboxStore.getState().sessions, new Set());
     expect(cat.needsInput.map((s) => s._id)).not.toContain(FORK_ID);
     expect(cat.stashed.map((s) => s._id)).toContain(FORK_ID);
   });
@@ -105,7 +105,7 @@ describe("preloadForkSessions triage state", () => {
   it("seeds a dismissed fork into the dismissed bucket", () => {
     const dismissedAt = Date.now() - 60 * 60 * 1000;
     preload([child({ inbox_dismissed_at: dismissedAt, inbox_stashed_at: null })], PARENT_ID);
-    const cat = categorizeSessions(useInboxStore.getState().sessions, new Set());
+    const cat = placeSections(useInboxStore.getState().sessions, new Set());
     expect(cat.needsInput.map((s) => s._id)).not.toContain(FORK_ID);
     expect(cat.dismissed.map((s) => s._id)).toContain(FORK_ID);
   });

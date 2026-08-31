@@ -10,6 +10,7 @@ import {
   sortLabels,
   computeReorderUpdates,
   isConvexId,
+  chipBucketFilters,
   type BucketItem,
 } from "../store/inboxStore";
 import { getLabelColor } from "../lib/labelColors";
@@ -59,22 +60,37 @@ export function LabelChipsRow({
     st => st.activeBucketFilter,
     st => st.activeProjectFilter,
     st => st.chipFilterExclude,
+    st => st.extraBucketFilters,
   ]);
   const visibleBuckets = useMemo(() => sortLabels(s.buckets), [s.buckets]);
+  // The label filter as a list (head chip + shift-added terms) — each chip
+  // finds its own entry here to know whether it's active and in which polarity.
+  const labelFilters = useMemo(
+    () => chipBucketFilters(s),
+    [s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters],
+  );
 
   // Click is a pure toggle: include the chip, click again to clear. Exclude
   // ("everything but this") is a deliberate gesture — ⌥/Alt-click, or the
   // right-click menu — never a state the plain click cycles through. Clicking
-  // a chip that is active in EITHER mode clears it, so a click's result never
-  // surprises: same chip = off, different chip = on.
-  const toggleBucket = useCallback((bucketId: string, alt?: boolean) => {
+  // a chip that is THE filter in either mode clears it, so a click's result
+  // never surprises: same chip = off, different chip = on (a plain click on a
+  // multi-term filter collapses it to just the clicked chip). ⇧ makes the
+  // gesture ADDITIVE instead: toggle this label in the include list, ⇧⌥ in
+  // the negative list.
+  const toggleBucket = useCallback((bucketId: string, alt?: boolean, shift?: boolean) => {
     const store = useInboxStore.getState();
-    const active = store.activeBucketFilter === bucketId;
+    if (shift) {
+      store.toggleBucketFilterTerm(bucketId, !!alt);
+      return;
+    }
+    const filters = chipBucketFilters(store);
+    const sole = filters.length === 1 && filters[0].id === bucketId;
     if (alt) {
-      if (active && store.chipFilterExclude) store.setActiveBucketFilter(null);
+      if (sole && filters[0].exclude) store.setActiveBucketFilter(null);
       else store.setActiveBucketFilter(bucketId, true);
     } else {
-      store.setActiveBucketFilter(active ? null : bucketId);
+      store.setActiveBucketFilter(sole ? null : bucketId);
     }
   }, []);
   const toggleProject = useCallback((name: string, path: string | null, alt?: boolean) => {
@@ -88,13 +104,16 @@ export function LabelChipsRow({
       else store.setActiveProjectFilter(name, path);
     }
   }, []);
-  // The ⌥-click hint, rendered as real keycaps (never bare glyphs in text).
-  const altClickHint = (
+  // Modifier-click hints, rendered as real keycaps (never bare glyphs in text).
+  const clickHint = (...mods: string[]) => (
     <span className="flex items-center gap-[3px]">
-      <KeyCap size="xs">{isMac ? "⌥" : "Alt"}</KeyCap>
+      {mods.map((m) => <KeyCap key={m} size="xs">{m}</KeyCap>)}
       <KeyCap size="xs">click</KeyCap>
     </span>
   );
+  const altClickHint = clickHint(isMac ? "⌥" : "Alt");
+  const shiftClickHint = clickHint("⇧");
+  const shiftAltClickHint = clickHint("⇧", isMac ? "⌥" : "Alt");
 
   // Labels created inline THIS session stay row-visible at count 0 — creating
   // a chip that instantly vanishes into +N is broken feedback. The exemption
@@ -111,10 +130,10 @@ export function LabelChipsRow({
     for (const b of visibleBuckets) {
       // Non-Convex ids are optimistic create-stubs — inherently fresh, visible
       // from the instant Enter is pressed until the server row supersedes.
-      if ((bucketCounts[b._id] || 0) > 0 || s.activeBucketFilter === b._id || freshLabelIds.has(b._id) || !isConvexId(b._id)) ids.add(b._id);
+      if ((bucketCounts[b._id] || 0) > 0 || labelFilters.some((t) => t.id === b._id) || freshLabelIds.has(b._id) || !isConvexId(b._id)) ids.add(b._id);
     }
     return ids;
-  }, [visibleBuckets, bucketCounts, s.activeBucketFilter, freshLabelIds]);
+  }, [visibleBuckets, bucketCounts, labelFilters, freshLabelIds]);
   const zeroHiddenCount = visibleBuckets.length - rowBucketIds.size;
 
   // ── Inline label creation ────────────────────────────────────────────────
@@ -136,7 +155,14 @@ export function LabelChipsRow({
   // ── Delete (archive) ─────────────────────────────────────────────────────
   const performDeleteLabel = useCallback((bucket: BucketItem) => {
     const store = useInboxStore.getState();
-    if (store.activeBucketFilter === bucket._id) store.setActiveBucketFilter(null);
+    // Pull the label out of the filter list first: sole term clears the
+    // filter, a multi-term list just loses this entry (head removal promotes).
+    const filters = chipBucketFilters(store);
+    const term = filters.find((t) => t.id === bucket._id);
+    if (term) {
+      if (filters.length === 1) store.setActiveBucketFilter(null);
+      else store.toggleBucketFilterTerm(bucket._id, term.exclude);
+    }
     store.updateBucket(bucket._id, { archived_at: Date.now() });
     toast.success(`Deleted label "${bucket.name}"`, {
       action: { label: "Undo", onClick: () => useInboxStore.getState().updateBucket(bucket._id, { archived_at: null }) },
@@ -399,8 +425,10 @@ export function LabelChipsRow({
   // ── Chips ────────────────────────────────────────────────────────────────
   const labelChip = (bucket: BucketItem, index: number) => {
     const bc = getLabelColor(bucket.name);
-    const active = s.activeBucketFilter === bucket._id;
-    const excluded = active && s.chipFilterExclude;
+    const term = labelFilters.find((t) => t.id === bucket._id);
+    const active = !!term;
+    const excluded = !!term?.exclude;
+    const sole = active && labelFilters.length === 1;
     const count = bucketCounts[bucket._id] || 0;
     const key = `label:${bucket._id}`;
     return (
@@ -414,7 +442,7 @@ export function LabelChipsRow({
           setDraggingLabelId(bucket._id);
         }}
         onDragEnd={clearDragState}
-        onClick={(e) => toggleBucket(bucket._id, e.altKey)}
+        onClick={(e) => toggleBucket(bucket._id, e.altKey, e.shiftKey)}
         onContextMenu={(e) => ctxMenu.open(e, { kind: "label", bucket })}
         onDragOver={(e) => {
           // Session-card drops target the chip itself; label reorders are
@@ -449,10 +477,10 @@ export function LabelChipsRow({
         }`}
         title={
           excluded
-            ? `Hiding "${bucket.name}" — click to clear`
+            ? sole ? `Hiding "${bucket.name}" — click to clear` : `Hiding "${bucket.name}" — click to focus only it`
             : active
-              ? `Filtering to "${bucket.name}" — click to clear`
-              : `Label: ${bucket.name} — click to filter, right-click to hide, drag to reorder`
+              ? sole ? `Filtering to "${bucket.name}" — click to clear` : `In filter — click to focus only "${bucket.name}"`
+              : `Label: ${bucket.name} — click to filter, right-click for more, drag to reorder`
         }
       >
         {/* Exclude keeps the filter's colors; the dot flattens into a minus
@@ -595,7 +623,7 @@ export function LabelChipsRow({
           const bc = getLabelColor(activeBucket.name);
           return (
             <button
-              onClick={(e) => toggleBucket(activeBucket._id, e.altKey)}
+              onClick={(e) => toggleBucket(activeBucket._id, e.altKey, e.shiftKey)}
               onContextMenu={(e) => ctxMenu.open(e, { kind: "label", bucket: activeBucket })}
               title={excluded ? `Hiding "${activeBucket.name}" — click to clear` : `Filtering to "${activeBucket.name}" — click to clear`}
               className={`group min-w-0 px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 font-medium ${bc.bg} ${bc.text}`}
@@ -683,8 +711,9 @@ export function LabelChipsRow({
               // that do render so the reorder shift math stays aligned.
               if (!emptyOpen && !rowBucketIds.has(bucket._id)) return null;
               const bc = getLabelColor(bucket.name);
-              const active = s.activeBucketFilter === bucket._id;
-              const excluded = active && s.chipFilterExclude;
+              const term = labelFilters.find((t) => t.id === bucket._id);
+              const active = !!term;
+              const excluded = !!term?.exclude;
               return (
                 <div
                   key={bucket._id}
@@ -700,8 +729,8 @@ export function LabelChipsRow({
                   }}
                   onDragEnd={clearDragState}
                   onClick={(e) => {
-                    toggleBucket(bucket._id, e.altKey);
-                    setPopoverOpen(false);
+                    toggleBucket(bucket._id, e.altKey, e.shiftKey);
+                    if (!e.shiftKey) setPopoverOpen(false);
                   }}
                   // The popover sits at z-9999 and would paint over the menu —
                   // hand the interaction off to the menu instead.
@@ -840,22 +869,51 @@ export function LabelChipsRow({
           // active swaps for its "clear" counterpart, so exactly one item ever
           // reads as an undo.
           if (p.kind === "label") {
-            const active = s.activeBucketFilter === p.bucket._id;
-            const excluded = active && s.chipFilterExclude;
+            const term = labelFilters.find((t) => t.id === p.bucket._id);
+            const sole = !!term && labelFilters.length === 1;
+            const inOtherFilter = labelFilters.length > 0 && !term;
             return (
               <>
                 <CtxHeader title={p.bucket.name} />
-                {active && !excluded ? (
-                  <CtxItem icon={FilterX} onSelect={() => useInboxStore.getState().setActiveBucketFilter(null)}>
-                    Clear filter
-                  </CtxItem>
+                {term && !term.exclude ? (
+                  sole ? (
+                    <CtxItem icon={FilterX} onSelect={() => useInboxStore.getState().setActiveBucketFilter(null)}>
+                      Clear filter
+                    </CtxItem>
+                  ) : (
+                    <CtxItem
+                      icon={FilterX}
+                      trailing={shiftClickHint}
+                      onSelect={() => useInboxStore.getState().toggleBucketFilterTerm(p.bucket._id, false)}
+                    >
+                      Remove from filter
+                    </CtxItem>
+                  )
                 ) : (
                   <CtxItem icon={Filter} onSelect={() => useInboxStore.getState().setActiveBucketFilter(p.bucket._id)}>
                     Filter by this label
                   </CtxItem>
                 )}
-                {excluded ? (
-                  <CtxItem icon={FilterX} onSelect={() => useInboxStore.getState().setActiveBucketFilter(null)}>
+                {/* Additive verbs, only while some other filter is on — the
+                    menu twin of ⇧-click / ⇧⌥-click. */}
+                {inOtherFilter && (
+                  <CtxItem
+                    icon={Filter}
+                    trailing={shiftClickHint}
+                    onSelect={() => useInboxStore.getState().toggleBucketFilterTerm(p.bucket._id, false)}
+                  >
+                    Add to filter
+                  </CtxItem>
+                )}
+                {term?.exclude ? (
+                  <CtxItem
+                    icon={FilterX}
+                    onSelect={() => {
+                      const store = useInboxStore.getState();
+                      if (sole) store.setActiveBucketFilter(null);
+                      else store.toggleBucketFilterTerm(p.bucket._id, true);
+                    }}
+                  >
                     Stop hiding
                   </CtxItem>
                 ) : (
@@ -865,6 +923,15 @@ export function LabelChipsRow({
                     onSelect={() => useInboxStore.getState().setActiveBucketFilter(p.bucket._id, true)}
                   >
                     Hide this label
+                  </CtxItem>
+                )}
+                {inOtherFilter && (
+                  <CtxItem
+                    icon={EyeOff}
+                    trailing={shiftAltClickHint}
+                    onSelect={() => useInboxStore.getState().toggleBucketFilterTerm(p.bucket._id, true)}
+                  >
+                    Also hide this label
                   </CtxItem>
                 )}
                 <CtxSeparator />

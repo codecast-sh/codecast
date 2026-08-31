@@ -21,6 +21,7 @@ export type ShortcutAction =
   | 'session.moveToBucket'
   | 'view.switch'
   | 'session.stash'
+  | 'session.stashHide'
   | 'session.kill'
   | 'session.deferAdvance'
   | 'session.dormantAdvance'
@@ -131,6 +132,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   // the editor whenever there is text to delete. Stash sets the session aside
   // with the agent still running; dismiss retires it AND kills the agent.
   { key: 'ctrl+backspace', action: 'session.stash', skipInputCheck: 'whenEmpty', description: 'Stash session (keep agent running)' },
+  // Stash and hide: the stash survives trigger wakes (a plain stash pops back
+  // on one). One modifier up from stash, same as dormant sits above defer.
+  { key: 'ctrl+alt+backspace', action: 'session.stashHide', skipInputCheck: 'whenEmpty', description: 'Stash and hide (stays out through trigger wakes)' },
   { key: 'ctrl+shift+backspace', action: 'session.kill', skipInputCheck: 'whenEmpty', description: 'Kill session' },
   { key: 'shift+backspace', action: 'session.deferAdvance', skipInputCheck: 'whenEmpty', description: 'Defer and advance' },
   // Dormant joins the backspace triage family one modifier up from defer, its
@@ -159,10 +163,17 @@ export const SHORTCUTS: ShortcutDef[] = [
 
   // Stage panes (the tab's split layout). Handlers return false when the
   // stage isn't split so the chords fall through to whatever else owns them.
-  { key: 'ctrl+alt+d', action: 'pane.split', skipInputCheck: true, description: 'Split: open this view beside itself' },
-  { key: 'ctrl+shift+w', mac: 'meta+shift+w', action: 'pane.close', skipInputCheck: true, description: 'Close pane' },
+  // No ctrl/cmd+shift+w here: browsers reserve it for closing the WINDOW and
+  // never let the page see it. No skipInputCheck on the split chord: Windows
+  // spells AltGr as ctrl+alt, so firing inside an input would eat typed
+  // characters on international layouts. Arrows first for focus motion —
+  // brackets need AltGr on many European layouts and can't be typed at all.
+  { key: 'ctrl+alt+d', action: 'pane.split', description: 'Split: open this view beside itself' },
+  { key: 'ctrl+alt+w', action: 'pane.close', skipInputCheck: true, description: 'Close pane' },
   { key: 'ctrl+alt+enter', action: 'pane.expand', skipInputCheck: true, description: 'Pane takes the whole stage' },
+  { key: 'ctrl+alt+arrowright', action: 'pane.next', skipInputCheck: true, description: 'Focus next pane' },
   { key: 'ctrl+alt+]', action: 'pane.next', skipInputCheck: true, description: 'Focus next pane' },
+  { key: 'ctrl+alt+arrowleft', action: 'pane.prev', skipInputCheck: true, description: 'Focus previous pane' },
   { key: 'ctrl+alt+[', action: 'pane.prev', skipInputCheck: true, description: 'Focus previous pane' },
 
   { key: 'ctrl+.', action: 'ui.zenToggle', skipInputCheck: true, description: 'Toggle zen mode' },

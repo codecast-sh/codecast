@@ -13,6 +13,7 @@ import { TASK_STATUS, TASK_STATUS_ORDER } from "../components/TaskStatusBadge";
 import { StatusCircle } from "../components/StatusCircle";
 import {
   DEFAULT_TASK_STATUSES,
+  TASK_STATUS_CATEGORIES,
   resolveTaskStatus,
   teamTaskStatuses,
   type TaskStatusCategory,
@@ -99,10 +100,9 @@ export function orderedStatuses(statuses: TeamTaskStatus[]): TeamTaskStatus[] {
 
 // Pipeline order for kanban columns: not started on the left, started in the
 // middle, finished on the right. The list view keeps TASK_STATUS_ORDER (active
-// work first); the board reads left to right as a pipeline instead.
-const BOARD_CATEGORY_ORDER: readonly TaskStatusCategory[] = [
-  "backlog", "open", "in_progress", "in_review", "done", "dropped",
-];
+// work first); the board reads left to right as a pipeline instead. The shared
+// TASK_STATUS_CATEGORIES tuple is already in pipeline order.
+const BOARD_CATEGORY_ORDER: readonly TaskStatusCategory[] = TASK_STATUS_CATEGORIES;
 
 /**
  * Kanban column order: pipeline category order, the team's own order within

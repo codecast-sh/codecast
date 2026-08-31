@@ -14,6 +14,8 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { canAccessConversation } from "./lib/access";
+import { pickAnsweredDecision } from "@codecast/shared/contracts";
+import type { Doc } from "./_generated/dataModel";
 
 const optionValidator = v.object({
   label: v.string(),
@@ -316,6 +318,30 @@ async function readableDecision(ctx: any, decisionId: any) {
   return row;
 }
 
+// The fields the answer bubble renders: the question, the options with the
+// chosen one, and the agent's reasoning. Shared by the by-id and by-answer
+// lookups so both return the identical shape. The Doc parameter type is what
+// keeps the query return types (and so the web bubble) fully typed —
+// readableDecision returns `any`, and an untyped row here would flow `any`
+// into every consumer through FunctionReturnType.
+function answerBubbleShape(row: Doc<"session_decisions">) {
+  return {
+    _id: row._id,
+    conversation_id: row.conversation_id,
+    question: row.question,
+    context_md: row.context_md,
+    options: row.options,
+    report_slug: row.report_slug,
+    blocking: row.blocking,
+    default_option: row.default_option,
+    status: row.status,
+    answer_index: row.answer_index,
+    answer_text: row.answer_text,
+    created_at: row.created_at,
+    resolved_at: row.resolved_at,
+  };
+}
+
 // One decision by id, for the answer bubble in the transcript: the queue
 // subscription (listForUser) keeps resolved rows a day, so an older answer
 // reads its options and context here when the reader unfolds it.
@@ -324,21 +350,32 @@ export const get = query({
   handler: async (ctx, args) => {
     const row = await readableDecision(ctx, args.decision_id);
     if (!row) return null;
-    return {
-      _id: row._id,
-      conversation_id: row.conversation_id,
-      question: row.question,
-      context_md: row.context_md,
-      options: row.options,
-      report_slug: row.report_slug,
-      blocking: row.blocking,
-      default_option: row.default_option,
-      status: row.status,
-      answer_index: row.answer_index,
-      answer_text: row.answer_text,
-      created_at: row.created_at,
-      resolved_at: row.resolved_at,
-    };
+    return answerBubbleShape(row);
+  },
+});
+
+// Resolve a legacy answer bubble to its decision row. Messages sent before
+// the wire format carried the id have only the chosen label, so the bubble
+// asks by conversation + label (+ its own timestamp as the tiebreak when the
+// same label answered several asks). Same access rule as reading by id:
+// anyone who can read the conversation.
+export const findByAnswer = query({
+  args: {
+    conversation_id: v.id("conversations"),
+    answer: v.string(),
+    near: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) return null;
+    const rows = await ctx.db
+      .query("session_decisions")
+      .withIndex("by_conversation_status", (q) => q.eq("conversation_id", args.conversation_id).eq("status", "answered"))
+      .collect();
+    const row = pickAnsweredDecision(rows, args.answer, args.near);
+    return row ? answerBubbleShape(row) : null;
   },
 });
 

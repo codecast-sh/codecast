@@ -273,7 +273,7 @@ export function sessionUnread(
 }
 
 /** Inbox sessions as cards. The caller hands in the Inbox's own membership
- *  (categorizeSessions over filterInboxScope), never the raw cache. */
+ *  (placeInboxRows forced to "mine"), never the raw cache. */
 export function sessionCards(
   sessions: InboxSession[],
   seenCounts: Record<string, number>,

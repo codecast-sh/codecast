@@ -1,0 +1,39 @@
+{
+  "about": "No rows: an empty tally, no truncation, and the digest of the empty set (sixteen zeros).",
+  "epoch": "E",
+  "asking": [],
+  "rows": [],
+  "expected": {
+    "truncated": [],
+    "tally": {
+      "shown": {
+        "questions": 0,
+        "pinned": 0,
+        "new": 0,
+        "needs_input": 0,
+        "done": 0,
+        "dormant": 0,
+        "working": 0,
+        "idle": 0,
+        "stashed": 0,
+        "dismissed": 0,
+        "hidden": 0
+      },
+      "folded": {
+        "questions": 0,
+        "pinned": 0,
+        "new": 0,
+        "needs_input": 0,
+        "done": 0,
+        "dormant": 0,
+        "working": 0,
+        "idle": 0,
+        "stashed": 0,
+        "dismissed": 0,
+        "hidden": 0
+      }
+    },
+    "set_digest": "0000000000000000",
+    "placements": {}
+  }
+}
