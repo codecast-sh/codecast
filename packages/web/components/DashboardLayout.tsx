@@ -7,7 +7,7 @@ import { installOpenIntent, detachCurrentView } from "../lib/openIntent";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
 import { isNonTabRoute } from "../src/compat/tabRouting";
-import { withApplyingViewHistory, type InboxViewSnapshot } from "../lib/inboxViewHistory";
+import { withApplyingViewHistory, sameBucketExtras, type InboxViewSnapshot } from "../lib/inboxViewHistory";
 import { RecentlyViewedMenu } from "./RecentlyViewedMenu";
 import { useMutation, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -26,6 +26,8 @@ import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
 import { Plus, PanelLeft, PanelRight, MessageSquare, SquareTerminal } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
+import { TriageBar } from "./triage/TriageBar";
+import { TriageNuxGate } from "./triage/TriageNux";
 import { NewSnippetsBanner } from "./NewSnippetsBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
@@ -44,7 +46,7 @@ import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp
 import { AppLoader } from "./AppLoader";
 import { SettingsModal } from "./settings/SettingsModal";
 import { PeopleWallModal } from "./people/PeopleWallModal";
-import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, sessionsWakeSig, pendingSendWakeSig, isSessionHidden, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, bucketProjectPath, categorizeMineSessions } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, bucketProjectPath, placeInboxRows } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { pathOnMyMachines } from "../lib/machinePicker";
 import { liveMachineRoster } from "../hooks/useSyncDevices";
@@ -54,11 +56,7 @@ import { desktopHeaderClass, setupDesktopDrag, isElectron, isDetachedTabWindow }
 import { SessionListPanel } from "./GlobalSessionPanel";
 import { FilePathMenuHost } from "./FilePathMenuHost";
 import { EdgePeek } from "./EdgePeek";
-import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
-import { useSyncTeamInboxSessions } from "../hooks/useSyncTeamInboxSessions";
-import { useSyncChangeFeed } from "../hooks/useSyncChangeFeed";
-import { useSyncBuckets } from "../hooks/useSyncBuckets";
-import { useSyncSessionDecisions } from "../hooks/useSyncSessionDecisions";
+import { useSyncCore } from "../hooks/useSyncCore";
 import { useChatChannelsSync, useChatUnread } from "../hooks/useChatSync";
 import { useThreadUnreadSync } from "../hooks/useThreadsSync";
 import { useChatToasts } from "../hooks/useChatToasts";
@@ -73,7 +71,8 @@ import { leaveCall } from "../lib/calls/callManager";
 import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
 import { useSyncMentionPlans } from "../hooks/useSyncPlans";
 import { useSyncMentionTasks } from "../hooks/useSyncTasks";
-import { isInboxSessionView, resolveSessionSelectKind, sessionFocusKind } from "../lib/inboxRouting";
+import { isInboxSessionView, sessionFocusKind } from "../lib/inboxRouting";
+import { useOpenSession } from "../hooks/useOpenSession";
 import { useRecentSwitcher } from "../hooks/useRecentSwitcher";
 import { RecentSwitcher } from "./RecentSwitcher";
 import { TabBar, AttachTabButton } from "./TabBar";
@@ -114,10 +113,11 @@ const DashboardNestCtx: React.Context<boolean> =
 // this tiny button instead of the entire shell (Sidebar, CommandPalette,
 // keyboard panel, main content) on every tick.
 const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { isOnInboxPage: boolean }) {
+  const openSession = useOpenSession();
   const s = useTrackedStore([
     // Wake on STRUCTURAL change (bucket/order/identity), never on the ~1s
     // liveness heartbeat: the raw s.sessions ref flips on every tick, and this
-    // badge was measured re-running categorizeSessions over the whole
+    // badge was measured re-running the whole classification over the
     // never-prune cache ~3x/sec at ~50ms a pass. The body still reads
     // s.sessions for data; these signatures only gate the re-render. Same for
     // pendingMessages — only the pending-send MEMBERSHIP matters here.
@@ -127,28 +127,25 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
     s => s.blockedReviveRequestedAt,
     s => pendingSendWakeSig(s.pendingMessages),
     s => s.currentUser?._id,
-    s => s.liveInboxIds,
     s => resolveShowOld(s.clientState.ui),
   ]);
-  // categorizeSessions' trust-TTL sweep (stale "working" → needs-input) is
-  // time-driven, not field-driven — keep it alive with a coarse clock, exactly
+  // The chokepoint's time-driven flips (trust TTL, revive expiry, the epoch)
+  // ride its deadline signature — keep them alive with a coarse clock, exactly
   // like SessionListPanel (see useCoarseNow / store/wakeSig.ts).
   const coarseNow = useCoarseNow(15_000);
   // Ambient "active agents" count stays MINE-scoped regardless of inbox scope: a
   // teammate row can linger in the shared cache after a team-board visit, but the
-  // dock badge counts YOUR working sessions, not the team's. filterInboxScope with
-  // "mine" drops any definitively-foreign row (no-op when the cache is all mine).
-  // On top of that, count only the AUTHORITATIVE active set — a stale "working"
-  // card that aged out of the live inbox must not inflate the badge (its frozen
-  // daemon status never un-sets). liveInboxIds + showOld make categorizeSessions
-  // drop it.
+  // dock badge counts YOUR working sessions, not the team's. The placement
+  // chokepoint (placeInboxRows, sync-convergence C5) forced to "mine" runs the
+  // scope filter and the shared working-set selection internally, so a stale
+  // "working" card outside it can never inflate the badge.
   const meId = s.currentUser?._id?.toString?.() ?? null;
   // Deps are the wake signatures (memoized by ref — free to re-call here), not
   // the raw s.sessions/s.pendingMessages refs those flip on every heartbeat.
   const working = useMemo(
-    () => categorizeMineSessions(s, coarseNow).working,
+    () => placeInboxRows(s, { scope: "mine", now: coarseNow }).working,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), s.liveInboxIds, resolveShowOld(s.clientState.ui), coarseNow],
+    [sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), resolveShowOld(s.clientState.ui), coarseNow],
   );
   if (working.length === 0) return null;
   const activeAgentCount = working.length;
@@ -157,11 +154,7 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
       onClick={() => {
         const store = useInboxStore.getState();
         if (!selectSessionRailOpen(store)) store.toggleSidePanel();
-        const firstWorking = working[0];
-        if (firstWorking) {
-          if (isOnInboxPage) store.setCurrentSession(firstWorking._id);
-          else store.selectPanelSession(firstWorking._id);
-        }
+        if (working[0]) openSession(working[0]._id);
       }}
       className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-full cursor-pointer select-none transition-all duration-300"
       style={{
@@ -221,13 +214,11 @@ function DashboardSyncEffects() {
   useSyncMentionTasks();
   useSyncMentionDocs();
   useSyncMentionPlans();
-  useSyncInboxSessions();
-  useSyncTeamInboxSessions();
-  useSyncChangeFeed();
-  useSyncBuckets();
-  // The decision queue: pending cast-decide questions feed the Questions
-  // section and the /questions queue app-wide (sidebar badge included).
-  useSyncSessionDecisions();
+  // THE feeder mount set (useSyncCore, sync-convergence C5): live window,
+  // liveness overlay, recovery probes, team feeders, sync-log applier, the
+  // decision queue and labels — one hook both platforms mount, so web and
+  // mobile replicas are fed identically.
+  useSyncCore("web");
   // Chat's channel rail runs app-wide, not on the chat page: the sidebar badge,
   // the document title and the arrival toasts all read it, and a toast that only
   // fires while chat is open is a toast nobody needs.
@@ -484,26 +475,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // page takes the full stage, and side by side is the tab's split layout,
   // entered by a deliberate drag onto the stage (components/stage).
 
-  const handleInboxSessionSelect = useCallback((id: string) => {
-    const store = useInboxStore.getState();
-    const sess = store.sessions[id];
-    if (sess?.forked_from) {
-      store.navigateToSession(id);
-      if (store.showMySessions) store.setShowMySessions(false);
-      return;
-    }
-    if (sess) {
-      if (isSessionHidden(sess)) {
-        store.setViewingDismissedId(id);
-      } else {
-        store.setCurrentSession(id);
-      }
-      if (store.showMySessions) store.setShowMySessions(false);
-    } else {
-      useInboxStore.getState().requestNavigate(id, { showMySessions: false });
-    }
-  }, []);
-
   // On conversation pages, derive active ID from the URL so non-owner viewers
   // (ViewerView) get correct sidebar highlighting — they don't set currentSessionId.
   const conversationPageId = isOnConversationPage && pathname
@@ -520,20 +491,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     ? (conversationPageId ?? s.currentSessionId)
     : s.sidePanelSessionId;
 
-  // Leave the current page and open the session in the inbox. Used by
-  // conversation pages (ViewerView for non-owner access) and by Settings/config
-  // — surfaces where selecting a session means "go work on it", not "peek
-  // alongside". Routes through navigateToSession so forks/dismissed/pending all
-  // resolve correctly.
-  const handleLeaveAndOpenSession = useCallback((id: string) => {
-    useInboxStore.getState().navigateToSession(id);
-    router.push('/inbox');
-  }, [router]);
-
-  const sessionSelectKind = resolveSessionSelectKind({ isOnSettingsPage, isOnInboxPage, isOnConversationPage });
-  const sessionListOnSelect = sessionSelectKind === "leave"
-    ? handleLeaveAndOpenSession
-    : handleInboxSessionSelect;
+  // The one select-kind-aware open path (hooks/useOpenSession): in place on
+  // the inbox, leave for the inbox from every other surface. Shared with the
+  // Ctrl+Tab switcher and the Ctrl+I/Ctrl+P jump shortcuts.
+  const sessionListOnSelect = useOpenSession();
 
   useMountEffect(() => {
     setIsMobile(window.innerWidth < 768);
@@ -741,8 +702,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         const v = popped.inboxView;
         const store = useInboxStore.getState();
         withApplyingViewHistory(() => {
-          if (v.bucket !== store.activeBucketFilter || v.project !== store.activeProjectFilter || !!v.exclude !== store.chipFilterExclude) {
-            if (v.bucket) store.setActiveBucketFilter(v.bucket, v.exclude);
+          if (v.bucket !== store.activeBucketFilter || v.project !== store.activeProjectFilter || !!v.exclude !== store.chipFilterExclude || !sameBucketExtras(v.extras, store.extraBucketFilters)) {
+            if (v.bucket) store.setActiveBucketFilter(v.bucket, v.exclude, v.extras);
             else if (v.project) store.setActiveProjectFilter(v.project, v.projectPath, v.exclude);
             else {
               store.setActiveBucketFilter(null);
@@ -948,6 +909,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     <div className="h-full flex flex-col min-h-0">
       <BreadcrumbBar />
       <div className="flex-1 min-h-0">{pageBody}</div>
+      {/* The triage verbs, one fixed home at the stage's bottom edge. The bar
+          gates itself to inbox session views, so it draws nothing elsewhere.
+          Own boundary: a bar crash must cost the bar, never the stage. */}
+      <ErrorBoundary name="TriageBar" level="inline">
+        <TriageBar />
+      </ErrorBoundary>
     </div>
   );
 
@@ -1297,6 +1264,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       )}
       <ErrorBoundary name="CommandPalette" level="inline">
         <CommandPalette />
+      </ErrorBoundary>
+      <ErrorBoundary name="TriageNux" level="inline">
+        <TriageNuxGate />
       </ErrorBoundary>
       {/* The dock portals to <body>, so this wrapper is empty (and hidden)
           until the boundary trips. A dock crash used to degrade into the

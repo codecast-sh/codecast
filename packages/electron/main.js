@@ -21,6 +21,16 @@ if (process.env.CODECAST_USER_DATA) {
 // rule covers this too; this is the belt-and-suspenders native guard.
 app.commandLine.appendSwitch("disable-features", "OverscrollHistoryNavigation");
 
+// System audio for the meeting recorder. The display-media handler below
+// answers `audio: "loopback"`; on Windows Chromium honors that natively, on
+// macOS 13+ only behind these two hidden feature flags (ScreenCaptureKit
+// loopback — Chromium ships the code but leaves it off until Electron 39).
+// The capture itself rides screen capture, so it is gated by the Screen
+// Recording permission, same as screen share.
+if (process.platform === "darwin") {
+  app.commandLine.appendSwitch("enable-features", "MacLoopbackAudioForScreenShare,MacSckSystemAudioLoopbackOverride");
+}
+
 // Pin Chromium's download path to our userData dir so macOS TCC never
 // probes ~/Documents or ~/Downloads and triggers the permission dialog.
 const _ud = app.getPath("userData");
@@ -1050,6 +1060,26 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
     win.setResizable(true);
     win.setContentSize(w, h);
     win.setResizable(false);
+    // WIDTH growth keeps the row's centre fixed — the horizontal twin of the
+    // circles' top pinning in faces.css. The circles are drawn centred, so a
+    // top-left-anchored widen (hover adding a chrome wider than one face)
+    // would slide every circle away from the pointer that caused it.
+    // Math.trunc, not round: a hover's grow and shrink must cancel exactly at
+    // any zoom, or the window walks a pixel sideways per hover cycle. Height
+    // stays top-anchored — growth is downward, and the circles do not move.
+    //
+    // Then the display clamp. The window was placed while it was a small
+    // seed — a row that grew wider than the space to the screen edge would
+    // hang off it, chrome and all, with no title bar to recover it by.
+    // Position wins over size when the display is smaller than the row: the
+    // left edge stays reachable and the far side overflows, same rule as
+    // clampCorner on the web side.
+    const [x, y] = win.getPosition();
+    const cx = x - Math.trunc((w - curW) / 2);
+    const area = screen.getDisplayMatching({ x: cx, y, width: w, height: h }).workArea;
+    const nx = Math.max(area.x, Math.min(cx, area.x + area.width - w));
+    const ny = Math.max(area.y, Math.min(y, area.y + area.height - h));
+    if (nx !== x || ny !== y) win.setPosition(nx, ny);
   });
 
   // Held on a circle, the window follows the cursor. Not a
@@ -1186,7 +1216,15 @@ function callCirclesShowing() {
 function syncFacesOverlayYield() {
   if (!facesWindow || facesWindow.isDestroyed()) return;
   if (callCirclesShowing()) {
-    if (facesWindow.isVisible()) facesWindow.hide();
+    if (facesWindow.isVisible()) {
+      // A hidden window keeps its runtime switches, and the renderer — which
+      // is what normally puts them back — sees no mouse while hidden. A drag
+      // or a lifted click-through that survived the yield would come back as
+      // a window eating clicks over glass, so both are reset on the way down.
+      facesSeeThrough.stopDrag();
+      facesWindow.setIgnoreMouseEvents(true, { forward: true });
+      facesWindow.hide();
+    }
   } else if (!facesWindow.isVisible()) {
     // showInactive, always: the overlay is a glance you keep beside your work,
     // and one that stole the keyboard when a call ended would be worse than
@@ -1259,18 +1297,27 @@ function createFacesWindow() {
     return { action: "deny" };
   });
   // Its moves write the SHARED circles slot, debounced like every saver here.
+  const saveFacesPlace = () => {
+    if (win.isDestroyed() || win.isMinimized()) return;
+    const [x, y] = win.getPosition();
+    updateSettings({ callPanelWindow: { ...loadCallPanelState(), circles: { x, y } } });
+  };
   win.on("move", () => {
     clearTimeout(facesPlaceTimer);
-    facesPlaceTimer = setTimeout(() => {
-      if (win.isDestroyed() || win.isMinimized()) return;
-      const [x, y] = win.getPosition();
-      updateSettings({ callPanelWindow: { ...loadCallPanelState(), circles: { x, y } } });
-    }, 400);
+    facesPlaceTimer = setTimeout(saveFacesPlace, 400);
+  });
+  win.on("close", () => {
+    // Flush, not drop: a drag that ended within the debounce window is the
+    // person's last word on where the circles live.
+    clearTimeout(facesPlaceTimer);
+    saveFacesPlace();
   });
   win.on("closed", () => {
     clearTimeout(facesPlaceTimer);
     if (facesWindow === win) facesWindow = null;
+    broadcastWindowRole();
   });
+  broadcastWindowRole();
   return win;
 }
 
@@ -1279,7 +1326,9 @@ function senderIsFacesWindow(e) {
   return win && !win.isDestroyed() && win === facesWindow ? win : null;
 }
 
-registerSeeThroughIpc("faces-window", senderIsFacesWindow, { getWindow: () => facesWindow });
+const facesSeeThrough = registerSeeThroughIpc("faces-window", senderIsFacesWindow, {
+  getWindow: () => facesWindow,
+});
 
 // Opening is a declaration — "keep the team over my work" — so it persists;
 // closing is its withdrawal. Any app window may ask: the entry button lives in
@@ -1369,6 +1418,10 @@ function broadcastWindowRole() {
     // Whether the call has a window of its own. The call lives THERE, so no
     // other window draws a dock for it — whichever of its three sizes it is in.
     const hasCallPanel = !!callWindow && !callWindow.isDestroyed();
+    // Whether the faces overlay exists (it may be yielding to a call). The
+    // people window's toggle reads this, so a close from the overlay's own
+    // chrome — or from another window — is reflected everywhere.
+    const hasFaces = !!facesWindow && !facesWindow.isDestroyed();
     for (const win of appWindows()) {
       // A window can be past its render frame's disposal and not yet report
       // isDestroyed(), and sending into that gap throws "Render frame was
@@ -1384,6 +1437,21 @@ function broadcastWindowRole() {
         anyInCall,
         peopleWindow: hasPeople,
         callPanel: hasCallPanel,
+        facesOverlay: hasFaces,
+      });
+    }
+    // The overlay runs the same web app but is never the app's voice: not
+    // electable, not a banner target (it ignores clicks), and the web side
+    // defaults to leader until told otherwise — so it is told, every time,
+    // outside the election.
+    if (hasFaces && !facesWindow.webContents.isDestroyed()) {
+      facesWindow.webContents.send("window-role", {
+        leader: false,
+        appFocused,
+        anyInCall,
+        peopleWindow: hasPeople,
+        callPanel: hasCallPanel,
+        facesOverlay: true,
       });
     }
   }, 30);

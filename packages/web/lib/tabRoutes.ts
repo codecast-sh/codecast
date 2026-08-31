@@ -115,7 +115,12 @@ export function healTabPaths<T extends { path: string; layout?: unknown; focused
             ? t.focusedLeafId
             : leavesOf(layout)[0].id;
         const synced = setLeafPath(layout, focusedId, next.path);
-        if (layout !== t.layout || synced !== t.layout || focusedId !== t.focusedLeafId) {
+        // Sanitizing always builds a fresh tree; only a SEMANTIC difference
+        // counts as healing, so healthy tabs keep their identity (callers
+        // detect the no-op by array identity).
+        const layoutChanged =
+          focusedId !== t.focusedLeafId || JSON.stringify(synced) !== JSON.stringify(t.layout);
+        if (layoutChanged) {
           next = { ...next, layout: synced, focusedLeafId: focusedId };
           changed = true;
         }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { awaitTrackedSessionCreateResult, categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, selectNavCollapsed, selectSessionRailOpen, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { awaitTrackedSessionCreateResult, categorizeSessions, computeInboxVisible, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, selectNavCollapsed, selectSessionRailOpen, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
 import { DispatchNotWiredError } from "../mutativeMiddleware";
 import { declareViewNav } from "../viewNav";
@@ -4146,11 +4146,15 @@ describe("dismiss/kill advances in the ACTIVE view order, like j/k", () => {
   // doesn't revert currentSessionId (undeclared non-null view writes are
   // reverted in tests exactly as in production).
   const seed = (viewMode?: "grouped" | "time") => {
+    // Now-relative stamps: membership is the shared working-set selection
+    // (30d recent window + 12h fold), so the fixture rows must be current to
+    // be walked at all. Relative order mirrors the original fixture exactly.
+    const now = Date.now();
     seedCurrentSession({
       sessions: {
-        [A]: waiting(A, 100, 200),
-        [B]: waiting(B, 200, 100),
-        [C]: waiting(C, 300, 150),
+        [A]: waiting(A, now - 300, now - 10),
+        [B]: waiting(B, now - 200, now - 30),
+        [C]: waiting(C, now - 100, now - 20),
       },
       conversations: {
         [A]: { _id: A } as any,
@@ -4191,13 +4195,15 @@ describe("dismiss/kill advances in the ACTIVE view order, like j/k", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Authoritative active set (hide-old): categorizeSessions must render exactly the
-// server's live inbox set (liveInboxIds) in the active buckets when showOld is off
-// — the invariant that converges the inbox across web / desktop / mobile and keeps
-// aged-out cruft out of Needs Input while it stays in the cache for search/open.
-// See inbox_no_authoritative_sessions_floor / the fold in categorizeSessions.
+// Authoritative active set: membership is DATA now — the shared working-set
+// selection over row fields (sync-convergence C4/C5), evaluated by the
+// computeInboxVisible chokepoint. The liveInboxIds gate (a per-device memory of
+// the last payload, with exemptions and a no-filter fallback) is deleted;
+// categorizeSessions only buckets the rows the chokepoint hands it. These pin
+// the invariant that converges counts across web / desktop / mobile and keeps
+// aged-out cruft out of Needs Input while it stays cached for search/open.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("categorizeSessions — authoritative active set (hide-old)", () => {
+describe("computeInboxVisible — the authoritative active set (working-set membership)", () => {
   const cid = (tag: string) => tag.padEnd(32, "0").slice(0, 32).toLowerCase();
   // An idle session with messages classifies as needs-input (see the stopped/idle
   // test above). Fresh updated_at so the trust-TTL sweep never touches it.
@@ -4210,80 +4216,75 @@ describe("categorizeSessions — authoritative active set (hide-old)", () => {
     is_idle: true,
     updated_at: Date.now() - ageMs,
   });
+  const state = (sessions: Record<string, InboxSession>, ui: Record<string, unknown> = {}) =>
+    ({ sessions, clientState: { ui }, currentUser: null, teamInboxIds: new Set<string>() }) as any;
 
-  it("hides cached rows absent from liveInboxIds; keeps live-set rows; counts old", () => {
+  it("drops a row outside the 30-day recent window from every count — cached for search, never counted", () => {
     const live = needsInputRow("liveactive");
     const old = needsInputRow("oldcruft", 40 * 24 * 60 * 60 * 1000); // 40d stale
     const sessions = { [live._id]: live, [old._id]: old };
-    const liveInboxIds = new Set([live._id]);
 
-    const hidden = categorizeSessions(sessions, new Set(), undefined, { liveInboxIds, showOld: false });
-    expect(hidden.needsInput.map((s) => s._id)).toEqual([live._id]);
-    expect(hidden.needsInput.map((s) => s._id)).not.toContain(old._id);
-    expect(hidden.oldCount).toBe(1);
+    const res = computeInboxVisible(state(sessions, { inbox_show_old: false }));
+    expect(Object.keys(res.visibleSessions)).toEqual([live._id]);
+    const cat = categorizeSessions(res.visibleSessions, new Set());
+    expect(cat.needsInput.map((s) => s._id)).toEqual([live._id]);
 
-    // The old row is only hidden from the buckets — it is still in the input map
-    // (categorize never mutates it), so search/open still resolve it.
+    // The old row is only outside the working set — it is still in the input map
+    // (the cache never prunes), so search/open still resolve it.
     expect(sessions[old._id]).toBe(old);
   });
 
-  it("showOld: true reveals the old rows and reports oldCount 0", () => {
+  it("GATE INVERSION: show-old is NOT a bypass — a nonmember stays invisible with the toggle ON", () => {
+    // The old gate skipped filtering entirely when inbox_show_old was on, so
+    // every device counted its whole never-prune cache (2,270 rows vs 1,062
+    // authoritative on one live client). Show-old only reveals FOLDED members.
     const live = needsInputRow("liveactive2");
     const old = needsInputRow("oldcruft2", 40 * 24 * 60 * 60 * 1000);
-    const sessions = { [live._id]: live, [old._id]: old };
-    const res = categorizeSessions(sessions, new Set(), undefined, {
-      liveInboxIds: new Set([live._id]),
-      showOld: true,
-    });
-    expect(res.needsInput.map((s) => s._id).sort()).toEqual([live._id, old._id].sort());
-    expect(res.oldCount).toBe(0);
+    const res = computeInboxVisible(state({ [live._id]: live, [old._id]: old }, { inbox_show_old: true }));
+    expect(Object.keys(res.visibleSessions)).toEqual([live._id]);
+    expect(res.oldCount).toBe(0); // a nonmember is not "old" — it is not in the set at all
   });
 
-  it("no liveInboxIds → safe fallback: show everything (pre-live-payload / legacy callers)", () => {
-    const a = needsInputRow("rowa");
-    const b = needsInputRow("rowb", 40 * 24 * 60 * 60 * 1000);
-    const sessions = { [a._id]: a, [b._id]: b };
-    // omitted opts (legacy call sites)
-    expect(categorizeSessions(sessions, new Set()).needsInput.length).toBe(2);
-    // explicit empty set (cold start, before the first live payload) also shows all
-    const cold = categorizeSessions(sessions, new Set(), undefined, { liveInboxIds: new Set(), showOld: false });
-    expect(cold.needsInput.length).toBe(2);
-    expect(cold.oldCount).toBe(0);
+  it("show-old selects shown + folded INSIDE the computation (the 12h fold gap)", () => {
+    const now = Date.now();
+    const fresh = { ...needsInputRow("freshrow"), updated_at: now };
+    const edge = { ...needsInputRow("edgerow"), updated_at: now - 13 * 60 * 60 * 1000 };
+    const folded = { ...needsInputRow("foldedrow"), updated_at: now - 14 * 60 * 60 * 1000 };
+    const sessions = { [fresh._id]: fresh, [edge._id]: edge, [folded._id]: folded };
+
+    // Off: the folded member hides; the row AT the cut stays (shared computeFold).
+    const off = computeInboxVisible(state(sessions, { inbox_show_old: false }));
+    expect(Object.keys(off.visibleSessions).sort()).toEqual([fresh._id, edge._id].sort());
+    expect(off.oldCount).toBe(1);
+
+    // On: the folded member renders; oldCount still names the folded set.
+    const on = computeInboxVisible(state(sessions, { inbox_show_old: true }));
+    expect(Object.keys(on.visibleSessions).sort()).toEqual([fresh._id, edge._id, folded._id].sort());
+    expect(on.oldCount).toBe(1);
   });
 
-  it("never hides a working session (working rows are always newest → always in the live set)", () => {
+  it("never hides a working session with current activity", () => {
     const working = { ...needsInputRow("workingnow"), agent_status: "working", is_idle: false };
-    // Even if a race left it momentarily out of liveInboxIds, it must not vanish
-    // from Working — but in practice it is always present. Assert the guaranteed
-    // case: a working row IN the live set stays in Working under hide-old.
-    const sessions = { [working._id]: working };
-    const res = categorizeSessions(sessions, new Set(), undefined, {
-      liveInboxIds: new Set([working._id]),
-      showOld: false,
-    });
-    expect(res.working.map((s) => s._id)).toEqual([working._id]);
-    expect(res.oldCount).toBe(0);
+    const res = computeInboxVisible(state({ [working._id]: working }, { inbox_show_old: false }));
+    const cat = categorizeSessions(res.visibleSessions, new Set());
+    expect(cat.working.map((s) => s._id)).toEqual([working._id]);
   });
 
-  it("pinned rows are exempt from hide-old even when absent from the live set", () => {
+  it("pinned rows hold their seat through the pinned window even when aged out of recent", () => {
     const pinned = { ...needsInputRow("pinnedold", 60 * 24 * 60 * 60 * 1000), is_pinned: true, inbox_pinned_at: Date.now() };
-    const sessions = { [pinned._id]: pinned };
-    const res = categorizeSessions(sessions, new Set(), undefined, { liveInboxIds: new Set(["someotherid".padEnd(32, "0")]), showOld: false });
-    expect(res.pinned.map((s) => s._id)).toEqual([pinned._id]);
-    expect(res.oldCount).toBe(0);
+    const res = computeInboxVisible(state({ [pinned._id]: pinned }, { inbox_show_old: false }));
+    expect(Object.keys(res.visibleSessions)).toEqual([pinned._id]);
+    const cat = categorizeSessions(res.visibleSessions, new Set());
+    expect(cat.pinned.map((s) => s._id)).toEqual([pinned._id]);
   });
 
-  it("the sidebar/dashboard count path matches the panel (same authoritative set)", () => {
-    // Regression for the divergence: the badges used raw s.sessions (no partition),
-    // so their counts included cruft the panel hid. With the fold both paths use the
-    // same opts → identical needsInput length.
+  it("the sidebar/dashboard count path matches the panel (both read the chokepoint's set)", () => {
     const live = needsInputRow("livea");
     const old1 = needsInputRow("old1", 40 * 24 * 60 * 60 * 1000);
     const old2 = needsInputRow("old2", 40 * 24 * 60 * 60 * 1000);
-    const sessions = { [live._id]: live, [old1._id]: old1, [old2._id]: old2 };
-    const opts = { liveInboxIds: new Set([live._id]), showOld: false };
-    const panel = categorizeSessions(sessions, new Set(), undefined, opts).needsInput.length;
-    const badge = categorizeSessions(sessions, new Set(), undefined, opts).needsInput.length;
+    const st = state({ [live._id]: live, [old1._id]: old1, [old2._id]: old2 }, { inbox_show_old: false });
+    const panel = categorizeSessions(computeInboxVisible(st).visibleSessions, new Set()).needsInput.length;
+    const badge = categorizeSessions(computeInboxVisible(st).visibleSessions, new Set()).needsInput.length;
     expect(panel).toBe(1);
     expect(badge).toBe(panel);
   });

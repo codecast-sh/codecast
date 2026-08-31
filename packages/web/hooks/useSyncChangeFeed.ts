@@ -3,6 +3,7 @@ import { useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, syncLogScopeMetaKey } from "../store/inboxStore";
 import { useQueryNoThrow } from "./useQueryNoThrow";
+import { onSyncWake } from "./syncWake";
 
 // Sync-log client applier — the single catch-up path.
 // Design: docs/architecture/sync-log-migration.md (pl-399, D7).
@@ -467,9 +468,10 @@ export function useSyncChangeFeed(): void {
     if (!hydrated) return;
     run();
     const id = setInterval(run, TICK_MS);
-    // Wake events — a backgrounded/frozen tab catches up the moment the user
-    // returns. `document` is web-only (this also runs in Expo, where AppState
-    // drives the lifecycle).
+    // Wake events — a backgrounded/frozen client catches up the moment the
+    // user returns. `document` is web-only; the syncWake bus below is the
+    // platform-neutral source (AppState "active" on mobile, wired by
+    // StoreSyncBridge), so an iOS resume replays the cursors too.
     const doc = typeof document !== "undefined" ? document : undefined;
     const win = typeof window !== "undefined" ? window : undefined;
     const onVisible = () => {
@@ -478,12 +480,14 @@ export function useSyncChangeFeed(): void {
     doc?.addEventListener?.("visibilitychange", onVisible);
     win?.addEventListener?.("focus", run);
     win?.addEventListener?.("online", run);
+    const offWake = onSyncWake(run);
     return () => {
       clearInterval(id);
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
         debounceRef.current = null;
       }
+      offWake();
       doc?.removeEventListener?.("visibilitychange", onVisible);
       win?.removeEventListener?.("focus", run);
       win?.removeEventListener?.("online", run);

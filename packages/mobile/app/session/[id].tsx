@@ -18,6 +18,7 @@ import { isTrustedImageSrc } from '@/lib/convex';
 import { parseInboundSessionMessage, isScheduledTaskMessage, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
 import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallbackFromLoaded, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
+import { isHiddenSystemSubtype } from '@codecast/web/lib/conversationProcessor';
 import { MessageNavigatorSheet } from '@/components/session/MessageNavigatorSheet';
 import { MessageTickRail, MessageListButton } from '@/components/session/MessageTickRail';
 import { StickyPromptBanner, type StickyPrompt } from '@/components/session/StickyPromptBanner';
@@ -2316,6 +2317,8 @@ function ThinkingBlock({ content }: { content: string }) {
 }
 
 function SystemMessage({ message }: { message: Message }) {
+  if (isHiddenSystemSubtype(message.subtype)) return null;
+
   if (message.subtype === 'compact_boundary') {
     return (
       <RNView style={styles.compactBoundary}>

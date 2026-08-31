@@ -8,7 +8,8 @@ import { soundIdle } from "../lib/sounds";
 import { useConvexSync } from "./useConvexSync";
 import { useRecoveryPoll } from "./useRecoveryPoll";
 import { useEnsureDispatch } from "./useEnsureDispatch";
-import { useLiveInboxSessions, applyLiveInboxIds } from "./useLiveInboxSessions";
+import { useLiveInboxSessions, applyLiveInboxIds, LIST_INBOX_SESSIONS_ARGS } from "./useLiveInboxSessions";
+import { onSyncWake } from "./syncWake";
 import { useWatchEffect } from "./useWatchEffect";
 import { bootEagerArmed, cancelReconcileCrawl, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
 import { collectGhostSweepCandidates, collectHiddenResurrectionSuspects } from "./ghostSweep";
@@ -267,15 +268,18 @@ export function useSyncInboxSessions() {
     bgSyncMessages(sessions);
   }, [syncTable, bgSyncMessages]), { coalesceMs: 500 });
 
-  // Liveness overlay: a small {convId: {agent_status/is_idle/...}} map merged onto
-  // the cached rows (syncOverlay). The ONLY inbox channel that re-runs on heartbeats,
-  // and it ships a tiny map instead of the full session list. The idle/needs-input
-  // sound lives here because "went idle" IS a liveness change — it reads the post-merge
-  // store rows (bounded to the payload's ids) so it sees the overlaid values.
+  // Liveness overlay: a small {convId: {facts + projection stamps}} map, plus
+  // the projection envelope (sync-convergence C1). The ONLY inbox channel that
+  // re-runs on heartbeats. The applier splits it: FACT fields merge onto the
+  // cached rows; the STAMPS and envelope land in the "mine" slot of the
+  // ephemeral sessionsProjection buffer, never on rows. The idle/needs-input
+  // sound lives here because "went idle" IS a liveness change — it reads the
+  // post-merge store rows (bounded to the payload's ids) so it sees the
+  // overlaid values.
   useConvexSync(sessionLiveness, useCallback((data: any) => {
     const liveness = data?.liveness ?? data;
     if (!liveness || typeof liveness !== "object") return;
-    useInboxStore.getState().syncOverlay("sessions", liveness as Record<string, Record<string, any>>);
+    useInboxStore.getState().applyInboxLivenessPayload("mine", data);
     const store = useInboxStore.getState();
     const merged = Object.keys(liveness)
       .map((id) => store.sessions[id])
@@ -323,7 +327,7 @@ export function useSyncInboxSessions() {
     // `_probe` makes this a novel query token so Convex round-trips instead of
     // serving the (possibly stalled) cache of the live listInboxSessions
     // subscription — otherwise the "recovery" just re-reads the staleness.
-    const fresh: any = await convex.query(api.conversations.listInboxSessions, { show_all: false, include_liveness: false, _probe: Date.now() });
+    const fresh: any = await convex.query(api.conversations.listInboxSessions, { ...LIST_INBOX_SESSIONS_ARGS, _probe: Date.now() });
     if (!fresh) return;
     const sessions = fresh.sessions ?? fresh;
     syncTable("sessions", sessions as unknown as InboxSession[]);
@@ -339,7 +343,9 @@ export function useSyncInboxSessions() {
     const fresh: any = await convex.query(api.conversations.sessionsLiveness, { _probe: Date.now() });
     const liveness = fresh?.liveness;
     if (!liveness) return;
-    useInboxStore.getState().syncOverlay("sessions", liveness as Record<string, Record<string, any>>);
+    // Same applier as the subscription: facts onto rows, stamps + envelope into
+    // the "mine" projection slot — a recovery pass must not fork payload shapes.
+    useInboxStore.getState().applyInboxLivenessPayload("mine", fresh);
     lastLivenessSyncRef.current = Date.now();
   }, [convex]), 15_000);
 
@@ -437,23 +443,19 @@ export function useSyncInboxSessions() {
   const [reconcileNonce, setReconcileNonce] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setReconcileNonce((n) => n + 1), SESSIONS_RECONCILE_THROTTLE_MS);
-    // Timers freeze while a tab/window is backgrounded, so a sleeping client
-    // misses its ticks exactly while it accumulates staleness — the "ghost
-    // cards after wake" vector. Re-tick on wake: the crawls behind this nonce
-    // are durably throttled per wsKey (a bump inside the window is a no-op)
-    // and the ghost sweep costs nothing when it finds no candidates.
-    // `document` is web-only — this hook also runs in the Expo app (no DOM),
-    // where backgrounding/wake is handled by the native AppState lifecycle.
-    if (typeof document === "undefined") return () => clearInterval(id);
-    const onWake = () => {
-      if (document.visibilityState === "visible") setReconcileNonce((n) => n + 1);
-    };
-    document.addEventListener("visibilitychange", onWake);
-    window.addEventListener("focus", onWake);
+    // Timers freeze while a tab/window (or the whole app) is backgrounded, so
+    // a sleeping client misses its ticks exactly while it accumulates
+    // staleness — the "ghost cards after wake" vector. Re-tick on wake: the
+    // crawls behind this nonce are durably throttled per wsKey (a bump inside
+    // the window is a no-op) and the ghost sweep costs nothing when it finds
+    // no candidates. The wake arrives on the platform-neutral syncWake bus —
+    // useSyncCore wires DOM visibility/focus on web, StoreSyncBridge wires
+    // AppState "active" on mobile — replacing the document-gated listener
+    // that never re-ticked on iOS.
+    const offWake = onSyncWake(() => setReconcileNonce((n) => n + 1));
     return () => {
       clearInterval(id);
-      document.removeEventListener("visibilitychange", onWake);
-      window.removeEventListener("focus", onWake);
+      offWake();
     };
   }, []);
   useEffect(() => {
