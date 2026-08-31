@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { dragCarriesPane } from "../lib/stage";
 import { LogoIcon } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import { useRouter } from "next/navigation";
@@ -25,7 +26,8 @@ import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
+import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemSubtype, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
+import { splitMarkdownBlocks } from "../lib/markdownBlocks";
 import { classifyApiErrorBanner, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "./DecisionAnswerFooter";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
@@ -35,15 +37,28 @@ import {
   describeToolGroup,
   extractNestedActions,
   formatToolName,
+  isAgentTool,
+  isAskTool,
+  isEditTool,
+  isGlobTool,
+  isGrepTool,
+  isPlanModeTool,
   isPlanWriteToolCall,
+  isReadTool,
+  isShellTool,
+  isTodoTool,
+  isWriteTool,
   shortenUrl,
   splitBrowserBatchResult,
   stripLineNumbers,
   structuredPayloadSummary,
   summarizeNestedActions,
+  toolPathFromInput,
   toolSummary as sharedToolSummary,
+  toolVisual,
   BROWSER_BATCH_TOOL,
   type NestedStepOutcome,
+  type ToolColorToken,
   truncateStr,
   getRelativePath,
 } from "@codecast/shared/render";
@@ -74,7 +89,7 @@ import { quoteSelectionIntoReply } from "../lib/quoteSelection";
 import { MessageReview } from "./MessageReview";
 import { SelectionQuoteToolbar } from "./SelectionQuoteToolbar";
 import { ReviewBar } from "./ReviewBar";
-import { SuggestionPills } from "./SuggestionPills";
+import { SuggestionPills, SuggestionPillsHandle } from "./SuggestionPills";
 import { ReviewComposerContext } from "./reviewContext";
 import { CommentDock } from "./comments/CommentDock";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
@@ -402,30 +417,6 @@ const MD_RENDER_CACHE_MAX = 500;
 // cosmetically, so ordinary messages keep exact single-parse semantics.
 const MD_BLOCK_SPLIT_THRESHOLD = 8000;
 
-// Split at blank-line runs, but never inside a ``` / ~~~ fence.
-function splitMarkdownBlocks(content: string): string[] {
-  const lines = content.split("\n");
-  const blocks: string[] = [];
-  let cur: string[] = [];
-  let inFence = false;
-  let fenceMark = "";
-  for (const line of lines) {
-    const fence = line.match(/^\s*(`{3,}|~{3,})/);
-    if (fence) {
-      if (!inFence) { inFence = true; fenceMark = fence[1][0]; }
-      else if (fence[1][0] === fenceMark) inFence = false;
-    }
-    if (!inFence && line.trim() === "" && cur.length > 0) {
-      blocks.push(cur.join("\n"));
-      cur = [];
-      continue;
-    }
-    cur.push(line);
-  }
-  if (cur.length > 0) blocks.push(cur.join("\n"));
-  return blocks;
-}
-
 function mdCachePut(key: string, el: ReactElement): ReactElement {
   MD_RENDER_CACHE.set(key, el);
   if (MD_RENDER_CACHE.size > MD_RENDER_CACHE_MAX) {
@@ -444,14 +435,20 @@ function renderMessageMarkdownCached(content: string, userText?: boolean): React
   }
   if (!userText && content.length > MD_BLOCK_SPLIT_THRESHOLD) {
     const blocks = splitMarkdownBlocks(content);
-    const el = (
-      <>
-        {blocks.map((b, i) => (
-          <Fragment key={i}>{renderMessageMarkdownCached(b)}</Fragment>
-        ))}
-      </>
-    );
-    return mdCachePut(key, el);
+    // Recurse only when the split made progress: a body with no blank lines
+    // outside fences returns itself as one block, and recursing on the
+    // identical string overflows the stack (the cache write happens after
+    // the recursive calls, so it can't break the loop).
+    if (blocks.length > 1) {
+      const el = (
+        <>
+          {blocks.map((b, i) => (
+            <Fragment key={i}>{renderMessageMarkdownCached(b)}</Fragment>
+          ))}
+        </>
+      );
+      return mdCachePut(key, el);
+    }
   }
   const el = ReactMarkdownBase({
     children: content,
@@ -2724,8 +2721,7 @@ function summarizeBashCommand(cmd: string): string {
 // a Bash tool's input showed up as a per-render scroll cost.
 const PARSE_CAST_COMMAND_CACHE = new WeakMap<ToolCall, ParsedCastCommand | null>();
 function parseCastCommand(tool: ToolCall): ParsedCastCommand | null {
-  const isBash = tool.name === "Bash" || tool.name === "shell_command" || tool.name === "shell" || tool.name === "exec_command" || tool.name === "container.exec" || tool.name === "commandExecution";
-  if (!isBash) return null;
+  if (!isShellTool(tool.name)) return null;
   if (PARSE_CAST_COMMAND_CACHE.has(tool)) return PARSE_CAST_COMMAND_CACHE.get(tool)!;
   let out: ParsedCastCommand | null = null;
   try {
@@ -3340,7 +3336,7 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
   const prompt = String(parsedInput.prompt || "");
   const model = parsedInput.model ? String(parsedInput.model) : null;
   const name = parsedInput.name ? String(parsedInput.name) : null;
-  const runInBackground = Boolean(parsedInput.run_in_background);
+  const runInBackground = Boolean(parsedInput.run_in_background || parsedInput.background);
 
   const resolvedChildId = childConversationId || findMatchingChild(prompt, childConversations);
   const router = useRouter();
@@ -3686,7 +3682,7 @@ function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
   // condensed feeds: all are standing state the reader needs to know is armed
   // (a watch, a detached command, a running multi-agent fleet, a loop's next
   // fire), not a transient tool step.
-  return isPlanWriteToolCall(tc) || tc.name === "AskUserQuestion" || tc.name === "Monitor" || tc.name === "Workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc);
+  return isPlanWriteToolCall(tc) || isAskTool(tc.name) || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc);
 }
 
 interface ToolChangeRange {
@@ -3722,6 +3718,23 @@ function FullscreenIcon() {
   );
 }
 
+const TOOL_COLOR_CLASS: Record<ToolColorToken, string> = {
+  green: "text-sol-green/80",
+  blue: "text-sol-blue/80",
+  violet: "text-sol-violet/80",
+  orange: "text-sol-orange/80",
+  cyan: "text-sol-cyan/80",
+  magenta: "text-sol-magenta/80",
+  red: "text-sol-red/80",
+  textDim: "text-sol-text-dim",
+  emerald: "text-emerald-500/80",
+  amber: "text-amber-500/80",
+};
+
+function toolColorClass(name: string): string {
+  return TOOL_COLOR_CLASS[toolVisual(name).color];
+}
+
 function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode, messageId, conversationId, onStartShareSelection, onOpenComments, collapsed, timestamp, images, globalImageMap }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; changeRange?: ToolChangeRange; shareSelectionMode?: boolean; messageId?: string; conversationId?: Id<"conversations">; onStartShareSelection?: (messageId: string) => void; onOpenComments?: () => void; collapsed?: boolean; timestamp?: number; images?: ImageData[]; globalImageMap?: Record<string, ImageData[]> }) {
   // opencode + pi name their built-in tools in lowercase (`edit`/`read`/`bash`/…);
   // gemini's glob matches too. Included alongside Claude's capitalized names and
@@ -3729,15 +3742,14 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   // specialized cards (DiffView, syntax read, bash styling) instead of the generic
   // fallback. Lowercase ids don't collide with claude/codex spellings.
   const isApplyPatch = tool.name === "apply_patch";
-  const isStandardEdit = tool.name === "Edit" || tool.name === "Write" || tool.name === "file_edit" || tool.name === "file_write" || tool.name === "edit" || tool.name === "write";
+  const isStandardEdit = isEditTool(tool.name) || isWriteTool(tool.name);
   const isFileChange = tool.name === "fileChange";
   const isEdit = isStandardEdit || isApplyPatch || isFileChange;
   const [expanded, setExpanded] = useState(isEdit);
-  const isRead = tool.name === "Read" || tool.name === "file_read" || tool.name === "read";
-  const isCodexShell = tool.name === "shell_command" || tool.name === "shell" || tool.name === "exec_command" || tool.name === "container.exec" || tool.name === "commandExecution";
-  const isBash = tool.name === "Bash" || tool.name === "bash" || isCodexShell;
-  const isGlob = tool.name === "Glob" || tool.name === "glob";
-  const isGrep = tool.name === "Grep" || tool.name === "grep";
+  const isRead = isReadTool(tool.name);
+  const isBash = isShellTool(tool.name);
+  const isGlob = isGlobTool(tool.name);
+  const isGrep = isGrepTool(tool.name);
   const isCodeSearch = tool.name === "code_search" || tool.name === "code_analysis";
   // Workflow subagents return their typed result by CALLING StructuredOutput:
   // the input is the whole payload and the result is boilerplate, so rendering
@@ -3762,8 +3774,9 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   const isBrowserBatch = tool.name === BROWSER_BATCH_TOOL;
   const isNested = isCodexExec || isBrowserBatch;
 
-  // claude uses file_path, codex uses path, opencode/pi use filePath (camelCase).
-  const filePath = String(parsedInput.file_path || parsedInput.filePath || parsedInput.path || "");
+  // claude uses file_path, codex uses path, opencode/pi use filePath (camelCase),
+  // grok read_file uses target_file and list_dir uses target_directory.
+  const filePath = toolPathFromInput(parsedInput);
   const relativePath = getRelativePath(filePath);
   // Enables inline line comments on the agent's edits (see DiffView). Scoped to a
   // live conversation; comments land in the shared review batch keyed by the
@@ -3796,7 +3809,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   const isMarkdown = isMarkdownFile(filePath);
   const content = isRead ? (result?.content || "") : String(parsedInput.content || "");
   const isPlan = isMarkdown && isPlanFile(filePath, content);
-  const isPlanWrite = tool.name === "Write" && filePath.includes('.claude/plans/');
+  const isPlanWrite = isWriteTool(tool.name) && filePath.includes('.claude/plans/');
   const [viewMode, setViewMode] = useState<'raw' | 'rendered'>(isMarkdown ? 'rendered' : 'raw');
   const [mdExpanded, setMdExpanded] = useState(false);
   const [mdFullscreen, setMdFullscreen] = useState(false);
@@ -3840,7 +3853,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
     if (isNested) {
       if (nestedActions.length === 1) {
         const inner = nestedActions[0];
-        if (inner.name === "exec_command" || inner.name === "shell_command" || inner.name === "shell" || inner.name === "container.exec" || inner.name === "commandExecution") {
+        if (isShellTool(inner.name)) {
           let innerInput: Record<string, unknown> = {};
           try { innerInput = JSON.parse(inner.input); } catch {}
           const cmd = unwrapShellCommand(String(innerInput.command || innerInput.cmd || ""));
@@ -4065,76 +4078,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   };
   const startLine = getStartLine();
 
-  const toolColors: Record<string, string> = {
-    Edit: "text-sol-orange/80",
-    Write: "text-sol-orange/80",
-    Read: "text-sol-blue/80",
-    Bash: "text-sol-green/80",
-    Glob: "text-sol-violet/80",
-    Grep: "text-sol-violet/80",
-    Task: "text-sol-cyan/80",
-    TaskCreate: "text-emerald-500/80",
-    TaskUpdate: "text-emerald-500/80",
-    TaskList: "text-emerald-500/80",
-    TaskGet: "text-emerald-500/80",
-    TaskOutput: "text-emerald-500/80",
-    TaskStop: "text-emerald-500/80",
-    AskUserQuestion: "text-sol-blue/80",
-    TeamCreate: "text-sol-cyan/80",
-    TeamDelete: "text-sol-cyan/80",
-    SendMessage: "text-amber-500/80",
-    StructuredOutput: "text-sol-cyan/80",
-    TodoWrite: "text-sol-magenta/80",
-    WebSearch: "text-sol-violet/80",
-    WebFetch: "text-sol-cyan/80",
-    NotebookEdit: "text-sol-orange/80",
-    Skill: "text-sol-cyan/80",
-    EnterPlanMode: "text-sol-violet/80",
-    ExitPlanMode: "text-sol-violet/80",
-    "mcp__claude-in-chrome__computer": "text-sol-orange/80",
-    "mcp__claude-in-chrome__browser_batch": "text-sol-orange/80",
-    "mcp__claude-in-chrome__navigate": "text-sol-blue/80",
-    "mcp__claude-in-chrome__read_page": "text-sol-blue/80",
-    "mcp__claude-in-chrome__find": "text-sol-violet/80",
-    "mcp__claude-in-chrome__form_input": "text-sol-orange/80",
-    "mcp__claude-in-chrome__javascript_tool": "text-sol-orange/80",
-    "mcp__claude-in-chrome__tabs_context_mcp": "text-sol-text-dim",
-    "mcp__claude-in-chrome__tabs_create_mcp": "text-sol-text-dim",
-    "mcp__claude-in-chrome__update_plan": "text-sol-cyan/80",
-    "mcp__claude-in-chrome__gif_creator": "text-sol-magenta/80",
-    "mcp__claude-in-chrome__read_console_messages": "text-sol-green/80",
-    "mcp__claude-in-chrome__read_network_requests": "text-sol-green/80",
-    "mcp__claude-in-chrome__get_page_text": "text-sol-blue/80",
-    "mcp__claude-in-chrome__upload_image": "text-sol-blue/80",
-    "mcp__claude-in-chrome__resize_window": "text-sol-text-dim",
-    "mcp__claude-in-chrome__shortcuts_list": "text-sol-violet/80",
-    "mcp__claude-in-chrome__shortcuts_execute": "text-sol-violet/80",
-  };
-
-  const codexToolColors: Record<string, string> = {
-    shell_command: "text-sol-green/80",
-    shell: "text-sol-green/80",
-    exec_command: "text-sol-green/80",
-    "container.exec": "text-sol-green/80",
-    commandExecution: "text-sol-green/80",
-    apply_patch: "text-sol-orange/80",
-    file_read: "text-sol-blue/80",
-    file_write: "text-sol-orange/80",
-    file_edit: "text-sol-orange/80",
-    fileChange: "text-sol-orange/80",
-    web_search: "text-sol-violet/80",
-    web_fetch: "text-sol-cyan/80",
-    code_search: "text-sol-violet/80",
-    code_analysis: "text-sol-violet/80",
-  };
-
-  const getMcpColor = (name: string) => {
-    if (codexToolColors[name]) return codexToolColors[name];
-    if (name.startsWith("mcp__")) return "text-sol-cyan/80";
-    return "text-sol-text-dim";
-  };
-
-  const toolColor = toolColors[tool.name] || getMcpColor(tool.name);
+  const toolColor = toolColorClass(tool.name);
 
   const targetStart = changeRange?.start ?? changeIndex;
   const targetEnd = changeRange?.end ?? changeIndex;
@@ -4266,7 +4210,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
           className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset transition-all duration-200"
         >
           {/* Markdown toggle header */}
-          {isMarkdown && (isRead || (tool.name === "Write" && Boolean(parsedInput.content))) && (
+          {isMarkdown && (isRead || (isWriteTool(tool.name) && Boolean(parsedInput.content))) && (
             <div className="flex items-center justify-between px-2 py-1 border-b border-sol-border/20 bg-sol-bg-highlight/30">
               <div className="flex items-center gap-2">
                 <span className="text-[10px] text-sol-text-dim">{language}</span>
@@ -4333,7 +4277,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
               language={language}
               commentContext={lineCommentCtx(filePath)}
             />
-          ) : tool.name === "Write" && !!parsedInput.content ? (
+          ) : isWriteTool(tool.name) && !!parsedInput.content ? (
             isMarkdown && viewMode === 'rendered' ? (
               <>
                 <div
@@ -4573,7 +4517,7 @@ function TodoWriteBlock({ tool }: { tool: ToolCall }) {
       <div className="flex items-center gap-2 py-0.5">
         <span className="w-1.5 h-1.5 rounded-full bg-pink-500 flex-shrink-0" />
         <span className="font-mono text-sm font-medium text-pink-600 dark:text-sol-magenta">
-          TodoWrite
+          {formatToolName(tool.name)}
         </span>
         <span className="text-sol-text-dim text-sm font-mono">
           {completed}/{todos.length} done
@@ -5924,8 +5868,8 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
 }
 
 function PlanModeBlock({ tool, result, conversationId, messageId, onSendMessage }: { tool: ToolCall; result?: ToolResult; conversationId?: string; messageId?: string; onSendMessage?: (content: string) => void }) {
-  const isEnter = tool.name === "EnterPlanMode";
-  const isExit = tool.name === "ExitPlanMode";
+  const isEnter = tool.name === "EnterPlanMode" || tool.name === "enter_plan_mode";
+  const isExit = tool.name === "ExitPlanMode" || tool.name === "exit_plan_mode";
   const isWaitingForApproval = isExit && !result && !!onSendMessage;
   const [sent, setSent] = useState(false);
 
@@ -6026,7 +5970,7 @@ function PollCheckIcon({ className }: { className?: string }) {
 }
 
 function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall; result?: ToolResult; onSendMessage?: (content: string) => void }) {
-  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
+  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; multi_select?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
   const [sent, setSent] = useState(() => _askUserSentState.has(tool.id));
   // Per-question selections. multiSelect questions hold several entries (checkbox
@@ -6035,7 +5979,10 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   const [otherOpen, setOtherOpen] = useState<Record<number, boolean>>({});
   const [otherTexts, setOtherTexts] = useState<Record<number, string>>({});
 
-  const questions = parsedInput.questions || [];
+  const questions = (parsedInput.questions || []).map((q) => ({
+    ...q,
+    multiSelect: q.multiSelect ?? q.multi_select,
+  }));
   if (questions.length === 0) return null;
 
   const isMultiQuestion = questions.length > 1;
@@ -6963,18 +6910,19 @@ function extractCompactionSummaryContent(content: string): string {
 // completion record, marked closed on the way in. Nothing is wrong and nothing
 // is owed, so it wears the same quiet grey as the "monitor ended" line, and the
 // unknown-status fallback lands there too rather than crying wolf.
-const taskStatusConfig: Record<string, { icon: string; color: string; bg: string; eyebrow: string; chip: string }> = {
-  completed: { icon: '\u2713', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', eyebrow: 'text-emerald-400/70', chip: 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10' },
-  killed: { icon: '\u25A0', color: 'text-sol-orange', bg: 'bg-sol-orange/10 border-sol-orange/20', eyebrow: 'text-sol-orange/70', chip: 'border-sol-orange/40 text-sol-orange bg-sol-orange/10' },
-  failed: { icon: '\u2717', color: 'text-sol-red', bg: 'bg-sol-red/10 border-sol-red/20', eyebrow: 'text-sol-red/70', chip: 'border-sol-red/40 text-sol-red bg-sol-red/10' },
-  running: { icon: '\u25B6', color: 'text-sol-blue', bg: 'bg-sol-blue/10 border-sol-blue/20', eyebrow: 'text-sol-blue/70', chip: 'border-sol-blue/40 text-sol-blue bg-sol-blue/10' },
-  stopped: { icon: '\u25A0', color: 'text-sol-text-dim', bg: 'bg-sol-bg-alt/30 border-sol-border/40', eyebrow: 'text-sol-text-dim', chip: 'border-sol-border/60 text-sol-text-dim bg-sol-bg-alt/40' },
+const taskStatusConfig: Record<string, { icon: string; color: string; bg: string; accent: string; eyebrow: string; chip: string }> = {
+  completed: { icon: '\u2713', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', accent: 'border-emerald-500/60 bg-emerald-500/5', eyebrow: 'text-emerald-400/70', chip: 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10' },
+  killed: { icon: '\u25A0', color: 'text-sol-orange', bg: 'bg-sol-orange/10 border-sol-orange/20', accent: 'border-sol-orange/60 bg-sol-orange/5', eyebrow: 'text-sol-orange/70', chip: 'border-sol-orange/40 text-sol-orange bg-sol-orange/10' },
+  failed: { icon: '\u2717', color: 'text-sol-red', bg: 'bg-sol-red/10 border-sol-red/20', accent: 'border-sol-red/60 bg-sol-red/5', eyebrow: 'text-sol-red/70', chip: 'border-sol-red/40 text-sol-red bg-sol-red/10' },
+  running: { icon: '\u25B6', color: 'text-sol-blue', bg: 'bg-sol-blue/10 border-sol-blue/20', accent: 'border-sol-blue/60 bg-sol-blue/5', eyebrow: 'text-sol-blue/70', chip: 'border-sol-blue/40 text-sol-blue bg-sol-blue/10' },
+  stopped: { icon: '\u25A0', color: 'text-sol-text-dim', bg: 'bg-sol-bg-alt/30 border-sol-border/40', accent: 'border-sol-border/60 bg-sol-bg-alt/30', eyebrow: 'text-sol-text-dim', chip: 'border-sol-border/60 text-sol-text-dim bg-sol-bg-alt/40' },
 };
 
 // The statuses whose notification the harness injects as a NEW user turn \u2014 the
 // message the reader is looking at is what pulled the agent back to work, and
-// the turn below it is the response. "stopped" is excluded: those notices are
-// resume-time bookkeeping riding a turn that was starting anyway.
+// the turn below it is the response. Those rows grow the elbow arrow pointing
+// at that turn. "stopped" is excluded: those notices are resume-time
+// bookkeeping riding a turn that was starting anyway.
 const WAKE_STATUSES = new Set(['completed', 'failed', 'killed']);
 
 function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { content: string; timestamp: number; agentNameToChildMap?: Record<string, string> }) {
@@ -7031,27 +6979,33 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
   if (parts) {
     const chipText = `${parsed.status}${parts.exitCode ? ` \u00b7 exit ${parts.exitCode}` : ''}`;
     return (
-      <div
-        className={`mb-2 px-3 py-2 flex items-start gap-2 text-xs border rounded ${cfg.bg}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
-        onClick={childId ? () => router.push(`/conversation/${childId}`) : undefined}
-      >
-        <span className={`font-mono text-sm leading-none shrink-0 mt-0.5 ${cfg.color}`}>{cfg.icon}</span>
-        <span className={`text-[10px] font-medium tracking-wide uppercase shrink-0 mt-px ${cfg.eyebrow}`}>{parts.kind}</span>
-        <ExpandableLine text={parts.description} className="text-sol-text font-medium" title={parsed.summary} />
-        <span className={`px-1 py-0 rounded border text-[9px] font-semibold shrink-0 mt-px ${cfg.chip}`}>{chipText}</span>
-        {childId && (
-          <svg className={`w-3 h-3 shrink-0 mt-0.5 ${cfg.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-          </svg>
-        )}
+      <div className="mb-1.5 mx-1">
+        {/* Same anatomy as a session-message card (left accent, header line) \u2014
+            both are machine deliveries into this thread, so they share one
+            visual language. */}
+        <div
+          className={`rounded border-l-2 ${cfg.accent}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
+          onClick={childId ? () => router.push(`/conversation/${childId}`) : undefined}
+        >
+          <div className="flex items-start gap-2 px-3 py-2 text-xs">
+            <span className={`font-mono text-sm leading-none shrink-0 mt-0.5 ${cfg.color}`}>{cfg.icon}</span>
+            <span className={`text-[10px] font-medium tracking-wide uppercase shrink-0 mt-px ${cfg.eyebrow}`}>{parts.kind}</span>
+            <ExpandableLine text={parts.description} className="text-sol-text font-medium" title={parsed.summary} />
+            <span className={`px-1 py-0 rounded border text-[9px] font-semibold shrink-0 mt-px ${cfg.chip}`}>{chipText}</span>
+            {childId && (
+              <svg className={`w-3 h-3 shrink-0 mt-0.5 ${cfg.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            )}
+            <span className="text-sol-text-dim font-mono text-[10px] shrink-0">{parsed.taskId}</span>
+            <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+          </div>
+        </div>
         {woke && (
-          <span className="flex items-center gap-1 text-[10px] text-sol-text-dim shrink-0 mt-px whitespace-nowrap" title="This notification woke the agent \u2014 the turn below is its response">
-            <Zap className="w-3 h-3" />
-            woke the agent
-          </span>
+          <div className="pl-2 pt-0.5" title="The turn below was woken by this notification">
+            <CornerDownRight className={`w-3.5 h-3.5 ${cfg.color} opacity-60`} />
+          </div>
         )}
-        <span className="text-sol-text-dim font-mono text-[10px] shrink-0">{parsed.taskId}</span>
-        <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
     );
   }
@@ -8108,7 +8062,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           {images.filter(img => !img.tool_use_id).map((img, i) => <ImageBlock key={i} image={img} />)}
         </div>
       )}
-      {decision && !effectivelyCollapsed && <DecisionAnswerFooter decision={decision} conversationId={conversationId} />}
+      {decision && !effectivelyCollapsed && <DecisionAnswerFooter decision={decision} conversationId={conversationId} timestamp={timestamp} />}
       {isTruncated && (
         <button
           onClick={handleToggleExpand}
@@ -8680,7 +8634,7 @@ function AssistantBlockImpl({
     ? linkifyMentions(strippedContent, agentNameToChildMap)
     : strippedContent;
   const parsedApiError = useMemo(() => parseApiErrorContent(displayContent), [displayContent]);
-  const onlyAskUser = toolCalls && toolCalls.length > 0 && toolCalls.every(tc => tc.name === "AskUserQuestion");
+  const onlyAskUser = toolCalls && toolCalls.length > 0 && toolCalls.every(tc => isAskTool(tc.name));
   const hasContent = displayContent && displayContent.trim().length > 0 && !onlyAskUser;
   const hasThinking = !!thinking && thinking.trim().length > 0;
   const visibleThinking = hasThinking && !!showThinking;
@@ -8704,7 +8658,7 @@ function AssistantBlockImpl({
   // later tool-only message. `src` is the message that actually ran it, so
   // comments, share selection and subagent links attribute correctly.
   const renderToolBlock = (tc: ToolCall, result: ToolResult | undefined, src: { messageId: string; messageUuid?: string; timestamp: number }) => (
-    (tc.name === "Task" || tc.name === "Agent") ? (
+    isAgentTool(tc.name) ? (
       <TaskToolBlock
         key={tc.id}
         tool={tc}
@@ -8712,9 +8666,9 @@ function AssistantBlockImpl({
         childConversationId={src.messageUuid && childConversationMap ? childConversationMap[src.messageUuid] : undefined}
         childConversations={childConversations}
       />
-    ) : tc.name === "TodoWrite" ? (
+    ) : isTodoTool(tc.name) ? (
       <TodoWriteBlock key={tc.id} tool={tc} />
-    ) : tc.name === "AskUserQuestion" ? (
+    ) : isAskTool(tc.name) ? (
       <AskUserQuestionBlock key={tc.id} tool={tc} result={result} onSendMessage={onSendInlineMessage} />
     ) : tc.name === "TaskList" ? (
       <TaskListBlock key={tc.id} tool={tc} result={result} taskRecordMap={taskRecordMap} />
@@ -8724,15 +8678,15 @@ function AssistantBlockImpl({
       <SendMessageBlock key={tc.id} tool={tc} agentNameToChildMap={agentNameToChildMap} />
     ) : tc.name === "TeamCreate" || tc.name === "TeamDelete" ? (
       <TeamCreateBlock key={tc.id} tool={tc} />
-    ) : tc.name === "Workflow" ? (
+    ) : tc.name === "Workflow" || tc.name === "workflow" ? (
       <WorkflowToolBlock key={tc.id} tool={tc} result={result} />
     ) : tc.name === "Skill" ? (
       <SkillBlock key={tc.id} tool={tc} />
-    ) : tc.name === "Monitor" || isBackgroundBashToolCall(tc) ? (
+    ) : tc.name === "Monitor" || tc.name === "monitor" || isBackgroundBashToolCall(tc) ? (
       <MonitorBlock key={tc.id} tool={tc} conversationId={conversationId} />
     ) : tc.name === "ScheduleWakeup" ? (
       <ScheduleWakeupBlock key={tc.id} tool={tc} result={result} timestamp={src.timestamp} />
-    ) : tc.name === "EnterPlanMode" || tc.name === "ExitPlanMode" ? (
+    ) : isPlanModeTool(tc.name) ? (
       <PlanModeBlock key={tc.id} tool={tc} result={result} conversationId={conversationId} messageId={src.messageId} onSendMessage={onSendInlineMessage} />
     ) : parseCastCommand(tc) ? (
       <CastCommandBlock key={tc.id} tool={tc} result={result} images={images} globalImageMap={globalImageMap} conversationId={conversationId} />
@@ -9093,6 +9047,8 @@ function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[
 }
 
 function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; subtype?: string; timestamp?: number; messageUuid?: string; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void }) {
+  if (isHiddenSystemSubtype(subtype)) return null;
+
   if (subtype === "compact_boundary") {
     return (
       <div className="my-6 flex items-center gap-3">
@@ -10858,15 +10814,22 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     store.setQueuedMessagesFor(conversationId, next);
   }, [conversationId]);
   const [selectedQueueIndex, setSelectedQueueIndex] = useState<number | null>(null);
+  // Keyboard selection for the suggestion pill row lives inside the component
+  // (the pill list is its server subscription); the composer drives it through
+  // this handle as the top rung of the ↑ ladder: pills over queue over images.
+  const suggestionPillsRef = useRef<SuggestionPillsHandle | null>(null);
+  // Mirror of the pill row's selection, reported up so Escape ownership (the
+  // effect below) can stand the compose popup down while a pill is selected.
+  const [pillSelectionActive, setPillSelectionActive] = useState(false);
   // Tell the host (compose popup) when Escape is spoken for by inner UI — the
   // lightbox, an image/queue chip selection, or the slash-command menu — so its
   // document-capture Escape listener stands down and the textarea handler above
   // gets to unwind that state instead of the whole dialog closing.
   useWatchEffect(() => {
     if (escapeOwnedRef) {
-      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null;
+      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null || pillSelectionActive;
     }
-  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex]);
+  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex, pillSelectionActive]);
   const setSessionHasQueuedMessages = useInboxStore((s) => s.setSessionHasQueuedMessages);
   useWatchEffect(() => {
     setSessionHasQueuedMessages(conversationId, queuedMessages.length > 0);
@@ -11436,6 +11399,48 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       return;
     }
 
+    // Top rung of the ↑ ladder: a selected suggestion pill. Enter sends it
+    // as-is (the pill contract), Tab drops it into the composer for editing.
+    const pills = suggestionPillsRef.current;
+    if (pills?.active()) {
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        pills.move(-1);
+        return;
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        pills.move(1); // past the last pill exits back to the composer
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        pills.clear();
+        if (queuedMessages.length > 0) setSelectedQueueIndex(0);
+        else if (pastedImages.length > 0) setSelectedImageIndex(0);
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        pills.send();
+        return;
+      }
+      if (e.key === "Tab" && !e.shiftKey) {
+        e.preventDefault();
+        pills.edit();
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        pills.clear();
+        return;
+      }
+      if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) {
+        pills.clear();
+      }
+    }
+
     if (selectedImageIndex !== null && pastedImages.length > 0) {
       if (e.key === "ArrowLeft") {
         e.preventDefault();
@@ -11479,6 +11484,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         }
         return;
       }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        // ↑ from the image strip climbs to the queue row above it.
+        if (queuedMessages.length > 0) {
+          setSelectedImageIndex(null);
+          setLightboxImageIndex(null);
+          setSelectedQueueIndex(queuedMessages.length - 1);
+        }
+        return;
+      }
       if (e.key === "ArrowDown") {
         e.preventDefault();
         setSelectedImageIndex(null);
@@ -11493,6 +11508,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (selectedQueueIndex !== null && queuedMessages.length > 0) {
       if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
         e.preventDefault();
+        // ↑ off the top of the queue climbs to the suggestion pill row.
+        if (e.key === "ArrowUp" && selectedQueueIndex === 0 && pills?.enter()) {
+          setSelectedQueueIndex(null);
+          return;
+        }
         setSelectedQueueIndex(Math.max(0, selectedQueueIndex - 1));
         return;
       }
@@ -11553,6 +11573,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       if (textarea && textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
         e.preventDefault();
         setSelectedQueueIndex(queuedMessages.length - 1);
+        return;
+      }
+    }
+
+    // Last rung: nothing else to select above the caret, climb to the pills.
+    if (e.key === "ArrowUp" && pills?.visible() && selectedImageIndex === null && selectedQueueIndex === null) {
+      const textarea = textareaRef.current;
+      if (textarea && textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
+        e.preventDefault();
+        pills.enter();
         return;
       }
     }
@@ -11992,6 +12022,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           {!bareComposer && suggestionsEnabled && !onGateSend && !onWorkflowLaunch && !hasAskUserQuestion && (
             <div className={`mx-auto px-2 sm:px-4 ${isExpanded ? "conv-col" : "max-w-md"}`}>
               <SuggestionPills
+                ref={suggestionPillsRef}
                 conversationId={conversationId}
                 idle={!isWaitingForResponse && !isThinking && !(agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus))}
                 hidden={!!message || pastedImages.length > 0 || composeMode}
@@ -12000,6 +12031,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 // contract ComposeEditor's onSubmit relies on).
                 onSend={(t) => { setMessage(t); messageRef.current = t; void handleSubmit({ preventDefault: () => {} } as any); }}
                 onEdit={(t) => { setMessage(t); textareaRef.current?.focus(); }}
+                onActiveChange={setPillSelectionActive}
               />
             </div>
           )}
@@ -13443,7 +13475,12 @@ const ConversationViewInner = (
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
 
+  // These handlers exist for IMAGE drops. A pane-shaped drag (a session card,
+  // a tab, a pane strip — lib/stage) must fall through untouched so it can
+  // bubble to the stage's drop layer and offer a split; swallowing every drag
+  // here is what made dropping a session onto a conversation a dead gesture.
   const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (dragCarriesPane(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
     dragCounterRef.current++;
@@ -13451,11 +13488,13 @@ const ConversationViewInner = (
   }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (dragCarriesPane(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
   }, []);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (dragCarriesPane(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
     dragCounterRef.current--;
@@ -13463,6 +13502,7 @@ const ConversationViewInner = (
   }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
+    if (dragCarriesPane(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
     dragCounterRef.current = 0;

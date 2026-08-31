@@ -17,7 +17,7 @@ import { CLIENT_SYNC_REGISTRY } from "./clientSyncRegistry";
 // months: every team-board visit, deep link, and crawl top-up leaves a row
 // forever. A long-lived install was measured hydrating ~7,000 rows (5k+ older
 // than 30 days, 4k belonging to teammates) into a map whose live inbox renders
-// ~134 — and every O(N) pass (syncTable, wake signatures, categorizeSessions,
+// ~134 — and every O(N) pass (syncTable, wake signatures, placeInboxRows,
 // sortSessions) paid the 7k price on each liveness flip, pinning the main
 // thread. Boot is the one safe moment to shed that weight: nothing holds refs
 // yet, and everything the UI can actually reach is kept —

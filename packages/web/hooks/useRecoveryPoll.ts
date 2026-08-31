@@ -1,4 +1,5 @@
 import { useEffect, useRef, type MutableRefObject } from "react";
+import { onSyncWake } from "./syncWake";
 
 // A one-shot recovery fetch can hang indefinitely while the Convex WebSocket is
 // mid-reconnect (the very situation recovery exists for). Cap it: a fetch that
@@ -167,10 +168,15 @@ export function useRecoveryPoll(
     doc?.addEventListener?.("visibilitychange", onVisible);
     win?.addEventListener?.("focus", wake);
     win?.addEventListener?.("online", wake);
+    // The platform-neutral wake bus (syncWake): mobile has no DOM events, so
+    // AppState "active" (wired by StoreSyncBridge) reaches the controller
+    // here. On web it doubles the DOM events above; wake() dedupes.
+    const offWake = onSyncWake(wake);
 
     return () => {
       clearInterval(id);
       controller.dispose();
+      offWake();
       doc?.removeEventListener?.("visibilitychange", onVisible);
       win?.removeEventListener?.("focus", wake);
       win?.removeEventListener?.("online", wake);

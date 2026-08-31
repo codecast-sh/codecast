@@ -271,3 +271,51 @@ describe("sanitizeLayout", () => {
     expect(sanitizeLayout(JSON.parse(JSON.stringify(root)))).toBeUndefined();
   });
 });
+
+describe("geometry tiling property", () => {
+  // Whatever sequence of splits builds the tree, the leaf rects must tile the
+  // stage exactly: full area, no overlaps, all within bounds. This is the
+  // contract the flat renderer and the drop preview both stand on.
+  test("random trees tile 100x100 exactly", () => {
+    let seed = 42;
+    const rand = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const edges = ["left", "right", "top", "bottom"] as const;
+    for (let trial = 0; trial < 40; trial++) {
+      let root: StageNode = leaf("/p0", `t${trial}_0`);
+      for (let i = 1; i < MAX_STAGE_LEAVES; i++) {
+        const targets = leavesOf(root);
+        const target = targets[Math.floor(rand() * targets.length)];
+        const edge = edges[Math.floor(rand() * 4)];
+        const useRoot = rand() < 0.25;
+        const res = insertLeaf(root, useRoot ? "root" : { leafId: target.id }, edge, `/p${i}`)!;
+        root = res.root;
+      }
+      const { leaves } = stageGeometry(root);
+      const area = leaves.reduce((a, l) => a + l.rect.width * l.rect.height, 0);
+      expect(Math.abs(area - 10000)).toBeLessThan(0.01);
+      for (const l of leaves) {
+        expect(l.rect.left).toBeGreaterThanOrEqual(-1e-6);
+        expect(l.rect.top).toBeGreaterThanOrEqual(-1e-6);
+        expect(l.rect.left + l.rect.width).toBeLessThanOrEqual(100 + 1e-6);
+        expect(l.rect.top + l.rect.height).toBeLessThanOrEqual(100 + 1e-6);
+      }
+      // Pairwise: no two rects overlap (touching edges allowed).
+      for (let a = 0; a < leaves.length; a++) {
+        for (let b = a + 1; b < leaves.length; b++) {
+          const A = leaves[a].rect, B = leaves[b].rect;
+          const overlapX = Math.min(A.left + A.width, B.left + B.width) - Math.max(A.left, B.left);
+          const overlapY = Math.min(A.top + A.height, B.top + B.height) - Math.max(A.top, B.top);
+          expect(Math.min(overlapX, overlapY)).toBeLessThan(0.01);
+        }
+      }
+    }
+  });
+
+  test("normalize is idempotent", () => {
+    const two = insertLeaf(leaf("/a", "a"), { leafId: "a" }, "right", "/b")!;
+    const bId = leavesOf(two.root)[1].id;
+    const three = insertLeaf(two.root, { leafId: bId }, "bottom", "/c")!;
+    const once = normalize(three.root);
+    expect(normalize(once)).toEqual(once);
+  });
+});

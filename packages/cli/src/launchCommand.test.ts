@@ -6,8 +6,12 @@ import { test, expect, describe } from "bun:test";
 import { AGENT_CLIENTS, type AgentClientId } from "@codecast/shared/contracts";
 import {
   buildLaunchArgs,
-  launchBinary,
+  buildPrintArgs,
+  formatPrintCommand,
   getConfiguredAgentArgs,
+  getPermissionFlags,
+  launchBinary,
+  resolvePrintModelAlias,
   type LaunchArgsInput,
 } from "./launchCommand.js";
 
@@ -212,5 +216,185 @@ describe("buildLaunchArgs — targeted per-client behavior", () => {
     // An effort outside GROK_EFFORT_LEVELS is dropped, never passed through.
     expect(buildLaunchArgs({ agentType: "grok", configuredArgs: "", permFlags: null, defaultFlags: null, modelAlias: "grok-4.5", requestedEffort: "bogus" }).binaryArgs)
       .toEqual(["-m", "grok-4.5"]);
+  });
+});
+
+const printBase = {
+  configuredArgs: "",
+  permFlags: null as string | null,
+  defaultFlags: null as string | null,
+  prompt: "do the thing",
+};
+
+describe("buildPrintArgs maps unified flags onto each client's native print mode", () => {
+  test("claude: -p positional, model/effort/output-format, bypass perms", () => {
+    const { binaryArgs, ignored } = buildPrintArgs({
+      ...printBase,
+      agentType: "claude",
+      permFlags: "--permission-mode bypassPermissions",
+      modelAlias: "opus",
+      requestedEffort: "high",
+      outputFormat: "json",
+    });
+    expect(binaryArgs).toEqual([
+      "--permission-mode", "bypassPermissions",
+      "--model", "opus",
+      "--effort", "high",
+      "--output-format", "json",
+      "-p", "do the thing",
+    ]);
+    expect(ignored).toEqual([]);
+  });
+
+  test("grok: -p takes the prompt as its value", () => {
+    const { binaryArgs } = buildPrintArgs({
+      ...printBase,
+      agentType: "grok",
+      permFlags: "--permission-mode bypassPermissions",
+      modelAlias: "grok-4.6",
+      requestedEffort: "high",
+      outputFormat: "stream-json",
+    });
+    expect(binaryArgs).toEqual([
+      "--permission-mode", "bypassPermissions",
+      "-m", "grok-4.6",
+      "--reasoning-effort", "high",
+      "--output-format", "streaming-json",
+      "-p", "do the thing",
+    ]);
+  });
+
+  test("codex: exec subcommand, resume is a nested subcommand, json is --json", () => {
+    const { binaryArgs } = buildPrintArgs({
+      ...printBase,
+      agentType: "codex",
+      permFlags: "--dangerously-bypass-approvals-and-sandbox",
+      modelAlias: "gpt-5.6-sol",
+      requestedEffort: "xhigh",
+      outputFormat: "json",
+      resumeId: "abc",
+    });
+    expect(binaryArgs).toEqual([
+      "exec", "resume", "abc",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "-m", "gpt-5.6-sol",
+      "-c", "model_reasoning_effort=xhigh",
+      "--json",
+      "do the thing",
+    ]);
+  });
+
+  test("opencode: run subcommand with --auto and --format json", () => {
+    const { binaryArgs } = buildPrintArgs({
+      ...printBase,
+      agentType: "opencode",
+      modelAlias: "anthropic/claude-sonnet-5",
+      outputFormat: "json",
+    });
+    expect(binaryArgs).toEqual([
+      "run", "--auto",
+      "-m", "anthropic/claude-sonnet-5",
+      "--format", "json",
+      "do the thing",
+    ]);
+  });
+
+  test("cursor print mode auto-approves with --force --trust", () => {
+    const { binaryArgs } = buildPrintArgs({
+      ...printBase,
+      agentType: "cursor",
+      modelAlias: "sonnet-4",
+    });
+    expect(binaryArgs).toEqual(["--force", "--trust", "--model", "sonnet-4", "-p", "do the thing"]);
+  });
+
+  test("cursor --permission-mode default skips auto-approve", () => {
+    const { binaryArgs } = buildPrintArgs({
+      ...printBase,
+      agentType: "cursor",
+      autoApprove: false,
+    });
+    expect(binaryArgs).toEqual(["-p", "do the thing"]);
+  });
+
+  test("pi: -p positional, --mode json, --thinking from effort", () => {
+    const { binaryArgs } = buildPrintArgs({
+      ...printBase,
+      agentType: "pi",
+      modelAlias: "openrouter/anthropic/claude-sonnet-5",
+      requestedEffort: "xhigh",
+      outputFormat: "json",
+    });
+    expect(binaryArgs).toEqual([
+      "--model", "openrouter/anthropic/claude-sonnet-5",
+      "--thinking", "xhigh",
+      "--mode", "json",
+      "-p", "do the thing",
+    ]);
+  });
+
+  test("gemini: -p takes the prompt as its value, --yolo auto-approves", () => {
+    const { binaryArgs } = buildPrintArgs({
+      ...printBase,
+      agentType: "gemini",
+      modelAlias: "gemini-2.5-pro",
+    });
+    expect(binaryArgs).toEqual(["--yolo", "--model", "gemini-2.5-pro", "-p", "do the thing"]);
+  });
+
+  test("unsupported flags are listed in ignored, not passed through", () => {
+    const { binaryArgs, ignored } = buildPrintArgs({
+      ...printBase,
+      agentType: "codex",
+      maxTurns: 8,
+      systemPrompt: "be brief",
+      jsonSchema: "{}",
+      bare: true,
+    });
+    expect(binaryArgs).not.toContain("--max-turns");
+    expect(binaryArgs).not.toContain("--bare");
+    expect(ignored).toEqual(["--max-turns", "--system-prompt", "--json-schema", "--bare"]);
+  });
+
+  test("claude honors --bare, --max-turns, --json-schema, --system-prompt", () => {
+    const { binaryArgs, ignored } = buildPrintArgs({
+      ...printBase,
+      agentType: "claude",
+      permFlags: "--permission-mode bypassPermissions",
+      maxTurns: 4,
+      systemPrompt: "be brief",
+      jsonSchema: '{"type":"object"}',
+      bare: true,
+    });
+    expect(binaryArgs).toEqual([
+      "--permission-mode", "bypassPermissions",
+      "--max-turns", "4",
+      "--system-prompt", "be brief",
+      "--json-schema", '{"type":"object"}',
+      "--bare",
+      "-p", "do the thing",
+    ]);
+    expect(ignored).toEqual([]);
+  });
+});
+
+describe("print helpers", () => {
+  test("resolvePrintModelAlias maps picker keys and passes raw ids through", () => {
+    expect(resolvePrintModelAlias("claude", "opus")).toBe("opus");
+    expect(resolvePrintModelAlias("claude", "default")).toBeUndefined();
+    expect(resolvePrintModelAlias("claude", undefined)).toBeUndefined();
+    expect(resolvePrintModelAlias("grok", "grok-4.6")).toBe("grok-4.6");
+    expect(resolvePrintModelAlias("claude", "some-raw-id")).toBe("some-raw-id");
+  });
+
+  test("getPermissionFlags defaults claude and grok to bypass", () => {
+    expect(getPermissionFlags("claude", null)).toBe("--permission-mode bypassPermissions");
+    expect(getPermissionFlags("grok", null)).toBe("--permission-mode bypassPermissions");
+    expect(getPermissionFlags("codex", null)).toBe("--dangerously-bypass-approvals-and-sandbox");
+  });
+
+  test("formatPrintCommand quotes args that need it", () => {
+    expect(formatPrintCommand("claude", ["-p", "do the thing"])).toBe("claude -p 'do the thing'");
+    expect(formatPrintCommand("grok", ["-m", "grok-4.6", "-p", "hi"])).toBe("grok -m grok-4.6 -p hi");
   });
 });
