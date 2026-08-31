@@ -218,7 +218,7 @@ function FleetDrillIn() {
   const s = useTrackedStore([
     (st) => overlayConversationId(st.workspace),
     // Only this row — the whole map would re-render the overlay on every
-    // other session's heartbeat (same rule as StageCompanion).
+    // other session's heartbeat (same rule as the stage's SessionPane).
     (st) => {
       const id = overlayConversationId(st.workspace);
       return id ? st.sessions[id] : null;
@@ -269,6 +269,20 @@ function FleetDrillIn() {
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [open, handleClose]);
+
+  // The board OWNS this slot, so leaving the board takes the visit with it.
+  // Without this, navigating to another surface mid-drill-in stranded the
+  // overlay pane in the store: nothing rendered it, yet overlayConversationId
+  // kept answering — and the triage chords (stash/defer/kill) target exactly
+  // that id, so a destructive key could hit an invisible session.
+  useEffect(() => {
+    return () => {
+      const st = useInboxStore.getState();
+      if (st.workspace.secondary.presentation === "overlay" && st.workspace.secondary.pane?.kind === "conversation") {
+        st.wsHide("secondary", { remember: false });
+      }
+    };
+  }, []);
 
   // A drilled-in row that vanished (killed, pruned) closes itself.
   if (!open || !id || !session) return null;

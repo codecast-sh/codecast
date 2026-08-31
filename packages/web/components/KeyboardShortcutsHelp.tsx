@@ -127,6 +127,12 @@ export function KeyboardShortcutsPanel() {
 
         <div className="px-4 py-2.5 border-t border-sol-border/30 text-[10px] text-sol-text-dim flex items-center gap-1.5">
           Press <KeyCap size="xs">?</KeyCap> to toggle this panel
+          <button
+            onClick={() => s.setTriageNuxOpen(true)}
+            className="ml-auto text-sol-text-dim hover:text-sol-cyan transition-colors"
+          >
+            Replay the intro tour
+          </button>
         </div>
       </div>
     </div>
