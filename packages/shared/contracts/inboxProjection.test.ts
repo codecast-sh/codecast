@@ -174,3 +174,21 @@ describe("computeBucketStale", () => {
     expect(calls).toBe(0);
   });
 });
+
+// A live harness /loop asleep on a wakeup parks its session exactly like an
+// armed inject trigger — the machine owns the next move (2026-08-31: these
+// sessions filed under Needs Input with no visible wake).
+describe("classifyWorkState armedLoopHome", () => {
+  test("a settled session with an armed loop rests dormant", () => {
+    expect(classifyWorkState(input({ armedLoopHome: true }))).toBe("dormant");
+  });
+
+  test("hard blocks outrank the loop park", () => {
+    expect(classifyWorkState(input({ armedLoopHome: true, awaitingInput: true }))).toBe("needs_input");
+    expect(classifyWorkState(input({ armedLoopHome: true, agentStatus: "permission_blocked" }))).toBe("needs_input");
+  });
+
+  test("an active turn outranks the loop park", () => {
+    expect(classifyWorkState(input({ armedLoopHome: true, agentStatus: "working", isIdle: false }))).toBe("working");
+  });
+});

@@ -84,18 +84,18 @@ describe("apply", () => {
     expect(ws.context.userClosed).toBeNull();
   });
 
-  it("keeps the current subject in a subject slot instead of conjuring one", () => {
-    const snap = captureWorkbench(workedIn()); // secondary: subject, split, 44
+  it("leaves the secondary slot alone — its one use (the board's drill-in) is the board's, not an arrangement", () => {
+    const snap = captureWorkbench(workedIn()); // old save: secondary subject, split, 44
     let ws = createWorkspace();
     ws = showPane(ws, "secondary", convo("live"), { presentation: "overlay" });
     ws = applyWorkbench(ws, snap);
+    // Applying an old snapshot that pinned a companion must not strand a pane
+    // in a slot nothing renders any more: the live overlay is untouched.
     expect(ws.secondary.pane).toEqual(convo("live"));
-    expect(ws.secondary.presentation).toBe("split");
-    expect(ws.secondary.size).toBe(44);
-    // …and with no subject on hand, the slot arranges empty.
+    expect(ws.secondary.presentation).toBe("overlay");
     const bare = applyWorkbench(createWorkspace(), snap);
     expect(bare.secondary.pane).toBeNull();
-    expect(bare.secondary.presentation).toBe("split");
+    expect(bare.secondary.presentation).toBe("overlay");
   });
 
   it("re-derives comments from the conversation you are on", () => {

@@ -19,7 +19,7 @@ import {
   isSettleVerdictCurrent,
   HEARTBEAT_ALIVE_MS,
 } from "./inboxFilters";
-import { loadArmedTriggerHomes, isArmedTriggerHome } from "./dormancy";
+import { loadArmedTriggerHomes, isArmedTriggerHome, isArmedLoopHome } from "./dormancy";
 
 export const sendPushNotification = internalAction({
   args: {
@@ -727,6 +727,7 @@ export async function performNeedsInputCheck(
     killed: !!conv.inbox_killed_at,
     userDormant: isUserDormant(conv),
     armedTriggerHome: isArmedTriggerHome(conv, armedHomes.standing),
+    armedLoopHome: isArmedLoopHome(conv, now),
     armedOnceTriggerHome: isArmedTriggerHome(conv, armedHomes.once),
     settleVerdict: isSettleVerdictCurrent(conv) ? conv.settle_verdict : null,
     declaredStatus: conv.thread_state_status ?? null,

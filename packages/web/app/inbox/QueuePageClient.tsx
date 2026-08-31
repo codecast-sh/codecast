@@ -10,7 +10,8 @@ import { urlSessionId } from "../../lib/pathLabel";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DashboardLayout } from "../../components/DashboardLayout";
-import { KeyCap } from "../../components/KeyboardShortcutsHelp";
+import { TriageBar } from "../../components/triage/TriageBar";
+import { TriageNuxGate } from "../../components/triage/TriageNux";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { ConversationPlaceholder } from "../../components/ConversationPlaceholder";
 import { ConversationDiffLayout } from "../../components/ConversationDiffLayout";
@@ -284,12 +285,6 @@ export function QueuePageClient() {
   // chronological feed. Persisted per-user (stamped LWW).
   const inboxHome = useInboxStore((s) => resolveInboxHome(s.clientState.ui));
   const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
-
-  // inbox_shortcuts_hidden is mirrored to localStorage (see CRITICAL_UI_KEYS in
-  // inboxStore.ts), so it's seeded synchronously and correct on first paint.
-  const shortcutsHidden = useInboxStore(s => s.clientState.ui?.inbox_shortcuts_hidden ?? false);
-  const showShortcuts = !shortcutsHidden;
-
 
 
   const isPopstateRef = useRef(false);
@@ -717,24 +712,10 @@ export function QueuePageClient() {
   return (
     <DashboardLayout>
       <InboxShortcuts />
+      <TriageNuxGate />
       <div className="flex flex-col h-full">
       <div className="flex-1 min-h-0">{inboxContent}</div>
-      {showShortcuts && (
-        <div className="flex-shrink-0 px-3 py-1 border-t border-sol-border/30 bg-sol-bg-alt/30 flex items-center gap-3 text-[10px] text-sol-text-dim">
-          <span className="flex items-center gap-1">
-            <span className="flex items-center gap-[2px]"><KeyCap size="xs">{"\u2303"}</KeyCap><KeyCap size="xs">J</KeyCap><span className="text-sol-text-dim/40">/</span><KeyCap size="xs">K</KeyCap></span> nav
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="flex items-center gap-[2px]"><KeyCap size="xs">{"\u2303"}</KeyCap><KeyCap size="xs">I</KeyCap></span> idle
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="flex items-center gap-[2px]"><KeyCap size="xs">{"\u2303"}</KeyCap><KeyCap size="xs">{"\u232b"}</KeyCap></span> dismiss
-          </span>
-          <button onClick={() => useInboxStore.getState().toggleShortcutsPanel()} className="ml-auto flex items-center gap-1 hover:text-sol-text-muted transition-colors">
-            <KeyCap size="xs">?</KeyCap> all shortcuts
-          </button>
-        </div>
-      )}
+      <TriageBar />
       </div>
     </DashboardLayout>
   );

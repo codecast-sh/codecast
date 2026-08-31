@@ -223,8 +223,15 @@ describe("paneReconcileTarget", () => {
     expect(paneReconcileTarget("busy", undefined)).toBe("working");
   });
 
-  test("no correction when the pane already agrees", () => {
-    expect(paneReconcileTarget("idle", "idle")).toBeNull();
+  test("stored idle re-derives on an idle pane (the waiting climb-back)", () => {
+    // A false task-death verdict (a stale cached agent pid condemning live
+    // watchers) collapses waiting -> idle; the caller maps this "idle" through
+    // resolveTurnEndStatus, which re-checks open tasks and can climb back to
+    // "waiting". A no-change answer publishes nothing, so agreeing stays cheap.
+    expect(paneReconcileTarget("idle", "idle")).toBe("idle");
+  });
+
+  test("no correction when a busy pane already agrees", () => {
     expect(paneReconcileTarget("busy", "working")).toBeNull();
     expect(paneReconcileTarget("busy", "thinking")).toBeNull();
   });

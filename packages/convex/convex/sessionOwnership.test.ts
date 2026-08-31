@@ -9,10 +9,14 @@ import {
 } from "./sessionOwnership";
 
 // Fixtures: Mr Bot runs a team-visible session; Jason and Ashot are teammates.
+// Samvit lives in a SECOND team, whose session jx3abcd is run by Ashot — the
+// roster tests prove the picker follows the session's team, not the caller's.
 const TEAM = "teams_1";
+const TEAM2 = "teams_2";
 const BOT = "users_bot";
 const JASON = "users_jason";
 const ASHOT = "users_ashot";
+const SAMVIT = "users_samvit";
 const OUTSIDER = "users_outsider";
 
 function fixtures() {
@@ -21,12 +25,15 @@ function fixtures() {
       { _id: BOT, name: "Mr Bot", email: "bot@union.ai", is_bot: true },
       { _id: JASON, name: "Jason Benn", email: "jason@union.ai" },
       { _id: ASHOT, name: "Ashot P", email: "ashot@union.ai" },
+      { _id: SAMVIT, name: "Samvit R", email: "samvit@other.ai" },
       { _id: OUTSIDER, name: "Stranger", email: "stranger@example.com" },
     ],
     team_memberships: [
       { _id: "tm_1", user_id: BOT, team_id: TEAM, visibility: "full" },
       { _id: "tm_2", user_id: JASON, team_id: TEAM, visibility: "full" },
       { _id: "tm_3", user_id: ASHOT, team_id: TEAM, visibility: "full" },
+      { _id: "tm_4", user_id: SAMVIT, team_id: TEAM2, visibility: "full" },
+      { _id: "tm_5", user_id: ASHOT, team_id: TEAM2, visibility: "full" },
     ],
     conversations: [
       {
@@ -45,6 +52,15 @@ function fixtures() {
         user_id: BOT,
         team_id: undefined,
         is_private: true,
+        status: "active",
+      },
+      {
+        _id: "jx3abcd_convex_id",
+        short_id: "jx3abcd",
+        session_id: "sess-uuid-3",
+        user_id: ASHOT,
+        team_id: TEAM2,
+        is_private: false,
         status: "active",
       },
     ],
@@ -385,5 +401,32 @@ describe("performListOwners", () => {
     const result = await performListOwners({ db }, ASHOT as any, "jx1abcd");
     expect(result?.short_id).toBe("jx1abcd");
     expect(result?.owners.map((o) => o.user_id)).toEqual([JASON]);
+  });
+
+  // The roster the picker offers must follow the SESSION's team: Ashot's
+  // active context is team 1, but jx3abcd is stamped team 2, so the
+  // candidates are team 2's members — never Jason or the bot.
+  test("team_members is the session team's roster, not the caller's", async () => {
+    const db = fixtures();
+    const result = await performListOwners({ db }, ASHOT as any, "jx3abcd");
+    expect(result?.team_members.map((m) => m._id).sort()).toEqual([ASHOT, SAMVIT].sort());
+  });
+
+  test("team session roster carries display fields and the bot flag", async () => {
+    const db = fixtures();
+    const result = await performListOwners({ db }, ASHOT as any, "jx1abcd");
+    const bot = result?.team_members.find((m) => m._id === BOT);
+    expect(bot?.is_bot).toBe(true);
+    const jason = result?.team_members.find((m) => m._id === JASON);
+    expect(jason).toMatchObject({ name: "Jason Benn", email: "jason@union.ai", is_bot: false });
+  });
+
+  // A teamless session accepts only a self-claim, so the roster is exactly
+  // the caller.
+  test("teamless session offers only the caller", async () => {
+    const db = fixtures();
+    db._tables.conversations[1].owner_user_id = JASON;
+    const result = await performListOwners({ db }, JASON as any, "jx2abcd");
+    expect(result?.team_members.map((m) => m._id)).toEqual([JASON]);
   });
 });

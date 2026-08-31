@@ -9,6 +9,7 @@ import type { AgentStatus } from "@codecast/shared/contracts";
 import {
   openTasksVouchForWaiting,
   OPEN_TASKS_FRESH_MS,
+  LOOP_OVERDUE_GRACE_MS,
   placeInboxRow,
   computeBucketStale,
   digestProjection,
@@ -32,7 +33,7 @@ import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, requireSessionCommandTarget } from "./daemonCommandUtils";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, isUserDormant, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
-import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind } from "./dormancy";
+import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
 import { filterUserMessages, isImportNotice } from "./userMessagesFilter";
@@ -800,7 +801,7 @@ async function findChildConversations(
   return { children, map, agentNameEntries: Object.entries(agentNameMap) };
 }
 
-function generateShareToken(): string {
+export function generateShareToken(): string {
   return crypto.randomUUID();
 }
 
@@ -1328,6 +1329,10 @@ export const webGet = query({
       subtitle: conv.subtitle,
       last_message_preview: conv.last_message_preview,
       last_message_role: conv.last_message_role,
+      // Inbox-card parity for the chat object card: the row thumbnail and the
+      // branch line come straight off the doc, no extra reads.
+      image_preview_url: conv.image_preview_url ?? null,
+      git_branch: conv.git_branch ?? null,
     };
   },
 });
@@ -6662,6 +6667,7 @@ export const feedForCLI = query({
         killed: !!conv.inbox_killed_at,
         userDormant: isUserDormant(conv),
         armedTriggerHome: isArmedTriggerHome(conv, armedHomes.standing),
+        armedLoopHome: isArmedLoopHome(conv, now),
         armedOnceTriggerHome: isArmedTriggerHome(conv, armedHomes.once),
         settleVerdict: isSettleVerdictCurrent(conv) ? conv.settle_verdict : null,
         declaredStatus: conv.thread_state_status ?? null,
@@ -8718,7 +8724,7 @@ export async function computeInboxSessions(
     for (const r of enrichedRows) {
       const cid = r.conv._id.toString();
       const asking = ownAsk(r.row) || pendingDecisionIds.has(cid) || askingParents.has(cid);
-      const placement = placeConversationRow(r.conv, r.row, asking, r.row.last_user_message);
+      const placement = placeConversationRow(r.conv, r.row, asking, r.row.last_user_message, now);
       r.row.bucket = placement.bucket;
       r.row.work_state = placement.work_state;
       r.row.asking = asking;
@@ -9026,6 +9032,7 @@ export function placeConversationRow(
   lv: { agent_status?: string | null; is_idle?: boolean | null; awaiting_input?: boolean | null; is_unresponsive?: boolean | null },
   asking: boolean,
   lastUserMessage: string | null | undefined,
+  now: number,
 ): InboxPlacement {
   const home = { armed_trigger_kind: conv.armed_trigger_kind, last_message_preview: lastUserMessage ?? null };
   return placeInboxRow({
@@ -9038,6 +9045,11 @@ export function placeConversationRow(
     killed: !!conv.inbox_killed_at,
     userDormant: isUserDormant(conv),
     armedTriggerHome: isArmedTriggerHomeOfKind(home, "standing"),
+    // The third structural park: a live harness /loop asleep on a wakeup.
+    // Time-dependent (an overdue wakeup un-parks), so the caller's clock — the
+    // time-flip machinery re-runs this at future instants and rowTimeDeadlines
+    // carries the loop's expiry boundary.
+    armedLoopHome: isArmedLoopHome({ loop_state: conv.loop_state, last_message_preview: lastUserMessage ?? null }, now),
     armedOnceTriggerHome: isArmedTriggerHomeOfKind(home, "once"),
     settleVerdict: isSettleVerdictCurrent(conv) ? (conv.settle_verdict ?? null) : null,
     declaredStatus: conv.thread_state_status ?? null,
@@ -9171,6 +9183,9 @@ function rowTimeDeadlines(conv: any, maps: InboxSessionMaps, cid: string, childr
     hb !== undefined ? hb + INBOX_HEARTBEAT_ALIVE_MS : null,
     maps.latestHeartbeat !== undefined ? maps.latestHeartbeat + USER_DAEMON_ALIVE_MS : null,
     openTasksAt !== undefined ? openTasksAt + OPEN_TASKS_FRESH_MS : null,
+    // An armed /loop parks the row (isArmedLoopHome) until its wakeup goes
+    // overdue past the grace — that passing must un-park the bucket.
+    conv.loop_state?.status === "armed" ? conv.loop_state.wakeup_at + LOOP_OVERDUE_GRACE_MS : null,
   ];
   for (const c of children) {
     const chb = maps.lastHeartbeatMap.get(c._id.toString());
@@ -9265,11 +9280,11 @@ export async function computeSessionsLiveness(
     const askingFor = (lv: LivenessFields) => ownAsk(lv) || pendingDecisionIds.has(cid) || askingParents.has(cid);
     const placeAt = (t: number): InboxPlacement => {
       const lvAt = deriveLivenessAt(conv, maps, reads[i], producing, t);
-      return placeConversationRow(conv, lvAt, askingFor(lvAt), reads[i].lastUserMessage);
+      return placeConversationRow(conv, lvAt, askingFor(lvAt), reads[i].lastUserMessage, t);
     };
     const lv = deriveLivenessAt(conv, maps, reads[i], producing, now);
     const asking = askingFor(lv);
-    const placement = placeConversationRow(conv, lv, asking, reads[i].lastUserMessage);
+    const placement = placeConversationRow(conv, lv, asking, reads[i].lastUserMessage, now);
     const stale = computeBucketStale(
       { deadlines: rowTimeDeadlines(conv, maps, cid, childrenByParent.get(cid) ?? []), placeAt, current: placement.bucket },
       now,

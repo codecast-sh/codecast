@@ -491,10 +491,12 @@ describe("verifyOpenTasks — a shell-backed task is alive while its child shell
 describe("paneReconcileTarget — a parked waiting over an idle pane is re-derived", () => {
   test("stored waiting + idle pane -> idle (the caller re-runs the settle verdict, which re-checks the tasks)", () => {
     expect(paneReconcileTarget("idle", "waiting")).toBe("idle");
+    // A stored idle re-derives too — the climb-back for a waiting a false
+    // task-death verdict collapsed (stale cached agent pid, 2026-08-30).
+    expect(paneReconcileTarget("idle", "idle")).toBe("idle");
     // Declared verdicts are still left alone by the pane: nothing to re-check.
     expect(paneReconcileTarget("idle", "dormant")).toBeNull();
     expect(paneReconcileTarget("idle", "done")).toBeNull();
-    expect(paneReconcileTarget("idle", "idle")).toBeNull();
   });
 });
 
