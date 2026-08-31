@@ -10,7 +10,7 @@ import {
   sync,
   type DurableCreateContinuation,
 } from "./mutativeMiddleware";
-import { adoptWorkspaceSnapshot, createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, promote as wsPromotePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
+import { adoptWorkspaceSnapshot, createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
 import { applyWorkbench as applyWorkbenchPure, captureWorkbench, chipFilterOf, resolveWorkbenchFilter, type WorkbenchSnapshot } from "./workbench";
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
@@ -1096,6 +1096,10 @@ export type ClientUI = {
   active_team_id?: string;
   active_filter?: "my" | "team";
   inbox_shortcuts_hidden?: boolean;
+  // The inbox triage bar (components/triage/TriageBar) with the labels
+  // dropped: icons + tooltips only. A per-user preference, stamped LWW
+  // (STAMPED_UI_KEYS) like the other view prefs.
+  triage_bar_compact?: boolean;
   // The master sound switch: off silences every cue the app can make.
   sounds_enabled?: boolean;
   // Chat toast sounds, split from the above: an agent fleet's chirps and a
@@ -2362,11 +2366,13 @@ export function visualOrderSessions(
   opts: {
     currentSessionId?: string | null;
     pendingCreateIds?: ReadonlySet<string>;
-    // Active bucket chip: scope keyboard nav / advance to the focused bucket,
-    // mirroring the project filter. bucketByConv comes from convBucketMap().
-    bucketFilter?: string | null;
+    // Active bucket chips: scope keyboard nav / advance to the focused labels,
+    // mirroring the project filter. bucketByConv comes from convBucketMap();
+    // the list comes from chipBucketFilters (head chip + shift-added terms).
+    bucketFilters?: readonly BucketFilterTerm[];
     bucketByConv?: Record<string, string | undefined>;
-    // Exclude mode: the active chip HIDES its matches instead of focusing them.
+    // Exclude mode: the active project chip HIDES its matches instead of
+    // focusing them (label terms carry their own polarity in bucketFilters).
     filterExclude?: boolean;
     // Grouped-view collapse: when provided, sessions inside a collapsed status
     // section are skipped, so Ctrl+J/K only walks cards the panel is actually
@@ -2422,14 +2428,17 @@ export function visualOrderSessions(
   for (const [section, key] of sections) {
     if (collapsed?.[key]) continue;
     for (const s of section) {
-      if (projectFilter) {
-        const m = getProjectName(s.git_root, s.project_path) === projectFilter;
-        if (opts.filterExclude ? m : !m) continue;
-      }
-      if (opts.bucketFilter) {
-        const m = opts.bucketByConv?.[s._id] === opts.bucketFilter;
-        if (opts.filterExclude ? m : !m) continue;
-      }
+      // The shared predicate (chipMatchesSession) so the walk and the render
+      // can never disagree — including the mid-create stub carve-out.
+      if (
+        (projectFilter || opts.bucketFilters?.length) &&
+        !chipMatchesSession(s, {
+          projectFilter,
+          exclude: opts.filterExclude,
+          bucketFilters: opts.bucketFilters,
+          bucketByConv: opts.bucketByConv ?? {},
+        })
+      ) continue;
       result.push(s);
     }
   }
@@ -2833,16 +2842,40 @@ export function flatViewComparator(mode: "time" | "recent", manualOrder?: Record
   };
 }
 
-// Does a session pass the active project/bucket chip? ONE predicate behind both
+// One term of the label filter: a label id plus polarity. The active filter is
+// an ordered list of these — head = (activeBucketFilter, chipFilterExclude),
+// tail = extraBucketFilters (shift-added chips). The list is assembled at read
+// time by chipBucketFilters, never stored twice.
+export type BucketFilterTerm = { id: string; exclude: boolean };
+
+// The full label filter as a list. Invariant (kept by the setters): the tail
+// is nonempty only while a head exists, so single-chip readers that only know
+// activeBucketFilter (label inheritance on create, workbench capture, project
+// seeding) keep meaning "the focused chip" untouched.
+export function chipBucketFilters(state: {
+  // Optional to match every caller's narrowed state shape (computeVisualOrder
+  // declares both as optional); absent reads the same as "no chip focused".
+  activeBucketFilter?: string | null;
+  chipFilterExclude?: boolean;
+  extraBucketFilters?: readonly BucketFilterTerm[];
+}): BucketFilterTerm[] {
+  if (!state.activeBucketFilter) return [];
+  return [{ id: state.activeBucketFilter, exclude: !!state.chipFilterExclude }, ...(state.extraBucketFilters ?? [])];
+}
+
+// Does a session pass the active project/bucket chips? ONE predicate behind both
 // the panel's filterByChip and the flat-view keyboard order so a chip narrows
 // the rendered list and Ctrl+J/K identically. A mid-create stub (non-Convex id)
-// always passes the bucket chip — the session you just summoned inside a focused
+// always passes the bucket chips — the session you just summoned inside a focused
 // bucket must stay reachable before its assignment syncs. With `exclude` the
-// chip inverts: matches are hidden, everything else shows (stubs still pass —
-// an excluded label never files new sessions, see beginOptimisticSession).
+// project chip inverts: matches are hidden, everything else shows (stubs still
+// pass — an excluded label never files new sessions, see beginOptimisticSession).
+// Label terms carry their own polarity: with any include terms the session's
+// label must be one of them (a session has ONE label, so includes are a union);
+// with only excludes the session's label must not be any of them.
 export function chipMatchesSession(
   s: InboxSession,
-  opts: { projectFilter?: string | null; bucketFilter?: string | null; exclude?: boolean; bucketByConv: Record<string, string | undefined> },
+  opts: { projectFilter?: string | null; exclude?: boolean; bucketFilters?: readonly BucketFilterTerm[]; bucketByConv: Record<string, string | undefined> },
 ): boolean {
   // Mid-create stubs get the same carve-out on both branches: the session you
   // just summoned must stay reachable no matter which chip is focused — under
@@ -2852,9 +2885,10 @@ export function chipMatchesSession(
     const m = getProjectName(s.git_root, s.project_path) === opts.projectFilter;
     if (opts.exclude ? m : !m) return false;
   }
-  if (opts.bucketFilter && isConvexId(s._id)) {
-    const m = opts.bucketByConv[s._id] === opts.bucketFilter;
-    if (opts.exclude ? m : !m) return false;
+  if (opts.bucketFilters?.length && isConvexId(s._id)) {
+    const label = opts.bucketByConv[s._id];
+    const includes = opts.bucketFilters.filter((t) => !t.exclude);
+    if (includes.length ? !includes.some((t) => t.id === label) : opts.bucketFilters.some((t) => t.exclude && t.id === label)) return false;
   }
   return true;
 }
@@ -3100,7 +3134,7 @@ export function computeVisualOrder(state: {
       focusedId,
       manualOrder: state.clientState.ui?.inbox_manual_order,
       freezeOrder: mode === "recent" ? state.recentFreezeOrder : null,
-      chipMatches: (s) => chipMatchesSession(s, { projectFilter: state.activeProjectFilter, bucketFilter: state.activeBucketFilter, exclude: state.chipFilterExclude, bucketByConv }),
+      chipMatches: (s) => chipMatchesSession(s, { projectFilter: state.activeProjectFilter, exclude: state.chipFilterExclude, bucketFilters: chipBucketFilters(state), bucketByConv }),
     });
     if (!yourMove) return flat;
     // A flat card still wears the bucket verdict (its badge reads from the same
@@ -3115,7 +3149,7 @@ export function computeVisualOrder(state: {
   const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), {
     currentSessionId: state.currentSessionId,
     pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)),
-    bucketFilter: state.activeBucketFilter,
+    bucketFilters: chipBucketFilters(state),
     filterExclude: state.chipFilterExclude,
     bucketByConv,
     collapsedSections: mode === "grouped" ? collapsed : undefined,
@@ -3875,9 +3909,18 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // -- Manual session buckets --
   buckets: Record<string, BucketItem>;
   bucketAssignments: Record<string, BucketAssignmentItem>;
-  // Mutually exclusive with activeProjectFilter: the chip row is ONE filter.
+  // Mutually exclusive with activeProjectFilter: the chip row is ONE filter
+  // axis. The label filter itself is a LIST — this head chip plus the
+  // shift-added tail below (see chipBucketFilters).
   activeBucketFilter: string | null;
-  setActiveBucketFilter: (bucketId: string | null, exclude?: boolean) => void;
+  setActiveBucketFilter: (bucketId: string | null, exclude?: boolean, extras?: BucketFilterTerm[]) => void;
+  // Shift-added label terms beyond the head chip, each with its own polarity.
+  // Invariant: nonempty only while activeBucketFilter is set (the setters keep
+  // it), so head-only readers never see a filter they can't represent.
+  extraBucketFilters: BucketFilterTerm[];
+  // The shift-click gesture: toggle one label term in/out of the filter list.
+  // No active label filter → behaves like a plain click (becomes the head).
+  toggleBucketFilterTerm: (bucketId: string, exclude: boolean) => void;
   // Panel view mode with back-compat for the pre-bucket inbox_flat_view bool.
   inboxViewMode: () => InboxViewMode;
   setInboxViewMode: (mode: InboxViewMode) => void;
@@ -3985,6 +4028,14 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // -- Shortcuts panel --
   shortcutsPanelOpen: boolean;
   toggleShortcutsPanel: () => void;
+  /** A navigation waiting for the user to pick WHICH split pane it opens in
+   *  (components/stage/StagePickLayer). Ephemeral gesture — raw set. */
+  stagePick: { path: string; title?: string } | null;
+  setStagePick: (pick: { path: string; title?: string } | null) => void;
+  // The intro tour (components/triage/TriageNux). Ephemeral modal toggle;
+  // whether it has RUN is durable, in clientState.tips.
+  triageNuxOpen: boolean;
+  setTriageNuxOpen: (open: boolean) => void;
   // The global anchor panel: a slide-over holding one anchor's conversation,
   // reachable from every page. Ephemeral (a modal toggle, never persisted).
   // `anchorId` is the LAST anchor shown, so re-opening lands where you were.
@@ -4015,7 +4066,6 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   wsShow: (slot: SlotId, pane: Pane, opts?: { presentation?: Presentation }) => void;
   wsHide: (slot: SlotId, opts?: { remember?: boolean }) => void;
   wsToggle: (slot: SlotId, pane: Pane) => void;
-  wsPromote: (slot: SlotId) => void;
   wsSetPresentation: (slot: SlotId, presentation: Presentation) => void;
   /** Restore a saved arrangement wholesale — every slot, plus zen and the chip
    *  filter. `id` stamps which saved workbench this is, so the rail can keep it
@@ -4314,11 +4364,15 @@ function recordVisitInDraft(draft: any, visit: Omit<RecentVisit, "ts">) {
 // The store's current view settings as a history snapshot (lib/inboxViewHistory).
 function snapshotInboxViewFromDraft(draft: any): InboxViewSnapshot {
   const ui = draft.clientState?.ui ?? {};
+  // Extras copy to plain objects: the snapshot lands in history.pushState,
+  // which structured-clones — never hand it live draft proxies.
+  const extras: BucketFilterTerm[] = (draft.extraBucketFilters ?? []).map((t: BucketFilterTerm) => ({ id: t.id, exclude: !!t.exclude }));
   return {
     bucket: draft.activeBucketFilter ?? null,
     project: draft.activeProjectFilter ?? null,
     projectPath: draft.activeProjectPath ?? null,
     exclude: !!draft.chipFilterExclude,
+    ...(extras.length ? { extras } : {}),
     mode: ui.inbox_view_mode ?? (ui.inbox_flat_view ? "time" : "grouped"),
   };
 }
@@ -4429,7 +4483,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 export const STAMPED_UI_KEYS = new Set([
   "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "show_triggers", "card_bars", "inbox_show_old",
   "simple_view", "inbox_image_thumbs", "composer_suggestions", "inbox_home", "threads_include_sessions",
-  "walkie_hold_seen", "call_camera_on",
+  "walkie_hold_seen", "call_camera_on", "triage_bar_compact",
   // The sound gates and volume: a mute is a per-user preference, not a
   // per-device one — turning sounds off anywhere must silence every client,
   // localhost dev origins included.
@@ -5491,6 +5545,25 @@ function commitChipFilterChange(draft: Draft, prev: InboxViewSnapshot) {
   evictFocusOutsideOrderInDraft(draft, sessionFocusKind(mountedPathname(draft), draft.currentConversation?.source));
 }
 
+// Replace the label filter's head chip — the body behind setActiveBucketFilter,
+// shared with toggleBucketFilterTerm's first-term branch (an action can't call
+// a sibling action synchronously, so both route through this draft helper).
+function setBucketFilterHeadInDraft(draft: Draft, bucketId: string | null, exclude?: boolean, extras?: BucketFilterTerm[]) {
+  const prev = snapshotInboxViewFromDraft(draft);
+  draft.activeBucketFilter = bucketId;
+  // A plain/alt click REPLACES the whole filter: shift-added terms drop. The
+  // extras param exists for history restore, which re-applies a full list.
+  draft.extraBucketFilters = bucketId && extras ? extras : [];
+  // Mirror of setActiveProjectFilter: don't clobber a project exclusion.
+  draft.chipFilterExclude = bucketId ? !!exclude : draft.activeProjectFilter ? draft.chipFilterExclude : false;
+  if (bucketId) {
+    draft.activeProjectFilter = null;
+    draft.activeProjectPath = null;
+    if (!exclude) recordVisitInDraft(draft, { kind: "view", key: `label:${bucketId}`, label: (draft.buckets as any)[bucketId]?.name });
+  }
+  commitChipFilterChange(draft, prev);
+}
+
 // The signed-in user, as the gesture bridge stamps it on outbound messages and
 // matches it on inbound ones. Exported for undoActions, whose undo closures
 // broadcast the reverted value (an un-announced undo leaves a sibling holding
@@ -6035,9 +6108,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // stray setActiveProjectFilter(null) would flip a bucket EXCLUSION into a
     // bucket include ("hide L" → "only L") without a click.
     this.chipFilterExclude = name ? !!exclude : this.activeBucketFilter ? this.chipFilterExclude : false;
-    // The chip row is ONE filter: picking a project clears any bucket focus.
+    // The chip row is ONE filter: picking a project clears any bucket focus,
+    // shift-added label terms included.
     if (name) {
       this.activeBucketFilter = null;
+      this.extraBucketFilters = [];
       // An exclusion isn't a "view" you revisit — only include mode records.
       if (!exclude) recordVisitInDraft(this, { kind: "view", key: `project:${name}`, label: name, path: path ?? undefined });
     }
@@ -6133,15 +6208,38 @@ const inboxStoreConfig = (set: any, get: any) => ({
   buckets: {},
   bucketAssignments: {},
   activeBucketFilter: null,
-  setActiveBucketFilter: action(function (this: Draft, bucketId: string | null, exclude?: boolean) {
+  extraBucketFilters: [],
+  setActiveBucketFilter: action(function (this: Draft, bucketId: string | null, exclude?: boolean, extras?: BucketFilterTerm[]) {
+    setBucketFilterHeadInDraft(this, bucketId, exclude, extras);
+  }),
+  // Shift-click: toggle ONE term of the label filter without disturbing the
+  // rest. Same id + same polarity = remove; same id + other polarity = flip in
+  // place; new id = append to the tail. Removing the head promotes the first
+  // tail term so the head invariant holds (extras never outlive the head).
+  toggleBucketFilterTerm: action(function (this: Draft, bucketId: string, exclude: boolean) {
+    if (!this.activeBucketFilter) {
+      // First term: identical to a plain/alt click, including clearing the
+      // project axis — the sibling action's exact logic.
+      setBucketFilterHeadInDraft(this, bucketId, exclude);
+      return;
+    }
     const prev = snapshotInboxViewFromDraft(this);
-    this.activeBucketFilter = bucketId;
-    // Mirror of setActiveProjectFilter: don't clobber a project exclusion.
-    this.chipFilterExclude = bucketId ? !!exclude : this.activeProjectFilter ? this.chipFilterExclude : false;
-    if (bucketId) {
-      this.activeProjectFilter = null;
-      this.activeProjectPath = null;
-      if (!exclude) recordVisitInDraft(this, { kind: "view", key: `label:${bucketId}`, label: (this.buckets as any)[bucketId]?.name });
+    const extras: BucketFilterTerm[] = this.extraBucketFilters ?? [];
+    if (this.activeBucketFilter === bucketId) {
+      if (!!this.chipFilterExclude === exclude) {
+        // Remove the head: the first extra takes over, or the filter clears.
+        const [next, ...rest] = extras;
+        this.activeBucketFilter = next?.id ?? null;
+        this.chipFilterExclude = next ? next.exclude : false;
+        this.extraBucketFilters = rest;
+      } else {
+        this.chipFilterExclude = exclude;
+      }
+    } else {
+      const at = extras.findIndex((t) => t.id === bucketId);
+      if (at < 0) this.extraBucketFilters = [...extras, { id: bucketId, exclude }];
+      else if (extras[at].exclude === exclude) this.extraBucketFilters = extras.filter((t) => t.id !== bucketId);
+      else this.extraBucketFilters = extras.map((t) => (t.id === bucketId ? { id: bucketId, exclude } : t));
     }
     commitChipFilterChange(this, prev);
   }),
@@ -9273,6 +9371,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   shortcutsPanelOpen: false,
   toggleShortcutsPanel: () => set({ shortcutsPanelOpen: !get().shortcutsPanelOpen }),
+  stagePick: null,
+  setStagePick: (pick: { path: string; title?: string } | null) => set({ stagePick: pick }),
+  triageNuxOpen: false,
+  setTriageNuxOpen: (open: boolean) => set({ triageNuxOpen: open }),
   anchorPanel: { open: false, anchorId: null },
   openAnchorPanel: (anchorId?: string | null) => set({
     anchorPanel: { open: true, anchorId: anchorId === undefined ? get().anchorPanel.anchorId : anchorId },
@@ -9290,9 +9392,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   closePeopleWall: () => set({ peopleWallOpen: false }),
   togglePeopleWall: () => set({ peopleWallOpen: !get().peopleWallOpen }),
 
-  // The ONE conversation allowed to share the stage with a working page (a
-  // task, a doc). Opening another replaces it — stage panes swap, they never
-  // accumulate, so the layout can never grow past page + companion + rail.
+  // The workspace slots (nav | context | dock…). The stage itself is no
+  // longer one of them: side by side lives in the tab's split layout
+  // (store/stageSplit), and the secondary slot's one remaining use is the
+  // fleet board's transient drill-in overlay, owned by the board.
   workspace: (() => {
     const prefs = readCriticalUiPrefs() as any;
     const device = readDeviceWorkspace();
@@ -9323,10 +9426,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
   wsToggle: action(function (this: Draft, slot: SlotId, pane: Pane) {
     this.workspace = togglePane(this.workspace as WorkspaceState, slot, pane);
-    persistWorkspace(this);
-  }),
-  wsPromote: action(function (this: Draft, slot: SlotId) {
-    this.workspace = wsPromotePure(this.workspace as WorkspaceState, slot);
     persistWorkspace(this);
   }),
   wsSetPresentation: action(function (this: Draft, slot: SlotId, presentation: Presentation) {
@@ -9380,6 +9479,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const prev = snapshotInboxViewFromDraft(this);
     const want = resolveWorkbenchFilter(snap.filter, this.buckets);
     this.activeBucketFilter = want.bucket;
+    // Layouts capture the head chip only — a shift-built list doesn't ride.
+    this.extraBucketFilters = [];
     this.activeProjectFilter = want.project;
     this.activeProjectPath = want.projectPath;
     this.chipFilterExclude = want.exclude;

@@ -16,7 +16,7 @@
 // rejected.
 
 import { lazy, memo, Suspense, useCallback, useMemo, useRef, useState } from "react";
-import { Maximize2, X } from "lucide-react";
+import { PaneControls } from "./PaneControls";
 import { useInboxStore, useTrackedStore, getSessionRenderKey, type AppTab } from "../../store/inboxStore";
 import {
   findBranch,
@@ -28,6 +28,7 @@ import {
 import { paneSessionId, stageClose, stageExpand, stageFocus, stageNavigateLeaf, startPaneDrag } from "../../lib/stage";
 import { animatedHideSession } from "../../store/undoActions";
 import { pathLabel } from "../../lib/pathLabel";
+import { chatTabTitle } from "../../lib/tabTitle";
 import { RoutePane } from "../RoutePane";
 import { PageIcon } from "../RecentVisitRow";
 import { ErrorBoundary } from "../ErrorBoundary";
@@ -78,10 +79,36 @@ const SessionPane = memo(function SessionPane({ sessionId, leafId }: { sessionId
   );
 });
 
+// What a pane's strip should CALL itself. A section pane is its section
+// ("Tasks"); an entity pane is the entity — the doc's title, the task's
+// title, the channel's name — because two panes both labeled "Docs" say
+// nothing. Subscribes only to the one row it names.
+function usePaneTitle(path: string): string {
+  const clean = path.split("?")[0];
+  const m = clean.match(/^\/(docs|tasks|plans|chat)\/([^/]+)/);
+  const kind = m?.[1];
+  const id = m?.[2] ?? "";
+  const s = useTrackedStore([
+    (st) =>
+      kind === "docs" ? ((st.docs[id] as any)?.display_title ?? st.docs[id]?.title)
+      : kind === "tasks" ? st.tasks[id]?.title
+      : kind === "plans" ? st.plans[id]?.title
+      : kind === "chat" ? chatTabTitle(path, st.chatChannels, st.teamMembers, (st as any).currentUser?._id)
+      : null,
+  ]);
+  const entity =
+    kind === "docs" ? ((s.docs[id] as any)?.display_title ?? s.docs[id]?.title)
+    : kind === "tasks" ? s.tasks[id]?.title
+    : kind === "plans" ? s.plans[id]?.title
+    : kind === "chat" ? chatTabTitle(path, s.chatChannels, s.teamMembers, (s as any).currentUser?._id)
+    : null;
+  return entity || pathLabel(path);
+}
+
 // The strip is the pane's window title AND its drag handle: grab it to move
 // the pane to another position (the drop layer treats it as a move).
 function PaneStrip({ leafId, path, focused }: { leafId: string; path: string; focused: boolean }) {
-  const title = pathLabel(path);
+  const title = usePaneTitle(path);
   return (
     <div
       draggable
@@ -93,12 +120,7 @@ function PaneStrip({ leafId, path, focused }: { leafId: string; path: string; fo
       <span className={`text-[11px] truncate flex-1 leading-none ${focused ? "text-sol-text-muted" : "text-sol-text-dim/70"}`}>
         {title}
       </span>
-      <button className="cc-panel__btn" title="Take the whole stage" onClick={() => stageExpand(leafId)}>
-        <Maximize2 className="w-3 h-3" />
-      </button>
-      <button className="cc-panel__btn" title="Close pane" onClick={() => stageClose(leafId)}>
-        <X className="w-3 h-3" />
-      </button>
+      <PaneControls onExpand={() => stageExpand(leafId)} onClose={() => stageClose(leafId)} />
     </div>
   );
 }
@@ -184,7 +206,10 @@ function StageHandle({
       const branch = findBranch(layout, handle.branchId);
       if (!el || !branch) return;
       e.preventDefault();
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      // Capture is a nicety (keeps hover styling on the handle mid-drag); the
+      // drag itself listens on window. It throws for an inactive pointer id
+      // (synthetic events in tests) — never let that kill the drag setup.
+      try { (e.target as HTMLElement).setPointerCapture(e.pointerId); } catch { /* no capture */ }
       setActive(true);
       const box = el.getBoundingClientRect();
       const branchPx = horizontal

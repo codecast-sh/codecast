@@ -72,11 +72,19 @@ export function isChatWakePrompt(rawContent: string | null | undefined): boolean
   return !!rawContent && CHAT_WAKE_HEADER.test(stripInjectionNoise(rawContent));
 }
 
+// A harness <task-notification> — a background task / Monitor / Workflow
+// completion the harness injected as a user turn. Keys off the opening tag
+// only, same truncated-preview rule as isSessionMessage.
+export function isTaskNotificationMessage(rawContent: string | null | undefined): boolean {
+  return !!rawContent && rawContent.trim().startsWith("<task-notification>");
+}
+
 // Any user-role message delivered by machinery rather than typed by the human:
 // a cross-session `cast send` message, an inter-agent teammate broadcast, a
-// scheduled-task injection, or a team-chat mention waking the anchor.
+// scheduled-task injection, a harness task notification, or a team-chat
+// mention waking the anchor.
 export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
-  return isSessionMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isChatWakePrompt(rawContent);
+  return isSessionMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent);
 }
 
 // --- Decision answers (cast decide) ------------------------------------------------

@@ -7,7 +7,7 @@ import { installOpenIntent, detachCurrentView } from "../lib/openIntent";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
 import { isNonTabRoute } from "../src/compat/tabRouting";
-import { withApplyingViewHistory, type InboxViewSnapshot } from "../lib/inboxViewHistory";
+import { withApplyingViewHistory, sameBucketExtras, type InboxViewSnapshot } from "../lib/inboxViewHistory";
 import { RecentlyViewedMenu } from "./RecentlyViewedMenu";
 import { useMutation, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -26,6 +26,8 @@ import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
 import { Plus, PanelLeft, PanelRight, MessageSquare, SquareTerminal } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
+import { TriageBar } from "./triage/TriageBar";
+import { TriageNuxGate } from "./triage/TriageNux";
 import { NewSnippetsBanner } from "./NewSnippetsBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
@@ -74,6 +76,7 @@ import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
 import { useSyncMentionPlans } from "../hooks/useSyncPlans";
 import { useSyncMentionTasks } from "../hooks/useSyncTasks";
 import { isInboxSessionView, resolveSessionSelectKind, sessionFocusKind } from "../lib/inboxRouting";
+import { requestStagePlacement, sessionPanePath } from "../lib/stage";
 import { useRecentSwitcher } from "../hooks/useRecentSwitcher";
 import { RecentSwitcher } from "./RecentSwitcher";
 import { TabBar, AttachTabButton } from "./TabBar";
@@ -526,11 +529,17 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // alongside". Routes through navigateToSession so forks/dismissed/pending all
   // resolve correctly.
   const handleLeaveAndOpenSession = useCallback((id: string) => {
-    useInboxStore.getState().navigateToSession(id);
+    const store = useInboxStore.getState();
+    // A SPLIT stage makes "open this session" ambiguous — which pane? Offer
+    // the pane picker with the conversation as the payload; the session opens
+    // as a pane right where the user points. Un-split stages keep the direct
+    // path: the conversation takes the stage.
+    if (requestStagePlacement(sessionPanePath(id), store.sessions[id]?.title ?? undefined)) return;
+    store.navigateToSession(id);
     router.push('/inbox');
   }, [router]);
 
-  const sessionSelectKind = resolveSessionSelectKind({ isOnSettingsPage, isOnInboxPage, isOnConversationPage });
+  const sessionSelectKind = resolveSessionSelectKind({ isOnSettingsPage, isOnInboxPage });
   const sessionListOnSelect = sessionSelectKind === "leave"
     ? handleLeaveAndOpenSession
     : handleInboxSessionSelect;
@@ -741,8 +750,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         const v = popped.inboxView;
         const store = useInboxStore.getState();
         withApplyingViewHistory(() => {
-          if (v.bucket !== store.activeBucketFilter || v.project !== store.activeProjectFilter || !!v.exclude !== store.chipFilterExclude) {
-            if (v.bucket) store.setActiveBucketFilter(v.bucket, v.exclude);
+          if (v.bucket !== store.activeBucketFilter || v.project !== store.activeProjectFilter || !!v.exclude !== store.chipFilterExclude || !sameBucketExtras(v.extras, store.extraBucketFilters)) {
+            if (v.bucket) store.setActiveBucketFilter(v.bucket, v.exclude, v.extras);
             else if (v.project) store.setActiveProjectFilter(v.project, v.projectPath, v.exclude);
             else {
               store.setActiveBucketFilter(null);
@@ -948,6 +957,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     <div className="h-full flex flex-col min-h-0">
       <BreadcrumbBar />
       <div className="flex-1 min-h-0">{pageBody}</div>
+      {/* The triage verbs, one fixed home at the stage's bottom edge. The bar
+          gates itself to inbox session views, so it draws nothing elsewhere. */}
+      <TriageBar />
     </div>
   );
 
@@ -1297,6 +1309,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       )}
       <ErrorBoundary name="CommandPalette" level="inline">
         <CommandPalette />
+      </ErrorBoundary>
+      <ErrorBoundary name="TriageNux" level="inline">
+        <TriageNuxGate />
       </ErrorBoundary>
       {/* The dock portals to <body>, so this wrapper is empty (and hidden)
           until the boundary trips. A dock crash used to degrade into the
