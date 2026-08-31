@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Check, ChevronDown, ChevronRight, CornerUpLeft } from "lucide-react";
-import type { DecisionAnswerMessage } from "@codecast/shared/contracts";
+import { pickAnsweredDecision, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
@@ -12,21 +12,40 @@ import { PublishedPageEmbed } from "./PublishedPageEmbed";
 
 // The strip under a decision answer bubble: which question this answered, a
 // way back to the `cast decide` call, and (unfolded) the options with the
-// chosen one marked plus the agent's reasoning. The message itself carries the
-// id and the question, so the closed strip renders from the transcript alone;
-// unfolding reads the decision row from the store (the queue keeps resolved
-// rows a day) and otherwise fetches it once by id — enrichment, so a missing
-// row degrades to the question text rather than an error.
-export function DecisionAnswerFooter({ decision, conversationId }: { decision: DecisionAnswerMessage; conversationId?: string }) {
+// chosen one marked plus the agent's reasoning. A tagged answer carries the
+// id and the question on the wire, so its closed strip renders from the
+// transcript alone and unfolding reads the decision row from the store (the
+// queue keeps resolved rows a day) or fetches it once by id. A legacy answer
+// ("Decision: <label>" from before the tag shipped) carries neither, so the
+// row is resolved by conversation + label — eagerly, because the closed
+// strip's question line depends on it. Both lookups are enrichment: a
+// missing row degrades to the text on the wire rather than an error.
+export function DecisionAnswerFooter({ decision, conversationId, timestamp }: { decision: DecisionAnswerMessage; conversationId?: string; timestamp?: number }) {
   const [open, setOpen] = useState(false);
-  const storeRow = useInboxStore((s) => s.sessionDecisions[decision.id]);
-  const { data: fetched } = useQueryNoThrow(
+  const storeRow = useInboxStore((s) => {
+    if (decision.id) return s.sessionDecisions[decision.id];
+    // Legacy: the conversation's answered row whose recorded answer matches,
+    // resolution nearest the message when the same label answered twice.
+    const rows = Object.values(s.sessionDecisions).filter(
+      (r) => r.conversation_id === conversationId && r.status === "answered",
+    );
+    return pickAnsweredDecision(rows, decision.answer, timestamp) ?? undefined;
+  });
+  const { data: fetchedById } = useQueryNoThrow(
     api.sessionDecisions.get,
     open && !storeRow && isConvexId(decision.id) ? { decision_id: decision.id as any } : "skip",
   );
-  const row = storeRow ?? fetched ?? null;
+  const legacyLookup = !decision.id && !storeRow && !!conversationId && isConvexId(conversationId);
+  const { data: fetchedByAnswer } = useQueryNoThrow(
+    api.sessionDecisions.findByAnswer,
+    legacyLookup ? { conversation_id: conversationId as any, answer: decision.answer, near: timestamp } : "skip",
+  );
+  // Until convex codegen picks up findByAnswer, its result is untyped; it
+  // returns answerBubbleShape, the same shape the store row carries.
+  const row = storeRow ?? fetchedById ?? (fetchedByAnswer as typeof storeRow) ?? null;
   const question = row?.question ?? decision.question ?? "";
-  const jump = useJumpToDecisionAsk(conversationId, decision.id, question);
+  const jump = useJumpToDecisionAsk(conversationId, decision.id || row?._id, question);
+  const loading = !row && ((open && isConvexId(decision.id) && fetchedById === undefined) || (legacyLookup && fetchedByAnswer === undefined));
   const chosen = row
     ? row.answer_index ?? row.options.findIndex((o) => o.label === decision.answer)
     : -1;
@@ -84,7 +103,7 @@ export function DecisionAnswerFooter({ decision, conversationId }: { decision: D
               )}
             </ol>
           ) : (
-            <div className="text-sol-text-dim">{fetched === undefined && isConvexId(decision.id) ? "Loading the question…" : "The full question is no longer available."}</div>
+            <div className="text-sol-text-dim">{loading ? "Loading the question…" : "The full question is no longer available."}</div>
           )}
           {row?.context_md && (
             <div className="text-sol-text-muted [&_p]:my-1">

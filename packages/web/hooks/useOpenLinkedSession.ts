@@ -75,7 +75,6 @@ export function useOpenLinkedSession() {
     const kind = resolveSessionSelectKind({
       isOnSettingsPage: routerLocation.pathname.startsWith("/settings"),
       isOnInboxPage: isInboxSessionView(pathname, store.currentConversation?.source),
-      isOnConversationPage: pathname?.includes("/conversation/") ?? false,
     });
     const open = resolveLinkedSessionOpen(kind, narrow);
     if (open === "route") {

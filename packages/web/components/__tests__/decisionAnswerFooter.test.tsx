@@ -25,4 +25,18 @@ describe("DecisionAnswerFooter", () => {
     // Options only unfold on demand.
     expect(html).not.toContain("Keep vendored");
   });
+
+  test("a legacy answer (no id or question on the wire) still renders the strip", () => {
+    // Static render can't see setState (zustand serves the initial snapshot
+    // on the server), so the row lookup itself is covered by the shared
+    // pickAnsweredDecision tests; here the strip must stand on the wire
+    // alone: placeholder question, the way back to the ask, no crash.
+    useInboxStore.setState({ sessionDecisions: {} } as any);
+    const html = render(
+      <DecisionAnswerFooter decision={{ id: "", answer: "Hold" }} conversationId={CONV} timestamp={5_100} />,
+    );
+    expect(html).toContain("decision");
+    expect(html).toContain("the agent&#x27;s question");
+    expect(html).toContain("the ask");
+  });
 });

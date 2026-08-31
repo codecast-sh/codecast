@@ -1,3 +1,4 @@
+import { INBOX_WINDOW_CAPS } from "@codecast/shared/contracts";
 import type { Id } from "./_generated/dataModel";
 // The per-user inbox triage/visibility stamps, projected off a conversation
 // doc. EVERY query that emits a conversation summary the client may seed into
@@ -27,8 +28,9 @@ export function inboxVisibilityFields(conv: {
 // INBOX_PINNED_CAP pins (by_user_pinned, descending) and flags overflow, so the
 // cap is enforced where the user can see it — a pin that would exceed it is
 // refused by every writer (conversations.patchConversation throws; the dispatch
-// patch rail drops the field). Sync-convergence C2.
-export const INBOX_PINNED_CAP = 100;
+// patch rail drops the field). Sync-convergence C2. Single source: the shared
+// window caps (INBOX_WINDOW_CAPS), which the replica's selection also reads.
+export const INBOX_PINNED_CAP = INBOX_WINDOW_CAPS.pinned;
 
 export const PIN_CAP_ERROR = `Pin limit reached: you already hold ${INBOX_PINNED_CAP} pinned sessions. Unpin one to pin another.`;
 

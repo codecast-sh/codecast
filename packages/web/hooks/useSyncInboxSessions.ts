@@ -267,15 +267,18 @@ export function useSyncInboxSessions() {
     bgSyncMessages(sessions);
   }, [syncTable, bgSyncMessages]), { coalesceMs: 500 });
 
-  // Liveness overlay: a small {convId: {agent_status/is_idle/...}} map merged onto
-  // the cached rows (syncOverlay). The ONLY inbox channel that re-runs on heartbeats,
-  // and it ships a tiny map instead of the full session list. The idle/needs-input
-  // sound lives here because "went idle" IS a liveness change — it reads the post-merge
-  // store rows (bounded to the payload's ids) so it sees the overlaid values.
+  // Liveness overlay: a small {convId: {facts + projection stamps}} map, plus
+  // the projection envelope (sync-convergence C1). The ONLY inbox channel that
+  // re-runs on heartbeats. The applier splits it: FACT fields merge onto the
+  // cached rows; the STAMPS and envelope land in the "mine" slot of the
+  // ephemeral sessionsProjection buffer, never on rows. The idle/needs-input
+  // sound lives here because "went idle" IS a liveness change — it reads the
+  // post-merge store rows (bounded to the payload's ids) so it sees the
+  // overlaid values.
   useConvexSync(sessionLiveness, useCallback((data: any) => {
     const liveness = data?.liveness ?? data;
     if (!liveness || typeof liveness !== "object") return;
-    useInboxStore.getState().syncOverlay("sessions", liveness as Record<string, Record<string, any>>);
+    useInboxStore.getState().applyInboxLivenessPayload("mine", data);
     const store = useInboxStore.getState();
     const merged = Object.keys(liveness)
       .map((id) => store.sessions[id])
@@ -339,7 +342,9 @@ export function useSyncInboxSessions() {
     const fresh: any = await convex.query(api.conversations.sessionsLiveness, { _probe: Date.now() });
     const liveness = fresh?.liveness;
     if (!liveness) return;
-    useInboxStore.getState().syncOverlay("sessions", liveness as Record<string, Record<string, any>>);
+    // Same applier as the subscription: facts onto rows, stamps + envelope into
+    // the "mine" projection slot — a recovery pass must not fork payload shapes.
+    useInboxStore.getState().applyInboxLivenessPayload("mine", fresh);
     lastLivenessSyncRef.current = Date.now();
   }, [convex]), 15_000);
 

@@ -115,11 +115,11 @@ const _seenGlobalErrors = new Set<string>();
 //    from its document-level pointerup/pointermove listeners when a divider
 //    drag's module-global state outlives the PanelGroup that owns it (the group
 //    unmounts/remounts while a sibling group keeps the shared, ref-counted
-//    listeners alive — both the tasks and docs DetailSplitLayouts live in the
-//    persistent tab shell). The throw aborts only that one listener call; the
-//    divider and panels keep working. The lookup uses throwOnMissing=true
-//    internally, so we can't fix it short of forking the library (4.11.2 still
-//    has it) — we just decline to report it. See components/DetailSplitLayout.
+//    listeners alive — the shell's sidebar/rail Groups and the diff layouts
+//    all live in the persistent tab shell). The throw aborts only that one
+//    listener call; the divider and panels keep working. The lookup uses
+//    throwOnMissing=true internally, so we can't fix it short of forking the
+//    library (4.11.2 still has it) — we just decline to report it.
 const IGNORED_ERROR_PATTERNS: RegExp[] = [
   /Could not find data for Group with id/,
   // StaleDispatchBindingError: a dispatch settling after its binding was

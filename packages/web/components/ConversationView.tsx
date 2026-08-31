@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { dragCarriesPane } from "../lib/stage";
 import { LogoIcon } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import { useRouter } from "next/navigation";
@@ -25,7 +26,8 @@ import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
+import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemSubtype, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
+import { splitMarkdownBlocks } from "../lib/markdownBlocks";
 import { classifyApiErrorBanner, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "./DecisionAnswerFooter";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
@@ -74,7 +76,7 @@ import { quoteSelectionIntoReply } from "../lib/quoteSelection";
 import { MessageReview } from "./MessageReview";
 import { SelectionQuoteToolbar } from "./SelectionQuoteToolbar";
 import { ReviewBar } from "./ReviewBar";
-import { SuggestionPills } from "./SuggestionPills";
+import { SuggestionPills, SuggestionPillsHandle } from "./SuggestionPills";
 import { ReviewComposerContext } from "./reviewContext";
 import { CommentDock } from "./comments/CommentDock";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
@@ -402,30 +404,6 @@ const MD_RENDER_CACHE_MAX = 500;
 // cosmetically, so ordinary messages keep exact single-parse semantics.
 const MD_BLOCK_SPLIT_THRESHOLD = 8000;
 
-// Split at blank-line runs, but never inside a ``` / ~~~ fence.
-function splitMarkdownBlocks(content: string): string[] {
-  const lines = content.split("\n");
-  const blocks: string[] = [];
-  let cur: string[] = [];
-  let inFence = false;
-  let fenceMark = "";
-  for (const line of lines) {
-    const fence = line.match(/^\s*(`{3,}|~{3,})/);
-    if (fence) {
-      if (!inFence) { inFence = true; fenceMark = fence[1][0]; }
-      else if (fence[1][0] === fenceMark) inFence = false;
-    }
-    if (!inFence && line.trim() === "" && cur.length > 0) {
-      blocks.push(cur.join("\n"));
-      cur = [];
-      continue;
-    }
-    cur.push(line);
-  }
-  if (cur.length > 0) blocks.push(cur.join("\n"));
-  return blocks;
-}
-
 function mdCachePut(key: string, el: ReactElement): ReactElement {
   MD_RENDER_CACHE.set(key, el);
   if (MD_RENDER_CACHE.size > MD_RENDER_CACHE_MAX) {
@@ -444,14 +422,20 @@ function renderMessageMarkdownCached(content: string, userText?: boolean): React
   }
   if (!userText && content.length > MD_BLOCK_SPLIT_THRESHOLD) {
     const blocks = splitMarkdownBlocks(content);
-    const el = (
-      <>
-        {blocks.map((b, i) => (
-          <Fragment key={i}>{renderMessageMarkdownCached(b)}</Fragment>
-        ))}
-      </>
-    );
-    return mdCachePut(key, el);
+    // Recurse only when the split made progress: a body with no blank lines
+    // outside fences returns itself as one block, and recursing on the
+    // identical string overflows the stack (the cache write happens after
+    // the recursive calls, so it can't break the loop).
+    if (blocks.length > 1) {
+      const el = (
+        <>
+          {blocks.map((b, i) => (
+            <Fragment key={i}>{renderMessageMarkdownCached(b)}</Fragment>
+          ))}
+        </>
+      );
+      return mdCachePut(key, el);
+    }
   }
   const el = ReactMarkdownBase({
     children: content,
@@ -8108,7 +8092,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           {images.filter(img => !img.tool_use_id).map((img, i) => <ImageBlock key={i} image={img} />)}
         </div>
       )}
-      {decision && !effectivelyCollapsed && <DecisionAnswerFooter decision={decision} conversationId={conversationId} />}
+      {decision && !effectivelyCollapsed && <DecisionAnswerFooter decision={decision} conversationId={conversationId} timestamp={timestamp} />}
       {isTruncated && (
         <button
           onClick={handleToggleExpand}
@@ -9093,6 +9077,8 @@ function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[
 }
 
 function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; subtype?: string; timestamp?: number; messageUuid?: string; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void }) {
+  if (isHiddenSystemSubtype(subtype)) return null;
+
   if (subtype === "compact_boundary") {
     return (
       <div className="my-6 flex items-center gap-3">
@@ -10858,6 +10844,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     store.setQueuedMessagesFor(conversationId, next);
   }, [conversationId]);
   const [selectedQueueIndex, setSelectedQueueIndex] = useState<number | null>(null);
+  // Keyboard selection for the suggestion pill row lives inside the component
+  // (the pill list is its server subscription); the composer drives it through
+  // this handle as the top rung of the ↑ ladder: pills over queue over images.
+  const suggestionPillsRef = useRef<SuggestionPillsHandle | null>(null);
   // Tell the host (compose popup) when Escape is spoken for by inner UI — the
   // lightbox, an image/queue chip selection, or the slash-command menu — so its
   // document-capture Escape listener stands down and the textarea handler above
@@ -11434,6 +11424,48 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       onCycleMode?.();
       flashModeLabel();
       return;
+    }
+
+    // Top rung of the ↑ ladder: a selected suggestion pill. Enter sends it
+    // as-is (the pill contract), Tab drops it into the composer for editing.
+    const pills = suggestionPillsRef.current;
+    if (pills?.active()) {
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        pills.move(-1);
+        return;
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        pills.move(1); // past the last pill exits back to the composer
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        pills.clear();
+        if (queuedMessages.length > 0) setSelectedQueueIndex(0);
+        else if (pastedImages.length > 0) setSelectedImageIndex(0);
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        pills.send();
+        return;
+      }
+      if (e.key === "Tab" && !e.shiftKey) {
+        e.preventDefault();
+        pills.edit();
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        pills.clear();
+        return;
+      }
+      if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) {
+        pills.clear();
+      }
     }
 
     if (selectedImageIndex !== null && pastedImages.length > 0) {
@@ -13443,7 +13475,12 @@ const ConversationViewInner = (
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
 
+  // These handlers exist for IMAGE drops. A pane-shaped drag (a session card,
+  // a tab, a pane strip — lib/stage) must fall through untouched so it can
+  // bubble to the stage's drop layer and offer a split; swallowing every drag
+  // here is what made dropping a session onto a conversation a dead gesture.
   const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (dragCarriesPane(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
     dragCounterRef.current++;
@@ -13451,11 +13488,13 @@ const ConversationViewInner = (
   }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (dragCarriesPane(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
   }, []);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (dragCarriesPane(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
     dragCounterRef.current--;
@@ -13463,6 +13502,7 @@ const ConversationViewInner = (
   }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
+    if (dragCarriesPane(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
     dragCounterRef.current = 0;

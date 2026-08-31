@@ -90,9 +90,6 @@ export function TeamSwitcher() {
               <div className="flex items-center gap-2">
                 <TeamCrest icon={team.icon} color={team.icon_color} size="sm" />
                 <span>{team.name}</span>
-                <span className="text-xs text-sol-base1">
-                  {team.role === "admin" ? "Admin" : "Member"}
-                </span>
               </div>
               {activeTeamId === team._id && <Check className="w-4 h-4 text-sol-cyan" />}
             </DropdownMenuItem>
