@@ -1,6 +1,7 @@
 
 .env.local
 codecast
+cast
 
 .env.cloud-test
 npm/vendor/
