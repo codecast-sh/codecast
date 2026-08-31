@@ -7,7 +7,7 @@ import { installOpenIntent, detachCurrentView } from "../lib/openIntent";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
 import { isNonTabRoute } from "../src/compat/tabRouting";
-import { withApplyingViewHistory, type InboxViewSnapshot } from "../lib/inboxViewHistory";
+import { withApplyingViewHistory, sameBucketExtras, type InboxViewSnapshot } from "../lib/inboxViewHistory";
 import { RecentlyViewedMenu } from "./RecentlyViewedMenu";
 import { useMutation, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -741,8 +741,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         const v = popped.inboxView;
         const store = useInboxStore.getState();
         withApplyingViewHistory(() => {
-          if (v.bucket !== store.activeBucketFilter || v.project !== store.activeProjectFilter || !!v.exclude !== store.chipFilterExclude) {
-            if (v.bucket) store.setActiveBucketFilter(v.bucket, v.exclude);
+          if (v.bucket !== store.activeBucketFilter || v.project !== store.activeProjectFilter || !!v.exclude !== store.chipFilterExclude || !sameBucketExtras(v.extras, store.extraBucketFilters)) {
+            if (v.bucket) store.setActiveBucketFilter(v.bucket, v.exclude, v.extras);
             else if (v.project) store.setActiveProjectFilter(v.project, v.projectPath, v.exclude);
             else {
               store.setActiveBucketFilter(null);

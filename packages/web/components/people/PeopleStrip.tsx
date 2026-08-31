@@ -1,10 +1,10 @@
 // The window at its smallest: one row of faces you can hold, and the team in
 // a few words. This is what a buddy list pinned above other apps should cost.
-import { memo, useCallback, useRef, useState, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 import { MemberFace } from "../presence/MemberFace";
 import { LiveRoomAction } from "../calls/LiveNow";
-import { useMountEffect } from "../../hooks/useMountEffect";
 import { emptyRosterText } from "./peopleRoster";
+import { useDescribeSlot } from "./useDescribeSlot";
 import { STRIP_FACE_PX, STRIP_ROW_H } from "./peopleDensity";
 import { peopleHeadClass } from "./usePeopleDensity";
 import { WallFaceButton, type FaceDescription } from "./PeopleWall";
@@ -13,12 +13,6 @@ import { TeamPulseLine } from "./TeamPulseLine";
 import { type PeopleRosterData } from "./usePeopleRoster";
 import { type TeamPulse } from "./teamPulse";
 import "./people.css";
-
-/** How long a pointer rests on a face before its name takes over the text
- *  slot. A strip pinned above other apps is CROSSED constantly on the way to
- *  whatever is behind it; without a dwell the slot flickers through three
- *  names on every pass. Focus and a refusal are deliberate, so they skip it. */
-const HOVER_DWELL_MS = 150;
 
 /**
  * THE SAME FACES AS THE WALL, in a row.
@@ -55,40 +49,9 @@ export function PeopleStrip({
 }) {
   const wall = useWall(data, STRIP_FACE_PX);
 
-  // The hovered face's words. A dwell timer debounces pointer arrivals; a
-  // null (leave) lands immediately; focus and refusals land immediately too,
-  // because WallFaceButton re-describes on refusal while attended.
-  const [desc, setDesc] = useState<FaceDescription | null>(null);
-  const dwell = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const shown = useRef<string | null>(null);
-  const onDescribe = useCallback((d: FaceDescription | null) => {
-    if (dwell.current) clearTimeout(dwell.current);
-    if (d === null) {
-      shown.current = null;
-      setDesc(null);
-      return;
-    }
-    // Already showing this face (a refusal update, or focus after hover):
-    // update in place with no second dwell.
-    if (shown.current === d.id) {
-      setDesc(d);
-      return;
-    }
-    dwell.current = setTimeout(() => {
-      shown.current = d.id;
-      setDesc(d);
-    }, HOVER_DWELL_MS);
-  }, []);
-  useMountEffect(() => {
-    // A pointer that leaves the window over a drag gap never delivers its
-    // pointerleave; the window losing focus is the honest reset.
-    const clear = () => onDescribe(null);
-    window.addEventListener("blur", clear);
-    return () => {
-      window.removeEventListener("blur", clear);
-      if (dwell.current) clearTimeout(dwell.current);
-    };
-  });
+  // The hovered face's words, debounced behind the shared dwell — the same
+  // slot discipline the floating overlay keeps (useDescribeSlot).
+  const { desc, onDescribe } = useDescribeSlot();
 
   return (
     <div
@@ -143,7 +106,7 @@ const StripFaces = memo(function StripFaces({
   wall: ReturnType<typeof useWall>;
   data: PeopleRosterData;
   callsEnabled: boolean;
-  onDescribe: (d: FaceDescription | null) => void;
+  onDescribe: (d: FaceDescription | null, ifShowing?: string) => void;
   emptyText: string | null;
 }) {
   const [showGone, setShowGone] = useState(false);

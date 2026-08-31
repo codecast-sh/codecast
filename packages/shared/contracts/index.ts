@@ -10,6 +10,7 @@ export * from "./agentClients";
 export * from "./executionBinding";
 export * from "./modelOptions";
 export * from "./workState";
+export * from "./loopState";
 export * from "./threadState";
 export * from "./apiErrorBanner";
 export * from "./deviceName";

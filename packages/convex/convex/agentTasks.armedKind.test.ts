@@ -3,13 +3,14 @@ import { refreshArmedTriggerKind } from "./agentTasks";
 import { armedTriggerKindFor, isArmedTriggerHomeOfKind } from "./dormancy";
 import { pinCapExceeded, INBOX_PINNED_CAP } from "./inboxProjection";
 import { makeFakeDb } from "./testDb";
+import type { Id } from "./_generated/dataModel";
 
 // conversations.armed_trigger_kind is the denormalized answer the inbox
 // projection reads instead of agent_tasks (sync-convergence C1). One writer
 // (refreshArmedTriggerKind) recomputes it from every trigger injecting into the
 // home; these pin the kind rule and that the writer only writes on change.
 
-const CONV = "conversations_home";
+const CONV = "conversations_home" as Id<"conversations">;
 
 function task(overrides: Record<string, any>) {
   return {

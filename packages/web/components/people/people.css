@@ -328,7 +328,8 @@
    in no doubt where the voice is going. */
 .people-wall[data-holding] .people-face-seat:not([data-hold]),
 .people-strip[data-holding] .people-face-seat:not([data-hold]),
-.people-bar[data-holding] .people-face-seat:not([data-hold]) {
+.people-bar[data-holding] .people-face-seat:not([data-hold]),
+.presence-faces[data-holding] .people-face-seat:not([data-hold]) {
   opacity: 0.34;
 }
 

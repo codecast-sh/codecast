@@ -27,6 +27,10 @@ export interface FaceDescription {
   text: string;
   /** Tailwind text class for `text`, so the tone survives the trip. */
   tone: string;
+  /** This is a refusal reason. It lands with no dwell and outlives the
+   *  pointer — the wall's "a refused press is never a dead press" guarantee,
+   *  carried into surfaces that speak through a slot. */
+  refused?: boolean;
 }
 
 
@@ -104,8 +108,11 @@ export function WallFaceButton({
   callsEnabled: boolean;
   /** Called with the face's words as a pointer or focus arrives (and again if
    *  a refusal changes them), null as it leaves. The strip renders these in
-   *  its text slot; the wall floats its own label and passes nothing. */
-  onDescribe?: (d: FaceDescription | null) => void;
+   *  its text slot; the wall floats its own label and passes nothing.
+   *  A null with `ifShowing` set is a SCOPED clear — honored only while the
+   *  slot still shows that face, so one face's refusal expiring cannot wipe
+   *  the words of the face the pointer moved on to. */
+  onDescribe?: (d: FaceDescription | null, ifShowing?: string) => void;
 }) {
   const { id, member, px } = face;
   const { viewerId, now, fleets, roomFor, dmFor, talkingId } = data;
@@ -139,16 +146,21 @@ export function WallFaceButton({
 
   // The describe channel: the same words the label under the face shows, told
   // to the surface. `attended` remembers a pointer or focus is on the face, so
-  // a refusal that expires mid-hover can put the ordinary line back.
+  // a refusal that expires mid-hover can put the ordinary line back — and a
+  // refusal speaks even UNATTENDED, because the hand that pressed has often
+  // left by the time the reason lands, and a reason nobody gets to read is a
+  // dead press wearing a different hat.
   const attended = useRef(false);
   const describe = useCallback(
     (refusedNow: boolean) => {
-      if (!onDescribe || !attended.current) return;
+      const refusal = refusedNow && !!blocked;
+      if (!onDescribe || (!attended.current && !refusal)) return;
       onDescribe({
         id,
         name,
-        text: refusedNow && blocked ? blocked : line,
-        tone: refusedNow && blocked ? "text-sol-red" : PRESENCE_META[visual].text,
+        refused: refusal,
+        text: refusal ? blocked : line,
+        tone: refusal ? "text-sol-red" : PRESENCE_META[visual].text,
       });
     },
     [onDescribe, id, name, blocked, line, visual],
@@ -159,13 +171,17 @@ export function WallFaceButton({
   };
   const unattend = () => {
     attended.current = false;
-    onDescribe?.(null);
+    // A live refusal outlasts the pointer; its expiry clears it below.
+    if (!refused) onDescribe?.(null);
   };
-  // The words follow the refusal in and out while the face is attended.
+  // The words follow the refusal in and out. Attended, the ordinary line
+  // returns when the refusal expires; unattended, expiry is a scoped clear,
+  // so it only empties the slot if the slot still shows THIS face.
   useLayoutEffect(() => {
-    describe(refused);
-
-  }, [refused, describe]);
+    if (refused) describe(true);
+    else if (attended.current) describe(false);
+    else onDescribe?.(null, id);
+  }, [refused, describe, onDescribe, id]);
 
   const unread = dm?.unread ?? 0;
 

@@ -800,7 +800,7 @@ async function findChildConversations(
   return { children, map, agentNameEntries: Object.entries(agentNameMap) };
 }
 
-function generateShareToken(): string {
+export function generateShareToken(): string {
   return crypto.randomUUID();
 }
 
@@ -1328,6 +1328,10 @@ export const webGet = query({
       subtitle: conv.subtitle,
       last_message_preview: conv.last_message_preview,
       last_message_role: conv.last_message_role,
+      // Inbox-card parity for the chat object card: the row thumbnail and the
+      // branch line come straight off the doc, no extra reads.
+      image_preview_url: conv.image_preview_url ?? null,
+      git_branch: conv.git_branch ?? null,
     };
   },
 });
