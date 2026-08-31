@@ -93,7 +93,10 @@ export function docSourceForPlanSource(planSource: string | null | undefined): "
 // their own chrome drop it from the body with `stripTitleHeading`.
 // ---------------------------------------------------------------------------
 
-const FRONTMATTER_RE = /^---[ \t]*\n[\s\S]*?\n---[ \t]*(?:\n|$)/;
+// Only real YAML frontmatter: the opening --- must be followed directly by a
+// `key:` line. A doc whose body simply opens with a horizontal rule (---,
+// blank line, prose) must not have everything up to the next --- swallowed.
+const FRONTMATTER_RE = /^---[ \t]*\n(?=[A-Za-z0-9_-]+[ \t]*:)[\s\S]*?\n---[ \t]*(?:\n|$)/;
 
 function splitFrontmatter(content: string): { front: string; body: string } {
   const fm = content.match(FRONTMATTER_RE);

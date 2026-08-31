@@ -14,8 +14,9 @@
 
 import {
   type InboxSession,
-  type CategorizedSessions,
-  categorizeSessions,
+  type PlacedInbox,
+  type PlaceInboxState,
+  placeInboxRows,
   classifySession,
   isAgentActive,
   getProjectName,
@@ -69,18 +70,6 @@ export function fleetBandFor(s: InboxSession, opts: FleetBandOpts): FleetBand {
   return "finished";
 }
 
-export interface FleetCountOpts extends FleetBandOpts {
-  /** Server-authoritative personal live set (store.liveInboxIds). Covers the
-   *  viewer's own sessions across every project and machine. */
-  liveInboxIds: Set<string>;
-  /** The team subscription's active set (store.teamInboxIds). Empty outside
-   *  team scope — where teammate rows lingering in the cache have frozen
-   *  liveness and must not be counted at all. */
-  teamInboxIds: ReadonlySet<string>;
-  currentSessionId?: string | null;
-  reviveRequestedAt?: Record<string, number>;
-}
-
 /**
  * The rows a fleet COUNT may consider at all: exactly the set the inbox/board
  * renders, never the raw session cache. The cache deliberately holds 30 days
@@ -89,36 +78,37 @@ export interface FleetCountOpts extends FleetBandOpts {
  * agents counted as "working", while a needs-input row older than an ad-hoc
  * recency window (but still in the inbox) silently dropped out.
  *
- * categorizeSessions applies the hiding rules in one place (stashed/dismissed/
- * killed rows, orphan subagents, non-blocked anchors, never-engaged blanks,
- * rows aged out of the server's inbox window), so this can never drift from
- * the board. The old-row partition runs against the union of the personal and
- * team live sets: own rows survive via liveInboxIds, teammates' via
- * teamInboxIds — each windowed by its own subscription.
+ * Both arms run THE placement chokepoint (placeInboxRows, sync-convergence
+ * C5), so every rule — scope, the shared working-set selection, the fold, the
+ * declared overlays, anchors, orphan subagents, never-engaged blanks — is
+ * decided in exactly one place and this can never drift from the board:
+ *   • "mine": the personal working set (definitively-foreign rows dropped by
+ *     the scope filter).
+ *   • team rows: the chokepoint's team scope — the server-gated teamInboxIds
+ *     set, counted only while its own subscription keeps liveness fresh.
  *
  * The row list is the same union splitFleetBands bands, including just-spawned
  * blanks with a live agent or a send in flight.
  */
 export function fleetCountedSessions(
-  sessions: Record<string, InboxSession>,
-  opts: FleetCountOpts,
+  state: PlaceInboxState,
+  opts: FleetBandOpts,
 ): InboxSession[] {
-  const windowIds = opts.teamInboxIds.size
-    ? new Set<string>([...opts.liveInboxIds, ...opts.teamInboxIds])
-    : opts.liveInboxIds;
-  const cat = categorizeSessions(sessions, opts.queued, opts.pendingSendIds, {
-    currentSessionId: opts.currentSessionId,
-    liveInboxIds: windowIds,
-    reviveRequestedAt: opts.reviveRequestedAt,
-  });
-  return [
-    ...cat.pinned,
-    ...cat.needsInput,
-    ...cat.done,
-    ...cat.dormant,
-    ...cat.working,
-    ...cat.newSessions.filter((s) => isAgentActive(s) || inFlight(s, opts)),
-  ];
+  const focusedId = state.currentSessionId ?? null;
+  const rows = new Map<string, InboxSession>();
+  const collect = (placed: PlacedInbox) => {
+    for (const s of [...placed.questions, ...placed.pinned, ...placed.needsInput, ...placed.done, ...placed.dormant, ...placed.working]) {
+      rows.set(s._id, s);
+    }
+    for (const s of placed.newSessions) {
+      if (isAgentActive(s) || inFlight(s, opts)) rows.set(s._id, s);
+    }
+  };
+  collect(placeInboxRows(state, { scope: "mine", focusedId, now: opts.now }));
+  if ((state.teamInboxIds?.size ?? 0) > 0) {
+    collect(placeInboxRows(state, { scope: "team", focusedId, now: opts.now }));
+  }
+  return [...rows.values()];
 }
 
 /**
@@ -199,16 +189,16 @@ export interface FleetBands {
 
 /**
  * Split the visible inbox rows into board bands. Callers hand in the
- * categorizeSessions output so every hiding rule (dismissed, stashed, killed,
+ * placeInboxRows output so every hiding rule (dismissed, stashed, killed,
  * orphan subagents, old rows) stays decided in exactly one place.
  */
 export function splitFleetBands(
-  cat: Pick<CategorizedSessions, "pinned" | "needsInput" | "working" | "newSessions"> &
-    Partial<Pick<CategorizedSessions, "done" | "dormant">>,
+  cat: Pick<PlacedInbox, "pinned" | "needsInput" | "working" | "newSessions"> &
+    Partial<Pick<PlacedInbox, "done" | "dormant" | "questions">>,
   opts: FleetBandOpts,
 ): FleetBands {
   const out: FleetBands = { needsYou: [], running: [], finished: [] };
-  for (const s of [...cat.pinned, ...cat.needsInput, ...(cat.done ?? []), ...(cat.dormant ?? []), ...cat.working]) {
+  for (const s of [...(cat.questions ?? []), ...cat.pinned, ...cat.needsInput, ...(cat.done ?? []), ...(cat.dormant ?? []), ...cat.working]) {
     out[fleetBandFor(s, opts)].push(s);
   }
   // Blanks: a just-spawned worker (agent starting, or a first send in flight)

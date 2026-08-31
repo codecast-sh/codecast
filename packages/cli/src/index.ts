@@ -9,8 +9,10 @@ import { registerCapabilityCommand } from "./capabilities/cli.js";
 import { registerDecideCommand } from "./decideCommand.js";
 import { registerImageCommand } from "./imageCommand.js";
 import { registerStateCommand, warnIfThreadStateStale } from "./stateCommand.js";
+import { registerSwitchCommand } from "./switchCommand.js";
 import { buildTaskStartBody } from "./taskClaim.js";
 import { registerBrowserCommand } from "./browser/cli.js";
+import { registerExecCommand } from "./execCommand.js";
 import open from "open";
 import * as fs from "fs";
 import * as path from "path";
@@ -2905,7 +2907,9 @@ registerCapabilityCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerDecideCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerImageCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerStateCommand(program, { getCliEndpoint, detectCurrentSessionId });
+registerSwitchCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId });
+registerExecCommand(program);
 
 program
   .command("auth")
@@ -10708,13 +10712,15 @@ program
     "  cast spawn - <<'EOF'\n" +
     "  Multi-line briefing with headings and code blocks,\n" +
     "  delivered exactly as written.\n" +
-    "  EOF"
+    "  EOF\n\n" +
+    "To run a prompt, wait, and print the result (no inbox card), use `cast exec`."
   )
   .argument("<prompts...>", "One task per session; '-' reads a prompt from stdin (several '-' split stdin on lines containing only ---)")
   .option("-C, --dir <path>", "Working directory (default: current project)")
     .option("--agent <type>", "Agent: claude (default), codex, cursor, gemini, opencode, pi, grok", "claude")
   .option("--subagent [parent]", "Nest under a parent session as a subagent row (default parent: the session running this command)")
   .option("--model <model>", "Model override (e.g. opus, sonnet)")
+  .option("--effort <level>", "Reasoning effort (claude: low|medium|high|max; varies by agent)")
   .option("--isolated", "Give each session its own git worktree")
   .option("--device <name>", "Machine to start on (label or device id, e.g. nose); falls back to an online machine with the repo if it's offline")
   .option("--label <name>", "File each spawned session under a label (created if new)")
@@ -10778,6 +10784,7 @@ program
           git_root: gitRoot,
           agent_type: agentType,
           model: options.model,
+          effort: options.effort,
           isolated: options.isolated || undefined,
           device: options.device,
           parent_session: parentSession,

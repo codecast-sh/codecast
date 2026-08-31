@@ -185,6 +185,11 @@ export function applyWorkbench(
 ): WorkspaceState {
   const next: WorkspaceState = { ...ws };
   for (const id of SLOT_IDS) {
+    // The secondary slot is no longer an arrangement anyone declares: its one
+    // remaining use is the fleet board's transient drill-in, owned by the
+    // board. Old saves pinned companions here; applying that snapshot today
+    // would strand a pane in a slot nothing renders.
+    if (id === "secondary") continue;
     const want = snap.slots[id];
     if (!want) continue;
     const cur = next[id];
@@ -229,6 +234,9 @@ export function matchesWorkbench(
     wantFilter.exclude !== haveFilter.exclude
   ) return false;
   for (const id of SLOT_IDS) {
+    // Ignored on apply (see applyWorkbench), so ignored here too — an old
+    // save's pinned companion must not keep a workbench from ever matching.
+    if (id === "secondary") continue;
     const want = snap.slots[id];
     if (!want) continue;
     const cur = ws[id];

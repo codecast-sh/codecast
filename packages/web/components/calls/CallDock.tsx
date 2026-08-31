@@ -19,6 +19,7 @@ import { firstName } from "./speakers";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
 import { POP_OUT_CALL_TITLE, canPopOutCall, isCallPanelWindow } from "../../lib/desktop";
 import { useDesktopWindowRole } from "../../hooks/useDesktopWindowRole";
+import { useHandCallToPanel } from "../../hooks/useHandCallToPanel";
 import { popOutCall } from "../../lib/calls/popOutCall";
 import {
   getJoinAnnouncement,
@@ -32,13 +33,19 @@ import {
 //   PINNED (default) — a small floating window, like the palette: it sits on
 //   top of the work, shows the people (video tiles, or faces when audio only)
 //   and the three controls that matter mid-call. Drag it anywhere, resize it,
-//   or expand it into the full stage.
+//   or expand it into the full stage. BROWSER ONLY. On the desktop a pinned
+//   call is already a real OS window (the call panel) — an in-app card is
+//   trapped in the parent window's edges, which is not a popout.
 //   UNPINNED — the compact pill above the composer: faces, status, mute, end.
 //   For when the window is in the way but the call goes on.
 //
 // All state reads are local-first — the store's ephemeral call slice and the
 // occupancy sync — so every control paints its result synchronously.
 export function CallDock() {
+  // Desktop: a real call moves to its own window the moment it is a call.
+  // Walkie bursts stay on this strip. The panel closing hands the call back
+  // without reopening itself (see isAutoPopSuppressed).
+  useHandCallToPanel();
   const s = useTrackedStore([
     (st: any) => st.call,
     (st: any) => st.call.roomKey ? st.callOccupancy[st.call.roomKey] : undefined,
@@ -58,7 +65,10 @@ export function CallDock() {
 
   // Which of the four surfaces this is, decided once, by the lookup that lives
   // beside the walkie because it is a fact about the walkie.
-  const surface = callDockSurface(walkie, call, { expanded });
+  const surface = callDockSurface(walkie, call, {
+    expanded,
+    video: remoteVideo || !!call.camera || !!call.sharing,
+  });
   const walkieOwns = surface === "walkie";
 
   // THE STAGE BELONGS TO THE CALL THAT WAS EXPANDED, and to no call after it
@@ -83,7 +93,11 @@ export function CallDock() {
   // effect whose dependency list would have to carry the same edge anyway.
   const arrived = (remoteVideo && !seenMedia.current.video) || (!!notice && !seenMedia.current.notice);
   seenMedia.current = { video: remoteVideo, notice: !!notice };
-  if (arrived && !walkieOwns && !expanded) setExpanded(true);
+  // Desktop: the call already has a window of its own. Opening the in-app
+  // stage on top of the work would flash a second surface, then vanish the
+  // moment the panel exists. Browser has no panel, so video still earns it.
+  if (arrived && !walkieOwns && !expanded && !canPopOutCall()) setExpanded(true);
+  if (expanded && canPopOutCall()) setExpanded(false);
 
   if (surface === "none") return null;
   // The call has a window of its own, and it is not this one. Every other
@@ -101,14 +115,19 @@ export function CallDock() {
   // being destroyed and another built. The stage is the exception the other
   // way round: it draws its own full-screen surface, so the root goes empty and
   // simply grows into it.
-  const shape = surfaceShape(surface, pinned);
+  //
+  // Desktop never takes the in-app "window" shape: that card is clamped to
+  // this renderer, and a call popout has to be a real OS window. Pin still
+  // means "float it" — it just floats as the call panel.
+  const inAppWindow = pinned && !canPopOutCall();
+  const shape = surfaceShape(surface, inAppWindow);
   return (
     <>
       <CallSurfaceRoot shape={shape}>
         {surface === "walkie" ? (
           <WalkieBanner />
         ) : surface === "dock" ? (
-          pinned ? (
+          inAppWindow ? (
             <MiniWindow
               call={call}
               roster={roster}
@@ -215,21 +234,30 @@ function MiniWindow({
         >
           {statusText}
         </span>
-        <PopOutCallButton />
-        <button
-          onClick={onExpand}
-          className="rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
-          title="Expand to the full stage"
+        {/* Chrome sits on the drag row. Pointerdown must not start a drag or
+            the three buttons never fire (the header captured the pointer). */}
+        <div
+          className="flex shrink-0 items-center"
+          onPointerDown={(e) => e.stopPropagation()}
         >
-          <Maximize2 className="h-3.5 w-3.5" />
-        </button>
-        <button
-          onClick={onUnpin}
-          className="rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
-          title="Unpin — shrink to the pill, the call continues"
-        >
-          <PinOff className="h-3.5 w-3.5" />
-        </button>
+          <PopOutCallButton />
+          <button
+            type="button"
+            onClick={onExpand}
+            className="cursor-pointer rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
+            title="Expand to the full stage"
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={onUnpin}
+            className="cursor-pointer rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
+            title="Unpin — shrink to the pill, the call continues"
+          >
+            <PinOff className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 px-2">
@@ -318,7 +346,7 @@ function DockPill({
       <button
         onClick={onExpand}
         className="flex items-center gap-2 rounded-md px-1 py-0.5 transition-colors hover:bg-sol-bg-highlight"
-        title="Expand to the full stage"
+        title={canPopOutCall() ? POP_OUT_CALL_TITLE : "Expand to the full stage"}
       >
         <div className="flex -space-x-2">
           {roster.slice(0, 4).map((m) => (
@@ -353,13 +381,16 @@ function DockPill({
         </span>
         <ChevronUp className="h-3.5 w-3.5 text-sol-text-dim" />
       </button>
-      <button
-        onClick={onPin}
-        className="rounded-md p-1.5 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
-        title="Pin — float a small window with the people on the call"
-      >
-        <Pin className="h-4 w-4" />
-      </button>
+      {!canPopOutCall() && (
+        <button
+          type="button"
+          onClick={onPin}
+          className="rounded-md p-1.5 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
+          title="Pin — float a small window with the people on the call"
+        >
+          <Pin className="h-4 w-4" />
+        </button>
+      )}
       <PopOutCallButton className="rounded-md p-1.5 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text" iconClassName="h-4 w-4" />
       <div className="mx-0.5 h-5 w-px bg-sol-border" />
       {call.roomKey && call.phase === "connected" && (
@@ -394,8 +425,9 @@ function PopOutCallButton({
   return (
     <button
       type="button"
+      onPointerDown={(e) => e.stopPropagation()}
       onClick={() => void popOutCall()}
-      className={className}
+      className={`${className} cursor-pointer`}
       title={POP_OUT_CALL_TITLE}
       aria-label={POP_OUT_CALL_TITLE}
     >

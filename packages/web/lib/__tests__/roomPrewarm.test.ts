@@ -17,7 +17,7 @@
 // mutation-checked: with the reuse removed, the join mints a second token and
 // performs a second handshake, which is the 12.7 seconds coming back.
 
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { ConnectionState } from "livekit-client";
 import { useInboxStore } from "../../store/inboxStore";
@@ -136,6 +136,13 @@ if (typeof (globalThis as any).document === "undefined") {
     createElement: () => ({ style: {}, dataset: {} as any, appendChild() {}, remove() {} }),
     body: { appendChild() {} },
   };
+  // The whole test run shares one process, so a lingering partial `document`
+  // sends every LATER file's `typeof document !== "undefined"` branch down a
+  // DOM path this stub cannot answer (document.hasFocus is not a function, in
+  // unrelated store suites). Uninstall what this file installed.
+  afterAll(() => {
+    delete (globalThis as any).document;
+  });
 }
 
 let mutations: Array<{ name: string; args: any }> = [];

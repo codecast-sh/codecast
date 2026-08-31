@@ -439,3 +439,34 @@ export function judgeProcessIdentity(args: {
   if (!declared) return { verdict: "unknown", declared };
   return { verdict: declared === args.sessionId ? "owned" : "foreign", declared };
 }
+
+// ── Registry supersession of a cached pid ───────────────────────────────────
+// The daemon caches session→pid once and revalidates only that the pid is
+// alive and agent-shaped. That check cannot CONVICT a stale mapping: the old
+// process often has no current claim of its own (its session moved on, or its
+// registry file was overwritten by a later era), so the identity verdict comes
+// back "unknown" and the cache keeps the wrong pid forever. Observed 2026-08-30:
+// a session resumed into tmux (new pid) while its old iTerm process lived on —
+// the daemon kept the old pid for hours, every background watcher the NEW
+// process armed failed the "child of the agent pid" check, and the session's
+// "waiting" verdict collapsed to needs_input with no wake row in the inbox.
+//
+// The session's OWN registry file is the missing witness: the SessionStart hook
+// of whichever process most recently started the session rewrites it, so a
+// hook-written registration NEWER than the moment we cached, naming a DIFFERENT
+// pid, proves the cached mapping describes a replaced era. Only the hook speaks
+// for the process — the daemon's own opportunistic writes (src: "daemon", no
+// `term`) are exactly the kind of guess that caused the stale fill, so they
+// never supersede.
+export function registrySupersedesCachedPid(
+  reg: { pid?: unknown; ts?: unknown; term?: unknown; src?: unknown } | null | undefined,
+  cachedPid: number,
+  cachedFilledAtMs: number,
+): boolean {
+  if (!reg || typeof reg.pid !== "number" || typeof reg.ts !== "number") return false;
+  if (typeof reg.term !== "string" || reg.src === "daemon") return false;
+  if (reg.pid === cachedPid) return false;
+  // reg.ts is epoch SECONDS (the hook writes seconds); strict "newer than the
+  // fill" — an older registration lost to whatever discovery filled the cache.
+  return reg.ts * 1000 > cachedFilledAtMs;
+}

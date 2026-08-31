@@ -2839,7 +2839,7 @@ http.route({
       // the existing row when it's seen before, so a retried/redelivered fork
       // can't mint a duplicate "Fork:" conversation. Dropping it here silently
       // disabled that guard for every CLI fork. direction titles the branch.
-      const { api_token, conversation_id, message_uuid, session_id, direction } = body;
+      const { api_token, conversation_id, message_uuid, session_id, direction, target_agent_type } = body;
       if (!api_token || !conversation_id) {
         return new Response(JSON.stringify({ error: "Missing api_token or conversation_id" }), {
           status: 400,
@@ -2852,6 +2852,7 @@ http.route({
         api_token,
         session_id,
         direction,
+        target_agent_type,
       });
       return new Response(JSON.stringify(result), {
         status: 200,
@@ -4169,6 +4170,10 @@ cliRoute("/cli/sessions/resume", async (ctx, body) => ctx.runMutation(api.conver
 // daemon's resume ladder — the web header's "Restart session", from a shell.
 // body: { api_token, session, repair? }.
 cliRoute("/cli/sessions/restart", async (ctx, body) => ctx.runMutation(api.conversations.cliRestartSession, body));
+
+// In-place agent/model switch (cast switch): stay on this conversation, drop a
+// divider, reconstitute as the new agent. body: { api_token, session, agent_type?, model?, effort? }.
+cliRoute("/cli/sessions/switch", async (ctx, body) => ctx.runMutation(api.conversations.switchSessionAgent, body));
 
 // Rename (cast rename): set a session's title with the custom flag so the
 // auto-titler never overwrites it. body: { api_token, session, title }.

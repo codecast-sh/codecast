@@ -50,9 +50,9 @@ export function ContextChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const currentAgent = useInboxStore((s) => s.currentConversation.agentType || "claude_code");
   const [selectedAgent, setSelectedAgent] = useState<AgentKey | null>(null);
-  // Same gesture as clicking a card in the object's "Sessions" list: on a
-  // working page (task/doc) the session opens as the split companion beside
-  // the page, immediately and from the local stub; elsewhere it routes.
+  // Same gesture as clicking a card in the object's "Sessions" list: the
+  // conversation takes the stage (routed to /conversation → the inbox); a
+  // side-by-side arrangement is a drag onto the stage, never a click.
   const openLinkedSession = useOpenLinkedSession();
 
   // Registry chokepoint, never a hand-rolled ternary: a client missing from a
@@ -158,8 +158,9 @@ export function ContextChatInput({
 
     // The stub row already exists (beginOptimisticSession wrote it), so this
     // paints the new session with its optimistic message before any server
-    // round-trip; the companion follows the stub→convex rekey via the
-    // attended-conversation mirror in DashboardLayout.
+    // round-trip; the /conversation/<stub> route resolves through
+    // navigateToSession + the inbox's ?s= param, both of which follow the
+    // stub→convex rekey.
     openLinkedSession({ _id: sid });
 
     // Resolve through the shared tracked-create/by_session_id lifecycle, then

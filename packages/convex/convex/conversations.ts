@@ -9,12 +9,19 @@ import type { AgentStatus } from "@codecast/shared/contracts";
 import {
   openTasksVouchForWaiting,
   OPEN_TASKS_FRESH_MS,
-  placeInboxRow,
+  LOOP_OVERDUE_GRACE_MS,
   computeBucketStale,
   digestProjection,
   inboxEpoch,
   emptyInboxTally,
+  computeFold,
+  selectWorkingSet,
+  placeProjectableRow,
+  rowLastTurnAllowsPark,
+  INBOX_FACT_FIELDS,
+  INBOX_PROJECTION_VERSION,
   INBOX_TRUNCATION_KINDS,
+  INBOX_WINDOW_CAPS,
   type InboxBucket,
   type InboxPlacement,
   type InboxProjection,
@@ -24,15 +31,15 @@ import { Doc, Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
-import { resetConversationPendingMessages, cancelQueuedMessagesOnKill } from "./pendingMessages";
+import { resetConversationPendingMessages, cancelQueuedMessagesOnKill, enqueuePendingMessage } from "./pendingMessages";
 import { latestImagePreviewUrl } from "./messages";
 import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, requireSessionCommandTarget } from "./daemonCommandUtils";
-import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
+import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, formatAgentSwitchNotice, findModelOption } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, isUserDormant, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
-import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind } from "./dormancy";
+import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
 import { filterUserMessages, isImportNotice } from "./userMessagesFilter";
@@ -800,7 +807,7 @@ async function findChildConversations(
   return { children, map, agentNameEntries: Object.entries(agentNameMap) };
 }
 
-function generateShareToken(): string {
+export function generateShareToken(): string {
   return crypto.randomUUID();
 }
 
@@ -1328,6 +1335,10 @@ export const webGet = query({
       subtitle: conv.subtitle,
       last_message_preview: conv.last_message_preview,
       last_message_role: conv.last_message_role,
+      // Inbox-card parity for the chat object card: the row thumbnail and the
+      // branch line come straight off the doc, no extra reads.
+      image_preview_url: conv.image_preview_url ?? null,
+      git_branch: conv.git_branch ?? null,
     };
   },
 });
@@ -6662,6 +6673,7 @@ export const feedForCLI = query({
         killed: !!conv.inbox_killed_at,
         userDormant: isUserDormant(conv),
         armedTriggerHome: isArmedTriggerHome(conv, armedHomes.standing),
+        armedLoopHome: isArmedLoopHome(conv, now),
         armedOnceTriggerHome: isArmedTriggerHome(conv, armedHomes.once),
         settleVerdict: isSettleVerdictCurrent(conv) ? conv.settle_verdict : null,
         declaredStatus: conv.thread_state_status ?? null,
@@ -7639,8 +7651,9 @@ const INBOX_SESSION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const TEAM_INBOX_MEMBER_CAP = 50;
 const TEAM_INBOX_PER_MEMBER_CAP = 60;
 // Row caps of the five personal windows. Each window reads cap + 1 so overflow
-// costs one row and names itself in `truncated` (sync-convergence C2).
-const INBOX_WINDOW_CAP = 200;
+// costs one row and names itself in `truncated` (sync-convergence C2). Single
+// source: the shared caps the replica's selection also applies (C4).
+const INBOX_WINDOW_CAP = INBOX_WINDOW_CAPS.recent;
 // Pinned rows are a deliberate, bounded set (INBOX_PINNED_CAP, inboxProjection.ts):
 // the window reads newest-first so the newest pins win, and the pin writers
 // refuse past the cap so the limit is enforced where the user can see it.
@@ -7803,16 +7816,18 @@ async function mergeForeignConversationLiveness(
 // The heartbeat-derived fields that move to the sessionsLiveness overlay. Stripped from
 // the base rows when liveness is excluded so the client can't read a stale value before
 // the overlay merges (it overlays these back, keyed by id, via syncOverlay).
-const INBOX_LIVENESS_FIELDS = [
-  "agent_status", "is_idle", "is_unresponsive", "awaiting_input",
-  "is_connected", "tmux_session", "permission_mode", "agent_started_at",
-  "open_tasks", "open_tasks_at",
-] as const;
-// The two fields that change on every streamed message. A client that opts in
-// (`fast_fields_in_overlay`) gets them from the sessionsLiveness overlay instead,
-// so a streaming session no longer changes the list result and Convex stops
-// re-pushing the whole ~1.7MB list on every token.
-const INBOX_FAST_FIELDS = ["message_count", "updated_at"] as const;
+//
+// DERIVED from the shared INBOX_FACT_FIELDS constant (sync-convergence C1):
+// the overlay owns exactly those fields, the strip list here and the client's
+// preserve list both re-derive from it, and a signature test pins the split.
+// The two fast fields change on every streamed message; a client that opts in
+// (`fast_fields_in_overlay`) gets them from the overlay instead, so a streaming
+// session no longer changes the list result and Convex stops re-pushing the
+// whole ~1.7MB list on every token.
+export const INBOX_FAST_FIELDS = ["message_count", "updated_at"] as const;
+export const INBOX_LIVENESS_FIELDS = INBOX_FACT_FIELDS.filter(
+  (f) => !(INBOX_FAST_FIELDS as readonly string[]).includes(f),
+);
 function stripInboxLiveness(row: any, fastFieldsToo = false): void {
   for (const f of INBOX_LIVENESS_FIELDS) row[f] = null;
   if (fastFieldsToo) for (const f of INBOX_FAST_FIELDS) row[f] = null;
@@ -8554,24 +8569,26 @@ export async function scanInboxConversations(
     await mergeForeignConversationLiveness(ctx, maps, foreignConvs, now);
   }
 
-  // Cluster cutoff hides stale active sessions when there's a clean time gap.
-  // Dismissed/stashed sessions have their own 30d window, and deliberately-filed
-  // rows (label extras, sessions assigned to me) are old by design — exclude
-  // both from the gap analysis.
-  let clusterCutoff = 0;
-  const activeConvs = conversations.filter(
-    (c) => !c.inbox_dismissed_at && !c.inbox_stashed_at && !deliberateIds.has(c._id.toString())
-  );
-  if (activeConvs.length > 0) {
-    const sorted = [...activeConvs].sort((a, b) => b.updated_at - a.updated_at);
-    for (let i = 1; i < sorted.length; i++) {
-      const gap = sorted[i - 1].updated_at - sorted[i].updated_at;
-      if (gap > 12 * 60 * 60 * 1000) {
-        clusterCutoff = sorted[i].updated_at;
-        break;
-      }
-    }
+  // The fold cutoff comes from the SHARED selection + fold (sync-convergence
+  // C4): selectWorkingSet over the caller's own and owned rows (teammate rows
+  // are outside the personal selection — team scope is outside the compare),
+  // then computeFold's 12h gap cut over the recent-only members. Pinned,
+  // dismissed, stashed and owned rows are deliberate and neither fold nor
+  // bridge a gap; deliberately-filed rows (label extras, sessions assigned to
+  // me) are outside the selection and fold-exempt on every channel — which is
+  // what makes inboxForCLI's cutoff identical to the overlay's even when the
+  // CLI hydrates extras the overlay never sees. A window the selection
+  // overflows names itself in `truncated` like the scan's own caps.
+  const uidStr = userId.toString();
+  const selectionInput: any[] = [];
+  for (const c of conversations) {
+    const idStr = c._id.toString();
+    if (c.user_id.toString() !== uidStr && !ownedByMeIds.has(idStr)) continue;
+    selectionInput.push(ownedByMeIds.has(idStr) ? { ...c, owned_by_me: true } : c);
   }
+  const selection = selectWorkingSet(selectionInput, now);
+  for (const kind of selection.truncated) truncated.add(kind);
+  const { cutoff: clusterCutoff } = computeFold(selection.members, now);
 
   return { conversations, maps, deliberateIds, clusterCutoff, ownedByMeIds, myOwnerRowById, truncated, pinnedOverflowIds };
 }
@@ -8656,8 +8673,10 @@ export async function computeInboxSessions(
     // account) never cluster-hide: an assignment routes a session into my inbox
     // on purpose, and it stays there until I dismiss it — otherwise a decision
     // handed over on Friday is silently gone by Monday while `cast sessions`
-    // with explicit ids still lists it as needs input.
-    const cutoff = deliberateIds.has(conv._id.toString()) ? 0 : clusterCutoff;
+    // with explicit ids still lists it as needs input. Owned rows are a
+    // deliberate window in the shared selection (C4), so they are fold-exempt
+    // for the same reason.
+    const cutoff = deliberateIds.has(conv._id.toString()) || ownedByMeIds.has(conv._id.toString()) ? 0 : clusterCutoff;
     // Pinned rows past the newest INBOX_PINNED_CHILDREN_SCAN skip the children
     // scan unless the caller asked for everything: children are never counted,
     // and the scan was the read that hit the system-operation limit.
@@ -8711,14 +8730,14 @@ export async function computeInboxSessions(
       for (const c of r.subagentChildren) if (!seen.has(c._id.toString())) merged.push(c);
       childrenByParent.set(pid, merged);
     }
-    const [pendingDecisionIds, askingParents] = await Promise.all([
-      loadPendingDecisionConvIds(ctx, userId),
-      buildAskingParents(ctx, childrenByParent, maps, now),
-    ]);
+    // Decisions FIRST: a parent already asking through a pending `cast decide`
+    // never spends child message probes (see buildAskingParents).
+    const pendingDecisionIds = await loadPendingDecisionConvIds(ctx, userId);
+    const { asking: askingParents } = await buildAskingParents(ctx, childrenByParent, maps, now, pendingDecisionIds);
     for (const r of enrichedRows) {
       const cid = r.conv._id.toString();
       const asking = ownAsk(r.row) || pendingDecisionIds.has(cid) || askingParents.has(cid);
-      const placement = placeConversationRow(r.conv, r.row, asking, r.row.last_user_message);
+      const placement = placeConversationRow(r.conv, r.row, asking, r.row.last_user_message, now);
       r.row.bucket = placement.bucket;
       r.row.work_state = placement.work_state;
       r.row.asking = asking;
@@ -8837,6 +8856,11 @@ type LivenessFields = {
   // list omits them.
   message_count: number;
   updated_at: number;
+  // Whether the newest user turn permits a structural park (machine-delivered
+  // or absent — dormancy.lastTurnAllowsPark). Overlay-borne so the replica can
+  // run the armed-trigger/loop park rule without the message body the server's
+  // probe covered (sync-convergence C1).
+  last_turn_allows_park: boolean;
 };
 
 // The projection stamps (sync-convergence C1/C3): the row's placement, its
@@ -8853,12 +8877,17 @@ export type InboxProjectionRowFields = {
 
 export type InboxLivenessRow = LivenessFields & InboxProjectionRowFields;
 
+// A row in the overlay map: a projection MEMBER carries facts + stamps
+// (InboxLivenessRow); a live probed CHILD carries facts only — no bucket key —
+// so replicas can compute parent rollups from replicated child facts (C1).
+export type InboxOverlayRow = LivenessFields & Partial<InboxProjectionRowFields>;
+
 // The projection fields, by name: what the paginated / byIds / base channels
 // must never carry (the overlay owns them), and what a client strips from
-// every incoming sessions row before its merge.
-export const INBOX_PROJECTION_FIELDS = [
-  "bucket", "work_state", "asking", "below_fold", "bucket_stale_at", "stale_bucket",
-] as const;
+// every incoming sessions row before its merge. The list itself lives in the
+// shared module (sync-convergence C1) so the client's strip list is the same
+// constant; re-exported for existing importers.
+export { INBOX_PROJECTION_FIELDS } from "@codecast/shared/contracts";
 
 // Convex env kill switch for the digest compare (sync-convergence C8): with
 // `npx convex env set INBOX_DIGEST_DISABLED 1` every overlay payload carries
@@ -8985,19 +9014,40 @@ export async function loadPendingDecisionConvIds(ctx: any, userId: Id<"users">):
   return new Set<string>(rows.map((r: any) => r.conversation_id.toString()));
 }
 
+// The child AUQ probe answers, cached across executions by (child id,
+// message_count): a heartbeat re-execution over an unchanged fleet pays zero
+// newest-message reads for its children. Sound because message_count moves on
+// every message insert (an AUQ answer is a new tool_result message), and the
+// child's conversation doc is in the subscription's read set through the pool
+// scan — so a change re-executes with a fresh key. Bounded; cleared wholesale
+// at the cap rather than tracking recency.
+const CHILD_AUQ_PROBE_CACHE_MAX = 4096;
+const childAuqProbeCache = new Map<string, boolean>();
+export function _resetChildAuqProbeCacheForTests(): void {
+  childAuqProbeCache.clear();
+}
+
 // Parents with a child that is asking: a child whose trusted status is
 // permission_blocked (from the maps), or a child with an open AskUserQuestion —
 // the same probe as the parent's own, run only for children with a non-idle
 // trusted status and content, so it is bounded by live children.
+//
+// Read discipline (pinned by the overlay read-budget test): set membership is
+// checked BEFORE a probe is enqueued — a parent already asking through a
+// pending `cast decide` (alreadyAsking) or a sibling's permission block never
+// spends a message read — and cache hits answer without one.
 export async function buildAskingParents(
   ctx: any,
   childrenByParent: Map<string, any[]>,
   maps: Pick<InboxSessionMaps, "liveConvIds" | "agentStatusMap" | "openTasksMap"> & Partial<Pick<InboxSessionMaps, "lastHeartbeatMap">>,
   now: number,
-): Promise<Set<string>> {
+  alreadyAsking?: ReadonlySet<string>,
+): Promise<{ asking: Set<string>; probedAuqOpen: Map<string, boolean> }> {
   const asking = new Set<string>();
-  const probes: Array<{ pid: string; convId: Id<"conversations"> }> = [];
+  const probedAuqOpen = new Map<string, boolean>();
+  const probes: Array<{ pid: string; cid: string; convId: Id<"conversations">; key: string }> = [];
   for (const [pid, children] of childrenByParent) {
+    if (alreadyAsking?.has(pid)) { asking.add(pid); continue; }
     for (const c of children) {
       const cid = c._id.toString();
       if ((c.message_count ?? 0) === 0) continue;
@@ -9005,12 +9055,31 @@ export async function buildAskingParents(
         maps.agentStatusMap.get(cid), c.updated_at, now, isLiveAt(maps, cid, now), verifiedWaitingFor(maps, cid, now),
       );
       if (status === "permission_blocked") { asking.add(pid); break; }
-      if (status !== undefined && status !== "idle") probes.push({ pid, convId: c._id });
+      if (status !== undefined && status !== "idle") {
+        const key = `${cid}:${c.message_count ?? 0}`;
+        const hit = childAuqProbeCache.get(key);
+        if (hit !== undefined) {
+          probedAuqOpen.set(cid, hit);
+          if (hit) { asking.add(pid); break; }
+        } else {
+          probes.push({ pid, cid, convId: c._id, key });
+        }
+      }
     }
   }
-  const results = await Promise.all(probes.map((p) => asking.has(p.pid) ? null : newestMessage(ctx, p.convId)));
-  probes.forEach((p, i) => { if (isOpenAskUserQuestion(results[i])) asking.add(p.pid); });
-  return asking;
+  // `undefined` marks a probe skipped because its parent resolved first — a
+  // skipped probe is never cached (its answer was never read).
+  const results = await Promise.all(probes.map((p) => asking.has(p.pid) ? undefined : newestMessage(ctx, p.convId)));
+  probes.forEach((p, i) => {
+    const msg = results[i];
+    if (msg === undefined) return;
+    const open = isOpenAskUserQuestion(msg);
+    if (childAuqProbeCache.size >= CHILD_AUQ_PROBE_CACHE_MAX) childAuqProbeCache.clear();
+    childAuqProbeCache.set(p.key, open);
+    probedAuqOpen.set(p.cid, open);
+    if (open) asking.add(p.pid);
+  });
+  return { asking, probedAuqOpen };
 }
 
 // A row's own ask: an open AskUserQuestion poll or a permission prompt.
@@ -9026,28 +9095,29 @@ export function placeConversationRow(
   lv: { agent_status?: string | null; is_idle?: boolean | null; awaiting_input?: boolean | null; is_unresponsive?: boolean | null },
   asking: boolean,
   lastUserMessage: string | null | undefined,
+  now: number,
 ): InboxPlacement {
-  const home = { armed_trigger_kind: conv.armed_trigger_kind, last_message_preview: lastUserMessage ?? null };
-  return placeInboxRow({
-    agentStatus: lv.agent_status ?? undefined,
-    isIdle: !!lv.is_idle,
-    awaitingInput: !!lv.awaiting_input,
-    hasPending: !!conv.has_pending_messages,
-    isUnresponsive: !!lv.is_unresponsive,
-    messageCount: conv.message_count ?? 0,
-    killed: !!conv.inbox_killed_at,
-    userDormant: isUserDormant(conv),
-    armedTriggerHome: isArmedTriggerHomeOfKind(home, "standing"),
-    armedOnceTriggerHome: isArmedTriggerHomeOfKind(home, "once"),
-    settleVerdict: isSettleVerdictCurrent(conv) ? (conv.settle_verdict ?? null) : null,
-    declaredStatus: conv.thread_state_status ?? null,
-    pendingApiError: conv.pending_api_error === true,
-    dismissed: !!conv.inbox_dismissed_at,
-    stashed: !!conv.inbox_stashed_at,
-    pinned: !!conv.inbox_pinned_at,
-    isAnchor: !!conv.anchor_id,
+  // Delegates to the SHARED row adapter (placeProjectableRow) so the server and
+  // every replica build the identical InboxPlacementInput from the identical
+  // fields — a placement rule cannot exist on one side only (C3). The probed
+  // lastUserMessage overrides the row's own preview (it covers the
+  // un-backfilled fallback), and the loop park is time-dependent, so the
+  // caller's clock rides through: the time-flip machinery re-runs this at
+  // future instants and rowTimeDeadlines carries the loop's expiry boundary.
+  return placeProjectableRow(
+    {
+      ...conv,
+      agent_status: lv.agent_status ?? null,
+      is_idle: lv.is_idle ?? null,
+      awaiting_input: lv.awaiting_input ?? null,
+      is_unresponsive: lv.is_unresponsive ?? null,
+      last_message_preview: lastUserMessage ?? null,
+      last_user_message: null,
+      last_turn_allows_park: undefined,
+    },
     asking,
-  });
+    now,
+  );
 }
 
 // Everything one liveness row needs that costs a read, gathered once per row at
@@ -9122,6 +9192,9 @@ function deriveLivenessAt(
     open_tasks_at: maps.openTasksMap.get(cid)?.at ?? null,
     message_count: conv.message_count ?? 0,
     updated_at: conv.updated_at,
+    // reads.lastUserMessage is the row's preview with the probed fallback for
+    // un-backfilled rows — exactly the input the park rule needs (C1).
+    last_turn_allows_park: rowLastTurnAllowsPark({ last_message_preview: reads.lastUserMessage }),
   };
 }
 
@@ -9171,6 +9244,9 @@ function rowTimeDeadlines(conv: any, maps: InboxSessionMaps, cid: string, childr
     hb !== undefined ? hb + INBOX_HEARTBEAT_ALIVE_MS : null,
     maps.latestHeartbeat !== undefined ? maps.latestHeartbeat + USER_DAEMON_ALIVE_MS : null,
     openTasksAt !== undefined ? openTasksAt + OPEN_TASKS_FRESH_MS : null,
+    // An armed /loop parks the row (isArmedLoopHome) until its wakeup goes
+    // overdue past the grace — that passing must un-park the bucket.
+    conv.loop_state?.status === "armed" ? conv.loop_state.wakeup_at + LOOP_OVERDUE_GRACE_MS : null,
   ];
   for (const c of children) {
     const chb = maps.lastHeartbeatMap.get(c._id.toString());
@@ -9206,19 +9282,20 @@ export async function computeSessionsLiveness(
   ctx: any,
   userId: Id<"users">,
   teamScope?: Id<"teams">,
-): Promise<{ liveness: Record<string, InboxLivenessRow>; projection: InboxProjection }> {
-  const asOf = Date.now();
-  const now = inboxEpoch(asOf);
-  const { conversations, maps, deliberateIds, clusterCutoff, truncated } = await scanInboxConversations(ctx, userId, now, {
+): Promise<{ liveness: Record<string, InboxOverlayRow>; projection: InboxProjection }> {
+  // The epoch is the payload's ONLY clock: no raw Date.now() may reach the
+  // result, so two executions inside one minute are byte identical (C2).
+  const now = inboxEpoch(Date.now());
+  const { conversations, maps, deliberateIds, clusterCutoff, ownedByMeIds, truncated } = await scanInboxConversations(ctx, userId, now, {
     includeLiveness: true,
     teamScope,
   });
   const pool = await hydrateLivePool(ctx, conversations, maps);
   const childrenByParent = groupPoolChildren(pool);
-  const [pendingDecisionIds, askingParents] = await Promise.all([
-    loadPendingDecisionConvIds(ctx, userId),
-    buildAskingParents(ctx, childrenByParent, maps, now),
-  ]);
+  // Decisions FIRST: a parent already asking through a pending `cast decide`
+  // never spends child message probes (see buildAskingParents).
+  const pendingDecisionIds = await loadPendingDecisionConvIds(ctx, userId);
+  const { asking: askingParents, probedAuqOpen } = await buildAskingParents(ctx, childrenByParent, maps, now, pendingDecisionIds);
   const uid = userId.toString();
   const shownConvs = conversations.filter((conv) => shouldShowInInbox(conv));
 
@@ -9256,25 +9333,25 @@ export async function computeSessionsLiveness(
   });
 
   // Phase 3 — derive, place, stamp. Pure from here on.
-  const liveness: Record<string, InboxLivenessRow> = {};
+  const liveness: Record<string, InboxOverlayRow> = {};
   const tally = { shown: emptyInboxTally(), folded: emptyInboxTally() };
-  const pairs: Array<[string, InboxBucket]> = [];
+  const entries: Array<[string, InboxBucket, boolean]> = [];
   shownConvs.forEach((conv, i) => {
     const cid = conv._id.toString();
     const producing = producingFor(cid);
     const askingFor = (lv: LivenessFields) => ownAsk(lv) || pendingDecisionIds.has(cid) || askingParents.has(cid);
     const placeAt = (t: number): InboxPlacement => {
       const lvAt = deriveLivenessAt(conv, maps, reads[i], producing, t);
-      return placeConversationRow(conv, lvAt, askingFor(lvAt), reads[i].lastUserMessage);
+      return placeConversationRow(conv, lvAt, askingFor(lvAt), reads[i].lastUserMessage, t);
     };
     const lv = deriveLivenessAt(conv, maps, reads[i], producing, now);
     const asking = askingFor(lv);
-    const placement = placeConversationRow(conv, lv, asking, reads[i].lastUserMessage);
+    const placement = placeConversationRow(conv, lv, asking, reads[i].lastUserMessage, now);
     const stale = computeBucketStale(
       { deadlines: rowTimeDeadlines(conv, maps, cid, childrenByParent.get(cid) ?? []), placeAt, current: placement.bucket },
       now,
     );
-    const below_fold = isBelowInboxFold(conv, deliberateIds.has(cid) ? 0 : clusterCutoff);
+    const below_fold = isBelowInboxFold(conv, deliberateIds.has(cid) || ownedByMeIds.has(cid) ? 0 : clusterCutoff);
     liveness[cid] = {
       ...lv,
       bucket: placement.bucket,
@@ -9285,18 +9362,46 @@ export async function computeSessionsLiveness(
       stale_bucket: stale.stale_bucket,
     };
     if (placement.bucket !== "hidden") (below_fold ? tally.folded : tally.shown)[placement.bucket]++;
-    pairs.push([cid, placement.bucket]);
+    entries.push([cid, placement.bucket, below_fold]);
   });
 
+  // FACT-ONLY child rows (no bucket key): the live children the pool probes —
+  // a non-idle trusted status with content — of shown parents, so a replica
+  // can compute parent rollups (producing grace, asking) from replicated child
+  // facts instead of message bodies (C1). Never members: no stamps, no tally,
+  // no digest entry. The AUQ answer comes from this execution's probes or the
+  // (child id, message_count) cache, so a warm and a cold execution over the
+  // same data emit the same row.
+  const shownIds = new Set(shownConvs.map((c) => c._id.toString()));
+  for (const [pid, children] of childrenByParent) {
+    if (!shownIds.has(pid)) continue;
+    for (const c of children) {
+      const cid = c._id.toString();
+      if (liveness[cid] || (c.message_count ?? 0) === 0) continue;
+      const status = trustedAgentStatus(
+        maps.agentStatusMap.get(cid), c.updated_at, now, isLiveAt(maps, cid, now), verifiedWaitingFor(maps, cid, now),
+      );
+      if (status === undefined || status === "idle") continue;
+      const auqOpen = probedAuqOpen.get(cid)
+        ?? childAuqProbeCache.get(`${cid}:${c.message_count ?? 0}`)
+        ?? false;
+      const childReads: LivenessRowReads = {
+        lastMsgRole: c.last_message_role,
+        lastUserMessage: c.last_message_preview || null,
+        auqOpen,
+      };
+      liveness[cid] = deriveLivenessAt(c, maps, childReads, () => false, now);
+    }
+  }
+
   const projection: InboxProjection = {
-    v: 1,
-    as_of: asOf,
+    v: INBOX_PROJECTION_VERSION,
     epoch: now,
     user_id: uid,
     scope: teamScope ? "team" : "mine",
     team_id: teamScope ? teamScope.toString() : null,
     tally,
-    set_digest: inboxDigestDisabled() ? null : digestProjection(pairs),
+    set_digest: inboxDigestDisabled() ? null : digestProjection(entries),
     truncated: truncatedList(truncated),
   };
   return { liveness, projection };
@@ -10750,6 +10855,153 @@ export const reconfigureSession = mutation({
   },
 });
 
+const switchAgentType = v.union(
+  v.literal("claude_code"),
+  v.literal("codex"),
+  v.literal("cursor"),
+  v.literal("gemini"),
+  v.literal("opencode"),
+  v.literal("pi"),
+  v.literal("grok"),
+);
+
+// Stay on THIS conversation: patch agent/model, drop a transcript divider, and
+// (when the live process has to change) kill+reconstitute as the new agent.
+// Forking is a different verb — forkFromMessage with target_agent_type.
+export const switchSessionAgent = mutation({
+  args: {
+    conversation_id: v.optional(v.id("conversations")),
+    session: v.optional(v.string()),
+    agent_type: v.optional(switchAgentType),
+    model: v.optional(v.string()),
+    effort: v.optional(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token
+      ? await getAuthenticatedUserId(ctx, args.api_token)
+      : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    let conv: Doc<"conversations"> | null = null;
+    if (args.conversation_id) {
+      conv = await ctx.db.get(args.conversation_id);
+      if (conv && conv.user_id !== userId && conv.owner_user_id !== userId) {
+        throw new Error("Not authorized");
+      }
+    } else if (args.session) {
+      conv = await resolveCommandableSession(ctx, userId, args.session, "switch");
+    } else {
+      throw new Error("conversation_id or session required");
+    }
+    if (!conv) throw new Error("Not found");
+
+    const prevAgent = conv.agent_type || "claude_code";
+    const nextAgent = args.agent_type || prevAgent;
+    const agentChanged = !!args.agent_type && args.agent_type !== prevAgent;
+    if (!agentChanged && args.model === undefined && args.effort === undefined) {
+      throw new Error("Nothing to switch");
+    }
+
+    const patch: Record<string, any> = { updated_at: Date.now() };
+    if (agentChanged) {
+      patch.agent_type = args.agent_type;
+      patch.model = undefined;
+      patch.effort = undefined;
+    }
+    const launchCfg = AGENT_MODEL_CONFIG[modelAgentKey(nextAgent)];
+    const launchModelOpt = args.model ? findModelOption(nextAgent, args.model) : undefined;
+    if (args.model !== undefined) {
+      if (args.model !== "default" && !launchModelOpt) throw new Error(`Unknown model: ${args.model}`);
+      patch.model = args.model === "default" || !launchModelOpt?.cliAlias
+        ? undefined
+        : (modelAgentKey(nextAgent) === "claude" ? `claude-${launchModelOpt.key}` : launchModelOpt.key);
+    }
+    if (args.effort !== undefined) {
+      if (args.effort === "default") {
+        patch.effort = undefined;
+      } else {
+        if (!launchCfg?.efforts.includes(args.effort)) throw new Error(`Unknown effort: ${args.effort}`);
+        patch.effort = args.effort;
+      }
+    }
+
+    await ctx.db.patch(conv._id, patch);
+    const updated = { ...conv, ...patch } as Doc<"conversations">;
+    const blank = (conv.message_count ?? 0) === 0;
+    const midSession = launchCfg?.midSession === true;
+    const reconstitutes = !blank && (agentChanged || !midSession);
+
+    if (blank) {
+      const daemonAgentType = fromConvexAgentType(nextAgent);
+      const stampedModelKey = args.model !== undefined
+        ? (launchModelOpt?.cliAlias ? launchModelOpt.key : undefined)
+        : undefined;
+      await enqueueStartSession(ctx, conv.user_id, {
+        conversationId: conv._id,
+        agentType: daemonAgentType,
+        projectPath: updated.project_path || updated.git_root,
+        gitRoot: updated.git_root,
+        sessionId: updated.session_id,
+        ...(stampedModelKey ? { model: stampedModelKey } : {}),
+        ...(updated.effort && launchCfg?.efforts.includes(updated.effort) ? { effort: updated.effort } : {}),
+      });
+      return { ...sessionCommandResult(updated), switched: true, blank: true, reconstituted: false };
+    }
+
+    if (reconstitutes) {
+      const notice = formatAgentSwitchNotice({
+        toAgent: nextAgent,
+        fromAgent: prevAgent,
+        toModel: args.model ?? (agentChanged ? undefined : conv.model),
+        fromModel: agentChanged ? conv.model : (args.model !== undefined ? conv.model : undefined),
+      });
+      await ctx.db.insert("messages", {
+        conversation_id: conv._id,
+        role: "user",
+        content: notice,
+        subtype: "agent_switch",
+        message_uuid: crypto.randomUUID(),
+        timestamp: Date.now(),
+      });
+      await ctx.db.patch(conv._id, {
+        message_count: (conv.message_count ?? 0) + 1,
+        last_message_role: "user",
+        updated_at: Date.now(),
+      });
+      if (!updated.session_id) throw new Error("No session to switch");
+      await enqueueKillAndResume(ctx, conv.user_id, updated, {
+        forceReconstitute: true,
+        switchAgent: true,
+      });
+      return { ...sessionCommandResult(updated), switched: true, reconstituted: true };
+    }
+
+    // Same-provider live rail: stamp the row, then inject `/model` / `/effort`
+    // so the running agent applies it. The slash echo is the divider.
+    const liveCommands: string[] = [];
+    if (args.model !== undefined) {
+      const alias = args.model === "default" ? "default" : launchModelOpt?.cliAlias;
+      if (alias) liveCommands.push(`/model ${alias}`);
+    }
+    if (args.effort !== undefined && args.effort !== "default") {
+      liveCommands.push(`/effort ${args.effort}`);
+    }
+    for (const content of liveCommands) {
+      await enqueuePendingMessage(ctx, updated, userId, {
+        content,
+        client_id: `switch-${crypto.randomUUID()}`,
+      });
+    }
+    return {
+      ...sessionCommandResult(updated),
+      switched: true,
+      reconstituted: false,
+      live_commands: liveCommands,
+    };
+  },
+});
+
 export const linkSessions = mutation({
   args: {
     parent_conversation_id: v.id("conversations"),
@@ -11564,7 +11816,7 @@ export async function enqueueKillAndResume(
   ctx: MutationCtx,
   userId: Id<"users">,
   conv: { _id: Id<"conversations">; session_id?: string; project_path?: string; git_root?: string; agent_type?: string },
-  opts: { forceReconstitute?: boolean } = {},
+  opts: { forceReconstitute?: boolean; switchAgent?: boolean } = {},
 ) {
   const now = Date.now();
   const pendingCommands = await ctx.db
@@ -11597,6 +11849,7 @@ export async function enqueueKillAndResume(
       project_path: conv.project_path ?? conv.git_root,
       agent_type: fromConvexAgentType(conv.agent_type),
       ...(opts.forceReconstitute ? { force_reconstitute: true } : {}),
+      ...(opts.switchAgent ? { switch_agent: true, force_reconstitute: true } : {}),
     }),
     created_at: now + 1,
   });
@@ -11805,47 +12058,6 @@ export const switchSessionProject = mutation({
       agentType: daemonAgentType,
       projectPath: args.project_path,
       gitRoot: args.project_path,
-      createdAt: now + 1,
-    });
-  },
-});
-
-export const switchSessionAgent = mutation({
-  args: {
-    conversation_id: v.id("conversations"),
-    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini"), v.literal("opencode"), v.literal("pi"), v.literal("grok")),
-  },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-
-    // Kill + relaunch routed under the runner's account so the session stays
-    // on the machine that runs it.
-    const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
-
-    await ctx.db.patch(args.conversation_id, { agent_type: args.agent_type });
-
-    if (conv.status !== "active") {
-      return;
-    }
-
-    const now = Date.now();
-    // fromConvexAgentType maps each client to its daemon spelling (claude_code ->
-    // claude; codex/cursor/gemini/opencode/pi pass through) and cowork -> claude.
-    const daemonAgentType = fromConvexAgentType(args.agent_type);
-
-    await ctx.db.insert("daemon_commands", {
-      user_id: conv.user_id,
-      command: "kill_session",
-      args: JSON.stringify({ conversation_id: args.conversation_id }),
-      created_at: now,
-    });
-
-    await enqueueStartSession(ctx, conv.user_id, {
-      conversationId: args.conversation_id,
-      agentType: daemonAgentType,
-      projectPath: conv.project_path || conv.git_root,
-      gitRoot: conv.git_root,
       createdAt: now + 1,
     });
   },

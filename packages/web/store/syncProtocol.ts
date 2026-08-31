@@ -33,13 +33,18 @@ export function applySyncTable<T extends { _id: string }>(
   prev?: Record<string, T>,
   opts?: {
     isDelta?: boolean;
-    ignoreFields?: string[];
-    preserveFields?: string[];
+    ignoreFields?: readonly string[];
+    // Readonly on purpose: the sessions preserve list derives from the shared
+    // INBOX_FACT_FIELDS `as const` tuple. The engine only iterates the list,
+    // so the cast below is sound.
+    preserveFields?: readonly string[];
     pruneAbsentScope?: (record: T) => boolean;
   },
 ): { table: Record<string, T>; pending: Record<string, PendingEntry> } {
   return engineApplySyncTable(tableName, incoming, pending, prev, {
     ...opts,
+    ignoreFields: opts?.ignoreFields as string[] | undefined,
+    preserveFields: opts?.preserveFields as string[] | undefined,
     optionalClearFields: OPTIONAL_INBOX_TIMESTAMPS,
   });
 }

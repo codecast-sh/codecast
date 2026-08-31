@@ -72,11 +72,19 @@ export function isChatWakePrompt(rawContent: string | null | undefined): boolean
   return !!rawContent && CHAT_WAKE_HEADER.test(stripInjectionNoise(rawContent));
 }
 
+// A harness <task-notification> — a background task / Monitor / Workflow
+// completion the harness injected as a user turn. Keys off the opening tag
+// only, same truncated-preview rule as isSessionMessage.
+export function isTaskNotificationMessage(rawContent: string | null | undefined): boolean {
+  return !!rawContent && rawContent.trim().startsWith("<task-notification>");
+}
+
 // Any user-role message delivered by machinery rather than typed by the human:
 // a cross-session `cast send` message, an inter-agent teammate broadcast, a
-// scheduled-task injection, or a team-chat mention waking the anchor.
+// scheduled-task injection, a harness task notification, or a team-chat
+// mention waking the anchor.
 export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
-  return isSessionMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isChatWakePrompt(rawContent);
+  return isSessionMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent);
 }
 
 // --- Decision answers (cast decide) ------------------------------------------------
@@ -101,6 +109,23 @@ export interface DecisionAnswerMessage {
   answer: string;
 }
 
+// Among a conversation's answered decision rows, the one a legacy answer
+// bubble (id unknown on the wire) most plausibly answered: the recorded
+// answer — the chosen option's label, or the free text — matches, and the
+// resolution time sits nearest the message. Shared by the server lookup
+// (sessionDecisions.findByAnswer) and the web store scan so both resolve
+// the same row.
+export function pickAnsweredDecision<
+  T extends { options: { label: string }[]; answer_index?: number; answer_text?: string; resolved_at?: number; created_at: number },
+>(rows: T[], answer: string, near?: number): T | null {
+  const recorded = (r: T) => (r.answer_index !== undefined ? r.options[r.answer_index]?.label : r.answer_text);
+  const matches = rows.filter((r) => recorded(r) === answer);
+  if (matches.length === 0) return null;
+  if (near === undefined) return matches[matches.length - 1];
+  const distance = (r: T) => Math.abs((r.resolved_at ?? r.created_at) - near);
+  return matches.reduce((best, r) => (distance(r) < distance(best) ? r : best));
+}
+
 function escapeTagAttr(s: string): string {
   return s
     .replace(/&/g, "&amp;")
@@ -122,7 +147,15 @@ export function parseDecisionAnswer(rawContent: string | null | undefined): Deci
   if (!rawContent) return null;
   const text = stripInjectionNoise(rawContent);
   const match = text.match(DECISION_ANSWER_TAG_RE);
-  if (!match) return null;
+  if (!match) {
+    // Answers sent before the tag shipped were the first line alone: the
+    // message is exactly "Decision: <chosen label>". Those transcripts are
+    // immutable, so recognize the shape here — id unknown, and single-line
+    // only, so a typed message that merely opens with the word stays a
+    // normal message. Surfaces resolve the row by conversation + label.
+    const legacy = text.trim().match(/^Decision:[ \t]+(\S[^\n]*)$/);
+    return legacy ? { id: "", answer: legacy[1].trim() } : null;
+  }
   const answer = text.replace(DECISION_ANSWER_TAG_RE, "").trim().replace(/^Decision:\s*/, "");
   return {
     id: match[1],
