@@ -13,7 +13,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppTab } from "../../store/inboxStore";
 import {
+  findLeaf,
   predictDrop,
+  removeLeaf,
   resolveDropZone,
   stageGeometry,
   type DropZone,
@@ -33,7 +35,10 @@ type Hover = {
   key: string;
   zone: DropZone;
   geometry: StageGeometry;
-  newLeafId: string;
+  /** Null while hovering a dragged pane's own center: the veil stays up (no
+   *  blink as the pointer crosses it) but nothing is highlighted — the drop
+   *  would be a no-op. */
+  newLeafId: string | null;
   title: string | null;
 };
 
@@ -67,15 +72,19 @@ export function StageDropLayer({
 
   // A drag that ends anywhere (dropped elsewhere, cancelled with Esc) leaves
   // no dragleave behind for us; the window-level end is the reliable signal.
+  // Registered for the whole time the layer is live, not only while a hover
+  // is showing — a drag cancelled while the hover was suppressed (its own
+  // pane's area) must still reset the depth counter, or the NEXT drag's veil
+  // wedges on.
   useEffect(() => {
-    if (!hover) return;
+    if (!enabled) return;
     window.addEventListener("dragend", clear);
     window.addEventListener("drop", clear);
     return () => {
       window.removeEventListener("dragend", clear);
       window.removeEventListener("drop", clear);
     };
-  }, [hover, clear]);
+  }, [enabled, clear]);
 
   const onDragEnter = useCallback(
     (e: React.DragEvent) => {
@@ -103,17 +112,31 @@ export function StageDropLayer({
       if (!zone) { setHover(null); return; }
       const payload = activePaneDrag();
       const path = payload?.path ?? "/__incoming";
-      // A dragged pane hovering its own center: nothing would change.
-      if (zone.kind === "center" && payload?.from?.kind === "leaf" && payload.from.leafId === zone.leafId) {
-        setHover(null);
+      // A MOVE of one of this stage's own panes predicts against the tree
+      // WITHOUT the moving pane: the preview then shows exactly the layout
+      // the drop produces (never the pane in both places), and the pane cap
+      // doesn't count the slot the move frees up.
+      const movingLeafId =
+        payload?.from?.kind === "leaf" && findLeaf(root, payload.from.leafId) ? payload.from.leafId : null;
+      // Any zone on the moving pane itself — its center OR its edges — is a
+      // no-op: a pane can't drop into itself. The veil holds steady (no
+      // target, no blink) so the gesture reads as "not here", not "nothing".
+      if (movingLeafId && "leafId" in zone && zone.leafId === movingLeafId) {
+        const key = `self:${movingLeafId}`;
+        setHover((prev) =>
+          prev && prev.key === key
+            ? prev
+            : { key, zone, geometry: geo, newLeafId: null, title: null },
+        );
         return;
       }
-      let predicted = predictDrop(root, zone, path);
+      const predictionRoot = movingLeafId ? (removeLeaf(root, movingLeafId) ?? root) : root;
+      let predicted = predictDrop(predictionRoot, zone, path);
       // At the pane cap an edge can't split; degrade to "open here" so the
       // gesture still means something instead of going dead.
       if (!predicted && zone.kind === "edge") {
         zone = { kind: "center", leafId: zone.leafId };
-        predicted = predictDrop(root, zone, path);
+        predicted = predictDrop(predictionRoot, zone, path);
       }
       if (!predicted) { setHover(null); return; }
       const key = JSON.stringify(zone);
@@ -137,7 +160,7 @@ export function StageDropLayer({
       const h = hover;
       clear();
       const payload = readPaneDrop(dt);
-      if (!payload || !h) return;
+      if (!payload || !h || h.newLeafId === null) return;
       performStageDrop(h.zone, payload);
     },
     [enabled, hover, clear],

@@ -174,8 +174,8 @@ describe("which surface the dock shows", () => {
   const seated = { roomKey: ROOM, phase: "connected" };
   const huddle = { roomKey: "channel:elsewhere", phase: "connected" };
   const gone = { roomKey: null, phase: "idle" };
-  const surface = (status: any, call: any, expanded = false) =>
-    callDockSurface(status as any, call, { expanded });
+  const surface = (status: any, call: any, expanded = false, video = false) =>
+    callDockSurface(status as any, call, { expanded, video });
 
   test("a burst and a listen both draw the strip, and nothing local outranks them", () => {
     // The regression itself: nothing about the burst differs between these two
@@ -195,24 +195,25 @@ describe("which surface the dock shows", () => {
     expect(surface(held("listen"), { ...seated, muted: false })).toBe("walkie");
   });
 
-  test("somebody stepping in on purpose hands the room to the call dock", () => {
-    // The founder's rule stated exactly: a hold stays a strip until somebody
-    // explicitly joins. Unmuting is NOT that signal and must never be read as
-    // one — auto-listen opens every listener's microphone, so the mute says who
-    // can be heard and nothing about whether a conversation started (ct-46032).
-    expect(surface(held("call"), seated)).toBe("dock");
+  test("somebody stepping in on purpose keeps the walkie's shape while the room is voice", () => {
+    // The founder's rule, restated for the fill-to-lock era: a walkie exchange
+    // LOOKS LIKE FACES for as long as it is voices — the latch and Join live
+    // both land on a circles card with Mute and End, not a video card for a
+    // conversation with no video in it. Unmuting is still not a join signal
+    // (ct-46032); and video or an expand still earns the room the real dock.
+    expect(surface(held("call"), seated)).toBe("walkie");
     expect(surface(held("call"), seated, true)).toBe("stage");
+    expect(surface(held("call"), seated, false, true)).toBe("dock");
   });
 
-  test("a burst spoken inside a live call leaves that call its own dock", () => {
-    // The room keys match exactly when the answer must be no: a 1:1 call lives
-    // in the same dm: room a burst to that person is spoken into. Taking the
-    // dock here would strip a call in progress of its hang-up, mute, camera and
-    // lock for the length of a sentence. The engine answers it by giving a room
-    // it finds itself ALREADY SEATED IN the mode `call`, so there is no
-    // separate guest ruling to keep in step with this one.
-    expect(surface(held("call"), seated)).toBe("dock");
-    expect(surface(held("call"), seated, true)).toBe("stage");
+  test("a burst spoken inside a call with video leaves that call its own dock", () => {
+    // The room keys match exactly when the video answer must hold: a 1:1 call
+    // with a camera up lives in the same dm: room a burst to that person is
+    // spoken into, and taking the dock away would strip it of its camera and
+    // lock for the length of a sentence. A voice-only call keeps the walkie
+    // card instead, which now carries its own hang-up and mute.
+    expect(surface(held("call"), seated, false, true)).toBe("dock");
+    expect(surface(held("call"), seated, true, true)).toBe("stage");
   });
 
   test("the room is read off the key it names, never a stale one", () => {
@@ -527,8 +528,9 @@ describe("walkieKeyName", () => {
   test("names each of the three moments of a hold", () => {
     expect(walkieKeyName("opening", {})).toBe("Opening the mic — do not talk yet");
     expect(walkieKeyName("live", { live: false })).toBe("Recording — they get it when you let go");
-    expect(walkieKeyName("live", { live: true })).toBe("Live — they hear you now, release to send");
+    expect(walkieKeyName("live", { live: true })).toBe("Live — they hear you now, keep holding to stay on");
     expect(walkieKeyName("dropped", {})).toBe("Nobody is hearing this — still recording");
+    expect(walkieKeyName("locked", {})).toBe("You are live, hands free — End stops it");
   });
 
   test("names the person when idle, instead of twenty identical controls", () => {

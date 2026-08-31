@@ -18,6 +18,9 @@ export type InboxViewSnapshot = {
   // Whether the active chip was in exclude mode ("everything but this").
   // Optional: entries pushed before this field existed restore as include.
   exclude?: boolean;
+  // Shift-added label terms beyond the head chip (store extraBucketFilters),
+  // each with its own polarity. Optional: older entries restore as none.
+  extras?: Array<{ id: string; exclude: boolean }>;
   mode: "grouped" | "recent" | "time" | "bucket";
 };
 
@@ -36,8 +39,18 @@ export function withApplyingViewHistory(fn: () => void) {
   }
 }
 
+// Elementwise: the extras list is ordered (click order), so order counts.
+export function sameBucketExtras(
+  a?: Array<{ id: string; exclude: boolean }>,
+  b?: Array<{ id: string; exclude: boolean }>,
+): boolean {
+  const la = a ?? [], lb = b ?? [];
+  return la.length === lb.length && la.every((t, i) => t.id === lb[i].id && !!t.exclude === !!lb[i].exclude);
+}
+
 export function sameInboxView(a: InboxViewSnapshot, b: InboxViewSnapshot): boolean {
-  return a.bucket === b.bucket && a.project === b.project && !!a.exclude === !!b.exclude && a.mode === b.mode;
+  return a.bucket === b.bucket && a.project === b.project && !!a.exclude === !!b.exclude &&
+    sameBucketExtras(a.extras, b.extras) && a.mode === b.mode;
 }
 
 // Push a traversable entry for a view-settings change. The CURRENT entry is

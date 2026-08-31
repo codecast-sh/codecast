@@ -45,11 +45,14 @@ export function useFleetSummaries(): Map<string, FleetSummary> {
     (st: any) => fleetSessionsWakeSig(st.sessions),
     (st: any) => st.sessionsWithQueuedMessages,
     (st: any) => pendingSendWakeSig(st.pendingMessages),
-    (st: any) => st.liveInboxIds,
     (st: any) => st.teamInboxIds,
+    // Scalar, never the churny row: the viewer id parameterizes the
+    // foreign-row rule in fleetCountedSessions.
+    (st: any) => (st.currentUser?._id ? String(st.currentUser._id) : ""),
   ]);
   const sessionsSig = fleetSessionsWakeSig(s.sessions);
   const pendingSig = pendingSendWakeSig(s.pendingMessages);
+  const viewerId = s.currentUser?._id ? String(s.currentUser._id) : null;
   return useMemo(() => {
     // The signatures are the real deps; the raw collections are read fresh here.
     const st = useInboxStore.getState();
@@ -60,14 +63,14 @@ export function useFleetSummaries(): Map<string, FleetSummary> {
     };
     const counted = fleetCountedSessions(st.sessions ?? {}, {
       ...opts,
-      liveInboxIds: st.liveInboxIds,
       teamInboxIds: st.teamInboxIds,
+      meId: viewerId,
       currentSessionId: st.currentSessionId,
       reviveRequestedAt: st.blockedReviveRequestedAt,
     });
     return fleetSummariesByMember(counted, opts);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the signatures stand in for the churny collections
-  }, [sessionsSig, pendingSig, s.sessionsWithQueuedMessages, s.liveInboxIds, s.teamInboxIds, now]);
+  }, [sessionsSig, pendingSig, s.sessionsWithQueuedMessages, s.teamInboxIds, viewerId, now]);
 }
 
 export interface MemberActivity {

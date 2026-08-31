@@ -259,6 +259,10 @@ export type DesktopWindowRole = {
   anyInCall: boolean;
   peopleWindow: boolean;
   callPanel: boolean;
+  /** The faces overlay window exists (it may be yielding to a call). The
+   *  people window's toggle draws this, so a close from the overlay's own
+   *  chrome — or from another window — is reflected everywhere. */
+  facesOverlay: boolean;
 };
 
 export type DesktopDisplaySource = {
@@ -880,6 +884,7 @@ let windowRole: DesktopWindowRole = {
   anyInCall: false,
   peopleWindow: false,
   callPanel: false,
+  facesOverlay: false,
 };
 let windowRoleTracked = false;
 
@@ -917,6 +922,7 @@ export function installWindowRoleTracker(): void {
       anyInCall: !!role.anyInCall,
       peopleWindow: !!role.peopleWindow,
       callPanel: !!role.callPanel,
+      facesOverlay: !!role.facesOverlay,
     };
     for (const cb of windowRoleWatchers) cb();
   });

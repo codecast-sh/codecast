@@ -13,35 +13,13 @@ export { classifyWorkState, DEAD_AGENT_STATUSES, type WorkStateInput } from "@co
 
 export type ConversationDoc = Doc<"conversations">;
 
-export const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"] as const;
-
-export function isNoiseTitle(title: string | undefined): boolean {
-  const t = title?.trim() || "";
-  if (!t) return false;
-  if (t.toLowerCase() === "warmup") return true;
-  return NOISE_TITLE_PREFIXES.some((p) => t.startsWith(p));
-}
-
-export function isOrphanOrSubagent(conv: ConversationDoc): boolean {
-  if (conv.is_subagent === true) return true;
-  if (conv.is_workflow_sub === true) return true;
-  if (conv.parent_conversation_id && !conv.parent_message_uuid) return true;
-  return false;
-}
-
-// `inbox_dismissed_at` is an absolute flag: a truthy value means dismissed until
-// a user action clears it. Never compare it against `updated_at`. See
-// schema.ts for the list of mutations allowed to clear it.
-//
-// Dismissed conversations are still part of the inbox — clients categorize them
-// into a separate bucket via the `inbox_dismissed_at` field on each result.
-export function shouldShowInInbox(conv: ConversationDoc): boolean {
-  if (isOrphanOrSubagent(conv)) return false;
-  if (conv.status === "completed" && conv.message_count === 0) return false;
-  if (isNoiseTitle(conv.title)) return false;
-  if (conv.inbox_killed_at && !conv.inbox_pinned_at) return false;
-  return true;
-}
+// The pure inbox visibility rule (subagent/orphan drop, noise titles, killed
+// unless pinned, completed-and-blank) lives in
+// @codecast/shared/contracts/inboxProjection — ONE implementation serves the
+// server scan and every replica's working-set selection (sync-convergence C4).
+// Re-exported so existing `from "./inboxFilters"` importers keep working.
+export { NOISE_TITLE_PREFIXES, isNoiseTitle, isOrphanOrSubagent, shouldShowInInbox } from "@codecast/shared/contracts";
+import { shouldShowInInbox } from "@codecast/shared/contracts";
 
 // The three DISTINCT ways a session leaves the active inbox. They were reported
 // as a single "dismissed" figure back when kill was an event rather than a
@@ -448,28 +426,11 @@ export function subagentKeepsParentWorking(input: {
   return input.isLive && ACTIVE_AGENT_STATUSES.has(input.agentStatus ?? "");
 }
 
-// The user's "dormant" gesture is a stamp that any later activity silently
-// expires — same contract as inbox_deferred_at: honored while newer than the
-// row's last activity, dead the moment a wake, a message, or a new turn bumps
-// updated_at. No write is needed to un-park; the row simply moves on.
-export function isUserDormant(
-  conv: { inbox_dormant_at?: number | null; updated_at: number },
-): boolean {
-  return !!conv.inbox_dormant_at && conv.inbox_dormant_at >= conv.updated_at;
-}
-
-// The settle classifier writes its verdict AFTER the settle it describes (it
-// runs off the needs-input check, once the row is quiet), so a current verdict
-// is always newer than the row's last activity. The next turn bumps updated_at
-// past it, and the verdict is stale until the next settle re-runs the check —
-// during which the active arms of classifyWorkState win anyway. Same contract
-// as isUserDormant, deliberately: one rule for "does this stamp still describe
-// the row I am looking at".
-export function isSettleVerdictCurrent(
-  conv: { settle_verdict_at?: number | null; updated_at: number },
-): boolean {
-  return !!conv.settle_verdict_at && conv.settle_verdict_at >= conv.updated_at;
-}
+// The stamp-currency rules (the user's dormant gesture, the settle verdict)
+// live in @codecast/shared/contracts/inboxProjection — the shared row placement
+// needs them, and one rule must decide "does this stamp still describe the row"
+// on every surface. Re-exported for existing importers.
+export { isUserDormant, isSettleVerdictCurrent } from "@codecast/shared/contracts";
 
 // Accepted `--state` filter values for CLI discovery, normalized to a canonical
 // token. "pinned" and "live" are orthogonal to work_state (they filter the

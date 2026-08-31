@@ -179,6 +179,42 @@
   50%      { opacity: 1; }
 }
 
+/* THE FILL, on the key itself: the same once-around arc every face draws, over
+ * the same --walkie-lock-ms, riding the ring as a ::before under its mask —
+ * "keep holding and this becomes a call", and when the arc closes, it does.
+ * (The @property registration lives in people.css; one is enough per page.) */
+.walkie-ptt-on .walkie-key-ring::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: conic-gradient(
+    from -90deg,
+    color-mix(in srgb, var(--walkie-tx) 85%, #fff 15%) var(--walkie-fill),
+    transparent 0
+  );
+  animation: walkie-lock-fill var(--walkie-lock-ms, 1200ms) linear forwards;
+}
+
+/* LOCKED: the closed arc, kept. The key comes back up — nothing is being held
+ * — and burns steady: live, hands free, until End. */
+.walkie-ptt-locked {
+  color: var(--sol-bg) !important;
+  background: var(--walkie-tx) !important;
+  border-color: var(--walkie-tx) !important;
+  animation: walkie-locked-breathe 3.2s ease-in-out infinite;
+}
+.walkie-ptt-locked .walkie-key-ring {
+  opacity: 1;
+  background: none;
+  box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--walkie-tx) 85%, transparent);
+}
+
+@keyframes walkie-locked-breathe {
+  0%, 100% { box-shadow: 0 0 10px color-mix(in srgb, var(--walkie-tx) 55%, transparent); }
+  50%      { box-shadow: 0 0 3px color-mix(in srgb, var(--walkie-tx) 30%, transparent); }
+}
+
 /* The room went away under an open mic. It keeps the warm accent — this IS the
  * outgoing direction, and it has not stopped being that — but as an outline
  * with a slash across it rather than a fill: the shape says "going out to
@@ -214,6 +250,9 @@
   /* Rest fully visible: the word beside it already carries the state, and the
      blanket rule in globals.css would otherwise leave it parked at 0.55. */
   .walkie-ptt-opening { animation: none; opacity: 1; }
+  /* The latch still fires on the clock; only the sweep and the breathing go. */
+  .walkie-ptt-on .walkie-key-ring::before { animation: none; background: none; }
+  .walkie-ptt-locked { animation: none; }
   /* The ring stops sweeping and becomes brightness alone. The level is still
      shown, because it is information and not decoration — somebody who has
      asked for less motion still has to be able to tell a live microphone from a
@@ -501,6 +540,123 @@
  * client's own voice going out everywhere else on this surface, and pressing
  * this is exactly that — the microphone already open stops carrying a burst
  * and starts carrying a conversation. */
+/* ── The faces ──────────────────────────────────────────────────────────────
+ *
+ * The circles ARE the conversation now: mine pops in the moment my voice
+ * starts going out, theirs the moment theirs starts coming in (or they step
+ * in), and both together is what a walkie exchange looks like. The pop has
+ * overshoot on purpose — a face appearing over your work is news, and news
+ * lands; it is also the whole of the animation, because these sit beside real
+ * work all day.
+ */
+.walkie-strip-faces {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.walkie-face-pop {
+  animation: walkie-face-pop 320ms cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+
+@keyframes walkie-face-pop {
+  from { transform: scale(0.2); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+
+/* MY circle carries the warm tone — this is my voice going OUT — where the
+ * talker's carries the cool one the shared face style already draws. */
+.walkie-strip-face-tx {
+  position: relative;
+  box-shadow:
+    0 0 0 calc(2px + var(--level) * 3px) color-mix(in srgb, var(--walkie-tx) 70%, transparent),
+    0 0 calc(4px + var(--level) * 18px) color-mix(in srgb, var(--walkie-tx) 40%, transparent);
+}
+
+/* Muted while live: the face dims and wears the fact, so a silent room is
+ * explained by a glance at the corner rather than by doubt. */
+.walkie-strip-face-muted {
+  opacity: 0.6;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sol-text-dim) 55%, transparent);
+}
+.walkie-strip-face-mutebadge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--sol-bg-alt);
+  border: 1px solid var(--sol-border);
+  color: var(--sol-red);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .walkie-face-pop {
+    animation: none;
+  }
+}
+
+/* ── The locked controls ────────────────────────────────────────────────────
+ *
+ * An open microphone with nobody's hand on it: what stops it must never need
+ * looking for. End is the full-weight answer; Mute is the pause beside it.
+ */
+.walkie-strip-end {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 9px;
+  font-size: 14.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--sol-bg);
+  background: var(--sol-red);
+  border: 1px solid var(--sol-red);
+  transition: filter 120ms, transform 90ms;
+}
+.walkie-strip-end:hover {
+  filter: brightness(1.12);
+}
+.walkie-strip-end:active {
+  transform: scale(0.99);
+}
+
+.walkie-strip-mute {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 9px;
+  font-size: 14.5px;
+  white-space: nowrap;
+  color: var(--sol-text-muted);
+  background: var(--sol-bg-highlight);
+  border: 1px solid transparent;
+  transition: filter 120ms;
+}
+.walkie-strip-mute:hover {
+  filter: brightness(1.15);
+}
+.walkie-strip-mute-on {
+  color: var(--sol-red);
+  border-color: color-mix(in srgb, var(--sol-red) 45%, transparent);
+}
+
+/* Locked, the card's own edge burns warm and steady — the state must read
+ * from across the room, not only from the buttons. */
+.walkie-strip-locked {
+  border-color: color-mix(in srgb, var(--walkie-tx) 65%, transparent);
+}
+
 .walkie-strip-join {
   display: inline-flex;
   align-items: center;
