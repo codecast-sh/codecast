@@ -114,3 +114,12 @@ export type {
 } from "./types";
 
 export { rowsToCamel, patchesToSnake } from "./case";
+export {
+  extractReplicationUpdates,
+  snapshotEntries,
+  createFollowerInbox,
+  type ReplicationUpdate,
+  type ReplicationMessage,
+  type FollowerInbox,
+  type FollowerInboxResult,
+} from "./replication";

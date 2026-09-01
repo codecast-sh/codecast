@@ -270,5 +270,6 @@ export type PlatformStoreInternals = {
   _clearRuntimeBindings: () => void;
   _setDispatchError: (fn: (action: string, error: unknown, args?: unknown) => void) => void;
   _setStorageHealth: (fn: ((healthy: boolean, elapsedMs: number) => void) | null) => void;
+  _setActionTee: (fn: ((actionName: string, patches: any[], state: any) => void) | null) => void;
   _dispatch: (action: string, args: any, patches?: any, result?: any) => Promise<any>;
 };
