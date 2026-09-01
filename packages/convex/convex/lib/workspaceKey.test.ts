@@ -37,6 +37,11 @@ const OTHER_TEAM = "t_other";
 function fixture(rows: Record<string, any[]> = {}) {
   return makeFakeDb({
     users: [{ _id: OWNER }, { _id: MATE }, { _id: OUTSIDER }],
+    // Both teams are LIVE. Access rules read a team row before they treat a
+    // team reference as a boundary (a deleted team is dangling data, not a
+    // denial), and this fake db answers get() by scanning the seeded tables —
+    // so an unseeded `teams` would make every team here look deleted.
+    teams: [{ _id: TEAM }, { _id: OTHER_TEAM }],
     team_memberships: [
       { _id: "m1", user_id: OWNER, team_id: TEAM, role: "member", visibility: "full" },
       { _id: "m2", user_id: MATE, team_id: TEAM, role: "member", visibility: "full" },

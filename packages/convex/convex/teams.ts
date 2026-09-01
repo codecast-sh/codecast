@@ -1119,6 +1119,13 @@ export const cleanupTestTeams = internalMutation({
       for (const m of memberships) {
         affectedUsers.add(m.user_id.toString());
         await ctx.db.delete(m._id);
+        // A member's directory mappings to this team would otherwise outlive
+        // it and keep stamping new conversations with a dead team_id.
+        const mappings = await ctx.db
+          .query("directory_team_mappings")
+          .withIndex("by_user_team", (q) => q.eq("user_id", m.user_id).eq("team_id", teamId))
+          .collect();
+        for (const dm of mappings) await ctx.db.delete(dm._id);
       }
       await ctx.db.delete(teamId);
       deleted.push(team.name);
