@@ -9,7 +9,7 @@ import { useRouter } from "next/navigation";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
 import { SessionMenuItems } from "./menus/ObjectContextMenus";
-import { copyToClipboard, formatRelative, formatDateFull } from "../lib/utils";
+import { copyToClipboard, formatRelative, formatDateFull, formatShortDate } from "../lib/utils";
 import { ImageLightbox } from "./ImageGallery";
 import { SessionErrorBanner, SessionResumeBanner } from "./SessionErrorBanner";
 import { AppLoader } from "./AppLoader";
@@ -3183,6 +3183,10 @@ function NeedsAttentionSection() {
 // touched in over a month, offer to bulk-dismiss them out of the working set.
 const STALE_SESSION_MS = 30 * 24 * 60 * 60 * 1000;
 const STALE_PROMPT_THRESHOLD = 10;
+// "Not now" rests the prompt for this long — persisted in client UI prefs so it
+// survives reloads and follows the user across devices instead of resurfacing
+// every time the panel mounts.
+const STALE_PROMPT_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
 // Stable empty list so the favorites memo keeps a constant ref when not in the
 // favorites view (a fresh [] each render would defeat downstream memoization).
 const EMPTY_FAVORITES: InboxSession[] = [];
@@ -3749,17 +3753,30 @@ function SessionListPanelImpl({
   // on purpose: subagents nested under a parent are held out of those buckets,
   // but dismissing their parent promotes them to top-level, so they must be in
   // the dismiss set too or they refill the inbox after a sweep.
+  // Sorted newest-first so the borderline ones (the sessions most worth a
+  // second look before a sweep) lead the review list.
+  const staleCutoff = coarseNow - STALE_SESSION_MS;
   const staleSessions = useMemo(() => {
-    const cutoff = Date.now() - STALE_SESSION_MS;
-    return (Object.values(s.sessions) as InboxSession[]).filter(
-      (sess) =>
-        !isSessionHidden(sess) &&
-        !sess.is_pinned &&
-        sess._id !== activeSessionId &&
-        (sess.updated_at ?? 0) < cutoff,
-    );
-  }, [s.sessions, activeSessionId]);
-  const [stalePromptSnoozed, setStalePromptSnoozed] = useState(false);
+    return (Object.values(s.sessions) as InboxSession[])
+      .filter(
+        (sess) =>
+          !isSessionHidden(sess) &&
+          !sess.is_pinned &&
+          sess._id !== activeSessionId &&
+          (sess.updated_at ?? 0) < staleCutoff,
+      )
+      .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+  }, [s.sessions, activeSessionId, staleCutoff]);
+  // The snooze is a persisted pref, not component state: a "Not now" used to
+  // evaporate on every reload, so the prompt kept coming back.
+  const stalePromptSnoozedAt = s.clientState.ui?.inbox_stale_prompt_snoozed_at ?? 0;
+  const stalePromptSnoozed = coarseNow - stalePromptSnoozedAt < STALE_PROMPT_SNOOZE_MS;
+  const snoozeStalePrompt = useCallback(() => {
+    useInboxStore.getState().updateClientUI({ inbox_stale_prompt_snoozed_at: Date.now() });
+  }, []);
+  // "Show them" — expands the list of sessions the sweep would dismiss, as
+  // ordinary cards, so the count is never a mystery number.
+  const [staleListOpen, setStaleListOpen] = useState(false);
   const [dismissingStale, setDismissingStale] = useState(false);
   const dismissStaleMutation = useMutation(api.conversations.dismissStaleInboxSessions);
   const showStalePrompt = staleSessions.length > STALE_PROMPT_THRESHOLD && !stalePromptSnoozed;
@@ -3824,7 +3841,8 @@ function SessionListPanelImpl({
     // Instant, optimistic local dismiss (sync — no per-row dispatch storm). This
     // is the durable, user-visible clear; it persists to IDB on its own.
     useInboxStore.getState().markSessionsDismissed(ids);
-    setStalePromptSnoozed(true);
+    snoozeStalePrompt();
+    setStaleListOpen(false);
     setDismissingStale(true);
     try {
       // Fire-once: schedules a background drainer that persists the dismissal
@@ -3837,7 +3855,7 @@ function SessionListPanelImpl({
       setDismissingStale(false);
       toast.success(`Dismissed ${count} old session${count === 1 ? "" : "s"} — still searchable anytime`);
     }
-  }, [staleSessions, dismissStaleMutation]);
+  }, [staleSessions, dismissStaleMutation, snoozeStalePrompt]);
 
   const [expandedSubSessions, setExpandedSubSessions] = useState<Record<string, boolean>>({});
   // Cap how many rows each section renders. A section like "Needs Input" can
@@ -4773,18 +4791,19 @@ function SessionListPanelImpl({
           fresh={blockedIncidentTs > 0}
         />
         {showStalePrompt && (
-          <div className="m-2 rounded-md border border-sol-yellow/30 bg-sol-yellow/[0.06] px-3 py-2.5">
+          <div className="m-2 rounded-md border border-sol-yellow/30 bg-sol-yellow/[0.06]">
+            <div className="px-3 py-2.5">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <div className="text-xs font-semibold text-sol-text">Clear out your working set?</div>
                 <div className="mt-0.5 text-[11px] leading-snug text-sol-text-muted">
-                  You have <span className="font-semibold text-sol-yellow">{staleSessions.length}</span> sessions
-                  with no activity in over a month. Dismiss them to focus your inbox — they stay searchable and
-                  accessible anytime.
+                  <span className="font-semibold text-sol-yellow">{staleSessions.length}</span> sessions have had
+                  no activity since {formatShortDate(staleCutoff)}. Dismissing them clears the inbox; they stay
+                  searchable and open by link. Pinned sessions are kept.
                 </div>
               </div>
               <button
-                onClick={() => setStalePromptSnoozed(true)}
+                onClick={snoozeStalePrompt}
                 className="shrink-0 rounded p-0.5 text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text"
                 title="Not now"
                 aria-label="Dismiss this prompt"
@@ -4792,21 +4811,39 @@ function SessionListPanelImpl({
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-            <div className="mt-2 flex items-center gap-2">
+            <div className="mt-2 flex items-center gap-3">
+              <button
+                onClick={() => setStaleListOpen((v) => !v)}
+                className="flex items-center gap-1 text-[11px] font-semibold text-sol-yellow transition-colors hover:text-sol-yellow/80"
+                aria-expanded={staleListOpen}
+              >
+                <ChevronRight className={`h-3 w-3 transition-transform ${staleListOpen ? "rotate-90" : ""}`} />
+                {staleListOpen ? "Hide them" : "Show them"}
+              </button>
               <button
                 onClick={handleDismissStale}
                 disabled={dismissingStale}
                 className="rounded bg-sol-yellow/15 px-2.5 py-1 text-[11px] font-semibold text-sol-yellow transition-colors hover:bg-sol-yellow/25 disabled:opacity-60"
               >
-                {dismissingStale ? "Dismissing…" : `Dismiss ${staleSessions.length} old sessions`}
+                {dismissingStale ? "Dismissing…" : `Dismiss all ${staleSessions.length}`}
               </button>
               <button
-                onClick={() => setStalePromptSnoozed(true)}
+                onClick={snoozeStalePrompt}
                 className="text-[11px] text-sol-text-dim transition-colors hover:text-sol-text"
               >
                 Not now
               </button>
             </div>
+            </div>
+            {/* The review list: the exact dismiss set, rendered as the same cards
+                as the rest of the inbox (flat, so a nested subagent that would be
+                dismissed shows as its own row). Each card's idle age says how
+                long it has sat; pin a card to hold it out of the sweep. */}
+            {staleListOpen && (
+              <div className="border-t border-sol-yellow/20">
+                {renderSection("Would be dismissed", staleSessions, "text-sol-yellow", undefined, true, { key: "stale_review" })}
+              </div>
+            )}
           </div>
         )}
         {flatView ? (
