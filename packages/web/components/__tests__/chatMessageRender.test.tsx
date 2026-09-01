@@ -38,14 +38,18 @@ describe("ChatMessage", () => {
             id: "u1",
             name: "C3 attrition carve-out decision",
             isAgent: true,
-            session: { id: "session-native-id", agentType: "claude_code", via: "Ashot Petrosian" },
+            session: {
+              id: "jx7c12zp5w6xg1z6evdbyvkezs8dadbn",
+              agentType: "claude_code",
+              via: "Ashot Petrosian",
+            },
           },
         })}
         channelId={CHANNEL}
         now={Date.now()}
       />,
     );
-    expect(html).toContain('href="/conversation/session-native-id"');
+    expect(html).toContain('href="/conversation/jx7c12zp5w6xg1z6evdbyvkezs8dadbn"');
     expect(html).toContain('title="Open session"');
     expect(html).toContain("C3 attrition carve-out decision");
     expect(html).toContain("via Ashot Petrosian");
