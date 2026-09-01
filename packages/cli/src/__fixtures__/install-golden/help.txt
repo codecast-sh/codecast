@@ -8,7 +8,7 @@ just that one (non-interactive). Add --disable to turn a snippet off.
 Snippets:
   memory        Cross-session recall (cast search / context / feed)
   messaging     Session-to-session messages (cast send)
-  forks         Branch or spawn sessions into the inbox
+  forks         Branch or spawn sessions into the inbox, or run a harness in print mode
   tasks         Work tracking for agents (cast task / plan)
   triggers      Delayed, recurring, and event-driven agent runs (cast trigger)
   workflows     Execution graphs with approval gates (cast workflow)

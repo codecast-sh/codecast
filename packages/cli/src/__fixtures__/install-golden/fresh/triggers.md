@@ -32,6 +32,8 @@ cast trigger complete tr-42 --summary "what was done"
 # Manage triggers
 cast trigger ls                       # list active triggers
 cast trigger ls --all                 # include completed/failed
+cast trigger update tr-42 --every 8h  # edit in place (--prompt/--title/--in/--every/--on); versioned + audited
+cast trigger history tr-42            # edit history: every version, who changed what, from where
 cast trigger pause tr-42              # pause a trigger
 cast trigger run tr-42                # fire immediately
 cast trigger cancel tr-42             # cancel a trigger
