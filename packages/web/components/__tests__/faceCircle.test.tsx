@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { FaceCircle } from "../calls/FaceCircle";
-import { TIER_DIAMETER, type FacePerson } from "../../lib/calls/faceCrop";
+import { CHROME_BUTTON, CHROME_BUTTON_W, TIER_DIAMETER, type FacePerson } from "../../lib/calls/faceCrop";
 
 // The circles are the call as most people will see it most of the time: a face
 // floating over their work. What makes that read as a person rather than as a
@@ -160,9 +160,18 @@ describe("the hover chrome", () => {
     expect(rule(".faces-window")["justify-content"]).toBe("flex-start");
   });
 
-  test("has 28px buttons", () => {
-    expect(rule(".faces-btn").width).toBe("28px");
-    expect(rule(".faces-btn").height).toBe("28px");
+  // The shell sizes the window from these constants BEFORE the chrome is
+  // drawn, so a stylesheet that disagrees with them clips the buttons.
+  test("its buttons are exactly the size the window is sized for", () => {
+    expect(rule(".faces-btn").width).toBe(`${CHROME_BUTTON_W}px`);
+    expect(rule(".faces-btn").height).toBe(`${CHROME_BUTTON}px`);
+  });
+
+  test("and every button carries its word, not just an icon", () => {
+    // A circle floating over somebody's work has nowhere else to say what a
+    // button does, so the word is part of the button rather than a tooltip.
+    expect(rule(".faces-btn-word")["font-size"]).toBeDefined();
+    expect(rule(".faces-btn-word")["white-space"]).toBe("nowrap");
   });
 });
 

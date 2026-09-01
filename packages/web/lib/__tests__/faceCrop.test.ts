@@ -335,8 +335,9 @@ describe("facesWindowSize", () => {
     const idle = facesWindowSize("everyone", 3);
     const hovered = facesWindowSize("everyone", 3, { hovered: true });
     expect(hovered.height - idle.height).toBe(HOVER_ROWS);
-    // Three 64px faces are already wider than the chrome, so the width holds.
-    expect(hovered.width).toBe(idle.width);
+    // The chrome carries words now, so it is wider than three 64px faces:
+    // the window widens to hold it, and never past what it needs.
+    expect(hovered.width).toBe(Math.max(idle.width, CHROME_WIDTH + FACES_PADDING * 2));
   });
 
   it("widens too, but only where the chrome would be clipped", () => {
