@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { cleanPromptSliceTitle, groupSessionsByTrigger, isTriggerFailing, latestLoadedTriggerMessage, partitionTriggerInbox, taskDisplayTitle, type TaskRow } from "./triggerTasks";
-import { isSessionHardBlocked, visualOrderSessions, type InboxSession } from "../store/inboxStore";
+import { isSessionHardBlocked, type InboxSession } from "../store/inboxStore";
+import { orderSections } from "../store/__tests__/placeTestHarness";
 
 describe("taskDisplayTitle / cleanPromptSliceTitle", () => {
   it("prefers the haiku display_title", () => {
@@ -309,33 +310,35 @@ describe("isSessionHardBlocked", () => {
   });
 });
 
-describe("visualOrderSessions absorbed projection", () => {
+describe("an armed trigger's resting home in the walk (the armed_trigger_kind fact)", () => {
+  // Trigger absorption is no longer a nav/panel pass over the trigger
+  // subscription: the home's armed_trigger_kind reaches the shared classifier
+  // as data (identically on every replica), so a resting standing home files
+  // DORMANT — it leaves Needs Input but stays reachable by Ctrl+J/K at the
+  // end, where the panel renders it. Nothing vanishes from the walk.
   const sessions: Record<string, InboxSession> = {
-    resting: session("resting", { is_idle: true }),
+    resting: session("resting", { is_idle: true, armed_trigger_kind: "standing", last_turn_allows_park: true }),
     ni: session("ni", { is_idle: true }),
-    run: session("run", { is_idle: true, agent_task_id: "sp" }),
+    parked: session("parked", { is_idle: true, agent_status: "dormant" }),
   };
 
-  it("walks absorbed sessions with the DORMANT section, after the triage buckets", () => {
-    // A trigger's resting home / uneventful run is parked on the trigger's next
-    // fire: it leaves Needs Input but stays reachable by Ctrl+J/K at the end,
-    // where the panel renders it (Dormant). Nothing vanishes from the walk.
-    const order = visualOrderSessions(sessions, new Set(), null, new Set(), {
-      absorbedIds: new Set(["resting", "run"]),
-    }).map((s) => s._id);
+  it("walks the resting home with the DORMANT section, after the triage buckets", () => {
+    const order = orderSections(sessions, new Set(), null, new Set(), {}).map((s) => s._id);
     expect(order[0]).toBe("ni");
-    expect(order.slice(1).sort()).toEqual(["resting", "run"]);
-    // …and a collapsed Dormant section hides them from the walk.
-    const collapsed = visualOrderSessions(sessions, new Set(), null, new Set(), {
-      absorbedIds: new Set(["resting", "run"]),
+    expect(order.slice(1).sort()).toEqual(["parked", "resting"]);
+    // …and a collapsed Dormant section hides it from the walk.
+    const collapsed = orderSections(sessions, new Set(), null, new Set(), {
       collapsedSections: { dormant: true },
     }).map((s) => s._id);
     expect(collapsed).toEqual(["ni"]);
   });
 
-  it("without the set, behavior is unchanged", () => {
-    const order = visualOrderSessions(sessions, new Set(), null, new Set(), {}).map((s) => s._id);
-    expect(order.sort()).toEqual(["ni", "resting", "run"]);
+  it("a home whose last turn was a human's is NOT parked — the human is triaging it", () => {
+    const order = orderSections(
+      { ...sessions, resting: { ...sessions.resting, last_turn_allows_park: false } },
+      new Set(), null, new Set(), { collapsedSections: { dormant: true } },
+    ).map((s) => s._id);
+    expect(order.sort()).toEqual(["ni", "resting"]);
   });
 });
 

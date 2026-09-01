@@ -3424,10 +3424,14 @@ async function collectChatExcerpt(
   channelEntries: Array<{ name: string; content: string }>;
 }> {
   const names = new Map<string, string>();
+  // "You (earlier)" is decided PER ROW, never cached by author: a session and
+  // its human host share a user_id, so caching the self label under the user
+  // would dress the human's own lines (and other sessions') as the reader's.
   const nameFor = async (row: Doc<"chat_messages">): Promise<string> => {
+    if (opts.isSelf(row)) return "You (earlier)";
     const key = row.user_id.toString();
     if (!names.has(key)) {
-      names.set(key, opts.isSelf(row) ? "You (earlier)" : displayName(await ctx.db.get(row.user_id)));
+      names.set(key, displayName(await ctx.db.get(row.user_id)));
     }
     return names.get(key)!;
   };

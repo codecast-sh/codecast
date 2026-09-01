@@ -207,27 +207,36 @@ export function useFaceKey({
   callsEnabled,
   talking,
   onTap,
+  name,
 }: {
   viewerId: string;
   memberId: string;
   callsEnabled: boolean;
   talking: boolean;
   onTap: () => void;
+  /** What to call them in the lock's "You joined Jordan" sentence. Optional:
+   *  a surface that cannot name them still locks the same way. */
+  name?: string;
 }): FaceKey {
   const roomKey = dmRoomKey(viewerId, memberId);
+  const nameRef = useRef(name);
+  nameRef.current = name;
   const ptt = usePushToTalk(
     callsEnabled ? roomKey : undefined,
     // At PRESS time, never at render: pointing at a bar of six faces must not
     // create six conversations.
     useCallback(() => useInboxStore.getState().openDmChannel([memberId]), [memberId]),
+    useCallback(() => nameRef.current ?? null, []),
   );
   const state = walkieKeyState(ptt);
   // TWO different questions, and using one for both dimmed the face you were
   // talking to for the first tenth of a second. `sending` is the microphone
   // being OPEN, which is what lights the ring and presses the face down.
   // `ptt.holding` is the thumb being down, which starts at the press and covers
-  // the opening gap before the mic answers.
-  const sending = state === "live" || state === "dropped";
+  // the opening gap before the mic answers. `locked` joins them because the
+  // latch is this client's own voice going out too — the warm ring must not
+  // blink off at the exact moment the gesture succeeds.
+  const sending = state === "live" || state === "dropped" || state === "locked";
 
   // Two rings, two subscriptions, two custom properties — because one element
   // can carry only one `--level` and both directions can be true at once (you

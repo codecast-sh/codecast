@@ -75,6 +75,23 @@ type DragHandles = {
   onResize: (e: ReactPointerEvent) => void;
 };
 
+/**
+ * Clicks on chrome inside a drag handle must not start a drag.
+ *
+ * The floating dock puts pop-out / expand / unpin on the same row you drag
+ * the card by. Pointer capture on that row is what made those three buttons
+ * do nothing: the header ate pointerdown, preventDefault'd it, and click
+ * never fired. Same selector the titlebar uses for `-webkit-app-region:
+ * no-drag` — a button, a link, a field.
+ */
+export const SURFACE_CHROME_SELECTOR =
+  "button, a, input, textarea, select, [role='button']";
+
+export function isSurfaceChromeTarget(target: EventTarget | null): boolean {
+  const el = target as { closest?: (s: string) => Element | null } | null;
+  return typeof el?.closest === "function" && !!el.closest(SURFACE_CHROME_SELECTOR);
+}
+
 const HandleContext = createContext<DragHandles | null>(null);
 
 /** The drag handles of the surface this content is inside, if it is inside one. */
@@ -158,6 +175,10 @@ export function CallSurfaceRoot({ shape, children }: { shape: SurfaceShape; chil
       apply: (p: Placement, dx: number, dy: number) => Placement,
     ) => {
       if (e.button !== 0) return;
+      // The handle is the header row, and the header row has buttons on it.
+      // Capturing the pointer here is what made pop-out / expand / unpin
+      // look like dead chrome: click never fired.
+      if (isSurfaceChromeTarget(e.target)) return;
       const target = e.currentTarget as HTMLElement;
       const x0 = e.clientX;
       const y0 = e.clientY;

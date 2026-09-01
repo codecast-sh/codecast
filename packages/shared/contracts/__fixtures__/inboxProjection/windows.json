@@ -1,0 +1,289 @@
+{
+  "about": "Window eligibility per the C4 table: recent, pinned, dismissed, stashed, owned; the 30d horizon on each stamp; killed rows leave dismissed/stashed but a pin keeps them.",
+  "epoch": "E",
+  "asking": [],
+  "rows": [
+    {
+      "_id": "recent_only",
+      "status": "active",
+      "updated_at": "E-1h",
+      "message_count": 4,
+      "is_idle": true
+    },
+    {
+      "_id": "recent_completed",
+      "status": "completed",
+      "updated_at": "E-2h",
+      "message_count": 4,
+      "is_idle": true
+    },
+    {
+      "_id": "recent_failed",
+      "status": "failed",
+      "updated_at": "E-2h",
+      "message_count": 4,
+      "is_idle": true
+    },
+    {
+      "_id": "pin_recent",
+      "status": "active",
+      "updated_at": "E-3h",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_pinned_at": "E-1d"
+    },
+    {
+      "_id": "pin_old",
+      "status": "active",
+      "updated_at": "E-40d",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_pinned_at": "E-40d"
+    },
+    {
+      "_id": "pin_failed",
+      "status": "failed",
+      "updated_at": "E-1h",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_pinned_at": "E-1h"
+    },
+    {
+      "_id": "dismissed_recent",
+      "status": "active",
+      "updated_at": "E-4h",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_dismissed_at": "E-2d"
+    },
+    {
+      "_id": "dismissed_old_row",
+      "status": "active",
+      "updated_at": "E-40d",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_dismissed_at": "E-2d"
+    },
+    {
+      "_id": "dismissed_old_stamp",
+      "status": "active",
+      "updated_at": "E-5h",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_dismissed_at": "E-31d"
+    },
+    {
+      "_id": "dismissed_old_both",
+      "status": "active",
+      "updated_at": "E-40d",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_dismissed_at": "E-31d"
+    },
+    {
+      "_id": "stashed_recent",
+      "status": "active",
+      "updated_at": "E-6h",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_stashed_at": "E-3d"
+    },
+    {
+      "_id": "stashed_old_row",
+      "status": "active",
+      "updated_at": "E-40d",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_stashed_at": "E-3d"
+    },
+    {
+      "_id": "stashed_old_both",
+      "status": "active",
+      "updated_at": "E-40d",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_stashed_at": "E-31d"
+    },
+    {
+      "_id": "killed_dismissed",
+      "status": "active",
+      "updated_at": "E-40d",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_dismissed_at": "E-1d",
+      "inbox_killed_at": "E-1d"
+    },
+    {
+      "_id": "killed_dismissed_pinned",
+      "status": "active",
+      "updated_at": "E-40d",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_dismissed_at": "E-1d",
+      "inbox_killed_at": "E-1d",
+      "inbox_pinned_at": "E-2d"
+    },
+    {
+      "_id": "killed_stashed_recent",
+      "status": "active",
+      "updated_at": "E-1h",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_stashed_at": "E-1d",
+      "inbox_killed_at": "E-1d"
+    },
+    {
+      "_id": "owned_recent",
+      "status": "active",
+      "updated_at": "E-7h",
+      "message_count": 4,
+      "is_idle": true,
+      "owned_by_me": true
+    },
+    {
+      "_id": "owned_old",
+      "status": "active",
+      "updated_at": "E-40d",
+      "message_count": 4,
+      "is_idle": true,
+      "owned_by_me": true
+    },
+    {
+      "_id": "owned_failed",
+      "status": "failed",
+      "updated_at": "E-1h",
+      "message_count": 4,
+      "is_idle": true,
+      "owned_by_me": true
+    },
+    {
+      "_id": "everything",
+      "status": "active",
+      "updated_at": "E-8h",
+      "message_count": 4,
+      "is_idle": true,
+      "owned_by_me": true,
+      "inbox_pinned_at": "E-1h",
+      "inbox_stashed_at": "E-1h",
+      "inbox_dismissed_at": "E-1h"
+    },
+    {
+      "_id": "horizon_edge_in",
+      "status": "active",
+      "updated_at": "E-30d",
+      "message_count": 4,
+      "is_idle": true
+    },
+    {
+      "_id": "horizon_edge_out",
+      "status": "active",
+      "updated_at": "E-30d-1ms",
+      "message_count": 4,
+      "is_idle": true
+    }
+  ],
+  "expected": {
+    "truncated": [],
+    "tally": {
+      "shown": {
+        "questions": 0,
+        "pinned": 3,
+        "new": 0,
+        "needs_input": 4,
+        "done": 0,
+        "dormant": 0,
+        "working": 0,
+        "idle": 0,
+        "stashed": 2,
+        "dismissed": 5,
+        "hidden": 0
+      },
+      "folded": {
+        "questions": 0,
+        "pinned": 0,
+        "new": 0,
+        "needs_input": 0,
+        "done": 0,
+        "dormant": 0,
+        "working": 0,
+        "idle": 0,
+        "stashed": 0,
+        "dismissed": 0,
+        "hidden": 0
+      }
+    },
+    "set_digest": "ce0591d4a81409d2",
+    "placements": {
+      "dismissedoldrowz1500000000000000": [
+        "dismissed",
+        "needs_input",
+        false
+      ],
+      "dismissedoldstampz17000000000000": [
+        "dismissed",
+        "needs_input",
+        false
+      ],
+      "dismissedrecentz1500000000000000": [
+        "dismissed",
+        "needs_input",
+        false
+      ],
+      "everythingz100000000000000000000": [
+        "dismissed",
+        "needs_input",
+        false
+      ],
+      "horizonedgeinz130000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "killeddismissedpinnedz2100000000": [
+        "dismissed",
+        "idle",
+        false
+      ],
+      "ownedrecentz11000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "pinfailedz9000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pinoldz6000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pinrecentz9000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "recentcompletedz1500000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "recentonlyz100000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "stashedoldrowz130000000000000000": [
+        "stashed",
+        "needs_input",
+        false
+      ],
+      "stashedrecentz130000000000000000": [
+        "stashed",
+        "needs_input",
+        false
+      ]
+    }
+  }
+}

@@ -1,10 +1,9 @@
 import { useRef, useCallback, useState } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { useEventListener } from "./useEventListener";
-import { usePathname } from "next/navigation";
-import { isInboxSessionView } from "../lib/inboxRouting";
 import { resolveRecentVisits, type ResolvedVisit } from "../lib/recentVisits";
 import { useOpenRecentVisit } from "./useOpenRecentVisit";
+import { useOpenSession } from "./useOpenSession";
 
 export type SwitcherState = {
   open: boolean;
@@ -21,27 +20,9 @@ const CLOSED: SwitcherState = { open: false, selectedIndex: 0, items: [] };
 const SWITCHER_LIMIT = 30;
 
 export function useRecentSwitcher() {
-  const setCurrentSession = useInboxStore((s) => s.setCurrentSession);
-  const selectPanelSession = useInboxStore((s) => s.selectPanelSession);
-  const pathname = usePathname();
-  const inboxSource = useInboxStore((s) => s.currentConversation?.source);
-  const isOnInboxPage = isInboxSessionView(pathname, inboxSource);
-
-  // A session opens in place on the inbox and in the side panel elsewhere, so a
-  // quick Ctrl+Tab peeks at a session without leaving the page you are on.
-  // Something only the conversation cache knows (opened from search, never in
-  // the inbox) goes through the navigation request the sidebar uses.
-  const openSession = useCallback((id: string) => {
-    const store = useInboxStore.getState();
-    if (!store.sessions[id]) {
-      store.requestNavigate(id, { showMySessions: false });
-      return;
-    }
-    // setCurrentSession / selectPanelSession record the view (MRU + divider
-    // anchor) themselves — no separate touchMru needed here.
-    if (isOnInboxPage) setCurrentSession(id);
-    else selectPanelSession(id);
-  }, [isOnInboxPage, setCurrentSession, selectPanelSession]);
+  // The shared select-kind-aware open path (hooks/useOpenSession): in place on
+  // the inbox, leave for the inbox from every other surface.
+  const openSession = useOpenSession();
   const openVisit = useOpenRecentVisit(openSession);
 
   const [renderState, setRenderState] = useState<SwitcherState>(CLOSED);

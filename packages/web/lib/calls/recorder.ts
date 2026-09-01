@@ -14,6 +14,15 @@
 // table is heard: well enough, and not as a direct feed. Nothing here claims
 // otherwise.
 //
+// ON THE DESKTOP it also asks the shell for the computer's own audio (the
+// loopback feed Chromium exposes through getDisplayMedia — main.js answers the
+// request with `audio: "loopback"`). That is what makes a meeting in
+// headphones recordable at all: the microphone cannot hear what only the
+// person hears. Strictly best effort — refused screen permission, an old
+// shell, a browser — and the recording is what it always was, the microphone.
+// The status says which of the two actually happened (`systemAudio`), and the
+// pill reads it.
+//
 // IT NEVER STARTS BY ITSELF. `startRecording` runs on a person's press and on
 // nothing else. The meeting-detection popup (ct-46036) will call this same
 // function — with an answer from the person as its gesture, never in place of
@@ -30,6 +39,7 @@ import { mutateOnUnload } from "../keepaliveMutation";
 import { createMicMeter, type MicMeter } from "./micMeter";
 import { createScribeEngine, type ConvexHandle } from "./scribeEngine";
 import { peekOsPermissions, permissionHint, refreshOsPermissions } from "../osPermissions";
+import { isDesktop } from "../desktop";
 
 const api = _api as any;
 
@@ -47,6 +57,9 @@ export type RecorderStatus = {
   error: string | null;
   /** The last few things the recognizer made out, newest last. */
   tail: Array<{ speaker: string; text: string }>;
+  /** The computer's own audio is being captured alongside the microphone
+   *  (desktop loopback). False everywhere the shell cannot provide it. */
+  systemAudio: boolean;
 };
 
 const IDLE: RecorderStatus = {
@@ -55,6 +68,7 @@ const IDLE: RecorderStatus = {
   startedAt: 0,
   error: null,
   tail: [],
+  systemAudio: false,
 };
 
 const engine = createScribeEngine();
@@ -72,6 +86,13 @@ let meter: MicMeter | null = null;
 let mediaRecorder: MediaRecorder | null = null;
 let chunks: Blob[] = [];
 let beatTimer: ReturnType<typeof setInterval> | null = null;
+let sysStream: MediaStream | null = null;
+let systemAudio = false;
+// The audio file's mixing bowl: mic in at start, the loopback feed joined in
+// whenever it arrives. Null when WebAudio is unavailable — the file is then
+// the raw microphone stream, as it always was.
+let mixCtx: AudioContext | null = null;
+let mixDest: MediaStreamAudioDestinationNode | null = null;
 
 /** One snapshot out of two sources — this module's own phase and the scribe
  *  engine's words — recomputed on either moving, so a React subscriber sees a
@@ -84,13 +105,15 @@ function publish() {
     startedAt,
     error: error ?? s.error,
     tail: s.tail,
+    systemAudio,
   };
   if (
     next.phase === snapshot.phase &&
     next.transcriptId === snapshot.transcriptId &&
     next.startedAt === snapshot.startedAt &&
     next.error === snapshot.error &&
-    next.tail === snapshot.tail
+    next.tail === snapshot.tail &&
+    next.systemAudio === snapshot.systemAudio
   ) {
     return;
   }
@@ -221,7 +244,7 @@ export async function startRecording(): Promise<string | null> {
     for (const cb of levelSubscribers) cb();
   });
 
-  startAudioFile(stream);
+  startAudioFile(buildFileStream(stream));
 
   // A recording holds its own lease: there is no room and no seat to keep it
   // alive, so this beat is what tells the server the tab is still here. Miss
@@ -234,6 +257,10 @@ export async function startRecording(): Promise<string | null> {
 
   startedAt = Date.now();
   setPhase("recording");
+  // The computer's own audio, where the shell can provide it. After the phase
+  // flip so its guard can be one question, and deliberately not awaited: the
+  // microphone must not wait on a screen-permission prompt.
+  void addSystemAudio(transcriptId);
   return transcriptId;
 }
 
@@ -269,8 +296,10 @@ export async function stopRecording(): Promise<void> {
   meter = null;
   for (const cb of levelSubscribers) cb();
   stopStream();
+  closeMix();
   startedAt = 0;
   recTranscriptId = null;
+  systemAudio = false;
   setPhase("idle");
 
   if (blob && transcriptId && convex) {
@@ -289,6 +318,94 @@ export async function stopRecording(): Promise<void> {
 function stopStream() {
   for (const t of stream?.getTracks() ?? []) t.stop();
   stream = null;
+  for (const t of sysStream?.getTracks() ?? []) t.stop();
+  sysStream = null;
+}
+
+// ── system audio (desktop loopback) ─────────────────────────────────────────
+//
+// What the microphone cannot hear: a meeting playing into headphones. The
+// desktop shell answers getDisplayMedia with the primary screen and Chromium's
+// loopback audio feed (main.js setDisplayMediaRequestHandler); the video track
+// is the toll of that API and is stopped on arrival. Everything is best
+// effort: a refusal, a browser, an old shell, a denied Screen Recording
+// permission — any of them just leaves the recording what it already is.
+
+async function addSystemAudio(transcriptId: string): Promise<void> {
+  if (!isDesktop()) return;
+  // Not during a huddle: the loopback feed would capture our own call audio,
+  // and a huddle's remote tracks are already transcribed by its own scribe.
+  if (useInboxStore.getState().call.phase !== "idle") return;
+  // A permission denied in System Settings makes the capture fail anyway;
+  // skip the doomed attempt. "ask"/"unknown" go ahead — the attempt is what
+  // raises the OS prompt the first time.
+  if (peekOsPermissions().screen === "off") return;
+
+  let display: MediaStream;
+  try {
+    display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+  } catch {
+    return;
+  }
+  for (const t of display.getVideoTracks()) t.stop();
+  const track = display.getAudioTracks()[0];
+  // The press this belongs to may be over by the time the permission prompt
+  // was answered — a stopped recording must not reopen a capture.
+  if (!track || phase !== "recording" || recTranscriptId !== transcriptId) {
+    for (const t of display.getTracks()) t.stop();
+    return;
+  }
+
+  sysStream = display;
+  // A second recognizer pipe, beside "mic". One speaker label for the whole
+  // feed: the recognizer keys speakers per track, and this track is "whatever
+  // the computer played".
+  engine.attach("system", track, "system", "Meeting audio");
+  // Into the audio file's mix, mid-recording — WebAudio allows a source to
+  // join a running graph.
+  if (mixCtx && mixDest) {
+    try {
+      mixCtx.createMediaStreamSource(new MediaStream([track])).connect(mixDest);
+    } catch {}
+  }
+  // With a direct feed in hand, the microphone's job narrows to the person in
+  // the room — ask the platform to subtract what the speakers are playing, so
+  // a meeting on speakers is not transcribed twice. Best effort: with
+  // headphones there is nothing to subtract and this changes nothing.
+  try {
+    await stream?.getAudioTracks()[0]?.applyConstraints({ echoCancellation: true });
+  } catch {}
+  // The OS can end the feed on its own (permission revoked mid-recording).
+  // The recording carries on as the microphone, and says so.
+  track.onended = () => {
+    if (recTranscriptId !== transcriptId) return;
+    engine.detach("system");
+    systemAudio = false;
+    publish();
+  };
+  systemAudio = true;
+  publish();
+}
+
+function buildFileStream(mic: MediaStream): MediaStream {
+  try {
+    if (typeof AudioContext !== "function") return mic;
+    const ctx = new AudioContext();
+    const dest = ctx.createMediaStreamDestination();
+    ctx.createMediaStreamSource(mic).connect(dest);
+    mixCtx = ctx;
+    mixDest = dest;
+    return dest.stream;
+  } catch {
+    closeMix();
+    return mic;
+  }
+}
+
+function closeMix() {
+  mixCtx?.close().catch(() => {});
+  mixCtx = null;
+  mixDest = null;
 }
 
 // ── the audio file ──────────────────────────────────────────────────────────

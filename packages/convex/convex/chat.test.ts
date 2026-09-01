@@ -1266,9 +1266,12 @@ describe("the anchor in a thread", () => {
     expect(queued[0].client_id).toBe(`chat-relay:${reply.message_id}`);
     expect(queued[0].content).toContain("[codecast team chat — #general");
     expect(queued[0].content).toContain("replied in a thread you are part of.");
-    // The session's own root reads as its own words; the reply carries the name.
+    // The session's own root reads as its own words; the human reply carries
+    // the person's NAME even though session and host share a user_id — the
+    // self label is per row, never cached per author.
     expect(queued[0].content).toContain("You (earlier): does the deploy look green?");
-    expect(queued[0].content).toContain("yes, all green");
+    expect(queued[0].content).toContain("Alice: yes, all green");
+    expect(queued[0].content).not.toContain("You (earlier): yes, all green");
     expect(queued[0].content).toContain(`cast chat send --channel ${CHANNEL} --thread ${root.message_id}`);
 
     // Idempotent on the message: a retried send does not inject twice.

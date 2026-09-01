@@ -35,7 +35,7 @@
 // the person expanded it.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
-import { newChatMessageClientId } from "../../store/chatSlice";
+import { CHAT_CHANNEL_STUB_PREFIX, newChatMessageClientId, resolveChannelStubId } from "../../store/chatSlice";
 import { joinCall, leaveCall, mediaFailureReason, setMuted } from "./callManager";
 import { openAsrPipe, type AsrPipe } from "./asrPipe";
 import {
@@ -607,6 +607,39 @@ function pushTranscript(b: Burst, onlyIfDue = false) {
   });
 }
 
+/** How long a burst will wait for its channel to become real before giving up.
+ *  Only a press into a DM that does not exist yet (or has not synced yet) pays
+ *  it, the recording runs throughout, and a channel create is one mutation —
+ *  seconds, not the two minutes a burst itself may run. */
+const CHANNEL_RESOLVE_MS = 8_000;
+
+/** The server id behind a channel the surface knows only optimistically,
+ *  read from the live store (the pure matching lives in chatSlice). */
+function serverChannelIdFor(stubId: string): string | null {
+  return resolveChannelStubId(useInboxStore.getState().chatChannels as Record<string, any>, stubId);
+}
+
+/** A channel id the server will accept, or null once waiting stops making
+ *  sense. Real ids pass straight through; a stub waits — bounded, and never
+ *  past the burst's own end — for the row that makes it real. */
+async function resolveServerChannelId(b: Burst, channelId: string): Promise<string | null> {
+  if (!channelId.startsWith(CHAT_CHANNEL_STUB_PREFIX)) return channelId;
+  const now = serverChannelIdFor(channelId);
+  if (now) return now;
+  const deadline = Date.now() + CHANNEL_RESOLVE_MS;
+  return await new Promise((resolve) => {
+    const tick = () => {
+      const found = serverChannelIdFor(channelId);
+      if (found || b.done || Date.now() > deadline) {
+        resolve(found);
+        return;
+      }
+      setTimeout(tick, 200);
+    };
+    tick();
+  });
+}
+
 /**
  * Hold to talk. Returns when the burst is set up — the microphone open, the
  * recorder and the recognizer running on it, the server row open. A caller that
@@ -747,8 +780,20 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
         void openRoomForBurst(b, track);
       }
 
+      // The surface may have handed us an optimistic stub — a face pressed
+      // before its DM existed, or before the channel sync loaded. The server
+      // validates channel_id as a real document id, so a stub sent as-is is a
+      // burst aborted every time. The words are already being recorded either
+      // way, so waiting here costs nothing audible.
+      const serverChannelId = await resolveServerChannelId(b, channelId);
+      if (b.done) return;
+      if (!serverChannelId) {
+        emit({ error: "Could not start the voice message" });
+        await abortBurst(b);
+        return;
+      }
       const res = await convex!.mutation(api.chat.startVoiceBurst, {
-        channel_id: channelId,
+        channel_id: serverChannelId,
         client_id: clientId,
         room_key: roomKey,
       });
@@ -1116,6 +1161,61 @@ export function markWalkieUpgraded(roomKey: string): void {
 }
 
 /**
+ * How long a hold must last before the key LOCKS — the ring around the face
+ * fills over exactly this, so the number is the animation and the animation is
+ * the promise. Above MIN_BURST_MS on purpose, and the ordering is load-bearing
+ * the same way WALL_TAP_MS's is: a release under 300ms is a tap, under 700ms a
+ * burst the engine discards, under this a burst that lands as a message, and a
+ * hold that outlives it stops being a message at all. A test pins the ladder.
+ */
+export const WALKIE_LOCK_MS = 1200;
+
+/**
+ * May a fill that just completed lock this hold?
+ *
+ * Pure, because the answer gates an open microphone changing what it IS. The
+ * burst must still be the one the fill was timing (`roomKey`), must not be
+ * over (a max-length cap or a blur may have landed it mid-fill), and must not
+ * already be upgraded (holding inside a huddle refills nothing — the room is
+ * already a call, and locking it again would announce a join that happened).
+ */
+export function shouldLockBurst(input: {
+  sending: { roomKey: string } | null;
+  joinedRoom: string | null;
+  roomKey: string;
+}): boolean {
+  if (!input.sending || input.sending.roomKey !== input.roomKey) return false;
+  return input.joinedRoom !== input.roomKey;
+}
+
+/**
+ * THE FILL COMPLETED: the hold stops being a message and becomes a seat.
+ *
+ * This is the strip's "Join live" pressed from the key itself, so it IS that
+ * path — `joinWalkieLive` stamps the room a call (sticky), says "You joined",
+ * plays the join cue, and tells the far side through the ordinary roster
+ * stamp. Then the burst lands: everything said during the fill arrives as the
+ * message it already was, the roger stays quiet and the microphone stays open,
+ * because both of those already read the upgraded mode (`burstUpgraded`).
+ * From here the person is simply live in the room until they End — release,
+ * blur and unmount all find no burst and do nothing.
+ *
+ * Nothing is awaited before the join: a cold microphone can still be opening
+ * at fill-complete, and a lock that waited for it would be a latch that
+ * sometimes ignores the hand. `endBurst` already awaits the setup internally,
+ * so ordering is safe whatever state the fill found.
+ */
+export async function lockBurstLive(opts: { name?: string | null } = {}): Promise<void> {
+  const b = burst;
+  if (!b || b.done) return;
+  if (!shouldLockBurst({ sending: b, joinedRoom: walkieJoinedRoom(status), roomKey: b.roomKey })) {
+    return;
+  }
+  await joinWalkieLive(b.roomKey, opts);
+  await endBurst();
+}
+
+/**
  * JOIN LIVE. The one gesture the whole upgrade exists for, and one click: the
  * person is already seated and already audible, so nothing here touches the
  * media plane except to put the camera back the way they left it.
@@ -1416,5 +1516,10 @@ if (typeof window !== "undefined" && import.meta.env.DEV) {
     // roger) is the one thing here a screenshot cannot show.
     markUpgraded: markWalkieUpgraded,
     joinLive: joinWalkieLive,
+    // The fill's latch, and the room it latched into — the rig proves the
+    // gesture's promise (seat live, burst landed, release inert) through
+    // these, the same reason joinLive is here.
+    lockLive: lockBurstLive,
+    joinedRoom: () => walkieJoinedRoom(getWalkieStatus()),
   };
 }

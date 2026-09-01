@@ -41,7 +41,7 @@ export const PERSISTENCE_AVAILABLE = typeof window !== "undefined";
 // declared schema against what is actually on disk (adds tables and indexes,
 // drops removed tables) rather than replaying a version ladder — so the old
 // twelve-step ladder that restated the whole schema per step is gone.
-export const CACHE_SCHEMA_VERSION = 22;
+export const CACHE_SCHEMA_VERSION = 23;
 export const CACHE_SCHEMA_SIGNATURE =
   "agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|capabilityBindings:_id|capabilityState:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|comments:_id|commits:_id|docDetails:_id|docs:_id|managedSessions:_id|messageFeed:_id, timestamp|pageThreads:_id|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|savedViews:_id|sessionDecisions:_id|sessions:_id|tasks:_id|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|workflowRuns:_id, workflow_id|workflows:_id";
 
@@ -332,8 +332,10 @@ const MSG_WRITE_DEBOUNCE_MS = 300;
 // so the store climbed unbounded (~445MB in a past incident). We cap it at the N
 // most-recently-active conversations and drop anything past a TTL, ordered by the
 // latestTimestamp index. Runs lazily off the write path — piggybacked on the
-// debounced flush and throttled — never on the hot per-tick path.
-const MAX_CACHED_CONVERSATIONS = 300;
+// debounced flush and throttled — never on the hot per-tick path. The cap sits
+// near the session-row cache floor (partitionSessionRetention keeps ~1200 rows):
+// a row the list can show should have its tail on disk, so the click is local.
+const MAX_CACHED_CONVERSATIONS = 1000;
 const CONVERSATION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const PRUNE_THROTTLE_MS = 5 * 60 * 1000; // at most once per 5 min
 const PROTECT_RECENT_MS = 10 * 60 * 1000; // never prune a conv touched this recently

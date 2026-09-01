@@ -60,11 +60,12 @@ declare global {
       getAlwaysOnTop?: () => Promise<boolean>;
       // The call panel (a huddle in a window of its own, at /call-panel). One
       // window, because one call: opening it for a second room moves the one
-      // that exists. `closeCallPanel` says WHY it is closing, which decides
-      // whether the shell hands the call back to the main window or lets it
-      // end. Absent on older builds — gate on them.
+      // that exists. `closeCallPanel({ended})` hangs up; without ended the
+      // shell hides the window (the huddle stays there). Absent on older
+      // builds — gate on them.
       isCallPanelWindow?: boolean;
       openCallPanel?: (roomKey: string, opts?: { mic?: boolean; camera?: boolean; scribe?: boolean }) => Promise<void>;
+      showCallPanel?: () => Promise<boolean>;
       closeCallPanel?: (opts?: { ended?: boolean }) => Promise<void>;
       // The panel keeps the shell told what it is hosting, so the shell can
       // hand the same room, mic and camera back when the window closes by any
@@ -259,6 +260,10 @@ export type DesktopWindowRole = {
   anyInCall: boolean;
   peopleWindow: boolean;
   callPanel: boolean;
+  /** The faces overlay window exists (it may be yielding to a call). The
+   *  people window's toggle draws this, so a close from the overlay's own
+   *  chrome — or from another window — is reflected everywhere. */
+  facesOverlay: boolean;
 };
 
 export type DesktopDisplaySource = {
@@ -428,15 +433,20 @@ export async function openCallPanel(
 /**
  * Close the panel from inside it.
  *
- * `ended` is the difference between the two ways out, and the shell needs to be
- * told which one this is: a hang-up ENDED the call and nothing should be handed
- * anywhere, while closing the window is a request to carry on in the main
- * window. Closing by the OS close box says nothing, which is why the shell
- * treats silence as "hand it back" — the safe reading, since a call you did not
- * hang up is a call still going.
+ * `ended` is hang-up: destroy the window, the huddle is over. Without it the
+ * shell HIDES the window, like the palette — the microphone stays, and the
+ * main window does not grow a card trapped in its edges. Showing the window
+ * again (`showCallPanel`) is how you get back.
  */
 export async function closeCallPanel(opts?: { ended?: boolean }): Promise<void> {
   await bridge("closeCallPanel")?.(opts);
+}
+
+/** Raise the huddle window. False when this build has no call window. */
+export async function showCallPanel(): Promise<boolean> {
+  const show = bridge("showCallPanel");
+  if (!show) return false;
+  return (await show()) === true;
 }
 
 /**
@@ -880,6 +890,7 @@ let windowRole: DesktopWindowRole = {
   anyInCall: false,
   peopleWindow: false,
   callPanel: false,
+  facesOverlay: false,
 };
 let windowRoleTracked = false;
 
@@ -917,6 +928,7 @@ export function installWindowRoleTracker(): void {
       anyInCall: !!role.anyInCall,
       peopleWindow: !!role.peopleWindow,
       callPanel: !!role.callPanel,
+      facesOverlay: !!role.facesOverlay,
     };
     for (const cb of windowRoleWatchers) cb();
   });

@@ -382,7 +382,7 @@ export default function TriggerDetailPage() {
                 {isEditable && (
                   <ShortcutTooltip label="Edit the prompt or cadence on the triggers page">
                     <Link
-                      href={`/triggers?task=${t._id}`}
+                      href={`/triggers?task=${t._id}&edit=1`}
                       className={`${verbBtn} border-sol-border/50 text-sol-text-dim hover:bg-sol-bg-alt/60 no-underline`}
                     >
                       <Pencil className="w-3.5 h-3.5" /> Edit

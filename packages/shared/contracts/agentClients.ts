@@ -41,6 +41,22 @@ export type AgentClientId = "claude" | "codex" | "cursor" | "gemini" | "opencode
 /** Runtime transports that may create/deliver for a fenced execution binding. */
 export type AgentExecutionTransport = "tmux" | "app-server" | "external";
 
+/**
+ * How a client runs non-interactively — the `cast exec` / `claude -p` analog.
+ * Data only; the CLI's `buildPrintArgs` maps unified flags onto these tokens.
+ */
+export interface AgentPrintMode {
+  /** `flag` = `-p` on the main binary; `subcommand` = `exec` / `run`. */
+  kind: "flag" | "subcommand";
+  /** The print flag (`-p`) or subcommand name (`exec`, `run`). */
+  token: string;
+  /**
+   * When true, the prompt is the flag's own value (`grok -p "…"`, `gemini -p "…"`).
+   * When false, the prompt is positional (`claude -p "…"`, `codex exec "…"`).
+   */
+  promptAsValue?: boolean;
+}
+
 /** The spelling the Convex schema / wire protocol stores (`conversations.agent_type`).
  *  Differs from `AgentClientId` only in `claude_code`, and carries the extra
  *  `cowork` value that has no distinct client of its own. `opencode` (phase 1)
@@ -347,6 +363,14 @@ export interface AgentClientDescriptor {
   /** Static args always passed at launch, before the conditional permission /
    *  model / effort flags the daemon appends. Empty for every current client. */
   launchArgs: string[];
+  /**
+   * How this client runs non-interactively (print / exec / run). Required: a
+   * new client must say how `cast exec` invokes it. `flag` is `-p` on the main
+   * binary; `subcommand` is `codex exec` / `opencode run`. `promptAsValue` is
+   * for flags that take the prompt as their own argument (`grok -p "…"`,
+   * `gemini -p "…"`) rather than a positional after the flag.
+   */
+  printMode: AgentPrintMode;
   /** Base command that resumes an existing session — the daemon appends
    *  model / permission / effort flags around it. */
   resumeCmd(sessionId: string): string;
@@ -440,6 +464,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     executionTransports: ["tmux"],
     binary: "claude",
     launchArgs: [],
+    printMode: { kind: "flag", token: "-p" },
     resumeCmd: (sessionId) => `claude --resume ${sessionId}`,
     transcriptRoots: ["~/.claude/projects"],
     watcherKind: "jsonl-dir",
@@ -476,6 +501,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     executionTransports: ["tmux", "app-server"],
     binary: "codex",
     launchArgs: [],
+    printMode: { kind: "subcommand", token: "exec" },
     resumeCmd: (sessionId) => `codex resume ${sessionId}`,
     transcriptRoots: ["~/.codex/sessions"],
     watcherKind: "jsonl-dir",
@@ -513,6 +539,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     executionTransports: ["tmux"],
     binary: "cursor-agent",
     launchArgs: [],
+    printMode: { kind: "flag", token: "-p" },
     // cursor-agent resumes a chat by id with its own binary (the ct-39074 fix): a
     // cursor session must never fall through to `claude --resume` + Claude's repair
     // machinery. Consumed by buildNonClaudeResumeCommand (resumeCommand.ts).
@@ -562,6 +589,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     executionTransports: ["tmux"],
     binary: "gemini",
     launchArgs: [],
+    printMode: { kind: "flag", token: "-p", promptAsValue: true },
     // gemini resumes the most-recent session and ignores the id (daemon fact).
     resumeCmd: () => `gemini --resume latest`,
     transcriptRoots: ["~/.gemini/tmp"],
@@ -582,6 +610,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     executionTransports: ["tmux"],
     binary: "opencode",
     launchArgs: [],
+    printMode: { kind: "subcommand", token: "run" },
     // opencode resumes a session by id with `opencode -s <id>` (verified against
     // `opencode run --help`: `-s, --session  session id to continue`). Consumed by
     // buildNonClaudeResumeCommand (resumeCommand.ts).
@@ -633,6 +662,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     executionTransports: ["tmux"],
     binary: "pi",
     launchArgs: [],
+    printMode: { kind: "flag", token: "-p" },
     // pi resumes a session by file path OR partial UUID via `--session` (README:
     // `pi --session <path>`; args.js also accepts a partial UUID). We pass the
     // session UUID, so pi reattaches to the SAME .jsonl and appends to it — unlike
@@ -671,6 +701,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // (ps comm basename "grok", verified live on v1.0.5).
     binary: "grok",
     launchArgs: [],
+    printMode: { kind: "flag", token: "-p", promptAsValue: true },
     // Always resume by UUID: a non-UUID argument matches session TITLES for the
     // cwd case-insensitively and ERRORS on duplicates (ambiguity by design), so
     // title resume is banned. `-c` (most recent) is deliberately unused — we

@@ -7,6 +7,7 @@ import { useConvexSync } from "./useConvexSync";
 import { prefetchStorageImageUrls } from "./useStorageImageUrl";
 import { rowSigExcluding } from "../store/wakeSig";
 import { shareTokenArg } from "../lib/shareTokenScope";
+import { deepenConversation, fetchOlderPage, WARM_DEEP_ROWS } from "./inboxWarm";
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_PENDING: Message[] = [];
@@ -299,6 +300,17 @@ export function useConversationMessages(
     })();
     return () => { cancelled = true; };
   }, [useNormalMode, tailState, conversationId, fetchSnapshot]);
+
+  // A warmed tail (the inbox warm loop's newest page) is shorter than the
+  // snapshot a cold open fetches. Once the window is anchored — a warm switch
+  // anchors synchronously, a cold open after its snapshot or hydration —
+  // backfill it to that window in the background so the first scroll-up is
+  // already local. deepenConversation is a no-op on a full window.
+  // eslint-disable-next-line no-restricted-syntax -- one-shot history backfill; the tail subscription is the live path
+  useEffect(() => {
+    if (!useNormalMode || tailState.id !== conversationId || tailState.anchor === null) return;
+    void deepenConversation(convex, conversationId, WARM_DEEP_ROWS);
+  }, [useNormalMode, tailState.id, tailState.anchor, conversationId, convex]);
 
   // The live tail. Anchored one ms before the newest known row so the
   // in-flight streaming row is always inside the subscribed range and its
@@ -760,26 +772,14 @@ export function useConversationMessages(
       // kept every loaded page subscribed and re-executing on churn). 200 per
       // page keeps the walk-back round-trip count low without defeating
       // virtualization.
-      const oldest = useInboxStore.getState().messages[conversationId]?.[0]?.timestamp;
-      if (oldest === undefined) return;
+      if (useInboxStore.getState().messages[conversationId]?.[0] === undefined) return;
       setOlderLoading(true);
-      convex.query(api.conversations.getAllMessages, {
-        conversation_id: convId,
-        limit: 200,
-        before_timestamp: oldest,
-        ...shareTokenArg(conversationId),
-      }).then((res: any) => {
-        if (!res?.messages) return;
-        useInboxStore.getState().mergeMessages(conversationId, res.messages, "prepend", {
-          hasMoreAbove: res.has_more_above ?? false,
-          initialized: true,
-        });
-      }).catch((err: unknown) => {
+      fetchOlderPage(convex, conversationId, WARM_DEEP_ROWS).catch((err: unknown) => {
          
         console.warn("[useConversationMessages] loadOlder failed", { conversationId, err });
       }).finally(() => setOlderLoading(false));
     }
-  }, [targetMode, targetAroundData, targetHasMoreAbove, targetIsLoadingOlder, olderLoading, convex, convId, conversationId]);
+  }, [targetMode, targetAroundData, targetHasMoreAbove, targetIsLoadingOlder, olderLoading, convex, conversationId]);
 
   const loadNewer = useCallback(() => {
     if (targetMode) {
