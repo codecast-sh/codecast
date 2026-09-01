@@ -220,20 +220,23 @@ describe("the per-row diff", () => {
     expect(evaluateInboxCompare({ ...disagree, pendingSessionCreates: { [B]: true } }, ctx()).kind).toBe("clean");
   });
 
-  it("drops a held row whose every window overflowed on either side", () => {
-    // B is a member through the recent window ONLY. The server stamps it
-    // working; the replica reads it idle — but recent overflowed, so B is
-    // dark to the proof.
+  it("a truncated window excuses a membership difference, never a bucket delta on a row both sides selected", () => {
+    // B is a member through the recent window ONLY, selected on BOTH sides.
+    // The server stamps it working; the replica reads it idle. The overflow
+    // flag does not hide that: the cap explains a row one side cut, not a
+    // verdict both sides hold (a busy account overflows recent every day, and
+    // hiding every recent-only row blinded the proof — prod, 2026-09-01).
     const full = baseState({ [A]: row(A), [B]: row(B, { agent_status: "working", is_idle: false }) });
     const held = { [A]: row(A), [B]: row(B) };
-    expect(evaluateInboxCompare(baseState(held, { sessionsProjection: { mine: serverSlot(full, { truncated: ["recent"] }) } }), ctx()).kind).toBe("clean");
-    // Without the flag the disagreement is a bucket delta.
-    const strict = baseState(held, { sessionsProjection: { mine: serverSlot(full) } });
-    expect(evaluateInboxCompare(strict, ctx())).toMatchObject({ kind: "diff", diff: { bucket_deltas: [B] } });
-    // A row also eligible through an unflagged window (owned) stays in the diff.
-    const both = baseState({ [A]: row(A), [B]: row(B, { owned_by_me: true, agent_status: "working", is_idle: false }) });
-    const bothReplica = baseState({ [A]: row(A), [B]: row(B, { owned_by_me: true }) }, { sessionsProjection: { mine: serverSlot(both, { truncated: ["recent"] }) } });
-    expect(evaluateInboxCompare(bothReplica, ctx())).toMatchObject({ kind: "diff", diff: { bucket_deltas: [B] } });
+    expect(evaluateInboxCompare(baseState(held, { sessionsProjection: { mine: serverSlot(full, { truncated: ["recent"] }) } }), ctx()))
+      .toMatchObject({ kind: "diff", diff: { bucket_deltas: [B] } });
+    // An EXTRA the replica selects through the overflowed window alone is the
+    // cap's doing and stays dark.
+    const extra = baseState({ [A]: row(A), [B]: row(B) }, { sessionsProjection: { mine: serverSlot(baseState({ [A]: row(A) }), { truncated: ["recent"] }) } });
+    expect(evaluateInboxCompare(extra, ctx()).kind).toBe("clean");
+    // Without the flag the same extra is reported.
+    const strictExtra = baseState({ [A]: row(A), [B]: row(B) }, { sessionsProjection: { mine: serverSlot(baseState({ [A]: row(A) })) } });
+    expect(evaluateInboxCompare(strictExtra, ctx())).toMatchObject({ kind: "diff", diff: { extra: [B] } });
   });
 
   it("a stamped id the replica does not HOLD is missing even under an overflow flag — the heal hydrates it, then the window carve-out applies", () => {
