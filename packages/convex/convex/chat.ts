@@ -33,6 +33,7 @@ import { dmKeyFor, isAgentTurnInFlight, isLiveVoiceRow, isSilentAgentRow, isVisi
 import { HUDDLE_DIGEST_CLIENT_ID_PREFIX, parseRoomKey } from "@codecast/shared/contracts";
 import { RateLimitError, checkRateLimit } from "./rateLimit";
 import { purgeUserTeam, touchThread } from "./threadReads";
+import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 // `userCanAccessAnchor` is the WAKE permission (any member of a team anchor's
 // team may spend a turn on it). It is used on the wake path and NOT on
 // `replyAsAnchor`, which gates on the host — see the comment there.
@@ -2095,11 +2096,12 @@ async function postChatMessage(
   // crosses onto someone else's screen.
   let originSession: { title?: string; agent_type?: string } | undefined;
   if (opts.origin === "agent" && opts.originSessionId) {
-    const conv = await ctx.db
-      .query("conversations")
-      .withIndex("by_session_id", (q: any) => q.eq("session_id", opts.originSessionId))
-      .first();
-    if (conv && (await isConversationOwner(ctx, authorId, conv))) {
+    const conv = await findConversationByAnyRefWhere(
+      ctx,
+      opts.originSessionId,
+      (candidate) => isConversationOwner(ctx, authorId, candidate),
+    );
+    if (conv) {
       originSession = {
         title: conv.title ? oneLine(conv.title, 80) : undefined,
         agent_type: conv.agent_type,
@@ -2145,6 +2147,32 @@ async function postChatMessage(
 
   return { messageId, mentions, hereCount, actorName, createdAt: now };
 }
+
+export const repairMissingOriginSession = internalMutation({
+  args: {
+    message_id: v.id("chat_messages"),
+    session_ref: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.message_id);
+    if (!message || message.origin !== "agent" || message.author_kind === "agent") {
+      throw new Error("Message is not session-authored");
+    }
+    if (message.origin_session_id) return { repaired: false };
+    const conversation = await findConversationByAnyRefWhere(
+      ctx,
+      args.session_ref,
+      (candidate) => isConversationOwner(ctx, message.user_id, candidate),
+    );
+    if (!conversation) throw new Error("Session is not owned by the message author");
+    await patchChat(ctx, message._id, {
+      origin_session_id: args.session_ref,
+      origin_session_title: conversation.title ? oneLine(conversation.title, 80) : undefined,
+      origin_agent_type: conversation.agent_type,
+    });
+    return { repaired: true };
+  },
+});
 
 // Everything that turns a stored row into a message people are TOLD about: the
 // author's own read mark, mention/thread/@here/DM notification fan-out, and the

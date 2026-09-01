@@ -30,6 +30,27 @@ describe("ChatMessage", () => {
     expect(html).not.toContain(`href="#chatmsg-${MESSAGE}"`);
   });
 
+  test("a session-authored message links its session identity", () => {
+    const html = renderToStaticMarkup(
+      <ChatMessage
+        message={view({
+          author: {
+            id: "u1",
+            name: "C3 attrition carve-out decision",
+            isAgent: true,
+            session: { id: "session-native-id", agentType: "claude_code", via: "Ashot Petrosian" },
+          },
+        })}
+        channelId={CHANNEL}
+        now={Date.now()}
+      />,
+    );
+    expect(html).toContain('href="/conversation/session-native-id"');
+    expect(html).toContain('title="Open session"');
+    expect(html).toContain("C3 attrition carve-out decision");
+    expect(html).toContain("via Ashot Petrosian");
+  });
+
   test("a bidi override in a teammate's message is rendered visible, not obeyed", () => {
     // remarkSanitizeInvisibleUnicode, which chat used to be assembled without.
     const html = renderToStaticMarkup(
