@@ -317,7 +317,17 @@ export const ChatMessage = memo(function ChatMessage({
           </div>
         ) : !grouped && (
           <div className="ch-msg-head">
-            <span className="ch-msg-author">{author.name}</span>
+            {author.session ? (
+              <a
+                className="ch-msg-author"
+                href={`/conversation/${encodeURIComponent(author.session.id)}`}
+                title="Open session"
+              >
+                {author.name}
+              </a>
+            ) : (
+              <span className="ch-msg-author">{author.name}</span>
+            )}
             {/* A session persona wears a "session" chip and credits the human
                 it ran as; the anchor keeps its plain "agent" chip. */}
             {author.session ? (

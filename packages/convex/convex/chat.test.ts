@@ -29,6 +29,7 @@ import {
   postCallDigest,
   purgeChatMembership,
   replyAsAnchor,
+  repairMissingOriginSession,
   searchMessages,
   sendAsAnchor,
   sendMessage,
@@ -1171,6 +1172,41 @@ describe("the anchor in a thread", () => {
     const plainRow = messagesIn(ctx).find((m: any) => m._id === plain.message_id);
     expect(plainRow.origin_session_id).toBeUndefined();
     expect(plainRow.origin_session_title).toBeUndefined();
+  });
+
+  test("repairs a historical agent-origin row only with its author's session", async () => {
+    const ctx = context(ALICE, {
+      conversations: [
+        { _id: "conv-alice", user_id: ALICE, session_id: "sess-alice", title: "C3 attrition carve-out decision", agent_type: "claude_code" },
+        { _id: "conv-bob", user_id: BOB, session_id: "sess-bob", title: "Bob's private spike", agent_type: "codex" },
+      ],
+      chat_messages: [{
+        _id: "chat-message-agent-origin",
+        team_id: TEAM,
+        channel_id: CHANNEL,
+        user_id: ALICE,
+        author_kind: "user",
+        origin: "agent",
+        content: "main is blocked",
+        created_at: 1,
+        updated_at: 1,
+      }],
+    });
+
+    await expect(call(repairMissingOriginSession, ctx, {
+      message_id: "chat-message-agent-origin",
+      session_ref: "sess-bob",
+    })).rejects.toThrow("Session is not owned by the message author");
+
+    expect(await call(repairMissingOriginSession, ctx, {
+      message_id: "chat-message-agent-origin",
+      session_ref: "sess-alice",
+    })).toEqual({ repaired: true });
+    expect(messagesIn(ctx)[0]).toMatchObject({
+      origin_session_id: "sess-alice",
+      origin_session_title: "C3 attrition carve-out decision",
+      origin_agent_type: "claude_code",
+    });
   });
 
   test("an anchor with no session yet keeps the message and reports why", async () => {

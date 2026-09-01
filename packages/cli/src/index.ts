@@ -10,6 +10,7 @@ import { registerDecideCommand } from "./decideCommand.js";
 import { registerImageCommand } from "./imageCommand.js";
 import { registerStateCommand, warnIfThreadStateStale } from "./stateCommand.js";
 import { buildTaskStartBody } from "./taskClaim.js";
+import { chatSendOrigin, sessionIdFromEnv } from "./sessionIdentity.js";
 import { registerBrowserCommand } from "./browser/cli.js";
 import open from "open";
 import * as fs from "fs";
@@ -393,16 +394,6 @@ function findCurrentSessionFromProcess(projectRoot: string): string | null {
 // and the `cast claude` wrapper CODECAST_SESSION_ID. This is the one witness
 // that survives tmux, nested shells and a clipped process table, so every
 // "which session am I" read starts here and falls back to the process walk.
-function sessionIdFromEnv(): string | null {
-  return (
-    process.env.CLAUDE_CODE_SESSION_ID ||
-    process.env.CODEX_SESSION_ID ||
-    process.env.CODECAST_SESSION_ID ||
-    process.env.CODECAST_MANAGED_SESSION ||
-    null
-  );
-}
-
 /** The calling agent's own session uuid — env first, then the process walk.
  *  No guessing: unlike detectCurrentSessionId this never picks "the one
  *  recently active session file", so a stamp made from it is always true. */
@@ -11894,24 +11885,11 @@ const chat = program
   .description("Team chat: channels, threads, and the anchor's replies")
   .showHelpAfterError(true);
 
-// A `cast` running inside a codecast-managed session is an AGENT typing, not the
+// A `cast` running inside an agent session is an AGENT typing, not the
 // human whose token it holds. Chat sends stamp that, and the server refuses to
 // wake an anchor — a billed turn on a second person's laptop — for a line a
-// machine wrote. It can only take privilege away, so a stale or missing env var
-// leaves the send exactly as it was.
-function chatSendOrigin(): { origin?: "agent"; origin_session_id?: string } {
-  const inSession = process.env.CODECAST_SESSION_ID
-    || process.env.CODECAST_MANAGED_SESSION
-    || process.env.CLAUDE_CODE_SESSION_ID
-    || process.env.CODEX_SESSION_ID;
-  if (!inSession) return {};
-  // Only the codecast session id personifies the line (the server resolves it
-  // to the session's title and agent). The agent-native ids above prove "a
-  // machine typed this" but name no codecast session, so they stamp origin
-  // alone.
-  const sessionId = process.env.CODECAST_SESSION_ID || process.env.CODECAST_MANAGED_SESSION;
-  return { origin: "agent", origin_session_id: sessionId || undefined };
-}
+// machine wrote. Every exact session id the agent exports personifies the line;
+// conversations.session_id stores those native Claude and Codex ids.
 
 // The queries return an `authors` map (one bounded read per distinct author in
 // the page), so a line carries a real name — including an author who has since
