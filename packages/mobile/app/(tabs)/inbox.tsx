@@ -1318,7 +1318,10 @@ export default function InboxScreen() {
   // collapsedSections. Grouped-view sections keep their historical label keys;
   // the label/plan/flat views pass web's keys (bucket_<id>, plan_<key>, all) so
   // collapse state round-trips with desktop.
-  const renderSection = useCallback((label: string, items: InboxSession[], color?: string, collapseKey?: string) => {
+  // `count` is the chokepoint's section count (flat cards plus members nested
+  // under a same-bucket lead) — the header number web, the tally and the CLI
+  // agree on; items.length is only the flat cards.
+  const renderSection = useCallback((label: string, items: InboxSession[], color?: string, collapseKey?: string, count?: number) => {
     if (items.length === 0) return null;
     const key = collapseKey ?? label;
     const collapsed = !!collapsedSections?.[key];
@@ -1326,7 +1329,7 @@ export default function InboxScreen() {
       <RNView key={key}>
         <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleCollapsedSection(key)} activeOpacity={0.7}>
           <FontAwesome name={collapsed ? "chevron-right" : "chevron-down"} size={9} color={Theme.textMuted0} />
-          <RNText style={[styles.sectionTitle, color ? { color } : undefined]}>{label} ({items.length})</RNText>
+          <RNText style={[styles.sectionTitle, color ? { color } : undefined]}>{label} ({count ?? items.length})</RNText>
         </TouchableOpacity>
         {!collapsed && items.map(renderSessionItem)}
       </RNView>
@@ -1433,17 +1436,20 @@ export default function InboxScreen() {
     // Questions lead: a session that asked you something is your move before
     // anything else, pinned or not — same order as the web panel.
     sections.push(renderSection("Questions", filteredQuestions, Theme.violet, "questions"));
-    sections.push(renderSection("Pinned", filteredPinned, Theme.magenta));
-    sections.push(renderSection("New", filteredNew, Theme.blue));
+    // The header number is the section COUNT while no chip narrows the list
+    // (a filter that removed nothing leaves the full count in force).
+    const countOf = (shown: InboxSession[], full: InboxSession[], n: number) => (shown.length === full.length ? n : undefined);
+    sections.push(renderSection("Pinned", filteredPinned, Theme.magenta, undefined, countOf(filteredPinned, pinned, placed.counts.pinned)));
+    sections.push(renderSection("New", filteredNew, Theme.blue, undefined, countOf(filteredNew, newSessions, placed.counts.newSessions)));
     // Top-down "who acts next": you (Needs Input, Done to review), the agent
     // (Working), a machine (Dormant) — same order as the web panel.
-    sections.push(renderSection("Needs Input", statusNeedsInput, Theme.accent));
-    sections.push(renderSection("Done", statusDone, Theme.cyan));
-    sections.push(renderSection("Working", statusWorking, Theme.greenBright));
-    sections.push(renderSection("Dormant", statusDormant, Theme.blue));
+    sections.push(renderSection("Needs Input", statusNeedsInput, Theme.accent, undefined, countOf(statusNeedsInput, needsInput, placed.counts.needsInput)));
+    sections.push(renderSection("Done", statusDone, Theme.cyan, undefined, countOf(statusDone, done, placed.counts.done)));
+    sections.push(renderSection("Working", statusWorking, Theme.greenBright, undefined, countOf(statusWorking, working, placed.counts.working)));
+    sections.push(renderSection("Dormant", statusDormant, Theme.blue, undefined, countOf(statusDormant, dormant, placed.counts.dormant)));
     return sections.filter(Boolean);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.
