@@ -1796,12 +1796,22 @@ export const SESSIONS_PRESERVE_FIELDS: readonly string[] = [
 // derived from the shared constant.
 export const SESSIONS_STRIP_FIELDS: readonly string[] = [...INBOX_PROJECTION_FIELDS];
 const SESSIONS_STRIP_FIELD_SET: ReadonlySet<string> = new Set(SESSIONS_STRIP_FIELDS);
+const INBOX_FACT_FIELD_SET: ReadonlySet<string> = new Set(INBOX_FACT_FIELDS);
 
 // The one fact merge: an overlay row's FACTS onto a session row, field by
 // field (stamps never reach a row), leaving an unchanged row's identity alone.
+// An overlay row is the fact writer for its row, so every fact field it does
+// not carry reads as null — never "keep what was there": the server's trusted
+// status is undefined once the managed row is gone, the key is absent from
+// the payload, and a stale "stopped" would otherwise outlive it and file a
+// declared-done session under Needs Input on this replica alone.
 function mergeOverlayFacts(target: Record<string, unknown>, facts: Record<string, unknown>): void {
+  for (const key of INBOX_FACT_FIELDS) {
+    const next = facts[key] === undefined ? null : facts[key];
+    if (!Object.is(target[key], next)) target[key] = next;
+  }
   for (const key in facts) {
-    if (SESSIONS_STRIP_FIELD_SET.has(key)) continue;
+    if (SESSIONS_STRIP_FIELD_SET.has(key) || INBOX_FACT_FIELD_SET.has(key)) continue;
     if (!Object.is(target[key], facts[key])) target[key] = facts[key];
   }
 }
