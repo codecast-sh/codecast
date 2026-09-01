@@ -862,6 +862,17 @@ function createCallWindow(roomKey, opts) {
     if (!callWindowState || callWindowState.room !== roomKey) {
       callWindow.loadURL(callPanelUrl(roomKey, opts));
     }
+    // An asked-for size reshapes the window that exists, the same way the
+    // renderer's own size buttons do.
+    if (opts && opts.size) {
+      const next = normalizeCallWindowSize(opts.size);
+      if (next !== callWindowSize) {
+        rememberCallWindowPlace(callWindow);
+        callWindowSize = next;
+        updateSettings({ callPanelWindow: { ...loadCallPanelState(), size: next } });
+        applyCallWindowSize(callWindow, next);
+      }
+    }
     // showInactive in the circle sizes: they are a glance you keep beside your
     // work, and one that stole the keyboard every time it appeared would be
     // worse than no circle at all.
@@ -873,9 +884,12 @@ function createCallWindow(roomKey, opts) {
     }
     return callWindow;
   }
-  // The size the person last left it in. Read before the URL is built, because
-  // the renderer is told which shape it is opening in.
-  callWindowSize = savedCallWindowSize();
+  // The size the person last left it in — unless the opener asked for one
+  // (the walkie card's "Float over your work" wants circles, not a stage).
+  // Read before the URL is built, because the renderer is told which shape it
+  // is opening in.
+  callWindowSize = opts && opts.size ? normalizeCallWindowSize(opts.size) : savedCallWindowSize();
+  if (opts && opts.size) updateSettings({ callPanelWindow: { ...loadCallPanelState(), size: callWindowSize } });
   const bounds = clampToVisibleDisplay(loadCallPanelState().bounds, CALL_PANEL_SIZE);
   const zoom = getAutoZoomFactor();
   const win = new BrowserWindow({

@@ -273,3 +273,18 @@ test("a zoomed page still gets a window the size of its circles", () => {
   rig.handlers.get("set-call-window-content-size")(sender, { width: 112, height: 112 });
   assert.deepEqual(win.getContentSize(), [168, 168]);
 });
+
+test("an opener may ask for a size, and the window is born in it", () => {
+  // The walkie card's "Float faces over my work" wants circles, not a stage
+  // that shrinks a frame later. The size is remembered like any other.
+  const rig = loadShell({ callPanelWindow: { size: "panel" } });
+  rig.handlers.get("open-call-panel")(null, "dm:a:b", { mic: true, size: "speaker" });
+  const win = rig.windows[rig.windows.length - 1];
+  assert.match(win.last("loadURL")[0], /size=speaker/);
+  assert.deepEqual(win.last("setAlwaysOnTop"), [true, "floating"]);
+  assert.equal(readSettings().callPanelWindow.size, "speaker");
+  // Asked again on the window that exists, the shape changes in place.
+  rig.handlers.get("open-call-panel")(null, "dm:a:b", { size: "panel" });
+  assert.deepEqual(win.last("setAlwaysOnTop"), [false, "floating"]);
+  assert.equal(win.isResizable(), true);
+});
