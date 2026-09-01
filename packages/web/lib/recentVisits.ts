@@ -9,6 +9,7 @@ import { channelDisplayName } from "./chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
 import { cleanTitle } from "./conversationProcessor";
 import { convBucketMap, filterInboxScopeFromState, getProjectName, type RecentVisit } from "../store/inboxStore";
+import { formatShortDate } from "./utils";
 
 // What a visit points at, resolved live so a row can show the object's own
 // detail (a task's status, a plan's progress, a label's session count).
@@ -155,5 +156,5 @@ export function visitTimeAgo(ts: number): string {
   if (hours < 24) return `${hours}h`;
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d`;
-  return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
+  return formatShortDate(ts);
 }
