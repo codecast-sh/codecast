@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { create as mutativeCreate } from "mutative";
 import { groupPatchesByTable } from "../mutativeMiddleware";
 import {
+  chipBucketFilters,
   chipMatchesSession,
   computeManualSortKey,
   computeReorderUpdates,
@@ -11,16 +12,16 @@ import {
   hydrateMergeValue,
   sortLabels,
   useInboxStore,
-  visualOrderSessions,
   type BucketAssignmentItem,
   type BucketItem,
   type InboxSession,
 } from "../inboxStore";
+import { orderSections } from "./placeTestHarness";
 
 const session = (id: string, extra: Partial<InboxSession> = {}): InboxSession => ({
   _id: id,
   session_id: `session-${id}`,
-  updated_at: 1,
+  updated_at: Date.now(),
   agent_type: "claude_code",
   message_count: 3,
   is_idle: true,
@@ -83,38 +84,51 @@ describe("convBucketMap", () => {
   });
 });
 
-describe("visualOrderSessions bucket filter", () => {
+describe("orderSections bucket filter", () => {
+  const idA = convexId("a"), idB = convexId("b");
   it("scopes keyboard order to the active bucket while leaving project filter intact", () => {
     const sessions: Record<string, InboxSession> = {
-      a: session("a", { is_idle: false }),
-      b: session("b", { is_idle: false }),
+      [idA]: session(idA, { is_idle: false }),
+      [idB]: session(idB, { is_idle: false }),
     };
-    const bucketByConv = { a: "bucket1" } as Record<string, string | undefined>;
-    const all = visualOrderSessions(sessions, new Set(), null, undefined, {});
-    expect(all.map((s) => s._id).sort()).toEqual(["a", "b"]);
-    const scoped = visualOrderSessions(sessions, new Set(), null, undefined, {
-      bucketFilter: "bucket1",
+    const bucketByConv = { [idA]: "bucket1" } as Record<string, string | undefined>;
+    const all = orderSections(sessions, new Set(), null, undefined, {});
+    expect(all.map((s) => s._id).sort()).toEqual([idA, idB].sort());
+    const scoped = orderSections(sessions, new Set(), null, undefined, {
+      bucketFilters: [{ id: "bucket1", exclude: false }],
       bucketByConv,
     });
-    expect(scoped.map((s) => s._id)).toEqual(["a"]);
+    expect(scoped.map((s) => s._id)).toEqual([idA]);
   });
 
-  it("filterExclude inverts the bucket and project scoping", () => {
+  it("negative terms and filterExclude invert the bucket and project scoping", () => {
     const sessions: Record<string, InboxSession> = {
-      a: session("a", { is_idle: false, project_path: "/x/codecast" }),
-      b: session("b", { is_idle: false, project_path: "/x/other" }),
+      [idA]: session(idA, { is_idle: false, project_path: "/x/codecast" }),
+      [idB]: session(idB, { is_idle: false, project_path: "/x/other" }),
     };
-    const bucketByConv = { a: "bucket1" } as Record<string, string | undefined>;
-    const bucketExcluded = visualOrderSessions(sessions, new Set(), null, undefined, {
-      bucketFilter: "bucket1",
+    const bucketByConv = { [idA]: "bucket1" } as Record<string, string | undefined>;
+    const bucketExcluded = orderSections(sessions, new Set(), null, undefined, {
+      bucketFilters: [{ id: "bucket1", exclude: true }],
       bucketByConv,
+    });
+    expect(bucketExcluded.map((s) => s._id)).toEqual([idB]);
+    const projectExcluded = orderSections(sessions, new Set(), "codecast", undefined, {
       filterExclude: true,
     });
-    expect(bucketExcluded.map((s) => s._id)).toEqual(["b"]);
-    const projectExcluded = visualOrderSessions(sessions, new Set(), "codecast", undefined, {
-      filterExclude: true,
+    expect(projectExcluded.map((s) => s._id)).toEqual([idB]);
+  });
+
+  it("mid-create stubs walk with the list even under a bucket chip (shared predicate)", () => {
+    const sessions: Record<string, InboxSession> = {
+      stub: session("stub", { is_idle: false }),
+      [idA]: session(idA, { is_idle: false }),
+    };
+    const scoped = orderSections(sessions, new Set(), null, undefined, {
+      bucketFilters: [{ id: "bucket1", exclude: false }],
+      bucketByConv: { [idA]: "bucket1" },
+      stubIds: new Set(["stub"]),
     });
-    expect(projectExcluded.map((s) => s._id)).toEqual(["b"]);
+    expect(scoped.map((s) => s._id).sort()).toEqual([idA, "stub"].sort());
   });
 });
 
@@ -124,18 +138,46 @@ describe("chipMatchesSession exclude mode", () => {
   it("hides matches and shows everything else", () => {
     const inBucket = session(convexId("in"));
     const outBucket = session(convexId("out"));
-    expect(chipMatchesSession(inBucket, { bucketFilter: "bucket1", exclude: true, bucketByConv })).toBe(false);
-    expect(chipMatchesSession(outBucket, { bucketFilter: "bucket1", exclude: true, bucketByConv })).toBe(true);
+    expect(chipMatchesSession(inBucket, { bucketFilters: [{ id: "bucket1", exclude: true }], bucketByConv })).toBe(false);
+    expect(chipMatchesSession(outBucket, { bucketFilters: [{ id: "bucket1", exclude: true }], bucketByConv })).toBe(true);
     const inProj = session(convexId("p1"), { project_path: "/x/codecast" });
     const outProj = session(convexId("p2"), { project_path: "/x/other" });
     expect(chipMatchesSession(inProj, { projectFilter: "codecast", exclude: true, bucketByConv })).toBe(false);
     expect(chipMatchesSession(outProj, { projectFilter: "codecast", exclude: true, bucketByConv })).toBe(true);
   });
 
-  it("mid-create stubs pass the bucket chip in both modes", () => {
+  it("mid-create stubs pass the bucket chips in both polarities", () => {
     const stub = session("stub-not-convex");
-    expect(chipMatchesSession(stub, { bucketFilter: "bucket1", bucketByConv })).toBe(true);
-    expect(chipMatchesSession(stub, { bucketFilter: "bucket1", exclude: true, bucketByConv })).toBe(true);
+    expect(chipMatchesSession(stub, { bucketFilters: [{ id: "bucket1", exclude: false }], bucketByConv })).toBe(true);
+    expect(chipMatchesSession(stub, { bucketFilters: [{ id: "bucket1", exclude: true }], bucketByConv })).toBe(true);
+  });
+});
+
+describe("chipMatchesSession with a multi-term filter list", () => {
+  const a = convexId("la"), b = convexId("lb"), c = convexId("lc");
+  const bucketByConv = { [a]: "bucketA", [b]: "bucketB", [c]: "bucketC" } as Record<string, string | undefined>;
+
+  it("include terms are a union over the session's single label", () => {
+    const terms = [{ id: "bucketA", exclude: false }, { id: "bucketB", exclude: false }];
+    expect(chipMatchesSession(session(a), { bucketFilters: terms, bucketByConv })).toBe(true);
+    expect(chipMatchesSession(session(b), { bucketFilters: terms, bucketByConv })).toBe(true);
+    expect(chipMatchesSession(session(c), { bucketFilters: terms, bucketByConv })).toBe(false);
+    expect(chipMatchesSession(session(convexId("none")), { bucketFilters: terms, bucketByConv })).toBe(false);
+  });
+
+  it("an all-negative list hides exactly its labels", () => {
+    const terms = [{ id: "bucketA", exclude: true }, { id: "bucketB", exclude: true }];
+    expect(chipMatchesSession(session(a), { bucketFilters: terms, bucketByConv })).toBe(false);
+    expect(chipMatchesSession(session(b), { bucketFilters: terms, bucketByConv })).toBe(false);
+    expect(chipMatchesSession(session(c), { bucketFilters: terms, bucketByConv })).toBe(true);
+    expect(chipMatchesSession(session(convexId("none")), { bucketFilters: terms, bucketByConv })).toBe(true);
+  });
+
+  it("with any include present, includes decide (a mixed list can't resurrect an excluded label)", () => {
+    const terms = [{ id: "bucketA", exclude: false }, { id: "bucketB", exclude: true }];
+    expect(chipMatchesSession(session(a), { bucketFilters: terms, bucketByConv })).toBe(true);
+    expect(chipMatchesSession(session(b), { bucketFilters: terms, bucketByConv })).toBe(false);
+    expect(chipMatchesSession(session(c), { bucketFilters: terms, bucketByConv })).toBe(false);
   });
 });
 
@@ -263,6 +305,88 @@ describe("bucket filter mutual exclusivity", () => {
     st = useInboxStore.getState();
     expect(st.activeProjectFilter).toBe("codecast");
     expect(st.chipFilterExclude).toBe(true);
+  });
+});
+
+describe("toggleBucketFilterTerm (shift-click filter list)", () => {
+  const resetFilters = () => {
+    useInboxStore.setState({
+      activeBucketFilter: null,
+      extraBucketFilters: [],
+      activeProjectFilter: null,
+      activeProjectPath: null,
+      chipFilterExclude: false,
+      pending: {},
+    });
+  };
+  beforeEach(resetFilters);
+  afterEach(resetFilters);
+  const filters = () => chipBucketFilters(useInboxStore.getState());
+
+  it("the first term behaves like a plain/alt click, clearing the project axis", () => {
+    const store = useInboxStore.getState();
+    store.setActiveProjectFilter("codecast", "/x/codecast");
+    store.toggleBucketFilterTerm("b1", false);
+    const st = useInboxStore.getState();
+    expect(st.activeBucketFilter).toBe("b1");
+    expect(st.activeProjectFilter).toBeNull();
+    expect(filters()).toEqual([{ id: "b1", exclude: false }]);
+  });
+
+  it("appends terms in click order and removes them on a same-polarity re-toggle", () => {
+    const store = useInboxStore.getState();
+    store.toggleBucketFilterTerm("b1", false);
+    store.toggleBucketFilterTerm("b2", false);
+    store.toggleBucketFilterTerm("b3", true);
+    expect(filters()).toEqual([
+      { id: "b1", exclude: false },
+      { id: "b2", exclude: false },
+      { id: "b3", exclude: true },
+    ]);
+    store.toggleBucketFilterTerm("b2", false);
+    expect(filters()).toEqual([{ id: "b1", exclude: false }, { id: "b3", exclude: true }]);
+  });
+
+  it("an opposite-polarity toggle flips a term in place (head and tail)", () => {
+    const store = useInboxStore.getState();
+    store.toggleBucketFilterTerm("b1", false);
+    store.toggleBucketFilterTerm("b2", false);
+    store.toggleBucketFilterTerm("b2", true);
+    expect(filters()).toEqual([{ id: "b1", exclude: false }, { id: "b2", exclude: true }]);
+    store.toggleBucketFilterTerm("b1", true);
+    expect(useInboxStore.getState().chipFilterExclude).toBe(true);
+    expect(filters()).toEqual([{ id: "b1", exclude: true }, { id: "b2", exclude: true }]);
+  });
+
+  it("removing the head promotes the first extra so extras never outlive the head", () => {
+    const store = useInboxStore.getState();
+    store.toggleBucketFilterTerm("b1", false);
+    store.toggleBucketFilterTerm("b2", true);
+    store.toggleBucketFilterTerm("b1", false);
+    const st = useInboxStore.getState();
+    expect(st.activeBucketFilter).toBe("b2");
+    expect(st.chipFilterExclude).toBe(true);
+    expect(st.extraBucketFilters).toEqual([]);
+    store.toggleBucketFilterTerm("b2", true);
+    expect(useInboxStore.getState().activeBucketFilter).toBeNull();
+    expect(filters()).toEqual([]);
+  });
+
+  it("a plain click (setActiveBucketFilter) collapses a multi-term filter to one chip", () => {
+    const store = useInboxStore.getState();
+    store.toggleBucketFilterTerm("b1", false);
+    store.toggleBucketFilterTerm("b2", false);
+    store.setActiveBucketFilter("b2");
+    expect(filters()).toEqual([{ id: "b2", exclude: false }]);
+  });
+
+  it("picking a project clears the whole label list", () => {
+    const store = useInboxStore.getState();
+    store.toggleBucketFilterTerm("b1", false);
+    store.toggleBucketFilterTerm("b2", true);
+    store.setActiveProjectFilter("codecast", "/x/codecast");
+    expect(filters()).toEqual([]);
+    expect(useInboxStore.getState().extraBucketFilters).toEqual([]);
   });
 });
 
@@ -477,34 +601,38 @@ describe("visualOrder follows the active view mode", () => {
 
   // Regression: in grouped/bucket view, Ctrl+J/K landed on "old" sessions the
   // panel hides when "show old sessions" is off, so the highlight sat still while
-  // the selection jumped onto an off-screen card. The panel renders these views
-  // from partitionOldSessions(...).visibleSessions; nav must walk the SAME set.
-  // (isOldSession only applies to real Convex ids, hence the 32-char fixtures.)
-  const LIVE_ID = "live".padEnd(32, "0"); // 32-char Convex-format id, in the live set
-  const OLD_ID = "olds".padEnd(32, "1");  // 32-char id, NOT in the live set → "old"
+  // the selection jumped onto an off-screen card. "Old" is the FOLD of the shared
+  // working-set selection now (sync-convergence C4): a member past a 12h activity
+  // gap hides behind the toggle; show-old reveals it INSIDE the computation. The
+  // panel renders from computeInboxVisible(...).visibleSessions; nav must walk
+  // the SAME set. (Membership only applies to real Convex ids — stubs are the
+  // create_stub overlay — hence the 32-char fixtures.)
+  const LIVE_ID = "live".padEnd(32, "0"); // fresh activity: above the fold
+  const EDGE_ID = "edge".padEnd(32, "2"); // at the fold cut: stays visible
+  const OLD_ID = "olds".padEnd(32, "1");  // past the cut → folded ("old")
   for (const mode of ["grouped", "bucket"] as const) {
-    it(`${mode} mode skips "old" (not-live) sessions when show_old is off, matching the render`, () => {
+    it(`${mode} mode skips "old" (folded) sessions when show_old is off, matching the render`, () => {
+      const now = Date.now();
       const sessions = {
-        [LIVE_ID]: session(LIVE_ID, { message_count: 3, updated_at: 200, git_root: "/x/web" }),
-        [OLD_ID]: session(OLD_ID, { message_count: 3, updated_at: 100, git_root: "/x/web" }),
+        [LIVE_ID]: session(LIVE_ID, { message_count: 3, updated_at: now, git_root: "/x/web" }),
+        [EDGE_ID]: session(EDGE_ID, { message_count: 3, updated_at: now - 13 * 60 * 60 * 1000, git_root: "/x/web" }),
+        [OLD_ID]: session(OLD_ID, { message_count: 3, updated_at: now - 14 * 60 * 60 * 1000, git_root: "/x/web" }),
       };
-      // show_old off (the default): the old card is hidden on screen, so nav
+      // show_old off (the default): the folded card is hidden on screen, so nav
       // drops it too.
       useInboxStore.setState({
         sessions,
-        liveInboxIds: new Set([LIVE_ID]),
         clientState: { ui: { inbox_view_mode: mode, inbox_show_old: false } },
       });
-      expect(useInboxStore.getState().visualOrder().map((s) => s._id)).toEqual([LIVE_ID]);
+      expect(useInboxStore.getState().visualOrder().map((s) => s._id).sort()).toEqual([LIVE_ID, EDGE_ID].sort());
       // show_old on (synced per-user view pref): both render and nav include
-      // the old session (membership is the contract here; the intra-status
+      // the folded session (membership is the contract here; the intra-status
       // tiebreak differs by mode).
       useInboxStore.setState({
         sessions,
-        liveInboxIds: new Set([LIVE_ID]),
         clientState: { ui: { inbox_view_mode: mode, inbox_show_old: true } },
       });
-      expect(useInboxStore.getState().visualOrder().map((s) => s._id).sort()).toEqual([LIVE_ID, OLD_ID].sort());
+      expect(useInboxStore.getState().visualOrder().map((s) => s._id).sort()).toEqual([LIVE_ID, EDGE_ID, OLD_ID].sort());
     });
   }
 

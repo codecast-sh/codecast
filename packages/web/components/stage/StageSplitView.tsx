@@ -16,7 +16,7 @@
 // rejected.
 
 import { lazy, memo, Suspense, useCallback, useMemo, useRef, useState } from "react";
-import { Maximize2, X } from "lucide-react";
+import { PaneControls } from "./PaneControls";
 import { useInboxStore, useTrackedStore, getSessionRenderKey, type AppTab } from "../../store/inboxStore";
 import {
   findBranch,
@@ -28,6 +28,7 @@ import {
 import { paneSessionId, stageClose, stageExpand, stageFocus, stageNavigateLeaf, startPaneDrag } from "../../lib/stage";
 import { animatedHideSession } from "../../store/undoActions";
 import { pathLabel } from "../../lib/pathLabel";
+import { chatTabTitle } from "../../lib/tabTitle";
 import { RoutePane } from "../RoutePane";
 import { PageIcon } from "../RecentVisitRow";
 import { ErrorBoundary } from "../ErrorBoundary";
@@ -78,10 +79,36 @@ const SessionPane = memo(function SessionPane({ sessionId, leafId }: { sessionId
   );
 });
 
+// What a pane's strip should CALL itself. A section pane is its section
+// ("Tasks"); an entity pane is the entity — the doc's title, the task's
+// title, the channel's name — because two panes both labeled "Docs" say
+// nothing. Subscribes only to the one row it names.
+function usePaneTitle(path: string): string {
+  const clean = path.split("?")[0];
+  const m = clean.match(/^\/(docs|tasks|plans|chat)\/([^/]+)/);
+  const kind = m?.[1];
+  const id = m?.[2] ?? "";
+  const s = useTrackedStore([
+    (st) =>
+      kind === "docs" ? ((st.docs[id] as any)?.display_title ?? st.docs[id]?.title)
+      : kind === "tasks" ? st.tasks[id]?.title
+      : kind === "plans" ? st.plans[id]?.title
+      : kind === "chat" ? chatTabTitle(path, st.chatChannels, st.teamMembers, (st as any).currentUser?._id)
+      : null,
+  ]);
+  const entity =
+    kind === "docs" ? ((s.docs[id] as any)?.display_title ?? s.docs[id]?.title)
+    : kind === "tasks" ? s.tasks[id]?.title
+    : kind === "plans" ? s.plans[id]?.title
+    : kind === "chat" ? chatTabTitle(path, s.chatChannels, s.teamMembers, (s as any).currentUser?._id)
+    : null;
+  return entity || pathLabel(path);
+}
+
 // The strip is the pane's window title AND its drag handle: grab it to move
 // the pane to another position (the drop layer treats it as a move).
 function PaneStrip({ leafId, path, focused }: { leafId: string; path: string; focused: boolean }) {
-  const title = pathLabel(path);
+  const title = usePaneTitle(path);
   return (
     <div
       draggable
@@ -93,28 +120,32 @@ function PaneStrip({ leafId, path, focused }: { leafId: string; path: string; fo
       <span className={`text-[11px] truncate flex-1 leading-none ${focused ? "text-sol-text-muted" : "text-sol-text-dim/70"}`}>
         {title}
       </span>
-      <button className="cc-panel__btn" title="Take the whole stage" onClick={() => stageExpand(leafId)}>
-        <Maximize2 className="w-3 h-3" />
-      </button>
-      <button className="cc-panel__btn" title="Close pane" onClick={() => stageClose(leafId)}>
-        <X className="w-3 h-3" />
-      </button>
+      <PaneControls onExpand={() => stageExpand(leafId)} onClose={() => stageClose(leafId)} />
     </div>
   );
 }
 
-function StageCell({
+// Memoized on primitive props: a resize drag re-renders the view per
+// pointermove, and without this every cell's whole page subtree re-ran even
+// when its own rect hadn't moved.
+const StageCell = memo(function StageCell({
   tabId,
   leafId,
   path,
-  rect,
+  left,
+  top,
+  width,
+  height,
   focused,
   isTabActive,
 }: {
   tabId: string;
   leafId: string;
   path: string;
-  rect: { left: number; top: number; width: number; height: number };
+  left: number;
+  top: number;
+  width: number;
+  height: number;
   focused: boolean;
   isTabActive: boolean;
 }) {
@@ -130,7 +161,7 @@ function StageCell({
     <div
       data-stage-leaf={leafId}
       className={`stage-cell${focused ? " stage-cell--focused" : ""}`}
-      style={{ left: `${rect.left}%`, top: `${rect.top}%`, width: `${rect.width}%`, height: `${rect.height}%` }}
+      style={{ left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%` }}
       onPointerDownCapture={handleFocus}
     >
       {sessionId ? (
@@ -160,7 +191,7 @@ function StageCell({
       )}
     </div>
   );
-}
+});
 
 function StageHandle({
   handle,
@@ -184,7 +215,10 @@ function StageHandle({
       const branch = findBranch(layout, handle.branchId);
       if (!el || !branch) return;
       e.preventDefault();
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      // Capture is a nicety (keeps hover styling on the handle mid-drag); the
+      // drag itself listens on window. It throws for an inactive pointer id
+      // (synthetic events in tests) — never let that kill the drag setup.
+      try { (e.target as HTMLElement).setPointerCapture(e.pointerId); } catch { /* no capture */ }
       setActive(true);
       const box = el.getBoundingClientRect();
       const branchPx = horizontal
@@ -192,17 +226,22 @@ function StageHandle({
         : (box.height * handle.branchRect.height) / 100;
       if (branchPx <= 0) return;
       // A pane narrower than ~240px (shorter than ~160px) stops being a
-      // surface, so the drag clamps in pixels converted to branch shares.
+      // surface, so the drag clamps in pixels converted to branch shares —
+      // but never past the pair's midpoint, or a pair smaller than two
+      // minimums would invert the clamp and pin the seam off-pointer.
       const minPct = Math.min(45, Math.max(8, ((horizontal ? 240 : 160) / branchPx) * 100));
       const start = horizontal ? e.clientX : e.clientY;
       const startSizes = [...branch.sizes];
       const i = handle.index;
       const pair = startSizes[i] + startSizes[i + 1];
+      const lo = Math.min(minPct, pair / 2);
       document.body.style.cursor = horizontal ? "col-resize" : "row-resize";
       document.body.style.userSelect = "none";
       const move = (ev: PointerEvent) => {
         const d = (((horizontal ? ev.clientX : ev.clientY) - start) / branchPx) * 100;
-        let a = Math.max(minPct, Math.min(pair - minPct, startSizes[i] + d));
+        const a = Math.max(lo, Math.min(pair - lo, startSizes[i] + d));
+        const prev = liveSizesRef.current;
+        if (prev && prev.branchId === branch.id && prev.sizes[i] === a) return;
         const sizes = [...startSizes];
         sizes[i] = a;
         sizes[i + 1] = pair - a;
@@ -277,7 +316,10 @@ export default memo(function StageSplitView({
           tabId={tab.id}
           leafId={l.id}
           path={l.path}
-          rect={l.rect}
+          left={l.rect.left}
+          top={l.rect.top}
+          width={l.rect.width}
+          height={l.rect.height}
           focused={tab.focusedLeafId === l.id}
           isTabActive={isTabActive}
         />

@@ -108,16 +108,18 @@ const TAG = (name: string, inner: string) => inner.match(new RegExp(`<${name}>([
 // row anatomy everywhere. Accepts raw (string) or parsed input so the message
 // scan, the tool-block router, and condensed-feed visibility share one
 // predicate.
+const BACKGROUND_SHELL_IDS = new Set(["Bash", "bash", "run_terminal_command"]);
+
 export function isBackgroundBashToolCall(tc: { name?: string; input?: unknown }): boolean {
-  if (tc.name !== "Bash") return false;
+  if (!tc.name || !BACKGROUND_SHELL_IDS.has(tc.name)) return false;
   let input: any = tc.input;
   if (typeof input === "string") {
     // Cheap prefilter: condensed feeds call this for every Bash input, and
     // almost none are backgrounded — skip the parse unless the key appears.
-    if (!input.includes("run_in_background")) return false;
+    if (!input.includes("run_in_background") && !input.includes('"background"')) return false;
     try { input = JSON.parse(input); } catch { return false; }
   }
-  return input?.run_in_background === true;
+  return input?.run_in_background === true || input?.background === true;
 }
 
 export function decodeEntities(s: string): string {

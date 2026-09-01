@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { openBackgroundTaskIds, openBackgroundTasks, reconciledStatusWithTasks, scanOpenBackgroundTasks, declaredSettleVerdict, latestTurnStartTs, markTurnStarted, statusFlipStartsTurn, verifyOpenTasks, parseProcessTable, taskProcessNeedle, toOpenTaskReports, paneReconcileTarget, type OpenTaskInfo } from "./daemon.js";
+import { transcriptTailTurnStartTs, openBackgroundTaskIds, openBackgroundTasks, reconciledStatusWithTasks, scanOpenBackgroundTasks, declaredSettleVerdict, latestTurnStartTs, markTurnStarted, statusFlipStartsTurn, verifyOpenTasks, parseProcessTable, taskProcessNeedle, toOpenTaskReports, paneReconcileTarget, type OpenTaskInfo } from "./daemon.js";
 
 // Regression tests for the "settled turn with live background work reads as
 // needs_input" bug (session jx7e6ex, 2026-08-03). A turn that ends while a
@@ -491,10 +491,57 @@ describe("verifyOpenTasks — a shell-backed task is alive while its child shell
 describe("paneReconcileTarget — a parked waiting over an idle pane is re-derived", () => {
   test("stored waiting + idle pane -> idle (the caller re-runs the settle verdict, which re-checks the tasks)", () => {
     expect(paneReconcileTarget("idle", "waiting")).toBe("idle");
+    // A stored idle re-derives too — the climb-back for a waiting a false
+    // task-death verdict collapsed (stale cached agent pid, 2026-08-30).
+    expect(paneReconcileTarget("idle", "idle")).toBe("idle");
     // Declared verdicts are still left alone by the pane: nothing to re-check.
     expect(paneReconcileTarget("idle", "dormant")).toBeNull();
     expect(paneReconcileTarget("idle", "done")).toBeNull();
-    expect(paneReconcileTarget("idle", "idle")).toBeNull();
   });
 });
 
+
+// The restart-proof turn fence: the transcript's own last delivered input,
+// read from a raw JSONL tail. Before this existed, every daemon restart read
+// pre-boot `cast state dormant|done` stamps as untrusted and the boot
+// reconcile republished "idle" over 17 parked sessions' declared verdicts
+// (2026-08-31).
+describe("transcriptTailTurnStartTs", () => {
+  const line = (o: object) => JSON.stringify(o) + "\n";
+  const T1 = "2026-08-31T10:00:00.000Z";
+  const T2 = "2026-08-31T11:00:00.000Z";
+
+  test("returns the newest real user turn's timestamp", () => {
+    const tail =
+      line({ type: "user", sessionId: "s1", timestamp: T1, message: { role: "user", content: "do the thing" } }) +
+      line({ type: "assistant", sessionId: "s1", timestamp: T2, message: { role: "assistant", content: [] } }) +
+      line({ type: "user", sessionId: "s1", timestamp: T2, message: { role: "user", content: "and this" } });
+    expect(transcriptTailTurnStartTs(tail, "s1")).toBe(Date.parse(T2));
+  });
+
+  test("tool_result replies ride inside a turn and never start one", () => {
+    const tail =
+      line({ type: "user", sessionId: "s1", timestamp: T1, message: { role: "user", content: "go" } }) +
+      line({ type: "user", sessionId: "s1", timestamp: T2, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] } });
+    expect(transcriptTailTurnStartTs(tail, "s1")).toBe(Date.parse(T1));
+  });
+
+  test("a resumed file's replayed prior-run lines are scoped out", () => {
+    const tail =
+      line({ type: "user", sessionId: "old", timestamp: T2, message: { role: "user", content: "prior run" } }) +
+      line({ type: "user", sessionId: "s1", timestamp: T1, message: { role: "user", content: "this run" } });
+    expect(transcriptTailTurnStartTs(tail, "s1")).toBe(Date.parse(T1));
+  });
+
+  test("no user turn in the window (or a torn tail) -> null", () => {
+    expect(transcriptTailTurnStartTs("", "s1")).toBeNull();
+    expect(transcriptTailTurnStartTs('{"type":"assistant"', "s1")).toBeNull();
+  });
+
+  test("a stamp written after the tail's turn start is the current turn's declaration", () => {
+    const tail = line({ type: "user", sessionId: "s1", timestamp: T1, message: { role: "user", content: "park yourself" } });
+    const turnStart = transcriptTailTurnStartTs(tail, "s1")!;
+    // The stamp postdates the delivered input -> trusted, however old the daemon is.
+    expect(declaredSettleVerdict("s1", Date.parse(T2), turnStart, { at: Date.parse(T1) + 5_000, status: "dormant" })).toBe("dormant");
+  });
+});

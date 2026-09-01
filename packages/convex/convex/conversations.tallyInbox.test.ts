@@ -38,7 +38,7 @@ function session(overrides: Record<string, any> = {}) {
 // the shared placeInboxRow (via placeConversationRow) before the tally sees
 // it. The test rows go through the same stamp.
 function stamped(s: any) {
-  const placement = placeConversationRow({ ...s, has_pending_messages: s.has_pending }, s, ownAsk(s), s.last_user_message);
+  const placement = placeConversationRow({ ...s, has_pending_messages: s.has_pending }, s, ownAsk(s), s.last_user_message, Date.now());
   return { ...s, ...placement, asking: ownAsk(s) };
 }
 

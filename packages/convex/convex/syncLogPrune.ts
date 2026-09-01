@@ -85,7 +85,7 @@ export async function pruneScope(
   let stoppedAtYoung = false;
   while (budget > 0) {
     const pageLimit = Math.min(PER_SCOPE_PAGE, budget);
-    const page = await db
+    const page: { _id: any; ts: number; position: number }[] = await db
       .query("sync_actions")
       .withIndex("by_scope_position", (q: any) =>
         q.eq("scope_key", head.scope_key).gt("position", from))

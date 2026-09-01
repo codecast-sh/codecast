@@ -5,6 +5,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { teamVisibleConvTeam } from "./privacy";
 import { computeWorkspaceKey } from "./lib/access";
+import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
 import { canAccessDoc } from "./lib/access";
 import { nextShortId } from "./counters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
@@ -1408,27 +1409,9 @@ export const webGetTaskDetail = query({
       if (u.image) nameToImage.set(u.name, u.image);
     }
     if (creator?.image) nameToImage.set(creator.name, creator.image);
-    type CommentSessionInfo = { _id: string; session_id: string; title: string | null; agent_type: string | null };
-    const commentConvCache = new Map<string, CommentSessionInfo | null>();
-    const enrichedComments = await Promise.all(comments.map(async c => {
-      let session_info: CommentSessionInfo | null = null;
-      if (c.conversation_id) {
-        const key = c.conversation_id.toString();
-        if (commentConvCache.has(key)) {
-          session_info = commentConvCache.get(key)!;
-        } else {
-          const conv = await ctx.db.get(c.conversation_id);
-          if (conv) {
-            session_info = { _id: conv._id, session_id: conv.session_id, title: conv.title || conv.subtitle || null, agent_type: conv.agent_type || null };
-          }
-          commentConvCache.set(key, session_info);
-        }
-      }
-      return {
-        ...c,
-        author_image: nameToImage.get(c.author) || null,
-        session_info,
-      };
+    const enrichedComments = (await attachCommentSessionInfo(ctx, comments)).map(c => ({
+      ...c,
+      author_image: nameToImage.get(c.author) || null,
     }));
 
     let plan = null;

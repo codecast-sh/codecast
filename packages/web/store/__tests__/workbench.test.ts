@@ -84,18 +84,18 @@ describe("apply", () => {
     expect(ws.context.userClosed).toBeNull();
   });
 
-  it("keeps the current subject in a subject slot instead of conjuring one", () => {
-    const snap = captureWorkbench(workedIn()); // secondary: subject, split, 44
+  it("leaves the secondary slot alone — its one use (the board's drill-in) is the board's, not an arrangement", () => {
+    const snap = captureWorkbench(workedIn()); // old save: secondary subject, split, 44
     let ws = createWorkspace();
     ws = showPane(ws, "secondary", convo("live"), { presentation: "overlay" });
     ws = applyWorkbench(ws, snap);
+    // Applying an old snapshot that pinned a companion must not strand a pane
+    // in a slot nothing renders any more: the live overlay is untouched.
     expect(ws.secondary.pane).toEqual(convo("live"));
-    expect(ws.secondary.presentation).toBe("split");
-    expect(ws.secondary.size).toBe(44);
-    // …and with no subject on hand, the slot arranges empty.
+    expect(ws.secondary.presentation).toBe("overlay");
     const bare = applyWorkbench(createWorkspace(), snap);
     expect(bare.secondary.pane).toBeNull();
-    expect(bare.secondary.presentation).toBe("split");
+    expect(bare.secondary.presentation).toBe("overlay");
   });
 
   it("re-derives comments from the conversation you are on", () => {
@@ -270,7 +270,10 @@ describe("matching the chip (the active highlight)", () => {
 const session = (id: string, extra: Partial<InboxSession> = {}): InboxSession => ({
   _id: id,
   session_id: `session-${id}`,
-  updated_at: 1,
+  // Fresh activity: membership is the shared working-set selection
+  // (sync-convergence C4), so rows must sit inside the 30-day recent window
+  // for the eviction walk (computeVisualOrder) to see them at all.
+  updated_at: Date.now(),
   agent_type: "claude_code",
   message_count: 3,
   is_idle: true,
@@ -279,6 +282,12 @@ const session = (id: string, extra: Partial<InboxSession> = {}): InboxSession =>
   title: `Session ${id}`,
   ...extra,
 });
+
+// Convex-format ids: the chip predicate's mid-create-stub carve-out means a
+// stub-shaped id ("s1") can never be filtered OUT by a label chip — these
+// suites are about real rows, so they must wear real-looking ids.
+const S1 = "jx7s1".padEnd(32, "0");
+const S2 = "jx7s2".padEnd(32, "0");
 
 const bucket = (id: string, name: string): BucketItem => ({ _id: id, name, created_at: 1, updated_at: 1 });
 
@@ -308,9 +317,9 @@ function resetChipStore() {
 describe("applying a workbench's chip filter", () => {
   beforeEach(() => {
     useInboxStore.setState({
-      sessions: { s1: session("s1"), s2: session("s2") },
+      sessions: { [S1]: session(S1), [S2]: session(S2) },
       buckets: { mine: bucket("mine", "triage"), empty: bucket("empty", "shipping") },
-      bucketAssignments: { r1: { _id: "r1", conversation_id: "s2", bucket_id: "mine", updated_at: 1 } },
+      bucketAssignments: { r1: { _id: "r1", conversation_id: S2, bucket_id: "mine", updated_at: 1 } },
       pending: {},
       pendingMessages: {},
       pendingSessionCreates: {},
@@ -369,9 +378,9 @@ describe("applying a workbench's chip filter", () => {
 describe("focus eviction after the chip changes", () => {
   beforeEach(() => {
     useInboxStore.setState({
-      sessions: { s1: session("s1"), s2: session("s2") },
+      sessions: { [S1]: session(S1), [S2]: session(S2) },
       buckets: { mine: bucket("mine", "triage"), empty: bucket("empty", "shipping") },
-      bucketAssignments: { r1: { _id: "r1", conversation_id: "s2", bucket_id: "mine", updated_at: 1 } },
+      bucketAssignments: { r1: { _id: "r1", conversation_id: S2, bucket_id: "mine", updated_at: 1 } },
       pending: {},
       pendingMessages: {},
       pendingSessionCreates: {},
@@ -403,19 +412,19 @@ describe("focus eviction after the chip changes", () => {
   };
 
   it("moves the inbox selection to the top of the list the filter renders", () => {
-    focus({ currentSessionId: "s1" });
+    focus({ currentSessionId: S1 });
     useInboxStore.getState().applyWorkbench(triage, undefined, "/inbox");
-    expect(useInboxStore.getState().currentSessionId).toBe("s2");
+    expect(useInboxStore.getState().currentSessionId).toBe(S2);
   });
 
   it("leaves a still-visible selection alone", () => {
-    focus({ currentSessionId: "s2" });
+    focus({ currentSessionId: S2 });
     useInboxStore.getState().applyWorkbench(triage, undefined, "/inbox");
-    expect(useInboxStore.getState().currentSessionId).toBe("s2");
+    expect(useInboxStore.getState().currentSessionId).toBe(S2);
   });
 
   it("clears the selection when the filter empties the list", () => {
-    focus({ currentSessionId: "s1" });
+    focus({ currentSessionId: S1 });
     useInboxStore.getState().applyWorkbench(withFilter({ bucket: { id: "empty", name: "shipping" } }), undefined, "/inbox");
     expect(useInboxStore.getState().currentSessionId).toBeNull();
   });
@@ -424,25 +433,25 @@ describe("focus eviction after the chip changes", () => {
   // highlights the panel's own selection like any plain surface — that is
   // the pointer the eviction moves, and the attended conversation stays put.
   it("a working page moves the panel pointer, like any plain surface", () => {
-    focus({ currentSessionId: "s1", sidePanelSessionId: "s1" });
+    focus({ currentSessionId: S1, sidePanelSessionId: S1 });
     useInboxStore.getState().applyWorkbench(triage, undefined, "/tasks");
     const s = useInboxStore.getState();
-    expect(s.sidePanelSessionId).toBe("s2");
-    expect(s.currentSessionId).toBe("s1");
+    expect(s.sidePanelSessionId).toBe(S2);
+    expect(s.currentSessionId).toBe(S1);
   });
 
   it("a plain surface is where the side panel's selection moves instead", () => {
-    focus({ currentSessionId: "s1", sidePanelSessionId: "s1" });
+    focus({ currentSessionId: S1, sidePanelSessionId: S1 });
     useInboxStore.getState().applyWorkbench(triage, undefined, "/projects");
     const s = useInboxStore.getState();
-    expect(s.sidePanelSessionId).toBe("s2");
-    expect(s.currentSessionId).toBe("s1");
+    expect(s.sidePanelSessionId).toBe(S2);
+    expect(s.currentSessionId).toBe(S1);
   });
 
   it("an unchanged chip evicts nobody — switching arrangements is not a filter change", () => {
-    focus({ currentSessionId: "s1", activeBucketFilter: null });
+    focus({ currentSessionId: S1, activeBucketFilter: null });
     useInboxStore.getState().applyWorkbench(withFilter(), undefined, "/inbox");
-    expect(useInboxStore.getState().currentSessionId).toBe("s1");
+    expect(useInboxStore.getState().currentSessionId).toBe(S1);
   });
 
   // A chip clicked by hand is the same gesture as a layout switch at a smaller
@@ -452,26 +461,26 @@ describe("focus eviction after the chip changes", () => {
     const onTab = (path: string) => useInboxStore.setState({ tabs: [{ id: "t", title: "", path, createdAt: 0 }], activeTabId: "t" } as any);
 
     it("an include chip on the inbox tab moves the selection to the top", () => {
-      onTab("/inbox?s=s1");
-      focus({ currentSessionId: "s1" });
+      onTab(`/inbox?s=${S1}`);
+      focus({ currentSessionId: S1 });
       useInboxStore.getState().setActiveBucketFilter("mine");
-      expect(useInboxStore.getState().currentSessionId).toBe("s2");
+      expect(useInboxStore.getState().currentSessionId).toBe(S2);
     });
 
     it("an exclude chip evicts the session it hides", () => {
-      onTab("/inbox?s=s2");
-      focus({ currentSessionId: "s2" });
+      onTab(`/inbox?s=${S2}`);
+      focus({ currentSessionId: S2 });
       useInboxStore.getState().setActiveBucketFilter("mine", true);
-      expect(useInboxStore.getState().currentSessionId).toBe("s1");
+      expect(useInboxStore.getState().currentSessionId).toBe(S1);
     });
 
     it("a project chip on a plain-surface tab moves the side panel's selection", () => {
       onTab("/projects");
-      focus({ currentSessionId: "s1", sidePanelSessionId: "s1" });
+      focus({ currentSessionId: S1, sidePanelSessionId: S1 });
       useInboxStore.getState().setActiveProjectFilter("nowhere", null);
       const s = useInboxStore.getState();
       expect(s.sidePanelSessionId).toBeNull();
-      expect(s.currentSessionId).toBe("s1");
+      expect(s.currentSessionId).toBe(S1);
     });
   });
 
@@ -486,21 +495,21 @@ describe("focus eviction after the chip changes", () => {
     };
 
     it("a layout that changes surface evicts against the surface it lands on", () => {
-      focus({ currentSessionId: "s1", sidePanelSessionId: "s1" });
+      focus({ currentSessionId: S1, sidePanelSessionId: S1 });
       const nav = fakeNav();
       switchToWorkbench(triage, nav, "/projects");
       expect(nav.pushed).toEqual(["/inbox"]);
       const s = useInboxStore.getState();
-      expect(s.currentSessionId).toBe("s2");
-      expect(s.sidePanelSessionId).toBe("s1");
+      expect(s.currentSessionId).toBe(S2);
+      expect(s.sidePanelSessionId).toBe(S1);
     });
 
     it("staying on the same surface keeps the current pathname and does not navigate", () => {
-      focus({ currentSessionId: "s1" });
+      focus({ currentSessionId: S1 });
       const nav = fakeNav();
       switchToWorkbench(triage, nav, "/inbox");
       expect(nav.pushed).toEqual([]);
-      expect(useInboxStore.getState().currentSessionId).toBe("s2");
+      expect(useInboxStore.getState().currentSessionId).toBe(S2);
     });
   });
 });

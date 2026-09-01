@@ -8,8 +8,11 @@ import { tryRenderHtmlMessage } from "@/components/HtmlSnippet";
 import {
   extractNestedActions,
   formatToolName,
-  structuredPayloadSummary,
+  isEditTool,
+  isWriteTool,
   toolSummary as sharedToolSummary,
+  toolVisual,
+  type ToolColorToken,
 } from "@codecast/shared/render";
 
 /**
@@ -78,45 +81,25 @@ function ClaudeIcon() {
 }
 
 function getToolSummary(tool: any): string | null {
-  const nested = extractNestedActions(tool);
-  if (nested.length > 0) {
-    return sharedToolSummary(nested.length === 1 ? nested[0] : tool) || null;
-  }
-
-  let parsedInput: Record<string, unknown> = {};
-  try {
-    parsedInput = JSON.parse(tool.input);
-  } catch {}
-
-  const truncateStr = (s: string, max: number) => s.length > max ? s.slice(0, max) + "..." : s;
-
-  if (tool.name === "Edit" || tool.name === "Read" || tool.name === "Write") {
-    const filePath = String(parsedInput.file_path || "");
-    const parts = filePath.split("/");
-    return parts.slice(-2).join("/");
-  }
-  if (tool.name === "Bash" && parsedInput.command) {
-    const cmd = String(parsedInput.command);
-    return cmd.length > 60 ? cmd.slice(0, 60) + "..." : cmd;
-  }
-  if (tool.name === "Glob" && parsedInput.pattern) return String(parsedInput.pattern);
-  if (tool.name === "Grep" && parsedInput.pattern) return String(parsedInput.pattern);
-  if (tool.name === "Task" && parsedInput.description) return truncateStr(String(parsedInput.description), 40);
-  if (tool.name === "StructuredOutput") return structuredPayloadSummary(parsedInput) || null;
-  return null;
+  return sharedToolSummary(tool) || null;
 }
 
-const toolColors: Record<string, string> = {
-  Edit: "text-sol-orange/80",
-  Write: "text-sol-orange/80",
-  Read: "text-sol-blue/80",
-  Bash: "text-sol-green/80",
-  Glob: "text-sol-violet/80",
-  Grep: "text-sol-violet/80",
-  Task: "text-sol-cyan/80",
-  StructuredOutput: "text-sol-cyan/80",
-  TodoWrite: "text-sol-magenta/80",
+const TOOL_COLOR_CLASS: Record<ToolColorToken, string> = {
+  green: "text-sol-green/80",
+  blue: "text-sol-blue/80",
+  violet: "text-sol-violet/80",
+  orange: "text-sol-orange/80",
+  cyan: "text-sol-cyan/80",
+  magenta: "text-sol-magenta/80",
+  red: "text-sol-red/80",
+  textDim: "text-sol-text-dim",
+  emerald: "text-emerald-500/80",
+  amber: "text-amber-500/80",
 };
+
+function toolColorClass(name: string): string {
+  return TOOL_COLOR_CLASS[toolVisual(name).color];
+}
 
 function getLanguageFromPath(filePath: string): string | undefined {
   const ext = filePath.split('.').pop()?.toLowerCase();
@@ -132,10 +115,10 @@ function getLanguageFromPath(filePath: string): string | undefined {
 }
 
 function parseWriteToolCall(tool: any): { filePath: string; content: string } | null {
-  if (tool.name !== "Write") return null;
+  if (!isWriteTool(tool.name)) return null;
   try {
     const parsed = JSON.parse(tool.input);
-    const filePath = String(parsed.file_path || "");
+    const filePath = String(parsed.file_path || parsed.filePath || parsed.path || parsed.target_file || "");
     const content = parsed.content || "";
     if (!content) return null;
     return { filePath, content };
@@ -145,11 +128,11 @@ function parseWriteToolCall(tool: any): { filePath: string; content: string } | 
 }
 
 function parseEditToolCall(tool: any): { filePath: string; oldString: string; newString: string } | null {
-  if (tool.name !== "Edit") return null;
+  if (!isEditTool(tool.name)) return null;
   try {
     const parsed = JSON.parse(tool.input);
     return {
-      filePath: String(parsed.file_path || ""),
+      filePath: String(parsed.file_path || parsed.filePath || parsed.path || parsed.target_file || ""),
       oldString: parsed.old_string || "",
       newString: parsed.new_string || "",
     };
@@ -220,13 +203,7 @@ function ToolCallBlock({ tool }: { tool: any }) {
   const summary = getToolSummary(tool);
   const nested = extractNestedActions(tool);
   const displayName = nested.length === 1 ? nested[0].name : tool.name;
-  const color = toolColors[displayName] || (
-    displayName === "exec_command" || displayName === "shell_command" || displayName === "commandExecution"
-      ? "text-sol-green/80"
-      : displayName.startsWith("mcp__")
-        ? "text-sol-cyan/80"
-        : "text-sol-text-dim"
-  );
+  const color = toolColorClass(displayName);
 
   return (
     <div className="my-0.5 pl-7">

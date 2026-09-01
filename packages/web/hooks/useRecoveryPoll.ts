@@ -1,4 +1,6 @@
 import { useEffect, useRef, type MutableRefObject } from "react";
+import { onSyncWake } from "./syncWake";
+import { beginSyncInflight } from "../store/syncActivity";
 
 // A one-shot recovery fetch can hang indefinitely while the Convex WebSocket is
 // mid-reconnect (the very situation recovery exists for). Cap it: a fetch that
@@ -77,10 +79,13 @@ export function createRecoveryController(opts: {
     if (!shouldRecover(now(), opts.getLastSync(), requiredStaleMs(), inFlight)) return;
     inFlight = true;
     let settled = false;
+    // The digest compare's quiescence gate sees every recovery fetch.
+    const releaseActivity = beginSyncInflight("poll");
     const release = () => {
       if (!settled) {
         settled = true;
         inFlight = false;
+        releaseActivity();
       }
     };
     const timer = setTimeout(release, timeoutMs);
@@ -167,10 +172,15 @@ export function useRecoveryPoll(
     doc?.addEventListener?.("visibilitychange", onVisible);
     win?.addEventListener?.("focus", wake);
     win?.addEventListener?.("online", wake);
+    // The platform-neutral wake bus (syncWake): mobile has no DOM events, so
+    // AppState "active" (wired by StoreSyncBridge) reaches the controller
+    // here. On web it doubles the DOM events above; wake() dedupes.
+    const offWake = onSyncWake(wake);
 
     return () => {
       clearInterval(id);
       controller.dispose();
+      offWake();
       doc?.removeEventListener?.("visibilitychange", onVisible);
       win?.removeEventListener?.("focus", wake);
       win?.removeEventListener?.("online", wake);

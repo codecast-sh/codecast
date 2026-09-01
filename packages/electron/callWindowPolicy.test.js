@@ -4,6 +4,7 @@ const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
 const {
   shouldHandBackCall,
+  shouldHideCallWindow,
   callWindowChrome,
   callWindowPlacementKey,
   normalizeCallWindowSize,
@@ -21,8 +22,16 @@ const facts = (over) => ({
   ...over,
 });
 
-test("a window closed with a live call hands it back to the main window", () => {
-  assert.equal(shouldHandBackCall(facts({})), true);
+test("a live huddle is never poured into the main window", () => {
+  // The main window is not a fallback surface. An in-app card cannot leave
+  // that window's edges, which is why the huddle has a window of its own.
+  assert.equal(shouldHandBackCall(facts({})), false);
+  assert.equal(shouldHideCallWindow(facts({})), true);
+});
+
+test("hiding keeps the huddle; hang-up and quit actually close", () => {
+  assert.equal(shouldHideCallWindow(facts({ ended: true })), false);
+  assert.equal(shouldHideCallWindow(facts({ quitting: true })), false);
 });
 
 test("a hang-up hands nothing back", () => {
@@ -159,15 +168,18 @@ test("the call window is not throttled when it is behind other windows", () => {
   assert.ok(CREATE_CALL_WINDOW.includes("backgroundThrottling: false"));
 });
 
-test("the separate faces window is gone from the shell", () => {
+test("the call never gets a second window for its circles", () => {
+  // The circle sizes used to be a window of their own, and moving the call
+  // there cost a re-join on every shape change. A `facesWindow` EXISTS again —
+  // but it is the idle presence overlay (photos, no call), so the guard is on
+  // the meaning, not the name: the old call-hosting channels stay dead, and
+  // the overlay is never handed a room.
   const src = readFileSync(join(__dirname, "main.js"), "utf8");
-  for (const dead of [
-    "createFacesWindow",
-    "facesWindow",
-    "open-faces-window",
-    "report-faces-state",
-    "set-faces-size",
-  ]) {
+  for (const dead of ["report-faces-state", "set-faces-size"]) {
     assert.ok(!src.includes(dead), `main.js still refers to \`${dead}\``);
   }
+  assert.ok(
+    !/createFacesWindow\([^)]+\)/.test(src),
+    "createFacesWindow takes arguments — a room here is the separate call window coming back",
+  );
 });

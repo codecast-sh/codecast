@@ -5,6 +5,7 @@ import { verifyApiToken } from "./apiTokens";
 import { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireUser } from "./lib/auth";
+import { generateShareToken } from "./conversations";
 import { readLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import {
   BOOKMARKS_GRANT_KEY,
@@ -169,7 +170,16 @@ export const createFromCLI = mutation({
       created_at: Date.now(),
     })).result;
 
-    const shareToken = conversation.share_token || conversation.session_id;
+    // A bookmark URL is a share link, and every /share/* query resolves by
+    // share token only — the old session_id fallback minted links that opened
+    // an "Invalid Link" page and unfurled nothing. The caller owns the
+    // conversation (checked above) and asked for a shareable link, so mint
+    // one for real, exactly as the Share button (generateShareLink) does.
+    let shareToken = conversation.share_token;
+    if (!shareToken) {
+      shareToken = generateShareToken();
+      await ctx.db.patch(conversation._id, { share_token: shareToken });
+    }
     const bookmarkUrl = `https://codecast.sh/share/${shareToken}#msg-${args.message_index}`;
 
     return {

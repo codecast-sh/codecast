@@ -258,6 +258,12 @@ describe("isBackgroundBashToolCall", () => {
     expect(isBackgroundBashToolCall({ name: "Monitor", input: JSON.stringify({ run_in_background: true }) })).toBe(false);
     expect(isBackgroundBashToolCall({ name: "Bash", input: "not json" })).toBe(false);
   });
+
+  test("matches grok run_terminal_command with background: true", () => {
+    expect(isBackgroundBashToolCall({ name: "run_terminal_command", input: JSON.stringify({ command: "sleep 10", background: true }) })).toBe(true);
+    expect(isBackgroundBashToolCall({ name: "run_terminal_command", input: { command: "sleep 10", background: true } })).toBe(true);
+    expect(isBackgroundBashToolCall({ name: "run_terminal_command", input: JSON.stringify({ command: "ls" }) })).toBe(false);
+  });
 });
 
 describe("effectiveMonitorStatus — defensive timeout expiry", () => {

@@ -3,7 +3,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useState, useRef, useCallback, useMemo } from "react";
 import { useEventListener } from "../hooks/useEventListener";
 import { AvatarImg } from "../lib/avatarCache";
-import { ClaudeIcon, OpenAIIcon, CursorIcon, GeminiIcon } from "./BrandIcons";
+import { ClaudeIcon, OpenAIIcon, CursorIcon, GeminiIcon, GrokIcon } from "./BrandIcons";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useRouter } from "next/navigation";
@@ -53,6 +53,12 @@ function AgentIcon({ agentType, className = "w-9 h-9" }: { agentType: string; cl
     return (
       <span className={`${className} rounded-full bg-[#1a73e8] flex items-center justify-center shrink-0`}>
         <GeminiIcon className="w-4 h-4 text-white" />
+      </span>
+    );
+  } else if (agentType === "grok") {
+    return (
+      <span className={`${className} rounded-full bg-[#0a0a0a] flex items-center justify-center shrink-0`}>
+        <GrokIcon className="w-4 h-4 text-white" />
       </span>
     );
   }

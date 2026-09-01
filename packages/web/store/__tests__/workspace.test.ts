@@ -6,13 +6,11 @@ import {
   togglePane,
   autoAllowed,
   setPresentation,
-  promote,
-  topOverlay,
   findPane,
   isVisible,
   samePane,
   surfaceForPath,
-  slotPolicyFor,
+
   serializeWorkspace,
   hydrateWorkspace,
   setSize,
@@ -98,26 +96,6 @@ describe("presentation", () => {
   });
 });
 
-describe("promote", () => {
-  it("swaps the pane onto the stage and takes the displaced one back", () => {
-    let ws = createWorkspace();
-    ws = showPane(ws, "primary", detail("task-1"));
-    ws = showPane(ws, "secondary", convo("s1"));
-    ws = promote(ws, "secondary");
-    expect(ws.primary.pane).toEqual(convo("s1"));
-    expect(ws.secondary.pane).toEqual(detail("task-1"));
-  });
-
-  // A route-rendered page is not a movable object; promoting over it empties
-  // the slot instead of parking "page" somewhere it can't render.
-  it("does not park the route page in a slot", () => {
-    let ws = showPane(createWorkspace(), "secondary", convo("s1"));
-    ws = promote(ws, "secondary");
-    expect(ws.primary.pane).toEqual(convo("s1"));
-    expect(ws.secondary.pane).toBeNull();
-  });
-});
-
 describe("toggle", () => {
   it("closes the same pane and remembers it", () => {
     let ws = togglePane(createWorkspace(), "context", sessionList);
@@ -134,17 +112,6 @@ describe("toggle", () => {
   });
 });
 
-describe("escape target", () => {
-  // One Esc rule for the whole app instead of a keydown listener per region.
-  it("names the topmost overlay and ignores split panes", () => {
-    let ws = createWorkspace();
-    ws = showPane(ws, "context", sessionList, { presentation: "split" });
-    expect(topOverlay(ws)).toBeNull();
-    ws = showPane(ws, "secondary", detail("d1"), { presentation: "overlay" });
-    expect(topOverlay(ws)).toBe("secondary");
-  });
-});
-
 describe("pane identity", () => {
   it("distinguishes subjects within a kind", () => {
     expect(samePane(convo("a"), convo("a"))).toBe(true);
@@ -155,7 +122,7 @@ describe("pane identity", () => {
   });
 });
 
-describe("route → slot defaults", () => {
+describe("surfaces", () => {
   it("classifies the surfaces the shell distinguishes", () => {
     expect(surfaceForPath("/inbox")).toBe("inbox");
     expect(surfaceForPath("/inbox?s=abc")).toBe("inbox");
@@ -167,22 +134,6 @@ describe("route → slot defaults", () => {
     // Settings must win even though the tab shell reports a carried /inbox path.
     expect(surfaceForPath("/settings/profile")).toBe("settings");
     expect(surfaceForPath("/workflows")).toBe("plain");
-  });
-
-  // No route defaults a second column any more: side by side is the tab's
-  // split layout, entered by a drag. The inbox alone hosts the board's
-  // drill-in as an overlay — a visit over the stage, never a second column.
-  it("never defaults a split; the inbox allows the overlay drill-in", () => {
-    expect(slotPolicyFor("working").secondary).toBe(false);
-    expect(slotPolicyFor("inbox").secondary).toBe("overlay");
-    expect(slotPolicyFor("conversation").secondary).toBe(false);
-    expect(slotPolicyFor("settings").secondary).toBe(false);
-  });
-
-  it("keeps the session rail available everywhere", () => {
-    for (const s of ["inbox", "conversation", "working", "settings", "plain"] as const) {
-      expect(slotPolicyFor(s).context).toBe(true);
-    }
   });
 });
 

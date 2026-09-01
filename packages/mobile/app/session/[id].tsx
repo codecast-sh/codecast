@@ -18,6 +18,7 @@ import { isTrustedImageSrc } from '@/lib/convex';
 import { parseInboundSessionMessage, isScheduledTaskMessage, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
 import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallbackFromLoaded, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
+import { isHiddenSystemSubtype } from '@codecast/web/lib/conversationProcessor';
 import { MessageNavigatorSheet } from '@/components/session/MessageNavigatorSheet';
 import { MessageTickRail, MessageListButton } from '@/components/session/MessageTickRail';
 import { StickyPromptBanner, type StickyPrompt } from '@/components/session/StickyPromptBanner';
@@ -29,7 +30,7 @@ import { PulsingDot } from '@/components/SessionItem';
 import { AssignmentChip, AssignedToYouBanner } from '@/components/AssignmentChip';
 import { SessionHuddleButton } from '@/components/calls/SessionHuddleButton';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
-import { agentSupportsFork, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE } from '@codecast/shared/contracts';
+import { agentSupportsFork, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice } from '@codecast/shared/contracts';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
 import { openLink } from '@/lib/links';
 import { EntityPill } from '@/components/EntityPill';
@@ -43,6 +44,14 @@ import {
   mcpToolNames,
   stripLineNumbers,
   isPlanWriteToolCall,
+  isReadTool,
+  isShellTool,
+  isEditTool,
+  isWriteTool,
+  isGrepTool,
+  isGlobTool,
+  isTodoTool,
+  toolPathFromInput,
   toolIcon,
   type ToolColorToken,
 } from '@codecast/shared/render';
@@ -1980,9 +1989,9 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
   let inputDisplay = toolCall.input;
   try {
     const parsed = JSON.parse(toolCall.input);
-    if (toolCall.name === 'Bash' && parsed.command) {
-      // For Bash, just show the command
-      inputDisplay = parsed.command;
+    if (isShellTool(toolCall.name) && (parsed.command || parsed.cmd)) {
+      // For shell tools, just show the command
+      inputDisplay = parsed.command || parsed.cmd;
     } else if (toolCall.name === 'StructuredOutput') {
       // The input IS the payload (a workflow subagent's typed return) — the
       // key/value flattening below drops nested objects, which is all of it.
@@ -2014,7 +2023,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
     inputDisplay = inputDisplay.slice(0, 2000) + '\n... (truncated)';
   }
 
-  const isRead = toolCall.name === 'Read' || toolCall.name === 'file_read';
+  const isRead = isReadTool(toolCall.name);
   const processedResult = result?.content ? (isRead ? stripLineNumbers(result.content) : result.content) : '';
   // StructuredOutput's success result is boilerplate ("Structured output
   // provided successfully") — the payload shown above it is the content.
@@ -2025,12 +2034,16 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
       ? processedResult.slice(0, 2000) + '\n... (truncated)'
       : (processedResult || undefined);
 
+  const isBash = isShellTool(toolCall.name);
+  const isEdit = isEditTool(toolCall.name) || toolCall.name === 'apply_patch';
+  const isWrite = isWriteTool(toolCall.name);
+
   // Compute result summary like web does
   const getResultSummary = () => {
     if (!result) return null;
     if (result.is_error) return '(error)';
-    const isEditOrWrite = toolCall.name === 'Edit' || toolCall.name === 'Write' || toolCall.name === 'file_edit' || toolCall.name === 'file_write' || toolCall.name === 'apply_patch';
-    const isGlobGrep = toolCall.name === 'Glob' || toolCall.name === 'Grep' || toolCall.name === 'code_search' || toolCall.name === 'code_analysis';
+    const isEditOrWrite = isEditTool(toolCall.name) || isWriteTool(toolCall.name) || toolCall.name === 'apply_patch';
+    const isGlobGrep = isGlobTool(toolCall.name) || isGrepTool(toolCall.name) || toolCall.name === 'code_search' || toolCall.name === 'code_analysis';
     if (isEditOrWrite) {
       const match = result.content.match(/with (\d+) additions? and (\d+) removals?/);
       if (match) return `(+${match[1]} -${match[2]})`;
@@ -2059,25 +2072,19 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
   let parsedInput: Record<string, any> = {};
   try { parsedInput = JSON.parse(toolCall.input); } catch {}
 
-  const isBash = toolCall.name === 'Bash' || toolCall.name === 'shell_command' || toolCall.name === 'shell' || toolCall.name === 'exec_command' || toolCall.name === 'container.exec';
-  const isEdit = toolCall.name === 'Edit' || toolCall.name === 'file_edit' || toolCall.name === 'apply_patch';
   const toolImage = images?.find(img => img.tool_use_id === toolCall.id)
     || globalImageMap?.[toolCall.id];
   const hasToolImage = !!toolImage;
 
-  const isWrite = toolCall.name === 'Write' || toolCall.name === 'file_write';
-  const filePath = String(parsedInput.file_path || parsedInput.path || '');
+  const filePath = toolPathFromInput(parsedInput);
   const language = filePath ? getFileExtension(filePath) : undefined;
   const isCodeResult = result && (
     isBash ||
-    toolCall.name === 'Read' ||
-    toolCall.name === 'Write' ||
-    toolCall.name === 'Edit' ||
-    toolCall.name === 'Grep' ||
-    toolCall.name === 'Glob' ||
-    toolCall.name === 'file_read' ||
-    toolCall.name === 'file_write' ||
-    toolCall.name === 'file_edit' ||
+    isRead ||
+    isWrite ||
+    isEdit ||
+    isGrepTool(toolCall.name) ||
+    isGlobTool(toolCall.name) ||
     toolCall.name === 'apply_patch' ||
     toolCall.name === 'code_search' ||
     toolCall.name === 'code_analysis'
@@ -2109,40 +2116,36 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
 
   // Tools that shouldn't show their input (just noise)
   // Command is shown in summary, no need to repeat
-  const shouldHideInput = [
-    'Bash',
-    'Read',
-    'Write',
-    'Edit',
-    'file_edit',
-    'file_read',
-    'file_write',
-    'apply_patch',
-    'TaskOutput',
-    'TaskList',
-    'TaskGet',
-    'TaskStop',
-    'TeamDelete',
-    'ExitPlanMode',
-    'EnterPlanMode',
-    'Glob',
-    'Grep',
-    'WebSearch',
-    'WebFetch',
-    'web_search',
-    'web_fetch',
-    'code_search',
-    'code_analysis',
-    'shell_command',
-    'shell',
-    'exec_command',
-    'container.exec',
-    'NotebookEdit',
-    'Skill',
-    'TeamCreate',
-    'TaskCreate',
-    'TaskUpdate',
-  ].includes(toolCall.name) || toolCall.name.startsWith('mcp__');
+  const shouldHideInput = isShellTool(toolCall.name)
+    || isReadTool(toolCall.name)
+    || isWriteTool(toolCall.name)
+    || isEditTool(toolCall.name)
+    || isGrepTool(toolCall.name)
+    || isGlobTool(toolCall.name)
+    || isTodoTool(toolCall.name)
+    || [
+      'apply_patch',
+      'TaskOutput',
+      'TaskList',
+      'TaskGet',
+      'TaskStop',
+      'TeamDelete',
+      'ExitPlanMode',
+      'EnterPlanMode',
+      'enter_plan_mode',
+      'exit_plan_mode',
+      'WebSearch',
+      'WebFetch',
+      'web_search',
+      'web_fetch',
+      'code_search',
+      'code_analysis',
+      'NotebookEdit',
+      'Skill',
+      'TeamCreate',
+      'TaskCreate',
+      'TaskUpdate',
+    ].includes(toolCall.name) || toolCall.name.startsWith('mcp__');
 
   return (
     <Pressable onPress={onToggle} style={styles.toolCallContainer}>
@@ -2316,6 +2319,8 @@ function ThinkingBlock({ content }: { content: string }) {
 }
 
 function SystemMessage({ message }: { message: Message }) {
+  if (isHiddenSystemSubtype(message.subtype)) return null;
+
   if (message.subtype === 'compact_boundary') {
     return (
       <RNView style={styles.compactBoundary}>
@@ -4934,6 +4939,17 @@ export default function SessionDetailScreen() {
             // dedicated cards, not user bubbles of raw XML — mirrors web's
             // classifyUserMessage → SessionMessageBlock / ScheduledTaskBlock.
             if (item.role === 'user' && item.content) {
+              if (isAgentSwitchNotice(item.content) || item.subtype === 'agent_switch') {
+                const parsed = parseAgentSwitchNotice(item.content);
+                const label = parsed ? `now using ${parsed.toLabel}` : 'agent switched';
+                return (
+                  <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 16, paddingHorizontal: 16 }}>
+                    <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
+                    <RNText style={{ fontSize: 11, color: Theme.textDim }}>{label}</RNText>
+                    <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
+                  </RNView>
+                );
+              }
               const sessionMsg = parseInboundSessionMessage(item.content);
               if (sessionMsg) {
                 // A huddle digest rides the session-message rail: show the

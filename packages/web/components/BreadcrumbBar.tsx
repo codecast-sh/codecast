@@ -21,6 +21,7 @@ import { channelDisplayName } from "../lib/chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 import { buildBreadcrumbs, type BreadcrumbLookups } from "../lib/breadcrumbs";
+import { tabStageLayout } from "../lib/stage";
 import { projectDotClass } from "../lib/projectColors";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 
@@ -87,7 +88,16 @@ export function BreadcrumbBar() {
     return buildBreadcrumbs(pathname, lookups);
   }, [pathname, projectTitle, taskTitle, taskShortId, docTitle, planTitle, planShortId, channelName]);
 
+  // A SPLIT stage has no single trail: the bar spans every pane while its
+  // crumbs describe only the focused one, and each pane already names itself
+  // in its strip. The trail returns when the stage is one surface again.
+  const stageSplit = useInboxStore((s) => {
+    const t = s.tabs.find((x) => x.id === s.activeTabId);
+    return !!t && !!tabStageLayout(t);
+  });
+
   // One crumb is a label, not a trail.
+  if (stageSplit) return null;
   if (specs.length < 2) return null;
 
   const items: Crumb[] = specs.map((spec) => ({

@@ -1,11 +1,15 @@
 import { describe, expect, it } from "bun:test";
+import { WALL_TAP_MS } from "../../components/people/peopleWallLayout";
 import {
+  MIN_BURST_MS,
+  WALKIE_LOCK_MS,
   hotListenDeadline,
   landBurst,
   measureBurst,
   nextRoomMode,
   pickLiveBurst,
   seatDeadline,
+  shouldLockBurst,
   shouldReleaseRoom,
   type LiveBurstRow,
 } from "../calls/walkie";
@@ -414,5 +418,42 @@ describe("meterLevel", () => {
       expect(v).toBeGreaterThanOrEqual(prev);
       prev = v;
     }
+  });
+});
+
+// The fill-to-lock gesture: a hold that outlives the fill stops being a
+// message and becomes a seat. The rules are small and the consequence is an
+// open microphone changing what it IS, so both halves are pinned: when a
+// completed fill may lock, and where the lock sits in the gesture ladder.
+describe("walkie: the fill locking a hold", () => {
+  it("locks the burst the fill was timing", () => {
+    expect(
+      shouldLockBurst({ sending: { roomKey: "dm:a:b" }, joinedRoom: null, roomKey: "dm:a:b" }),
+    ).toBe(true);
+  });
+
+  it("locks nothing when the burst already landed — a cap or a blur beat the fill", () => {
+    expect(shouldLockBurst({ sending: null, joinedRoom: null, roomKey: "dm:a:b" })).toBe(false);
+  });
+
+  it("locks nothing when the hold moved to another room under the timer", () => {
+    expect(
+      shouldLockBurst({ sending: { roomKey: "dm:a:c" }, joinedRoom: null, roomKey: "dm:a:b" }),
+    ).toBe(false);
+  });
+
+  it("re-locks nothing inside a room that is already a call — hold-to-reply stays a non-event", () => {
+    expect(
+      shouldLockBurst({ sending: { roomKey: "dm:a:b" }, joinedRoom: "dm:a:b", roomKey: "dm:a:b" }),
+    ).toBe(false);
+  });
+
+  it("keeps the gesture ladder in order: tap under burst under lock", () => {
+    // Release <WALL_TAP_MS is a tap, <MIN_BURST_MS a discarded brush,
+    // <WALKIE_LOCK_MS a burst that lands, and past the fill the hold locks.
+    // Each meaning needs real room on the clock or one gesture swallows its
+    // neighbour.
+    expect(WALL_TAP_MS).toBeLessThan(MIN_BURST_MS - 200);
+    expect(MIN_BURST_MS).toBeLessThan(WALKIE_LOCK_MS - 200);
   });
 });

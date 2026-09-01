@@ -1,11 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { categorizeSessions } from "./inboxStore";
+import { placeSections } from "./__tests__/placeTestHarness";
 import { STATUS_TRUST_TTL_MS } from "@codecast/shared/contracts";
 
 // Regression: a session that has aged out of the liveness overlay's window keeps
 // its last-synced live status frozen (the base cache never prunes, the overlay
 // only refreshes in-window rows). A frozen `agent_status:"working"` would pin the
-// row in the WORKING fallthrough bucket forever. categorizeSessions must distrust
+// row in the WORKING fallthrough bucket forever. placeSections must distrust
 // a stale active status past STATUS_TRUST_TTL_MS — keyed on updated_at — and file
 // the settled session under needsInput instead. Mirrors the backend's
 // trustedAgentStatus coercion for rows the overlay can no longer reach.
@@ -27,14 +27,14 @@ function mk(over: Partial<any>): any {
 function bucketsOf(sessions: any[]) {
   const map: Record<string, any> = {};
   for (const s of sessions) map[s._id] = s;
-  const { working, needsInput } = categorizeSessions(map, new Set());
+  const { working, needsInput } = placeSections(map, new Set());
   return {
     working: working.map((s) => s._id),
     needsInput: needsInput.map((s) => s._id),
   };
 }
 
-describe("categorizeSessions — stale frozen-working safety net", () => {
+describe("placeSections — stale frozen-working safety net", () => {
   it("keeps a genuinely-active, freshly-updated session in working", () => {
     const s = mk({ _id: "live", agent_status: "working", is_idle: false, updated_at: NOW - 30_000 });
     const { working, needsInput } = bucketsOf([s]);

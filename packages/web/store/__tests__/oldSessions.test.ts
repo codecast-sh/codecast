@@ -1,276 +1,224 @@
 import { describe, expect, it } from "bun:test";
-import { isOldSession, partitionOldSessions, categorizeSessions, flatViewSessions, type InboxSession } from "../inboxStore";
+import {
+  computeInboxMembership,
+  partitionWorkingSet,
+  renderInboxEpoch,
+  type InboxSession,
+} from "../inboxStore";
+import { inboxEpoch, INBOX_WINDOW_CAPS } from "@codecast/shared/contracts";
 
-// The "show old sessions" toggle is a pure CLIENT-SIDE filter. "Old" = a
-// top-level session the live (recent) inbox subscription no longer returns but
-// the never-prune cache still holds (the completeness crawl backfilled it).
-// Before this, the toggle only changed a server query arg, which the
-// never-prune cache + crawl undid — so hiding did nothing and toggling spun the
-// sync chip. These tests pin the local classification that replaced it.
+// The "show old sessions" toggle over the REPLICA model (sync-convergence
+// C4/C5). Membership is no longer a per-device memory of the last payload
+// (liveInboxIds + exemptions + a no-filter fallback) — it is the shared
+// working-set selection (selectWorkingSet, caps included) evaluated over the
+// replica's own rows, the same computation the server scan runs. "Old" is the
+// FOLD: a member past a deterministic 12h activity gap, hidden behind the
+// toggle. Show-old selects shown + folded INSIDE the computation and can never
+// bypass the selection — the bug class this replaced was every device counting
+// its whole never-prune cache whenever the synced toggle was on.
 
-// A real Convex id is 32 lowercase base32 chars; isConvexId checks that shape.
+const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
+const NOW = Date.now();
+const EPOCH = inboxEpoch(NOW);
+
 const cid = (n: number) => `j${String(n).padStart(31, "0")}`;
 
 function sess(overrides: Partial<InboxSession> & { _id: string }): InboxSession {
   return {
     _id: overrides._id,
+    session_id: `sess-${overrides._id.slice(0, 4)}`,
     title: "s",
-    updated_at: 1,
+    agent_type: "claude_code",
+    updated_at: NOW,
     message_count: 1,
+    is_idle: true,
+    has_pending: false,
     ...overrides,
   } as InboxSession;
 }
 
 const RECENT = cid(1);
-const OLD = cid(2);
+const AGED = cid(2);
 
-describe("isOldSession", () => {
-  const live = new Set([RECENT]);
-
-  it("a cached top-level session absent from the live set is old", () => {
-    expect(isOldSession(sess({ _id: OLD }), live)).toBe(true);
+describe("computeInboxMembership — the shared selection over the replica", () => {
+  it("a row with activity inside the 30-day window is a member; an aged-out row is not", () => {
+    const m = computeInboxMembership(
+      {
+        [RECENT]: sess({ _id: RECENT }),
+        [AGED]: sess({ _id: AGED, updated_at: NOW - 40 * DAY }),
+      },
+      EPOCH,
+    );
+    expect(m.members.has(RECENT)).toBe(true);
+    expect(m.members.has(AGED)).toBe(false);
   });
 
-  it("a session still in the live set is not old", () => {
-    expect(isOldSession(sess({ _id: RECENT }), live)).toBe(false);
-  });
-
-  it("optimistic stubs (non-Convex id) are never old", () => {
-    expect(isOldSession(sess({ _id: "local-stub-123" }), live)).toBe(false);
-  });
-
-  it("subagents ride their parent, never counted old", () => {
-    expect(isOldSession(sess({ _id: OLD, parent_conversation_id: RECENT }), live)).toBe(false);
-  });
-
-  it("pinned, focused, and dismissed/stashed rows are never old", () => {
-    expect(isOldSession(sess({ _id: OLD, is_pinned: true }), live)).toBe(false);
-    expect(isOldSession(sess({ _id: OLD }), live, OLD)).toBe(false);
-    expect(isOldSession(sess({ _id: OLD, inbox_dismissed_at: 5 }), live)).toBe(false);
-    expect(isOldSession(sess({ _id: OLD, inbox_stashed_at: 5 }), live)).toBe(false);
-  });
-});
-
-describe("partitionOldSessions", () => {
-  const sessions = { [RECENT]: sess({ _id: RECENT }), [OLD]: sess({ _id: OLD }) };
-  const live = new Set([RECENT]);
-
-  it("an empty live set means nothing is old yet — never blank a cold open", () => {
-    const r = partitionOldSessions(sessions, new Set(), false);
-    expect(r.oldCount).toBe(0);
-    expect(Object.keys(r.visibleSessions)).toHaveLength(2);
-  });
-
-  it("show-all keeps every row but still reports the old count for the badge", () => {
-    const r = partitionOldSessions(sessions, live, true);
-    expect(r.oldCount).toBe(1);
-    expect(Object.keys(r.visibleSessions).sort()).toEqual([RECENT, OLD].sort());
-  });
-
-  it("hide drops only the old rows, instantly and without touching the server", () => {
-    const r = partitionOldSessions(sessions, live, false);
-    expect(r.oldCount).toBe(1);
-    expect(Object.keys(r.visibleSessions)).toEqual([RECENT]);
-  });
-
-  it("returns the same map ref when nothing is old (no needless re-render)", () => {
-    const allLive = new Set([RECENT, OLD]);
-    const r = partitionOldSessions(sessions, allLive, false);
-    expect(r.oldCount).toBe(0);
-    expect(r.visibleSessions).toBe(sessions);
-  });
-});
-
-// Regression (ct-37163): hiding old sessions used to ORPHAN-PROMOTE subagents.
-// The server only emits a subagent alongside its parent, so a subagent rides its
-// parent in the cache. partitionOldSessions drops an OLD top-level parent but
-// keeps the child (it has a parent id, so isOldSession skips it). categorizeSessions
-// then saw the child with no parent in the set and promoted it to a loose
-// top-level NEEDS INPUT card — which (a) only appeared when "show old" was OFF
-// (parent gone) and (b) couldn't be hidden by the subagent toggle (it wasn't in
-// subsByParent). The fix: a parentless subagent is never a flat card; it nests
-// when its parent is present, and is dropped otherwise.
-describe("hiding old must not promote a subagent to a loose card (ct-37163)", () => {
-  const PARENT = OLD; // old top-level parent, backfilled by the completeness crawl
-  const CHILD = cid(3); // its subagent — awaiting_input would land it in needsInput if loose
-  const base: Record<string, InboxSession> = {
-    [RECENT]: sess({ _id: RECENT, awaiting_input: true }),
-    [PARENT]: sess({ _id: PARENT, awaiting_input: true }),
-    [CHILD]: sess({ _id: CHILD, parent_conversation_id: PARENT, is_subagent: true, awaiting_input: true }),
-  };
-  const live = new Set([RECENT]); // PARENT + CHILD are absent from the live recent set → "old"
-  const ids = (xs: InboxSession[]) => xs.map((x) => x._id);
-
-  it("show-old ON: the child nests under its parent, never a loose needs-input card", () => {
-    const { visibleSessions } = partitionOldSessions(base, live, true);
-    const cat = categorizeSessions(visibleSessions, new Set());
-    expect(ids(cat.subsByParent.get(PARENT) ?? [])).toContain(CHILD);
-    expect(ids(cat.needsInput)).not.toContain(CHILD);
-  });
-
-  it("show-old OFF: dropping the old parent must NOT surface the orphaned child", () => {
-    const { visibleSessions } = partitionOldSessions(base, live, false);
-    const cat = categorizeSessions(visibleSessions, new Set());
-    expect(ids(cat.needsInput)).not.toContain(PARENT); // old parent hidden
-    expect(ids(cat.needsInput)).not.toContain(CHILD); // child rides it — not promoted
-    expect(ids(cat.working)).not.toContain(CHILD);
-    expect(ids(cat.newSessions)).not.toContain(CHILD);
-  });
-
-  it("a subagent whose parent is entirely absent (hard-deleted) is never promoted", () => {
-    const cat = categorizeSessions({ [RECENT]: base[RECENT], [CHILD]: base[CHILD] }, new Set());
-    expect(ids(cat.needsInput)).not.toContain(CHILD);
-  });
-});
-
-// Agent-team teammates (spawned_by_conversation_id + agent_team_name, stamped
-// by linkSpawnedBy) NEST under their lead like Task-tool subagents — but keep
-// first-class semantics when the lead is absent: unlike a Task subagent they
-// render as a normal flat card, never hidden, because a teammate is a real
-// session someone may still need to answer. Forks (forked_from) and
-// cast-spawn sessions (no team stamp) never nest.
-describe("agent-team teammates nest under their lead", () => {
-  const LEAD = cid(10);
-  const MATE = cid(11);
-  const ids = (xs: InboxSession[]) => xs.map((x) => x._id);
-  const lead = sess({ _id: LEAD, awaiting_input: true, agent_team_name: "myteam", agent_name: "team-lead" });
-  const mate = sess({
-    _id: MATE,
-    awaiting_input: true,
-    spawned_by_conversation_id: LEAD,
-    agent_team_name: "myteam",
-    agent_name: "researcher",
-  });
-
-  it("lead present: the teammate nests under the lead and leaves the flat buckets", () => {
-    const cat = categorizeSessions({ [LEAD]: lead, [MATE]: mate }, new Set());
-    expect(ids(cat.subsByParent.get(LEAD) ?? [])).toContain(MATE);
-    expect(ids(cat.needsInput)).toEqual([LEAD]);
-  });
-
-  it("lead absent: the teammate stays a normal flat card — never hidden like a Task-subagent orphan", () => {
-    const cat = categorizeSessions({ [MATE]: mate }, new Set());
-    expect(ids(cat.needsInput)).toContain(MATE);
-  });
-
-  it("spawned_by without a team stamp does not nest (cast spawn stays first-class)", () => {
-    const spawned = sess({ _id: MATE, awaiting_input: true, spawned_by_conversation_id: LEAD });
-    const cat = categorizeSessions({ [LEAD]: lead, [MATE]: spawned }, new Set());
-    expect(cat.subsByParent.get(LEAD) ?? []).toHaveLength(0);
-    expect(ids(cat.needsInput)).toContain(MATE);
-  });
-
-  it("forks never nest — they group in forksByParent only", () => {
-    const fork = sess({ _id: MATE, awaiting_input: true, forked_from: LEAD });
-    const cat = categorizeSessions({ [LEAD]: lead, [MATE]: fork }, new Set());
-    expect(cat.subsByParent.get(LEAD) ?? []).toHaveLength(0);
-    expect(ids(cat.forksByParent.get(LEAD) ?? [])).toContain(MATE);
-    expect(ids(cat.needsInput)).toContain(MATE);
-  });
-
-  it("old partition: a teammate rides its LIVE lead, but ages out when the whole team is stale", () => {
-    // Lead live, teammate outside the live window → not old (it nests under the lead).
-    expect(isOldSession(mate, new Set([LEAD]))).toBe(false);
-    // Neither in the live window → the teammate ages out like any session
-    // (unlike a Task subagent, which is exempt outright).
-    expect(isOldSession(mate, new Set([RECENT]))).toBe(true);
-  });
-});
-
-// Regression (ct-38183): the flat (time / recent) views render every session as
-// its own row in comparator order, so a subagent/teammate row landed wherever
-// ITS activity sorted — stranded between unrelated cards while its
-// recently-active parent sorted far above. flatViewSessions must hoist each
-// child directly under its parent whenever the parent made the final list; a
-// row whose parent is absent keeps its slot (same "parentless renders flat"
-// semantics as categorizeSessions).
-describe("flat views hoist subagent/teammate rows under their parent (ct-38183)", () => {
-  const LEAD = cid(20);
-  const MATE_A = cid(21);
-  const MATE_B = cid(22);
-  const UNRELATED = cid(23);
-  const ids = (xs: InboxSession[]) => xs.map((x) => x._id);
-  const team = (id: string, name: string, t: number) =>
-    sess({
-      _id: id,
-      spawned_by_conversation_id: LEAD,
-      agent_team_name: "myteam",
-      agent_name: name,
-      started_at: t,
-      updated_at: t,
-    });
-  // The production shape: the lead worked recently (sorts to the top), its
-  // teammates went quiet hours ago and sort next to an unrelated old card.
-  const base: Record<string, InboxSession> = {
-    [LEAD]: sess({ _id: LEAD, agent_team_name: "myteam", agent_name: "team-lead", started_at: 1000, updated_at: 5000 }),
-    [UNRELATED]: sess({ _id: UNRELATED, started_at: 3000, updated_at: 3000 }),
-    [MATE_A]: team(MATE_A, "researcher", 2000),
-    [MATE_B]: team(MATE_B, "mapper", 1900),
-  };
-  const flatten = (sessions: Record<string, InboxSession>, mode: "time" | "recent", showSubagents = true) => {
-    const cat = categorizeSessions(sessions, new Set());
-    return flatViewSessions(cat.sorted, cat.subsByParent, { mode, showSubagents });
-  };
-
-  it("recent mode: teammates render directly under their lead, not at their own time slot", () => {
-    expect(ids(flatten(base, "recent"))).toEqual([LEAD, MATE_A, MATE_B, UNRELATED]);
-  });
-
-  it("time mode: same hoist on the creation-time order", () => {
-    // Creation order alone would be UNRELATED(3000), MATE_A, MATE_B, LEAD(1000).
-    expect(ids(flatten(base, "time"))).toEqual([UNRELATED, LEAD, MATE_A, MATE_B]);
-  });
-
-  it("Task-tool subagents hoist the same way", () => {
-    const sub = sess({ _id: MATE_A, parent_conversation_id: LEAD, is_subagent: true, started_at: 2000, updated_at: 2000 });
-    const withSub = { [LEAD]: base[LEAD], [UNRELATED]: base[UNRELATED], [MATE_A]: sub };
-    expect(ids(flatten(withSub, "recent"))).toEqual([LEAD, MATE_A, UNRELATED]);
-  });
-
-  it("parent absent: a teammate keeps its comparator slot as a flat row", () => {
-    const noLead = { [UNRELATED]: base[UNRELATED], [MATE_A]: base[MATE_A], [MATE_B]: base[MATE_B] };
-    expect(ids(flatten(noLead, "recent"))).toEqual([UNRELATED, MATE_A, MATE_B]);
-  });
-
-  it("subagent toggle off still drops nested rows entirely", () => {
-    expect(ids(flatten(base, "recent", false))).toEqual([LEAD, UNRELATED]);
-  });
-
-  // Regression (ct-45319): the grouped view hides a Task subagent whose parent
-  // is absent (isOrphanSubagent — it rides its parent), but the flat views kept
-  // it at its own creation slot wearing the ↳ arrow, so an anchor's workers
-  // (the anchor is hidden from the inbox unless blocked) rendered as children
-  // of whatever unrelated card sorted above them.
-  describe("parent absent: a Task subagent is hidden, not floated (ct-45319)", () => {
-    const ANCHOR = cid(24);
-    const SUB_A = cid(25);
-    const SUB_B = cid(26);
-    const sub = (id: string, t: number, extra: Partial<InboxSession> = {}) =>
-      sess({ _id: id, parent_conversation_id: ANCHOR, is_subagent: true, started_at: t, updated_at: t, ...extra });
-    const withAnchor = {
-      [ANCHOR]: sess({ _id: ANCHOR, is_anchor: true, started_at: 500, updated_at: 500 }),
-      [UNRELATED]: base[UNRELATED],
-      [SUB_A]: sub(SUB_A, 2500),
-      [SUB_B]: sub(SUB_B, 2400),
+  it("membership is DATA, not payload memory: a cold cache selects correctly with no live payload ever seen", () => {
+    // The old gate read liveInboxIds; empty set = show everything. Now the same
+    // rows produce the same set on a cold boot, a stalled subscription, or a
+    // fresh payload — the selection reads only row fields and the epoch.
+    const rows = {
+      [RECENT]: sess({ _id: RECENT }),
+      [AGED]: sess({ _id: AGED, updated_at: NOW - 40 * DAY }),
     };
+    const m = computeInboxMembership(rows, EPOCH);
+    expect([...m.members]).toEqual([RECENT]);
+  });
 
-    it("time mode: the hidden anchor's subagents drop out instead of trailing an unrelated card", () => {
-      const cat = categorizeSessions(withAnchor, new Set());
-      expect(cat.sorted.map((x) => x._id)).not.toContain(ANCHOR);
-      expect(ids(flatViewSessions(cat.sorted, cat.subsByParent, { mode: "time", showSubagents: true }))).toEqual([UNRELATED]);
-    });
+  it("stubs and child rows are never their own members (overlay and structure, not membership)", () => {
+    const m = computeInboxMembership(
+      {
+        "local-stub-123": sess({ _id: "local-stub-123" }),
+        [AGED]: sess({ _id: AGED, parent_conversation_id: RECENT, parent_message_uuid: "u1" }),
+      },
+      EPOCH,
+    );
+    expect(m.members.size).toBe(0);
+  });
 
-    it("the focused and pinned orphans still render", () => {
-      const pinned = { ...withAnchor, [SUB_B]: sub(SUB_B, 2400, { is_pinned: true }) };
-      const cat = categorizeSessions(pinned, new Set());
-      expect(ids(flatViewSessions(cat.sorted, cat.subsByParent, { mode: "time", showSubagents: true, focusedId: SUB_A }))).toEqual([UNRELATED, SUB_A, SUB_B]);
-    });
+  it("killed rows are out unless pinned (shouldShowInInbox, shared with the server scan)", () => {
+    const killed = cid(3);
+    const killedPinned = cid(4);
+    const m = computeInboxMembership(
+      {
+        [killed]: sess({ _id: killed, inbox_killed_at: NOW }),
+        [killedPinned]: sess({ _id: killedPinned, inbox_killed_at: NOW, is_pinned: true, inbox_pinned_at: NOW }),
+      },
+      EPOCH,
+    );
+    expect(m.members.has(killed)).toBe(false);
+    expect(m.members.has(killedPinned)).toBe(true);
+  });
 
-    it("parent filtered out by the chip: its subagents leave with it", () => {
-      const withLead = { ...withAnchor, [ANCHOR]: sess({ _id: ANCHOR, started_at: 500, updated_at: 500 }) };
-      const cat = categorizeSessions(withLead, new Set());
-      const chipMatches = (x: InboxSession) => x._id !== ANCHOR;
-      expect(ids(flatViewSessions(cat.sorted, cat.subsByParent, { mode: "time", showSubagents: true, chipMatches }))).toEqual([UNRELATED]);
-    });
+  it("dismissed and stashed rows hold seats through their own 30-day windows, keyed on the gesture stamp", () => {
+    const dismissed = cid(5);
+    const stashed = cid(6);
+    const staleDismiss = cid(7);
+    const m = computeInboxMembership(
+      {
+        // Ancient activity, fresh gesture: still a member (the dismissed window
+        // keys on inbox_dismissed_at, not updated_at).
+        [dismissed]: sess({ _id: dismissed, updated_at: NOW - 40 * DAY, status: "completed", inbox_dismissed_at: NOW - DAY }),
+        [stashed]: sess({ _id: stashed, updated_at: NOW - 40 * DAY, status: "completed", inbox_stashed_at: NOW - DAY }),
+        // Gesture older than the window: out.
+        [staleDismiss]: sess({ _id: staleDismiss, updated_at: NOW - 40 * DAY, status: "completed", inbox_dismissed_at: NOW - 40 * DAY }),
+      },
+      EPOCH,
+    );
+    expect(m.members.has(dismissed)).toBe(true);
+    expect(m.members.has(stashed)).toBe(true);
+    expect(m.members.has(staleDismiss)).toBe(false);
+  });
+
+  it("a pinned row holds its seat at any age", () => {
+    const pinnedOld = cid(8);
+    const m = computeInboxMembership(
+      { [pinnedOld]: sess({ _id: pinnedOld, updated_at: NOW - 90 * DAY, inbox_pinned_at: NOW - 90 * DAY, is_pinned: true }) },
+      EPOCH,
+    );
+    expect(m.members.has(pinnedOld)).toBe(true);
+  });
+
+  it("an overflowing window names itself in truncated (caps are part of the shared selection)", () => {
+    const rows: Record<string, InboxSession> = {};
+    for (let i = 0; i < INBOX_WINDOW_CAPS.recent + 5; i++) {
+      const id = cid(100 + i);
+      rows[id] = sess({ _id: id, updated_at: NOW - i });
+    }
+    const m = computeInboxMembership(rows, EPOCH);
+    expect(m.truncated).toContain("recent");
+    expect(m.members.size).toBe(INBOX_WINDOW_CAPS.recent);
+  });
+
+  it("the fold: members past a 12h activity gap; deliberate windows exempt", () => {
+    const fresh = cid(20);
+    const edge = cid(21);
+    const folded = cid(22);
+    const oldPin = cid(23);
+    const m = computeInboxMembership(
+      {
+        [fresh]: sess({ _id: fresh, updated_at: NOW }),
+        [edge]: sess({ _id: edge, updated_at: NOW - 13 * HOUR }),
+        [folded]: sess({ _id: folded, updated_at: NOW - 14 * HOUR }),
+        // Same age as the folded row, but pinned — a deliberate window, exempt.
+        [oldPin]: sess({ _id: oldPin, updated_at: NOW - 14 * HOUR, is_pinned: true, inbox_pinned_at: NOW - 14 * HOUR }),
+      },
+      EPOCH,
+    );
+    expect(m.belowFold.has(fresh)).toBe(false);
+    expect(m.belowFold.has(edge)).toBe(false); // at the cut, not under it
+    expect(m.belowFold.has(folded)).toBe(true);
+    expect(m.belowFold.has(oldPin)).toBe(false);
+  });
+});
+
+describe("partitionWorkingSet — show-old inside the computation, overlays as pass-throughs", () => {
+  const membershipOf = (rows: Record<string, InboxSession>) => computeInboxMembership(rows, EPOCH);
+
+  it("GATE INVERSION: a nonmember is dropped even with show-old ON (the toggle is not a bypass)", () => {
+    const rows = {
+      [RECENT]: sess({ _id: RECENT }),
+      [AGED]: sess({ _id: AGED, updated_at: NOW - 40 * DAY }),
+    };
+    const r = partitionWorkingSet(rows, membershipOf(rows), { showOld: true });
+    expect(Object.keys(r.visibleSessions)).toEqual([RECENT]);
+    expect(r.oldCount).toBe(0);
+  });
+
+  it("show-old off hides folded members and counts them; on reveals them, count unchanged", () => {
+    const fresh = cid(30);
+    const edge = cid(31);
+    const folded = cid(32);
+    const rows = {
+      [fresh]: sess({ _id: fresh, updated_at: NOW }),
+      [edge]: sess({ _id: edge, updated_at: NOW - 13 * HOUR }),
+      [folded]: sess({ _id: folded, updated_at: NOW - 14 * HOUR }),
+    };
+    const off = partitionWorkingSet(rows, membershipOf(rows), { showOld: false });
+    expect(Object.keys(off.visibleSessions).sort()).toEqual([fresh, edge].sort());
+    expect(off.oldCount).toBe(1);
+    const on = partitionWorkingSet(rows, membershipOf(rows), { showOld: true });
+    expect(Object.keys(on.visibleSessions).sort()).toEqual([fresh, edge, folded].sort());
+    expect(on.oldCount).toBe(1);
+  });
+
+  it("declared overlays pass through: create stub, child rows, the focused session, kept drafts", () => {
+    const focusedOld = cid(40);
+    const draftOld = cid(41);
+    const child = cid(42);
+    const rows = {
+      [RECENT]: sess({ _id: RECENT }),
+      "local-stub-9": sess({ _id: "local-stub-9" }),                       // create_stub
+      [child]: sess({ _id: child, parent_conversation_id: RECENT, parent_message_uuid: "u" }), // rides its parent
+      [focusedOld]: sess({ _id: focusedOld, updated_at: NOW - 40 * DAY }), // focused
+      [draftOld]: sess({ _id: draftOld, updated_at: NOW - 40 * DAY, _hasDraft: true }), // draft_blank
+    };
+    const r = partitionWorkingSet(rows, membershipOf(rows), { showOld: false, focusedId: focusedOld });
+    expect(Object.keys(r.visibleSessions).sort()).toEqual(
+      [RECENT, "local-stub-9", child, focusedOld, draftOld].sort(),
+    );
+    // Pass-throughs are rendering-only: none of them are members, none count old.
+    expect(r.oldCount).toBe(0);
+  });
+
+  it("returns the original map ref when nothing was dropped, so downstream memos hold", () => {
+    const rows = { [RECENT]: sess({ _id: RECENT }) };
+    const r = partitionWorkingSet(rows, membershipOf(rows), { showOld: false });
+    expect(r.visibleSessions).toBe(rows);
+  });
+});
+
+describe("renderInboxEpoch — the replica's clock (C2)", () => {
+  it("the latest payload epoch advanced by the local minute; whichever is ahead wins", () => {
+    const localEpoch = inboxEpoch(NOW);
+    // Payload behind the device clock: the local minute rules.
+    expect(renderInboxEpoch({ mine: { epoch: localEpoch - 5 * 60_000 } }, NOW)).toBe(localEpoch);
+    // Payload ahead (device clock skewed back): the payload rules — the view
+    // never rolls backwards to a slow local clock.
+    expect(renderInboxEpoch({ mine: { epoch: localEpoch + 5 * 60_000 } }, NOW)).toBe(localEpoch + 5 * 60_000);
+    // No payload yet: the local minute.
+    expect(renderInboxEpoch(undefined, NOW)).toBe(localEpoch);
+    expect(renderInboxEpoch({}, NOW)).toBe(localEpoch);
   });
 });

@@ -49,11 +49,13 @@ describe("durable dispatch call-site guards", () => {
     );
   });
 
-  test("agent-switch forks use a client id, local stub, and tracked rekey lifecycle", async () => {
+  test("in-place agent switch is the default; forks stay an explicit opt-in", async () => {
     const source = await Bun.file(
       new URL("../../components/ConversationView.tsx", import.meta.url),
     ).text();
 
+    expect(source).toContain('convCommand(id, "switchSessionAgent"');
+    expect(source).toContain("Fork as");
     expect(source).toContain("target_agent_type: t,");
     expect(source).toContain("session_id: forkSessionId,");
     expect(source).toContain("_forkTargetAgentType: t");

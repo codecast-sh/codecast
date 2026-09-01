@@ -72,8 +72,11 @@ export function useAvatarFaceCrop(opts: {
       host.setAttribute("data-tracking", "face");
     };
 
+    // A persistent listener, not `once`: AvatarImg swaps the element's src in
+    // place when its byte cache resolves (remote URL first, cached object URL
+    // a beat later), and the crop belongs to the pixels actually shown.
     if (img.complete) void detect();
-    else img.addEventListener("load", detect, { once: true });
+    img.addEventListener("load", detect);
 
     return () => {
       stopped = true;

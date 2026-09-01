@@ -5,6 +5,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, InboxSession, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { useRecoveryPoll } from "./useRecoveryPoll";
+import { warmVisibleSessions } from "./inboxWarm";
 
 // Record the team-mode active id set, change-guarded so an identical payload
 // doesn't allocate a new Set and re-render every subscriber. The panel gates the
@@ -62,15 +63,23 @@ export function useSyncTeamInboxSessions() {
     if (!Array.isArray(sessions)) return;
     syncTable("sessions", sessions as unknown as InboxSession[]);
     applyTeamInboxIds(sessions, (activeTeamId as string | undefined) ?? null);
+    // Team rows warm through the same rendered-order loop as the personal
+    // inbox — the board's cards are the rows on screen in team scope.
+    warmVisibleSessions(convex);
     lastSyncRef.current = Date.now();
-  }, [syncTable, activeTeamId]), { coalesceMs: 300 });
+  }, [syncTable, activeTeamId, convex]), { coalesceMs: 300 });
 
+  // Facts merge onto rows; stamps + the projection envelope land in the TEAM
+  // slot of sessionsProjection — keyed by team id, so the personal overlay and
+  // the team overlay never write the same slot (sync-convergence C1). Team
+  // stamps ship but are not compared (the replica lacks team visibility
+  // inputs); they exist for freshness scheduling.
   useConvexSync(teamLiveness, useCallback((data: any) => {
     const liveness = data?.liveness ?? data;
     if (!liveness || typeof liveness !== "object") return;
-    useInboxStore.getState().syncOverlay("sessions", liveness as Record<string, Record<string, any>>);
+    useInboxStore.getState().applyInboxLivenessPayload(`team:${activeTeamId ?? ""}`, data);
     lastLivenessRef.current = Date.now();
-  }, []), { coalesceMs: 300 });
+  }, [activeTeamId]), { coalesceMs: 300 });
 
   // Leaving team mode clears the active set (the teammate rows stay in the
   // never-prune cache; the "mine" scope filter is what hides them). This is
@@ -98,6 +107,7 @@ export function useSyncTeamInboxSessions() {
     if (!Array.isArray(sessions)) return;
     syncTable("sessions", sessions as unknown as InboxSession[]);
     applyTeamInboxIds(sessions, (activeTeamId as string | undefined) ?? null);
+    warmVisibleSessions(convex);
     lastSyncRef.current = Date.now();
   }, [convex, active, activeTeamId, syncTable]), 15_000);
 
@@ -109,7 +119,8 @@ export function useSyncTeamInboxSessions() {
     });
     const liveness = fresh?.liveness;
     if (!liveness) return;
-    useInboxStore.getState().syncOverlay("sessions", liveness as Record<string, Record<string, any>>);
+    // Same applier as the subscription — a recovery pass must not fork shapes.
+    useInboxStore.getState().applyInboxLivenessPayload(`team:${activeTeamId ?? ""}`, fresh);
     lastLivenessRef.current = Date.now();
   }, [convex, active, activeTeamId]), 15_000);
 

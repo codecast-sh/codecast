@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
-import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useTrackedStore } from "../../store/inboxStore";
 import {
   getCallTiles,

@@ -96,6 +96,7 @@ import type * as inboxProjection from "../inboxProjection.js";
 import type * as ipRateLimit from "../ipRateLimit.js";
 import type * as lib_access from "../lib/access.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_commentSessionInfo from "../lib/commentSessionInfo.js";
 import type * as lib_docSnapshot from "../lib/docSnapshot.js";
 import type * as lib_liveSessions from "../lib/liveSessions.js";
 import type * as lib_openTasksValidator from "../lib/openTasksValidator.js";
@@ -267,6 +268,7 @@ declare const fullApi: ApiFromModules<{
   ipRateLimit: typeof ipRateLimit;
   "lib/access": typeof lib_access;
   "lib/auth": typeof lib_auth;
+  "lib/commentSessionInfo": typeof lib_commentSessionInfo;
   "lib/docSnapshot": typeof lib_docSnapshot;
   "lib/liveSessions": typeof lib_liveSessions;
   "lib/openTasksValidator": typeof lib_openTasksValidator;

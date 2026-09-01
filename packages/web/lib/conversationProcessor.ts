@@ -47,6 +47,15 @@ export function isSystemMessage(content: string): boolean {
   return SYSTEM_MESSAGE_PREFIXES.some(prefix => content.startsWith(prefix));
 }
 
+// Claude Code writes its terminal status lines into the transcript as system
+// entries with subtype "informational": Remote Control connect/disconnect,
+// usage-limit auto-continue countdowns, "Unknown command" typo hints. They
+// address the person sitting at the terminal, not the conversation — every
+// renderer (web thread, mobile thread) hides the whole subtype.
+export function isHiddenSystemSubtype(subtype?: string | null): boolean {
+  return subtype === "informational";
+}
+
 /** Synthetic truncation notice the CLI injects into imported sessions for the
  * model's context. Context-only — hide it from every user-facing surface. */
 export const IMPORT_NOTICE_PREFIX = "[Codecast import]";

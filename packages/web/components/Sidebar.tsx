@@ -47,7 +47,7 @@ import { LiveNowRail } from "./calls/LiveNow";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
-import { startPaneDrag } from "../lib/stage";
+import { requestStagePlacement, startPaneDrag } from "../lib/stage";
 
 const api = _api as any;
 
@@ -82,9 +82,22 @@ function getShortPath(projectPath: string): string {
  *  does, and its hover actions. NavSection's children and the pinned rail render
  *  through the same component so selection, hover, and action affordances can
  *  never drift apart. */
+// Anything in the rail that NAMES A PLACE is a pane waiting to happen: give
+// it these props and it can be dragged onto the stage to split it in
+// (lib/stage). One helper so every link and row speaks the same drag.
+function paneDragProps(path: string, title: string) {
+  return {
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => startPaneDrag(e, { path, title }),
+  };
+}
+
 type SectionRowSpec = {
   id: string;
   name: string;
+  /** The route this row shows. Present = the row is draggable onto the stage
+   *  and its click offers the pane picker on a split stage. */
+  path?: string;
   icon?: React.ReactNode;
   /** Highlighted as the row you are currently looking at. */
   active?: boolean;
@@ -105,6 +118,7 @@ function SectionRow({ row, className }: { row: SectionRowSpec; className?: strin
   return (
     <div
       onContextMenu={row.onContextMenu}
+      {...(row.path ? paneDragProps(row.path, row.name) : {})}
       className={`flex items-center group/v transition-colors ${
         row.active
           ? "bg-sol-bg-highlight text-sol-text"
@@ -112,7 +126,12 @@ function SectionRow({ row, className }: { row: SectionRowSpec; className?: strin
       } ${row.dim ? "opacity-60 hover:opacity-100" : ""} ${className ?? ""}`}
     >
       <button
-        onClick={row.onSelect}
+        onClick={() => {
+          // A split stage makes the destination ambiguous — offer the picker
+          // (same rule as the section links above).
+          if (row.path && requestStagePlacement(row.path, row.name)) return;
+          row.onSelect();
+        }}
         className="flex items-center gap-1.5 pl-2 pr-1.5 py-1 hover:text-sol-text transition-colors flex-1 min-w-0 text-left"
         title={row.title ?? row.name}
         aria-current={row.active ? "page" : undefined}
@@ -212,7 +231,15 @@ function NavSection({
       }`}>
         <Link
           href={href}
-          onClick={onMobileClose}
+          onClick={(e) => {
+            onMobileClose?.();
+            // On a SPLIT stage a plain click is ambiguous — which pane? Hand
+            // the choice to the user (StagePickLayer) instead of guessing.
+            // Modified clicks keep their browser meaning.
+            if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && requestStagePlacement(href, label)) {
+              e.preventDefault();
+            }
+          }}
           data-nav-row
           // A section is a pane waiting to happen: drag it onto the stage to
           // split it in beside whatever is there (lib/stage).
@@ -287,6 +314,7 @@ const QuestionsNavRow = memo(function QuestionsNavRow({
     <Link
       href="/questions"
       onClick={onMobileClose}
+      {...paneDragProps("/questions", "Questions")}
       className={`w-full flex items-center ${isNarrow ? "justify-center" : "gap-3"} px-4 py-2.5 border-l-2 transition-colors motion-reduce:transition-none text-left ${
         isActive
           ? "bg-sol-bg-highlight text-sol-text border-sol-violet"
@@ -327,6 +355,7 @@ const ThreadsNavRow = memo(function ThreadsNavRow({
     <Link
       href="/threads"
       onClick={onMobileClose}
+      {...paneDragProps("/threads", "Threads")}
       className={`relative w-full flex items-center ${isNarrow ? "justify-center" : "gap-3"} px-4 py-2.5 border-l-2 transition-colors motion-reduce:transition-none text-left ${
         isActive
           ? "bg-sol-bg-highlight text-sol-text border-sol-cyan"
@@ -572,6 +601,7 @@ const CallsNavRow = memo(function CallsNavRow({
       <Link
         href="/calls"
         onClick={onMobileClose}
+        {...paneDragProps("/calls", "Calls")}
         data-nav-row
         className={`flex-1 flex items-center ${isNarrow ? "justify-center" : "gap-3"} px-4 py-2.5 min-w-0`}
         title="Calls — live huddles and transcripts"
@@ -665,6 +695,7 @@ function PinnedRail({
       return {
         ...base,
         name: "Threads",
+        path: "/threads",
         icon: <MessagesSquare className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
         trailing:
           threadsUnread > 0 ? <NavCount n={threadsUnread} tone="bg-sol-cyan text-sol-bg" small /> : null,
@@ -677,6 +708,7 @@ function PinnedRail({
       return {
         ...base,
         name: p?.title ?? pin.label,
+        path: `/projects/${pin.id}`,
         icon: <FolderKanban className="w-3 h-3 flex-shrink-0 text-sol-text-dim" />,
         active: pathname === `/projects/${pin.id}` || !!pathname?.startsWith(`/projects/${pin.id}/`),
         onSelect: () => onNavigate(`/projects/${pin.id}`),
@@ -703,6 +735,7 @@ function PinnedRail({
         name: live
           ? channelDisplayName(live, teamMembers)
           : dmName ?? (c?.name || pin.label.replace(/^#/, "")),
+        path: `/chat/${id}`,
         icon: live?.muted
           ? <BellOff className="w-3 h-3 flex-shrink-0 text-sol-text-dim" aria-label="Muted" />
           : counterpart
@@ -1145,6 +1178,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           {activeTeam && (
             <Link
               href="/team/activity"
+              {...paneDragProps("/team/activity", "Activity")}
               className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 border-l-2 transition-colors motion-reduce:transition-none text-left ${
                 isTeamActivity
                   ? "bg-sol-bg-highlight text-sol-text border-sol-cyan"

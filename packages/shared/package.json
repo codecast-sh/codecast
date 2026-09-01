@@ -12,6 +12,7 @@
     ".": "./index.ts",
     "./encryption": "./encryption/index.ts",
     "./contracts": "./contracts/index.ts",
+    "./contracts/__fixtures__/inboxProjectionGen": "./contracts/__fixtures__/inboxProjectionGen.ts",
     "./entities": "./entities/index.ts",
     "./render": "./render/index.ts",
     "./tasks": "./tasks/index.ts",

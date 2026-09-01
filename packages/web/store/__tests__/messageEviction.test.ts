@@ -31,6 +31,7 @@ function makeDraft(loadedCount: number, opts: Record<string, any> = {}) {
     viewingDismissedId: null,
     currentConversation: null,
     liveInboxIds: new Set<string>(),
+    warmProtectedIds: new Set<string>(),
     ...opts,
   };
 }
@@ -76,5 +77,23 @@ describe("evictInactiveMessages", () => {
     expect(d.messages["conv-2"]).toBeDefined(); // protected: pending send
     expect(d.messages["conv-3"]).toBeDefined(); // protected: active conv
     expect(Object.keys(d.messages).length).toBe(MAX_IN_MEMORY_CONVERSATIONS);
+  });
+
+  it("keeps every row on screen, and lets the live set stand in only until that set exists", () => {
+    // conv-0 is the oldest-viewed row, so it is first in line for eviction; a
+    // published on-screen set holds it, and once that set exists the live set no
+    // longer protects anything (it outgrew the cap and left no slack).
+    const shown = makeDraft(MAX_IN_MEMORY_CONVERSATIONS + 10, {
+      warmProtectedIds: new Set(["conv-0"]),
+      liveInboxIds: new Set(["conv-1"]),
+    });
+    evictInactiveMessages(shown, "zzz-not-loaded");
+    expect(shown.messages["conv-0"]).toBeDefined();
+    expect(shown.messages["conv-1"]).toBeUndefined();
+    expect(Object.keys(shown.messages).length).toBe(MAX_IN_MEMORY_CONVERSATIONS);
+
+    const boot = makeDraft(MAX_IN_MEMORY_CONVERSATIONS + 10, { liveInboxIds: new Set(["conv-1"]) });
+    evictInactiveMessages(boot, "zzz-not-loaded");
+    expect(boot.messages["conv-1"]).toBeDefined();
   });
 });

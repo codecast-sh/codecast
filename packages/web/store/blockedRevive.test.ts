@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import {
-  categorizeSessions,
   freshReviveRequestIds,
   showsBlockedBadge,
   BLOCKED_REVIVE_TTL_MS,
 } from "./inboxStore";
+import { placeSections } from "./__tests__/placeTestHarness";
 
 // Regression: the blocked-sessions banner's continue/switch actions must render
 // locally the moment the user clicks. pending_api_error is server-derived (it
@@ -32,7 +32,7 @@ function mk(over: Partial<any>): any {
 function bucketsOf(sessions: any[], reviveRequestedAt?: Record<string, number>) {
   const map: Record<string, any> = {};
   for (const s of sessions) map[s._id] = s;
-  const { working, needsInput } = categorizeSessions(map, new Set(), undefined, {
+  const { working, needsInput } = placeSections(map, new Set(), undefined, {
     reviveRequestedAt,
   });
   return {
@@ -41,7 +41,7 @@ function bucketsOf(sessions: any[], reviveRequestedAt?: Record<string, number>) 
   };
 }
 
-describe("categorizeSessions — blocked-banner revive stamps", () => {
+describe("placeSections — blocked-banner revive stamps (the revive overlay)", () => {
   it("files a blocked session under needs-input with no stamp", () => {
     const { working, needsInput } = bucketsOf([mk({ _id: "blocked" })]);
     expect(needsInput).toContain("blocked");

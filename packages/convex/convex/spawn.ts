@@ -84,6 +84,7 @@ export async function spawnSessionCore(
     projectPath?: string;
     gitRoot?: string;
     model?: string;
+    effort?: string;
     isolated?: boolean;
     worktreeName?: string;
     targetDeviceId?: string | null;
@@ -123,6 +124,7 @@ export async function spawnSessionCore(
     isolated: opts.isolated,
     worktreeName: opts.worktreeName,
     model: opts.model,
+    effort: opts.effort,
     createdAt: now,
     targetDeviceId: opts.targetDeviceId ?? null,
   });
@@ -170,6 +172,7 @@ export const createSessionFromCli = mutation({
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
     model: v.optional(v.string()),
+    effort: v.optional(v.string()),
     isolated: v.optional(v.boolean()),
     worktree_name: v.optional(v.string()),
     // A device_id or label; routes start_session at that machine (see
@@ -204,6 +207,7 @@ export const createSessionFromCli = mutation({
       projectPath: args.project_path,
       gitRoot: args.git_root,
       model: args.model,
+      effort: args.effort,
       isolated: args.isolated,
       worktreeName: args.worktree_name,
       targetDeviceId,

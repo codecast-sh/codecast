@@ -23,7 +23,7 @@ import { ArrowDown, ArrowUp, ListChecks, Plus, Trash2 } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
-  DEFAULT_TASK_STATUS_NAMES,
+  TASK_STATUS_CATEGORIES,
   TASK_STATUS_COLORS,
   isActiveTask,
   normalizeTeamTaskStatuses,
@@ -31,7 +31,6 @@ import {
   type TaskStatusCategory,
   type TeamTaskStatus,
 } from "@codecast/shared/tasks";
-import { TASK_STATUS_ORDER } from "../TaskStatusBadge";
 import { STATUS_COLOR_CLASSES, statusVisual, taskStatusKey } from "../../lib/taskStatuses";
 import { useInboxStore } from "../../store/inboxStore";
 import { filterToWorkspace } from "../../lib/workspaceScope";
@@ -162,7 +161,7 @@ export function TeamTaskStatusEditor({
       overflowVisible
     >
       <div className="space-y-2">
-        {TASK_STATUS_ORDER.map((category) => {
+        {TASK_STATUS_CATEGORIES.map((category) => {
           const rows = statuses.filter((s) => s.category === category);
           return (
             <div key={category}>

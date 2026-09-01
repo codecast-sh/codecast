@@ -3,34 +3,36 @@
 Status: design, ready for implementation (ct-47200 to ct-47205). Companion to
 sync-log-migration.md, which owns transport (ordered per scope catch up). This document
 owns the layer above: multiplayer sync into local first client databases that is
-eventually consistent by construction, one shared computation over that data, and hash
-based monitoring that proves convergence in production over time.
+eventually consistent by construction, one shared computation over that data, and
+monitoring that proves convergence in production over time. Code comments reference the
+numbered sections below (C1, C2, ...).
 
 ## The model
 
-Every client (web, desktop, mobile, CLI) is a replica. The server database is canonical;
-each client's store holds a replicated subset. Bucket counts and lists are VIEWS computed
-locally, on the client, from the replica. Convergence then needs exactly three identities,
-and nothing else:
+Every client with a replica (web, desktop, mobile) is a local first database. The server
+database is canonical; each client's store holds a replicated subset. Bucket counts and
+lists are VIEWS computed locally, on the client, from the replica. Convergence needs
+exactly three identities:
 
 1. **Same data.** Within a declared working set, every replica eventually holds the same
    rows with the same field values. This is the sync layer's whole job and its only job.
-2. **Same computation.** One pure function, in shared code, computes membership, fold,
-   and bucket from row fields. Every surface on every platform calls it. The server runs
-   the SAME function only to produce the digest that checks the replicas.
-3. **Same parameters.** View state (show old, scope) is synced user state; time enters
-   only as a minute epoch, so two clients in the same minute compute identical views.
+2. **Same computation.** One pure module, in shared code, computes membership, fold, and
+   bucket from row fields. Every replica surface calls it. The server runs the SAME
+   module over canonical state, but only to produce checking data: a per row stamp map
+   and a digest. Nothing the server computes is a render source on a replica client.
+3. **Same parameters.** View state (show old, scope) is synced user state. Time enters
+   only as a minute epoch, and the epoch a replica compares at is the one the server's
+   payload names, so a device clock never enters the comparison.
 
-Anything that breaks one of the three identities is the bug class this design removes:
-per query enrichment that hands different field values to different clients, membership
-decided by which payload a device happened to receive, per surface computation passes,
-and unsynchronized clocks.
+The CLI has no replica of the inbox, so `inboxForCLI` renders the server's own run of
+the shared module. For a client without a replica, the canonical computation is the
+view. The convergence proof below concerns the replica clients.
 
-"Provable" is operational: the server hashes the view it derives from canonical state;
-each client hashes the view it derives from its replica; the hashes are compared
-continuously in prod, drift is a metric with an alarm, and mismatch triggers a bounded
-self heal. Eventual consistency stops being an assumption and becomes a monitored
-invariant.
+"Provable" is operational: the server stamps the placement it derives from canonical
+state; each replica computes its own placement from its replica; the two are diffed per
+row, continuously, in prod. Drift is a metric with an alarm, and mismatch triggers a
+bounded self heal. Eventual consistency stops being an assumption and becomes a
+monitored invariant.
 
 ## Why the previous designs did not converge
 
@@ -46,228 +48,413 @@ client:
    every device counts its own never pruned cache: measured 2,270 cached rows vs 1,062
    authoritative ids on one client.
 2. The server set is nondeterministic. `computeInboxSessions` mixes `Date.now()` into
-   window bounds and liveness thresholds, applies a 12 hour cluster cut over a 200 row
-   sample, and truncates silently. Two executions seconds apart differ on identical data.
+   window bounds and liveness thresholds, applies a 12 hour cluster cut over a sample,
+   and truncates silently. Two executions seconds apart differ on identical data.
 3. Field values differ per channel. The same conversation yields different rows from
-   `listInboxSessions` (liveness stripped, no ask probe), `listInboxSessionsPaginated`
-   (full liveness), and `getInboxSessionsByIds` (empty maps) — last writer wins in the
-   store.
-4. The computation differs per surface. The panel, the sidebar badge, and mobile call the
-   shared code through different paths with different passes (question lift over the
-   whole cache, trigger absorption, revive stamps, focus exemptions), and mobile freezes
-   its snapshot under a moving trust TTL clock.
+   `listInboxSessions`, `listInboxSessionsPaginated`, and `getInboxSessionsByIds`, and
+   the last writer wins in the store.
+4. The computation differs per surface. The panel, the sidebar badge, and mobile call
+   different code paths with different passes (question lift over the whole cache,
+   trigger absorption, revive stamps, focus exemptions), and mobile freezes its snapshot
+   under a moving trust TTL clock.
 5. Nothing measures drift.
 
 ## Design
 
-### D1 The replicated working set: same data, by construction
+### C1 Facts and channels
 
-**The working set is a predicate, not a payload.** `inWorkingSet(row, epoch)` is a pure
-function over row fields: status active or completed, `updated_at` within the 30 day
-window of the minute epoch, or pinned, or dismissed or stashed within their windows, or
-owned. It lives in `packages/shared/contracts/inboxProjection.ts` and is the SAME code on
-server and client. The server uses it to decide what to replicate; the client uses it to
-decide what to count. A row's membership therefore depends only on its fields and the
-minute — never on which payload a device received. `liveInboxIds` as a gate is deleted.
+**Replication channels deliver the working set and keep it current.** Unchanged
+machinery: the live window query (`listInboxSessions`) delivers row bodies; the sync log
+delivers semantic transitions per scope with ordered positions; the completeness crawl
+and the dismissed and stashed reconciles remain the floor and the subtractive healers
+for hide state; `getInboxSessionsByIds` hydrates named ids.
 
-**Replication channels deliver the set and keep it current.** Unchanged machinery, with
-its determinism fixed:
+**The liveness overlay is the fact writer.** `sessionsLiveness` (and its team twin)
+carries FACTS, never verdicts, for every row the scan shows: `agent_status`, `is_idle`,
+`is_unresponsive`, `awaiting_input`, `is_connected`, `agent_started_at`, `open_tasks`,
+`open_tasks_at`, `message_count`, `updated_at`, plus `last_turn_allows_park` (whether
+the newest turn permits a park verdict; the server computes it from the newest message,
+including the probed fallback the row's preview lacks, so the replica never needs the
+message body). The overlay also carries fact rows for the live CHILDREN it probes
+(subagents of shown parents), so a replica can compute parent rollups from replicated
+child facts. Facts have one writer: `syncTable` strips fact fields from every other
+sessions channel, so no channel can write a torn or stale value over a fresher one. The
+fact field names live in one shared constant; the server strip list and the client
+preserve list both derive from it, with a signature test.
 
-- The live window query (`listInboxSessions`) becomes a plain fetch of working set rows:
-  epoch quantized bounds, no cluster cut on membership, explicit `truncated` flags for
-  every cap (recent, pinned, dismissed, stashed, owned, team member, member rows). The
-  pinned window orders newest first and its cap rises with a loud overflow flag.
-- The sync log delivers semantic transitions per scope with ordered positions (as today).
-- The completeness crawl and the dismissed and stashed reconciles remain the floor and
-  the subtractive healers for hide state.
-- The liveness overlay (`sessionsLiveness`) remains the churn channel, but it carries
-  FACTS, not verdicts: heartbeat recency, trusted agent status, `awaiting_input`, open
-  task counts. Facts written onto the row by exactly one writer (the overlay applier);
-  `syncTable` strips fact fields from every other sessions channel, so no channel can
-  write a torn or stale value over a fresher one. This closes cause 3: one field, one
-  writer, every replica converges on the overlay's value.
+Rows the scan does not cover (past a window cap, killed and unpinned, outside every
+window) keep their last synced facts until a crawl or a semantic transition refreshes
+the row. Those rows are also outside the stamped set, so the compare does not cover
+them; C7's heartbeat reports the uncovered count so this residue is visible, and the
+crawl period bounds it.
 
-**Ask state becomes data.** Today `awaiting_input` exists only where a query ran the
-message probe. It stays an overlay delivered fact, and the two inputs that today require
-client side joins become row fields maintained at write time, so they replicate through
-the ordinary channels and the sync log:
+**Stamps are checking data.** Each overlay payload also stamps, per shown row:
+`bucket`, `work_state`, `asking`, `below_fold`, `bucket_stale_at`, `stale_bucket`.
+These are the server's run of the shared module over canonical state. A replica client
+stores them in a per scope buffer (`sessionsProjection[scope]`), NEVER on the session
+row, and reads them only in the compare (C6) and the recompute scheduler (C2). A source
+guard bans reading them anywhere else. Because the buffer is keyed by scope, the
+personal overlay and the team overlay never write the same slot, and a row's fold in
+team scope can differ from its fold in personal scope without any field ping pong.
 
-- `armed_trigger_kind: "none" | "standing" | "once"` written when a trigger is armed,
-  paused, completed, or rehomed.
-- `has_open_ask` (own AskUserQuestion or permission prompt or pending `cast decide`) and
-  `has_asking_child` (rollup from children), maintained by the writers that change those
-  states (message settle, decision post and answer, child status transitions). Write
-  time denormalization is the local first move: facts are stamped where they change,
-  views never need a join.
+**Ask state is derived, not stored.** No conversation row field records an open ask.
+The server derives it per overlay execution with zero writes: own open question or
+permission prompt (from the message probe), pending `cast decide` rows (one
+session_decisions read), and the child rollup (bounded child probes). The replica
+derives the same thing from replicated inputs: its own `awaiting_input` fact, the
+synced session_decisions collection, and its replica children's facts. This is
+deliberate: an ask flips at tool prompt cadence across subagent fleets, and stamping it
+on the parent row would serialize every flip on the row the message flush path already
+patches, plus the scope's sync head. Write time denormalization is reserved for low
+frequency transitions.
 
-**Eventual consistency claim, stated honestly.** For any row whose fields make it a
-working set member, every online replica converges to the server's field values through
-live push (in window), the sync log (semantic transitions, ordered per scope), or the
-crawls (bounded staleness floor); hide state converges subtractively through the
-reconciles; fact fields have one writer. The known residue: `updated_at` is churn exempt
-in the sync log, so a row OUTSIDE the live window can hold a stale `updated_at` until
-the next semantic transition or crawl. That residue is bounded by the crawl period and
-is exactly what the digest monitor (D5) measures in prod. If the monitor shows it
-matters, the fix is a sync log emit for window crossing transitions, decided on data.
+**The one denormalized fact is `armed_trigger_kind`** (`"none" | "standing" | "once"`),
+written on every trigger lifecycle transition through `patchTask`, and on `webDelete`
+(which must refresh the old home after the delete). An exhaustive test enumerates every
+mutation that writes `agent_tasks` and asserts each path restamps the home. A client
+reads an absent value as `none`; the one shot backfill has landed and trigger homes are
+rare.
 
-### D2 One computation: the shared projection module
+### C2 Determinism and time
 
-`packages/shared/contracts/inboxProjection.ts` (the precedent is `agentStatus.ts`, which
-convex already imports) exports pure functions only:
+**The epoch.** Every time term in the shared module compares against
+`epoch = floor(now / 60s) * 60s`. The server evaluates at the epoch of its execution
+and names it in the payload.
 
-- `inWorkingSet(row, epoch)` — membership (D1).
-- `classifyRow(row, epoch)` — the one classifier: `work_state` (merging
-  `classifyWorkState` with the web rules the server lacks: unresolved
-  `pending_api_error` with content is needs input) and `bucket`, the mutually exclusive
-  placement: dismissed, stashed, hidden (anchor rows), questions (`has_open_ask` or
-  `has_asking_child` or `awaiting_input`), pinned, new (no messages), then the work
-  state. Pinned outranks the work buckets, so Needs Input never counts a pinned row.
-- `computeFold(rows, epoch)` — the 12 hour gap cut, computed over the CONVERGED working
-  set rather than a per query sample, so it is deterministic and identical on every
-  replica. Fold affects default rendering and splits the tally (`shown` vs `folded`);
-  show old means rendering and counting `shown + folded`. Fold never changes membership.
-- `projectInbox(rows, viewState, epoch, overlays)` — membership, fold, classification,
-  ordering, tallies, in one call.
-- `digestProjection(pairs)` — order independent hash over (id, bucket) pairs: FNV 1a 32
-  per pair folded into two 32 bit lanes (plain sum and sum of `Math.imul(h, h | 1)`),
-  16 hex characters. No sorting, no BigInt. One implementation, one test vector, used by
-  server and every client.
+**Payloads are deterministic.** No payload field carries a raw execution timestamp: the
+projection envelope carries `epoch`, never `Date.now()`. Two executions inside one
+minute over the same data are byte identical, so Convex suppresses the push and a
+stable inbox costs zero pushes between real changes. A unit test pins this. Payload age
+is measured on the client from receipt time on a monotonic clock; it needs no server
+timestamp.
 
-Consumers: the client store chokepoint (D4), `inboxForCLI` (whose tallies converge by
-construction once it calls the same function), and the server digest query (D5). The
-store's parallel classifiers (`isSessionWaitingForInput` chain, the trust sweep inside
-`categorizeSessions`) and the server's separate `tallyInboxRows` path are deleted, not
-wrapped.
+**The replica's clock.** For the compare, the client evaluates the shared module AT THE
+PAYLOAD'S EPOCH over its replica, so device clock skew cannot desynchronize the
+comparison. For rendering, the client's epoch is the latest payload epoch advanced by
+the local coarse tick (15 seconds, quantized to the minute); raw device wall clock
+never enters the computation.
 
-Time discipline: every time term compares against `epoch = floor(now / 60s) * 60s`.
-Clients evaluate on the shared 15 second coarse tick but quantize to the minute, so two
-replicas with the same data disagree at most across one minute boundary, and the digest
-compare (D5) only compares matching epochs.
+**Time flips without writes.** Convex re-executes a subscription only when a document
+in its read set changes, so a payload can outlive the time thresholds it was computed
+with (trust TTL expiry, idle grace, heartbeat windows). `computeBucketStale` stamps,
+per row, the earliest deadline whose passing changes the bucket. The client uses
+`bucket_stale_at` as a scheduling hint: when its coarse tick passes the stamp, it
+recomputes that row's placement LOCALLY (the replica holds the same facts, so the same
+flip falls out) and treats the payload as stale. It never renders `stale_bucket`; the
+stamp exists so a passed deadline is recognizable.
 
-### D3 Same parameters: view state is synced state
+**Quiet scopes get probed.** When no data changes (daemon offline, weekend, a mobile
+only user), the payload freezes exactly where time driven reclassification accumulates.
+When the payload age passes a bound (5 minutes) and the scope is due for a check, the
+client issues one `sessionsLiveness` probe (the `_probe` arg) on a slow, budgeted
+schedule to force a fresh execution. Skips for a stale payload are counted separately
+in the heartbeat so "no checks ran" always names its cause.
 
-`inbox_show_old`, `inbox_scope`, and the other stamped view keys remain in the synced
-LWW bag — that part already works. What changes is their semantics: show old selects
-`shown + folded` instead of `shown` inside the shared computation. No preference may
-bypass the working set predicate or widen the counted set beyond it; the guard test
-asserts the chokepoint is the only reader of these keys for counting purposes.
+### C3 One placement
 
-### D4 One chokepoint, one feeder set, declared overlays
+`packages/shared/contracts/inboxProjection.ts` is pure isomorphic code (no Node or DOM
+APIs, no BigInt) imported by Convex, the web store, mobile, and the daemon. It exports:
 
-- **Chokepoint.** `placeInboxRows` in the store calls `projectInbox` with (replica rows,
-  synced view state, coarse epoch, declared overlays) and returns placed buckets and
-  tallies. Every consumer uses it: panel, sidebar badge, dock badge, active agents pill,
-  fleet board, thread cards, palette, mobile inbox. A source level guard bans
-  `categorizeSessions`, `partitionOldSessions`, and `liftQuestions` outside it. The
-  memoization contract is part of the chokepoint (fresh rows plus the coarse tick),
-  which removes mobile's frozen snapshot class by construction.
-- **Declared overlays** — the only local adjustments, enumerated in one module, each
-  named, bounded, and excluded from the digest compare:
+- `classifyWorkState(input)`: the one work state classifier, merging the server rules
+  and the web rules (killed outranks everything; an unresolved API error banner with
+  content is needs input; declared and structural rest verdicts; the settle classifier
+  only files done).
+- `placeInboxRow(input)`: the mutually exclusive bucket, first rule wins: dismissed,
+  stashed, hidden (an anchor row that is not hard blocked), questions (asking), pinned,
+  new (no messages), then the work state. Pinned outranks the work buckets, so Needs
+  Input never counts a pinned row.
+- `inWorkingSet`, `selectWorkingSet`, `computeFold`, `projectInbox`: membership and
+  fold (C4).
+- `digestProjection(entries)`: an order independent hash over
+  `(id, bucket, below_fold)` triples: FNV 1a 32 per triple folded into two 32 bit
+  lanes, 16 hex characters. Fold is in the digest on purpose: with show old off, the
+  headline count is the shown tally, so two replicas that agree on every bucket but cut
+  the fold differently are diverged, and the digest must say so. A property test
+  asserts a fold flip with unchanged buckets changes the digest.
+- `computeBucketStale`: the time flip stamp (C2).
+- `INBOX_PROJECTION_VERSION = 2`, carried as `v` in every projection envelope. Golden
+  fixtures (input rows to expected buckets, fold, and digest) are pinned in the shared
+  package tests, and a second assertion ties the fixture hash to the version constant:
+  a behavior change fails the fixtures, and updating the fixtures without bumping the
+  version fails too. The client compares only when the payload's `v` equals its own
+  constant (C6).
 
-  | Overlay | Effect | Bound |
-  |---|---|---|
-  | optimistic create stub | appears in Working | until the server row supersedes (altKey) |
-  | optimistic triage gesture | moves or removes the row | until ack or HIDDEN_OVERRIDE_SETTLE_MS |
-  | focused session | stays visible while open | while focused; never counted outside the working set |
-  | queued or pending send in the open view | Needs Input to Working | while the queue holds |
-  | revive request | Needs Input to Working | 120s |
-  | draft or blank engagement | renders a `new` row locally | rendering only, never counts |
+Consumers: the client store chokepoint (C5), `inboxForCLI` (rendering the server's own
+run), and the overlay's stamping pass (C1). The store's parallel classifiers
+(`categorizeSessions`, the `isSessionWaitingForInput` chain, `liftQuestions`,
+`partitionOldSessions`) and the server's separate `tallyInboxRows` path are deleted,
+not wrapped.
 
-  Chip filters, label lenses, and schedule grouping are presentation over placed rows and
-  cannot change headline tallies. Trigger absorption stops moving rows between buckets:
-  `armed_trigger_kind` reaches the classifier as data, identically everywhere.
-- **Feeder parity.** `useSyncCore(profile)` owns the full feeder mount set: sync log
-  applier, live window, liveness overlay, team feeders (mounted per scope), recovery
-  probes, completeness crawl, dismissed and stashed reconciles, session decisions, client
-  state, current user, buckets. Web `DashboardLayout` and mobile `StoreSyncBridge` both
-  mount it; a guard asserts every registered feeder is in the profile. Mobile pauses the
-  set on AppState background and resumes with one catch up pass, replacing the
-  `document` gated nonce that never re ticks on iOS today.
-- **Recovery discipline.** Every subscription pairs with an error handler and a
-  controller backed probe (the zombie subscription class from the 2026-08-30 outage);
-  no feeder adds a bespoke interval.
+### C4 The working set
 
-### D5 Hash monitoring: the convergence proof that runs in prod
+**Membership is the shared selection, caps included.** The server's scan reads five
+capped windows; an honest replica predicate must select the same rows, so the selection
+is shared, not just the predicate. `selectWorkingSet(rows, epoch)` applies, over rows
+that pass `shouldShowInInbox` (lifted into the shared module: drops subagent and orphan
+rows, killed rows unless pinned, noise titles, completed rows with zero messages) and
+are top level:
 
-- **Server digest.** A small query, `inboxProjectionDigest`, runs `projectInbox` over
-  canonical state for the caller's scope at the current epoch and returns
-  `{ v, as_of, epoch, scope, tally, set_digest, truncated }`. It rides the liveness
-  overlay payload (same execution, same candidate rows, no extra reads) so every client
-  receives a fresh digest at the overlay's cadence without a new subscription.
-- **Client compare.** The chokepoint memo digests the pairs the replica computes — server
-  buckets are not rendered, so the compare is genuinely replica vs canonical: same
-  function, two databases. Compared on the coarse tick, only when epochs match, with
-  overlay affected rows excluded by construction (pending entries, excludes, stubs,
-  focused outside the set).
-- **Drift telemetry.** Nonzero mismatch emits `inbox_drift { missing, extra,
-  bucket_deltas, payload_age_ms, scope, platform }` (counts only, never ids);
-  `inbox_digest_heartbeat` fires hourly with `{ checks, mismatches, heals,
-  max_payload_age_ms }` so "no drift" is distinguishable from "the check never ran".
-  This is the over time monitor: the acceptance bar is two weeks of heartbeats with zero
-  mismatches across web, desktop, and mobile, and the metric stays on permanently as the
-  regression alarm for every future sync change.
-- **Self heal, bounded.** A mismatch re fetches the working set through the existing
-  recovery path (in flight guard, backoff), applies it through the ordinary appliers
-  (respecting pending entries), budgeted at three heals per ten minutes; the fourth
-  emits `inbox_drift_persistent` and stops. Missing row bodies heal through
-  `getInboxSessionsByIds` and count separately. Kill switch: `INBOX_DIGEST_DISABLED` on
-  the Convex env returns `set_digest: null` and every client skips compare and heal.
+| Window | Eligibility | Sort key | Cap |
+|---|---|---|---|
+| recent | status active or completed, `updated_at` within 30 days of the epoch | `updated_at` desc | 200 |
+| pinned | `inbox_pinned_at` set | `inbox_pinned_at` desc | 100 |
+| dismissed | `inbox_dismissed_at` within 30 days, not killed | `inbox_dismissed_at` desc | 200 |
+| stashed | `inbox_stashed_at` within 30 days, not killed | `inbox_stashed_at` desc | 200 |
+| owned | `owned_by_me`, same status and recency rule as recent | server side only | 200 |
 
-### D6 Transport closures
+The caps and sort keys are shared constants; the server scan and the client selection
+must agree, pinned by a test that runs both over one fixture set. The working set is
+the union of the window survivors. When a window overflows, the server names it in
+`truncated`, and the compare drops that window's rows on both sides (C6): a capped
+window is dark to the proof, and the heartbeat counts it. The owned window's cap order
+is a server side detail (owner row order) the replica does not hold, so an overflowing
+owned window is likewise dropped; under the cap, ordering does not matter.
 
-- Functions guard: fail any file importing raw `mutation`/`internalMutation` from
-  `_generated/server` unless allowlisted, regardless of the tables it writes today.
-- Retention floor: unit test pinning both floor branches of the prune walk (traced
-  correct; the test locks it).
-- Churn exemption: documented dependency of classification stamps on `updated_at` (D1
-  residue); the digest monitor decides whether a window crossing emit is needed.
-- New fact fields (`armed_trigger_kind`, `has_open_ask`, `has_asking_child`) are
-  semantic, therefore sync log tracked; a test asserts they are not on the churn list.
+Team scope membership depends on inputs the replica does not hold (member visibility
+settings, redaction). The team overlay still delivers facts and stamps for rendering
+freshness, but team scope is outside the compare, stated here and counted in the
+heartbeat as uncovered. Extending the proof to team scope means replicating those
+visibility inputs as synced facts; that is future work, not an implied capability.
+
+**Fold is deterministic and shared.** `computeFold(members, epoch)` computes the 12
+hour gap cut over the selection's rows, sorted by `updated_at` (the overlay carries
+`updated_at` as a fact, so the sort input is fresh for every covered row). Rows that
+are members through a deliberate window (pinned, dismissed, stashed, owned) are exempt
+from the cut. Rows outside the selection (label extras hydrated for the CLI) are fold
+exempt everywhere, so the CLI and the overlay compute the same cutoff from the same
+set. Fold affects default rendering and splits the tally (`shown` vs `folded`); show
+old means rendering and counting `shown + folded`. Fold never changes membership.
+
+**Fold rows ride the existing channels, not a wider payload.** The base list keeps
+today's transport behavior: with show old off it omits rows under the fold cut, so
+deployed bundles keep receiving today's payload and today's rendered set, and the live
+channel does not grow by hundreds of enriched row bodies. This is safe because
+membership never depends on the payload: the replica already holds fold row bodies (the
+cache never prunes and the completeness crawl is the floor), the overlay keeps their
+facts fresh at about thirty bytes per row, and a replica that lacks one heals it by id
+(C7). Bodies for show old browsing come from `listInboxSessionsPaginated` on demand.
+
+**View state parameterizes, never bypasses.** `inbox_show_old`, `inbox_scope`, and the
+other stamped view keys stay in the synced LWW bag. Show old selects `shown + folded`
+inside the shared computation. No preference may bypass the selection or widen the
+counted set beyond it; a guard test asserts the chokepoint is the only reader of these
+keys for counting purposes.
+
+### C5 The client replica
+
+**One chokepoint.** `placeInboxRows` in the store calls the shared module with (replica
+rows, synced view state, epoch, declared overlays) and returns placed buckets and
+tallies. Every consumer uses it: panel, sidebar badge, dock badge, active agents pill,
+fleet board, thread cards, palette, mobile inbox. A source guard bans the deleted
+classifiers outside it.
+
+**The chokepoint is incremental, verified against the full computation.** A full
+recompute over a never pruned cache every 15 seconds is the re-render class that pegged
+the sidebar, and Hermes pays it several times over. So:
+
+- Working set membership is an index maintained in the sync apply path (the
+  SYNC_REGISTRY indexes mechanism): a row's membership changes only when a membership
+  relevant field changes or a time boundary passes. Each member carries one precomputed
+  expiry instant (when it ages out of its window), held in a coarse bucketed heap.
+- Placement is kept per row. A deadline heap holds the server's `bucket_stale_at`
+  stamps plus the bounded local overlay expiries (revive 120 seconds, triage settle).
+  On a coarse tick, only rows whose deadline passed are re placed; on data arrival,
+  only rows whose wake signature changed. Tallies update by delta. The digest recomputes
+  only when some triple changed or the epoch advanced. When nothing moved, every
+  returned ref is stable, so downstream memos hold.
+- A dev mode assertion runs the full computation and asserts the incremental result
+  equals it, for both membership and placement. That assertion is itself a convergence
+  check in the spirit of C6.
+
+**Declared overlays** are the only local adjustments, enumerated in one module, each
+named, bounded, and excluded from the compare:
+
+| Overlay | Effect | Bound |
+|---|---|---|
+| optimistic create stub | appears in Working | until the server row supersedes (altKey) |
+| optimistic triage gesture | moves or removes the row | until ack or HIDDEN_OVERRIDE_SETTLE_MS |
+| focused session | stays visible while open | while focused; never counted outside the working set |
+| queued or pending send in the open view | Needs Input to Working | while the queue holds |
+| revive request | Needs Input to Working | 120s |
+| draft or blank engagement | renders a `new` row locally | rendering only, never counts |
+
+Chip filters, label lenses, and schedule grouping are presentation over placed rows and
+cannot change headline tallies. Trigger absorption stops being a pass: the
+`armed_trigger_kind` fact reaches the classifier as data, identically everywhere.
+
+**Feeder parity.** `useSyncCore(profile)` owns the full feeder mount set: sync log
+applier, live window, liveness overlay, team feeders (mounted per scope), recovery
+probes, completeness crawl, dismissed and stashed reconciles, session decisions, client
+state, current user, buckets. Web `DashboardLayout` and mobile `StoreSyncBridge` both
+mount it; a guard asserts every registered feeder is in the profile. The recovery poll
+calls the live window with the SAME args as the subscription, so a stalled subscription
+cannot flap the store between two payload shapes. Mobile pauses the set on AppState
+background and resumes with one catch up pass, replacing the document gated nonce that
+never re-ticks on iOS today.
+
+**Recovery discipline.** Every subscription pairs with an error handler and a
+controller backed probe; no feeder adds a bespoke interval beyond the ones named here.
+
+### C6 The compare
+
+The compare medium is the stamp map, not an opaque hash: the client diffs its own per
+row placement against the server's stamps for the same epoch. Two hashes cannot name
+missing ids, exclude an optimistic gesture, or say which bucket disagreed; a per row
+diff does all three.
+
+**Gates.** A compare runs on the coarse tick only when ALL hold:
+
+1. The payload carries a digest (`set_digest` not null; C8 kill switch).
+2. The payload's `v` equals the client's `INBOX_PROJECTION_VERSION`. On mismatch, skip
+   and emit a low rate `inbox_digest_version_skew` metric: a deploy skew window becomes
+   silence plus a signal, never a storm.
+3. Payload age (receipt clock) is under the bound; otherwise skip, count, and consider
+   a probe (C2).
+4. The appliers are quiescent: no sync applies for the last N coarse ticks, no in
+   flight sync log range, crawl page, or recovery poll. Mid catch up divergence is
+   ordinary eventual consistency, not drift.
+5. The replica is complete for the scope: the completeness crawl has stamped
+   `backfilledAt`. A cold device compares nothing until it can honestly claim the set.
+6. Scope is covered (personal scope; team scope is out, C4).
+
+**Procedure.** Evaluate the shared module at the payload's epoch over the replica's
+selection. If no declared overlay is active and the local digest equals `set_digest`,
+the check passes (the digest is the cheap short circuit). Otherwise diff per row:
+drop ids affected by a declared overlay, drop rows whose only window overflowed
+(`truncated`), and drop foreign rows (rows the viewer does not run) when the
+`foreign_scan` flag fired. What remains decomposes into `missing` (stamped ids the
+replica lacks), `extra` (local members the stamps lack), `bucket_deltas`, and
+`fold_deltas`.
+
+**Persistence rule.** A nonempty diff counts as drift, and may spend a heal, only when
+it persists across two consecutive compares against payloads with distinct epochs. A
+single tick landing between the base push and the overlay push is a race, not
+divergence.
+
+### C7 Heal and telemetry
+
+**Heal is targeted.** `missing` ids heal through `getInboxSessionsByIds` for exactly
+those ids; their facts arrive with the next overlay payload (a probe forces one), since
+the store now holds the row for `syncOverlay` to land on. `bucket_deltas` and
+`fold_deltas` on rows the replica holds mean stale facts, and facts have one writer, so
+the heal is one overlay probe, not a working set refetch. `extra` ids are re-evaluated
+after the heal; a persistent extra is a membership bug and is reported, not deleted
+(deletion truth remains authorized absence).
+
+**Bounded.** Three heals per ten minutes, jittered, fixed window. The fourth emits
+`inbox_drift_persistent` and latches healing OFF for the session; a reload rearms it.
+A same version computation bug then costs one telemetry event per client, not a fleet
+of synchronized refetch storms.
+
+**Telemetry.**
+
+- `inbox_drift { missing, extra, bucket_deltas, fold_deltas, payload_age_ms, scope,
+  platform }`: counts only, never ids, deduped to one event per changed digest value.
+- `inbox_digest_heartbeat`, hourly: `{ checks, mismatches, heals, max_payload_age_ms,
+  skips: { stale_payload, version_skew, not_quiescent, cold_replica, truncated_windows,
+  scope_uncovered } }`. Zeros included, so "no drift" is distinguishable from "the
+  check never ran", and every skip names its cause.
+
+The acceptance bar is two weeks of heartbeats with zero mismatches across web, desktop,
+and mobile, with the skip counters low enough that coverage is real. The metric stays
+on permanently as the regression alarm for every future sync change.
+
+### C8 Kill switch
+
+`INBOX_DIGEST_DISABLED=1` on the Convex env makes every overlay payload carry
+`set_digest: null`; every client then skips compare and heal. No deploy needed; it
+propagates at overlay cadence. It is the reactive stop for a bad ship; the version gate
+(C6) is the proactive one.
+
+### C9 Compatibility contracts
+
+**Additive changes only, precisely defined.** Public function changes add OPTIONAL args
+and new result fields only. An optional arg ships server first, defaults to today's
+behavior, and the client latches it off for the session on an ArgumentValidationError
+naming it (the `ack_positions` precedent), so a Convex revert degrades instead of
+breaking writes. This design needs no new args at all: the digest and stamps are new
+result fields on an existing payload, and the base list is byte identical for old
+callers.
+
+**Frozen contracts for old binaries.** Mobile binaries live for months. A Convex side
+contract test pins, while they exist: `listInboxSessions` `include_liveness` defaults
+to true; the `sessionsLiveness` payload keeps its `liveness` key; and every field the
+old classifiers read (`agent_status`, `is_idle`, `awaiting_input`, `has_pending`,
+`message_count`) stays present on each channel that carries it today. The test is the
+freeze: a cleanup cannot pass CI while old binaries exist. Deleting these guarantees is
+tied to a named minimum supported mobile version, not an open ended watch.
+
+**Deploy order.** The shared module ships to every web client on the next push to main,
+while the server copy waits for `deploy.sh`. So: deploy Convex BEFORE pushing any
+behavior change to the shared module. The version gate makes the failure mode of
+forgetting a silent skew metric instead of a heal storm, but the order stands.
+
+**The cache schema bump preserves data.** A Dexie version bump with the same tables
+keeps every row; nothing wipes. Session rows written before this design persist
+indefinitely without the new fact fields, and the classifier must read an absent fact
+as unknown and fall back honestly, forever. An upgrade test opens a seeded old version
+database, bumps, and asserts rows survive and the registry reads them. On deploy day,
+tabs on the old bundle can hit VersionError and run without the cache until reload; a
+metric fires when `loadCache` disables the cache so that noise is measurable.
 
 ## What this deliberately does not do
 
-- No server rendered verdicts. Buckets are computed on the replica; the server runs the
-  shared function only to produce the checking digest.
+- No server rendered verdicts on replica clients. Stamps are checking data in a scope
+  keyed buffer; a guard test keeps them out of render paths.
+- No denormalized ask fields. Ask state flips too often to stamp on the conversation
+  row without recreating the head contention and flush starvation incident classes; it
+  is derived on both sides from replicated inputs.
 - No client cache pruning (standing decision). The cache beyond the working set backs
-  search and reopening; the predicate keeps it out of every count.
-- No CRDTs, no vector clocks. Single writer per field group plus per scope ordered
-  positions plus subtractive reconciles already give convergence; the work is making
-  inputs replicated data and the computation shared.
-- No new query arguments (result fields only, so deployed bundles never hit validation
-  errors, and a Convex revert degrades new clients to stale but honest local computation,
-  never wrong numbers).
+  search and reopening; the selection keeps it out of every count.
+- No CRDTs, no vector clocks. Single writer per fact, per scope ordered positions, and
+  subtractive reconciles give convergence; the work is making inputs replicated data
+  and the computation shared.
+- No team scope compare yet. The replica cannot evaluate team visibility inputs; the
+  heartbeat counts the scope as uncovered rather than pretending.
 - No change to workspace or access semantics.
 
 ## Rollout
 
-1. Convex (ct-47200): shared projection module; deterministic windows + truncation
-   flags; fact field denormalization and writers; overlay fact carriage; digest on the
-   overlay payload; `inboxForCLI` onto the shared function; kill switch. Deploy before
-   any client ships. Deployed bundles see byte compatible payloads plus ignored new
-   fields.
-2. Web (ct-47201, ct-47202, ct-47203): predicate membership + deleted gate exemptions,
-   chokepoint + guard, `useSyncCore`, declared overlays module, digest compare + heal +
-   telemetry. Mobile mounts `useSyncCore` and deletes its local passes in the same
-   change (the store is shared; OTA carries it). `CACHE_SCHEMA_VERSION` bump.
+1. Convex + shared module (ct-47200): fold and caps into the shared selection; digest
+   over triples, version 2; `last_turn_allows_park` and child fact rows on the overlay;
+   `epoch` replaces the raw timestamp in the envelope; `webDelete` trigger refresh; the
+   frozen contracts test; kill switch. Deploy before any client ships. Deployed bundles
+   see byte compatible payloads plus ignored new fields.
+2. Web (ct-47201, ct-47202, ct-47203): selection membership and deleted gate
+   exemptions; scope keyed stamp buffer and guard; chokepoint with the incremental
+   engine; `useSyncCore`; declared overlays module; compare, heal, telemetry. Mobile
+   mounts `useSyncCore` and deletes its local passes in the same change (the store is
+   shared; OTA carries it). `CACHE_SCHEMA_VERSION` bump.
 3. Transport closures (ct-47204) ship with either step.
-4. Telemetry watch (ct-47205): drift dashboard; two weeks of zero mismatch heartbeats.
+4. Telemetry watch (ct-47205): drift dashboard; two weeks of zero mismatch heartbeats
+   with honest coverage.
 
 ## Validation plan
 
-- Unit, shared module: classifier and membership and fold determinism (same data + same
-  epoch = identical output, property tested across generated rows); digest test vector;
-  fold never changes `shown + folded`; every truncation flag fires at its cap.
-- Unit, server: two executions in one minute return identical payloads and digests; the
-  overlay adds no per row reads beyond today's; fact writers stamp on every transition
-  path (trigger lifecycle, decision post and answer, child transitions).
-- Unit, client: fact fields have one writer (syncTable strips them elsewhere); the
-  chokepoint guard; the overlay exclusion rules; the heal budget and kill switch; feeder
-  profile parity between web and mobile.
-- Simulation: the eventual consistency proof as a test — two simulated replicas receive
-  interleaved payloads, sync log ranges, crawls, gestures, reconnects, and epoch ticks
-  in different orders, and at quiescence hold identical working sets, identical placed
-  buckets, and identical digests, equal to a directly computed server projection.
-- End to end: web + mobile simulator against dev Convex; drive pin, dismiss, settle,
+- Unit, shared module: classifier, selection, and fold determinism (same data and epoch
+  give identical output, property tested across generated rows); the digest test
+  vector; a fold flip changes the digest; every truncation flag fires at its cap; the
+  golden fixtures tied to the version constant; the scan and the shared selection agree
+  over one fixture set.
+- Unit, server: two executions in one minute return byte identical payloads; a pinned
+  read budget on the overlay (child probes cached by child id and message count, cheap
+  set checks before probes) so enrichment cannot silently regrow the read count; every
+  `agent_tasks` writer restamps `armed_trigger_kind`, enumerated exhaustively; the
+  frozen contracts test.
+- Unit, client: fact fields have one writer and the strip and preserve lists derive
+  from the shared constant; stamps never reach a render path; the chokepoint guard;
+  the incremental engine equals the full computation; the compare gates, persistence
+  rule, heal budget, latch, and kill switch; feeder profile parity between web and
+  mobile; both recovery call sites use identical args; the Dexie upgrade test.
+- Simulation: two simulated replicas receive interleaved payloads, sync log ranges,
+  crawls, gestures, reconnects, and epoch ticks in different orders, and at quiescence
+  hold identical working sets, placements, and digests, equal to a directly computed
+  server projection. A cold replica case: fold rows present server side, empty client
+  cache; assert the compare stays gated until the crawl completes and the heal then
+  converges within one budget.
+- End to end: web plus mobile simulator against dev Convex; drive pin, dismiss, settle,
   trigger arm; assert equal counts within one payload cycle; kill one client's
-  subscription and assert detection and heal within budget.
+  subscription and assert detection and heal within budget. Two drills: ship a client a
+  deliberately wrong module and confirm silence plus the skew metric; set
+  `INBOX_DIGEST_DISABLED` and time the null propagating.
 - Prod: the drift metric, permanently.

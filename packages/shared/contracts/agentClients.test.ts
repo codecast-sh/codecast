@@ -79,6 +79,26 @@ describe("parseExecutionAgentClientId", () => {
   });
 });
 
+describe("print mode", () => {
+  it("declares a print mode for every client", () => {
+    for (const [id, d] of Object.entries(AGENT_CLIENTS)) {
+      expect(d.printMode, id).toBeDefined();
+      expect(["flag", "subcommand"]).toContain(d.printMode.kind);
+      expect(d.printMode.token.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("uses -p for flag clients and a subcommand for codex/opencode", () => {
+    expect(AGENT_CLIENTS.claude.printMode).toEqual({ kind: "flag", token: "-p" });
+    expect(AGENT_CLIENTS.cursor.printMode).toEqual({ kind: "flag", token: "-p" });
+    expect(AGENT_CLIENTS.pi.printMode).toEqual({ kind: "flag", token: "-p" });
+    expect(AGENT_CLIENTS.grok.printMode).toEqual({ kind: "flag", token: "-p", promptAsValue: true });
+    expect(AGENT_CLIENTS.gemini.printMode).toEqual({ kind: "flag", token: "-p", promptAsValue: true });
+    expect(AGENT_CLIENTS.codex.printMode).toEqual({ kind: "subcommand", token: "exec" });
+    expect(AGENT_CLIENTS.opencode.printMode).toEqual({ kind: "subcommand", token: "run" });
+  });
+});
+
 describe("fenced execution transports", () => {
   it("declares the exact implemented transport set for every agent family", () => {
     expect(AGENT_CLIENTS.claude.executionTransports).toEqual(["tmux"]);

@@ -11,10 +11,10 @@ import {
   formatRelativeTime, projectName, styles as sessionStyles,
 } from '@/components/SessionItem';
 import {
-  useInboxStore, isConvexId, type InboxSession, type InboxViewMode, type BucketItem, categorizeSessions, partitionOldSessions, sessionsWithPendingSend,
+  useInboxStore, isConvexId, type InboxSession, type InboxViewMode, type BucketItem, placeInboxRows,
   chipMatchesSession, getProjectName, resolveInboxViewMode, resolveShowOld, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels, computeChipCounts,
-  sessionsWakeSig, pendingSendWakeSig, filterInboxScope,
+  sessionsWakeSig, pendingSendWakeSig,
 } from '@codecast/web/store/inboxStore';
 import {
   AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, featuredModelOptions, launchRailOptions, toConvexAgentType,
@@ -55,6 +55,10 @@ function HiddenSessionRow({ session, variant, onPress, onRestore, onKill }: {
             color={Theme.textMuted0}
             style={{ marginRight: 6 }}
           />
+          {variant === "stashed" && session.inbox_stashed_at && session.inbox_stash_hidden ? (
+            // Stash and hide: trigger wakes don't bring it back (web's EyeOff mark).
+            <FontAwesome name="eye-slash" size={10} color={Theme.textMuted0} style={{ marginRight: 6 }} />
+          ) : null}
           <RNText style={styles.dismissedTitle} numberOfLines={1}>
             {cleanTitle(session.title)}
           </RNText>
@@ -1065,8 +1069,7 @@ export default function InboxScreen() {
   const sessionsSig = useInboxStore((s) => sessionsWakeSig(s.sessions));
   const pendingSendSig = useInboxStore((s) => pendingSendWakeSig(s.pendingMessages));
   const sessions = useInboxStore.getState().sessions;
-  const pendingMessages = useInboxStore.getState().pendingMessages;
-  // categorizeSessions' trust-TTL sweep (stale "working" → needs-input) and
+  // placeInboxRows' trust-TTL adaptation (stale "working" → needs-input) and
   // the rows' relative times are time-driven, not field-driven — a signature
   // never wakes them, so a coarse clock does.
   const coarseNow = useCoarseNow(15_000);
@@ -1106,7 +1109,6 @@ export default function InboxScreen() {
   const visibleBuckets = useMemo(() => sortLabels(buckets), [buckets]);
 
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
-  const liveInboxIds = useInboxStore((s) => s.liveInboxIds);
   // Hide "old" rows exactly like web (GlobalSessionPanel): the never-prune cache
   // holds every session ever synced (including teammates' threads opened from the
   // feed), but only rows the live inbox subscription still returns are actionable.
@@ -1119,24 +1121,20 @@ export default function InboxScreen() {
   const inboxScope = useInboxStore((s) => s.clientState.ui?.inbox_scope ?? "mine");
   const teamInboxIds = useInboxStore((s) => s.teamInboxIds);
   const meId = useInboxStore((s) => s.currentUser?._id?.toString?.() ?? null);
-  const { visibleSessions } = useMemo(
-    () => partitionOldSessions(
-      filterInboxScope(sessions, inboxScope, meId, teamInboxIds, currentSessionId),
-      liveInboxIds, showOld, currentSessionId),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig stands in for the churny sessions ref
-    [sessionsSig, inboxScope, meId, teamInboxIds, liveInboxIds, showOld, currentSessionId],
+  // THE PLACEMENT CHOKEPOINT (store placeInboxRows, sync-convergence C5):
+  // scope → shared working-set selection → fold → shared per-row placement →
+  // sections — the exact computation web runs, so the phone and desktop can
+  // never disagree about membership OR buckets. Reads the LATEST store state
+  // on each recompute (coarseNow re-runs it via the chokepoint's deadline
+  // signature), so the epoch tick never sweeps a frozen snapshot — and the
+  // revive overlay, the questions bucket and the armed-trigger dormancy all
+  // arrive with it (they were web-only passes before).
+  const placed = useMemo(
+    () => placeInboxRows(useInboxStore.getState(), { focusedId: currentSessionId, now: coarseNow }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig/pendingSendSig stand in for the churny refs; coarseNow drives the deadline signature
+    [sessionsSig, pendingSendSig, inboxScope, meId, teamInboxIds, showOld, currentSessionId, pendingSessionCreates, sessionsWithQueuedMessages, coarseNow],
   );
-  // Full-args categorize (matches web): pendingSendIds keeps optimistic sends
-  // in Working, and opts make isEngagedBlank work so the New section actually
-  // surfaces freshly created blank sessions.
-  const { sorted: sortedAll, subsByParent, pinned, newSessions, needsInput, done, dormant, working, stashed: stashedSessions, dismissed: dismissedOnly } = useMemo(
-    () => categorizeSessions(visibleSessions, sessionsWithQueuedMessages, sessionsWithPendingSend(pendingMessages), {
-      currentSessionId,
-      pendingCreateIds: new Set(Object.keys(pendingSessionCreates)),
-    }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- pendingSendSig gates pendingMessages; coarseNow drives the time-based trust-TTL sweep
-    [visibleSessions, sessionsWithQueuedMessages, pendingSendSig, currentSessionId, pendingSessionCreates, coarseNow],
-  );
+  const { visibleSessions, sorted: sortedAll, subsByParent, questions, pinned, newSessions, needsInput, done, dormant, working, stashed: stashedSessions, dismissed: dismissedOnly } = placed;
   const activeSessions = useMemo(() => sortedAll.filter((s) => !s.is_deferred), [sortedAll]);
 
   // Label + project chip counts — same source as web's LabelChipsRow / palette
@@ -1154,7 +1152,7 @@ export default function InboxScreen() {
   );
 
   const chipMatches = useCallback((s: InboxSession) =>
-    chipMatchesSession(s, { projectFilter: activeProjectFilter, bucketFilter: activeBucketFilter, bucketByConv }),
+    chipMatchesSession(s, { projectFilter: activeProjectFilter, bucketFilters: activeBucketFilter ? [{ id: activeBucketFilter, exclude: false }] : undefined, bucketByConv }),
     [activeProjectFilter, activeBucketFilter, bucketByConv]);
   const chipFilter = useCallback((items: InboxSession[]) => {
     if (!activeProjectFilter && !activeBucketFilter) return items;
@@ -1360,26 +1358,15 @@ export default function InboxScreen() {
     }),
     [scheduleTasks, visibleSessions, sessionsWithQueuedMessages, schedulesSeenAt, currentSessionId],
   );
-  // Absorbed-filtered lists: the TRIGGERS dock renders the sessions resting
-  // behind a schedule row, so they must not double-render in the triage buckets.
-  // Flat views ("recent"/"time") stay unabsorbed, mirroring web's visualOrder.
-  const statusNeedsInput = useMemo(
-    () => filteredNeedsInput.filter((s) => !schedulePartition.absorbedIds.has(s._id)),
-    [filteredNeedsInput, schedulePartition.absorbedIds],
-  );
-  const statusDone = useMemo(
-    () => filteredDone.filter((s) => !schedulePartition.absorbedIds.has(s._id)),
-    [filteredDone, schedulePartition.absorbedIds],
-  );
-  // Absorbed settled rows are parked on their trigger's next fire — same as
-  // web, they file under DORMANT (visible) instead of vanishing.
-  const statusDormant = useMemo(
-    () => [
-      ...filteredDormant,
-      ...[...filteredNeedsInput, ...filteredDone].filter((s) => schedulePartition.absorbedIds.has(s._id)),
-    ],
-    [filteredDormant, filteredNeedsInput, filteredDone, schedulePartition.absorbedIds],
-  );
+  // Trigger absorption is no longer a client pass (sync-convergence C5): an
+  // armed inject trigger or a live loop parks its home in DORMANT as data
+  // (armed_trigger_kind / loop_state reach the shared classifier inside the
+  // chokepoint), identically on web, mobile and the server. QUESTIONS renders
+  // ahead of Needs Input — same lift web ships; it was missing here.
+  const filteredQuestions = useMemo(() => chipFilter(questions), [chipFilter, questions]);
+  const statusNeedsInput = filteredNeedsInput;
+  const statusDone = filteredDone;
+  const statusDormant = filteredDormant;
   const statusWorking = filteredWorking;
 
   const listData = useMemo(() => {
@@ -1426,7 +1413,7 @@ export default function InboxScreen() {
     // not theme); the active set regroups by label or plan, with unfiled
     // sessions falling to auto-derived project groups — exactly web's layout.
     if (viewMode === "bucket" || viewMode === "plan") {
-      const active = [...filteredNew, ...statusNeedsInput, ...statusDone, ...filteredDormant.filter((s) => !schedulePartition.absorbedIds.has(s._id)), ...statusWorking];
+      const active = [...filteredQuestions, ...filteredNew, ...statusNeedsInput, ...statusDone, ...filteredDormant, ...statusWorking];
       sections.push(renderSection("Pinned", filteredPinned, Theme.magenta));
       if (viewMode === "bucket") {
         const { labelGroups, projectGroups } = groupSessionsForLabelView(active, buckets, bucketByConv);
@@ -1443,6 +1430,9 @@ export default function InboxScreen() {
       }
       return sections.filter(Boolean);
     }
+    // Questions lead: a session that asked you something is your move before
+    // anything else, pinned or not — same order as the web panel.
+    sections.push(renderSection("Questions", filteredQuestions, Theme.violet, "questions"));
     sections.push(renderSection("Pinned", filteredPinned, Theme.magenta));
     sections.push(renderSection("New", filteredNew, Theme.blue));
     // Top-down "who acts next": you (Needs Input, Done to review), the agent
@@ -1453,7 +1443,7 @@ export default function InboxScreen() {
     sections.push(renderSection("Dormant", statusDormant, Theme.blue));
     return sections.filter(Boolean);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.

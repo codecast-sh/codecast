@@ -27,6 +27,7 @@ import {
   onCallPanelHandback,
 } from "../lib/desktop";
 import { takeOverCall } from "../lib/calls/callManager";
+import { suppressAutoPopOut } from "../lib/calls/popOutCall";
 import { showBrowserHandoffToast } from "./BrowserHandoffToast";
 import { installMeetingOfferListener } from "../lib/calls/meetingOffers";
 import { cleanNotificationBody } from "../lib/notificationText";
@@ -191,6 +192,9 @@ export function DesktopProvider() {
     // participation, in that order, and the audio has no hole in it.
     onCallPanelHandback((payload) => {
       if (!payload?.room) return;
+      // Closing the panel is a request to keep the call HERE. Without this
+      // the auto-pop would reopen the panel on the same room forever.
+      suppressAutoPopOut(payload.room);
       void takeOverCall({
         roomKey: payload.room,
         mic: !!payload.mic,

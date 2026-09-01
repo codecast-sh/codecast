@@ -21,14 +21,30 @@ function RedirectToHome() {
  * guestOk: render children for unauthenticated visitors instead of
  * redirecting home — for routes that do their own access resolution
  * (public share links).
+ *
+ * blankSignedOut: render NOTHING while signed out or loading, instead of the
+ * loader and the redirect — for see-through overlay windows, where a loader
+ * is an opaque card floating over the person's work and a redirect lands the
+ * marketing home page in an always-on-top square. Invisible glass is the
+ * honest signed-out state there, and children resume the moment a sign-in
+ * flips the gate.
  */
-export function AuthGuard({ children, guestOk }: { children: React.ReactNode; guestOk?: boolean }) {
+export function AuthGuard({
+  children,
+  guestOk,
+  blankSignedOut,
+}: {
+  children: React.ReactNode;
+  guestOk?: boolean;
+  blankSignedOut?: boolean;
+}) {
   const localAuthed = useLocalAuth();
   const { isAuthenticated, isLoading } = useConvexAuth();
 
   if (localAuthed || isAuthenticated) return <>{children}</>;
   // No local token yet, but the provider is still reading storage (its
   // IndexedDB fallback path) — a local, offline-safe wait of a few frames.
-  if (isLoading) return <AppLoader />;
-  return guestOk ? <>{children}</> : <RedirectToHome />;
+  if (isLoading) return blankSignedOut ? null : <AppLoader />;
+  if (guestOk) return <>{children}</>;
+  return blankSignedOut ? null : <RedirectToHome />;
 }

@@ -181,6 +181,7 @@ const Palette = lazy(() => import("@/app/palette/page"));
 // People window
 const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
+const Faces = lazy(() => import("@/app/faces/page"));
 const MeetingOffer = lazy(() => import("@/app/meeting-offer/page"));
 
 // Settings
@@ -319,6 +320,11 @@ export const ROUTES: RouteEntry[] = [
   //    dashboardShell/standalone routes, so calling it standalone would force
   //    "call-panel" into the in-shell set — the opposite of what it is.
   { path: "call-panel", component: cast(CallPanel), layout: "callPanel" },
+
+  // -- The faces overlay (TransparentWindowLayout): the team as circles
+  //    floating over the work when there is no call. Same layout family as
+  //    the call panel's circle sizes, for the same reason: glass, not a page.
+  { path: "faces", component: cast(Faces), layout: "palette" },
 
   // -- The meeting-offer window (TransparentWindowLayout): the record-this-
   //    meeting card as a small chromeless corner window --

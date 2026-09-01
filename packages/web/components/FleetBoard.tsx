@@ -4,9 +4,8 @@ import {
   useInboxStore,
   useTrackedStore,
   sessionsWakeSig,
-  categorizeSessions,
-  filterInboxScope,
-  partitionOldSessions,
+  pendingSendWakeSig,
+  placeInboxRows,
   sessionsWithPendingSend,
   resolveShowOld,
   resolveInboxHome,
@@ -218,7 +217,7 @@ function FleetDrillIn() {
   const s = useTrackedStore([
     (st) => overlayConversationId(st.workspace),
     // Only this row — the whole map would re-render the overlay on every
-    // other session's heartbeat (same rule as StageCompanion).
+    // other session's heartbeat (same rule as the stage's SessionPane).
     (st) => {
       const id = overlayConversationId(st.workspace);
       return id ? st.sessions[id] : null;
@@ -270,6 +269,20 @@ function FleetDrillIn() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [open, handleClose]);
 
+  // The board OWNS this slot, so leaving the board takes the visit with it.
+  // Without this, navigating to another surface mid-drill-in stranded the
+  // overlay pane in the store: nothing rendered it, yet overlayConversationId
+  // kept answering — and the triage chords (stash/defer/kill) target exactly
+  // that id, so a destructive key could hit an invisible session.
+  useEffect(() => {
+    return () => {
+      const st = useInboxStore.getState();
+      if (st.workspace.secondary.presentation === "overlay" && st.workspace.secondary.pane?.kind === "conversation") {
+        st.wsHide("secondary", { remember: false });
+      }
+    };
+  }, []);
+
   // A drilled-in row that vanished (killed, pruned) closes itself.
   if (!open || !id || !session) return null;
 
@@ -307,7 +320,6 @@ export function FleetBoard() {
     (st) => sessionsWakeSig(st.sessions),
     (st) => st.sessionsWithQueuedMessages,
     (st) => st.pendingMessages,
-    (st) => st.liveInboxIds,
     (st) => resolveShowOld(st.clientState.ui),
     (st) => st.clientState.ui?.inbox_scope ?? "mine",
     (st) => st.currentUser?._id?.toString?.() ?? null,
@@ -327,32 +339,15 @@ export function FleetBoard() {
   const meId = s.currentUser?._id?.toString?.() ?? null;
   const focusedId = s.currentSessionId;
 
-  const scoped = useMemo(
-    () => filterInboxScope(s.sessions, inboxScope, meId, s.teamInboxIds, focusedId),
-    [s.sessions, inboxScope, meId, s.teamInboxIds, focusedId],
-  );
-  const { visibleSessions } = useMemo(
-    () =>
-      inboxScope === "team"
-        ? { visibleSessions: scoped, oldCount: 0 }
-        : partitionOldSessions(scoped, s.liveInboxIds, showOld, focusedId),
-    [scoped, inboxScope, s.liveInboxIds, showOld, focusedId],
+  // THE placement chokepoint (placeInboxRows, sync-convergence C5): scope →
+  // shared working-set selection → fold → placed sections — the same set the
+  // panel renders, one call for the whole board.
+  const categorized = useMemo(
+    () => placeInboxRows(s, { focusedId, now: coarseNow }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showOld, focusedId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), s.pendingSessionCreates, s.blockedReviveRequestedAt, coarseNow],
   );
   const pendingSendIds = useMemo(() => sessionsWithPendingSend(s.pendingMessages), [s.pendingMessages]);
-  const blankOpts = useMemo(
-    () => ({
-      currentSessionId: focusedId,
-      pendingCreateIds: new Set(Object.keys(s.pendingSessionCreates)),
-      reviveRequestedAt: s.blockedReviveRequestedAt,
-    }),
-    [focusedId, s.pendingSessionCreates, s.blockedReviveRequestedAt],
-  );
-  const categorized = useMemo(
-    () => categorizeSessions(visibleSessions, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts),
-    // coarseNow: categorize reads Date.now() internally for the trust-TTL
-    // sweep; the coarse clock re-runs it without heartbeat coupling.
-    [visibleSessions, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts, coarseNow],
-  );
   const bands: FleetBands = useMemo(
     () => splitFleetBands(categorized, { queued: s.sessionsWithQueuedMessages, pendingSendIds, now: coarseNow }),
     [categorized, s.sessionsWithQueuedMessages, pendingSendIds, coarseNow],

@@ -90,6 +90,7 @@ import {
   parsePsEtimeSeconds,
   judgeProcessIdentity,
   processDeclaredSessionId,
+  registrySupersedesCachedPid,
   type ProcessOwnership,
   type ProcessSessionClaim,
 } from "./sessionProcessMatcher.js";
@@ -175,7 +176,7 @@ import {
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
-import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
+import { buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs, OpenTaskKind, OpenTaskReport } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, isValidPaneTarget, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID, classifyApiErrorBanner, isUsageLimitDialog, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
@@ -735,38 +736,6 @@ const PID_FILE_STALE_GRACE_MS = 2_000;
 // the faithful union of every field the daemon, the CLI (index.ts), and the claude
 // wrapper read/write into the same file. Imported above.
 
-function getPermissionFlags(agentType: AgentClientId, config?: Config | null): string | null {
-  const modes = config?.agent_permission_modes;
-
-  if (agentType === "claude") {
-    if (modes?.claude === "bypass") return "--permission-mode bypassPermissions";
-    if (modes?.claude === "default") return "--allow-dangerously-skip-permissions";
-    // No explicit config: match codex behavior and default to bypass so sessions launched
-    // from the web (or any non-CLI surface) inherit the user's expected dev defaults.
-    return "--permission-mode bypassPermissions";
-  } else if (agentType === "codex") {
-    const existing = getAgentArgs(config, "codex") || "";
-    if (existing.includes("--full-auto") || existing.includes("--ask-for-approval") || existing.includes("--dangerously-bypass")) return null;
-    if (modes?.codex === "full_auto") return "--full-auto";
-    if (modes?.codex === "default") return null;
-    // Default to bypass when no explicit config is set
-    return "--dangerously-bypass-approvals-and-sandbox";
-  } else if (agentType === "grok") {
-    // Managed grok is driven from the web and can't answer TUI permission
-    // prompts (panePromptMonitoring: false), so it launches in bypass — grok
-    // uses claude's exact --permission-mode spelling (verified on v1.0.5:
-    // default|acceptEdits|auto|dontAsk|bypassPermissions|plan). Honor a
-    // user-pinned mode in agent_args.grok, codex-style, so it can't double up.
-    const existing = getAgentArgs(config, "grok") || "";
-    if (existing.includes("--permission-mode") || existing.includes("--always-approve")) return null;
-    return "--permission-mode bypassPermissions";
-  } else if (agentType === "gemini") {
-    // gemini flags TBD
-  }
-
-  return null;
-}
-
 /**
  * Build the launch args for a BLANK/fresh agent session (one with no transcript
  * to resume): the user's configured base args plus the default permission flags
@@ -822,12 +791,6 @@ function resolveCodexApprovalPolicy(config?: Config | null): ApprovalPolicy {
     return "never";
   }
   return "on-request";
-}
-
-function getDefaultParamFlags(agentType: AgentClientId, config?: Config | null): string | null {
-  const params = config?.agent_default_params?.[agentType];
-  if (!params || Object.keys(params).length === 0) return null;
-  return Object.entries(params).map(([k, v]) => `--${k} ${v}`).join(" ");
 }
 
 interface ConversationCache {
@@ -4214,6 +4177,69 @@ async function executeRemoteCommand(
             }
             conversationResumeFailures.delete(conversationId);
           }
+        }
+        // In-place agent switch: ignore the old transcript, rebuild as the
+        // TARGET agent under a new native session id, rebind this conversation.
+        // A live-pane reuse of the OLD agent would silently no-op the switch.
+        if (parsed.switch_agent === true && conversationId) {
+          const targetAgent: AgentClientId = resumeAgentType || "claude";
+          log(`[REMOTE] Agent switch conv=${conversationId.slice(0, 12)} ${sessionId.slice(0, 8)} → ${targetAgent}`);
+          restartingSessionIds.set(sessionId, Date.now());
+          try {
+            const cwd = projectPath
+              ? await resolveResumeCwdOrRefuse({ recordedCwd: projectPath, cwdOverride: projectPath, conversationId })
+              : null;
+            if (!cwd) {
+              await refuseResumeNoLocalCheckout(sessionId, conversationId, projectPath);
+              error = "No local checkout for agent switch";
+              break;
+            }
+            let switched = false;
+            if (config?.convex_url && config?.auth_token && mayReconstituteResumeTranscript(targetAgent)) {
+              try {
+                const siteUrl = config.convex_url.replace(".cloud", ".site");
+                const exportData = await fetchExport(siteUrl, config.auth_token, conversationId);
+                if (exportData.messages.length > 0) {
+                  let reconJsonl: string;
+                  let newSessionId: string;
+                  let reconFilePath: string;
+                  if (targetAgent === "codex") {
+                    ({ jsonl: reconJsonl, sessionId: newSessionId } = generateCodexJsonl(exportData));
+                    ({ filePath: reconFilePath } = writeCodexSession(reconJsonl, newSessionId));
+                  } else {
+                    const tailMessages = chooseClaudeAutoTrim(exportData);
+                    ({ jsonl: reconJsonl, sessionId: newSessionId } = generateClaudeCodeJsonl(exportData, { tailMessages }));
+                    ({ filePath: reconFilePath } = writeClaudeCodeSession(reconJsonl, newSessionId, cwd));
+                  }
+                  setPosition(reconFilePath, fs.statSync(reconFilePath).size);
+                  remapConversationSession(sessionId, newSessionId, conversationId);
+                  void pushSessionIdBinding(conversationId, newSessionId, cwd);
+                  const resumed = await autoResumeSession(
+                    newSessionId, "", readTitleCache(), cwd, conversationId, targetAgent, USER_RESUME,
+                  );
+                  if (resumed) {
+                    const cache = readConversationCache();
+                    cache[newSessionId] = conversationId;
+                    saveConversationCache(cache);
+                    syncServiceRef?.markSessionActive(conversationId).catch(logConvexFailure);
+                    conversationResumeFailures.delete(conversationId);
+                    await clearConversationDeliveryAndResumeState(conversationId, newSessionId, "agent_switch");
+                    result = JSON.stringify({ switched: true, session_id: newSessionId, agent_type: targetAgent });
+                    log(`[REMOTE] Agent switch reconstituted ${sessionId.slice(0, 8)} → ${newSessionId.slice(0, 8)} (${targetAgent})`);
+                    switched = true;
+                  }
+                }
+              } catch (switchErr) {
+                log(`[REMOTE] Agent switch reconstitution failed: ${switchErr instanceof Error ? switchErr.message : String(switchErr)}`);
+              }
+            }
+            if (!switched) {
+              error = `Failed to switch session ${sessionId.slice(0, 8)} to ${targetAgent}`;
+            }
+          } finally {
+            restartingSessionIds.delete(sessionId);
+          }
+          break;
         }
         // opencode API fork. The parent's real ses_ id rode down in
         // parsed.parent_session_id (forkFromMessage). The session_id here is the
@@ -10365,8 +10391,13 @@ export function paneReconcileTarget(
     // A parked "waiting" is re-derived too: the caller runs the settle verdict
     // again, which re-checks the open tasks against live processes — a task
     // that died without a notice drains the session back to idle here instead
-    // of sitting parked until the quiet-time decay.
-    return stored === undefined || staleActive || stored === "waiting" ? "idle" : null;
+    // of sitting parked until the quiet-time decay. A stored "idle" re-derives
+    // for the same reason in the OTHER direction: a false task-death verdict
+    // (e.g. a stale cached agent pid condemning live watchers) collapses
+    // waiting → idle, and without this leg nothing ever climbs back — the
+    // session sits in needs-input while a live watcher stands. The re-derive
+    // is O(transcript delta) and publishes only when the verdict changes.
+    return stored === undefined || staleActive || stored === "waiting" || stored === "idle" ? "idle" : null;
   }
   if (state === "busy") {
     // The settle verdicts count as quiet too: a busy pane over a parked
@@ -10844,7 +10875,13 @@ export function toOpenTaskReports(tasks: OpenTaskInfo[]): OpenTaskReport[] {
   }));
 }
 // The pid behind a session, from the discovery cache; undefined until found.
+// Checks registry supersession first: the open-task process check runs off
+// this pid, and a stale one condemns every LIVE watcher the session's real
+// process armed — collapsing a genuine "waiting" park into needs_input.
+// Undefined (superseded, not yet rediscovered) fails toward "alive": exactly
+// the lenient bias verifyOpenTasks wants.
 function agentProcessPid(sessionId: string): number | undefined {
+  if (dropSupersededProcessCacheEntry(sessionId)) return undefined;
   return sessionProcessCache.get(sessionId)?.pid;
 }
 // The open tasks the daemon will vouch for: transcript-open, generation-fenced,
@@ -10899,8 +10936,18 @@ function resolveTurnEndStatus(sessionId: string, transcriptPath?: string): Settl
   const file = transcriptPath
     ? { path: transcriptPath, agentType: "claude" as const }
     : findSessionFile(sessionId);
-  const declared = declaredSettleVerdict(sessionId);
   const claude = !!file && file.agentType === "claude";
+  let tail: string | null = null;
+  if (claude) {
+    try { tail = readFileTailSync(file!.path); } catch {}
+  }
+  // Turn start for the stamp fence: the in-memory mark while the daemon has
+  // one, else the transcript's own last delivered input (restart-proof — see
+  // transcriptTailTurnStartTs). declaredSettleVerdict still falls back to the
+  // boot time when neither exists: needs-input stays the safe side.
+  const turnStart = turnStartedAt.get(sessionId)
+    ?? (tail !== null ? transcriptTailTurnStartTs(tail, sessionId) ?? undefined : undefined);
+  const declared = declaredSettleVerdict(sessionId, Date.now(), turnStart);
   const openTasks = claude ? verifiedOpenTasks(file!.path, sessionId) : [];
   // Every settle publishes what it checked — an empty list included, so the
   // server's open_tasks never outlives the tasks. Picked up by the very next
@@ -10908,12 +10955,42 @@ function resolveTurnEndStatus(sessionId: string, transcriptPath?: string): Settl
   if (claude) pendingOpenTaskReports.set(sessionId, toOpenTaskReports(openTasks));
   const openWork = openTasks.length > 0;
   if (!declared && !openWork) return "idle";
-  if (claude) {
-    try {
-      if (transcriptTailEndsInterrupted(readFileTailSync(file!.path))) return "idle";
-    } catch {}
-  }
+  if (tail !== null && transcriptTailEndsInterrupted(tail)) return "idle";
   return declared ?? "waiting";
+}
+
+// The newest turn-STARTING user message in a Claude JSONL tail: a user turn
+// that is not a tool_result reply (those ride inside a turn), scoped to
+// `currentSessionId` when given (a resumed file replays prior runs' history
+// verbatim). The raw-line twin of latestTurnStartTs, for callers that hold a
+// file tail rather than a parsed batch. Null when the window holds none.
+//
+// This is what lets declaredSettleVerdict survive a daemon restart: the
+// in-memory turn mark dies with the process, and the old DAEMON_BOOTED_AT
+// stand-in read every pre-boot `cast state dormant|done` stamp as untrusted —
+// so a restart's boot reconcile republished "idle" over every parked session's
+// declared verdict (17 live sessions demoted in one restart, 2026-08-31). The
+// transcript is the durable record of delivered input; a stamp newer than the
+// last user turn is the CURRENT turn's declaration, whatever the daemon's age.
+export function transcriptTailTurnStartTs(tailContent: string, currentSessionId?: string): number | null {
+  let latest: number | null = null;
+  for (const rawLine of tailContent.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    let d: { type?: string; sessionId?: string; timestamp?: string; message?: { role?: string; content?: unknown } };
+    try {
+      d = JSON.parse(line);
+    } catch {
+      continue; // partial/corrupt line (mid-write tail, or the cut first line) -> skip
+    }
+    if (d.type !== "user" || d.message?.role !== "user") continue;
+    if (currentSessionId && d.sessionId && d.sessionId !== currentSessionId) continue;
+    const content = d.message?.content;
+    if (Array.isArray(content) && content.some((b) => (b as { type?: string })?.type === "tool_result")) continue;
+    const ts = d.timestamp ? Date.parse(d.timestamp) : NaN;
+    if (!isNaN(ts) && (latest === null || ts > latest)) latest = ts;
+  }
+  return latest;
 }
 
 // True when the newest real message in a Claude JSONL tail is the synthetic
@@ -11659,71 +11736,7 @@ export async function verifyTmuxSubmitAfterPaste(
   return { outcome: "timeout", rePasted, payloadSeen, payloadCheckable };
 }
 
-// A TUI paints its composer seconds before it starts reading stdin: on a cold
-// boot under load, Claude Code's ❯ box is visible while every key sent to the
-// pty still lands in a buffer the input handler later mishandles — the paste
-// is dropped wholesale and the C-a/C-k clearing bytes surface as literal
-// \x01/\x0b INSIDE a submitted message (ct-40212; measured gap up to ~7s on a
-// loaded host). A painted prompt is therefore NOT proof of readiness. This
-// probe proves consumption the way daemon.inject-clear.test.ts does: type one
-// inert character and wait until it renders in the composer region. The
-// caller's C-a/C-k drain then removes the probe along with any stale draft.
-//
-// Scope: only panes showing a ❯/› composer glyph (Claude/cursor style); for
-// glyphless clients there is no line to watch, so behavior is unchanged.
-// Throws AGENT_STDIN_NOT_READY when the TUI never consumes within the budget —
-// the delivery layer's retry/backoff redelivers later instead of pasting into
-// a deaf pane and acking a message the agent never saw.
-const STDIN_PROBE_CHAR = "q"; // inert in the composer; absent from CC's footer/status text
-
-// Composer region = last ❯/› glyph line plus everything below it (a multi-line
-// draft puts the cursor below the glyph line). Null when the pane has no glyph.
-function tmuxComposerRegion(pane: string): string | null {
-  const lines = pane.replace(/[\s\n]+$/, "").split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (/[❯›]/.test(lines[i])) return lines.slice(i).join("\n");
-  }
-  return null;
-}
-const countStdinProbes = (region: string): number => region.split(STDIN_PROBE_CHAR).length - 1;
-
-// Returns the pre-probe count of probe chars in the composer region (the
-// baseline drainTmuxComposer verifies against), or null when the pane could
-// not be probed (glyphless client, capture failure) and no probe was typed.
-export async function proveTmuxStdinConsumption(
-  target: string,
-  budgetMs = 20_000,
-  exec: typeof tmuxExec = tmuxExec,
-): Promise<number | null> {
-  let before: string | null = null;
-  try {
-    ({ stdout: before } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
-  } catch {
-    return null; // capture problems are diagnosed by the paste path itself
-  }
-  const beforeRegion = tmuxComposerRegion(before);
-  if (beforeRegion === null) return null; // no composer glyph to watch — glyphless client or unusual pane
-  const baseline = countStdinProbes(beforeRegion);
-
-  const deadline = Date.now() + budgetMs;
-  while (Date.now() < deadline) {
-    await exec(["send-keys", "-t", target, "-l", STDIN_PROBE_CHAR]);
-    // Poll briefly for this probe to render; if the TUI is deaf, send another
-    // probe next lap (accumulated probes all clear in the C-a/C-k drain).
-    for (let i = 0; i < 8 && Date.now() < deadline; i++) {
-      await new Promise(resolve => setTimeout(resolve, 150));
-      try {
-        const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]);
-        const region = tmuxComposerRegion(stdout);
-        if (region !== null && countStdinProbes(region) > baseline) return baseline;
-      } catch {}
-    }
-  }
-  throw new Error(`AGENT_STDIN_NOT_READY: composer never consumed a probe key within ${Math.round(budgetMs / 1000)}s`);
-}
-
-// Drains the composer, then — when a stdin probe ran on this pane — verifies
-// the probe chars actually left it before the caller pastes.
+// Drains the composer with blind C-a/C-k cycles before a paste.
 //
 // Why C-a/C-k cycles and not a single C-u: in Claude Code 2.1.x's input box a
 // single C-u does not reliably empty the buffer when stale text is present
@@ -11733,43 +11746,144 @@ export async function proveTmuxStdinConsumption(
 // (start of line) + C-k (kill to end) drains reliably; three cycles handles
 // multi-line drafts. See daemon.inject-clear.test.ts.
 //
-// Why the verification: the probe proves keys REACH the input handler, not
-// that control bytes are interpreted yet. On a marginal cold boot the probe
-// renders while C-a/C-k are still mishandled, the accumulated probes survive
-// the blind cycles, and the paste + Enter submits "qqq<message>" (ct-43082).
-// Closed loop instead: re-drain until the region's probe count falls back to
-// the pre-probe baseline, and throw AGENT_STDIN_NOT_READY (the delivery
-// layer's retry/backoff redelivers) rather than paste into a dirty composer.
-// probeBaseline === null (busy pane, glyphless client) keeps the blind drain.
+// This drain is best-effort: whatever it misses shows up at the prompt as
+// foreign text and fails the Enter gate (awaitTmuxComposerPayload), which
+// re-drains and re-pastes. The gate, not this drain, is the closed loop.
 export async function drainTmuxComposer(
   target: string,
-  probeBaseline: number | null,
-  budgetMs = 5_000,
   exec: typeof tmuxExec = tmuxExec,
 ): Promise<void> {
-  const cycle = async () => {
+  for (let i = 0; i < 3; i++) {
     await exec(["send-keys", "-t", target, "C-a"]);
     await new Promise(resolve => setTimeout(resolve, 20));
     await exec(["send-keys", "-t", target, "C-k"]);
     await new Promise(resolve => setTimeout(resolve, 20));
-  };
-  for (let i = 0; i < 3; i++) await cycle();
-  await new Promise(resolve => setTimeout(resolve, 50));
-  if (probeBaseline === null) return;
-
-  const deadline = Date.now() + budgetMs;
-  while (Date.now() < deadline) {
-    try {
-      const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]);
-      const region = tmuxComposerRegion(stdout);
-      if (region === null || countStdinProbes(region) <= probeBaseline) return;
-    } catch {
-      return; // capture problems are diagnosed by the paste path itself
-    }
-    await cycle();
-    await new Promise(resolve => setTimeout(resolve, 150));
   }
-  throw new Error("AGENT_STDIN_NOT_READY: probe residue survived the composer drain, leaving message pending for retry");
+  await new Promise(resolve => setTimeout(resolve, 50));
+}
+
+// A TUI paints its composer seconds before it starts reading stdin: on a cold
+// boot under load, Claude Code's ❯ box is visible while every key sent to the
+// pty still lands in a buffer the input handler later mishandles (ct-40212;
+// measured gap up to ~7s on a loaded host). A painted prompt is therefore NOT
+// proof of readiness. Earlier revisions proved consumption by typing a foreign
+// probe character ("q") before the paste — but any injected character can
+// outrace a screen-based check: a probe still sitting in the pty buffer is
+// invisible to capture-pane, renders AFTER the drain verifies clean, and
+// submits glued to the message ("q<message>", ct-47277). The pty guarantees
+// byte ORDER, not visibility, so the one check that cannot be outraced is
+// waiting for the LAST bytes written — the payload itself — to render: once
+// the payload is visible, everything written before it has been consumed too.
+//
+// awaitTmuxComposerPayload is that check. After the paste, poll the composer
+// until the text at the prompt IS the payload (prefix match, whitespace
+// ignored, since the TUI soft-wraps the box at arbitrary points) with nothing
+// before it. Foreign text at the prompt — a stale draft the blind drain
+// missed, a mishandled control byte — fails the match and triggers a drain +
+// re-paste; Enter is only ever sent by the caller over a composer that
+// visibly holds the message and nothing else. Every re-paste is preceded by
+// C-a/C-k clearing bytes in the same pty stream, so in-order processing wipes
+// any late flush of the earlier paste before the fresh one lands — a doubled
+// message is impossible by construction.
+//
+// Scope: only panes showing a ❯/› composer glyph (Claude/cursor style) and a
+// payload the composer can be watched for (non-blank, free of prompt glyphs
+// that would break the last-glyph anchor); "unwatchable" keeps the legacy
+// timed-Enter behavior for glyphless clients. Throws AGENT_STDIN_NOT_READY
+// when the composer never converges within the budget — the delivery layer's
+// retry/backoff redelivers later instead of submitting into a deaf or dirty
+// pane.
+const stripComposerWs = (s: string) => s.replace(/\s+/g, "");
+
+// The first 40 non-whitespace chars the composer must show at the prompt, or
+// null when the payload cannot be watched for.
+export function tmuxWatchablePrefix(payload: string): string | null {
+  if (/[❯›]/.test(payload)) return null;
+  return stripComposerWs(payload).slice(0, 40) || null;
+}
+
+export async function awaitTmuxComposerPayload(
+  target: string,
+  payload: string,
+  opts: {
+    multiline?: boolean;
+    prePaste?: string;
+    rePaste: () => Promise<void>;
+    budgetMs?: number;
+    exec?: typeof tmuxExec;
+  },
+): Promise<"matched" | "unwatchable"> {
+  const exec = opts.exec ?? tmuxExec;
+  const prefix = tmuxWatchablePrefix(payload);
+  if (prefix === null) return "unwatchable";
+  const deadline = Date.now() + (opts.budgetMs ?? 20_000);
+  const tick = () => new Promise(resolve => setTimeout(resolve, 150));
+
+  let glyphlessTicks = 0;
+  let liveEmptyTicks = 0;
+  let foreignTicks = 0;
+  let rePastes = 0;
+  const drainAndRePaste = async (why: string) => {
+    log(`${why} in ${target}, draining and re-pasting`);
+    rePastes++;
+    liveEmptyTicks = 0;
+    foreignTicks = 0;
+    await drainTmuxComposer(target, exec);
+    await opts.rePaste();
+  };
+
+  while (Date.now() < deadline) {
+    let pane: string;
+    try {
+      ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+    } catch {
+      return "unwatchable"; // capture problems are diagnosed by the post-submit verifier
+    }
+    const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
+    if (glyphAt === -1) {
+      // Glyphless client, or a transient redraw hid the box: after a few
+      // consecutive misses, hand back to the legacy timed-Enter path.
+      if (++glyphlessTicks >= 3) return "unwatchable";
+      await tick();
+      continue;
+    }
+    glyphlessTicks = 0;
+    const afterGlyph = pane.slice(glyphAt + 1);
+    const glyphLine = afterGlyph.split("\n", 1)[0];
+    // A multi-line bracketed paste can render as a collapsed chip
+    // ("[Pasted text #1 +13 lines]") with none of the text visible: the chip
+    // at the prompt with nothing before it IS the payload.
+    const chip = opts.multiline ? glyphLine.match(/\[[^\]\n]*pasted[^\]\n]*\]/i) : null;
+    const matched = chip
+      ? !glyphLine.slice(0, chip.index).trim()
+      : stripComposerWs(afterGlyph).startsWith(prefix);
+    if (matched) return "matched";
+
+    if (!glyphLine.trim()) {
+      // Empty prompt. A frozen pane (identical to the pre-paste capture)
+      // means the paste is still pty-buffered — wait, never re-paste: a
+      // second copy would flush right behind the first. A LIVE empty prompt
+      // held for a few ticks means the paste was dropped.
+      foreignTicks = 0;
+      if (opts.prePaste !== undefined && pane === opts.prePaste) {
+        liveEmptyTicks = 0;
+      } else if (++liveEmptyTicks >= 3 && rePastes < 2) {
+        await drainAndRePaste("composer still empty after paste");
+      }
+      await tick();
+      continue;
+    }
+
+    // Foreign text at the prompt: a stale draft, probe-era residue, or a
+    // render still mid-flush. Give it a few ticks to converge into a match,
+    // then clear and re-paste.
+    liveEmptyTicks = 0;
+    if (++foreignTicks >= 3 && rePastes < 2) {
+      await drainAndRePaste("composer holds foreign text");
+    }
+    await tick();
+  }
+  throw new Error("AGENT_STDIN_NOT_READY: composer never showed the pasted payload, leaving message pending for retry");
 }
 
 export async function injectViaTmux(target: string, content: string, agentType?: AgentClientId): Promise<void> {
@@ -11868,15 +11982,6 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // native queue rather than waiting for the turn to finish.
   const { busy } = await ensureTmuxReady(target, agentType);
 
-  // A visible prompt is not proof the TUI reads stdin yet (cold boot, ct-40212):
-  // prove consumption with a probe key before sending the clear/paste sequence.
-  // A busy agent is consuming by definition (it is mid-turn), so skip there.
-  // The baseline feeds the drain's verification below (ct-43082).
-  let probeBaseline: number | null = null;
-  if (!busy) {
-    probeBaseline = await proveTmuxStdinConsumption(target);
-  }
-
   const contentLines = content.split(/\r?\n/).length;
   const captureLines = Math.max(30, contentLines + Math.ceil(sanitized.length / 60) + 10);
   const contentPrefix = sanitized.slice(0, 40);
@@ -11885,8 +11990,8 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
 
   // Clear any stale input before pasting to prevent draft text from being
   // prepended to the injected message or submitted by the trailing Enter —
-  // see drainTmuxComposer for why C-a/C-k cycles and how the drain is
-  // verified against the probe baseline.
+  // see drainTmuxComposer for why C-a/C-k cycles. The drain is best-effort:
+  // the Enter gate below refuses to submit over anything it missed.
   //
   // Escape is the one key here that doubles as "interrupt the current turn", so
   // it is gated on the agent being idle. Mid-turn the type-ahead box holds at most
@@ -11896,7 +12001,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     await tmuxExec(["send-keys", "-t", target, "Escape"]);
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  await drainTmuxComposer(target, probeBaseline);
+  await drainTmuxComposer(target);
 
   // Capture pane before paste for before/after comparison
   let prePaste = "";
@@ -11908,34 +12013,41 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // Paste once
   await doPaste();
 
-  // Brief confirmation: did the pane change? (4 checks, 100ms apart = 400ms max).
-  // Tightened from 5×200ms (1s) — observation: pane redraw after a tmux paste
-  // is sub-100ms in practice; the long budget was defensive and rarely useful.
-  // The post-submit verify loop below is the real safety net for "did the
-  // payload actually reach the agent" — this is just an early signal.
-  let pasteConfirmed = false;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 100));
-    try {
-      const { stdout: postPaste } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
-      if (postPaste !== prePaste) {
-        pasteConfirmed = true;
-        break;
-      }
-    } catch {}
-  }
-
-  if (!pasteConfirmed) {
-    log(`Paste may not have landed in ${target} (pane unchanged after 400ms), proceeding anyway`);
-  }
-
-  // Send Enter to submit. The adaptive delay scales with content length so
-  // tmux paste-buffer has time to flush before Enter — but the 200ms floor
-  // was overly generous: tmux paste + Enter are queued in the same pty
-  // stream so order is preserved even for short pastes.
+  // The payload is its own readiness probe: Enter is only sent once the
+  // composer visibly holds it and nothing else — see awaitTmuxComposerPayload
+  // for the deaf-boot, dropped-paste and foreign-residue handling. A gate
+  // match doubles as paste confirmation for the post-submit verifier.
   const enterDelay = Math.max(100, Math.min(1000, Math.ceil(sanitized.length / 100) * 50));
-  await new Promise(resolve => setTimeout(resolve, enterDelay));
-  await tmuxExec(["send-keys", "-t", target, "Enter"]);
+  const gate = await awaitTmuxComposerPayload(target, sanitized, {
+    multiline: bracketed && sanitized.includes("\n"),
+    prePaste,
+    rePaste: doPaste,
+  });
+  let pasteConfirmed = gate === "matched";
+  if (gate === "matched") {
+    await tmuxExec(["send-keys", "-t", target, "Enter"]);
+  } else {
+    // Unwatchable pane (glyphless client, blank payload): legacy timing.
+    // Brief confirmation — did the pane change? (4 checks, 100ms apart.)
+    // The post-submit verify loop below is the real safety net there.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      try {
+        const { stdout: postPaste } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+        if (postPaste !== prePaste) {
+          pasteConfirmed = true;
+          break;
+        }
+      } catch {}
+    }
+    if (!pasteConfirmed) {
+      log(`Paste may not have landed in ${target} (pane unchanged after 400ms), proceeding anyway`);
+    }
+    // Adaptive delay so tmux paste-buffer flushes before Enter; the same
+    // pty-stream ordering that makes the gate sound keeps this safe too.
+    await new Promise(resolve => setTimeout(resolve, enterDelay));
+    await tmuxExec(["send-keys", "-t", target, "Enter"]);
+  }
 
   // Post-submit: verify the agent started processing — see
   // verifyTmuxSubmitAfterPaste for the full state machine. The ultimate
@@ -15083,10 +15195,53 @@ interface CachedProcessInfo {
   tmuxTarget?: string;
   termProgram?: string;
   lastVerified: number;
+  // When this mapping was FILLED (not last revalidated): the reference point a
+  // newer hook-written registry registration supersedes (see
+  // registrySupersedesCachedPid — the stale-pid self-heal).
+  filledAt: number;
 }
 
 const sessionProcessCache = new Map<string, CachedProcessInfo>();
 const PROCESS_CACHE_TTL_MS = 30_000;
+
+// ── Registry supersession probe ─────────────────────────────────────────────
+// The session's own registry file, read cheaply and memoized: the sync settle
+// paths (agentProcessPid → verifiedOpenTasks) consult it on every settle, so
+// the read must not hit disk each time. A short TTL keeps the heal window
+// close to the cache's own revalidation cadence.
+const REGISTRY_PROBE_TTL_MS = 30_000;
+const registryProbeCache = new Map<string, { at: number; reg: unknown }>();
+function registryRegistrationFor(sessionId: string): unknown {
+  const hit = registryProbeCache.get(sessionId);
+  if (hit && Date.now() - hit.at < REGISTRY_PROBE_TTL_MS) return hit.reg;
+  let reg: unknown = null;
+  try {
+    reg = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, "session-registry", `${sessionId}.json`), "utf-8"));
+  } catch {
+    reg = null;
+  }
+  // Bounded: entries are per live-ish session; a runaway caller must not grow
+  // this without limit.
+  if (registryProbeCache.size > 1000) registryProbeCache.clear();
+  registryProbeCache.set(sessionId, { at: Date.now(), reg });
+  return reg;
+}
+
+// Drop a cached session→pid mapping the session's own registry has proven
+// stale (a newer hook registration names a different pid). Returns true when
+// the entry was dropped; the next discovery re-fills from the registry
+// (Strategy 0). This is the self-heal for the "unknown verdict fails open"
+// hole: the old pid often can't be CONVICTED as foreign (it has no current
+// claims), but the session's own file can still outvote it.
+function dropSupersededProcessCacheEntry(sessionId: string): boolean {
+  const cached = sessionProcessCache.get(sessionId);
+  if (!cached) return false;
+  const reg = registryRegistrationFor(sessionId);
+  if (!registrySupersedesCachedPid(reg as { pid?: unknown; ts?: unknown; term?: unknown; src?: unknown } | null, cached.pid, cached.filledAt)) return false;
+  log(`[IDENTITY] session ${shortId(sessionId)}: registry hook claim names pid ${(reg as { pid: number }).pid}, newer than cached fill — dropping stale cached pid ${cached.pid}`);
+  sessionProcessCache.delete(sessionId);
+  return true;
+}
 
 // Server rows registered with their tmux name, so a later tmux discovery for
 // the same session (e.g. a session that started OUTSIDE tmux and was resumed
@@ -15102,7 +15257,11 @@ function cacheSessionProcess(sessionId: string, info: ClaudeSessionInfo, tmuxTar
     tmuxTarget,
     termProgram: info.termProgram,
     lastVerified: Date.now(),
+    filledAt: Date.now(),
   });
+  // A fresh fill is a fresh answer — don't let a pre-fill registry probe hide
+  // a registration written moments before this mapping was discovered.
+  registryProbeCache.delete(sessionId);
   // Backfill tmux_session on the server row when this cache fill is the first
   // place the tmux placement shows up. registerManagedSession patches the
   // existing row by session_id; conversation_id/device_id are omitted so the
@@ -15123,6 +15282,9 @@ function cacheSessionProcess(sessionId: string, info: ClaudeSessionInfo, tmuxTar
 }
 
 async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSessionInfo | null> {
+  // Supersession outranks the TTL: a registry hook claim newer than this
+  // mapping proves it stale however recently the pid checked out as alive.
+  if (dropSupersededProcessCacheEntry(sessionId)) return null;
   const cached = sessionProcessCache.get(sessionId);
   if (!cached) return null;
   if (Date.now() - cached.lastVerified > PROCESS_CACHE_TTL_MS) {
@@ -15139,6 +15301,7 @@ async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSession
 
 async function validateProcessCache(): Promise<void> {
   for (const [sessionId, cached] of sessionProcessCache) {
+    if (dropSupersededProcessCacheEntry(sessionId)) continue;
     if (!isProcessRunning(cached.pid) || !(await isAgentProcess(cached.pid))) {
       sessionProcessCache.delete(sessionId);
     }
@@ -16891,10 +17054,10 @@ async function deliverMessage(
           log(`Started session ${entry.tmuxSession} startup timed out after ${Date.now() - startTime}ms, proceeding anyway`);
         }
         // Brief settle after the prompt paints. This is NOT the readiness
-        // guarantee — injectViaTmux now proves stdin consumption with a probe
-        // key before sending anything (proveTmuxStdinConsumption, ct-40212),
-        // so a slow input handler stalls the probe, not the paste. The 500ms
-        // just lets the freshly painted frame stop redrawing.
+        // guarantee — injectViaTmux gates Enter on the pasted payload actually
+        // rendering in the composer (awaitTmuxComposerPayload, ct-40212), so a
+        // slow input handler stalls the gate, not the submit. The 500ms just
+        // lets the freshly painted frame stop redrawing.
         await new Promise(resolve => setTimeout(resolve, 500));
         const startedTmuxTarget = entry.tmuxSession + ":0.0";
         // Mark "injected" best-effort (non-blocking) BEFORE the paste. The mark is fire-and-forget
@@ -16916,7 +17079,7 @@ async function deliverMessage(
         return true;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        // A deaf-but-painted composer (probe never consumed) or a paste that
+        // A deaf-but-painted composer (payload never rendered) or a paste that
         // provably never reached the agent are conditions of THIS healthy,
         // still-booting pane. Falling through would start a SECOND instance
         // beside it (the incident's duplicated-backend shape) — rethrow so the

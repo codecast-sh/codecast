@@ -9,7 +9,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { cleanTitle, isSystemMessage, isCommandMessage, isImportNotice } from "../lib/conversationProcessor";
 import { stripTeammateFraming } from "./sessionMessage";
-import { ClaudeIcon, OpenAIIcon, CursorIcon, GeminiIcon } from "./BrandIcons";
+import { ClaudeIcon, OpenAIIcon, CursorIcon, GeminiIcon, GrokIcon } from "./BrandIcons";
 import { shouldShowSession, isSubagent, isTrivialSubagent, isWarmupSession } from "../lib/sessionFilters";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
 import { useStableOrder } from "../hooks/useStableOrder";
@@ -353,8 +353,14 @@ export function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: str
         <GeminiIcon className="w-2.5 h-2.5 text-white" />
       </span>
     );
-  } else if (agentType === "opencode" || agentType === "pi" || agentType === "grok") {
-    // opencode/pi/grok have no dedicated badge glyph here — reuse the canonical
+  } else if (agentType === "grok") {
+    return (
+      <span className={`${className} rounded bg-[#0a0a0a] flex items-center justify-center shrink-0`}>
+        <GrokIcon className="w-2.5 h-2.5 text-white" />
+      </span>
+    );
+  } else if (agentType === "opencode" || agentType === "pi") {
+    // opencode/pi have no dedicated badge glyph here — reuse the canonical
     // AgentTypeIcon (its own accent color) inside the badge chrome so they never
     // fall through to the Claude icon.
     return (

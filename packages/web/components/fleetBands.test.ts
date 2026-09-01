@@ -284,52 +284,80 @@ describe("fleetSessionSig — the wake gate for always-mounted fleet surfaces", 
 });
 
 describe("fleetCountedSessions", () => {
-  // Convex-shaped ids (32 lowercase alphanumerics) so the old-row partition
-  // actually engages — a non-Convex id is an optimistic stub, always visible.
+  // Convex-shaped ids (32 lowercase alphanumerics) so the working-set
+  // selection actually engages — a non-Convex id is an optimistic stub,
+  // always visible.
   const cid = (n: number) => `c${String(n).padStart(31, "0")}`;
   const byId = (rows: InboxSession[]) => Object.fromEntries(rows.map((r) => [r._id, r]));
   const ids = (rows: InboxSession[]) => rows.map((r) => r._id).sort();
-  const countOpts = (
-    live: string[],
+  // The chokepoint's store-state subset (PlaceInboxState): the row map plus
+  // the scope inputs. Show-old OFF so the fold test below pins the cut; the
+  // other cases have no fold gap.
+  const stateOf = (
+    sessions: Record<string, InboxSession>,
     team: string[] = [],
-  ) => ({ ...noQueue, liveInboxIds: new Set(live), teamInboxIds: new Set(team) });
+    meId: string | null = "me",
+    ui: Record<string, unknown> = { inbox_show_old: false },
+  ) => ({
+    sessions,
+    sessionsWithQueuedMessages: new Set<string>(),
+    pendingMessages: {},
+    clientState: { ui },
+    currentUser: meId ? { _id: meId } : null,
+    teamInboxIds: new Set(team),
+    currentSessionId: null,
+  });
 
   it("never counts a row the user set aside, even with a live agent", () => {
     const working = sess({ _id: cid(1), is_idle: false, agent_status: "working" });
     const stashed = sess({ _id: cid(2), is_idle: false, agent_status: "working", inbox_stashed_at: NOW });
     const dismissed = sess({ _id: cid(3), awaiting_input: true, inbox_dismissed_at: NOW });
     const killed = sess({ _id: cid(4), awaiting_input: true, inbox_killed_at: NOW });
-    const rows = fleetCountedSessions(byId([working, stashed, dismissed, killed]), countOpts([cid(1)]));
+    const rows = fleetCountedSessions(stateOf(byId([working, stashed, dismissed, killed])), noQueue);
     expect(ids(rows)).toEqual([cid(1)]);
   });
 
   it("counts a needs-input row still in the inbox window regardless of age", () => {
     // The 21-hour-old triggered-task session on another machine/project: the
     // inbox shows it, so the card must count it — this is what the old 6h
-    // recency filter silently dropped.
+    // recency filter silently dropped. A lone stale row has no fresher
+    // neighbor to open the fold gap, so it stays above the fold.
     const old = sess({ _id: cid(1), awaiting_input: true, updated_at: NOW - 21 * 3600_000 });
-    const rows = fleetCountedSessions(byId([old]), countOpts([cid(1)]));
+    const rows = fleetCountedSessions(stateOf(byId([old])), noQueue);
     expect(ids(rows)).toEqual([cid(1)]);
     expect(fleetBandFor(old, noQueue)).toBe("needsYou");
   });
 
-  it("hides a row aged out of the live inbox window, pinned exempt", () => {
-    const aged = sess({ _id: cid(1), awaiting_input: true });
-    const pinnedAged = sess({ _id: cid(2), awaiting_input: true, is_pinned: true });
+  it("hides a row below the fold (the 12h activity-gap cut), pinned exempt", () => {
+    // computeFold: a >12h gap in the recent members' activity puts everything
+    // STRICTLY OLDER than the row at the gap below the fold; the gap row
+    // itself is the cut and stays. Pinned rows are a deliberate window — fold
+    // exempt, and they can't bridge the gap either.
+    // `aged` is a plain settled row (needs input): an OPEN ASK would lift it
+    // into QUESTIONS from behind the fold — the decision queue is
+    // membership-blind by design — so it would count either way.
     const inWindow = sess({ _id: cid(3), is_idle: false, agent_status: "working" });
-    const rows = fleetCountedSessions(byId([aged, pinnedAged, inWindow]), countOpts([cid(3)]));
-    expect(ids(rows)).toEqual([cid(2), cid(3)]);
+    const edge = sess({ _id: cid(4), updated_at: NOW - 15 * 3600_000 });
+    const aged = sess({ _id: cid(1), updated_at: NOW - 16 * 3600_000 });
+    const pinnedAged = sess({ _id: cid(2), awaiting_input: true, is_pinned: true, updated_at: NOW - 17 * 3600_000 });
+    const rows = fleetCountedSessions(stateOf(byId([aged, pinnedAged, inWindow, edge])), noQueue);
+    expect(ids(rows)).toEqual([cid(2), cid(3), cid(4)]);
+    // Show-old ON: the folded row renders and counts (shown + folded) — the
+    // fleet card mirrors the panel's headline under the same view state.
+    const shown = fleetCountedSessions(stateOf(byId([aged, pinnedAged, inWindow, edge]), [], "me", { inbox_show_old: true }), noQueue);
+    expect(ids(shown)).toEqual([cid(1), cid(2), cid(3), cid(4)]);
   });
 
   it("counts teammate rows only while the team subscription reports them", () => {
     const mine = sess({ _id: cid(1), user_id: "me", is_idle: false, agent_status: "working" });
     const teammate = sess({ _id: cid(2), user_id: "them", is_idle: false, agent_status: "working" });
     // Team scope: their row rides teamInboxIds.
-    expect(ids(fleetCountedSessions(byId([mine, teammate]), countOpts([cid(1)], [cid(2)]))))
+    expect(ids(fleetCountedSessions(stateOf(byId([mine, teammate]), [cid(2)]), noQueue)))
       .toEqual([cid(1), cid(2)]);
-    // Mine scope (team set cleared): the cached teammate row has frozen
-    // liveness and must not be counted.
-    expect(ids(fleetCountedSessions(byId([mine, teammate]), countOpts([cid(1)]))))
+    // Mine scope (team set cleared): the working-set selection doesn't read
+    // authorship, but the cached teammate row has frozen liveness and must
+    // not be counted (the isForeignRow arm).
+    expect(ids(fleetCountedSessions(stateOf(byId([mine, teammate])), noQueue)))
       .toEqual([cid(1)]);
   });
 
@@ -338,7 +366,7 @@ describe("fleetCountedSessions", () => {
     // enters via the working bucket the moment it carries a message.
     const spawned = sess({ _id: cid(1), message_count: 1, is_idle: false, agent_status: "working" });
     const stub = sess({ _id: cid(2), message_count: 0 });
-    const rows = fleetCountedSessions(byId([spawned, stub]), countOpts([cid(1), cid(2)]));
+    const rows = fleetCountedSessions(stateOf(byId([spawned, stub])), noQueue);
     expect(ids(rows)).toEqual([cid(1)]);
   });
 });

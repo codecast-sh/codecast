@@ -1824,6 +1824,7 @@ const SESSION_COMMANDS = {
   restartSession: api.conversations.restartSession,
   repairSession: api.conversations.repairSession,
   reconfigureSession: api.conversations.reconfigureSession,
+  switchSessionAgent: api.conversations.switchSessionAgent,
   rewindSession: api.conversations.rewindSession,
   forkFromMessage: api.conversations.forkFromMessage,
   sendKeysToSession: api.conversations.sendKeysToSession,

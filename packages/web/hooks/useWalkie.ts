@@ -26,14 +26,17 @@ import {
 } from "react";
 import { toast } from "sonner";
 import {
+  WALKIE_LOCK_MS,
   endBurst,
   getWalkieLevel,
   getWalkieStatus,
+  lockBurstLive,
   startBurst,
   subscribeWalkie,
   subscribeWalkieLevel,
   walkieBlockedFor,
   walkieHoldsRoom,
+  walkieJoinedRoom,
   warmMic,
   type WalkieStatus,
 } from "../lib/calls/walkie";
@@ -161,6 +164,11 @@ export function walkieBlockedReason(roomKey: string | undefined): string | null 
 export type PushToTalk = {
   /** This surface's room is the one being talked into right now. */
   holding: boolean;
+  /** The hold outlived the fill and LATCHED: this client is deliberately live
+   *  in this key's room (the walkie's own upgrade), hands off the key, until
+   *  they End. The mic may still be muted or denied — the call plane's facts
+   *  say — but the seat is theirs on purpose. */
+  locked: boolean;
   /** The mic is actually open in the room. False through setup — acquiring the
    *  mic, joining and unmuting — which is a real gap, not a formality: 1.0s
    *  into a warm room and 12.7s into a cold one, measured. A surface that says
@@ -194,10 +202,14 @@ export type PushToTalk = {
  * the room is doing. `opening` is only the gap before it.
  */
 export function walkieKeyState(
-  ptt: Pick<PushToTalk, "holding" | "capturing" | "dropped">,
-): "idle" | "opening" | "live" | "dropped" {
+  ptt: Pick<PushToTalk, "holding" | "capturing" | "dropped" | "locked">,
+): "idle" | "opening" | "live" | "dropped" | "locked" {
   if (ptt.dropped) return "dropped";
   if (ptt.capturing) return "live";
+  // After the fill latches there is no burst left to capture, so `locked`
+  // comes after the burst facts: mid-fill the key still reads as the live
+  // hold it is, and the latch takes over the moment the burst lands.
+  if (ptt.locked) return "locked";
   return ptt.holding ? "opening" : "idle";
 }
 
@@ -250,9 +262,10 @@ export function walkieKeyName(
   if (state === "opening") return "Opening the mic — do not talk yet";
   if (state === "live") {
     return opts.live
-      ? "Live — they hear you now, release to send"
+      ? "Live — they hear you now, keep holding to stay on"
       : "Recording — they get it when you let go";
   }
+  if (state === "locked") return "You are live, hands free — End stops it";
   return opts.label ?? opts.title ?? "Hold to talk";
 }
 
@@ -271,6 +284,10 @@ export function walkieKeySig(s: WalkieStatus, roomKey: string | undefined): stri
     mine ? "1" : "0",
     mine?.live ? "1" : "0",
     mine && mine.openAt !== null ? "1" : "0",
+    // The latch: this key's room is the one this client stepped into on
+    // purpose (the fill completing, or Join live). A fifth fact, because a
+    // key that latched has no burst left and every other field goes quiet.
+    roomKey && walkieJoinedRoom(s) === roomKey ? "1" : "0",
     s.unavailable ?? "",
   ].join("|");
 }
@@ -297,6 +314,10 @@ export function useWalkieKeySig(roomKey: string | undefined): string {
 export function usePushToTalk(
   roomKey: string | undefined,
   resolveChannelId: () => string | null,
+  /** Who is on the other end, for the lock's "You joined Jordan" sentence —
+   *  resolved at lock time, never at render. A surface that cannot name them
+   *  still locks the same way. */
+  resolveName?: () => string | null,
 ): PushToTalk {
   // ONE ROOM'S WORTH OF THE ENGINE, and never the whole snapshot.
   //
@@ -328,19 +349,42 @@ export function usePushToTalk(
     (st: any) => st.clientState?.ui?.active_team_id ?? "",
   ]);
   const held = useRef(false);
+  // The fill. Armed at the press, disarmed by any release — so a hold that
+  // outlives it is the one gesture that locks, and everything shorter keeps
+  // its old meaning (tap, burst). A ref, because nothing on screen changes at
+  // arm time: the ring animates in CSS off the same WALKIE_LOCK_MS.
+  const fill = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const disarmFill = () => {
+    if (fill.current) clearTimeout(fill.current);
+    fill.current = null;
+  };
 
   const release = useCallback(() => {
+    // Always disarmed, even for a hand that never held here: a blur mid-fill
+    // must not let the latch fire into an unfocused window.
+    disarmFill();
     if (!held.current) return;
     held.current = false;
     void endBurst();
   }, []);
 
+  const nameRef = useRef(resolveName);
+  nameRef.current = resolveName;
   const press = useCallback(() => {
     if (held.current || walkieBlockedReason(roomKey)) return;
     const channelId = resolveChannelId();
     if (!channelId || !roomKey) return;
     held.current = true;
     void startBurst(channelId, roomKey);
+    disarmFill();
+    fill.current = setTimeout(() => {
+      fill.current = null;
+      // THE LATCH. The engine re-checks that this burst is still the one the
+      // fill was timing (shouldLockBurst), so a cap or a blur that landed it
+      // mid-tick locks nothing. The hand can let go from here: release finds
+      // no burst and does nothing.
+      void lockBurstLive({ name: nameRef.current?.() ?? null });
+    }, WALKIE_LOCK_MS);
   }, [roomKey, resolveChannelId]);
 
   // A hold that survives the window losing focus is a mic left open in someone
@@ -372,6 +416,10 @@ export function usePushToTalk(
   const dropped = opened && walkieBurstDropped(status.sending, call);
   return {
     holding,
+    // Deliberately live in this key's room — the fill having latched, or Join
+    // live pressed; the key cannot tell them apart and should not. The engine
+    // keeps the claim honest against the call plane (reconcileLiveRoom).
+    locked: !!roomKey && walkieJoinedRoom(status) === roomKey,
     live: opened && !dropped,
     dropped,
     capturing: holding && !!status.sending?.live,
@@ -766,6 +814,13 @@ export type WalkieStrip = {
   /** The recognizer is down, so the words come after the recording rather than
    *  during it. Not a failed burst. */
   quiet: boolean;
+  /** This client is deliberately live in the room, hands off the key — the
+   *  fill locked, or Join live was pressed. The strip shows a seat, not a
+   *  hold: my face, the live headline, and an End. */
+  locked: boolean;
+  /** The other side is deliberately in too (their roster stamp), or their
+   *  voice is playing right now — either way their face belongs on screen. */
+  together: boolean;
 };
 
 export function walkieStripState(
@@ -788,14 +843,29 @@ export function walkieStripState(
   // where the line would be a lie. A refused microphone sets `muted`, so a seat
   // with no device never claims to be heard.
   const hotMic = !tx && !call.muted && call.phase === "connected";
+  // The latch: this client's own deliberate seat in the strip's room. Read off
+  // the engine's joined room rather than any flag of this surface's own, so
+  // the fill locking and the Join live button land in the same state.
+  const joined = walkieJoinedRoom(status);
+  const locked = !!joined && call.roomKey === joined && call.phase !== "idle";
+  const together =
+    rx ||
+    (locked &&
+      otherJoinedLive(
+        (state.callOccupancy?.[joined!] as any[]) ?? [],
+        String(state.currentUser?._id ?? ""),
+        status.liveRoom?.since ?? 0,
+      ));
   return {
     headline: stripHeadline({ status, state, name, now: ctx.now, dropped, micDenied }),
     tx,
     rx,
-    hotMic,
+    hotMic: hotMic && !locked,
     micDenied,
     dropped,
     quiet: tx && status.asr === "unavailable",
+    locked,
+    together,
   };
 }
 
@@ -835,6 +905,25 @@ function stripHeadline(input: {
   // this person says can leave — so the strip says exactly that rather than
   // "Riley is talking", which reads as a conversation and is half of one.
   if (micDenied) return `You can hear ${name} — your mic is off (permission denied)`;
+  // LOCKED: a deliberate seat, hands off the key. Muted is said first because
+  // it flips what every other sentence here promises; a two-way line when they
+  // are in; otherwise the roster answers whether they can actually hear this —
+  // never this client's own seat, which was the old "Live to X" lie.
+  const joined = walkieJoinedRoom(status);
+  if (joined && state.call.roomKey === joined) {
+    if (state.call.muted) return `Muted — ${name} can't hear you`;
+    if (incoming) return `You and ${name} are live`;
+    if (
+      otherJoinedLive(
+        (state.callOccupancy?.[joined] as any[]) ?? [],
+        String(state.currentUser?._id ?? ""),
+        status.liveRoom?.since ?? 0,
+      )
+    ) {
+      return `You and ${name} are live`;
+    }
+    return senderHearingFrom(state, joined, now).text;
+  }
   if (incoming) return `${name} is talking`;
   return `Still open with ${name}`;
 }
@@ -859,9 +948,19 @@ export type DockSurface = "none" | "walkie" | "stage" | "dock";
 export function callDockSurface(
   status: WalkieStatus,
   call: { roomKey: string | null; phase: string },
-  opts: { expanded: boolean },
+  opts: {
+    expanded: boolean;
+    /** Any video in the room — a camera either way, or a screen. Video is what
+     *  earns the card; a voice stays circles. */
+    video?: boolean;
+  },
 ): DockSurface {
   if (walkieHoldsRoom(status, call.roomKey)) return "walkie";
   if (call.phase === "idle") return "none";
+  // A voice room this client stepped into FROM THE WALKIE keeps the walkie's
+  // own shape — faces and an End, not a video card for a conversation with no
+  // video in it. The fill locking, and Join live, both land here. Video
+  // arriving or the person expanding hands the room to the ordinary dock.
+  if (!opts.expanded && !opts.video && walkieJoinedRoom(status) === call.roomKey) return "walkie";
   return opts.expanded ? "stage" : "dock";
 }

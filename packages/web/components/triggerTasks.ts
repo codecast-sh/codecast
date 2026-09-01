@@ -190,22 +190,12 @@ export interface TriggerRow {
 // running worker is transient labor, not a standing trigger, and it already
 // renders nested under its parent session's card.
 
-// An armed wakeup whose fire time passed this long ago is a dead harness (the
-// fire lands within seconds normally) — drop the row instead of showing a
-// forever-"due" loop.
-export const LOOP_OVERDUE_GRACE_MS = 15 * 60_000;
-// A wakeup turn that hasn't re-armed or stopped within this window ended
-// without telling us (session killed mid-turn) — stop showing "running".
-export const LOOP_WAKING_TTL_MS = 30 * 60_000;
+// Freshness lives in shared/contracts/loopState — the server classifier and
+// this roster must agree on when a loop stops being a live standing intent.
+import { isLoopFresh } from "@codecast/shared/contracts";
+export { LOOP_OVERDUE_GRACE_MS, LOOP_WAKING_TTL_MS, isLoopFresh } from "@codecast/shared/contracts";
 
 export type LoopStateLike = NonNullable<InboxSession["loop_state"]>;
-
-// Is this loop still a live standing intent (worth a row) at `now`?
-export function isLoopFresh(loop: LoopStateLike, now: number): boolean {
-  return loop.status === "waking"
-    ? now - (loop.fired_at ?? loop.event_at) < LOOP_WAKING_TTL_MS
-    : loop.wakeup_at > now - LOOP_OVERDUE_GRACE_MS;
-}
 
 export function loopTaskRow(sess: InboxSession, loop: LoopStateLike): TaskRow {
   return {
@@ -258,8 +248,9 @@ export function partitionTriggerInbox(
     // clientState.ui.schedules_seen_at — outcomes newer than this are unread.
     seenAt?: number;
     // The session open in the conversation pane. Never absorbed — same rule as
-    // partitionOldSessions/blank-hiding: the session you're viewing always has
-    // a card, so selection highlight and auto-scroll can land on it.
+    // the focused-session overlay in partitionWorkingSet: the session you're
+    // viewing always has a card, so selection highlight and auto-scroll can
+    // land on it.
     focusedId?: string | null;
     // Clock for loop-freshness membership (armed wakeup overdue, waking turn
     // aged out). Callers pass a coarse clock so membership re-evaluates on it;

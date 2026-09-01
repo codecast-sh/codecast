@@ -1,18 +1,18 @@
 import { describe, expect, it } from "bun:test";
+import { STATUS_TRUST_TTL_MS } from "@codecast/shared/contracts";
 import {
-  categorizeSessions,
   classifySession,
   sessionRestState,
-  visualOrderSessions,
   type InboxSession,
 } from "../inboxStore";
+import { orderSections, placeSections } from "./placeTestHarness";
 
 // The settled sections split by WHO ACTS NEXT: a blocked settle is Needs Input,
 // a delivered one is Done, one parked on a machine wake is Dormant. These pin
-// the client mirror of classifyWorkState's restState arm (convex/inboxFilters):
+// the client mirror of classifyWorkState's restState arm (the shared module):
 // the same sources, the same precedence, so the web inbox and `cast sessions`
 // file the same session under the same word.
-// A live clock: categorizeSessions runs the trust-TTL staleness net against
+// A live clock: the chokepoint runs the trust-TTL staleness net against
 // Date.now(), so a fixed past timestamp would file every row as stale/settled.
 const NOW = Date.now();
 const mk = (id: string, extra: Partial<InboxSession> = {}): InboxSession => ({
@@ -28,7 +28,7 @@ const mk = (id: string, extra: Partial<InboxSession> = {}): InboxSession => ({
   ...extra,
 });
 const ids = (xs: InboxSession[]) => xs.map((x) => x._id);
-const cat = (sessions: Record<string, InboxSession>) => categorizeSessions(sessions, new Set());
+const cat = (sessions: Record<string, InboxSession>) => placeSections(sessions, new Set());
 
 describe("sessionRestState", () => {
   it("declared verdicts: agent_status dormant / done, and the inferred waiting", () => {
@@ -81,7 +81,7 @@ describe("classifySession.rest", () => {
   });
 });
 
-describe("categorizeSessions rest sections", () => {
+describe("placeSections rest sections", () => {
   it("splits settled rows into needsInput / done / dormant", () => {
     const { needsInput, done, dormant, working } = cat({
       blocked: mk("blocked"),
@@ -93,10 +93,18 @@ describe("categorizeSessions rest sections", () => {
       judged: mk("judged", { settle_verdict: "done" }),
       busy: mk("busy", { is_idle: false, agent_status: "working" }),
     });
-    expect(ids(needsInput).sort()).toEqual(["asked", "blocked"]);
+    // An open ask is the QUESTIONS bucket now (asking outranks the work
+    // state); the plain idle settle is the needs-input fallthrough.
+    expect(ids(needsInput).sort()).toEqual(["blocked"]);
     expect(ids(done).sort()).toEqual(["judged", "shipped"]);
     expect(ids(dormant).sort()).toEqual(["parked", "userParked", "watching"]);
     expect(ids(working)).toEqual(["busy"]);
+  });
+
+  it("an open ask files under QUESTIONS, not needs input", () => {
+    const { questions, needsInput } = cat({ asked: mk("asked", { awaiting_input: true }) });
+    expect(ids(questions)).toEqual(["asked"]);
+    expect(needsInput).toEqual([]);
   });
 
   it("orders dormant newest-first, done and needs input oldest-first", () => {
@@ -129,9 +137,85 @@ describe("categorizeSessions rest sections", () => {
     expect(done).toEqual([]);
     expect(dormant).toEqual([]);
   });
+
+  it("an armed standing trigger's resting home files under Dormant as a FACT, not a pass", () => {
+    // Trigger absorption used to be a panel-only pass over the trigger
+    // subscription; the armed_trigger_kind fact reaches the shared classifier
+    // as data, identically on every replica.
+    const { dormant, needsInput } = cat({
+      home: mk("home", { armed_trigger_kind: "standing", last_turn_allows_park: true }),
+      human: mk("human", { armed_trigger_kind: "standing", last_turn_allows_park: false }),
+    });
+    expect(ids(dormant)).toEqual(["home"]);
+    expect(ids(needsInput)).toEqual(["human"]);
+  });
 });
 
-describe("visualOrderSessions with rest sections", () => {
+// ct-47520 (live prod repro, "Cameron tasks execution"): the pre-chokepoint
+// web classifier derived a settled row's rest as
+//   waiting && !hard ? sessionRestState(s) : "needs_input"
+// so a row that entered the settled split ONLY through the trust-staleness
+// net (a frozen is_idle:false copy the liveness overlay no longer refreshes)
+// had waiting=false, lost its settle verdict, and filed under Needs Input
+// wearing a DORMANT pill — while the server filed the same row Done. The
+// chokepoint adapts a stale row exactly as the server's trustedAgentStatus /
+// recency-gated is_idle do at enrichment, so the row's own verdicts decide.
+describe("ct-47520: a staleness-swept row keeps its rest verdict at the chokepoint", () => {
+  const AGED = NOW - (STATUS_TRUST_TTL_MS + 5 * 60_000);
+  // Every field from the live card.
+  const cameron = mk("cameron", {
+    agent_status: "idle",
+    is_idle: false,
+    thread_state_status: "dormant",
+    settle_verdict: "done",
+    awaiting_input: false,
+    is_unresponsive: false,
+    has_pending: false,
+    message_count: 277,
+    updated_at: AGED,
+  });
+
+  it("files the verdict-done, declared-dormant, frozen row under DONE", () => {
+    const placed = placeSections({ cameron }, new Set());
+    expect(ids(placed.done)).toEqual(["cameron"]);
+    expect(placed.needsInput).toEqual([]);
+    expect(placed.dormant).toEqual([]);
+    expect(placed.working).toEqual([]);
+    expect(placed.placements.get("cameron")).toMatchObject({ bucket: "done", work_state: "done" });
+    expect(placed.tally.shown.done).toBe(1);
+    expect(placed.tally.shown.needs_input).toBe(0);
+  });
+
+  it("the sibling with no settle verdict and only a dormant declaration is NEEDS INPUT (dead-daemon rule)", () => {
+    // A `dormant` promise with no daemon status behind it has no one to
+    // deliver the wake — a human must look. Only `done` rides the
+    // declaration fallback.
+    const sibling = mk("sibling", { ...cameron, _id: "sibling", settle_verdict: null });
+    const placed = placeSections({ sibling }, new Set());
+    expect(ids(placed.needsInput)).toEqual(["sibling"]);
+    expect(placed.done).toEqual([]);
+    expect(placed.dormant).toEqual([]);
+    expect(placed.placements.get("sibling")).toMatchObject({ bucket: "needs_input", work_state: "needs_input" });
+  });
+
+  it("the live twin (overlay-fresh is_idle:true) places identically — staleness changes nothing about the verdict", () => {
+    const live = mk("live", { ...cameron, _id: "live", is_idle: true, updated_at: NOW - 60_000 });
+    const placed = placeSections({ live }, new Set());
+    expect(ids(placed.done)).toEqual(["live"]);
+    expect(placed.needsInput).toEqual([]);
+  });
+
+  it("the walk order agrees with the section: the row is a DONE target, never a needs-input one", () => {
+    const yourMove = orderSections({ cameron }, new Set(), null, undefined, { yourMove: true });
+    expect(ids(yourMove)).toEqual(["cameron"]);
+    const placed = placeSections({ cameron, fresh: mk("fresh") }, new Set());
+    // needs-input (fresh) walks before done (cameron): rank and section agree.
+    expect(ids(orderSections({ cameron, fresh: mk("fresh") }, new Set()))).toEqual(["fresh", "cameron"]);
+    expect(ids(placed.needsInput)).toEqual(["fresh"]);
+  });
+});
+
+describe("orderSections with rest sections", () => {
   it("walks the status view top-down: needs input, done, working, dormant", () => {
     const sessions = {
       n: mk("n"),
@@ -139,22 +223,21 @@ describe("visualOrderSessions with rest sections", () => {
       w: mk("w", { is_idle: false, agent_status: "working" }),
       p: mk("p", { agent_status: "dormant" }),
     };
-    expect(ids(visualOrderSessions(sessions, new Set()))).toEqual(["n", "d", "w", "p"]);
+    expect(ids(orderSections(sessions, new Set()))).toEqual(["n", "d", "w", "p"]);
   });
 
-  it("an absorbed settled row (a trigger's resting home) walks with Dormant, not its own bucket", () => {
+  it("an armed trigger's resting home walks with Dormant, not its own bucket", () => {
     const sessions = {
       n: mk("n"),
-      home: mk("home"),
+      home: mk("home", { armed_trigger_kind: "standing", last_turn_allows_park: true, updated_at: NOW - 10 }),
       p: mk("p", { agent_status: "dormant" }),
     };
-    expect(ids(visualOrderSessions(sessions, new Set(), null, undefined, { absorbedIds: new Set(["home"]) })))
-      .toEqual(["n", "p", "home"]);
+    expect(ids(orderSections(sessions, new Set()))).toEqual(["n", "p", "home"]);
   });
 
   it("a collapsed dormant section is skipped", () => {
     const sessions = { n: mk("n"), p: mk("p", { agent_status: "dormant" }) };
-    expect(ids(visualOrderSessions(sessions, new Set(), null, undefined, { collapsedSections: { dormant: true } })))
+    expect(ids(orderSections(sessions, new Set(), null, undefined, { collapsedSections: { dormant: true } })))
       .toEqual(["n"]);
   });
 });

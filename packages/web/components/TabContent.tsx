@@ -10,6 +10,7 @@ import { RoutePane } from "./RoutePane";
 import { useNarrowStage } from "../hooks/useNarrowStage";
 import { useStageShortcuts } from "../hooks/useStageShortcuts";
 import { StageDropLayer } from "./stage/StageDropLayer";
+import { StagePickLayer } from "./stage/StagePickLayer";
 
 // Only a tab that is actually split pays for the split renderer (and the
 // conversation pane it can host); a plain tab's import graph stays as it was.
@@ -96,6 +97,7 @@ function TabPane({ tab, isActive, children }: { tab: AppTab; isActive: boolean; 
         ) : (
           <RoutePane tabId={tab.id} path={tab.path} isActive={isActive} />
         )}
+        <StagePickLayer tab={tab} enabled={isActive && !narrow} />
       </StageDropLayer>
       {children}
     </div>

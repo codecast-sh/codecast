@@ -1,5 +1,6 @@
 import { useCallback, useRef } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
@@ -22,7 +23,13 @@ import {
 // The webList subscription is deduped by Convex with the panel/badge/strip
 // subscriptions, so mounting this hook anywhere costs no extra server load.
 export function useTriggerKillNotice() {
-  const tasks = useQuery(api.agentTasks.webList, {}) as TaskRow[] | undefined;
+  // No-throw: this subscription only ENRICHES the kill (it names the triggers
+  // a kill cancels). It mounts app-wide — the global chords, and the triage
+  // bar on every inbox view — so a webList server failure crashing the
+  // subscriber would take the whole stage down (it did, 2026-08-31: a webList
+  // timeout under load unmounted the app into the top-level boundary). The
+  // kill itself never needs it; without data the notices just stay silent.
+  const tasks = useQueryNoThrow(api.agentTasks.webList, {}).data as TaskRow[] | undefined;
   const tasksRef = useRef(tasks);
   tasksRef.current = tasks;
   const reactivateTask = useMutation(api.agentTasks.webReactivate);

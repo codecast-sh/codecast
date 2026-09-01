@@ -3,6 +3,8 @@ import {
   callWindowLeaveGesture,
   callWindowReport,
   callWindowSizeOnFailedJoin,
+  isDuplicateIdentityDisconnect,
+  shouldYieldCallOnDisconnect,
   type CallWindowPhase,
 } from "../calls/callHandoff";
 import type { CallWindowSize } from "../desktop";
@@ -115,5 +117,42 @@ describe("callWindowReport", () => {
         scribe: true,
       }),
     ).toEqual({ room: "session:x", mic: true, camera: true, scribe: true });
+  });
+});
+
+describe("shouldYieldCallOnDisconnect", () => {
+  const hang = { elsewhere: false, outlivesWindow: false };
+
+  it("yields on DUPLICATE_IDENTITY, however LiveKit spells it", () => {
+    // Enum 2, the name, a dashed name: hanging up on any of these is how
+    // popping the call out kills it (leaveRoom deletes the other window's seat).
+    expect(isDuplicateIdentityDisconnect(2)).toBe(true);
+    expect(isDuplicateIdentityDisconnect("DUPLICATE_IDENTITY")).toBe(true);
+    expect(isDuplicateIdentityDisconnect("duplicate-identity")).toBe(true);
+    expect(shouldYieldCallOnDisconnect(2, hang)).toBe(true);
+    expect(shouldYieldCallOnDisconnect("DUPLICATE_IDENTITY", hang)).toBe(true);
+  });
+
+  it("yields any disconnect once the call panel exists elsewhere", () => {
+    // The panel is already open; this renderer is the one being vacated.
+    expect(shouldYieldCallOnDisconnect(1, { elsewhere: true, outlivesWindow: false })).toBe(true);
+    expect(shouldYieldCallOnDisconnect(undefined, { elsewhere: true, outlivesWindow: false })).toBe(true);
+  });
+
+  it("yields PARTICIPANT_REMOVED from a window that was going to leave", () => {
+    // Some livekit-client versions report the eviction as a removal, not 2.
+    expect(
+      shouldYieldCallOnDisconnect(4, { elsewhere: false, outlivesWindow: true }),
+    ).toBe(true);
+    expect(
+      shouldYieldCallOnDisconnect("PARTICIPANT_REMOVED", { elsewhere: false, outlivesWindow: true }),
+    ).toBe(true);
+  });
+
+  it("hangs up a real kick, a network drop, a room that closed", () => {
+    expect(shouldYieldCallOnDisconnect(1, hang)).toBe(false);
+    expect(shouldYieldCallOnDisconnect(3, hang)).toBe(false);
+    expect(shouldYieldCallOnDisconnect(9, hang)).toBe(false);
+    expect(shouldYieldCallOnDisconnect(undefined, hang)).toBe(false);
   });
 });

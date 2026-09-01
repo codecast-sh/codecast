@@ -117,7 +117,7 @@ export default function DocDetailScreen() {
 
         {doc.labels && doc.labels.length > 0 && (
           <RNView style={styles.labelRow}>
-            {doc.labels.map((l) => (
+            {doc.labels.map((l: string) => (
               <RNView key={l} style={styles.labelBadge}>
                 <RNText style={styles.labelText}>{l}</RNText>
               </RNView>

@@ -151,35 +151,6 @@ export function setSize(ws: WorkspaceState, slot: SlotId, size: number): Workspa
   return patch(ws, slot, { size });
 }
 
-/**
- * Move a slot's pane onto the stage. The pane it displaces moves back into the
- * slot, so promote is a swap and the total pane count never changes.
- */
-export function promote(ws: WorkspaceState, slot: SlotId): WorkspaceState {
-  if (slot === "primary") return ws;
-  const incoming = ws[slot].pane;
-  if (!incoming) return ws;
-  const displaced = ws.primary.pane;
-  let next = patch(ws, "primary", { pane: incoming, presentation: "split" });
-  next = patch(next, slot, {
-    pane: displaced && displaced.kind !== "page" ? displaced : null,
-    userClosed: null,
-  });
-  return next;
-}
-
-/**
- * The topmost overlay — what Esc should retreat from. One rule for every
- * region, instead of a keydown handler per component.
- */
-export function topOverlay(ws: WorkspaceState): SlotId | null {
-  for (const id of ["secondary", "context", "list", "dock", "nav"] as SlotId[]) {
-    const s = ws[id];
-    if (s.pane && s.presentation === "overlay") return id;
-  }
-  return null;
-}
-
 // ---------------------------------------------------------------------------
 // Well-known panes + selectors
 //
@@ -322,12 +293,13 @@ export function overlayConversationId(ws: WorkspaceState): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Route → slot defaults
+// Surfaces
 //
-// What the screen shows should be DERIVED from where you are, not accumulated
-// by a pile of route effects each nudging its own region. This states, in one
-// table, which panes a route can host; the shell applies it, and a slot the
-// user closed by hand stays closed (autoAllowed).
+// Which kind of place a route is. Routes default NO panes any more — side by
+// side on the stage is the tab's split layout (store/stageSplit), entered by
+// a deliberate gesture, and the one remaining secondary-slot use (the fleet
+// board's overlay drill-in) is owned end to end by the board itself
+// (components/FleetBoard: it shows the overlay, and its unmount clears it).
 // ---------------------------------------------------------------------------
 
 export type SurfaceKind = "inbox" | "conversation" | "working" | "settings" | "plain";
@@ -340,23 +312,3 @@ export function surfaceForPath(pathname: string): SurfaceKind {
   return "plain";
 }
 
-/**
- * Which slots a surface may host, and HOW the secondary slot may present.
- * Anything not listed is emptied on arrival.
- *  - "overlay" the fleet board's drill-in: a transient visit OVER the stage
- *  - false     the slot stays empty on this surface
- * Side by side on the stage is no longer a slot at all: it is the tab's split
- * layout (store/stageSplit), entered by a deliberate drag, never by a route
- * default — the page takes the full stage by default everywhere.
- */
-export function slotPolicyFor(surface: SurfaceKind): {
-  context: boolean;
-  secondary: false | "overlay";
-} {
-  switch (surface) {
-    // The inbox stage can be the fleet board; a tile click drills in as an
-    // overlay that returns to the board. Never a split — the board is the home.
-    case "inbox": return { context: true, secondary: "overlay" };
-    default: return { context: true, secondary: false };
-  }
-}

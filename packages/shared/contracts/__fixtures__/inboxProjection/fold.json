@@ -1,0 +1,293 @@
+{
+  "about": "The 12h gap cut: the row at the gap is the cut and never folds; deliberate windows and queued work are exempt and cannot bridge the gap; folded rows keep their bucket and split the tally.",
+  "epoch": "E",
+  "asking": [
+    "folded_ask"
+  ],
+  "rows": [
+    {
+      "_id": "fresh_working",
+      "status": "active",
+      "updated_at": "E-5m",
+      "message_count": 4,
+      "agent_status": "working",
+      "is_idle": false
+    },
+    {
+      "_id": "fresh_needs",
+      "status": "active",
+      "updated_at": "E-3h",
+      "message_count": 4,
+      "is_idle": true
+    },
+    {
+      "_id": "fresh_done",
+      "status": "active",
+      "updated_at": "E-10h",
+      "message_count": 4,
+      "agent_status": "done",
+      "is_idle": true
+    },
+    {
+      "_id": "edge",
+      "status": "active",
+      "updated_at": "E-22h",
+      "message_count": 4,
+      "is_idle": true
+    },
+    {
+      "_id": "folded_needs",
+      "status": "active",
+      "updated_at": "E-23h",
+      "message_count": 4,
+      "is_idle": true
+    },
+    {
+      "_id": "folded_done",
+      "status": "completed",
+      "updated_at": "E-2d",
+      "message_count": 4,
+      "is_idle": true,
+      "thread_state_status": "done"
+    },
+    {
+      "_id": "folded_ask",
+      "status": "active",
+      "updated_at": "E-3d",
+      "message_count": 4,
+      "is_idle": true,
+      "awaiting_input": true
+    },
+    {
+      "_id": "folded_blank",
+      "status": "active",
+      "updated_at": "E-4d",
+      "message_count": 0,
+      "is_idle": true
+    },
+    {
+      "_id": "folded_hidden_anchor",
+      "status": "active",
+      "updated_at": "E-5d",
+      "message_count": 4,
+      "is_idle": true,
+      "anchor_id": "anchors_1"
+    },
+    {
+      "_id": "folded_standing",
+      "status": "active",
+      "updated_at": "E-6d",
+      "message_count": 4,
+      "is_idle": true,
+      "armed_trigger_kind": "standing"
+    },
+    {
+      "_id": "bridge_pin",
+      "status": "active",
+      "updated_at": "E-16h",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_pinned_at": "E-1h"
+    },
+    {
+      "_id": "bridge_owned",
+      "status": "active",
+      "updated_at": "E-17h",
+      "message_count": 4,
+      "is_idle": true,
+      "owned_by_me": true
+    },
+    {
+      "_id": "bridge_stashed",
+      "status": "active",
+      "updated_at": "E-18h",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_stashed_at": "E-1h"
+    },
+    {
+      "_id": "bridge_dismissed",
+      "status": "active",
+      "updated_at": "E-19h",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_dismissed_at": "E-1h"
+    },
+    {
+      "_id": "old_queued",
+      "status": "active",
+      "updated_at": "E-7d",
+      "message_count": 4,
+      "is_idle": true,
+      "has_pending_messages": true
+    },
+    {
+      "_id": "old_pin",
+      "status": "active",
+      "updated_at": "E-20d",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_pinned_at": "E-20d"
+    },
+    {
+      "_id": "ancient_pin",
+      "status": "active",
+      "updated_at": "E-35d",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_pinned_at": "E-35d"
+    },
+    {
+      "_id": "ancient",
+      "status": "active",
+      "updated_at": "E-31d",
+      "message_count": 4,
+      "is_idle": true
+    },
+    {
+      "_id": "expired_dismiss_recent_activity",
+      "status": "active",
+      "updated_at": "E-23h",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_dismissed_at": "E-31d"
+    },
+    {
+      "_id": "expired_stash_recent_activity",
+      "status": "active",
+      "updated_at": "E-2d",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_stashed_at": "E-32d"
+    }
+  ],
+  "expected": {
+    "truncated": [],
+    "tally": {
+      "shown": {
+        "questions": 0,
+        "pinned": 3,
+        "new": 0,
+        "needs_input": 4,
+        "done": 2,
+        "dormant": 0,
+        "working": 2,
+        "idle": 0,
+        "stashed": 2,
+        "dismissed": 2,
+        "hidden": 0
+      },
+      "folded": {
+        "questions": 1,
+        "pinned": 0,
+        "new": 1,
+        "needs_input": 0,
+        "done": 0,
+        "dormant": 1,
+        "working": 0,
+        "idle": 0,
+        "stashed": 0,
+        "dismissed": 0,
+        "hidden": 0
+      }
+    },
+    "set_digest": "7a68a03c2bab562e",
+    "placements": {
+      "ancientpinz100000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "bridgedismissedz1500000000000000": [
+        "dismissed",
+        "needs_input",
+        false
+      ],
+      "bridgeownedz11000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "bridgepinz9000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "bridgestashedz130000000000000000": [
+        "stashed",
+        "needs_input",
+        false
+      ],
+      "edgez400000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "expireddismissrecentactivityz280": [
+        "dismissed",
+        "needs_input",
+        false
+      ],
+      "expiredstashrecentactivityz26000": [
+        "stashed",
+        "needs_input",
+        false
+      ],
+      "foldedaskz9000000000000000000000": [
+        "questions",
+        "needs_input",
+        true
+      ],
+      "foldedblankz11000000000000000000": [
+        "new",
+        "idle",
+        true
+      ],
+      "foldeddonez100000000000000000000": [
+        "done",
+        "done",
+        false
+      ],
+      "foldedhiddenanchorz1800000000000": [
+        "hidden",
+        "needs_input",
+        true
+      ],
+      "foldedneedsz11000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "foldedstandingz14000000000000000": [
+        "dormant",
+        "dormant",
+        true
+      ],
+      "freshdonez9000000000000000000000": [
+        "done",
+        "done",
+        false
+      ],
+      "freshneedsz100000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "freshworkingz1200000000000000000": [
+        "working",
+        "working",
+        false
+      ],
+      "oldpinz6000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "oldqueuedz9000000000000000000000": [
+        "working",
+        "working",
+        false
+      ]
+    }
+  }
+}

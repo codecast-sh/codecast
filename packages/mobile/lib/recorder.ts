@@ -252,7 +252,11 @@ export async function startRecording(convex: ConvexReactClient): Promise<void> {
     return;
   }
 
-  run = { recorder, transcriptId, convex, beat: null, meter: null, limit: null };
+  // Unreachable: the try assigned it or the catch returned. The check exists
+  // because a narrowing made inside a try does not survive the block.
+  if (!transcriptId) return;
+  const active: Run = { recorder, transcriptId, convex, beat: null, meter: null, limit: null };
+  run = active;
   set({
     phase: 'recording',
     startedAt: Date.now(),
@@ -264,12 +268,12 @@ export async function startRecording(convex: ConvexReactClient): Promise<void> {
   // The server lease. A recording has no room and therefore no seat leases, so
   // this is the only thing telling the orphan sweep it is still going; without
   // it the sweep ends the recording two minutes in.
-  run.beat = setInterval(() => {
+  active.beat = setInterval(() => {
     const id = run?.transcriptId;
     if (id) void convex.mutation(api.transcripts.beat, { transcript_id: id }).catch(() => {});
   }, CALL_HEARTBEAT_MS);
 
-  run.meter = setInterval(() => {
+  active.meter = setInterval(() => {
     try {
       setLevel(meterLevelFromDb(run?.recorder?.getStatus?.()?.metering));
     } catch {
@@ -280,7 +284,7 @@ export async function startRecording(convex: ConvexReactClient): Promise<void> {
   // Stop before the file outgrows what a transcription can read. Cutting it
   // here costs the tail of a very long meeting; not cutting it costs the words
   // of the whole thing, and only after the person has already sat through it.
-  run.limit = setTimeout(() => {
+  active.limit = setTimeout(() => {
     set({ stoppedAtLimit: true });
     void stopRecording();
   }, MAX_RECORDING_MS);

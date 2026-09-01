@@ -32,6 +32,8 @@ cast read <id> 15:25              # read messages 15-25
 cast sessions                     # work-state snapshot (needs input / working / idle)
 cast sessions -w                  # stream state changes live
 cast send <id> "text"             # message another session
+cast exec "summarize this repo"   # print mode: run a prompt, print, exit
+cast spawn "audit the auth flow"  # start a session in the inbox
 cast resume auth bug              # search history and resume the match
 cast attach                       # tmux session picker TUI
 cast fork --from 15               # branch a conversation from a message

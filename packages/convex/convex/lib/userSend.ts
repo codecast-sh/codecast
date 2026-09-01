@@ -43,7 +43,6 @@ export function isUserMessageNoise(content: string): boolean {
   if (isMachineDeliveredMessage(t)) return true;
   if (COMMAND_RE.test(t)) return true;
   if (SKILL_RE.test(t)) return true;
-  if (t.startsWith("<task-notification>") && !t.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "").trim()) return true;
   if (t.startsWith("{") && t.includes("__cc_poll")) return true;
   if (t.includes("Your task is to create a detailed summary of the conversation so far")) return true;
   const stripped = stripMessageTags(t);

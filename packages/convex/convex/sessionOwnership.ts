@@ -91,6 +91,16 @@ async function resolveOwnableConversation(
   return conversation;
 }
 
+async function teamMemberDocs(ctx: { db: any }, teamId: any): Promise<any[]> {
+  const memberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
+    .collect();
+  return (
+    await Promise.all(memberships.map((m: any) => ctx.db.get(m.user_id)))
+  ).filter(Boolean) as any[];
+}
+
 // Resolve one owner ref to a user doc: "me", then exact email, then exact name,
 // then a UNIQUE substring — scripts pass exact emails; the looser tiers are for
 // humans at the CLI.
@@ -133,13 +143,7 @@ async function resolveOwnerRef(
   if (!conversation.team_id) {
     throw new Error(`Session ${shortId} has no team — an owner must be a teammate. Use "me" to claim it yourself.`);
   }
-  const memberships = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_team_id", (q: any) => q.eq("team_id", conversation.team_id))
-    .collect();
-  const members = (
-    await Promise.all(memberships.map((m: any) => ctx.db.get(m.user_id)))
-  ).filter(Boolean) as any[];
+  const members = await teamMemberDocs(ctx, conversation.team_id);
 
   const needle = ownerRef.toLowerCase();
   let ownerUser =
@@ -461,7 +465,45 @@ export const removeSessionOwner = mutation({
   },
 });
 
-// The full owner SET for one session — the session panel's owner chips. Fetched
+// A row of the owner-candidate roster: who the picker may OFFER. Mirrors the
+// fields the web/mobile pickers render off a store roster row.
+export type OwnerCandidate = {
+  _id: string;
+  name: string | null;
+  email: string | null;
+  image: string | null;
+  github_avatar_url: string | null;
+  is_bot: boolean;
+};
+
+const toOwnerCandidate = (u: any): OwnerCandidate => ({
+  _id: u._id.toString(),
+  name: u.name ?? null,
+  email: u.email ?? null,
+  image: u.image ?? null,
+  github_avatar_url: u.github_avatar_url ?? null,
+  is_bot: !!u.is_bot,
+});
+
+// Who may become an owner of THIS session — the same rule resolveOwnerRef
+// enforces on write: members of the session's team, or only the caller when
+// the session is teamless (self-claim). The pickers render exactly this list;
+// a roster taken from the viewer's ACTIVE team offers people the server would
+// reject whenever the session is stamped with a different team.
+async function listOwnerCandidates(
+  ctx: { db: any },
+  authUserId: Id<"users">,
+  conversation: any,
+): Promise<OwnerCandidate[]> {
+  if (!conversation.team_id) {
+    const me = await ctx.db.get(authUserId);
+    return me ? [toOwnerCandidate(me)] : [];
+  }
+  return (await teamMemberDocs(ctx, conversation.team_id)).map(toOwnerCandidate);
+}
+
+// The full owner SET for one session — the session panel's owner chips — plus
+// the candidate roster the picker offers (see listOwnerCandidates). Fetched
 // on demand for a single session, so the inbox list never pays a per-row lookup.
 // Returns null (never throws) when the ref doesn't resolve to an accessible
 // session: this is a reactive read the web subscribes to while a session is
@@ -471,13 +513,19 @@ export async function performListOwners(
   ctx: { db: any },
   authUserId: Id<"users">,
   sessionId: string,
-): Promise<{ short_id: string; conversation_id: Id<"conversations">; owners: OwnerInfo[] } | null> {
+): Promise<{
+  short_id: string;
+  conversation_id: Id<"conversations">;
+  owners: OwnerInfo[];
+  team_members: OwnerCandidate[];
+} | null> {
   const conversation = await findOwnableConversation(ctx, authUserId, sessionId);
   if (!conversation) return null;
   return {
     short_id: conversation.short_id ?? conversation._id.toString().slice(0, 7),
     conversation_id: conversation._id,
     owners: await listOwnerInfos(ctx, conversation._id),
+    team_members: await listOwnerCandidates(ctx, authUserId, conversation),
   };
 }
 

@@ -199,7 +199,7 @@ function HorizonRail({ tasks, now }: { tasks: any[]; now: number }) {
   if (points.length === 0) return null;
 
   return (
-    <div className="reveal reveal-1 rounded-xl border border-sol-border bg-sol-card px-5 pt-4 pb-2 mb-6 select-none">
+    <div className="border-t border-sol-border/40 px-5 pt-3.5 pb-2 select-none">
       <div className="flex items-center justify-between mb-3">
         <span className="text-[10px] font-medium uppercase tracking-widest text-sol-text-dim">±24 hours</span>
         <span className="text-[10px] text-sol-text-dim flex items-center gap-3">
@@ -418,14 +418,22 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
   // page mounted, so a later click on another trigger changes only the query —
   // a mount-time read would leave that click landing on the page with nothing
   // expanded.
-  const deepLinkRef = useSearchParams().get("task");
+  const searchParams = useSearchParams();
+  const deepLinkRef = searchParams.get("task");
+  // &edit=1 (the detail page's Edit verb) lands with the edit form already open
+  // instead of a read-only expanded row.
+  const deepLinkEdit = searchParams.get("edit") === "1";
   const isDeepLinked =
     !!deepLinkRef && (deepLinkRef === task._id || deepLinkRef.toLowerCase() === task.short_id);
   const [expanded, setExpanded] = useState(isDeepLinked);
+  const [formMode, setFormMode] = useState<null | "edit" | "duplicate">(
+    isDeepLinked && deepLinkEdit ? "edit" : null,
+  );
   const rowRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (isDeepLinked) {
       setExpanded(true);
+      if (deepLinkEdit) setFormMode("edit");
       rowRef.current?.scrollIntoView({ block: "center" });
     }
     // Keyed on the param VALUE so each new ?task= target re-fires; a row that
@@ -433,7 +441,6 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLinkRef]);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [formMode, setFormMode] = useState<null | "edit" | "duplicate">(null);
   // Verbs are store actions (local-first): the agent_tasks row flips on the
   // draft synchronously and the dispatch side effect runs the real mutation.
   // Same actions the inbox schedule rows and the conversation strip use.
@@ -495,13 +502,13 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
   const iconBtn =
     "p-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight transition-colors";
   const detailBtn =
-    "inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text rounded-md border border-sol-border px-2 py-1 transition-colors";
+    "inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text rounded-md bg-sol-bg-alt/70 hover:bg-sol-bg-highlight px-2 py-1 transition-colors";
 
   return (
     <div
       ref={rowRef}
       className={`group rounded-lg border bg-sol-card hover:bg-sol-card-hover transition-[background-color,border-color,transform,box-shadow] duration-150 cursor-pointer hover:-translate-y-px hover:shadow-md hover:shadow-black/20 ${
-        task.status === "failed" ? "border-sol-red/30" : "border-sol-border"
+        task.status === "failed" ? "border-sol-red/30" : "border-sol-border/70"
       } ${task.status === "running" ? "border-emerald-400/40" : ""} ${
         isNext ? "ring-1 ring-inset ring-sol-cyan/30" : ""
       }`}
@@ -707,7 +714,7 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
       </div>
 
       {expanded && formMode && (
-        <div className="px-4 pb-3 border-t border-sol-border cursor-auto animate-fadeSlideIn" onClick={(e) => e.stopPropagation()}>
+        <div className="px-4 pb-3 border-t border-sol-border/50 cursor-auto animate-fadeSlideIn" onClick={(e) => e.stopPropagation()}>
           <TriggerForm
             embedded
             editTask={formMode === "edit" ? task : undefined}
@@ -718,7 +725,7 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
       )}
 
       {expanded && !formMode && (
-        <div className="px-4 pb-3 pt-1 border-t border-sol-border bg-sol-bg/30 rounded-b-lg cursor-auto animate-fadeSlideIn" onClick={(e) => e.stopPropagation()}>
+        <div className="px-4 pb-3 pt-1 border-t border-sol-border/50 bg-sol-bg/30 rounded-b-lg cursor-auto animate-fadeSlideIn" onClick={(e) => e.stopPropagation()}>
           {/* The run list below is the richer path (every run, trigger-linked);
               this button only covers a schedule whose runs can't be enumerated
               (e.g. an encrypted home conversation) but whose last run is known.
@@ -817,7 +824,7 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
             )}
           </div>
 
-          <div className="flex items-center gap-1.5 mt-3 pt-2.5 border-t border-sol-border/60">
+          <div className="flex items-center gap-1.5 mt-3 pt-2.5 border-t border-sol-border/40">
             <Link
               href={`/triggers/${task.short_id ?? task._id}`}
               onClick={(e) => e.stopPropagation()}
@@ -1014,13 +1021,13 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
         }}
         placeholder='What should the agent do? e.g. "Check if CI is green on main and report"'
         rows={3}
-        className="w-full bg-sol-bg-alt border border-sol-border rounded-lg px-3 py-2 text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan/60 resize-none"
+        className="w-full bg-sol-bg-alt rounded-lg px-3 py-2 text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:ring-1 focus:ring-sol-cyan/50 resize-none"
       />
       <input
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         placeholder="Title (optional — auto-named from the prompt)"
-        className="w-full mt-2 bg-sol-bg-alt border border-sol-border rounded-lg px-3 py-1.5 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan/60"
+        className="w-full mt-2 bg-sol-bg-alt rounded-lg px-3 py-1.5 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:ring-1 focus:ring-sol-cyan/50"
       />
 
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mt-3">
@@ -1035,15 +1042,15 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
             <input
               value={duration}
               onChange={(e) => setDuration(e.target.value)}
-              className={`w-20 bg-sol-bg-alt border rounded-lg px-2 py-1 text-xs font-mono text-sol-text focus:outline-none ${
-                parsed === undefined ? "border-sol-red/50" : "border-sol-border focus:border-sol-cyan/60"
+              className={`w-20 bg-sol-bg-alt rounded-lg px-2 py-1 text-xs font-mono text-sol-text focus:outline-none ${
+                parsed === undefined ? "ring-1 ring-sol-red/50" : "focus:ring-1 focus:ring-sol-cyan/50"
               }`}
             />
             <span className={`text-[11px] ${parsed === undefined ? "text-sol-red" : "text-sol-text-dim"}`}>{preview}</span>
           </div>
         )}
         {kind === "on" && (
-          <SelectBox className="py-1" value={eventKey} onChange={(e) => setEventKey(e.target.value)}>
+          <SelectBox className="py-1 border-none" value={eventKey} onChange={(e) => setEventKey(e.target.value)}>
             {Object.keys(EVENT_SHORTHANDS).map((k) => (
               <option key={k} value={k}>{k}</option>
             ))}
@@ -1070,7 +1077,7 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
           onChange={(e) => setProject(e.target.value)}
           list="trigger-project-roots"
           placeholder="Project path (optional)"
-          className="flex-1 min-w-[180px] bg-sol-bg-alt border border-sol-border rounded-lg px-2 py-1 text-xs font-mono text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan/60"
+          className="flex-1 min-w-[180px] bg-sol-bg-alt rounded-lg px-2 py-1 text-xs font-mono text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:ring-1 focus:ring-sol-cyan/50"
         />
         <datalist id="trigger-project-roots">
           {projectOptions.map((p) => <option key={p} value={p} />)}
@@ -1213,7 +1220,7 @@ function StatStrip({ stats, now, typeFilter, onToggleType, onShowFailing, failin
         : "—";
   const nextAccent = stats.running > 0 ? "text-emerald-400" : stats.nextRunAt ? "text-sol-cyan" : "text-sol-text-dim";
   return (
-    <div className="reveal flex flex-wrap items-center gap-x-7 gap-y-3 mb-5 px-1">
+    <div className="flex flex-wrap items-center gap-x-7 gap-y-3 px-5 py-4">
       <StatCell value={stats.active} label="active" />
       <StatCell
         value={stats.recurring}
@@ -1260,7 +1267,7 @@ function AttentionBanner({ tasks }: { tasks: any[] }) {
   if (tasks.length === 0) return null;
   const plural = tasks.length === 1;
   return (
-    <div className="flex items-start gap-2.5 rounded-xl border border-sol-red/30 bg-sol-red/5 px-4 py-3 mb-5">
+    <div className="flex items-start gap-2.5 rounded-xl bg-sol-red/[0.08] px-4 py-3 mb-5">
       <AlertTriangle className="w-4 h-4 text-sol-red flex-shrink-0 mt-0.5" />
       <div className="min-w-0 text-xs flex-1">
         <span className="text-sol-red font-medium">
@@ -1325,9 +1332,9 @@ function matchesFilters(t: any, f: Filters): boolean {
 // loops, cyan one-shots, yellow event hooks) — click filters, click again
 // clears. Same toggle the stat strip's recurring/one-time cells drive.
 const TYPE_PILLS: { key: string; label: string; Icon: any; on: string }[] = [
-  { key: "recurring", label: "recurring", Icon: Repeat, on: "bg-sol-violet/15 text-sol-violet border-sol-violet/40" },
-  { key: "once", label: "one-time", Icon: Clock, on: "bg-sol-cyan/15 text-sol-cyan border-sol-cyan/40" },
-  { key: "event", label: "event", Icon: Zap, on: "bg-sol-yellow/15 text-sol-yellow border-sol-yellow/40" },
+  { key: "recurring", label: "recurring", Icon: Repeat, on: "bg-sol-violet/15 text-sol-violet" },
+  { key: "once", label: "one-time", Icon: Clock, on: "bg-sol-cyan/15 text-sol-cyan" },
+  { key: "event", label: "event", Icon: Zap, on: "bg-sol-yellow/15 text-sol-yellow" },
 ];
 
 function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total, grouped, setGrouped }: {
@@ -1344,8 +1351,10 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
   const active = filtersActive(filters);
   return (
     <div className="sticky top-0 z-20 -mx-1 px-1 py-2 mb-3 bg-sol-bg/85 backdrop-blur">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative flex-1 min-w-[180px]">
+      {/* Two deliberate rows: search owns the first, every filter control sits
+          on the second — no ragged wrap of orphaned controls. */}
+      <div className="flex flex-col gap-2">
+        <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-sol-text-dim pointer-events-none" />
           <input
             id="trigger-search"
@@ -1358,7 +1367,7 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
               }
             }}
             placeholder="Search title, prompt, last result…"
-            className="w-full bg-sol-bg-alt border border-sol-border rounded-lg pl-8 pr-7 py-1.5 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan/60"
+            className="w-full bg-sol-bg-alt rounded-lg pl-8 pr-7 py-1.5 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:ring-1 focus:ring-sol-cyan/50"
           />
           {filters.search && (
             <ShortcutTooltip label="Clear search">
@@ -1372,15 +1381,16 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
             </ShortcutTooltip>
           )}
         </div>
+        <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-1">
           {TYPE_PILLS.filter((p) => p.key !== "event" || hasEvent).map(({ key, label, Icon, on }) => (
             <button
               key={key}
               onClick={() => update({ type: filters.type === key ? "all" : key })}
-              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                 filters.type === key
                   ? on
-                  : "border-sol-border text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight"
+                  : "bg-sol-bg-alt text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight"
               }`}
             >
               <Icon className="w-3 h-3" />
@@ -1388,19 +1398,19 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
             </button>
           ))}
         </div>
-        <SelectBox value={filters.mode} onChange={(e) => update({ mode: e.target.value })}>
+        <SelectBox className="border-none" value={filters.mode} onChange={(e) => update({ mode: e.target.value })}>
           <option value="all">all modes</option>
           <option value="apply">makes changes</option>
           <option value="propose">read-only</option>
         </SelectBox>
         {projects.length > 1 && (
-          <SelectBox value={filters.project} onChange={(e) => update({ project: e.target.value })}>
+          <SelectBox className="border-none" value={filters.project} onChange={(e) => update({ project: e.target.value })}>
             <option value="all">all projects</option>
             {projects.map((p) => <option key={p} value={p}>{projectName(p)}</option>)}
           </SelectBox>
         )}
         {hasCodex && (
-          <SelectBox value={filters.agent} onChange={(e) => update({ agent: e.target.value })}>
+          <SelectBox className="border-none" value={filters.agent} onChange={(e) => update({ agent: e.target.value })}>
             <option value="all">all agents</option>
             <option value="claude">claude</option>
             <option value="codex">codex</option>
@@ -1410,21 +1420,22 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
           <button
             onClick={() => setGrouped(!grouped)}
             aria-label="Group by project"
-            className={`p-1.5 rounded-lg border transition-colors ${
-              grouped ? "border-sol-cyan/50 text-sol-cyan bg-sol-cyan/10" : "border-sol-border text-sol-text-dim hover:text-sol-text"
+            className={`p-1.5 rounded-lg transition-colors ${
+              grouped ? "text-sol-cyan bg-sol-cyan/15" : "bg-sol-bg-alt text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight"
             }`}
           >
             <LayoutGrid className="w-3.5 h-3.5" />
           </button>
         </ShortcutTooltip>
         {active && (
-          <span className="inline-flex items-center gap-2 text-[11px] text-sol-text-dim">
+          <span className="ml-auto inline-flex items-center gap-2 text-[11px] text-sol-text-dim">
             <span className="tabular-nums">{shown} of {total}</span>
             <button onClick={() => update(EMPTY_FILTERS)} className="hover:text-sol-text underline underline-offset-2">
               clear
             </button>
           </span>
         )}
+        </div>
       </div>
     </div>
   );
@@ -1503,7 +1514,7 @@ function HistoryBody({ tasks, now, grouped, ctxMenu }: { tasks: any[]; now: numb
   return (
     <div className="flex flex-col gap-2">
       {/* success / failure proportion */}
-      <div className="rounded-lg border border-sol-border bg-sol-card/40 px-3 py-2.5">
+      <div className="rounded-lg bg-sol-bg-alt/50 px-3 py-2.5">
         <div className="flex items-center justify-between text-[11px] mb-1.5">
           <span className="text-sol-text-dim">
             <span className="text-emerald-400">{succeeded} succeeded</span>
@@ -1521,10 +1532,10 @@ function HistoryBody({ tasks, now, grouped, ctxMenu }: { tasks: any[]; now: numb
         <div className="flex items-center gap-2">
           <button
             onClick={() => setFailuresOnly((v) => !v)}
-            className={`inline-flex items-center gap-1 text-[11px] rounded-md border px-2 py-1 transition-colors ${
+            className={`inline-flex items-center gap-1 text-[11px] rounded-md px-2 py-1 transition-colors ${
               failuresOnly
-                ? "border-sol-red/50 text-sol-red bg-sol-red/10"
-                : "border-sol-border text-sol-text-dim hover:text-sol-text"
+                ? "text-sol-red bg-sol-red/15"
+                : "bg-sol-bg-alt text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight"
             }`}
           >
             <AlertTriangle className="w-3 h-3" /> failures only
@@ -1573,7 +1584,7 @@ function FilteredEmpty({ onClear }: { onClear: () => void }) {
       <p className="text-sm text-sol-text-muted">No triggers match these filters</p>
       <button
         onClick={onClear}
-        className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-sol-border text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight transition-colors"
+        className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-sol-bg-alt text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight transition-colors"
       >
         Clear filters
       </button>
@@ -1674,18 +1685,6 @@ function TriggersContent() {
           </button>
         </div>
 
-        {hasTasks && (
-          <StatStrip
-            stats={stats}
-            now={now}
-            typeFilter={filters.type}
-            onToggleType={(type) => update({ type: filters.type === type ? "all" : type })}
-            onShowFailing={() => update({ failing: !filters.failing })}
-            failingFilter={filters.failing}
-          />
-        )}
-        {hasTasks && <AttentionBanner tasks={failingActive} />}
-
         {showForm && <TriggerForm onClose={() => setShowForm(false)} />}
 
         {tasks === undefined ? (
@@ -1697,7 +1696,7 @@ function TriggersContent() {
             <p className="text-xs text-sol-text-dim max-w-sm">
               Set triggers to run agents later — check CI, review PRs, continue work — from here or any session:
             </p>
-            <code className="font-mono text-xs text-sol-text-muted bg-sol-bg-alt border border-sol-border rounded-md px-3 py-1.5">
+            <code className="font-mono text-xs text-sol-text-muted bg-sol-bg-alt rounded-md px-3 py-1.5">
               cast trigger add "Check CI on main" --in 30m
             </code>
             <button
@@ -1709,9 +1708,25 @@ function TriggersContent() {
           </div>
         ) : (
           <>
-            {/* All filtered tasks, not just active: finished one-times and
-                paused loops still own dots on the past half of the rail. */}
-            <HorizonRail tasks={filtered} now={now} />
+            {/* One overview surface: the health numbers head the card, the
+                ±24h rail is its body — a hairline divider between them, no
+                second box. The rail plots all filtered tasks, not just active:
+                finished one-times and paused loops still own dots on the past
+                half. */}
+            {hasTasks && (
+              <div className="reveal rounded-xl border border-sol-border bg-sol-card mb-5">
+                <StatStrip
+                  stats={stats}
+                  now={now}
+                  typeFilter={filters.type}
+                  onToggleType={(type) => update({ type: filters.type === type ? "all" : type })}
+                  onShowFailing={() => update({ failing: !filters.failing })}
+                  failingFilter={filters.failing}
+                />
+                <HorizonRail tasks={filtered} now={now} />
+              </div>
+            )}
+            {hasTasks && <AttentionBanner tasks={failingActive} />}
             <FilterBar
               filters={filters}
               update={update}

@@ -86,8 +86,13 @@ export const TIPS: TipDef[] = [
   { id: 'w-msg-prev', type: 'whisper', shortcutAction: 'msg.prev', phase: 3,
     content: 'Jump to previous message' },
 
+  { id: 'i-stage-split', type: 'inline', shortcutAction: 'pane.split', phase: 3,
+    content: 'Drag a session or a sidebar section onto the page to split the stage' },
+
   { id: 'm-first-zen', type: 'milestone', phase: 3,
     content: 'Zen mode — distraction-free focus' },
+  { id: 'm-first-split', type: 'milestone', phase: 3,
+    content: 'Stage split — drag the seam to resize; drag a pane’s strip to rearrange' },
   { id: 'm-first-diff', type: 'milestone', phase: 3,
     content: 'Diff panel — see code changes inline' },
   { id: 'm-first-fork', type: 'milestone', phase: 3,

@@ -8,6 +8,7 @@ import { useTeamRosterIdentity, useViewerIdentity, type RosterIdentity } from ".
 import { useSyncTasks } from "../../hooks/useSyncTasks";
 import { TaskDetailContent } from "./[id]/page";
 import { DetailSplitLayout } from "../../components/DetailSplitLayout";
+import { dragCarriesPane } from "../../lib/stage";
 import { AvatarImg } from "../../lib/avatarCache";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 
@@ -663,6 +664,10 @@ function KanbanView({
   }, [grouped, keyFor, onStatusChange, onReorder, statuses]);
 
   const handleDragOver = useCallback((e: React.DragEvent, status: string) => {
+    // A pane/session drag crossing the board belongs to the stage's split
+    // layer — lighting the column ring for it promises a drop this column
+    // can't perform.
+    if (dragCarriesPane(e.dataTransfer)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     setDragOver(status);

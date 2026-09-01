@@ -3,6 +3,17 @@ import {
   formatToolName,
   mcpToolNames,
   codexToolNames,
+  grokToolNames,
+  isShellTool,
+  isReadTool,
+  isEditTool,
+  isWriteTool,
+  isGrepTool,
+  isGlobTool,
+  isTodoTool,
+  isAskTool,
+  isAgentTool,
+  toolPathFromInput,
   truncateStr,
   shortenUrl,
   getRelativePath,
@@ -42,8 +53,16 @@ describe("formatToolName", () => {
     // unknown mcp -> title-case the method segment
     ["mcp__some_server__do_a_thing", "Do A Thing"],
     ["mcp__server__method", "Method"],
-    // plain snake_case tool id
-    ["read_file", "Read File"],
+    // grok snake_case ids collapse to the same family labels as claude/codex
+    ["run_terminal_command", "Terminal"],
+    ["read_file", "Read"],
+    ["search_replace", "Edit"],
+    ["list_dir", "List"],
+    ["todo_write", "Todos"],
+    ["ask_user_question", "Question"],
+    ["get_command_or_subagent_output", "Wait"],
+    ["spawn_subagent", "Agent"],
+    ["Web search:", "Search"],
     // already-friendly names pass through unchanged
     ["Bash", "Bash"],
     ["Read", "Read"],
@@ -59,6 +78,32 @@ describe("formatToolName", () => {
     for (const [id, label] of Object.entries(codexToolNames)) {
       expect(formatToolName(id)).toBe(label);
     }
+    for (const [id, label] of Object.entries(grokToolNames)) {
+      expect(formatToolName(id)).toBe(label);
+    }
+  });
+});
+
+describe("tool family classifiers", () => {
+  it("puts grok ids in the same families as claude/codex synonyms", () => {
+    expect(isShellTool("run_terminal_command")).toBe(true);
+    expect(isShellTool("Bash")).toBe(true);
+    expect(isShellTool("shell_command")).toBe(true);
+    expect(isReadTool("read_file")).toBe(true);
+    expect(isEditTool("search_replace")).toBe(true);
+    expect(isWriteTool("write")).toBe(true);
+    expect(isGrepTool("grep")).toBe(true);
+    expect(isGlobTool("list_dir")).toBe(true);
+    expect(isTodoTool("todo_write")).toBe(true);
+    expect(isAskTool("ask_user_question")).toBe(true);
+    expect(isAgentTool("spawn_subagent")).toBe(true);
+    expect(isShellTool("read_file")).toBe(false);
+  });
+
+  it("reads grok's target_file / target_directory as the path", () => {
+    expect(toolPathFromInput({ target_file: "/Users/ashot/src/codecast/a.ts" })).toBe("/Users/ashot/src/codecast/a.ts");
+    expect(toolPathFromInput({ target_directory: "packages/cli/src" })).toBe("packages/cli/src");
+    expect(toolPathFromInput({ file_path: "/x/a.ts" })).toBe("/x/a.ts");
   });
 });
 
@@ -144,6 +189,12 @@ describe("toolSummary", () => {
     ["edit", { filePath: "/Users/ashot/src/codecast/a.ts" }, "codecast/a.ts"],
     ["write", { filePath: "/home/me/code/x/b.ts" }, "x/b.ts"],
     ["bash", { command: "ls -la" }, "ls -la"],
+    ["run_terminal_command", { command: "ls -la", description: "list files" }, "ls -la"],
+    ["read_file", { target_file: "/Users/ashot/src/codecast/a.ts" }, "codecast/a.ts"],
+    ["search_replace", { file_path: "/Users/ashot/src/codecast/a.ts" }, "codecast/a.ts"],
+    ["list_dir", { target_directory: "/Users/ashot/src/codecast/packages/cli/src" }, "codecast/packages/cli/src"],
+    ["todo_write", { todos: [1, 2] }, "2 tasks"],
+    ["open_page", { url: "https://example.com/foo" }, "example.com/foo"],
     ["glob", { pattern: "**/*.ts" }, "**/*.ts"],
     ["grep", { pattern: "TODO" }, "TODO"],
     ["Bash", { command: "ls -la" }, "ls -la"],
@@ -293,6 +344,11 @@ describe("toolVisual / toolIcon", () => {
     ["WebFetch", { icon: "globe", color: "cyan" }],
     // opencode/pi lowercase tool ids resolve to the same visuals as their twins
     ["bash", { icon: "terminal", color: "green" }],
+    ["run_terminal_command", { icon: "terminal", color: "green" }],
+    ["read_file", { icon: "file-code-o", color: "blue" }],
+    ["search_replace", { icon: "pencil", color: "orange" }],
+    ["list_dir", { icon: "file-code-o", color: "blue" }],
+    ["todo_write", { icon: "check-square-o", color: "magenta" }],
     ["read", { icon: "file-code-o", color: "blue" }],
     ["edit", { icon: "pencil", color: "orange" }],
     ["write", { icon: "pencil", color: "orange" }],
@@ -322,8 +378,11 @@ describe("describeToolGroup", () => {
   it("counts a family, singular and plural", () => {
     expect(describeToolGroup("Bash", 1)).toBe("ran 1 command");
     expect(describeToolGroup("Bash", 4)).toBe("ran 4 commands");
+    expect(describeToolGroup("run_terminal_command", 1)).toBe("ran 1 command");
     expect(describeToolGroup("Read", 3)).toBe("read 3 files");
+    expect(describeToolGroup("read_file", 2)).toBe("read 2 files");
     expect(describeToolGroup("Grep", 2)).toBe("2 searches");
+    expect(describeToolGroup("search_replace", 1)).toBe("1 edit");
   });
 
   it("falls back to the formatted tool name", () => {
@@ -335,6 +394,7 @@ describe("describeToolGroup", () => {
 describe("describeSmallToolGroup", () => {
   it("names a lone command instead of counting it", () => {
     expect(describeSmallToolGroup([tc("Bash", { command: "npm test" })])).toBe("ran npm test");
+    expect(describeSmallToolGroup([tc("run_terminal_command", { command: "ls -la" })])).toBe("ran ls -la");
   });
 
   it("spends a whole line on a lone subject, and splits it across a pair", () => {

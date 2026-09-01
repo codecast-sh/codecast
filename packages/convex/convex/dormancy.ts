@@ -11,6 +11,7 @@
 // something warrants input" case, so they surface the home instead of parking
 // it. Standing loops (recurring / event) and `once` follow-ups park with
 // different strength — see ArmedTriggerHomes — so the loader keeps them apart.
+import { isLoopFresh, isMachineDeliveredMessage } from "@codecast/shared/contracts";
 import type { QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 
@@ -68,14 +69,14 @@ export async function loadArmedTriggerHomes(
 }
 
 // The last user turn was delivered by machinery — another session's cast send,
-// a trigger injection, an agent-team teammate — rather than typed by the human.
-// Mirrors the web's isMachineDeliveredMessage (components/sessionMessage.ts)
-// over the row's last_message_preview. A human who spoke last is triaging the
-// session, so an armed-trigger home with a human turn on top classifies like
-// any other conversation instead of parking.
+// a trigger injection, a task notification, an agent-team teammate — rather
+// than typed by the human. The SHARED isMachineDeliveredMessage, applied to
+// the row's last_message_preview (its checks key off opening tags, so a
+// truncated preview matches). A human who spoke last is triaging the session,
+// so an armed-trigger home with a human turn on top classifies like any other
+// conversation instead of parking.
 export function isMachineDeliveredPreview(preview: string | null | undefined): boolean {
-  const c = (preview || "").trimStart();
-  return c.startsWith("<session-message") || c.startsWith("<scheduled-task") || c.includes("<teammate-message");
+  return isMachineDeliveredMessage(preview);
 }
 
 // The classifier's armed-trigger input for one row: its home is armed AND the
@@ -142,4 +143,27 @@ export function armedTriggerHomeLoader(ctx: Pick<QueryCtx, "db">) {
     }
     return hit;
   };
+}
+
+// ── Armed /loop wakeup (conversations.loop_state) ───────────────────────────
+// The third structural dormancy source, after armed inject triggers and open
+// background tasks: a session sleeping on a harness ScheduleWakeup. The
+// denormalized loop_state rides the row (derived at message ingest), so this
+// is zero extra reads — same contract as armed_trigger_kind. Standing
+// strength: the loop owns the session's cadence. The same last-turn rule
+// applies — a human who spoke last is triaging the session, so it classifies
+// normally even while the wakeup stays armed. Only a FRESH "armed" parks:
+// "waking" is the machine's own turn in flight (the active arms classify it),
+// and an overdue wakeup is a dead harness whose promise must not hide the row.
+export function isArmedLoopHome(
+  conv: {
+    loop_state?: { status: string; wakeup_at: number; fired_at?: number | null; event_at: number } | null;
+    last_message_preview?: string | null;
+  },
+  now: number,
+): boolean {
+  const loop = conv.loop_state;
+  if (!loop || loop.status !== "armed") return false;
+  if (!isLoopFresh({ status: "armed", wakeup_at: loop.wakeup_at, fired_at: loop.fired_at ?? undefined, event_at: loop.event_at }, now)) return false;
+  return lastTurnAllowsPark(conv);
 }

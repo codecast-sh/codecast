@@ -50,7 +50,6 @@ export function useFloatingCircles(opts: {
   // ── The window is exactly as big as its circles ─────────────────────────
   useWatchEffect(() => {
     bridge.setContentSize(sizeForRef.current(hovered));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- shapeSig stands in for everything sizeFor reads
   }, [shapeSig, hovered]);
 
   // ── Click-through ───────────────────────────────────────────────────────
@@ -91,6 +90,13 @@ export function useFloatingCircles(opts: {
     return () => cancelAnimationFrame(id);
   }, [measure, shapeSig, hovered]);
   useEventListener("resize", measure);
+  // The overlay's faces GROW when a teammate's presence changes, as a 280ms
+  // transform (people.css), and rects include transforms — so the measure
+  // above can land on a circle mid-scale and keep the old radius. The circles
+  // stop moving at animationend, which bubbles up from the seats; measure once
+  // more then. The resize backstop cannot cover this: two faces swapping tiers
+  // leave the window size unchanged, so no resize ever fires.
+  useEventListener("animationend", measure);
 
   const hide = useCallback(() => {
     if (hideTimer.current) clearTimeout(hideTimer.current);

@@ -71,12 +71,48 @@ export const codexToolNames: Record<string, string> = {
   image_gen__imagegen: "Generate Image",
 };
 
+// Grok Build (xAI grok-shell) tool ids. The transcript stores the snake_case
+// function name as `title`, so the title-case fallback would otherwise paint
+// `run_terminal_command` as "Run Terminal Command" and hide it from the
+// Terminal/Read/Edit cards that key off the canonical family names.
+export const grokToolNames: Record<string, string> = {
+  run_terminal_command: "Terminal",
+  read_file: "Read",
+  search_replace: "Edit",
+  list_dir: "List",
+  todo_write: "Todos",
+  ask_user_question: "Question",
+  get_command_or_subagent_output: "Wait",
+  kill_command_or_subagent: "Kill",
+  spawn_subagent: "Agent",
+  open_page: "Open",
+  open_page_with_find: "Find",
+  enter_plan_mode: "Plan",
+  exit_plan_mode: "Plan",
+  image_gen: "Image",
+  image_edit: "Image",
+  image_to_video: "Video",
+  reference_to_video: "Video",
+  scheduler_create: "Schedule",
+  scheduler_delete: "Schedule",
+  scheduler_list: "Schedule",
+  search_tool: "Find Tool",
+  use_tool: "Tool",
+  x_user_search: "Search",
+  x_semantic_search: "Search",
+  x_keyword_search: "Search",
+  x_thread_fetch: "Fetch",
+  // Live grok sometimes titles the search tool this way instead of web_search.
+  "Web search:": "Search",
+};
+
 // Turn a raw tool id into a short human-readable label. Looks up the curated
-// MCP/Codex tables first, then falls back to title-casing an `mcp__server__method`
+// MCP/Codex/Grok tables first, then falls back to title-casing an `mcp__server__method`
 // id (or any snake_case id) into words.
 export function formatToolName(name: string): string {
   if (mcpToolNames[name]) return mcpToolNames[name];
   if (codexToolNames[name]) return codexToolNames[name];
+  if (grokToolNames[name]) return grokToolNames[name];
   if (name.startsWith("mcp__")) {
     const parts = name.split("__");
     const method = parts[2] || parts[1] || "MCP";

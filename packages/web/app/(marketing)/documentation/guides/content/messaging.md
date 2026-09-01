@@ -53,12 +53,13 @@ The messaging snippet also teaches agents the inbox gestures humans have in the 
 ```bash
 cast stash [session_id]      # out of the inbox; the agent KEEPS RUNNING (Stashed bucket)
                              # no ID = current session — tidy yourself away when done
+cast stash --hide [session]  # stash and stay hidden: trigger wakes don't bring it back
 cast restore [session_id]    # bring a stashed or killed session back
 cast kill <session_id>       # tear the agent down, mark completed, cancel its triggers
                              # (transcript stays; the session is restartable)
 ```
 
-Dismiss is reversible and keeps the agent alive; kill is the deliberate "done with it". Agents are instructed to tell the human which sessions they hid or killed and why.
+Stash is reversible and keeps the agent alive; kill is the deliberate "done with it". A plain stash comes back into the inbox when a trigger fires into the session. `--hide` keeps it out of sight through those wakes and brings it back only for an ask: a blocked declaration, a `--needs-attention` run, or a stall. Agents are instructed to tell the human which sessions they hid or killed and why.
 
 ## Delivery
 

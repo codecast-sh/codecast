@@ -48,10 +48,14 @@ export function RecordingPill() {
               {fmtClock(status.startedAt ? now - status.startedAt : 0)}
             </span>
             {/* Where the sound comes from, in the words the feature actually
-                delivers. It hears the room through the microphone; it is not
-                tapping the meeting. */}
+                delivers: the microphone always, and on the desktop the
+                computer's own audio when the shell could open that feed. */}
             <span className="rec-pill-what">
-              {stopping ? "finishing" : "recording the room"}
+              {stopping
+                ? "finishing"
+                : status.systemAudio
+                  ? "recording the room + computer audio"
+                  : "recording the room"}
             </span>
           </div>
           {last ? (

@@ -14,6 +14,14 @@ import {
 import { taskVisual } from "./TaskStatusBadge";
 import { stripMarkdown, docContentPreview, docBodyMarkdown } from "../lib/notificationText";
 import { type EntityType } from "../lib/entityLinks";
+import { AgentTypeIcon } from "./AgentTypeIcon";
+import { cleanUserMessage } from "./sessionMessage";
+import { cleanTitle } from "../lib/conversationProcessor";
+import { getLabelColor } from "../lib/labelColors";
+import { getProjectName } from "../store/inboxStore";
+import { imageBytes } from "../lib/imageByteCache";
+import { sessionCardSummary } from "../lib/sessionSummary";
+import { FormattedSummary } from "./FormattedSummary";
 import { MarkdownBlocks } from "./tools/MarkdownRenderer";
 import { clipFade } from "./CollapsibleBody";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
@@ -179,16 +187,103 @@ function ProgressBar({ done, total, pct, bar }: { done: number; total: number; p
   );
 }
 
+/**
+ * A session shared in chat reads exactly like its inbox card — the "simple"
+ * card people already know: agent icon + title, the summary, the blue `>` last
+ * user line, then author / project / count / age on one footer line, with the
+ * image thumbnail on the right. Built from the SAME atoms the inbox card uses
+ * (AgentTypeIcon, cleanTitle, cleanUserMessage, sessionCardSummary,
+ * getLabelColor, imageBytes) so the two can't drift apart visually.
+ */
+function SessionCardBody({ session, expanded }: { session: any; expanded: boolean }) {
+  const thumbSrc = imageBytes.useSrc(session.image_preview_url || undefined);
+  const title = cleanTitle(session.title || "New Session");
+  const summary = sessionCardSummary(session);
+  const userLine = cleanUserMessage(session.last_message_preview);
+  const project = getProjectName(undefined, session.project_path);
+  const projectColor = project ? getLabelColor(project) : null;
+  const isLive = !!session.is_active;
+
+  return (
+    <div className="flex items-start gap-2.5">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 text-[13px] leading-tight text-sol-text">
+          <span className="flex-shrink-0" title={session.agent_type || "claude_code"}>
+            <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3.5 h-3.5" />
+          </span>
+          <span className={`min-w-0 font-medium ${expanded ? "" : "truncate"}`}>{title}</span>
+          {isLive && (
+            <span className="relative flex h-1.5 w-1.5 flex-shrink-0" title="Live">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sol-green opacity-75" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-sol-green" />
+            </span>
+          )}
+        </div>
+        {summary && (
+          <div className={`mt-0.5 text-[11px] leading-snug text-sol-text-muted ${expanded ? "whitespace-pre-line" : "line-clamp-2"}`}>
+            <FormattedSummary text={summary} />
+          </div>
+        )}
+        {userLine && (
+          <div className={`mt-0.5 text-[11px] font-semibold leading-snug text-sky-700 dark:text-sky-300 ${expanded ? "" : "truncate"}`}>
+            <span className="mr-0.5 text-sky-600/60 dark:text-sky-400/50">&gt;</span>
+            {userLine}
+          </div>
+        )}
+        <div className="mt-1.5 flex min-w-0 items-center gap-1.5 text-[10px] text-sol-text-dim">
+          {(session.author_name || session.author_avatar) && (
+            <span className="inline-flex min-w-0 items-center gap-1">
+              <AuthorAvatar name={session.author_name} avatar={session.author_avatar} size={12} />
+              <span className="max-w-[120px] truncate text-sol-text-muted">{session.author_name}</span>
+            </span>
+          )}
+          {project && projectColor && (
+            <span className="inline-flex min-w-0 items-center gap-1">
+              <span className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${projectColor.dot}`} />
+              <span className={`max-w-[140px] truncate ${projectColor.text ?? "text-sol-text-muted"}`}>{project}</span>
+            </span>
+          )}
+          <span className="ml-auto flex flex-shrink-0 items-center gap-1.5">
+            {session.message_count > 0 && <span className="tabular-nums">{session.message_count}</span>}
+            {relativeTime(session.updated_at) && <span>{relativeTime(session.updated_at)}</span>}
+          </span>
+        </div>
+      </div>
+      {thumbSrc && (
+        <img
+          src={thumbSrc}
+          alt=""
+          className={`flex-shrink-0 rounded border border-sol-border object-cover ${expanded ? "max-h-40 max-w-[220px]" : "h-[46px] w-[46px]"}`}
+        />
+      )}
+    </div>
+  );
+}
+
 /** The usable snippet a collapsed card shows — the reason to expand, visible before it. */
 function CardSnippet({ type, entity, compact }: { type: EntityType; entity: any; compact: boolean }) {
   const clamp = compact ? "line-clamp-2" : "line-clamp-3";
 
   if (type === "task") {
-    if (!entity.description) return null;
+    const last = Array.isArray(entity.comments) && entity.comments.length > 0
+      ? [...entity.comments].sort((a: any, b: any) => (a.created_at ?? 0) - (b.created_at ?? 0)).at(-1)
+      : null;
+    if (!entity.description && !last) return null;
     return (
-      <p className={`text-[11px] leading-relaxed text-sol-text-muted ${clamp}`}>
-        {stripMarkdown(entity.description).slice(0, 400)}
-      </p>
+      <div className="space-y-1">
+        {entity.description && (
+          <p className={`text-[11px] leading-relaxed text-sol-text-muted ${clamp}`}>
+            {stripMarkdown(entity.description).slice(0, 400)}
+          </p>
+        )}
+        {last?.text && (
+          <div className="flex items-baseline gap-1 border-l-2 border-[color-mix(in_srgb,var(--sol-border)_70%,transparent)] pl-1.5 text-[10px] leading-snug">
+            {last.author && <span className="flex-shrink-0 font-medium text-sol-text-muted">{last.author}</span>}
+            <span className="min-w-0 truncate text-sol-text-dim">{stripMarkdown(last.text)}</span>
+            {last.created_at && <span className="ml-auto flex-shrink-0 text-sol-text-dim/70">{relativeTime(last.created_at)}</span>}
+          </div>
+        )}
+      </div>
     );
   }
   if (type === "plan") {
@@ -262,7 +357,7 @@ function CommentRows({ comments }: { comments: any[] }) {
       )}
       {recent.map((c: any, i: number) => (
         <div key={c._id ?? i} className="flex items-start gap-1.5 text-[11px] leading-relaxed">
-          <span className="flex-shrink-0 font-medium text-sol-text-muted">{c.author}:</span>
+          <span className="max-w-[180px] flex-shrink-0 truncate font-medium text-sol-text-muted">{c.session_info?.title || c.author}:</span>
           <span className="line-clamp-3 min-w-0 whitespace-pre-line text-sol-text-muted [overflow-wrap:anywhere]">{c.text}</span>
           {c.created_at && <span className="ml-auto flex-shrink-0 text-[10px] text-sol-text-dim">{relativeTime(c.created_at)}</span>}
         </div>
@@ -333,7 +428,6 @@ function CardDetail({ type, entity }: { type: EntityType; entity: any }) {
     const projectName = entity.project_path?.split("/").pop() ?? null;
     return (
       <div className="space-y-2.5">
-        <SessionSummaryBlock session={entity} clamp={false} />
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-sol-text-dim">
           {entity.message_count != null && <span className="font-mono">{entity.message_count} msgs</span>}
           {projectName && (
@@ -355,7 +449,7 @@ function CardDetail({ type, entity }: { type: EntityType; entity: any }) {
   }
   if (type === "doc") {
     return (
-      <div className="max-h-[55vh] overflow-y-auto pr-1">
+      <div className="max-h-[70vh] overflow-y-auto pr-1">
         <CardMarkdown content={docBodyMarkdown(entity.content)} />
       </div>
     );
@@ -470,9 +564,33 @@ export function EntityObjectCard({ refId, count }: { refId: string; count: numbe
       onClick={toggle}
       onKeyDown={onKeyDown}
       style={expanded && count > 1 ? { gridColumn: "1 / -1" } : undefined}
-      className={`entity-card group/card min-w-0 cursor-pointer overflow-hidden rounded-md border ${expanded ? accent.borderOpen : accent.border} ${accent.borderHover} bg-sol-card text-left transition-colors focus-visible:outline-none focus-visible:ring-1 ${accent.ring}`}
+      className={`entity-card group/card relative min-w-0 cursor-pointer overflow-hidden border ${expanded ? `rounded-lg ${accent.borderOpen} bg-sol-bg shadow-xl` : `rounded-md ${accent.border} bg-sol-card`} ${accent.borderHover} text-left transition-colors focus-visible:outline-none focus-visible:ring-1 ${accent.ring}`}
     >
+      {/* A session renders as its inbox card — flat, no header strip; the
+          open/expand controls float over the top-right corner on hover. */}
+      {isSession && entity && (
+        <>
+          <div className="absolute right-1.5 top-1.5 z-[1] flex items-center gap-0.5 rounded bg-sol-card/80 opacity-0 backdrop-blur-sm transition-opacity focus-within:opacity-100 group-hover/card:opacity-100">
+            <Link
+              href={href}
+              onClick={openObject}
+              title="Open session"
+              className={`rounded p-0.5 text-sol-text-dim ${accent.hoverText}`}
+            >
+              <ArrowUpRight className="h-3 w-3" />
+            </Link>
+            <ChevronDown
+              className={`h-3 w-3 text-sol-text-dim transition-transform duration-200 ${accent.chevronHover} ${expanded ? "rotate-180" : ""}`}
+            />
+          </div>
+          <div className={expanded ? "px-3.5 pb-1 pt-2.5" : "px-3 py-2"}>
+            <SessionCardBody session={entity} expanded={expanded} />
+          </div>
+        </>
+      )}
+
       {/* Header strip: identity + state, always visible. */}
+      {!(isSession && entity) && (
       <div className={`flex items-start gap-2 border-b ${accent.stripBorder} ${expanded ? accent.stripOpen : accent.strip} px-2.5 py-1.5 transition-colors`}>
         <span className="relative mt-[2px] flex-shrink-0">
           {isSession && (entity?.author_name || entity?.author_avatar) ? (
@@ -513,9 +631,10 @@ export function EntityObjectCard({ refId, count }: { refId: string; count: numbe
           />
         </div>
       </div>
+      )}
 
       {/* Preview body — the usable snippet, before any click. */}
-      {entity && !expanded && (
+      {entity && !expanded && !isSession && (
         <div className={compact ? "px-2.5 py-1.5" : "px-2.5 py-2"}>
           {compact && <CardMetaLine type={type} entity={entity} />}
           <div className={compact ? "mt-1" : ""}>
@@ -543,7 +662,7 @@ export function EntityObjectCard({ refId, count }: { refId: string; count: numbe
       >
         <div>
           {entity && mounted && (
-            <div className="cursor-auto px-2.5 pb-2.5 pt-2" onClick={(e) => e.stopPropagation()}>
+            <div className={`cursor-auto ${expanded || mounted ? "px-3.5 pb-3 pt-2" : "px-2.5 pb-2.5 pt-2"}`} onClick={(e) => e.stopPropagation()}>
               <CardDetail type={type} entity={entity} />
               <div className="mt-2.5 flex items-center justify-between border-t border-[color-mix(in_srgb,var(--sol-border)_55%,transparent)] pt-1.5">
                 <span className="font-mono text-[10px] text-sol-text-dim">{entity.short_id ?? rawId}</span>

@@ -213,6 +213,55 @@ export function newChatChannelClientId(): string {
   return `${CHAT_CHANNEL_STUB_PREFIX}${randomSuffix()}`;
 }
 
+/**
+ * The channel to use for a dm_key, with a REAL row always beating a stub.
+ *
+ * The preference is load-bearing, not cosmetic: a press that races the channel
+ * sync creates a stub, and because the server's idempotent open answers with
+ * the EXISTING row — whose client_id belongs to whoever created the DM first —
+ * nothing ever supersedes that stub. It persists across reloads, and returning
+ * it hands every caller an id the server refuses (v.id validation), which is
+ * how one early press used to kill a DM's walkie key forever.
+ */
+export function findDmChannelId(
+  rows: Record<string, { _id?: unknown; dm_key?: string } | undefined>,
+  dmKey: string,
+): string | null {
+  let stub: string | null = null;
+  for (const id in rows) {
+    if (rows[id]?.dm_key !== dmKey) continue;
+    if (id.startsWith(CHAT_CHANNEL_STUB_PREFIX)) {
+      stub = stub ?? id;
+      continue;
+    }
+    return id;
+  }
+  return stub;
+}
+
+/**
+ * The server row behind an optimistic channel stub, once it has arrived.
+ *
+ * Two ways a stub becomes real: the create echoes a row carrying our client_id
+ * (a genuinely new channel), or the channel already existed and syncs in
+ * wearing the same dm_key (a press that raced the sync). Either row IS the
+ * channel; the stub was only ever a promise of it.
+ */
+export function resolveChannelStubId(
+  rows: Record<string, { client_id?: string; dm_key?: string } | undefined>,
+  stubId: string,
+): string | null {
+  const stubKey = rows[stubId]?.dm_key ?? null;
+  for (const id in rows) {
+    if (id === stubId || id.startsWith(CHAT_CHANNEL_STUB_PREFIX)) continue;
+    const row = rows[id];
+    if (!row) continue;
+    if (row.client_id === stubId) return id;
+    if (stubKey && row.dm_key === stubKey) return id;
+  }
+  return null;
+}
+
 /** The one reaction row this viewer can own for (message, emoji). Deterministic
  *  so a double-tap finds and removes its own optimistic row rather than adding
  *  a second one. */
@@ -892,9 +941,8 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       const viewer = (state as any).currentUser?._id ?? "";
       const dmKey = dmKeyFor(teamId ?? "", [viewer, ...memberIds]);
       // The room may already be here — same tick, real id, no server wait.
-      for (const id in state.chatChannels) {
-        if (state.chatChannels[id]?.dm_key === dmKey) return id;
-      }
+      const existing = findDmChannelId(state.chatChannels, dmKey);
+      if (existing) return existing;
       const clientId = newChatChannelClientId();
       void (get().dispatchOpenDm(clientId, memberIds, teamId) as Promise<any>).catch(() => {
         // Delivery is the outbox's problem; see createChatChannel.

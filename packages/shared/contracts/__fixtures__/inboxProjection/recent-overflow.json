@@ -1,0 +1,1071 @@
+{
+  "about": "One past the recent cap: the 200 newest survive by updated_at, the oldest is dropped, `recent` is named in truncated. The dropped row is pinned so it stays a member through its pin (a row can lose one seat and keep another).",
+  "epoch": "E",
+  "asking": [],
+  "rows": [
+    {
+      "repeat": {
+        "count": 200,
+        "idPrefix": "rec",
+        "row": {
+          "status": "active",
+          "updated_at": "E-1m",
+          "message_count": 4,
+          "is_idle": true
+        },
+        "step": {
+          "updated_at": -60000
+        }
+      }
+    },
+    {
+      "_id": "oldest_pinned",
+      "status": "active",
+      "updated_at": "E-1d",
+      "message_count": 4,
+      "is_idle": true,
+      "inbox_pinned_at": "E-1h"
+    }
+  ],
+  "expected": {
+    "truncated": [
+      "recent"
+    ],
+    "tally": {
+      "shown": {
+        "questions": 0,
+        "pinned": 1,
+        "new": 0,
+        "needs_input": 200,
+        "done": 0,
+        "dormant": 0,
+        "working": 0,
+        "idle": 0,
+        "stashed": 0,
+        "dismissed": 0,
+        "hidden": 0
+      },
+      "folded": {
+        "questions": 0,
+        "pinned": 0,
+        "new": 0,
+        "needs_input": 0,
+        "done": 0,
+        "dormant": 0,
+        "working": 0,
+        "idle": 0,
+        "stashed": 0,
+        "dismissed": 0,
+        "hidden": 0
+      }
+    },
+    "set_digest": "4b6bebc1763bc67b",
+    "placements": {
+      "oldestpinnedz1200000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "rec0z400000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec100z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec101z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec102z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec103z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec104z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec105z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec106z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec107z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec108z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec109z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec10z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec110z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec111z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec112z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec113z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec114z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec115z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec116z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec117z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec118z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec119z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec11z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec120z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec121z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec122z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec123z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec124z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec125z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec126z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec127z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec128z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec129z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec12z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec130z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec131z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec132z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec133z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec134z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec135z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec136z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec137z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec138z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec139z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec13z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec140z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec141z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec142z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec143z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec144z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec145z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec146z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec147z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec148z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec149z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec14z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec150z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec151z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec152z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec153z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec154z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec155z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec156z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec157z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec158z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec159z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec15z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec160z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec161z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec162z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec163z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec164z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec165z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec166z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec167z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec168z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec169z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec16z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec170z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec171z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec172z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec173z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec174z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec175z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec176z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec177z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec178z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec179z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec17z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec180z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec181z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec182z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec183z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec184z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec185z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec186z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec187z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec188z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec189z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec18z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec190z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec191z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec192z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec193z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec194z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec195z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec196z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec197z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec198z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec199z6000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec19z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec1z400000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec20z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec21z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec22z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec23z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec24z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec25z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec26z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec27z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec28z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec29z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec2z400000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec30z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec31z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec32z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec33z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec34z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec35z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec36z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec37z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec38z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec39z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec3z400000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec40z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec41z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec42z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec43z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec44z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec45z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec46z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec47z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec48z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec49z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec4z400000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec50z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec51z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec52z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec53z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec54z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec55z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec56z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec57z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec58z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec59z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec5z400000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec60z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec61z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec62z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec63z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec64z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec65z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec66z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec67z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec68z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec69z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec6z400000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec70z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec71z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec72z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec73z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec74z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec75z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec76z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec77z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec78z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec79z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec7z400000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec80z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec81z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec82z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec83z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec84z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec85z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec86z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec87z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec88z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec89z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec8z400000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec90z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec91z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec92z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec93z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec94z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec95z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec96z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec97z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec98z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec99z50000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "rec9z400000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ]
+    }
+  }
+}

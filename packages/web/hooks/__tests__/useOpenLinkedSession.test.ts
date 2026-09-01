@@ -9,7 +9,6 @@ const kindFor = (surface: Partial<Parameters<typeof resolveSessionSelectKind>[0]
   resolveSessionSelectKind({
     isOnSettingsPage: false,
     isOnInboxPage: false,
-    isOnConversationPage: false,
     ...surface,
   });
 
@@ -19,10 +18,6 @@ describe("resolveLinkedSessionOpen", () => {
   // conversation peek doesn't render on the inbox page, so nothing opened.
   it("selects in place on the inbox page instead of peeking", () => {
     expect(resolveLinkedSessionOpen(kindFor({ isOnInboxPage: true }), false)).toBe("select");
-  });
-
-  it("routes to the conversation page from a full conversation page", () => {
-    expect(resolveLinkedSessionOpen(kindFor({ isOnConversationPage: true }), false)).toBe("route");
   });
 
   it("routes to the stage from every other page — side by side is a drag, not a click", () => {

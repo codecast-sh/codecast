@@ -1,20 +1,18 @@
 import { useMemo } from "react";
 import {
-  categorizeSessions,
-  filterInboxScope,
+  placeInboxRows,
   pendingSendWakeSig,
   resolveShowOld,
   sessionsWakeSig,
-  sessionsWithPendingSend,
   useTrackedStore,
 } from "../store/inboxStore";
 import { sessionCards, type ThreadCardModel } from "../lib/threadCards";
 import { useCoarseNow } from "./useCoarseNow";
 
-// The Threads page's session cards: the Inbox's own membership —
-// categorizeSessions over filterInboxScope, with the exact options and wake
-// deps useNeedsInputCount uses — never the raw never-prune cache. Off by
-// default (the toggle), because that queue already lives in the Inbox.
+// The Threads page's session cards: the Inbox's own membership — the placement
+// chokepoint (placeInboxRows) forced to "mine", with the exact wake deps
+// useNeedsInputCount uses — never the raw never-prune cache. Off by default
+// (the toggle), because that queue already lives in the Inbox.
 
 /** The Inbox's sessions as thread cards, or none while the toggle is off.
  *  Dep list mirrors hooks/useNeedsInputCount, plus the seen cursors (the
@@ -26,27 +24,20 @@ export function useSessionThreadCards(enabled: boolean): ThreadCardModel[] {
     s => s.blockedReviveRequestedAt,
     s => pendingSendWakeSig(s.pendingMessages),
     s => s.currentUser?._id,
-    s => s.liveInboxIds,
     s => resolveShowOld(s.clientState.ui),
     s => s._seenMessageCount,
   ]);
   const meId = s.currentUser?._id;
-  // The trust-TTL sweep inside categorizeSessions is time-driven; a coarse
-  // clock keeps it honest (shared timer, extra subscribers are free).
+  // The chokepoint's time-driven flips (trust TTL, revive expiry, the epoch)
+  // ride its deadline signature; a coarse clock keeps them honest.
   const coarseNow = useCoarseNow(15_000);
   return useMemo(() => {
     if (!enabled) return [];
-    const cat = categorizeSessions(
-      filterInboxScope(s.sessions, "mine", meId ? meId.toString() : null),
-      s.sessionsWithQueuedMessages,
-      sessionsWithPendingSend(s.pendingMessages),
-      { liveInboxIds: s.liveInboxIds, showOld: resolveShowOld(s.clientState.ui), reviveRequestedAt: s.blockedReviveRequestedAt },
-    );
+    const placed = placeInboxRows(s as any, { scope: "mine", now: coarseNow });
     // Every bucket the Inbox shows; stashed and dismissed are out of it.
     // sortCards re-orders by activity, so bucket order here is moot.
-    const rows = [...cat.pinned, ...cat.newSessions, ...cat.needsInput, ...cat.working, ...cat.dormant, ...cat.done];
+    const rows = [...placed.questions, ...placed.pinned, ...placed.newSessions, ...placed.needsInput, ...placed.working, ...placed.dormant, ...placed.done];
     return sessionCards(rows, s._seenMessageCount);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), s.liveInboxIds, resolveShowOld(s.clientState.ui), s._seenMessageCount, coarseNow]);
+  }, [enabled, sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), resolveShowOld(s.clientState.ui), s._seenMessageCount, coarseNow]);
 }
-

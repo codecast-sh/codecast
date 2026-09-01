@@ -40,8 +40,14 @@ export function applyLiveInboxIds(sessions: any[]) {
  * Returns the raw subscription result (undefined until the first server response)
  * for callers that need the live payload itself.
  */
+// The ONE argument shape for the live inbox window. The 15s recovery probe in
+// useSyncInboxSessions spreads THIS constant (plus its cache-busting _probe),
+// so a stalled subscription can never flap the store between two payload
+// shapes — the probe and the subscription are byte-identical requests.
+export const LIST_INBOX_SESSIONS_ARGS = { show_all: false, include_liveness: false, fast_fields_in_overlay: true } as const;
+
 export function useLiveInboxSessions(opts?: { onSync?: (sessions: any[]) => void }) {
-  const inboxSessions = useQuery(api.conversations.listInboxSessions, { show_all: false, include_liveness: false, fast_fields_in_overlay: true });
+  const inboxSessions = useQuery(api.conversations.listInboxSessions, LIST_INBOX_SESSIONS_ARGS);
   const syncTable = useInboxStore((s) => s.syncTable);
   const onSyncRef = useRef(opts?.onSync);
   onSyncRef.current = opts?.onSync;

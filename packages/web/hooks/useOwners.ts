@@ -17,6 +17,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { humanizeConvexError } from "@codecast/shared/contracts";
 import { isConvexId } from "../lib/entityLinks";
 import { useWatchEffect } from "./useWatchEffect";
 
@@ -33,6 +34,8 @@ type OwnerInfo = {
 };
 
 export type OwnersEnv = {
+  // Warm-paint fallback roster only: once listOwners answers, its
+  // team_members (the SESSION team's roster) replaces this.
   teamMembers: any[] | undefined;
   currentUser: any;
   notify?: (msg: string, kind: "success" | "error") => void;
@@ -48,6 +51,20 @@ export type OwnersEnv = {
  */
 export function shouldQueryOwners(conversationId: string, currentUser: unknown): boolean {
   return Boolean(conversationId && isConvexId(conversationId) && currentUser);
+}
+
+/**
+ * The roster the picker offers. The server's list wins — listOwners returns
+ * the SESSION team's members, the only people the owner mutations accept.
+ * The injected roster (the viewer's active team) is a warm-paint fallback for
+ * while the query loads, and for an older server that doesn't send
+ * team_members yet.
+ */
+export function pickRoster(
+  serverMembers: any[] | undefined,
+  injected: any[] | undefined,
+): any[] {
+  return serverMembers ?? injected ?? [];
 }
 
 export function useOwners(conversationId: string, env: OwnersEnv) {
@@ -76,11 +93,16 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
     return s;
   }, [serverIds, overrides]);
 
+  const roster: any[] = useMemo(
+    () => pickRoster((data as any)?.team_members, teamMembers),
+    [data, teamMembers],
+  );
+
   const memberById = useMemo(() => {
     const m = new Map<string, any>();
-    for (const mem of teamMembers || []) if (mem?._id) m.set(mem._id, mem);
+    for (const mem of roster) if (mem?._id) m.set(mem._id, mem);
     return m;
-  }, [teamMembers]);
+  }, [roster]);
 
   const displayFor = (id: string) => {
     const mem = memberById.get(id);
@@ -116,7 +138,7 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
       // Leave the override; the reconcile effect clears it when the query catches up.
     } catch (e: any) {
       setOverrides((o) => { const n = { ...o }; delete n[id]; return n; }); // revert
-      notify?.(e?.message || "Owner change failed", "error");
+      notify?.(humanizeConvexError(e, "Owner change failed"), "error");
     }
   };
 
@@ -126,12 +148,12 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
     try {
       for (const id of ids) await removeOwner({ session_id: conversationId, owner: id });
     } catch (e: any) {
-      notify?.(e?.message || "Failed to clear owners", "error");
+      notify?.(humanizeConvexError(e, "Failed to clear owners"), "error");
     }
   };
 
   // Bots (Mr Bot, Anchors) can't own a session — a bot's inbox is nobody's.
-  const selectable = (teamMembers || []).filter((m: any) => m && !m.is_bot);
+  const selectable = roster.filter((m: any) => m && !m.is_bot);
   const ownerList = Array.from(ownerIds);
 
   // The current user's own UNACKED handoff (someone else assigned them, no

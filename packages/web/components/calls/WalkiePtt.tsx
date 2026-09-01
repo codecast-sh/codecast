@@ -3,6 +3,7 @@
 // can each dress the same press differently.
 import { Mic } from "lucide-react";
 import { pttHoldProps, usePushToTalk, useWalkieLevelVar, walkieKeyName, walkieKeyState } from "../../hooks/useWalkie";
+import { WALKIE_LOCK_MS } from "../../lib/calls/walkie";
 import "./walkie.css";
 
 export function WalkiePttButton({
@@ -65,10 +66,15 @@ export function WalkiePttButton({
       type="button"
       className={`walkie-ptt walkie-key walkie-key-${size} ${label ? "walkie-key-wide" : ""} ${className ?? ""} ${
         ptt.capturing ? "walkie-ptt-on" : ""
-      } ${opening ? "walkie-ptt-opening" : ""} ${ptt.dropped ? "walkie-ptt-dropped" : ""}`}
+      } ${opening ? "walkie-ptt-opening" : ""} ${ptt.dropped ? "walkie-ptt-dropped" : ""} ${
+        state === "locked" ? "walkie-ptt-locked" : ""
+      }`}
       disabled={!!ptt.reason}
       data-walkie-ptt={roomKey ?? ""}
       data-walkie-state={state}
+      // The lock's clock, for the fill arc — one constant for the picture and
+      // the latch, same as the wall's seats.
+      style={{ ["--walkie-lock-ms" as string]: `${WALKIE_LOCK_MS}ms` }}
       aria-label={name}
       title={ptt.reason ?? (state === "idle" ? (title ?? "Hold to talk") : name)}
       {...pttHoldProps(ptt)}
@@ -96,7 +102,9 @@ export function WalkiePttButton({
                 ? ptt.live
                   ? "Live"
                   : "Recording"
-                : label}
+                : state === "locked"
+                  ? "On the line"
+                  : label}
         </span>
       )}
     </button>

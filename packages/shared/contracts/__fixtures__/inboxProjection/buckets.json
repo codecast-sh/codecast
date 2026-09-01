@@ -1,0 +1,615 @@
+{
+  "about": "One row per placement rule: every bucket, every rest verdict, every hard block. Fresh cluster (no fold).",
+  "epoch": "E",
+  "asking": [
+    "ask_child_lift"
+  ],
+  "rows": [
+    {
+      "_id": "working",
+      "status": "active",
+      "updated_at": "E-1m",
+      "message_count": 5,
+      "agent_status": "working",
+      "is_idle": false
+    },
+    {
+      "_id": "needs_input",
+      "status": "active",
+      "updated_at": "E-2m",
+      "message_count": 5,
+      "is_idle": true
+    },
+    {
+      "_id": "declared_done",
+      "status": "active",
+      "updated_at": "E-3m",
+      "message_count": 5,
+      "agent_status": "done",
+      "is_idle": true
+    },
+    {
+      "_id": "row_done_no_daemon",
+      "status": "completed",
+      "updated_at": "E-4m",
+      "message_count": 5,
+      "is_idle": true,
+      "thread_state_status": "done"
+    },
+    {
+      "_id": "declared_dormant",
+      "status": "active",
+      "updated_at": "E-5m",
+      "message_count": 5,
+      "agent_status": "dormant",
+      "is_idle": true
+    },
+    {
+      "_id": "waiting",
+      "status": "active",
+      "updated_at": "E-6m",
+      "message_count": 5,
+      "agent_status": "waiting",
+      "is_idle": true
+    },
+    {
+      "_id": "standing_home",
+      "status": "active",
+      "updated_at": "E-7m",
+      "message_count": 5,
+      "is_idle": true,
+      "armed_trigger_kind": "standing",
+      "last_turn_allows_park": true
+    },
+    {
+      "_id": "standing_home_human_last",
+      "status": "active",
+      "updated_at": "E-8m",
+      "message_count": 5,
+      "is_idle": true,
+      "armed_trigger_kind": "standing",
+      "last_turn_allows_park": false
+    },
+    {
+      "_id": "once_home_done",
+      "status": "active",
+      "updated_at": "E-9m",
+      "message_count": 5,
+      "is_idle": true,
+      "armed_trigger_kind": "once",
+      "settle_verdict": "done",
+      "settle_verdict_at": "E-8m"
+    },
+    {
+      "_id": "once_home_needs",
+      "status": "active",
+      "updated_at": "E-10m",
+      "message_count": 5,
+      "is_idle": true,
+      "armed_trigger_kind": "once"
+    },
+    {
+      "_id": "loop_fresh",
+      "status": "active",
+      "updated_at": "E-11m",
+      "message_count": 5,
+      "is_idle": true,
+      "loop_state": {
+        "status": "armed",
+        "wakeup_at": "E+1h",
+        "event_at": "E-1h"
+      }
+    },
+    {
+      "_id": "loop_overdue",
+      "status": "active",
+      "updated_at": "E-12m",
+      "message_count": 5,
+      "is_idle": true,
+      "loop_state": {
+        "status": "armed",
+        "wakeup_at": "E-1h",
+        "event_at": "E-2h"
+      }
+    },
+    {
+      "_id": "user_dormant",
+      "status": "active",
+      "updated_at": "E-13m",
+      "message_count": 5,
+      "is_idle": true,
+      "inbox_dormant_at": "E-12m"
+    },
+    {
+      "_id": "user_dormant_stale",
+      "status": "active",
+      "updated_at": "E-14m",
+      "message_count": 5,
+      "is_idle": true,
+      "inbox_dormant_at": "E-20m"
+    },
+    {
+      "_id": "settle_done_current",
+      "status": "active",
+      "updated_at": "E-15m",
+      "message_count": 5,
+      "is_idle": true,
+      "settle_verdict": "done",
+      "settle_verdict_at": "E-14m"
+    },
+    {
+      "_id": "settle_done_stale",
+      "status": "active",
+      "updated_at": "E-16m",
+      "message_count": 5,
+      "is_idle": true,
+      "settle_verdict": "done",
+      "settle_verdict_at": "E-30m"
+    },
+    {
+      "_id": "declared_blocked",
+      "status": "active",
+      "updated_at": "E-17m",
+      "message_count": 5,
+      "is_idle": true,
+      "thread_state_status": "blocked",
+      "settle_verdict": "done",
+      "settle_verdict_at": "E-16m"
+    },
+    {
+      "_id": "own_prompt",
+      "status": "active",
+      "updated_at": "E-18m",
+      "message_count": 5,
+      "is_idle": true,
+      "awaiting_input": true
+    },
+    {
+      "_id": "permission",
+      "status": "active",
+      "updated_at": "E-19m",
+      "message_count": 5,
+      "agent_status": "permission_blocked",
+      "is_idle": true
+    },
+    {
+      "_id": "api_error",
+      "status": "active",
+      "updated_at": "E-20m",
+      "message_count": 5,
+      "agent_status": "working",
+      "is_idle": false,
+      "pending_api_error": true
+    },
+    {
+      "_id": "dead",
+      "status": "active",
+      "updated_at": "E-21m",
+      "message_count": 5,
+      "agent_status": "stopped",
+      "is_idle": true
+    },
+    {
+      "_id": "dead_blank",
+      "status": "active",
+      "updated_at": "E-22m",
+      "message_count": 0,
+      "agent_status": "stopped",
+      "is_idle": true
+    },
+    {
+      "_id": "unresponsive",
+      "status": "active",
+      "updated_at": "E-23m",
+      "message_count": 5,
+      "is_idle": true,
+      "is_unresponsive": true
+    },
+    {
+      "_id": "queued",
+      "status": "active",
+      "updated_at": "E-24m",
+      "message_count": 5,
+      "is_idle": true,
+      "has_pending_messages": true
+    },
+    {
+      "_id": "queued_dead",
+      "status": "active",
+      "updated_at": "E-25m",
+      "message_count": 5,
+      "agent_status": "stopped",
+      "is_idle": true,
+      "has_pending_messages": true
+    },
+    {
+      "_id": "mid_grace",
+      "status": "active",
+      "updated_at": "E-26m",
+      "message_count": 5,
+      "is_idle": false
+    },
+    {
+      "_id": "blank",
+      "status": "active",
+      "updated_at": "E-27m",
+      "message_count": 0,
+      "is_idle": true
+    },
+    {
+      "_id": "ask_child_lift",
+      "status": "active",
+      "updated_at": "E-28m",
+      "message_count": 5,
+      "is_idle": true
+    },
+    {
+      "_id": "pinned_needs",
+      "status": "active",
+      "updated_at": "E-29m",
+      "message_count": 5,
+      "is_idle": true,
+      "inbox_pinned_at": "E-1h"
+    },
+    {
+      "_id": "pinned_working",
+      "status": "active",
+      "updated_at": "E-30m",
+      "message_count": 5,
+      "agent_status": "working",
+      "is_idle": false,
+      "inbox_pinned_at": "E-2h"
+    },
+    {
+      "_id": "stashed",
+      "status": "active",
+      "updated_at": "E-31m",
+      "message_count": 5,
+      "is_idle": true,
+      "inbox_stashed_at": "E-1h",
+      "inbox_pinned_at": "E-1h",
+      "awaiting_input": true
+    },
+    {
+      "_id": "dismissed",
+      "status": "active",
+      "updated_at": "E-32m",
+      "message_count": 5,
+      "is_idle": true,
+      "inbox_dismissed_at": "E-1h",
+      "inbox_stashed_at": "E-1h"
+    },
+    {
+      "_id": "killed_pinned",
+      "status": "active",
+      "updated_at": "E-33m",
+      "message_count": 5,
+      "agent_status": "working",
+      "is_idle": false,
+      "inbox_killed_at": "E-1h",
+      "inbox_pinned_at": "E-1h"
+    },
+    {
+      "_id": "anchor_quiet",
+      "status": "active",
+      "updated_at": "E-34m",
+      "message_count": 5,
+      "is_idle": true,
+      "anchor_id": "anchors_1",
+      "inbox_pinned_at": "E-1h"
+    },
+    {
+      "_id": "anchor_blocked",
+      "status": "active",
+      "updated_at": "E-35m",
+      "message_count": 5,
+      "is_idle": true,
+      "anchor_id": "anchors_1",
+      "awaiting_input": true
+    },
+    {
+      "_id": "anchor_dead",
+      "status": "active",
+      "updated_at": "E-36m",
+      "message_count": 5,
+      "agent_status": "stopped",
+      "is_idle": true,
+      "anchor_id": "anchors_1"
+    },
+    {
+      "_id": "completed_content",
+      "status": "completed",
+      "updated_at": "E-37m",
+      "message_count": 3,
+      "is_idle": true
+    },
+    {
+      "_id": "failed_status",
+      "status": "failed",
+      "updated_at": "E-38m",
+      "message_count": 3,
+      "is_idle": true
+    },
+    {
+      "_id": "subagent",
+      "status": "active",
+      "updated_at": "E-39m",
+      "message_count": 3,
+      "is_subagent": true,
+      "agent_status": "working",
+      "is_idle": false
+    },
+    {
+      "_id": "orphan",
+      "status": "active",
+      "updated_at": "E-40m",
+      "message_count": 3,
+      "parent_conversation_id": "parent",
+      "is_idle": true
+    },
+    {
+      "_id": "fork_child",
+      "status": "active",
+      "updated_at": "E-41m",
+      "message_count": 3,
+      "parent_conversation_id": "parent",
+      "parent_message_uuid": "m1",
+      "is_idle": true
+    },
+    {
+      "_id": "noise",
+      "status": "active",
+      "updated_at": "E-42m",
+      "message_count": 3,
+      "title": "[Using: claude]",
+      "is_idle": true
+    },
+    {
+      "_id": "warmup",
+      "status": "active",
+      "updated_at": "E-43m",
+      "message_count": 3,
+      "title": "warmup",
+      "is_idle": true
+    },
+    {
+      "_id": "completed_blank",
+      "status": "completed",
+      "updated_at": "E-44m",
+      "message_count": 0,
+      "is_idle": true
+    },
+    {
+      "_id": "killed_unpinned",
+      "status": "active",
+      "updated_at": "E-45m",
+      "message_count": 3,
+      "is_idle": true,
+      "inbox_killed_at": "E-1h"
+    }
+  ],
+  "expected": {
+    "truncated": [],
+    "tally": {
+      "shown": {
+        "questions": 1,
+        "pinned": 3,
+        "new": 2,
+        "needs_input": 17,
+        "done": 3,
+        "dormant": 6,
+        "working": 3,
+        "idle": 0,
+        "stashed": 1,
+        "dismissed": 1,
+        "hidden": 0
+      },
+      "folded": {
+        "questions": 0,
+        "pinned": 0,
+        "new": 0,
+        "needs_input": 0,
+        "done": 0,
+        "dormant": 0,
+        "working": 0,
+        "idle": 0,
+        "stashed": 0,
+        "dismissed": 0,
+        "hidden": 0
+      }
+    },
+    "set_digest": "64f894581fb377a2",
+    "placements": {
+      "anchorblockedz130000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "anchordeadz100000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "anchorquietz11000000000000000000": [
+        "hidden",
+        "needs_input",
+        false
+      ],
+      "apierrorz80000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "askchildliftz1200000000000000000": [
+        "questions",
+        "needs_input",
+        false
+      ],
+      "blankz50000000000000000000000000": [
+        "new",
+        "idle",
+        false
+      ],
+      "completedcontentz160000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "deadblankz9000000000000000000000": [
+        "new",
+        "idle",
+        false
+      ],
+      "deadz400000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "declaredblockedz1500000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "declareddonez1200000000000000000": [
+        "done",
+        "done",
+        false
+      ],
+      "declareddormantz1500000000000000": [
+        "dormant",
+        "dormant",
+        false
+      ],
+      "dismissedz9000000000000000000000": [
+        "dismissed",
+        "needs_input",
+        false
+      ],
+      "forkchildz9000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "killedpinnedz1200000000000000000": [
+        "pinned",
+        "idle",
+        false
+      ],
+      "loopfreshz9000000000000000000000": [
+        "dormant",
+        "dormant",
+        false
+      ],
+      "loopoverduez11000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "midgracez80000000000000000000000": [
+        "working",
+        "working",
+        false
+      ],
+      "needsinputz100000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "oncehomedonez1200000000000000000": [
+        "dormant",
+        "dormant",
+        false
+      ],
+      "oncehomeneedsz130000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "ownpromptz9000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "permissionz100000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "pinnedneedsz11000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pinnedworkingz130000000000000000": [
+        "pinned",
+        "working",
+        false
+      ],
+      "queueddeadz100000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "queuedz6000000000000000000000000": [
+        "working",
+        "working",
+        false
+      ],
+      "rowdonenodaemonz1500000000000000": [
+        "done",
+        "done",
+        false
+      ],
+      "settledonecurrentz17000000000000": [
+        "done",
+        "done",
+        false
+      ],
+      "settledonestalez1500000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "standinghomehumanlastz2100000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "standinghomez1200000000000000000": [
+        "dormant",
+        "dormant",
+        false
+      ],
+      "stashedz700000000000000000000000": [
+        "stashed",
+        "needs_input",
+        false
+      ],
+      "unresponsivez1200000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "userdormantstalez160000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "userdormantz11000000000000000000": [
+        "dormant",
+        "dormant",
+        false
+      ],
+      "waitingz700000000000000000000000": [
+        "dormant",
+        "dormant",
+        false
+      ],
+      "workingz700000000000000000000000": [
+        "working",
+        "working",
+        false
+      ]
+    }
+  }
+}

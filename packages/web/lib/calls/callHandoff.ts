@@ -139,3 +139,70 @@ export function callWindowReport(s: {
     scribe: !!s.scribe,
   };
 }
+
+// ── Disconnect: yield vs hang-up ──────────────────────────────────────────
+//
+// A call lives in ONE renderer at a time. Moving it (pop out, or the panel
+// closing and the main window taking it back) is a second window joining with
+// the same LiveKit identity, which evicts this one. The source must RELEASE
+// the room without calling leaveRoom: the seat in call_members is keyed by
+// (user, room), so hanging up here deletes the seat the destination is now
+// sitting in and can end the transcript.
+//
+// LiveKit's documented signal is DUPLICATE_IDENTITY (enum 2). Some client
+// versions deliver the number, the name, or PARTICIPANT_REMOVED (4) for the
+// same eviction. Hanging up on any of those, while another of our windows is
+// the destination, is how popping a call out kills it.
+
+/** livekit-client DisconnectReason.DUPLICATE_IDENTITY */
+const LIVEKIT_DUPLICATE_IDENTITY = 2;
+/** livekit-client DisconnectReason.PARTICIPANT_REMOVED */
+const LIVEKIT_PARTICIPANT_REMOVED = 4;
+
+function reasonName(reason: unknown): string {
+  if (typeof reason === "string") return reason.toUpperCase().replace(/-/g, "_");
+  return "";
+}
+
+function reasonNumber(reason: unknown): number | null {
+  if (typeof reason === "number" && Number.isFinite(reason)) return reason;
+  if (typeof reason === "object" && reason !== null && "valueOf" in reason) {
+    const n = Number((reason as { valueOf: () => unknown }).valueOf());
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+export function isDuplicateIdentityDisconnect(reason: unknown): boolean {
+  if (reasonNumber(reason) === LIVEKIT_DUPLICATE_IDENTITY) return true;
+  const name = reasonName(reason);
+  return name === "DUPLICATE_IDENTITY" || name.endsWith("DUPLICATE_IDENTITY");
+}
+
+function isParticipantRemovedDisconnect(reason: unknown): boolean {
+  if (reasonNumber(reason) === LIVEKIT_PARTICIPANT_REMOVED) return true;
+  const name = reasonName(reason);
+  return name === "PARTICIPANT_REMOVED" || name.endsWith("PARTICIPANT_REMOVED");
+}
+
+/**
+ * Should this renderer let the room go without hanging up?
+ *
+ * `elsewhere` — a call panel exists and this renderer is not it (we just
+ * popped out; any disconnect here is the panel taking over).
+ * `outlivesWindow` — this window was opened as a place the call would leave
+ * (the panel, or the source of a pop-out). A removal then is the other
+ * window joining, not a hang-up.
+ *
+ * A real kick, a network drop, a room that closed: hang up. Those reasons
+ * are not a handoff, and yielding would leave a ghost seat.
+ */
+export function shouldYieldCallOnDisconnect(
+  reason: unknown,
+  opts: { elsewhere: boolean; outlivesWindow: boolean },
+): boolean {
+  if (isDuplicateIdentityDisconnect(reason)) return true;
+  if (opts.elsewhere) return true;
+  if (opts.outlivesWindow && isParticipantRemovedDisconnect(reason)) return true;
+  return false;
+}

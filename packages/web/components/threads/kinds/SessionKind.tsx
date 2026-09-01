@@ -18,7 +18,7 @@ import "../../chat/chat.css";
 
 // The session kind: the viewer's own inbox sessions, shown as cards only when
 // the Sessions toggle is on (off by default — their queue already lives in
-// the Inbox). Membership is the Inbox's own: categorizeSessions over
+// the Inbox). Membership is the Inbox's own: placeInboxRows over
 // filterInboxScope, derived in hooks/useSessionThreadCards. Expanded, a card
 // is the DM kind's shape: the newest messages of the session inline and the
 // app's own composer sending into it; the side panel is a secondary button.

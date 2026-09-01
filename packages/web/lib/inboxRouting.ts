@@ -48,7 +48,6 @@ export type SessionSelectKind = "leave" | "inboxInPlace";
 export function resolveSessionSelectKind(opts: {
   isOnSettingsPage: boolean;
   isOnInboxPage: boolean;
-  isOnConversationPage: boolean;
 }): SessionSelectKind {
   if (opts.isOnSettingsPage) return "leave";
   if (opts.isOnInboxPage) return "inboxInPlace";

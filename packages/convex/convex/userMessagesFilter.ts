@@ -9,6 +9,8 @@
 // be returned here. Keeping that invariant at the source means no client has to
 // re-filter by role (a guard that has been silently dropped by refactors twice).
 
+import { AGENT_SWITCH_NOTICE_PREFIX } from "@codecast/shared/contracts";
+
 export type FilterableMessage = {
   _id: string;
   message_uuid?: string;
@@ -46,6 +48,7 @@ const USER_NOISE_PREFIXES = [
   "[Request interrupted",
   "[Request cancelled",
   IMPORT_NOTICE_PREFIX,
+  AGENT_SWITCH_NOTICE_PREFIX,
   "This session is being continued",
   "Your task is to create a detailed summary",
   "Please continue the conversation",

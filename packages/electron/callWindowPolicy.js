@@ -83,21 +83,31 @@ function callWindowPlacementKey(size) {
  * @returns {boolean} Whether to hand the room back to the main window.
  */
 function shouldHandBackCall({ ended, quitting, room }) {
-  // Hung up. The call is over; there is nothing to hand anywhere.
+  // A huddle lives in its own window, like the palette. Pouring it into the
+  // main window on close was the in-app card stuck inside the parent. The
+  // call either stays in this window (hide) or it ends (hang-up).
+  void ended;
+  void quitting;
+  void room;
+  return false;
+}
+
+/**
+ * Close of the call window with a live huddle: hide, do not destroy.
+ *
+ * Hang-up and quit actually close. Everything else is the palette gesture —
+ * the window goes away, the microphone stays, showing the window again is
+ * how you get back.
+ */
+function shouldHideCallWindow({ ended, quitting }) {
   if (ended) return false;
-  // Quitting. Every window gets `close` during a quit, and a handback then
-  // would raise the main window on the way out and ask it to join a room the
-  // process is about to stop existing for.
   if (quitting) return false;
-  // Nothing was being hosted — a window that closed before it ever connected.
-  if (!room) return false;
-  // A window closed with a live call in it and nowhere else to be. Hand it
-  // back: a call nobody hung up is a call still going.
   return true;
 }
 
 module.exports = {
   shouldHandBackCall,
+  shouldHideCallWindow,
   callWindowChrome,
   callWindowPlacementKey,
   normalizeCallWindowSize,

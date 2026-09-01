@@ -405,15 +405,14 @@ export function CallStage({
               </StageChromeButton>
             );
           })}
-        {/* The window's own close. There is no traffic light to do it: closing
-            hands the call back to the main window, which joins and carries on
-            — hanging up is the other door, and it is the red button on the
-            control bar below. */}
+        {/* The window's own close. There is no traffic light to do it. Hide,
+            like the palette: the huddle stays in this window. Hang-up is the
+            red button on the control bar below. */}
         {panel && chromeless && (
           <StageChromeButton
             onClick={() => void closeCallPanel({})}
             className="ml-2"
-            title="Close this window — the call carries on in the main window"
+            title="Hide this window — the huddle keeps going"
           >
             <X className="h-3.5 w-3.5" />
           </StageChromeButton>

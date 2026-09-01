@@ -633,8 +633,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: 
   }, [cancelHover]);
 
   // Session pills route through the same open-resolution as every other linked
-  // session (useOpenLinkedSession): on a task/doc/plan surface the conversation
-  // swaps into the companion pane instead of replacing the whole stage, and on
+  // session (useOpenLinkedSession): the conversation takes the stage, and on
   // the inbox it becomes the current selection. Plain left-click only — modified
   // clicks and unresolved entities keep the href's full-page navigation.
   const openLinkedSession = useOpenLinkedSession();

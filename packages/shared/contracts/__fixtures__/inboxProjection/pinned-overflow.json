@@ -1,0 +1,572 @@
+{
+  "about": "One past the pinned cap: the newest 100 pins survive, the oldest pin is dropped, `pinned` is named in truncated. The pins are older than the recency window so the pinned window is their only seat.",
+  "epoch": "E",
+  "asking": [],
+  "rows": [
+    {
+      "repeat": {
+        "count": 101,
+        "idPrefix": "pin",
+        "row": {
+          "status": "active",
+          "updated_at": "E-40d",
+          "message_count": 4,
+          "is_idle": true,
+          "inbox_pinned_at": "E-1h"
+        },
+        "step": {
+          "inbox_pinned_at": -60000
+        }
+      }
+    },
+    {
+      "_id": "fresh",
+      "status": "active",
+      "updated_at": "E-1m",
+      "message_count": 4,
+      "agent_status": "working",
+      "is_idle": false
+    }
+  ],
+  "expected": {
+    "truncated": [
+      "pinned"
+    ],
+    "tally": {
+      "shown": {
+        "questions": 0,
+        "pinned": 100,
+        "new": 0,
+        "needs_input": 0,
+        "done": 0,
+        "dormant": 0,
+        "working": 1,
+        "idle": 0,
+        "stashed": 0,
+        "dismissed": 0,
+        "hidden": 0
+      },
+      "folded": {
+        "questions": 0,
+        "pinned": 0,
+        "new": 0,
+        "needs_input": 0,
+        "done": 0,
+        "dormant": 0,
+        "working": 0,
+        "idle": 0,
+        "stashed": 0,
+        "dismissed": 0,
+        "hidden": 0
+      }
+    },
+    "set_digest": "189d8ee9cd793d61",
+    "placements": {
+      "freshz50000000000000000000000000": [
+        "working",
+        "working",
+        false
+      ],
+      "pin0z400000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin10z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin11z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin12z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin13z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin14z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin15z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin16z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin17z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin18z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin19z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin1z400000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin20z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin21z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin22z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin23z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin24z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin25z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin26z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin27z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin28z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin29z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin2z400000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin30z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin31z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin32z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin33z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin34z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin35z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin36z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin37z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin38z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin39z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin3z400000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin40z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin41z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin42z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin43z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin44z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin45z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin46z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin47z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin48z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin49z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin4z400000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin50z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin51z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin52z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin53z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin54z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin55z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin56z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin57z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin58z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin59z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin5z400000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin60z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin61z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin62z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin63z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin64z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin65z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin66z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin67z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin68z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin69z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin6z400000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin70z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin71z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin72z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin73z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin74z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin75z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin76z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin77z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin78z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin79z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin7z400000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin80z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin81z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin82z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin83z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin84z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin85z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin86z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin87z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin88z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin89z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin8z400000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin90z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin91z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin92z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin93z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin94z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin95z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin96z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin97z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin98z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin99z50000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "pin9z400000000000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ]
+    }
+  }
+}

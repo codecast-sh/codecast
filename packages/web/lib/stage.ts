@@ -22,6 +22,13 @@ import { isNonTabRoute } from "./tabRoutes";
 import { pathLabel, tabNeedsUrlRestore } from "./pathLabel";
 import { isDetachedTabWindow } from "./desktop";
 
+// Dynamic on purpose: the tips module drags analytics into any import graph
+// that touches it, and this module sits under TabContent (every tab pays for
+// its imports). A milestone is fire-and-forget; async is fine.
+function firstSplitMilestone() {
+  void import("../tips/useTips").then((m) => m.checkMilestone("m-first-split")).catch(() => {});
+}
+
 // ---------------------------------------------------------------------------
 // Drag protocol
 // ---------------------------------------------------------------------------
@@ -53,6 +60,9 @@ export function startPaneDrag(e: React.DragEvent | DragEvent, payload: PaneDragP
   if (!dt) return;
   dt.setData(PANE_DRAG_TYPE, JSON.stringify(payload));
   dt.effectAllowed = "copyMove";
+  // Warm the split renderer's lazy chunk while the drag is still in the air,
+  // so the first drop doesn't blank the stage waiting for it.
+  void import("../components/stage/StageSplitView").catch(() => {});
   liveDrag = payload;
   const clear = () => {
     liveDrag = null;
@@ -162,6 +172,11 @@ export function stageMoveLeafToTab(leafId: string) {
   const leaf = tab?.layout && leavesOf(tab.layout).find((l) => l.id === leafId);
   if (!leaf) return;
   st.stageCloseLeaf(leafId);
+  // Re-sync the address bar BEFORE opening the tab: openTab stamps the
+  // source tab from window.location, which still shows the popped pane's
+  // path — stamping that stale URL would write the popped content back over
+  // the surviving pane. (openTab itself converts the /conversation spelling.)
+  syncUrl();
   st.openTab({ path: leaf.path, title: pathLabel(leaf.path), makeActive: true });
   syncUrl();
 }
@@ -183,10 +198,14 @@ export function performStageDrop(zone: DropZone, payload: PaneDragPayload): bool
   if (zone.kind === "center") {
     const isSelf = from?.kind === "leaf" && from.leafId === zone.leafId;
     if (isSelf) return false;
-    if (from?.kind === "leaf") st.stageCloseLeaf(from.leafId);
     if (tab.layout) {
+      // Point the target FIRST, then dissolve a moved source. The other order
+      // is a trap: closing the source can collapse the layout to a single
+      // pane, and every stage op after that no-ops — the source vanished but
+      // the target never navigated.
       st.stageFocusLeaf(zone.leafId);
       st.stageSetLeafPath(zone.leafId, payload.path);
+      if (from?.kind === "leaf") st.stageCloseLeaf(from.leafId);
       if (from?.kind === "tab" && from.tabId !== st.activeTabId) st.closeTab(from.tabId);
       syncUrl();
     } else {
@@ -210,8 +229,13 @@ export function performStageDrop(zone: DropZone, payload: PaneDragPayload): bool
   }
 
   if (from?.kind === "leaf") {
+    // A rearrange is ONE atomic tree move (stageMoveLeaf): closing first and
+    // re-inserting passed a 2-pane split through the plain-tab collapse,
+    // which respelled the stationary pane's path and remounted everything.
     if (zone.kind === "edge" && zone.leafId === from.leafId) return false;
-    st.stageCloseLeaf(from.leafId);
+    st.stageMoveLeaf(from.leafId, zone.kind === "root" ? "root" : { leafId: zone.leafId }, zone.edge);
+    syncUrl();
+    return true;
   }
   const leafId = st.stageInsertLeaf(
     zone.kind === "root" ? "root" : { leafId: zone.leafId },
@@ -221,7 +245,46 @@ export function performStageDrop(zone: DropZone, payload: PaneDragPayload): bool
   if (!leafId) return false;
   if (from?.kind === "tab" && from.tabId !== st.activeTabId) st.closeTab(from.tabId);
   syncUrl();
+  firstSplitMilestone();
   return true;
+}
+
+/**
+ * A navigation from OUTSIDE the stage (a sidebar section, a rail session
+ * card) while the stage is split: rather than guessing a pane, hand the
+ * choice to the user — the stage overlays its cells (StagePickLayer, the
+ * same visual language as the drop preview) and the click picks the
+ * destination. Returns false when there's nothing to choose (no split,
+ * narrow screen, bad path) — the caller navigates normally.
+ */
+export function requestStagePlacement(path: string, title?: string): boolean {
+  if (typeof window === "undefined" || window.innerWidth < 900 || isDetachedTabWindow()) return false;
+  const tab = activeTab();
+  if (!tab || !tabStageLayout(tab) || isNonTabRoute(path)) return false;
+  useInboxStore.getState().setStagePick({ path, title });
+  return true;
+}
+
+/** Resolve a pending placement into a pane (or a fresh tab). */
+export function placeStagePick(target: { leafId: string } | "newTab") {
+  const st = useInboxStore.getState();
+  const pick = st.stagePick;
+  st.setStagePick(null);
+  if (!pick) return;
+  if (target === "newTab") {
+    st.saveCurrentTabState();
+    st.openTab({ path: pick.path, title: pick.title ?? pathLabel(pick.path), makeActive: true });
+    return;
+  }
+  // Same rule as a drop: a pane already showing this path is focused rather
+  // than doubled — unless that pane is the one the user pointed at.
+  const tab = activeTab();
+  const existing = tab?.layout
+    ? leavesOf(tab.layout).find((l) => l.path === pick.path && l.id !== target.leafId)
+    : null;
+  st.stageFocusLeaf(existing ? existing.id : target.leafId);
+  // The focused pane's navigation is the tab's navigation (history, recents).
+  tabNavigate(pick.path, "push");
 }
 
 /**
@@ -247,6 +310,7 @@ export function openBeside(path: string): boolean {
   const leafId = st.stageInsertLeaf("root", "right", path);
   if (!leafId) return false;
   syncUrl();
+  firstSplitMilestone();
   return true;
 }
 

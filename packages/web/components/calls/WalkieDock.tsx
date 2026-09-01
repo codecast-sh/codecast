@@ -41,7 +41,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { leaveCall, setMuted } from "../../lib/calls/callManager";
-import { joinWalkieLive, shutWalkieDoor } from "../../lib/calls/walkie";
+import { getWalkieStatus, joinWalkieLive, shutWalkieDoor, walkieJoinedRoom } from "../../lib/calls/walkie";
 import { getJoinAnnouncement, joinTitle, subscribeJoinAnnouncement } from "../../lib/calls/joinAnnounce";
 import {
   lastWalkieTarget,
@@ -137,11 +137,26 @@ export function WalkieBanner() {
   const announcement = useSyncExternalStore(subscribeJoinAnnouncement, getJoinAnnouncement, () => null);
   // The words, from the burst's own row rather than from the channel store.
   const words = useLiveWords(incoming?.messageId);
-  const face = useTalkerFace(incoming?.fromUserId, incoming?.fromName ?? label);
+  // THE LATCH, read before the face hooks so their inputs are unconditional:
+  // locked here means this client is deliberately live in the target's room,
+  // and the other person's face belongs on screen even between their bursts.
+  const lockedHere = !!target && walkieJoinedRoom(getWalkieStatus()) === target.roomKey;
+  const face = useTalkerFace(
+    incoming?.fromUserId ?? (lockedHere ? otherId : undefined),
+    incoming?.fromName ?? label,
+  );
   // The cool ring around that face rises and falls with the voice inside it,
   // written straight onto the element as `--level` by the engine's meter. No
   // React render per frame: the same machinery the key's own ring uses.
   const faceRef = useWalkieLevelVar<HTMLSpanElement>(!!incoming, incoming?.fromUserId);
+  // My own circle: on screen whenever my voice is going out. The image comes
+  // off the user doc as two scalars, never the row — same discipline as the
+  // talker's face above.
+  const myImage = useInboxStore(
+    (st: any) => st.currentUser?.image || st.currentUser?.github_avatar_url || undefined,
+  );
+  const myName = useInboxStore((st: any) => String(st.currentUser?.name ?? "You"));
+  const myFaceRef = useWalkieLevelVar<HTMLSpanElement>(!!sending);
   if (!target) return null;
 
   // The teammate's own name when they are the one talking, and the room's label
@@ -168,8 +183,13 @@ export function WalkieBanner() {
       words={words}
       face={face}
       faceRef={faceRef}
+      myFace={{ image: myImage, name: myName }}
+      myFaceRef={myFaceRef}
       tx={strip.tx}
       rx={strip.rx}
+      locked={strip.locked}
+      together={strip.together}
+      muted={s.call.muted !== false}
       hotMic={strip.hotMic}
       micDenied={strip.micDenied}
       quiet={strip.quiet}
@@ -181,8 +201,9 @@ export function WalkieBanner() {
       // that moment is for.
       // …and never while the join is being announced: the question this row
       // asks has just been answered, and the dock is a moment away.
-      actions={(!strip.tx || strip.rx) && headline === strip.headline}
+      actions={(!strip.tx || strip.rx) && headline === strip.headline && !strip.locked}
       onMute={() => void setMuted(true)}
+      onMuteToggle={() => void setMuted(s.call.muted === false)}
       onJoin={() => void joinWalkieLive(target.roomKey, { name })}
       onSnooze={snoozeWalkie}
       onOpenDm={() => router.push(`/chat/${target.channelId}`)}
@@ -242,10 +263,20 @@ export function WalkieStripView(props: {
   face: { image?: string; name: string } | null;
   /** Writes `--level` onto the face while a voice is inside it. */
   faceRef?: RefCallback<HTMLSpanElement>;
+  /** This client's own face — on screen whenever their voice is going out (a
+   *  hold, or the latch), popping in the moment it starts. */
+  myFace?: { image?: string; name: string } | null;
+  /** Writes `--level` onto my face while my mic is open. */
+  myFaceRef?: RefCallback<HTMLSpanElement>;
   /** This client is talking. */
   tx: boolean;
   /** A teammate's burst is playing here. */
   rx: boolean;
+  /** Deliberately live, hands off the key — the fill locked, or Join live. */
+  locked: boolean;
+  /** The other side is in too: both faces, one room. */
+  together: boolean;
+  muted: boolean;
   hotMic: boolean;
   micDenied: boolean;
   quiet: boolean;
@@ -254,13 +285,20 @@ export function WalkieStripView(props: {
   /** Join live and Snooze are on offer. */
   actions: boolean;
   onMute: () => void;
+  onMuteToggle?: () => void;
   onJoin: () => void;
   onSnooze: () => void;
   onOpenDm: () => void;
   onLeave: () => void;
   replyKey?: ReactNode;
 }) {
-  const { tx, rx } = props;
+  const { tx, rx, locked, together } = props;
+  // WHOSE CIRCLES ARE ON SCREEN. Mine whenever my voice is going out — the
+  // press, and the latch after it. Theirs whenever theirs is coming in, or
+  // they are deliberately in the room. Both is the founder's picture: two
+  // faces, one room, each side seeing the other.
+  const showMe = (tx || locked) && !!props.myFace;
+  const showThem = (rx || together || (!tx && !locked)) && !!props.face;
   // NEVER THE SAME NAME TWICE. Every sentence the engine writes names the
   // person in it ("Riley is talking", "You and Riley are both talking"), so a
   // name line above it would stutter on every ordinary state. It appears for
@@ -270,11 +308,12 @@ export function WalkieStripView(props: {
     <div
       className={[
         "walkie-strip",
-        tx || rx ? "walkie-strip-live" : "",
+        tx || rx || locked ? "walkie-strip-live" : "",
         // Both at once is one room with a voice going each way, so both edges
         // are drawn rather than one of them winning.
-        tx ? "walkie-strip-tx" : "",
+        tx || locked ? "walkie-strip-tx" : "",
         rx ? "walkie-strip-rx" : "",
+        locked ? "walkie-strip-locked" : "",
         props.hotMic ? "walkie-strip-hot" : "",
         props.micDenied ? "walkie-strip-denied" : "",
         props.joined ? "walkie-strip-joined" : "",
@@ -285,9 +324,29 @@ export function WalkieStripView(props: {
       {props.hotMic && <HotMicLine name={props.name} onMute={props.onMute} />}
 
       <div className="walkie-strip-head">
-        {props.face && (
-          <span ref={props.faceRef} className="walkie-strip-face" aria-hidden="true">
-            <Avatar m={{ user_image: props.face.image, user_name: props.face.name }} size={FACE} />
+        {(showMe || showThem) && (
+          <span className="walkie-strip-faces" aria-hidden="true">
+            {showMe && props.myFace && (
+              <span
+                ref={props.myFaceRef}
+                // Keyed so leaving and re-entering the screen pops again: the
+                // pop is the news of a voice starting, not a mount artifact.
+                key="me"
+                className={`walkie-strip-face walkie-strip-face-tx walkie-face-pop${props.muted ? " walkie-strip-face-muted" : ""}`}
+              >
+                <Avatar m={{ user_image: props.myFace.image, user_name: props.myFace.name }} size={FACE} />
+                {props.muted && (
+                  <span className="walkie-strip-face-mutebadge">
+                    <MicOff className="h-3 w-3" />
+                  </span>
+                )}
+              </span>
+            )}
+            {showThem && props.face && (
+              <span ref={props.faceRef} key="them" className="walkie-strip-face walkie-face-pop">
+                <Avatar m={{ user_image: props.face.image, user_name: props.face.name }} size={FACE} />
+              </span>
+            )}
           </span>
         )}
         <div className="walkie-strip-who">
@@ -328,8 +387,10 @@ export function WalkieStripView(props: {
             the face rather than in the button row, because it is a different
             kind of thing from the two decisions below — a hold, not a click —
             and because while both keys are down this is where my own warm
-            ring sits against their cool one. */}
-        {props.replyKey && <div className="walkie-strip-reply">{props.replyKey}</div>}
+            ring sits against their cool one. Not while locked: the mic is
+            already open on purpose, and a hold-to-reply next to it would be a
+            second way to do what is already happening. */}
+        {props.replyKey && !locked && <div className="walkie-strip-reply">{props.replyKey}</div>}
       </div>
 
       {!!props.words && (
@@ -338,6 +399,25 @@ export function WalkieStripView(props: {
         </div>
       )}
       {props.quiet && <div className="walkie-strip-quiet">recording, no live words</div>}
+
+      {/* LOCKED: the two controls a live seat needs, full width and unmissable
+          — this is an open microphone with nobody's hand on it, so what stops
+          it must never need looking for. Mute is the pause, End is the door. */}
+      {locked && (
+        <div className="walkie-strip-actions">
+          <button
+            type="button"
+            className={`walkie-strip-mute${props.muted ? " walkie-strip-mute-on" : ""}`}
+            onClick={props.onMuteToggle}
+          >
+            <MicOff className="h-4 w-4" />
+            {props.muted ? "Unmute" : "Mute"}
+          </button>
+          <button type="button" className="walkie-strip-end" onClick={props.onLeave}>
+            End
+          </button>
+        </div>
+      )}
 
       {props.actions && (
         <div className="walkie-strip-actions">

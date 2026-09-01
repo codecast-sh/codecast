@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { categorizeSessions, isSessionHardBlocked, type InboxSession } from "../inboxStore";
+import { isSessionHardBlocked, type InboxSession } from "../inboxStore";
+import { placeSections } from "./placeTestHarness";
 
 // Guards the Anchor v2 inbox rule (and the round-1 regression it fixed): an
 // anchor's standing thread is HIDDEN from the inbox in its normal idle-after-a-turn
@@ -8,7 +9,7 @@ import { categorizeSessions, isSessionHardBlocked, type InboxSession } from "../
 const mk = (id: string, extra: Partial<InboxSession> = {}): InboxSession => ({
   _id: id,
   session_id: `s-${id}`,
-  updated_at: 1,
+  updated_at: Date.now(),
   agent_type: "claude_code",
   message_count: 2,
   is_idle: true,
@@ -18,7 +19,7 @@ const mk = (id: string, extra: Partial<InboxSession> = {}): InboxSession => ({
 });
 
 const inSorted = (sessions: Record<string, InboxSession>, id: string) =>
-  categorizeSessions(sessions, new Set()).sorted.some((s) => s._id === id);
+  placeSections(sessions, new Set()).sorted.some((s) => s._id === id);
 
 describe("anchor inbox visibility", () => {
   it("hides an idle anchor (the round-1 bug: it must NOT pop into the inbox after a turn)", () => {
