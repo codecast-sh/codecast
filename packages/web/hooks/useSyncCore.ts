@@ -43,7 +43,7 @@ export function useSyncCore(profile: SyncCoreProfile): void {
   useSyncChangeFeed();
   useSyncSessionDecisions();
   useSyncBuckets();
-  useInboxDigestCompare(profile);
+  useInboxDigestCompare();
 
   // eslint-disable-next-line no-restricted-syntax -- platform wake-source wiring
   useEffect(() => {

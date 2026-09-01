@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { WEB_ROOT, offendersUnder } from "./sourceWalk";
 
 // INBOX PROJECTION GUARDS (docs/architecture/sync-convergence.md C1, C4, C6).
 //
@@ -26,46 +25,8 @@ import { join } from "node:path";
 // If this fails on new code, route the read through the chokepoint (or, for
 // the compare, the compare module) — do not widen an allowlist.
 
-const ROOT = join(import.meta.dir, "..", "..");
-
-function walk(dir: string, out: string[] = []): string[] {
-  for (const name of readdirSync(dir)) {
-    if (name === "node_modules" || name === "__tests__" || name === ".next") continue;
-    const full = join(dir, name);
-    if (statSync(full).isDirectory()) walk(full, out);
-    else if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name)) out.push(full);
-  }
-  return out;
-}
-
-function codeLines(file: string): Array<{ line: string; n: number }> {
-  const src = readFileSync(file, "utf8");
-  const out: Array<{ line: string; n: number }> = [];
-  src.split("\n").forEach((line, i) => {
-    const t = line.trim();
-    if (t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")) return;
-    out.push({ line, n: i + 1 });
-  });
-  return out;
-}
-
-function offendersFor(
-  dirs: string[],
-  token: RegExp,
-  allowed: ReadonlyMap<string, string>,
-): string[] {
-  const offenders: string[] = [];
-  for (const dir of dirs) {
-    for (const file of walk(join(ROOT, dir))) {
-      const rel = file.slice(ROOT.length + 1);
-      if (allowed.has(rel)) continue;
-      for (const { line, n } of codeLines(file)) {
-        if (token.test(line)) offenders.push(`${rel}:${n}: ${line.trim()}`);
-      }
-    }
-  }
-  return offenders;
-}
+const offendersFor = (dirs: string[], token: RegExp, allowed: ReadonlyMap<string, string>) =>
+  offendersUnder(WEB_ROOT, dirs, token, allowed);
 
 const ALL_DIRS = ["app", "components", "hooks", "lib", "store", "src", "shortcuts", "tips"];
 

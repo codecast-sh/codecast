@@ -70,11 +70,26 @@ describe("computeInboxMembership — the shared selection over the replica", () 
     const m = computeInboxMembership(
       {
         "local-stub-123": sess({ _id: "local-stub-123" }),
-        [AGED]: sess({ _id: AGED, parent_conversation_id: RECENT, parent_message_uuid: "u1" }),
+        [AGED]: sess({ _id: AGED, parent_conversation_id: RECENT, is_subagent: true }),
+        [cid(9)]: sess({ _id: cid(9), parent_conversation_id: RECENT }), // orphan: parent pointer, no parent message
       },
       EPOCH,
     );
     expect(m.members.size).toBe(0);
+  });
+
+  it("a plan handoff (parent pointer + parent message, not a subagent) IS its own member — the server stamps it", () => {
+    // createConversation writes exactly this shape for the daemon's plan
+    // handoff (parent_message_uuid "plan-handoff"); the server's scan treats
+    // it as a first-class member (shouldShowInInbox keeps it, groupPoolChildren
+    // excludes it from the child pool), so the replica must select it too or
+    // the compare reports it missing at every epoch.
+    const handoff = cid(5);
+    const m = computeInboxMembership(
+      { [handoff]: sess({ _id: handoff, parent_conversation_id: RECENT, parent_message_uuid: "plan-handoff" }) },
+      EPOCH,
+    );
+    expect(m.members.has(handoff)).toBe(true);
   });
 
   it("killed rows are out unless pinned (shouldShowInInbox, shared with the server scan)", () => {

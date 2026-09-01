@@ -1,4 +1,4 @@
-import { Archive, Clock, Moon, Pin, Square, Tag, type LucideIcon } from "lucide-react";
+import { Archive, Clock, EyeOff, Moon, Pin, Square, Tag, type LucideIcon } from "lucide-react";
 import type { ShortcutAction } from "../../shortcuts/registry";
 
 // The triage vocabulary, in one place. The bar, the intro tour, and any
@@ -7,7 +7,7 @@ import type { ShortcutAction } from "../../shortcuts/registry";
 // accents match the ones the session context menu and the card hover toolbar
 // already established (menus/ObjectContextMenus.tsx, GlobalSessionPanel.tsx).
 
-export type TriageVerbId = "defer" | "dormant" | "stash" | "kill" | "pin" | "label";
+export type TriageVerbId = "defer" | "dormant" | "stash" | "hide" | "kill" | "pin" | "label";
 
 export interface TriageVerb {
   id: TriageVerbId;
@@ -31,7 +31,7 @@ export interface TriageVerb {
 }
 
 /**
- * The four parking verbs: what you do with a card when you are not going to
+ * The five parking verbs: what you do with a card when you are not going to
  * reply right now. Ordered by escalation, lightest first.
  */
 export const PARK_VERBS: TriageVerb[] = [
@@ -63,10 +63,21 @@ export const PARK_VERBS: TriageVerb[] = [
     label: "Stash",
     done: "Stashed",
     icon: Archive,
-    blurb: "Out of the inbox. The agent keeps running out of sight.",
+    blurb: "Out of the inbox. The agent keeps running, and the card comes back when a trigger fires into it.",
     hover: "hover:text-sol-yellow hover:bg-sol-yellow/10",
     text: "text-sol-yellow",
     bg: "bg-sol-yellow/10",
+  },
+  {
+    id: "hide",
+    action: "session.stashHide",
+    label: "Hide",
+    done: "Stashed and hid",
+    icon: EyeOff,
+    blurb: "Stash that stays out through trigger wakes. Only an ask brings it back.",
+    hover: "hover:text-sol-violet hover:bg-sol-violet/10",
+    text: "text-sol-violet",
+    bg: "bg-sol-violet/10",
   },
   {
     id: "kill",

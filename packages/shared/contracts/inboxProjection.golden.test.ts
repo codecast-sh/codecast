@@ -40,7 +40,7 @@ const REGEN = process.env.INBOX_GOLDEN_REGEN === "1";
 const FIXTURE_EPOCH = 1_800_000_000_000;
 
 const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
-  2: "abddb0d7cb6aaa51",
+  2: "e72f762fac4e3f41",
 };
 
 type Expected = {
@@ -82,7 +82,7 @@ function loadCases(): Array<{ name: string; file: string; fixture: Fixture; rows
 }
 
 function actualFor(c: ReturnType<typeof loadCases>[number]): Expected {
-  const p = projectInbox(c.rows, { showOld: false }, c.epoch, { asking: (id) => c.asking.has(id) });
+  const p = projectInbox(c.rows, c.epoch, { asking: (id) => c.asking.has(id) });
   const placements: Expected["placements"] = {};
   for (const id of [...p.placements.keys()].sort()) {
     const pl = p.placements.get(id)!;
@@ -130,6 +130,9 @@ describe("inbox projection golden fixtures", () => {
     // `new`, and a killed row is a member only through its pin, which outranks
     // the verdict. Pinned here so a rule change that opens the bucket is seen.
     expect(buckets.has("idle")).toBe(false);
+    // Overflow of the two replicated-order windows is pinned here; the
+    // dismissed, stashed and owned caps (cap and cap + 1) are owned by the
+    // property suite (inboxProjection.property.test.ts, "every window cap").
     for (const w of ["recent", "pinned"]) expect(truncated.has(w), `no fixture overflows ${w}`).toBe(true);
     expect(folded).toBeGreaterThan(0);
   });

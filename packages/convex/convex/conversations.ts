@@ -15,8 +15,11 @@ import {
   inboxEpoch,
   emptyInboxTally,
   computeFold,
-  isFoldExempt,
+  isBelowFoldAt,
+  rollupParentIdOf,
   selectWorkingSet,
+  WORKING_SET_RECENCY_MS,
+  BLOCKED_BANNER_KINDS,
   placeProjectableRow,
   rowLastTurnAllowsPark,
   INBOX_FACT_FIELDS,
@@ -6634,7 +6637,7 @@ export const feedForCLI = query({
       // heartbeatAlive leg uses the same 90s window as the inbox maps (NOT the
       // stricter 60s liveStatusMap above) so both surfaces coerce identically.
       const heartbeatFresh =
-        !!managed?.last_heartbeat && now - managed.last_heartbeat < INBOX_HEARTBEAT_ALIVE_MS;
+        !!managed?.last_heartbeat && now - managed.last_heartbeat < HEARTBEAT_ALIVE_MS;
       const agentStatus = trustedAgentStatus(
         managed?.agent_status, conv.updated_at, now, heartbeatFresh,
         openTasksVouchForWaiting(managed?.open_tasks_at, managed?.open_tasks?.length ?? 0, now),
@@ -7632,16 +7635,16 @@ export const getConversationsBySessionIds = query({
 // so the two queries emit BYTE-IDENTICAL enriched rows — schema drift between
 // the live channel and the crawl would clobber rich rows with thin ones when the
 // store overlays by id (sessions sync is isDelta). See inbox_no_authoritative_sessions_floor.
-const INBOX_HEARTBEAT_ALIVE_MS = 90 * 1000;
-const INBOX_DISMISSED_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
-// How far back a session's last activity (updated_at) may be and still be
-// PROACTIVELY pulled into the inbox. This is a fetch bound only: both inbox
-// queries below stop sending older active/completed sessions, so a fresh client
-// loads lean. The client deliberately never prunes — its sessions cache is
-// isDelta (never-prune), so anything already cached, or opened on demand via
-// click/search (injectSession), stays. Pinned and recently-dismissed sessions
-// keep their own (separate) queries below and are unaffected by this window.
-const INBOX_SESSION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+// How far back a session's last activity (updated_at), or its dismiss/stash
+// stamp, may be and still be PROACTIVELY pulled into the inbox. ONE source:
+// the shared recency horizon the replica's selection (inWorkingSet) applies,
+// so the scan and the selection can never disagree at the horizon. This is a
+// fetch bound only: the client deliberately never prunes — its sessions cache
+// is isDelta (never-prune), so anything already cached, or opened on demand
+// via click/search (injectSession), stays. Pinned sessions keep their own
+// window and are unaffected.
+const INBOX_SESSION_WINDOW_MS = WORKING_SET_RECENCY_MS;
+const INBOX_DISMISSED_WINDOW_MS = WORKING_SET_RECENCY_MS;
 
 // Bounds on the team-mode ("team scope") candidate scan. The board pulls each
 // teammate's recent team-visible sessions; caps keep a single recompute within
@@ -7690,7 +7693,7 @@ const CONV_DAEMON_ALIVE_MS = 10 * 60 * 1000;
 
 function heartbeatAliveAt(maps: Pick<InboxSessionMaps, "lastHeartbeatMap">, cid: string, now: number): boolean {
   const hb = maps.lastHeartbeatMap.get(cid);
-  return hb !== undefined && now - hb < INBOX_HEARTBEAT_ALIVE_MS;
+  return hb !== undefined && now - hb < HEARTBEAT_ALIVE_MS;
 }
 
 function userDaemonAliveAt(maps: Pick<InboxSessionMaps, "latestHeartbeat">, now: number): boolean {
@@ -7843,12 +7846,9 @@ export function isBelowInboxFold(
   conv: { updated_at: number; has_pending_messages?: boolean | null; inbox_pinned_at?: number | null; inbox_dismissed_at?: number | null; inbox_stashed_at?: number | null },
   clusterCutoff: number,
 ): boolean {
-  if (clusterCutoff <= 0) return false;
-  // The shared exemption rule (computeFold uses the same one), so the per-row
-  // flag can never disagree with the cut it was computed from.
-  if (isFoldExempt(conv as any)) return false;
-  if (conv.has_pending_messages) return false;
-  return conv.updated_at < clusterCutoff;
+  // The shared per-row rule (computeFold's loop body), so the per-row flag can
+  // never disagree with the cut it was computed from.
+  return isBelowFoldAt(conv as any, clusterCutoff);
 }
 
 // Enrich one conversation into the inbox session row, including the AskUserQuestion
@@ -8593,7 +8593,7 @@ export async function scanInboxConversations(
   }
   const selection = selectWorkingSet(selectionInput, now);
   for (const kind of selection.truncated) truncated.add(kind);
-  const { cutoff: clusterCutoff } = computeFold(selection.members, now);
+  const { cutoff: clusterCutoff } = computeFold(selection.members);
 
   return { conversations, maps, deliberateIds, clusterCutoff, ownedByMeIds, myOwnerRowById, truncated, pinnedOverflowIds };
 }
@@ -8741,7 +8741,7 @@ export async function computeInboxSessions(
     const { asking: askingParents } = await buildAskingParents(ctx, childrenByParent, maps, now, pendingDecisionIds);
     for (const r of enrichedRows) {
       const cid = r.conv._id.toString();
-      const asking = ownAsk(r.row) || pendingDecisionIds.has(cid) || askingParents.has(cid);
+      const asking = ownAsk(r.row, r.conv) || pendingDecisionIds.has(cid) || askingParents.has(cid);
       const placement = placeConversationRow(r.conv, r.row, asking, r.row.last_user_message, now);
       r.row.bucket = placement.bucket;
       r.row.work_state = placement.work_state;
@@ -8938,17 +8938,17 @@ function childKeepsParentWorking(
   });
 }
 
-// Children in the candidate pool, grouped by parent. A child here is a row with
-// a parent pointer that is never a projection member itself (subagents and
-// orphans — isOrphanOrSubagent): its producing state and its open ask have
-// nowhere to surface but on the parent. A fork with its own inbox row is its
-// own projection member and speaks for itself.
+// Children in the candidate pool, grouped by the parent their state rolls up
+// to (the shared rollupParentIdOf rule — the replica's asking derivation
+// groups by the same one): subagents and orphans, which are never members
+// themselves, and agent-team teammates, whose asks surface on the lead. A plan
+// handoff with its own inbox row is its own projection member and speaks for
+// itself.
 export function groupPoolChildren(pool: any[]): Map<string, any[]> {
   const byParent = new Map<string, any[]>();
   for (const c of pool) {
-    if (!c.parent_conversation_id) continue;
-    if (!c.is_subagent && c.parent_message_uuid && shouldShowInInbox(c)) continue;
-    const pid = c.parent_conversation_id.toString();
+    const pid = rollupParentIdOf(c);
+    if (!pid) continue;
     const list = byParent.get(pid);
     if (list) list.push(c);
     else byParent.set(pid, [c]);
@@ -8981,10 +8981,14 @@ export function deriveProducingParents(
 
 // The candidate pool plus every live conversation the windows missed (a live
 // child of a parent outside the window still keeps that parent working).
-async function hydrateLivePool(ctx: any, conversations: any[], maps: InboxSessionMaps): Promise<any[]> {
+// The candidate pool the child rollups read: the scan's rows, every LIVE
+// conversation (a producing child keeps its parent working), and every row
+// holding a pending `cast decide` (a spawned worker's decision lifts its
+// parent whether or not the worker is still live).
+async function hydrateLivePool(ctx: any, conversations: any[], maps: InboxSessionMaps, extraIds: Iterable<string> = []): Promise<any[]> {
   const seen = new Set<string>(conversations.map((c: any) => c._id.toString()));
   const pool = [...conversations];
-  const missingLiveIds = [...maps.liveConvIds].filter((cid) => !seen.has(cid));
+  const missingLiveIds = [...new Set([...maps.liveConvIds, ...extraIds])].filter((cid) => !seen.has(cid));
   const hydratedLive = await Promise.all(
     missingLiveIds.map((cid) => Promise.resolve(ctx.db.get(cid as Id<"conversations">)).catch(() => null))
   );
@@ -9055,6 +9059,10 @@ export async function buildAskingParents(
     if (alreadyAsking?.has(pid)) { asking.add(pid); continue; }
     for (const c of children) {
       const cid = c._id.toString();
+      if (c.inbox_killed_at) continue;
+      // A child's own pending `cast decide` (a spawned subagent worker posts
+      // on ITS session) lifts the parent exactly as its open prompt does.
+      if (alreadyAsking?.has(cid)) { asking.add(pid); break; }
       if ((c.message_count ?? 0) === 0) continue;
       const status = trustedAgentStatus(
         maps.agentStatusMap.get(cid), c.updated_at, now, isLiveAt(maps, cid, now), verifiedWaitingFor(maps, cid, now),
@@ -9087,8 +9095,17 @@ export async function buildAskingParents(
   return { asking, probedAuqOpen };
 }
 
-// A row's own ask: an open AskUserQuestion poll or a permission prompt.
-export function ownAsk(lv: { awaiting_input?: boolean | null; agent_status?: string | null }): boolean {
+// A row's own ask: an open AskUserQuestion poll or a permission prompt. An
+// infrastructure park is not a decision: a row whose newest turn is an
+// unresolved login / limit / dropped-connection banner (BLOCKED_BANNER_KINDS)
+// is blocked on plumbing, and files needs_input through the pendingApiError
+// arm — the same exception the web decision queue applies
+// (lib/decisionQueue sessionHasOpenQuestion), so both sides share one rule.
+export function ownAsk(
+  lv: { awaiting_input?: boolean | null; agent_status?: string | null },
+  conv?: { pending_api_error_kind?: string | null },
+): boolean {
+  if (conv?.pending_api_error_kind && BLOCKED_BANNER_KINDS.has(conv.pending_api_error_kind)) return false;
   return !!lv.awaiting_input || lv.agent_status === "permission_blocked";
 }
 
@@ -9246,7 +9263,7 @@ function rowTimeDeadlines(conv: any, maps: InboxSessionMaps, cid: string, childr
     conv.updated_at + STATUS_TRUST_TTL_MS,
     conv.updated_at + CONV_DAEMON_ALIVE_MS,
     statusAt !== undefined ? statusAt + AGENT_IDLE_GRACE_MS : null,
-    hb !== undefined ? hb + INBOX_HEARTBEAT_ALIVE_MS : null,
+    hb !== undefined ? hb + HEARTBEAT_ALIVE_MS : null,
     maps.latestHeartbeat !== undefined ? maps.latestHeartbeat + USER_DAEMON_ALIVE_MS : null,
     openTasksAt !== undefined ? openTasksAt + OPEN_TASKS_FRESH_MS : null,
     // An armed /loop parks the row (isArmedLoopHome) until its wakeup goes
@@ -9259,7 +9276,7 @@ function rowTimeDeadlines(conv: any, maps: InboxSessionMaps, cid: string, childr
       c.updated_at + SUBAGENT_PRODUCING_GRACE_MS,
       c.updated_at + STATUS_TRUST_TTL_MS,
       c.updated_at + HEARTBEAT_ALIVE_MS,
-      chb !== undefined ? chb + INBOX_HEARTBEAT_ALIVE_MS : null,
+      chb !== undefined ? chb + HEARTBEAT_ALIVE_MS : null,
     );
   }
   return deadlines;
@@ -9295,11 +9312,12 @@ export async function computeSessionsLiveness(
     includeLiveness: true,
     teamScope,
   });
-  const pool = await hydrateLivePool(ctx, conversations, maps);
-  const childrenByParent = groupPoolChildren(pool);
   // Decisions FIRST: a parent already asking through a pending `cast decide`
-  // never spends child message probes (see buildAskingParents).
+  // never spends child message probes (see buildAskingParents), and a child
+  // holding one joins the pool so its parent is lifted.
   const pendingDecisionIds = await loadPendingDecisionConvIds(ctx, userId);
+  const pool = await hydrateLivePool(ctx, conversations, maps, pendingDecisionIds);
+  const childrenByParent = groupPoolChildren(pool);
   const { asking: askingParents, probedAuqOpen } = await buildAskingParents(ctx, childrenByParent, maps, now, pendingDecisionIds);
   const uid = userId.toString();
   const shownConvs = conversations.filter((conv) => shouldShowInInbox(conv));
@@ -9344,7 +9362,7 @@ export async function computeSessionsLiveness(
   shownConvs.forEach((conv, i) => {
     const cid = conv._id.toString();
     const producing = producingFor(cid);
-    const askingFor = (lv: LivenessFields) => ownAsk(lv) || pendingDecisionIds.has(cid) || askingParents.has(cid);
+    const askingFor = (lv: LivenessFields) => ownAsk(lv, conv) || pendingDecisionIds.has(cid) || askingParents.has(cid);
     const placeAt = (t: number): InboxPlacement => {
       const lvAt = deriveLivenessAt(conv, maps, reads[i], producing, t);
       return placeConversationRow(conv, lvAt, askingFor(lvAt), reads[i].lastUserMessage, t);
@@ -9989,9 +10007,15 @@ export async function collectInboxSessionsByIds(ctx: any, userId: Id<"users">, i
     const id = ctx.db.normalizeId("conversations", raw);
     if (!id) continue;
     const conv = await ctx.db.get(id);
-    if (!conv || conv.user_id.toString() !== userId.toString()) continue;
+    if (!conv) continue;
+    // The runner, or an owner (session_owners) — the same admission the scan's
+    // owned window applies, so a replica can heal an assigned row it missed.
+    // The owner seat is stamped so the client's foreign-row rule keeps it.
+    const owned = conv.user_id.toString() !== userId.toString();
+    if (owned && !(await isSessionOwner(ctx, conv._id, userId))) continue;
     if (conv.status !== "active" && conv.status !== "completed") continue;
     const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, 0, { auq: true });
+    if (owned) row.owned_by_me = true;
     stripInboxLiveness(row);
     sessions.push(row);
   }

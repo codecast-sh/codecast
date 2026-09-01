@@ -21,12 +21,13 @@ describe("triage verb catalog", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  test("the parking verbs are the four backspace-family chords", () => {
+  test("the parking verbs are the five backspace-family chords", () => {
     // Order matters: the bar reads left to right by escalation.
     expect(PARK_VERBS.map((v) => v.action)).toEqual([
       "session.deferAdvance",
       "session.dormantAdvance",
       "session.stash",
+      "session.stashHide",
       "session.kill",
     ]);
   });

@@ -2,7 +2,6 @@ import { describe, expect, it } from "bun:test";
 import { STATUS_TRUST_TTL_MS } from "@codecast/shared/contracts";
 import {
   classifySession,
-  sessionRestState,
   type InboxSession,
 } from "../inboxStore";
 import { orderSections, placeSections } from "./placeTestHarness";
@@ -30,7 +29,12 @@ const mk = (id: string, extra: Partial<InboxSession> = {}): InboxSession => ({
 const ids = (xs: InboxSession[]) => xs.map((x) => x._id);
 const cat = (sessions: Record<string, InboxSession>) => placeSections(sessions, new Set());
 
-describe("sessionRestState", () => {
+// The rest verdict is the shared classifyWorkState restState arm, read through
+// classifySession (the adapter): the same sources, the same precedence, so the
+// web inbox and `cast sessions` file the same session under the same word.
+const sessionRestState = (s: InboxSession) => classifySession(s).rest;
+
+describe("the rest verdict (classifySession.rest over the shared classifier)", () => {
   it("declared verdicts: agent_status dormant / done, and the inferred waiting", () => {
     expect(sessionRestState(mk("a", { agent_status: "dormant" }))).toBe("dormant");
     expect(sessionRestState(mk("a", { agent_status: "waiting" }))).toBe("dormant");

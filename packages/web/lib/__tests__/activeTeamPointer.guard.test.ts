@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { walkSources } from "./sourceWalk";
 import { join } from "node:path";
 
 // The active team lives in two places ON PURPOSE:
@@ -24,15 +25,7 @@ const ALLOWED = new Set([
   "store/inboxStore.ts", // defines updateClientUI and the ui bag
 ]);
 
-function walk(dir: string, out: string[] = []): string[] {
-  for (const name of readdirSync(dir)) {
-    if (name === "node_modules" || name === "__tests__" || name === ".next") continue;
-    const full = join(dir, name);
-    if (statSync(full).isDirectory()) walk(full, out);
-    else if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name)) out.push(full);
-  }
-  return out;
-}
+const walk = (dir: string) => walkSources(dir);
 
 describe("active-team pointer", () => {
   test("nothing writes the ui mirror without the canonical pointer", () => {

@@ -1,7 +1,7 @@
 import { useRef, useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, InboxSession, isSessionWaitingForInput, classifySession, isSub, DISMISS_RECONCILE_WINDOW_MS, visualOrderViewSig } from "../store/inboxStore";
+import { useInboxStore, InboxSession, classifySession, isSub, DISMISS_RECONCILE_WINDOW_MS, visualOrderViewSig } from "../store/inboxStore";
 import { warmVisibleSessions } from "./inboxWarm";
 import { toast } from "sonner";
 import { soundIdle } from "../lib/sounds";
@@ -21,10 +21,10 @@ import { collectGhostSweepCandidates, collectHiddenResurrectionSuspects } from "
 // completeness floor isn't the live window's recency cap. Per-session enrichment
 // (message read + children + plan/task gets) is heavy, so pages stay small — a big
 // page times out the UDF. Throttle/incremental semantics mirror the tasks crawl.
-// The completeness crawl only backfills the last 30 days of sessions; older ones
-// stay reachable via search/open. Mirrors the inbox window — see the server's
-// INBOX_SESSION_WINDOW_MS and inbox_30day_session_window.
-const SESSIONS_CRAWL_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+// The completeness crawl only backfills the shared recency horizon (the
+// server's scan window and the working-set selection read the same constant);
+// older sessions stay reachable via search/open.
+const SESSIONS_CRAWL_WINDOW_MS = DISMISS_RECONCILE_WINDOW_MS;
 const SESSIONS_RECONCILE_PAGE_SIZE = 75;
 const SESSIONS_RECONCILE_PAGE_DELAY_MS = 60;
 const SESSIONS_RECONCILE_THROTTLE_MS = 30 * 60 * 1000;
@@ -34,11 +34,14 @@ const BOOT_OUTBOX_DRAIN_POLL_MS = 250;
 
 
 export function waitingSoundKey(session: InboxSession, queued: Set<string>): string | null {
-  if (!isSessionWaitingForInput(session, queued)) return null;
-  // Only a genuine claim on the human chimes. A delivered (done) or parked
-  // (dormant) settle is quiet — the server's needs-input push stands down on
-  // the same verdict (classifyWorkState !== "needs_input").
-  if (classifySession(session).rest !== "needs_input") return null;
+  // A message the user just queued means they already acted; a pinned row
+  // lives in its own group and never chimes.
+  if (queued.has(session._id) || session.is_pinned) return null;
+  // Only a genuine claim on the human chimes: the SHARED verdict's
+  // needs_input (a delivered or parked settle is quiet) — the server's
+  // needs-input push stands down on the same verdict.
+  const c = classifySession(session);
+  if (!c.waiting || c.rest !== "needs_input") return null;
   const kind = session.awaiting_input
     ? "awaiting_input"
     : session.agent_status === "permission_blocked"

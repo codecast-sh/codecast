@@ -126,7 +126,7 @@ async function batchGetChunk(convex: any, coll: Collection, ids: string[]): Prom
 
 // Per-collection batch fetch of CURRENT state for a set of ids. Each returns rows
 // in the exact shape its live channel syncs, so syncTable merges them cleanly.
-async function batchGet(convex: any, coll: Collection, ids: string[]): Promise<any[]> {
+export async function batchGet(convex: any, coll: Collection, ids: string[]): Promise<any[]> {
   if (!ids.length) return [];
   const rows: any[] = [];
   for (const chunk of chunkIds(ids)) {

@@ -15,7 +15,12 @@ const POSTHOG_KEY = META_ENV.VITE_POSTHOG_KEY;
 const POSTHOG_HOST = META_ENV.VITE_POSTHOG_HOST || "https://us.i.posthog.com";
 const IS_DEV = META_ENV.DEV;
 
-function getPlatform(): "desktop" | "web" {
+export type AnalyticsPlatform = "desktop" | "web" | "mobile";
+
+// The platform every event is stamped with. Exported so other telemetry
+// (the inbox digest compare) stamps the same value; the native twin answers
+// "mobile".
+export function getPlatform(): AnalyticsPlatform {
   return typeof window !== "undefined" && !!(window as any).__CODECAST_ELECTRON__
     ? "desktop"
     : "web";

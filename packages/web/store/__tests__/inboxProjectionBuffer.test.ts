@@ -3,6 +3,8 @@ import {
   useInboxStore,
   SESSIONS_PRESERVE_FIELDS,
   SESSIONS_STRIP_FIELDS,
+  __resetHeldOverlayFactsForTests,
+  computeInboxMembership,
   type InboxSession,
 } from "../inboxStore";
 import {
@@ -187,5 +189,47 @@ describe("single-writer enforcement on every row channel", () => {
     const merged = useInboxStore.getState().sessions[A] as any;
     expect(merged.agent_status).toBe("working");
     expect(merged.tmux_session).toBe("cc-1");
+  });
+});
+
+describe("facts for a row the store does not hold yet are held for its arrival", () => {
+  // A daemon-started session: the overlay (facts) and the base list (fast
+  // fields stripped to null) are coalesced independently, so the overlay can
+  // land first. Without the hold, the row landed with updated_at null, read
+  // as 0 by the selection, and sat outside every window until the NEXT
+  // overlay execution (one heartbeat with a live daemon; indefinite without).
+  const NEW = "e".repeat(32);
+  const EPOCH = 1_800_000_000_000;
+  beforeEach(() => {
+    __resetHeldOverlayFactsForTests();
+    useInboxStore.setState({ sessions: {}, sessionsProjection: {}, pending: {} } as any);
+  });
+
+  it("overlay first, then the base row: the row lands with the overlay's facts and is a member at once", () => {
+    const store = useInboxStore.getState();
+    store.applyInboxLivenessPayload("mine", {
+      liveness: { [NEW]: { bucket: "working", work_state: "working", agent_status: "working", is_idle: false, updated_at: EPOCH - 60_000, message_count: 2 } },
+      projection: { v: INBOX_PROJECTION_VERSION, epoch: EPOCH, tally: {}, set_digest: "x", truncated: [] },
+    });
+    expect(useInboxStore.getState().sessions[NEW]).toBeUndefined();
+    // The base list's shape with fast_fields_in_overlay: the facts are null.
+    useInboxStore.getState().syncTable("sessions", [{ ...row(NEW), updated_at: null, message_count: null, agent_status: null, is_idle: null }]);
+    const landed = useInboxStore.getState().sessions[NEW];
+    expect(landed.updated_at).toBe(EPOCH - 60_000);
+    expect(landed.message_count).toBe(2);
+    expect(landed.agent_status).toBe("working");
+    expect((landed as any).bucket).toBeUndefined();
+    expect(computeInboxMembership(useInboxStore.getState().sessions, EPOCH).members.has(NEW)).toBe(true);
+    // Consumed: a second sync of the same row does not re-merge stale facts.
+    useInboxStore.getState().syncTable("sessions", [{ ...row(NEW), updated_at: EPOCH, message_count: 3 }]);
+    expect(useInboxStore.getState().sessions[NEW].updated_at).toBe(EPOCH);
+  });
+
+  it("a newer payload replaces the hold, so nothing outlives one overlay execution", () => {
+    const store = useInboxStore.getState();
+    store.applyInboxLivenessPayload("mine", { liveness: { [NEW]: { updated_at: EPOCH - 60_000, message_count: 2 } } });
+    store.applyInboxLivenessPayload("mine", { liveness: {} });
+    useInboxStore.getState().syncTable("sessions", [{ ...row(NEW), updated_at: null, message_count: null }]);
+    expect(useInboxStore.getState().sessions[NEW].updated_at).toBeNull();
   });
 });

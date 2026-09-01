@@ -17,7 +17,6 @@ import {
   type PlacedInbox,
   type PlaceInboxState,
   placeInboxRows,
-  classifySession,
   isAgentActive,
   getProjectName,
 } from "../store/inboxStore";
@@ -41,9 +40,17 @@ export interface FleetBandOpts {
 const inFlight = (s: InboxSession, opts: FleetBandOpts) =>
   opts.queued.has(s._id) || opts.pendingSendIds.has(s._id);
 
+// Is the daemon producing right now, per the RAW facts: an active status, or
+// the server's composite is_idle false. The board asks this, not "who acts
+// next" (the shared verdict): a run that died mid-task (stopped while not
+// idle) is the user's to revive, while a cleanly finished one (stopped and
+// idle) is FINISHED here even though the inbox verdict files it needs_input.
+// A killed row is retired whatever its frozen status says.
+const isProducing = (s: InboxSession) => !s.inbox_killed_at && (isAgentActive(s) || !s.is_idle);
+
 export function fleetBandFor(s: InboxSession, opts: FleetBandOpts): FleetBand {
   // A message on its way to the agent reads as running, whatever the stale
-  // status claims — same precedence isSessionWaitingForInput gives in-flight.
+  // status claims — the same precedence the pending_send overlay gives in-flight.
   if (inFlight(s, opts)) return "running";
   // Concrete blockers only. Deliberately NOT isSessionHardBlocked: its "dead
   // agent with output" arm counts every cleanly finished session ("stopped" +
@@ -55,8 +62,7 @@ export function fleetBandFor(s: InboxSession, opts: FleetBandOpts): FleetBand {
   if (s.awaiting_input) return "needsYou";
   if (s.pending_api_error && hasOutput) return "needsYou";
   if (s.agent_status === "permission_blocked" && hasOutput) return "needsYou";
-  const { idle } = classifySession(s);
-  if (!idle) {
+  if (isProducing(s)) {
     // "Active" per status, but the liveness TTL says the agent went silent
     // (or the daemon marked it unresponsive): a quietly dead worker is the
     // user's to revive, not a running one.
@@ -284,7 +290,7 @@ export function fleetTileMeta(
       return { text: blocker ? `asks: ${blocker}` : "waiting for your answer", tone: "amber" };
     }
     if (s.agent_status === "stopped") return { text: "agent stopped", tone: "amber" };
-    if (isLivenessStale(s, now) && !classifySession(s).idle) {
+    if (isLivenessStale(s, now) && isProducing(s)) {
       return { text: `went quiet ${compactAge(now - (s.updated_at ?? now))} ago`, tone: "amber" };
     }
     return { text: blocker || "needs your attention", tone: "amber" };

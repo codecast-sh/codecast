@@ -183,7 +183,17 @@ Consumers: the client store chokepoint (C5), `inboxForCLI` (rendering the server
 run), and the overlay's stamping pass (C1). The store's parallel classifiers
 (`categorizeSessions`, the `isSessionWaitingForInput` chain, `liftQuestions`,
 `partitionOldSessions`) and the server's separate `tallyInboxRows` path are deleted,
-not wrapped.
+not wrapped. The one per-row verdict a surface outside the chokepoint may read
+(`classifySession`: the sidebar rank and wake signature, the sessions page, trigger
+absorption, the waiting chime) is a thin adapter over `placeProjectableRow`, with the
+row's facts as they stand; a source guard bans the deleted names.
+
+**The asking rollup is one shared rule.** `rollupParentIdOf` (shared module) names the
+parent a child's ask lifts: a subagent or orphan rolls up to its `parent_conversation_id`;
+a plan handoff (parent pointer plus parent message) is its own member and speaks for
+itself; an agent team teammate rolls up to its lead. The server pool grouping and the
+replica's asking derivation both group by it, and a child's pending `cast decide` lifts
+its parent on both sides.
 
 ### C4 The working set
 
@@ -282,6 +292,19 @@ Chip filters, label lenses, and schedule grouping are presentation over placed r
 cannot change headline tallies. Trigger absorption stops being a pass: the
 `armed_trigger_kind` fact reaches the classifier as data, identically everywhere.
 
+**The staleness sweep is gated on overlay coverage.** The server's `is_idle` and
+`has_pending` facts come from inputs the replica does not hold (`last_message_role`,
+`agent_status_updated_at`, a producing subagent), so a row the latest overlay payload
+stamps, while that payload is younger than the compare's payload age bound, is placed
+from those facts exactly as the server placed it. The client only sweep (a quiet row
+past the idle grace reads as settled; a trust stale row blanks its queue flag) applies
+only to rows the payload cannot vouch for: liveness never delivered, a row outside the
+payload, or a payload past the bound (the stale probe refreshes it within five
+minutes). The status trust decay stays ungated: it reads the same two inputs the server
+reads. The two replica simulation found the ungated sweep filing a parent with a
+producing child, and a live daemon holding an unanswered message, under needs input
+while the server and the CLI kept them working.
+
 **Feeder parity.** `useSyncCore(profile)` owns the full feeder mount set: sync log
 applier, live window, liveness overlay, team feeders (mounted per scope), recovery
 probes, completeness crawl, dismissed and stashed reconciles, session decisions, client
@@ -337,9 +360,16 @@ divergence.
 those ids; their facts arrive with the next overlay payload (a probe forces one), since
 the store now holds the row for `syncOverlay` to land on. `bucket_deltas` and
 `fold_deltas` on rows the replica holds mean stale facts, and facts have one writer, so
-the heal is one overlay probe, not a working set refetch. `extra` ids are re-evaluated
-after the heal; a persistent extra is a membership bug and is reported, not deleted
-(deletion truth remains authorized absence).
+the heal is one overlay probe, not a working set refetch. `extra` ids are re-read by id
+through the same `getInboxSessionsByIds` call: a row the replica still counts but the
+server does not stamp is usually a field the replica holds wrong (the two replica
+simulation found a pin lock that re-asserted a local pin over a remote kill, and no
+channel ever re-delivered the killed row once the lock settled), so the authoritative
+row lands its fields. Before that merge the heal releases every pending field lock on
+the named rows that is past `HIDDEN_OVERRIDE_SETTLE_MS`: past that bound the compare's
+carve-out already stops treating the lock as an intentional deviation, so the lock and
+the carve-out share one bound. A row the server does not return is left exactly as it
+was and stays a reported extra (deletion truth remains authorized absence).
 
 **Bounded.** Three heals per ten minutes, jittered, fixed window. The fourth emits
 `inbox_drift_persistent` and latches healing OFF for the session; a reload rearms it.
@@ -451,7 +481,21 @@ metric fires when `loadCache` disables the cache so that noise is measurable.
   hold identical working sets, placements, and digests, equal to a directly computed
   server projection. A cold replica case: fold rows present server side, empty client
   cache; assert the compare stays gated until the crawl completes and the heal then
-  converges within one budget.
+  converges within one budget. Landed as
+  `packages/web/store/__tests__/inboxConvergenceSim.test.ts`: the real Convex compute
+  functions over a fake db, the real store appliers and gestures, one virtual clock
+  behind `Date.now` and `performance.now`, twelve seeded random schedules of sixty steps
+  (replay one with `SIM_SEEDS=<seed>`), plus the dead subscription cases and the two
+  drills (wrong client version, `INBOX_DIGEST_DISABLED`). The sync channels alone leave
+  a bounded residue (the settled pin lock case above); the anti-entropy loop closes it
+  within one heal, and the test prints which seeds needed it.
+- Golden fixtures and property tests: `packages/shared/contracts/inboxProjection.golden.test.ts`
+  over `__fixtures__/inboxProjection/*.json` (regenerate with `INBOX_GOLDEN_REGEN=1`,
+  then bump the version and pin the printed hash), and
+  `inboxProjection.property.test.ts` over seeded generated row sets
+  (`__fixtures__/inboxProjectionGen.ts`, shared with the convex and web suites).
+  Server determinism over generated worlds:
+  `packages/convex/convex/conversations.convergence.test.ts`.
 - End to end: web plus mobile simulator against dev Convex; drive pin, dismiss, settle,
   trigger arm; assert equal counts within one payload cycle; kill one client's
   subscription and assert detection and heal within budget. Two drills: ship a client a

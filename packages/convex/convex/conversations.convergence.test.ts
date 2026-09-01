@@ -156,7 +156,7 @@ describe("the overlay is the shared projection over its own facts", () => {
       const world = genWorld(seed, 80, EPOCH, ME);
       const { liveness, projection } = await computeSessionsLiveness({ db: dbFor(world) }, ME as any);
       const { rows, asking } = replicaRowsOf(world, liveness);
-      const local = projectInbox(rows, { showOld: false }, EPOCH, { asking: (id) => asking.has(id) });
+      const local = projectInbox(rows, EPOCH, { asking: (id) => asking.has(id) });
       expect(local.set_digest).toBe(projection.set_digest!);
       expect(local.tally).toEqual(projection.tally);
       for (const [id, stamp] of Object.entries(liveness)) {
