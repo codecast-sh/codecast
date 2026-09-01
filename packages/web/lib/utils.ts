@@ -30,6 +30,11 @@ export function formatRelative(ts: number, now: number = Date.now()): string {
   return short === "now" ? "just now" : `${short} ago`;
 }
 
+/** "Aug 2" — the short calendar form for a date that is past the relative range. */
+export function formatShortDate(ts: number): string {
+  return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
 /** The long form a relative stamp's tooltip shows. */
 export function formatDateFull(ts: number): string {
   return new Date(ts).toLocaleDateString("en-US", {

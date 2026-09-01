@@ -1236,6 +1236,10 @@ export type ClientUI = {
   // including off — so sticky can't decay into stuck. The legacy key still
   // lingers in server docs; nothing may ever read it (resolveShowOld).
   inbox_show_old?: boolean;
+  // When the user last said "Not now" to the "clear out your working set"
+  // prompt. Stamped LWW: a snooze on one device silences the prompt on every
+  // device for its window (STALE_PROMPT_SNOOZE_MS in GlobalSessionPanel).
+  inbox_stale_prompt_snoozed_at?: number;
   // Inbox scope. "mine" (default) is the personal inbox: your own sessions plus
   // any explicitly routed to you. "team" turns the inbox into a shared board of
   // every team-visible session across the active team (a superset of "mine").
@@ -5131,7 +5135,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 export const STAMPED_UI_KEYS = new Set([
   "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "show_triggers", "card_bars", "inbox_show_old",
   "simple_view", "inbox_image_thumbs", "composer_suggestions", "inbox_home", "threads_include_sessions",
-  "walkie_hold_seen", "call_camera_on", "triage_bar_compact",
+  "walkie_hold_seen", "call_camera_on", "triage_bar_compact", "inbox_stale_prompt_snoozed_at",
   // The sound gates and volume: a mute is a per-user preference, not a
   // per-device one — turning sounds off anywhere must silence every client,
   // localhost dev origins included.
@@ -8104,9 +8108,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   syncTable: sync(function (this: Draft, field: string, incoming: any, opts?: SyncOpts) {
     if (!incoming && incoming !== 0) return;
-    // Quiescence clock for the digest compare (sync-convergence C6): a row
-    // channel is applying, so the replica is mid catch-up until it settles.
-    if (SYNC_ACTIVITY_FIELDS.has(field)) noteSyncApply();
     const config = SYNC_REGISTRY[field] ? { ...SYNC_REGISTRY[field], ...opts } : (opts || {});
     const kind = config.kind ?? "collection";
 
@@ -8294,6 +8295,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
       }
     }
 
+    // Quiescence clock for the digest compare (sync-convergence C6): a row
+    // channel COMMITTED a change, so the replica is mid catch-up until it
+    // settles. Stamped here, past the no-op bail above, because a busy account
+    // re-pushes the sessions channel every few seconds (liveness heartbeats
+    // re-emit the live window; facts are stripped from this channel, so those
+    // pushes are value-identical) and a value-identical push is not catch-up
+    // — stamping it kept the compare gated on not_quiescent forever. Decided
+    // by IDENTITY, like the no-op bail: applySyncTable hands back the previous
+    // table and pending objects when nothing it compares changed (the sessions
+    // channel registers a transform, so it never reaches that bail).
+    if (SYNC_ACTIVITY_FIELDS.has(field) && (base[field] !== table || base.pending !== (pending as any))) noteSyncApply();
     // applySyncTable returns the PREVIOUS table/pending objects untouched when
     // a push changed nothing (whole-collection identity reuse) — skip the draft
     // writes so a no-op sync produces no commit at all.

@@ -4,9 +4,11 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import {
   createInboxDigestComparer,
+  evaluateInboxCompare,
   INBOX_COMPARE_TICK_MS,
   type InboxDigestComparer,
 } from "../store/inboxDigestCompare";
+import { lastSyncApplyMono, monotonicNow, syncInflightCount } from "../store/syncActivity";
 import { syncMetaKey } from "./reconcileCrawl";
 import { inboxCrawlWsKey } from "./useSyncInboxSessions";
 import { batchGet } from "./useSyncChangeFeed";
@@ -43,6 +45,28 @@ export function startInboxDigestCompare(
       useInboxStore.getState().applyInboxLivenessPayload("mine", fresh);
     },
   });
+  // Dev console handle (same convention as __inboxStore): `evaluate` is the
+  // pure compare over the live store with the tick's exact context — no heal,
+  // no telemetry — so a person can read the outcome and the per-row diff;
+  // `counters` are the heartbeat counters since the last flush.
+  if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+    (window as any).__inboxDigest = {
+      evaluate: () => {
+        const state = useInboxStore.getState();
+        const meId = state.currentUser?._id?.toString?.() ?? null;
+        return evaluateInboxCompare(state, {
+          now: Date.now(),
+          nowMono: monotonicNow(),
+          crawlMetaKey: meId ? syncMetaKey("sessions", inboxCrawlWsKey(meId)) : null,
+          lastApplyMono: lastSyncApplyMono(),
+          inflight: syncInflightCount(),
+        });
+      },
+      counters: comparer.counters,
+      healLatched: comparer.healLatched,
+      activity: () => ({ apply_age_ms: monotonicNow() - lastSyncApplyMono(), inflight: syncInflightCount() }),
+    };
+  }
   const unsubscribe = subscribeTick(INBOX_COMPARE_TICK_MS, () => {
     try {
       comparer.tick(useInboxStore.getState());
