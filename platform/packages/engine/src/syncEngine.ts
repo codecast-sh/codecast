@@ -259,7 +259,7 @@ export function createSyncEngine(config: PlatformConfig): SyncEngine {
     // applySyncTable hands back the previous row object whenever nothing changed.
     // The pending map must land even when the rows didn't: an echo that CLEARS
     // a local-first field protection changes pending, not the table.
-    if (!cfg.altKey && !cfg.extra && !cfg.transform && base.pending === pending) {
+    if (!cfg.altKey && !cfg.extra && !cfg.transform && !cfg.force && base.pending === pending) {
       if (prevCollection) {
         const newKeys = Object.keys(table);
         if (newKeys.length === Object.keys(prevCollection).length &&

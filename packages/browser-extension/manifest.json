@@ -3,7 +3,7 @@
   "name": "Cast Browser Bridge",
   "version": "0.1.0",
   "description": "Lets the cast CLI drive tabs in this Chrome over a token-authenticated localhost bridge. Driven tabs show Chrome's debugging banner and a badge.",
-  "permissions": ["debugger", "tabs", "storage", "alarms"],
+  "permissions": ["debugger", "tabs", "tabGroups", "storage", "alarms"],
   "background": {
     "service_worker": "background.js"
   },

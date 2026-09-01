@@ -1586,7 +1586,7 @@ export class SyncService {
     }
   }
 
-  async getProjectInfo(conversationId: string): Promise<{ project_path: string | null; git_root: string | null; git_remote_url: string | null; effort: string | null; execution_protocol_state: string | null } | null> {
+  async getProjectInfo(conversationId: string): Promise<{ project_path: string | null; git_root: string | null; git_remote_url: string | null; effort: string | null; cc_account: string | null; execution_protocol_state: string | null } | null> {
     try {
       return await this.guarded(async () => {
         const result = await this.client.query("conversations:getProjectInfo" as any, {
@@ -1599,6 +1599,7 @@ export class SyncService {
           git_root: result.git_root ?? null,
           git_remote_url: result.git_remote_url ?? null,
           effort: result.effort ?? null,
+          cc_account: result.cc_account ?? null,
           execution_protocol_state: result.execution_protocol_state ?? null,
         };
       });

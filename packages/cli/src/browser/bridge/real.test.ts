@@ -9,9 +9,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  isRealMode, ownedRealTab, pruneRealTabs, realTabOwnership, rememberRealTab, resolveRealTarget,
-  setStickyTarget, stickyTarget,
+  bridgeEndpointIfConfigured, engineBrowserFor, isRealMode, ownedRealTab, pruneRealTabs, realTabOwnership, rememberRealTab,
+  resolveRealTarget, setStickyTarget, splitTargetFlags, stickyTarget,
 } from "./real.js";
+import { writeBridgeState } from "./host.js";
+import { isRealSession, realSessionKey } from "../engine.js";
 import { tabIdOfTarget, targetIdOfTab } from "./protocol.js";
 
 let dir: string;
@@ -108,5 +110,53 @@ describe("resolveRealTarget", () => {
     expect(resolveRealTarget(targets, "app.example", "session:x").targetId).toBe(targetIdOfTab(2));
     expect(resolveRealTarget(targets, "human's mail", "session:x").targetId).toBe(targetIdOfTab(1));
     expect(() => resolveRealTarget(targets, "nope", "session:x")).toThrow(/no real-browser tab/);
+  });
+});
+
+describe("target flags on a raw argument line", () => {
+  test("--real and --clone come off the line, everything else stays in order", () => {
+    expect(splitTargetFlags(["https://x", "--real", "--new-tab"])).toEqual({ real: true, clone: undefined, args: ["https://x", "--new-tab"] });
+    expect(splitTargetFlags(["--clone", "snapshot", "-i"])).toEqual({ real: undefined, clone: true, args: ["snapshot", "-i"] });
+    expect(splitTargetFlags(["tab", "list"])).toEqual({ real: undefined, clone: undefined, args: ["tab", "list"] });
+  });
+
+  test("what comes off the line is what isRealMode reads", () => {
+    setStickyTarget("session:a", "real");
+    expect(isRealMode(splitTargetFlags(["--clone"]), "session:a")).toBe(false);
+    expect(isRealMode(splitTargetFlags([]), "session:a")).toBe(true);
+    expect(isRealMode(splitTargetFlags(["--real"]), "session:b")).toBe(true);
+  });
+});
+
+describe("the browser behind an engine session key", () => {
+  test("a plain key drives the managed Chrome: no port, no socket", () => {
+    expect(engineBrowserFor("env-abc")).toEqual({ session: "env-abc" });
+  });
+
+  test("a -real key drives the bridge: its port, and its socket URL carrying the token", () => {
+    writeBridgeState({ port: 47123, token: "tok" });
+    expect(engineBrowserFor(realSessionKey("env-abc"))).toEqual({
+      session: "env-abc-real",
+      port: 47123,
+      cdp: "ws://127.0.0.1:47123/devtools/browser/tok",
+    });
+    expect(bridgeEndpointIfConfigured()).toEqual({ port: 47123, token: "tok" });
+  });
+
+  test("a -real key with no bridge set up is refused, never routed to the clone", () => {
+    expect(() => engineBrowserFor("env-abc-real")).toThrow(/extension setup/);
+    expect(bridgeEndpointIfConfigured()).toBeNull();
+  });
+});
+
+describe("real session keys", () => {
+  test("suffix once, never twice, and the key stays within the engine's length", () => {
+    expect(realSessionKey("env-abc")).toBe("env-abc-real");
+    expect(realSessionKey("env-abc-real")).toBe("env-abc-real");
+    expect(isRealSession("env-abc-real")).toBe(true);
+    expect(isRealSession("env-abc")).toBe(false);
+    const long = realSessionKey("x".repeat(60));
+    expect(long.length).toBe(60);
+    expect(isRealSession(long)).toBe(true);
   });
 });

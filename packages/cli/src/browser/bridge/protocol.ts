@@ -19,10 +19,21 @@
  *
  * Only the extension face is ours, and it is tiny: tab management,
  * attach/detach, raw CDP per tab, plus events flowing back.
+ *
+ * Two things ride on that face that plain CDP has no word for. A tab can be
+ * created in the background (`active: false`, so Chrome does not steal the
+ * human's focus) and inside a Chrome tab group (`group`), which is how a
+ * session's tabs stay together and how the extension shows work in progress:
+ * it animates the group title while a `cdp` op is in flight. The host maps
+ * `Target.createTarget {background, castGroup}` onto these and never lets
+ * `castGroup` or a group leak back to a client.
  */
 
-/** Bumped when a message shape changes incompatibly. Both ends report theirs. */
-export const BRIDGE_PROTOCOL = 2;
+/**
+ * Bumped when a message shape changes incompatibly. Both ends report theirs.
+ * 3: tabs.create takes `background` and `group`; tabs carry `group`.
+ */
+export const BRIDGE_PROTOCOL = 3;
 
 /** Default loopback port for the bridge host. Override: CAST_BRIDGE_PORT. */
 export const BRIDGE_DEFAULT_PORT = 41729;
@@ -41,12 +52,25 @@ export type BridgeOp =
   | "detach"
   | "cdp";
 
+/** The colours Chrome accepts for a tab group (chrome.tabGroups.Color). */
+export type BridgeGroupColor = "grey" | "blue" | "red" | "yellow" | "green" | "pink" | "purple" | "cyan" | "orange";
+
+/** A Chrome tab group as the bridge names it: by title within a window. */
+export interface BridgeGroup {
+  title: string;
+  color: BridgeGroupColor;
+}
+
 /** Host → extension request. */
 export interface BridgeRequest {
   id: number;
   op: BridgeOp;
   tabId?: number;
   url?: string;
+  /** tabs.create: open without activating the tab (default false). */
+  background?: boolean;
+  /** tabs.create: put the tab in this group, reusing one with the same title in the same window. */
+  group?: BridgeGroup;
   method?: string;
   params?: Record<string, unknown>;
 }
@@ -77,6 +101,8 @@ export interface BridgeTab {
   active: boolean;
   windowId: number;
   attached: boolean;
+  /** The tab's group with its plain title (never the animated one), absent when ungrouped. */
+  group?: BridgeGroup;
 }
 
 // ---------------------------------------------------------------------------

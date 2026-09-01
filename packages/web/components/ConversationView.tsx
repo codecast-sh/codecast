@@ -26,7 +26,7 @@ import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemSubtype, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
+import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
 import { splitMarkdownBlocks } from "../lib/markdownBlocks";
 import { classifyApiErrorBanner, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "./DecisionAnswerFooter";
@@ -145,7 +145,7 @@ const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { AssignmentBadge } from "./AssignmentBadge";
 import { AssignedToYouBanner, useOwnersFromStore } from "./OwnersBadge";
-import { TmuxAttachPill } from "./TmuxAttachPill";
+import { TmuxAttachPill, useAttachCopy } from "./TmuxAttachPill";
 import { SessionDaemonChip } from "./DaemonStatusChip";
 import { SessionFilesButton } from "./SessionFilesButton";
 import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
@@ -9104,7 +9104,7 @@ function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[
 }
 
 function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; subtype?: string; timestamp?: number; messageUuid?: string; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void }) {
-  if (isHiddenSystemSubtype(subtype)) return null;
+  if (isHiddenSystemNotice(content, subtype)) return null;
 
   if (subtype === "compact_boundary") {
     return (
@@ -12858,6 +12858,9 @@ const ConversationViewInner = (
     };
   }));
   const isSessionLive = !!managedSession?.is_connected;
+  // The simple-view menu's "Copy tmux attach" — the same gesture as the header
+  // pill's copy button, so it copies the same command for the same machine.
+  const { copyAttach: copyTmuxAttach } = useAttachCopy(managedSession?.tmux_session, conversation?._id?.toString());
 
   // Store-fed (hooks/useSyncWorkflows): the gate banner paints from the cached
   // run on the first frame; the feeder keeps it live.
@@ -16646,7 +16649,7 @@ const ConversationViewInner = (
                         them here so the hamburger stays the full command
                         surface in that mode. */}
                     {simpleViewPref && managedSession?.tmux_session && (
-                      <DropdownMenuItem onSelect={() => { setTimeout(() => { const cmd = `tmux attach -t '${managedSession.tmux_session}'`; copyToClipboard(cmd).then(() => toast.success("tmux attach copied")).catch(() => toast.error("Failed to copy")); }); }}>
+                      <DropdownMenuItem onSelect={() => { setTimeout(() => copyTmuxAttach()); }}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                         </svg>

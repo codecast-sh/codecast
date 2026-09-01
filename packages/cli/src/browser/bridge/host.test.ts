@@ -9,7 +9,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { WebSocket } from "ws";
 import { CdpConnection, CdpError, listTargets } from "../cdp.js";
 import { startBridgeHost, type RunningHost } from "./host.js";
-import { CLOSE_BAD_TOKEN, targetIdOfTab, type BridgeTab } from "./protocol.js";
+import { BRIDGE_PROTOCOL, CLOSE_BAD_TOKEN, targetIdOfTab, type BridgeTab } from "./protocol.js";
 
 const TOKEN = "t".repeat(64);
 let host: RunningHost | null = null;
@@ -57,7 +57,8 @@ function closeCode(ws: WebSocket, timeoutMs = 3000): Promise<number> {
 
 /**
  * A scripted stand-in for the extension. Answers tabs.list from `tabs`,
- * records attach/detach, and echoes cdp calls as `{echo: {tabId, method, params}}`.
+ * records attach/detach, keeps the group a tab was created with, and echoes
+ * cdp calls as `{echo: {tabId, method, params}}`.
  */
 class FakeExtension {
   ws!: WebSocket;
@@ -76,7 +77,7 @@ class FakeExtension {
 
   async connect(port: number): Promise<this> {
     this.ws = await dial(port, `/ext?token=${TOKEN}`, { origin: "chrome-extension://fakeextensionid" });
-    this.ws.send(JSON.stringify({ op: "hello", version: "9.9.9", protocol: 2, userAgent: "FakeChrome/1" }));
+    this.ws.send(JSON.stringify({ op: "hello", version: "9.9.9", protocol: BRIDGE_PROTOCOL, userAgent: "FakeChrome/1" }));
     this.ws.on("message", (raw) => {
       const m = JSON.parse(String(raw));
       if (m.op === "ping") return;
@@ -86,7 +87,7 @@ class FakeExtension {
         case "tabs.list":
           return reply({ tabs: this.tabs.map((t) => ({ ...t, attached: this.attached.has(t.tabId) })) });
         case "tabs.create": {
-          const t = FakeExtension.tab(this.nextTab++, m.url, "new");
+          const t = { ...FakeExtension.tab(this.nextTab++, m.url, "new"), active: !m.background, ...(m.group ? { group: m.group } : {}) };
           this.tabs.push(t);
           return reply({ tabId: t.tabId });
         }
@@ -262,6 +263,80 @@ describe("bridge host as a CDP endpoint", () => {
     await conn.send("Target.closeTarget", { targetId });
     expect(ext.tabs.length).toBe(0);
     conn.close();
+  });
+
+  test("createTarget forwards background and castGroup, and strips castGroup from what the client sees", async () => {
+    const h = await freshHost();
+    const ext = await new FakeExtension([]).connect(h.port);
+    const conn = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    const group = { title: "cast smoke", color: "blue" };
+    const created = await conn.send("Target.createTarget", { url: "https://a.example/", background: true, castGroup: group });
+    expect(Object.keys(created)).toEqual(["targetId"]);
+    const sent = ext.seen.find((m) => m.op === "tabs.create");
+    expect(sent).toEqual({ id: sent.id, op: "tabs.create", url: "https://a.example/", background: true, group });
+    expect("castGroup" in sent).toBe(false);
+
+    // Neither the target list nor the HTTP face mention a group.
+    const { targetInfos } = await conn.send("Target.getTargets");
+    expect(targetInfos.length).toBe(1);
+    expect("group" in targetInfos[0]).toBe(false);
+    expect("castGroup" in targetInfos[0]).toBe(false);
+    const listed = await listTargets(cdpEndpoint(h.port));
+    expect("group" in (listed[0] as any)).toBe(false);
+
+    // A plain create is foreground, ungrouped from the extension's point of view of a new socket.
+    const other = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    await other.send("Target.createTarget", { url: "https://b.example/" });
+    const plain = ext.seen.filter((m) => m.op === "tabs.create")[1];
+    expect(plain.background).toBe(false);
+    expect("group" in plain).toBe(false);
+    // A malformed castGroup is ignored rather than forwarded.
+    await other.send("Target.createTarget", { url: "https://c.example/", castGroup: { title: "", color: "red" } });
+    expect("group" in ext.seen.filter((m) => m.op === "tabs.create")[2]).toBe(false);
+    conn.close();
+    other.close();
+  });
+
+  test("a socket that created a grouped tab, or attached to one, puts its later creates in that group", async () => {
+    const h = await freshHost();
+    const ext = await new FakeExtension([FakeExtension.tab(7)]).connect(h.port);
+    const a = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    const b = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    const group = { title: "session one", color: "green" };
+    const creates = () => ext.seen.filter((m) => m.op === "tabs.create");
+
+    // A remembers the group across creates on the same socket.
+    const first = await a.send("Target.createTarget", { url: "https://a1.example/", castGroup: group });
+    await a.send("Target.createTarget", { url: "https://a2.example/" });
+    expect(creates().map((m) => m.group)).toEqual([group, group]);
+
+    // B is a different socket: nothing remembered for it.
+    await b.send("Target.createTarget", { url: "https://b1.example/" });
+    expect("group" in creates()[2]).toBe(false);
+
+    // B attaches to one of A's grouped tabs and adopts the group.
+    await b.send("Target.attachToTarget", { targetId: first.targetId, flatten: true });
+    await b.send("Target.createTarget", { url: "https://b2.example/" });
+    expect(creates()[3].group).toEqual(group);
+
+    // Attaching to an ungrouped tab afterwards does not forget the group.
+    await b.send("Target.attachToTarget", { targetId: targetIdOfTab(7), flatten: true });
+    await b.send("Target.createTarget", { url: "https://b3.example/" });
+    expect(creates()[4].group).toEqual(group);
+
+    // An explicit castGroup on a later create switches the socket to that group.
+    const second = { title: "session two", color: "red" };
+    await a.send("Target.createTarget", { url: "https://a3.example/", castGroup: second });
+    await a.send("Target.createTarget", { url: "https://a4.example/" });
+    expect(creates().slice(5).map((m) => m.group)).toEqual([second, second]);
+
+    // The group is per socket, so a fresh connection starts clean.
+    a.close();
+    const a2 = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    await a2.send("Target.createTarget", { url: "https://a5.example/" });
+    expect("group" in creates()[7]).toBe(false);
+    a2.close();
+    b.close();
   });
 
   test("setDiscoverTargets replays existing targets and streams tab changes", async () => {

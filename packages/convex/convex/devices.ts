@@ -158,6 +158,9 @@ export async function enqueueStartSession(
     // they ride the payload so old daemons just ignore them.
     model?: string;
     effort?: string;
+    // Saved Claude account profile to launch on (the daemon sources its
+    // setup-token file; a name with no token file falls back to the keychain).
+    ccAccount?: string;
     // Stable-context launch prefs from the new-session page: override the
     // machine's stable mode for this session ("off" suppresses injection) and
     // drop specific feed cards. Same ride-along contract as model/effort.
@@ -229,6 +232,7 @@ export async function enqueueStartSession(
   if (opts.prompt) args.prompt = opts.prompt;
   if (model) args.model = model;
   if (opts.effort) args.effort = opts.effort;
+  if (opts.ccAccount) args.cc_account = opts.ccAccount;
   if (opts.stableMode) args.stable_mode = opts.stableMode;
   if (opts.stableExclude?.length) args.stable_exclude = opts.stableExclude;
 

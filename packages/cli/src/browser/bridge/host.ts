@@ -24,12 +24,24 @@
  * that socket with one moving part fewer, and an open WebSocket keeps the MV3
  * service worker alive (Chrome 116+).
  *
+ * Tab groups are the one thing added on top of CDP. `Target.createTarget`
+ * takes two extra params: `background` (open without activating, which the
+ * extension maps to `active: false`) and `castGroup` ({title, color}), which
+ * puts the tab in a Chrome tab group so a session's tabs sit together and
+ * the extension has a title to animate while it works. The group is per
+ * client socket: once a client creates a grouped tab, or attaches to one,
+ * every later `Target.createTarget` from that socket with no `castGroup`
+ * lands in the same group. `castGroup` never reaches a client: replies and
+ * target infos carry only what real Chrome would send.
+ *
  * Threat model. Loopback is reachable by every local process and by JavaScript
  * on any web page. Against pages: the token lives in a 0600 file a page cannot
  * read, an upgrade carrying an http(s) Origin is refused before the token is
  * even checked (pages always send one; the extension sends chrome-extension://
  * and the CLI none), and the HTTP face rejects any Host other than loopback,
  * which is what defeats DNS rebinding. Against other local users: the token.
+ * A group is a grouping hint and nothing more: it grants no access to the
+ * tabs already in it, and every tab still needs its own attach.
  */
 
 import * as fs from "node:fs";
@@ -44,7 +56,7 @@ import { browserHome } from "../profile.js";
 import type { CdpEndpoint } from "../cdp.js";
 import {
   BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, CLOSE_BAD_TOKEN, tabIdOfTarget, targetIdOfTab,
-  type BridgeReply, type BridgeTab,
+  type BridgeGroup, type BridgeReply, type BridgeTab,
 } from "./protocol.js";
 
 // ---------------------------------------------------------------------------
@@ -192,6 +204,8 @@ interface Client {
   /** sessionId → tabId for the tabs this client has attached. */
   sessions: Map<string, number>;
   discover: boolean;
+  /** The group of the last tab this client created with one or attached to; later creates join it. */
+  group: BridgeGroup | null;
 }
 
 interface PendingExt {
@@ -206,6 +220,14 @@ function tokenMatches(expected: string, got: string | null | undefined): boolean
   const a = Buffer.from(expected);
   const b = Buffer.from(got);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/** `castGroup` as a client may send it; anything else is treated as absent. */
+function parseGroup(raw: unknown): BridgeGroup | null {
+  if (!raw || typeof raw !== "object") return null;
+  const { title, color } = raw as Record<string, unknown>;
+  if (typeof title !== "string" || !title.trim() || typeof color !== "string") return null;
+  return { title, color: color as BridgeGroup["color"] };
 }
 
 /** CDP-shaped error reply. -32601 is what Chrome uses for an unknown method. */
@@ -395,6 +417,9 @@ export function startBridgeHost(opts: { port: number; token: string }): Promise<
         const sessionId = crypto.randomBytes(16).toString("hex").toUpperCase();
         client.sessions.set(sessionId, tabId);
         const t = (await listTabs()).find((x) => x.tabId === tabId);
+        // Attaching to a grouped tab adopts its group; an ungrouped tab (a
+        // human's tab named with --tab) leaves the session's group alone.
+        if (t?.group) client.group = t.group;
         sendJson(client.ws, {
           method: "Target.attachedToTarget",
           params: {
@@ -415,7 +440,13 @@ export function startBridgeHost(opts: { port: number; token: string }): Promise<
         return {};
       }
       case "Target.createTarget": {
-        const r = await extCall("tabs.create", { url: params?.url || "about:blank" }, 15_000);
+        const group = parseGroup(params?.castGroup) ?? client.group;
+        const r = await extCall(
+          "tabs.create",
+          { url: params?.url || "about:blank", background: !!params?.background, ...(group ? { group } : {}) },
+          15_000,
+        );
+        if (group) client.group = group;
         return { targetId: targetIdOfTab(r.tabId as number) };
       }
       case "Target.closeTarget": {
@@ -596,7 +627,7 @@ export function startBridgeHost(opts: { port: number; token: string }): Promise<
         return;
       }
 
-      const client: Client = { ws, sessions: new Map(), discover: false };
+      const client: Client = { ws, sessions: new Map(), discover: false, group: null };
       clients.add(client);
       ws.on("message", (raw) => {
         void onClientMessage(client, String(raw));

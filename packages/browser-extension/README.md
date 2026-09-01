@@ -42,12 +42,19 @@ opened** (or one you name with `--tab`). It never touches your other tabs.
 
 ## How you can tell a tab is being driven
 
-Two indicators, both per tab:
-
 - Chrome's own banner — *"cast-browser-bridge is debugging this browser"* —
   shown for as long as the debugger is attached. Clicking **Cancel** there
   detaches instantly; the extension notices and lets go.
 - A red `CAST` badge on the extension icon while that tab is attached.
+- A Chrome tab group per session, named after it. Its title gains cycling
+  dots while a command runs and a checkmark for three seconds after. Every
+  tab a session opens joins its group; the group disappears with its last tab.
+- A thin border in the group's colour around the driven page. It never takes
+  a click, it is hidden for every screenshot, and it goes away when the
+  session detaches. It is injected through the debugger session itself, so
+  the extension needs no access to page content beyond the debugger it
+  already holds. If you cancel the banner yourself the border stays on that
+  page until the next navigation.
 
 ## Security posture
 
@@ -85,9 +92,10 @@ SMOKE_HEADED=1 bun packages/browser-extension/smoke.mjs   # watch it happen
 ```
 
 Launches a **separate** Chrome with a scratch profile (your running browser is
-never touched), loads this extension unpacked, and runs the full verb set
+never touched), loads this extension unpacked, runs the full verb set
 (open, snapshot, find, click, type, press, eval, shot, tabs) through the
-bridge, printing PASS/FAIL per verb. Requires an unbranded build (Chrome for
+bridge, then checks the tab group, the working indicator and the border
+overlay as a raw CDP client, printing PASS/FAIL per check. Requires an unbranded build (Chrome for
 Testing or Chromium — branded Chrome ≥137 ignores `--load-extension`); it
 finds one in the puppeteer/playwright caches, or
 `npx @puppeteer/browsers install chrome@stable`.

@@ -24,31 +24,12 @@
   .cq-hide-minimal { display: none !important; }
 }
 
-/* The triage bar (components/triage/TriageBar). Rest state is icon + word;
-   chords appear on hover of the bar and grow into the empty middle of the
-   row so the right cluster does not move. Words drop on a narrow column;
-   icons and their tooltips always survive. The query container is the bar
-   itself, so this tracks the inbox column, not the viewport. */
-[data-triage-bar] .cq-triage-caps {
-  min-width: 0;
-  max-width: 0;
-  margin-left: 0;
-  opacity: 0;
-  overflow: hidden;
-  pointer-events: none;
-  white-space: nowrap;
-  transition: max-width 160ms cubic-bezier(0.23, 1, 0.32, 1), margin-left 160ms cubic-bezier(0.23, 1, 0.32, 1), opacity 120ms ease;
-}
-[data-triage-bar]:hover .cq-triage-caps,
-[data-triage-bar]:focus-within .cq-triage-caps {
-  max-width: 5.5rem;
-  margin-left: 0.375rem;
-  opacity: 1;
-}
-@media (prefers-reduced-motion: reduce) {
-  [data-triage-bar] .cq-triage-caps { transition: none; }
-}
-@container (max-width: 560px) {
+/* The triage bar (components/triage/TriageBar). Rest state is icon + word,
+   nothing else; chords live in the hover tooltips and in the "more" menu.
+   Words fold on a narrow column, icons and tooltips always survive. The
+   query container is the bar itself, so this tracks the inbox column, not
+   the viewport. */
+@container (max-width: 420px) {
   .cq-triage-word { display: none !important; }
 }
 

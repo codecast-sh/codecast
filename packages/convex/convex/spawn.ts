@@ -85,6 +85,7 @@ export async function spawnSessionCore(
     gitRoot?: string;
     model?: string;
     effort?: string;
+    ccAccount?: string;
     isolated?: boolean;
     worktreeName?: string;
     targetDeviceId?: string | null;
@@ -109,6 +110,7 @@ export async function spawnSessionCore(
     message_count: 0,
     ...privacy,
     ...(opts.subagentFields ?? {}),
+    ...(opts.ccAccount ? { cc_account: opts.ccAccount } : {}),
     status: "active",
   });
 
@@ -125,6 +127,7 @@ export async function spawnSessionCore(
     worktreeName: opts.worktreeName,
     model: opts.model,
     effort: opts.effort,
+    ccAccount: opts.ccAccount,
     createdAt: now,
     targetDeviceId: opts.targetDeviceId ?? null,
   });
@@ -173,6 +176,9 @@ export const createSessionFromCli = mutation({
     git_root: v.optional(v.string()),
     model: v.optional(v.string()),
     effort: v.optional(v.string()),
+    // Saved Claude account profile name (cast accounts token <name>); the
+    // daemon sources that account's setup-token into the launch env.
+    cc_account: v.optional(v.string()),
     isolated: v.optional(v.boolean()),
     worktree_name: v.optional(v.string()),
     // A device_id or label; routes start_session at that machine (see
@@ -208,6 +214,7 @@ export const createSessionFromCli = mutation({
       gitRoot: args.git_root,
       model: args.model,
       effort: args.effort,
+      ccAccount: args.cc_account,
       isolated: args.isolated,
       worktreeName: args.worktree_name,
       targetDeviceId,

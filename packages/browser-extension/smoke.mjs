@@ -10,7 +10,11 @@
  *      type, press, eval, shot, tabs) via `cast browser --real`;
  *   2. agent-browser (the engine) — `--cdp <bridge url>` open, snapshot,
  *      click, screenshot, tab list. Skipped with a note if no engine binary
- *      is installed.
+ *      is installed;
+ *   3. a raw CDP client on the bridge, for what only the bridge adds: a
+ *      background create into a named tab group, the group title animating
+ *      while a command runs, the border overlay around the driven page, and
+ *      a screenshot that does not show it.
  *
  * It launches a SEPARATE Chrome with a scratch profile (never your running
  * browser) and loads the extension unpacked. One piece of scaffolding: the
@@ -30,6 +34,7 @@ import * as http from "node:http";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as zlib from "node:zlib";
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
 const extDir = path.join(repoRoot, "packages/browser-extension");
@@ -178,8 +183,8 @@ class Cdp {
       }
     };
   }
-  static async connect(port) {
-    const res = await fetch(`http://127.0.0.1:${port}/json/version`);
+  static async connect(port, token) {
+    const res = await fetch(`http://127.0.0.1:${port}/json/version${token ? `?token=${token}` : ""}`);
     const { webSocketDebuggerUrl } = await res.json();
     const ws = new WebSocket(webSocketDebuggerUrl);
     await new Promise((resolve, reject) => {
@@ -201,13 +206,14 @@ class Cdp {
 }
 
 /**
- * Seed the token the way a human does — through the extension's options
- * context. Evaluating in the service worker directly hangs whenever the
- * worker has gone dormant (CDP attach does not wake a stopped MV3 worker),
- * but an extension PAGE has the same chrome.storage, and messaging from it
- * is exactly what wakes the worker up.
+ * An extension context to evaluate in: the options page, opened through the
+ * scratch Chrome's CDP port. Evaluating in the service worker directly hangs
+ * whenever the worker has gone dormant (CDP attach does not wake a stopped
+ * MV3 worker), but an extension PAGE has the same chrome.* APIs, and
+ * messaging from it is exactly what wakes the worker up. Used to seed the
+ * token (the by-hand step) and to read tab groups, which CDP cannot see.
  */
-async function seedToken(cdpPort, token, bridgePort) {
+async function extensionContext(cdpPort) {
   const cdp = await Cdp.connect(cdpPort);
   const deadline = Date.now() + 20_000;
   let extId = null;
@@ -220,19 +226,165 @@ async function seedToken(cdpPort, token, bridgePort) {
     else if (Date.now() > deadline) throw new Error("extension service worker never appeared — is this a branded Chrome ≥137?");
     else await new Promise((r) => setTimeout(r, 400));
   }
-  const { targetId } = await cdp.send("Target.createTarget", { url: `chrome-extension://${extId}/options.html` });
+  const { targetId } = await cdp.send("Target.createTarget", { url: `chrome-extension://${extId}/options.html`, background: true });
   const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  return {
+    cdp,
+    /** Evaluate an expression (a promise is awaited) and return its value. */
+    async eval(expression) {
+      const r = await cdp.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sessionId);
+      if (r.exceptionDetails) throw new Error(r.exceptionDetails.text + ": " + JSON.stringify(r.exceptionDetails.exception?.description));
+      return r.result?.value;
+    },
+    close: () => cdp.send("Target.closeTarget", { targetId }).catch(() => {}),
+  };
+}
+
+async function seedToken(ext, token, bridgePort) {
   const expr = `chrome.storage.local.set({ bridge: { token: ${JSON.stringify(token)}, port: ${bridgePort} } })
     .then(() => chrome.runtime.sendMessage({ op: "reconnect" }))
     .then(() => "seeded")`;
   const evalDeadline = Date.now() + 15_000;
   for (;;) {
-    const r = await cdp.send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true }, sessionId);
-    if (r.result?.value === "seeded") break;
-    if (Date.now() > evalDeadline) throw new Error("seeding via options page failed: " + JSON.stringify(r).slice(0, 300));
+    const v = await ext.eval(expr).catch(() => null);
+    if (v === "seeded") return;
+    if (Date.now() > evalDeadline) throw new Error("seeding via options page failed");
     await new Promise((r2) => setTimeout(r2, 500)); // page may still be booting
   }
-  await cdp.send("Target.closeTarget", { targetId }).catch(() => {});
+}
+
+/**
+ * The top-left pixel of a PNG as [r, g, b]. Every PNG filter leaves the
+ * first pixel of the first row untouched (its neighbours are all zero), so
+ * decoding the IDAT stream and reading the bytes after the filter byte is
+ * enough. Only 8-bit RGB and RGBA, which is what Chrome writes.
+ */
+function pngTopLeftPixel(buf) {
+  let off = 8;
+  let channels = 0;
+  const idat = [];
+  while (off < buf.length) {
+    const len = buf.readUInt32BE(off);
+    const type = buf.toString("ascii", off + 4, off + 8);
+    const data = buf.subarray(off + 8, off + 8 + len);
+    if (type === "IHDR") {
+      if (data[8] !== 8) throw new Error("png: only 8-bit samples supported");
+      channels = { 2: 3, 6: 4 }[data[9]];
+      if (!channels) throw new Error("png: only RGB/RGBA supported");
+    } else if (type === "IDAT") idat.push(data);
+    off += 12 + len;
+  }
+  const raw = zlib.inflateSync(Buffer.concat(idat));
+  return [raw[1], raw[2], raw[3]];
+}
+
+const BORDER_ID = "cast-browser-bridge-border";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * What only the bridge adds on top of CDP, exercised as a raw client the way
+ * the engine path will: a background create into a session group, the group
+ * following the socket, the working indicator on the group title, the border
+ * overlay (present, click-transparent, surviving navigation, gone on detach)
+ * and a screenshot that never shows it.
+ */
+async function bridgeExtras(bridgePort, token, ext, cdpPort, pageUrl) {
+  const bridge = await Cdp.connect(bridgePort, token);
+  const group = { title: "cast smoke", color: "blue" };
+  const tabIdOf = (targetId) => parseInt(targetId, 16);
+
+  const first = await bridge.send("Target.createTarget", { url: pageUrl, background: true, castGroup: group });
+  const second = await bridge.send("Target.createTarget", { url: pageUrl });
+  const tabs = [tabIdOf(first.targetId), tabIdOf(second.targetId)];
+  const created = await ext.eval(`chrome.tabs.get(${tabs[0]}).then((t) => ({ active: t.active, groupId: t.groupId }))`);
+  check("bridge: background create is not the active tab", created.active === false, JSON.stringify(created));
+  const groupInfo = await ext.eval(
+    `chrome.tabGroups.query({ title: ${JSON.stringify(group.title)} }).then(async (gs) => ({
+      count: gs.length, color: gs[0]?.color, tabs: gs[0] ? (await chrome.tabs.query({ groupId: gs[0].id })).map((t) => t.id) : [] }))`,
+  );
+  check(
+    "bridge: both creates on one socket share one group with the title and colour",
+    groupInfo.count === 1 && groupInfo.color === "blue" && tabs.every((id) => groupInfo.tabs.includes(id)),
+    JSON.stringify(groupInfo),
+  );
+  const { sessionId } = await bridge.send("Target.attachToTarget", { targetId: first.targetId, flatten: true });
+  const page = (expression) =>
+    bridge.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sessionId).then((r) => r.result?.value);
+  const borderState = () => page(`(() => {
+    const e = document.getElementById(${JSON.stringify(BORDER_ID)});
+    if (!e) return { present: false };
+    const cs = getComputedStyle(e);
+    return { present: true, color: cs.borderTopColor, pointer: cs.pointerEvents, visibility: cs.visibility,
+      hit: document.elementFromPoint(1, 1)?.id === e.id };
+  })()`);
+  const border = await borderState();
+  check(
+    "bridge: border overlay present in the group colour and transparent to hit tests",
+    border.present && border.color === "rgb(26, 115, 232)" && border.pointer === "none" && border.hit === false,
+    JSON.stringify(border),
+  );
+
+  // A slow command: the group title should cycle dots meanwhile, then show a checkmark.
+  const slow = bridge.send("Runtime.evaluate", { expression: "new Promise((r) => setTimeout(r, 1500))", awaitPromise: true }, sessionId);
+  const titles = new Set();
+  const groupTitle = () => ext.eval(`chrome.tabGroups.query({ color: "blue" }).then((gs) => gs[0]?.title)`);
+  for (let i = 0; i < 12; i++) {
+    titles.add(await groupTitle());
+    await sleep(100);
+  }
+  await slow;
+  const withDots = [...titles].filter((t) => /^cast smoke\.{1,3}$/.test(t));
+  check("bridge: group title animates while a command is in flight", withDots.length >= 2, JSON.stringify([...titles]));
+  await sleep(150);
+  const afterwards = await groupTitle();
+  check("bridge: checkmark after the command", afterwards === "cast smoke ✓", JSON.stringify(afterwards));
+  // The plain title is what the host is told, never a frame of the animation.
+  const listed = await fetch(`http://127.0.0.1:${bridgePort}/json/list?token=${token}`).then((r) => r.json());
+  check("bridge: /json/list carries no group", listed.every((t) => !("group" in t) && !("castGroup" in t)), JSON.stringify(listed).slice(0, 200));
+
+  await bridge.send("Page.navigate", { url: pageUrl + "?again" }, sessionId);
+  let survived = null;
+  for (let i = 0; i < 30 && !survived?.present; i++) {
+    await sleep(100);
+    survived = await borderState().catch(() => null);
+  }
+  check("bridge: border survives navigation", !!survived?.present, JSON.stringify(survived));
+
+  // Chrome's own port sees the same tab (found by its unique URL now) with
+  // nothing hiding the frame: its capture shows the blue corner. That is what
+  // makes the white corner through the bridge a real result.
+  const chromeCdp = await Cdp.connect(cdpPort);
+  const { targetInfos } = await chromeCdp.send("Target.getTargets");
+  const real = targetInfos.find((t) => t.url === pageUrl + "?again");
+  const s2 = real ? (await chromeCdp.send("Target.attachToTarget", { targetId: real.targetId, flatten: true })).sessionId : null;
+  const rawShot = s2 ? await chromeCdp.send("Page.captureScreenshot", { format: "png" }, s2) : null;
+  const rawPx = rawShot ? pngTopLeftPixel(Buffer.from(rawShot.data, "base64")) : [];
+  check("bridge: a capture that skips the bridge shows the border", rawPx[2] > 200 && rawPx[0] < 100, `pixel ${rawPx.join(",")}`);
+
+  const shot = await bridge.send("Page.captureScreenshot", { format: "png" }, sessionId);
+  const px = pngTopLeftPixel(Buffer.from(shot.data, "base64"));
+  const restored = await borderState();
+  check("bridge: screenshot through the bridge hides the border", px[0] > 200 && px[1] > 200 && px[2] > 200, `pixel ${px.join(",")}`);
+  check("bridge: border visible again after the screenshot", restored.present && restored.visibility === "visible", JSON.stringify(restored));
+
+  await sleep(3200);
+  check("bridge: plain title restored a few seconds after", (await groupTitle()) === "cast smoke", JSON.stringify(await groupTitle()));
+
+  await bridge.send("Target.detachFromTarget", { sessionId });
+  await sleep(300);
+  // The bridge released the tab, so through Chrome's port the frame must be gone.
+  const gone = s2
+    ? (await chromeCdp.send("Runtime.evaluate", { expression: `!document.getElementById(${JSON.stringify(BORDER_ID)})`, returnByValue: true }, s2)).result?.value
+    : null;
+  check("bridge: border removed on detach", gone === true, `target ${real ? "found" : "missing"}, gone=${gone}`);
+  chromeCdp.ws.close();
+
+  await bridge.send("Target.closeTarget", { targetId: first.targetId });
+  await bridge.send("Target.closeTarget", { targetId: second.targetId });
+  await sleep(300);
+  const left = await ext.eval(`chrome.tabGroups.query({ title: ${JSON.stringify(group.title)} }).then((gs) => gs.length)`);
+  check("bridge: group empties itself when its tabs close", left === 0, `groups left: ${left}`);
+  bridge.ws.close();
 }
 
 const TEST_PAGE = `<!doctype html><html><head><title>Cast Bridge Smoke</title></head><body>
@@ -296,7 +448,8 @@ async function main() {
   check("scratch Chrome launched with extension", true);
 
   // 4. Seed the token (the by-hand options-page step, automated).
-  await seedToken(cdpPort, token, bridgePort);
+  const ext = await extensionContext(cdpPort);
+  await seedToken(ext, token, bridgePort);
   check("token seeded into extension storage", true);
 
   // 5. Extension connects to the host.
@@ -363,7 +516,11 @@ async function main() {
   const tabs = await cast(["browser", "tabs", "--real"]);
   check("tabs", tabs.code === 0 && tabs.all.includes(pageUrl.slice(0, 30)), tabs.all.slice(0, 300));
 
-  // 7. The engine, driving the SAME real Chrome through the same host, as a
+  // 7. Groups, the working indicator and the border overlay, as a raw CDP client.
+  await bridgeExtras(bridgePort, token, ext, cdpPort, pageUrl);
+  await ext.close();
+
+  // 8. The engine, driving the SAME real Chrome through the same host, as a
   //    plain CDP client: this is what `cast browser --real` does once the
   //    engine adapter appends `--cdp <url>` (see bridge/real.ts realCdpUrl).
   const ab = findEngine();

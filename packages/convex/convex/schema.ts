@@ -376,6 +376,11 @@ export default defineSchema({
     // stamped optimistically by the web picker / at create, confirmed by the
     // rollup parsing "Set effort level to X" / "with X effort" switch echoes.
     effort: v.optional(v.string()),
+    // Saved Claude account profile this session launches on (its setup-token
+    // is sourced into the launch env, see cli/ccAccounts.ts). Stamped at
+    // create; the daemon re-reads it on every resume so a restart never
+    // silently falls back to the machine's keychain login.
+    cc_account: v.optional(v.string()),
     started_at: v.number(),
     updated_at: v.number(),
     message_count: v.number(),
@@ -2056,6 +2061,14 @@ export default defineSchema({
     patterns: v.optional(v.array(v.object({
       pattern: v.string(),
       example: v.string(),
+      count: v.number(),
+    }))),
+    // Reusable prompts mined by LLM: full-text directives the user resends
+    // across sessions near-verbatim ("you are a world class product
+    // engineer… do another 10 rounds"). Unlike pattern examples these are
+    // MEANT to be replayed, adapted to the current conversation.
+    prompts: v.optional(v.array(v.object({
+      text: v.string(),
       count: v.number(),
     }))),
     recent: v.array(v.string()),

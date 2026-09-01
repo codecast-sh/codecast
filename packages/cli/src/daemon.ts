@@ -36,6 +36,7 @@ import {
   credentialHealth,
   activeAccountSummary,
   listProfiles,
+  accountSourcePrefix,
 } from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
 import { buildDisclaimShellPrefix } from "./disclaim.js";
@@ -3337,6 +3338,15 @@ async function executeRemoteCommand(
         // passed through to the CLI.
         const requestedModelKey: string | undefined = typeof parsed.model === "string" ? parsed.model : undefined;
         const requestedEffort: string | undefined = typeof parsed.effort === "string" ? parsed.effort : undefined;
+        // Per-session Claude account: a saved profile whose setup-token file is
+        // sourced into this launch's env, so the session runs on that account
+        // while the keychain login (and every other session) stays put.
+        // Validated by name shape here; a missing token file is logged and the
+        // launch falls back to the keychain (see accountSourcePrefix).
+        const requestedAccount: string | undefined =
+          agentType === "claude" && typeof parsed.cc_account === "string" && /^[a-z0-9][a-z0-9._-]{0,40}$/i.test(parsed.cc_account)
+            ? parsed.cc_account
+            : undefined;
         // Per-session stable-context prefs from the new-session page. Same
         // ride-along contract as model/effort: unknown values dropped here.
         const stablePrefs: StableLaunchPrefs = {
@@ -3579,11 +3589,13 @@ async function executeRemoteCommand(
         // Managed provider keys (opencode/pi) are sourced from a 0600 file so the
         // key never lands in `ps`/the pane; "" when nothing is managed (pl-207).
         const keyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
+        // Same file-not-argv rule for the per-session Claude account token.
+        const accountPrefix = accountSourcePrefix(requestedAccount, log);
         // Launch through the disclaim wrapper so the agent is TCC
         // self-responsible: privacy prompts name the agent (its own signed
         // identity), not codecast/bun (see disclaim.ts). The wrapper execs
         // plain argv, which works here because envPrefix starts with `env`.
-        let cmdText = `${keyPrefix}${disclaimPrefix()}${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
+        let cmdText = `${accountPrefix}${keyPrefix}${disclaimPrefix()}${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
 
         let codexThreadId: string | null = null;
         const codexSkipApprovals = binaryArgs.includes("--full-auto") || binaryArgs.includes("--dangerously-bypass-approvals-and-sandbox");
@@ -15998,6 +16010,9 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   // bare `grok --resume <id>` would re-enter Ask mode and park on TUI prompts
   // nobody can answer. getPermissionFlags already yields null when
   // agent_args.grok pins a mode, so the flags can't double up.
+  // Per-session account twin of the effort fallback below: set from the
+  // conversation row inside the claude branch, sourced on the resume line.
+  let resumeAccountPrefix = "";
   const nonClaudeResumeCmd = buildNonClaudeResumeCommand(agentType, sessionId, {
     codexArgs: getAgentArgs(config, "codex"),
     codexPermFlags: agentType === "codex" ? getPermissionFlags("codex", config) : null,
@@ -16074,10 +16089,19 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     // (a session launched with --effort that never switched in-session leaves
     // no transcript trace, so without this a restart silently drops it).
     let effortFlag = resumeEffortFlagFromFile(resumeJsonlPath, extraFlags);
-    if (!effortFlag && !/(^|\s)--effort(\s|=)/.test(extraFlags) && conversationId && syncServiceRef) {
-      const convEffort = (await syncServiceRef.getProjectInfo(conversationId).catch(() => null))?.effort;
+    // One row read serves both fallbacks: effort (above) and the per-session
+    // account. The account has no transcript echo at all — CLAUDE_CODE_OAUTH_TOKEN
+    // is read at process start — so without this a restart lands the session on
+    // the keychain login (verified 2026-09-01: `/status` flips from
+    // "Auth token: CLAUDE_CODE_OAUTH_TOKEN" to "Login method: Claude Max account").
+    const convInfo = conversationId && syncServiceRef
+      ? await syncServiceRef.getProjectInfo(conversationId).catch(() => null)
+      : null;
+    if (!effortFlag && !/(^|\s)--effort(\s|=)/.test(extraFlags)) {
+      const convEffort = convInfo?.effort;
       if (convEffort && /^[a-z]+$/.test(convEffort)) effortFlag = ` --effort ${convEffort}`;
     }
+    resumeAccountPrefix = accountSourcePrefix(convInfo?.cc_account ?? undefined, log);
     resumeCmd = `${launchBinary("claude", { warn: log })} --resume ${resumeId}${modelFlag}${effortFlag}${extraFlags ? " " + extraFlags : ""}`;
   }
 
@@ -16123,7 +16147,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     // disclaimPrefix: resumed agents carry their own TCC identity, same as a
     // fresh launch (resumeEnvPrefix always starts with `env`, so the wrapper's
     // plain-argv exec contract holds).
-    await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `${resumeKeyPrefix}${disclaimPrefix()}${resumeEnvPrefix} ${resumeCmd}`]);
+    await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `${resumeAccountPrefix}${resumeKeyPrefix}${disclaimPrefix()}${resumeEnvPrefix} ${resumeCmd}`]);
     await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
 
     logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} cwd=${cwd} cmd=${resumeCmd}`);

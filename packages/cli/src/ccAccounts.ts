@@ -26,6 +26,7 @@ import * as path from "path";
 import { readLocalCredential } from "./remote/session-move.js";
 import { readProfileIndexFile } from "./readForUpdate.js";
 import { atomicWriteFile } from "./atomicWrite.js";
+import { renderProviderEnvFile, sourceFilePrefix } from "./providerKeyLaunch.js";
 
 const ACTIVE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const PROFILE_KEYCHAIN_PREFIX = "codecast-cc-account-";
@@ -453,10 +454,91 @@ export function deleteProfile(name: string): CcProfileMeta {
     );
   }
   deleteProfileSecret(name);
+  removeAccountToken(name);
   delete index.profiles[name];
   writeProfileIndex(index);
   invalidateAccountsCache();
   return { name, ...meta, active: false };
+}
+
+// ---------------------------------------------------------------------------
+// Per-account launch token (`claude setup-token`)
+//
+// A setup-token is a static one-year OAuth token that Claude Code reads from
+// CLAUDE_CODE_OAUTH_TOKEN, which outranks the keychain login. Nothing about it
+// rotates, so none of the refresh / save-on-switch / split-grant machinery
+// above applies: it is a string in a 0600 file, sourced into ONE session's env
+// at launch. That makes the account a per-session choice instead of the
+// machine-global swap `useProfile` performs. The token can only make model
+// requests (no profile/usage scope), so identity and usage still come from the
+// keychain snapshot — the two live side by side under one profile name.
+// ---------------------------------------------------------------------------
+
+const SETUP_TOKEN_PREFIX = "sk-ant-oat01-";
+/** Anthropic mints setup-tokens for one year and never warns before expiry;
+ *  the file mtime (written at store time) is the only clock we have. */
+export const SETUP_TOKEN_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
+
+export function accountTokenFilePath(name: string): string {
+  assertValidProfileName(name);
+  return path.join(codecastDir(), `cc-account-${name}.env`);
+}
+
+/** Store a setup-token for a profile as a 0600 `export` file (same shape and
+ *  quoting as the provider-key file, so the launch line only ever carries the
+ *  PATH). Rejects anything that isn't a setup-token so a pasted keychain
+ *  access token or API key can't be sourced into a session by mistake. */
+export function writeAccountToken(name: string, token: string): string {
+  const t = token.trim();
+  if (!t.startsWith(SETUP_TOKEN_PREFIX) || /\s/.test(t) || t.length < SETUP_TOKEN_PREFIX.length + 20) {
+    throw new CcAccountError(`Not a Claude setup-token (expected ${SETUP_TOKEN_PREFIX}…) — mint one with: claude setup-token`);
+  }
+  const file = accountTokenFilePath(name);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  atomicWriteFile(file, renderProviderEnvFile({ CLAUDE_CODE_OAUTH_TOKEN: t }), { mode: 0o600 });
+  return file;
+}
+
+export function removeAccountToken(name: string): boolean {
+  const file = accountTokenFilePath(name);
+  const existed = fs.existsSync(file);
+  try { fs.rmSync(file, { force: true }); } catch {}
+  return existed;
+}
+
+export interface AccountTokenInfo {
+  file: string;
+  stored_at: number;
+  expires_at: number;
+}
+
+/** Non-secret facts about a stored token, or null when the profile has none. */
+export function accountTokenInfo(name: string): AccountTokenInfo | null {
+  let file: string;
+  try { file = accountTokenFilePath(name); } catch { return null; }
+  try {
+    const stored_at = fs.statSync(file).mtimeMs;
+    return { file, stored_at, expires_at: stored_at + SETUP_TOKEN_LIFETIME_MS };
+  } catch {
+    return null;
+  }
+}
+
+/** Launch-line prefix that sources the profile's token file, or "" when no
+ *  account was requested. A requested account with no stored token is reported
+ *  through `warn` and falls back to the keychain login rather than failing the
+ *  launch — the session still starts, on the machine's default account. */
+export function accountSourcePrefix(name: string | undefined, warn?: (msg: string) => void): string {
+  if (!name) return "";
+  const info = accountTokenInfo(name);
+  if (!info) {
+    warn?.(`cc_account "${name}" requested but no setup-token stored (cast accounts token ${name}) — launching on the keychain login`);
+    return "";
+  }
+  if (info.expires_at <= Date.now()) {
+    warn?.(`cc_account "${name}" setup-token is past its one-year lifetime — re-mint with: claude setup-token | cast accounts token ${name}`);
+  }
+  return sourceFilePrefix(info.file);
 }
 
 /** Re-snapshot the ACTIVE account into whichever saved profile matches its
