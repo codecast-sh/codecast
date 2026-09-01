@@ -323,6 +323,13 @@ never re-ticks on iOS today.
 **Recovery discipline.** Every subscription pairs with an error handler and a
 controller backed probe; no feeder adds a bespoke interval beyond the ones named here.
 
+**Grouping never crosses a section boundary.** A subagent is never its own member and
+rides its present parent. An agent team teammate is a member (it counts in its own
+bucket, on the server and on every replica) and nests under its lead only while the two
+share a bucket; otherwise it renders flat in its own section. A section header count is
+therefore the count of rows placed in that bucket, which is what the tally and the CLI
+report.
+
 ### C6 The compare
 
 The compare medium is the stamp map, not an opaque hash: the client diffs its own per

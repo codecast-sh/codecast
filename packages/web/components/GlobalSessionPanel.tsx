@@ -3561,6 +3561,11 @@ function SessionListPanelImpl({
   // absorption is no longer a client pass — an armed inject trigger or a live
   // loop parks its home in DORMANT as DATA (armed_trigger_kind / loop_state
   // reach the shared classifier), identically on every client and the server.
+  // The header number is the chokepoint's section COUNT (flat cards plus
+  // members nested under a same-bucket lead — what the tally and the CLI
+  // report) while no chip narrows the list; a filter that removed nothing
+  // leaves the full count in force.
+  const countOf = (shown: InboxSession[], full: InboxSession[], n: number) => (shown.length === full.length ? n : undefined);
   const statusPinned = filteredPinned;
   const statusNew = filteredNew;
   const statusNeedsInput = filteredNeedsInput;
@@ -4322,6 +4327,9 @@ function SessionListPanelImpl({
       // Label/project sections pass an id-based key so a label named e.g.
       // "Working" can't share collapse state with the status section.
       key?: string;
+      // The header number when it differs from items.length: the chokepoint's
+      // section count (flat cards plus members nested under a same-bucket lead).
+      count?: number;
       // Present (even as null) = the whole section is a drop target in the
       // "by label" view. A label id assigns it; null removes the label
       // (dropping onto a project group returns the session to its project).
@@ -4381,11 +4389,11 @@ function SessionListPanelImpl({
           {opts?.monoLabel ? (
             <span className={`text-[10px] font-semibold flex items-center gap-1.5 min-w-0 ${color}`}>
               <span className="truncate font-mono">{label}</span>
-              <span className="opacity-70 shrink-0">({items.length})</span>
+              <span className="opacity-70 shrink-0">({opts?.count ?? items.length})</span>
             </span>
           ) : (
             <span className={`text-[10px] font-semibold uppercase tracking-wider ${color}`}>
-              {label} ({items.length})
+              {label} ({opts?.count ?? items.length})
             </span>
           )}
           <svg className={`w-3 h-3 transition-transform ${color} ${collapsed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -4896,17 +4904,18 @@ function SessionListPanelImpl({
             answering advances to the next — same flow for one or many. */}
         {renderSection("Questions", statusQuestions, "text-sol-violet", undefined, undefined, {
           key: "questions",
+          count: countOf(statusQuestions, placedQuestions, placed.counts.questions),
           onSelect: (session) => router.push(`/questions?s=${session._id}`),
         })}
-        {renderSection("Pinned", statusPinned, "text-sol-magenta")}
-        {renderSection("New", statusNew, "text-sol-blue")}
-        {renderSection("Needs Input", statusNeedsInput, "text-sol-yellow")}
+        {renderSection("Pinned", statusPinned, "text-sol-magenta", undefined, undefined, { count: countOf(statusPinned, pinned, placed.counts.pinned) })}
+        {renderSection("New", statusNew, "text-sol-blue", undefined, undefined, { count: countOf(statusNew, newSessions, placed.counts.newSessions) })}
+        {renderSection("Needs Input", statusNeedsInput, "text-sol-yellow", undefined, undefined, { count: countOf(statusNeedsInput, needsInput, placed.counts.needsInput) })}
         {/* Sections read top-down as "who acts next": you (Questions, Needs
             Input, Done to review), the agent right now (Working), then a
             machine event (Dormant). Nothing below Dormant is anyone's move. */}
-        {renderSection("Done", statusDone, "text-sol-cyan")}
-        {renderSection("Working", statusWorking, "text-sol-green", "working")}
-        {renderSection("Dormant", statusDormant, "text-sol-blue")}
+        {renderSection("Done", statusDone, "text-sol-cyan", undefined, undefined, { count: countOf(statusDone, done, placed.counts.done) })}
+        {renderSection("Working", statusWorking, "text-sol-green", "working", undefined, { count: countOf(statusWorking, working, placed.counts.working) })}
+        {renderSection("Dormant", statusDormant, "text-sol-blue", undefined, undefined, { count: countOf(statusDormant, dormant, placed.counts.dormant) })}
         </>
         )}
         {sortedSessions.length === 0 && (
