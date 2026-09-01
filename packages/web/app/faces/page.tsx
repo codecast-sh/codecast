@@ -8,6 +8,7 @@ import { useMountEffect } from "../../hooks/useMountEffect";
 import { useSyncInboxSessions } from "../../hooks/useSyncInboxSessions";
 import { useSyncTeamInboxSessions } from "../../hooks/useSyncTeamInboxSessions";
 import { useChatChannelsSync } from "../../hooks/useChatSync";
+import { useSyncReplication } from "../../hooks/useSyncRole";
 import { useSyncTeams } from "../../hooks/useSyncTeams";
 import { useCallSync } from "../../hooks/useCallSync";
 import { useWalkieSync } from "../../hooks/useWalkieSync";
@@ -81,6 +82,7 @@ function FacesSyncEffects() {
   useSyncInboxSessions();
   useSyncTeamInboxSessions();
   // DM unread badges, and the channel ids the walkie resolves rooms through.
+  useSyncReplication(false);
   useChatChannelsSync();
   // The call plane: occupancy for the huddle chips, and what binds the Convex
   // client into callManager so a hold can open a room at all.

@@ -6,6 +6,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEnsureDispatch } from "../../hooks/useEnsureDispatch";
 import { useLiveInboxSessions } from "../../hooks/useLiveInboxSessions";
 import { isElectron, bridge } from "../../lib/desktop";
+import { useSyncReplication } from "../../hooks/useSyncRole";
 
 export default function PalettePage() {
   return (
@@ -28,6 +29,9 @@ export default function PalettePage() {
  */
 function PaletteRoot() {
   useEnsureDispatch();
+  // Follower-only: the palette never mounts the full shell, so it is never
+  // elected sync host; with a host alive its inbox feed arrives by replication.
+  useSyncReplication(false);
   return <ReadyPaletteRoot />;
 }
 

@@ -600,6 +600,10 @@ export function mutativeMiddleware(
     let outboxRemoveFn: OutboxRemoveFn | null = null;
     let outboxLoadFn: OutboxLoadFn | null = null;
     let storageHealthFn: ((healthy: boolean, elapsedMs: number) => void) | null = null;
+    // Follower-mode replication tee: called with every action()'s patches (never
+    // sync()'s), so a window that does not own persistence can still offer its
+    // optimistic writes to the sync host. See replication.ts.
+    let actionTeeFn: ((actionName: string, patches: Patch[], state: any) => void) | null = null;
     const receiptWaiters = new Map<string, ReceiptWaiter>();
     // Outbox ids whose server dispatch already settled the command (ack or
     // terminal rejection) — the row is garbage the moment it commits. Dispatch
@@ -1078,6 +1082,14 @@ export function mutativeMiddleware(
           });
         }
 
+        if ((isAct || isAsyncAct) && actionTeeFn && finalPatches.length > 0) {
+          try {
+            actionTeeFn(key, finalPatches, finalState);
+          } catch (error) {
+            console.error(`[local-first] replication tee failed (action=${key})`, error);
+          }
+        }
+
         if (isAct || isAsyncAct) {
           const grouped =
             patches.length > 0 ? groupPatchesByTable(patches, finalState, groupCtx) : undefined;
@@ -1397,6 +1409,10 @@ export function mutativeMiddleware(
     // unaffected either way.
     wrapped._setStorageHealth = (fn: ((healthy: boolean, elapsedMs: number) => void) | null) => {
       storageHealthFn = fn;
+    };
+
+    wrapped._setActionTee = (fn: ((actionName: string, patches: Patch[], state: any) => void) | null) => {
+      actionTeeFn = fn;
     };
 
     wrapped._dispatch = (action: string, args: any, patches?: any, result?: any) => {

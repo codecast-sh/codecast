@@ -4,6 +4,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { useSwitchWorkspace } from "./useSwitchWorkspace";
+import { useIsSyncHost } from "./useSyncRole";
 
 /**
  * The viewer's teams, into the store.
@@ -18,7 +19,9 @@ import { useSwitchWorkspace } from "./useSwitchWorkspace";
  * trip (the workspace switcher reads the active team from it).
  */
 export function useSyncTeams(): any[] | undefined {
-  const teamsQuery = useQuery(api.teams.getUserTeams);
+  // Follower windows receive `teams` over replication; only a host feeds it.
+  const isSyncHost = useIsSyncHost();
+  const teamsQuery = useQuery(api.teams.getUserTeams, isSyncHost ? {} : "skip");
   useConvexSync(
     teamsQuery,
     useCallback((d: any) => useInboxStore.getState().syncTable("teams", d), []),

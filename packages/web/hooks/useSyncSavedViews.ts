@@ -4,6 +4,7 @@ import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useWatchEffect } from "./useWatchEffect";
+import { useIsSyncHost } from "./useSyncRole";
 
 const api = _api as any;
 
@@ -20,6 +21,7 @@ const api = _api as any;
  * a repeat key rather than inserting a second copy.
  */
 export function useSyncSavedViews() {
+  const isSyncHost = useIsSyncHost();
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   // Repair before the first push lands, so a client carrying tombstones from the
   // short-lived pruning build gets its views back on this boot rather than
@@ -36,7 +38,7 @@ export function useSyncSavedViews() {
     api.savedViews.webList,
     // A just-created team carries an optimistic stub id until the server
     // echoes; a stub is not an Id<"teams">, so skip for that window.
-    activeTeamId && !isConvexId(String(activeTeamId))
+    !isSyncHost || (activeTeamId && !isConvexId(String(activeTeamId)))
       ? "skip"
       : activeTeamId
         ? { team_id: activeTeamId }

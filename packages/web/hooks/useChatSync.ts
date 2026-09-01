@@ -17,6 +17,7 @@
 // reads the raw collection in the body.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useIsSyncHost } from "./useSyncRole";
 import { useConvex } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -181,6 +182,7 @@ export function useChatChannelsSync(): { error?: Error } {
   // rail — go quiet along with the nav row. The server refuses the query for
   // an off team anyway; skipping it keeps the console clean.
   const chatOn = useTeamFeature("chat");
+  const isSyncHost = useIsSyncHost();
   useEffect(() => {
     if (!chatOn) syncTable("chatRail", []);
   }, [chatOn, syncTable]);
@@ -194,7 +196,8 @@ export function useChatChannelsSync(): { error?: Error } {
     // users.active_team_id — a second source of truth that can disagree with
     // the workspace the client is actually showing. In the personal workspace
     // chat has no scope at all, so there is nothing to subscribe to.
-    chatOn && teamId && isConvexId(teamId) ? { team_id: teamId } : "skip",
+    // Follower windows receive the channel rail over replication instead.
+    chatOn && isSyncHost && teamId && isConvexId(teamId) ? { team_id: teamId } : "skip",
   );
 
   useConvexSync(
