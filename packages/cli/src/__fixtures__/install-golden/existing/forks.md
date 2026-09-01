@@ -44,6 +44,8 @@ You can spin work off into your human's inbox as independent sessions — not hi
 cast fork "<direction>" ["<direction>" ...]   # branch THIS conversation N ways from here
 cast spawn "<task>" ["<task>" ...]            # start N fresh sessions, no shared history
 cast spawn --subagent --agent codex "<task>"  # subagent row nested under THIS session — yours to manage
+cast exec --agent grok "review this diff"     # run now, print the result, exit (no inbox card)
+cast switch --agent codex                     # continue THIS session under a different agent
 cast spawn - <<'EOF'                          # multi-line briefing via stdin (same as cast send)
 …goal, numbered steps, constraints — exact newlines preserved…
 EOF
@@ -67,7 +69,26 @@ A fork fan-out is a handoff, not an orchestration. When the human asks to run wo
 
 `cast spawn --subagent` inverts the ownership: the new session nests in the UI as a subagent row under this session instead of landing as a first-class inbox card, and it is YOURS to manage — brief it, watch it, `cast send <id>` it follow-ups, `cast read <id>` its results, and fold what it finds back into your own work. Unlike a Task-tool subagent it is a full session on any agent backend, so `--subagent --agent codex` runs a codex worker under a claude parent. Bare `--subagent` nests under the session running the command; pass a value (`--subagent <session>`) to nest under another of your sessions. To block on it, watch it by id — `cast sessions <id> -w --json` emits a `transition` to `needs_input` when the worker finishes its turn (a subagent row is hidden from the top-level list, but always answers when named), then `cast read <id>` for its result. Tell the human what you delegated, and report the results yourself — a subagent row is your worker, not a handoff to their inbox.
 
-Both start working immediately and appear in the inbox. A branch or session only knows what you give it — for forks, plus the history up to the fork point — so seed each with a sharp, self-contained prompt. When you launch several, tell the human what you sent where.
+`cast exec` is the other verb. It runs a prompt on any harness, prints the result, and exits. There is no inbox card: the process is the session. Use it when you need the answer in this turn. Use spawn when the work belongs in the inbox.
+
+```bash
+cast exec "summarize this repo"
+cast exec --agent grok --model grok-4.6 --effort high "review the diff"
+git diff | cast exec --agent claude --model sonnet "write a commit message"
+```
+
+Fork and spawn start working immediately and appear in the inbox. A branch or session only knows what you give it — for forks, plus the history up to the fork point — so seed each with a sharp, self-contained prompt. When you launch several, tell the human what you sent where.
 
 Labels carry across a fork by default: a branch inherits whatever label you'd filed the parent session under (labels are your personal filing, so this follows your own filing even when you fork a teammate's session), keeping a fork grouped with its source without any flag. Pass `--label <name>` to file the new sessions under a label you choose instead — an override for forks, and the only way to file a `spawn` (which starts fresh, with nothing to inherit). The label is created if it doesn't exist: `cast spawn --label rollout "<task>" "<task>"`, then `cast sessions --label rollout` to see the whole fan-out as a group.
+
+Stay on THIS session when you need a different agent or model. Do not fork unless you want a parallel branch the human will steer separately.
+
+```bash
+cast switch --agent codex              # continue here under Codex
+cast switch --model opus               # same agent, different model
+cast switch --agent claude --model sonnet
+cast switch --agent codex --fork       # optional: a new session instead
+```
+
+A divider lands in the thread ("now using Codex"). The conversation id does not change. A provider switch replaces this process — do not keep talking as if you are still the old agent. A model switch on the same provider usually does not.
 <!-- /codecast-forks -->

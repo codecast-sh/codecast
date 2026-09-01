@@ -29,9 +29,11 @@ export function animateSessionEnter(id: string) {
 }
 
 export type HideSessionMode = "stash" | "kill";
+/** `hidden` = "Stash and hide": the stash survives trigger wakes (stash mode only). */
+export type HideSessionOpts = { hidden?: boolean };
 
 /** Animate a session card sliding out, then call undoableHideSession. */
-export function animatedHideSession(id: string, mode: HideSessionMode) {
+export function animatedHideSession(id: string, mode: HideSessionMode, opts?: HideSessionOpts) {
   const card = document.querySelector(`[data-session-id="${id}"]`);
   const wrapper = card?.parentElement;
   if (wrapper) {
@@ -43,12 +45,12 @@ export function animatedHideSession(id: string, mode: HideSessionMode) {
     const finish = () => {
       if (done) return;
       done = true;
-      undoableHideSession(id, mode);
+      undoableHideSession(id, mode, opts);
     };
     wrapper.addEventListener('animationend', finish, { once: true });
     setTimeout(finish, 250);
   } else {
-    undoableHideSession(id, mode);
+    undoableHideSession(id, mode, opts);
   }
 }
 
@@ -87,15 +89,15 @@ function snapshotSession(state: StoreState, id: string) {
 // running); "kill" retires it (the server kills the agent on the hide
 // transition). Undo restores the snapshot and clears BOTH hide flags — the
 // kill itself isn't undoable (the session stays resumable), same as before.
-export function undoableHideSession(id: string, mode: HideSessionMode) {
+export function undoableHideSession(id: string, mode: HideSessionMode, opts?: HideSessionOpts) {
   const state = useInboxStore.getState();
   const session = state.sessions[id];
   const label = session?.title || "session";
-  const verb = mode === "kill" ? "Killed" : "Stashed";
+  const verb = mode === "kill" ? "Killed" : opts?.hidden ? "Stashed and hid" : "Stashed";
   const snap = snapshotSession(state, id);
 
   if (mode === "kill") useInboxStore.getState().killSession(id);
-  else useInboxStore.getState().stashSession(id);
+  else useInboxStore.getState().stashSession(id, opts);
 
   pushUndo({
     label: `${verb} ${label}`,
@@ -132,6 +134,7 @@ export function undoableHideSession(id: string, mode: HideSessionMode) {
           return [sid, {
             inbox_dismissed_at: prev?.inbox_dismissed_at ?? null,
             inbox_stashed_at: prev?.inbox_stashed_at ?? null,
+            inbox_stash_hidden: prev?.inbox_stash_hidden ?? null,
           }];
         })
       );
@@ -160,7 +163,7 @@ export function undoableHideSession(id: string, mode: HideSessionMode) {
     },
     redo: () => {
       if (mode === "kill") useInboxStore.getState().killSession(id);
-      else useInboxStore.getState().stashSession(id);
+      else useInboxStore.getState().stashSession(id, opts);
     },
   });
 

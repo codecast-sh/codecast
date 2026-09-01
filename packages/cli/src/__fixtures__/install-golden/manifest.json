@@ -11,7 +11,7 @@
   "messaging": {
     "config": {
       "messaging_enabled": true,
-      "messaging_version": "8"
+      "messaging_version": "9"
     },
     "stdout": "* Messaging — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -20,7 +20,7 @@
   "forks": {
     "config": {
       "forks_enabled": true,
-      "forks_version": "5"
+      "forks_version": "6"
     },
     "stdout": "* Forks & Sessions — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,

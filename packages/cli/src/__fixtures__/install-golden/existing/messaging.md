@@ -27,13 +27,14 @@ You can also manage which sessions the human sees in their inbox — the same ge
 ```bash
 cast stash [session_id]        # Out of the inbox; the agent KEEPS RUNNING (Stashed bucket).
                                # No ID = current session — tidy yourself away when done.
+cast stash --hide [session_id] # Stash AND stay hidden: trigger wakes don't bring it back.
 cast restore [session_id]      # Bring a stashed/killed session back into the inbox.
 cast kill <session_id>         # Tear the agent down, mark completed, cancel its triggers
                                # (Killed bucket; transcript stays, restartable). ID required —
                                # killing your OWN session cuts you off mid-turn.
 ```
 
-Stash is reversible and keeps the agent alive; kill is the deliberate "done with it". A stashed session is silent except for asks: its triggers keep firing out of sight, and it returns to the inbox only when you (or it) declare `--status blocked`, a run completes `--needs-attention`, or it stalls (permission prompt, open question, dead process). When you hide or kill sessions on the human's behalf, tell them which ones and why.
+Stash is reversible and keeps the agent alive; kill is the deliberate "done with it". A plain stash returns to the inbox the moment a trigger fires into it — the human sees the session because something happened to it. `--hide` keeps it out of sight through those wakes: its triggers keep firing silently, and it returns only for asks — you (or it) declare `--status blocked`, a run completes `--needs-attention`, or it stalls (permission prompt, open question, dead process). Use `--hide` for a loop the human has already reviewed and wants quiet. When you hide or kill sessions on the human's behalf, tell them which ones and why.
 <!-- /codecast-messaging -->
 
 ## House rules

@@ -12,6 +12,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import {
   AGENT_MODEL_CONFIG,
   agentSupportsExecutionTransport,
+  isStashHidden,
 } from "@codecast/shared/contracts";
 import type { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
@@ -2078,7 +2079,7 @@ export async function abandonAmbiguousAndResendInDb(
     has_pending_messages: true,
     ...(conversation.status === "completed" ? { status: "active" as const } : {}),
     ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
-    ...(conversation.inbox_stashed_at && !machineWake ? { inbox_stashed_at: undefined } : {}),
+    ...(conversation.inbox_stashed_at && !(machineWake && isStashHidden(conversation)) ? { inbox_stashed_at: undefined } : {}),
     ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
   });
   return {

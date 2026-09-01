@@ -17,7 +17,7 @@ import { AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption } from "@codecast
 import { useDynamicModels } from "../hooks/useDynamicModels";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
-import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, filterInboxScopeFromState, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
+import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, placeInboxRows, filterInboxScopeFromState, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
 import { resolveRecentVisits, visitTimeAgo, VISIT_OBJECT_LABEL, type ResolvedVisit } from "../lib/recentVisits";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { RecentVisitGlyph } from "./RecentVisitRow";
@@ -109,6 +109,7 @@ import {
   LayoutDashboard,
   Plus,
   RefreshCw,
+  EyeOff,
 } from "lucide-react";
 import { AnchorGlyph } from "./anchor/AnchorIdentity";
 import { setTaskParent, closeTaskWithGuard } from "../lib/taskActions";
@@ -395,22 +396,12 @@ export function ActionSubmenu({
     // it sits above; this picker is a catalog of views, and a label whose
     // sessions were all dismissed is still a real view — a 0 badge here would
     // read as "empty label".
-    const scope = st.clientState.ui?.inbox_scope ?? "mine";
-    const scoped = filterInboxScope(
-      st.sessions,
-      scope,
-      st.currentUser?._id?.toString?.() ?? null,
-      st.teamInboxIds,
-      st.currentSessionId,
-    );
-    const cat = categorizeSessions(
-      scoped,
-      st.sessionsWithQueuedMessages,
-      sessionsWithPendingSend(st.pendingMessages),
-      { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)), showOld: true, reviveRequestedAt: st.blockedReviveRequestedAt },
-    );
+    // The placement chokepoint (placeInboxRows, sync-convergence C5): the
+    // same scoped working-set selection every other counting surface uses, so
+    // the view badges here can never disagree with the panel's chip row.
+    const placed = placeInboxRows(st, { focusedId: st.currentSessionId ?? null });
     const bucketByConv = convBucketMap(st.bucketAssignments as Record<string, BucketAssignmentItem>);
-    const counts = computeChipCounts([...cat.sorted, ...cat.stashed, ...cat.dismissed], bucketByConv);
+    const counts = computeChipCounts([...placed.sorted, ...placed.stashed, ...placed.dismissed], bucketByConv);
     // Label counts come from the assignments themselves, not from cached
     // sessions: bucket_assignments sync completely (buckets.webList collects the
     // whole per-user table), while the session cache is windowed and boot-pruned
@@ -1897,6 +1888,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       } else if (actionKey === "session_stash") {
         undoableHideSession(session._id, "stash");
         closePalette();
+      } else if (actionKey === "session_stash_hide") {
+        undoableHideSession(session._id, "stash", { hidden: true });
+        closePalette();
       } else if (actionKey === "session_defer") {
         undoableDeferSession(session._id);
         closePalette();
@@ -1992,6 +1986,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         ? [{ key: "model", label: "Change model & effort...", icon: Cpu } as ContextActionRow]
         : []),
       { key: "session_stash", label: "Stash session", icon: Archive, shortcutAction: "session.stash" },
+      { key: "session_stash_hide", label: "Stash and hide session", icon: EyeOff, shortcutAction: "session.stashHide" },
       { key: "session_kill", label: "Kill session", icon: Square, shortcutAction: "session.kill" },
       { key: "session_defer", label: "Defer session", icon: Clock, shortcutAction: "session.deferAdvance" },
       { key: "session_dormant", label: "Dormant — a machine wakes it", icon: Moon, shortcutAction: "session.dormantAdvance" },

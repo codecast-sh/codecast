@@ -26,12 +26,13 @@
 // and the dismiss/stash reconcile crawls remain the durable path; the bridge
 // only closes the window between the gesture and that reconcile.
 
-// The four row fields the bridge carries. Every one of them is written by a
-// user gesture and read by the inbox's bucket/sort logic, and every one is
+// The row fields the bridge carries. Every one of them is written by a user
+// gesture and read by the inbox's bucket/sort logic, and every one is
 // nullable — which is what makes a stale sibling's whole-row put destructive.
 export const BRIDGED_FIELDS = [
   "inbox_dismissed_at",
   "inbox_stashed_at",
+  "inbox_stash_hidden",
   "inbox_pinned_at",
   "is_pinned",
 ] as const;
@@ -49,7 +50,10 @@ export type GestureMessage =
   // carries that half INLINE rather than as a second broadcast, so one user
   // gesture is exactly one message (a receiver that saw only half of a split
   // pair would converge to a state the user never asked for).
-  | { kind: "hide"; mode: "kill" | "stash"; ids: string[]; forget?: string[]; ts: number }
+  // `hidden` = "Stash and hide" (stash mode only): the receiver writes the
+  // same inbox_stash_hidden the sender did, so both windows agree on whether
+  // a trigger wake brings the row back.
+  | { kind: "hide"; mode: "kill" | "stash"; hidden?: boolean; ids: string[]; forget?: string[]; ts: number }
   | { kind: "restore"; ids: string[]; ts: number }
   // `pinnedAt` is the EXACT value the sender wrote, carried separately from
   // `ts` (the ordering stamp) because undo restores the ORIGINAL pin time, not
@@ -167,6 +171,7 @@ function isGestureMessage(data: unknown): data is Envelope {
   }
   if (e.kind === "hide") {
     if (e.forget !== undefined && !Array.isArray(e.forget)) return false;
+    if (e.hidden !== undefined && typeof e.hidden !== "boolean") return false;
     return Array.isArray(e.ids) && (e.mode === "kill" || e.mode === "stash");
   }
   if (e.kind === "forget") {

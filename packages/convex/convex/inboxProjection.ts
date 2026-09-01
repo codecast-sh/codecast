@@ -1,3 +1,4 @@
+import { INBOX_WINDOW_CAPS } from "@codecast/shared/contracts";
 import type { Id } from "./_generated/dataModel";
 // The per-user inbox triage/visibility stamps, projected off a conversation
 // doc. EVERY query that emits a conversation summary the client may seed into
@@ -8,16 +9,18 @@ import type { Id } from "./_generated/dataModel";
 // then renders as a needs-input card on every boot until a full row re-delivers
 // the stamps (the "forks flash in the inbox on reload" bug, ct-42666).
 //
-// All four are free fields already on the doc in hand — no extra reads.
+// All five are free fields already on the doc in hand — no extra reads.
 export function inboxVisibilityFields(conv: {
   inbox_dismissed_at?: number | null;
   inbox_stashed_at?: number | null;
+  inbox_stash_hidden?: boolean | null;
   inbox_killed_at?: number | null;
   inbox_pinned_at?: number | null;
 }) {
   return {
     inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
     inbox_stashed_at: conv.inbox_stashed_at ?? null,
+    inbox_stash_hidden: conv.inbox_stash_hidden ?? null,
     inbox_killed_at: conv.inbox_killed_at ?? null,
     inbox_pinned_at: conv.inbox_pinned_at ?? null,
   };
@@ -27,8 +30,9 @@ export function inboxVisibilityFields(conv: {
 // INBOX_PINNED_CAP pins (by_user_pinned, descending) and flags overflow, so the
 // cap is enforced where the user can see it — a pin that would exceed it is
 // refused by every writer (conversations.patchConversation throws; the dispatch
-// patch rail drops the field). Sync-convergence C2.
-export const INBOX_PINNED_CAP = 100;
+// patch rail drops the field). Sync-convergence C2. Single source: the shared
+// window caps (INBOX_WINDOW_CAPS), which the replica's selection also reads.
+export const INBOX_PINNED_CAP = INBOX_WINDOW_CAPS.pinned;
 
 export const PIN_CAP_ERROR = `Pin limit reached: you already hold ${INBOX_PINNED_CAP} pinned sessions. Unpin one to pin another.`;
 

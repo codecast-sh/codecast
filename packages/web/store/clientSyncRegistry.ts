@@ -110,6 +110,7 @@ export const CLIENT_SYNC_REGISTRY = {
       fields: [
         "inbox_dismissed_at",
         "inbox_stashed_at",
+        "inbox_stash_hidden",
         "inbox_pinned_at",
         "inbox_deferred_at",
         "inbox_dormant_at",

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { dragCarriesPane } from "../lib/stage";
 import { LogoIcon } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import { useRouter } from "next/navigation";
@@ -25,8 +26,9 @@ import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
-import { classifyApiErrorBanner, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
+import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemSubtype, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
+import { splitMarkdownBlocks } from "../lib/markdownBlocks";
+import { classifyApiErrorBanner, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "./DecisionAnswerFooter";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { parseLimitResetAt } from "../lib/limitReset";
@@ -35,15 +37,28 @@ import {
   describeToolGroup,
   extractNestedActions,
   formatToolName,
+  isAgentTool,
+  isAskTool,
+  isEditTool,
+  isGlobTool,
+  isGrepTool,
+  isPlanModeTool,
   isPlanWriteToolCall,
+  isReadTool,
+  isShellTool,
+  isTodoTool,
+  isWriteTool,
   shortenUrl,
   splitBrowserBatchResult,
   stripLineNumbers,
   structuredPayloadSummary,
   summarizeNestedActions,
+  toolPathFromInput,
   toolSummary as sharedToolSummary,
+  toolVisual,
   BROWSER_BATCH_TOOL,
   type NestedStepOutcome,
+  type ToolColorToken,
   truncateStr,
   getRelativePath,
 } from "@codecast/shared/render";
@@ -58,6 +73,7 @@ import { UsageDisplay } from "./UsageDisplay";
 import { StableContextCards, StableContextPicker } from "./StableContextCards";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
+import { animatedHideSession } from "../store/undoActions";
 import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
 import { tryRenderCastDiff, MessageIdentityProvider } from "./InlineDiff";
@@ -74,7 +90,7 @@ import { quoteSelectionIntoReply } from "../lib/quoteSelection";
 import { MessageReview } from "./MessageReview";
 import { SelectionQuoteToolbar } from "./SelectionQuoteToolbar";
 import { ReviewBar } from "./ReviewBar";
-import { SuggestionPills } from "./SuggestionPills";
+import { SuggestionPills, SuggestionPillsHandle } from "./SuggestionPills";
 import { ReviewComposerContext } from "./reviewContext";
 import { CommentDock } from "./comments/CommentDock";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
@@ -108,6 +124,7 @@ import { CommitCard } from "./CommitCard";
 import { PRCard } from "./PRCard";
 import { DiffView } from "./DiffView";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
+import { GrokIcon as GrokMark } from "./BrandIcons";
 import { AnchorHeaderPill } from "./anchor/AnchorHeaderPill";
 import { HeaderModelControl, LaunchModelPill } from "./ModelEffortPicker";
 import {
@@ -205,7 +222,7 @@ import { setupDesktopDrag, desktopHeaderClass, isDetachedTabWindow } from "../li
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2, Search, Bot, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Pin, Forward, PhoneCall, Archive } from "lucide-react";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useTeamFeature } from "../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
@@ -402,30 +419,6 @@ const MD_RENDER_CACHE_MAX = 500;
 // cosmetically, so ordinary messages keep exact single-parse semantics.
 const MD_BLOCK_SPLIT_THRESHOLD = 8000;
 
-// Split at blank-line runs, but never inside a ``` / ~~~ fence.
-function splitMarkdownBlocks(content: string): string[] {
-  const lines = content.split("\n");
-  const blocks: string[] = [];
-  let cur: string[] = [];
-  let inFence = false;
-  let fenceMark = "";
-  for (const line of lines) {
-    const fence = line.match(/^\s*(`{3,}|~{3,})/);
-    if (fence) {
-      if (!inFence) { inFence = true; fenceMark = fence[1][0]; }
-      else if (fence[1][0] === fenceMark) inFence = false;
-    }
-    if (!inFence && line.trim() === "" && cur.length > 0) {
-      blocks.push(cur.join("\n"));
-      cur = [];
-      continue;
-    }
-    cur.push(line);
-  }
-  if (cur.length > 0) blocks.push(cur.join("\n"));
-  return blocks;
-}
-
 function mdCachePut(key: string, el: ReactElement): ReactElement {
   MD_RENDER_CACHE.set(key, el);
   if (MD_RENDER_CACHE.size > MD_RENDER_CACHE_MAX) {
@@ -444,14 +437,20 @@ function renderMessageMarkdownCached(content: string, userText?: boolean): React
   }
   if (!userText && content.length > MD_BLOCK_SPLIT_THRESHOLD) {
     const blocks = splitMarkdownBlocks(content);
-    const el = (
-      <>
-        {blocks.map((b, i) => (
-          <Fragment key={i}>{renderMessageMarkdownCached(b)}</Fragment>
-        ))}
-      </>
-    );
-    return mdCachePut(key, el);
+    // Recurse only when the split made progress: a body with no blank lines
+    // outside fences returns itself as one block, and recursing on the
+    // identical string overflows the stack (the cache write happens after
+    // the recursive calls, so it can't break the loop).
+    if (blocks.length > 1) {
+      const el = (
+        <>
+          {blocks.map((b, i) => (
+            <Fragment key={i}>{renderMessageMarkdownCached(b)}</Fragment>
+          ))}
+        </>
+      );
+      return mdCachePut(key, el);
+    }
   }
   const el = ReactMarkdownBase({
     children: content,
@@ -2724,8 +2723,7 @@ function summarizeBashCommand(cmd: string): string {
 // a Bash tool's input showed up as a per-render scroll cost.
 const PARSE_CAST_COMMAND_CACHE = new WeakMap<ToolCall, ParsedCastCommand | null>();
 function parseCastCommand(tool: ToolCall): ParsedCastCommand | null {
-  const isBash = tool.name === "Bash" || tool.name === "shell_command" || tool.name === "shell" || tool.name === "exec_command" || tool.name === "container.exec" || tool.name === "commandExecution";
-  if (!isBash) return null;
+  if (!isShellTool(tool.name)) return null;
   if (PARSE_CAST_COMMAND_CACHE.has(tool)) return PARSE_CAST_COMMAND_CACHE.get(tool)!;
   let out: ParsedCastCommand | null = null;
   try {
@@ -2795,6 +2793,7 @@ type UserMessageKind =
   | { kind: 'poll_response' }
   | { kind: 'scheduled_task' }
   | { kind: 'machine_move'; destination?: string; machineChanged: boolean }
+  | { kind: 'agent_switch'; toLabel: string; fromLabel?: string }
   | { kind: 'session_message'; from: string; body: string; name?: string }
   | { kind: 'huddle_summary'; huddle: HuddleSummaryTag }
   | { kind: 'chat_wake'; wake: ChatWakePrompt }
@@ -2861,7 +2860,7 @@ function classifyUserMessage(
   if (t.startsWith('{') && t.includes('__cc_poll')) {
     try { if (JSON.parse(t).__cc_poll) return { kind: 'poll_response' }; } catch {}
   }
-  if (immediatePrev?.role === 'assistant' && immediatePrev?.tool_calls?.some(tc => tc.name === 'AskUserQuestion')) {
+  if (immediatePrev?.role === 'assistant' && immediatePrev?.tool_calls?.some(tc => isAskTool(tc.name))) {
     return { kind: 'poll_response' };
   }
   if (!tStripped) return { kind: 'noise' };
@@ -2872,6 +2871,9 @@ function classifyUserMessage(
   const bashOut = parseBashOutput(tNoReminders);
   if (bashOut) return { kind: 'bash_output', stdout: bashOut.stdout, stderr: bashOut.stderr };
   if (isCommandMessage(tNoReminders)) {
+    if (isModelSwitchStdout(tNoReminders)) {
+      return { kind: "agent_switch", toLabel: modelSwitchStdoutLabel(tNoReminders) || "new model" };
+    }
     if (isSkillExpansion(t)) {
       const cmdMatch = t.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
       return { kind: 'skill_expansion', cmdName: cmdMatch?.[1]?.replace(/^\//, "") };
@@ -2884,6 +2886,13 @@ function classifyUserMessage(
     // Hide /compact commands — the compact_boundary system message handles the visual separator
     const cmdName = t.match(/<command-(?:name|message)>\/?compact<\/command-(?:name|message)>/);
     if (cmdName || t === '/compact') return { kind: 'compaction_prompt' };
+    const parsedCmd = parseCommandInvocation(tNoReminders);
+    if (isModelSwitchCommandName(parsedCmd.cmdName)) {
+      const label = parsedCmd.cmdName === "effort"
+        ? `${parsedCmd.args || "effort"} effort`
+        : (parsedCmd.args || "new model");
+      return { kind: "agent_switch", toLabel: label };
+    }
     return { kind: 'command' };
   }
   // Legacy stored form: command tags were stripped at sync time, leaving "name\n/name\nargs".
@@ -2891,6 +2900,13 @@ function classifyUserMessage(
   if (isStrippedCommand(tNoReminders)) return { kind: 'command' };
   if (agentType === "codex" && isCodexTurnAbortedMessage(t)) return { kind: 'interrupt', tone: 'amber' };
   if (isInterruptMessage(t)) return { kind: 'interrupt', tone: 'sky' };
+  if (isAgentSwitchNotice(tNoReminders) || msg.subtype === "agent_switch") {
+    const parsed = parseAgentSwitchNotice(tNoReminders);
+    return { kind: "agent_switch", toLabel: parsed?.toLabel || "new agent", fromLabel: parsed?.fromLabel };
+  }
+  if (isModelSwitchStdout(tNoReminders)) {
+    return { kind: "agent_switch", toLabel: modelSwitchStdoutLabel(tNoReminders) || "new model" };
+  }
   if (isMachineMoveNotice(tNoReminders)) return { kind: 'machine_move', ...parseMachineMoveNotice(tNoReminders) };
   if (isBackgroundAgentStoppedNotice(t)) return { kind: 'background_agent_stopped', agentName: backgroundAgentStoppedName(t) ?? undefined };
   if (isSkillExpansion(t)) return { kind: 'skill_expansion' };
@@ -3037,9 +3053,7 @@ function PiIcon() {
 function GrokIcon() {
   return (
     <div className="w-6 h-6 rounded bg-sol-text flex items-center justify-center shrink-0">
-      <svg className="w-3.5 h-3.5 text-sol-bg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-        <path d="M3 3l18 18M21 3l-7.5 7.5M3 21l7.5-7.5" />
-      </svg>
+      <GrokMark className="w-3.5 h-3.5 text-sol-bg" />
     </div>
   );
 }
@@ -3340,7 +3354,7 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
   const prompt = String(parsedInput.prompt || "");
   const model = parsedInput.model ? String(parsedInput.model) : null;
   const name = parsedInput.name ? String(parsedInput.name) : null;
-  const runInBackground = Boolean(parsedInput.run_in_background);
+  const runInBackground = Boolean(parsedInput.run_in_background || parsedInput.background);
 
   const resolvedChildId = childConversationId || findMatchingChild(prompt, childConversations);
   const router = useRouter();
@@ -3686,7 +3700,7 @@ function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
   // condensed feeds: all are standing state the reader needs to know is armed
   // (a watch, a detached command, a running multi-agent fleet, a loop's next
   // fire), not a transient tool step.
-  return isPlanWriteToolCall(tc) || tc.name === "AskUserQuestion" || tc.name === "Monitor" || tc.name === "Workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc);
+  return isPlanWriteToolCall(tc) || isAskTool(tc.name) || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc);
 }
 
 interface ToolChangeRange {
@@ -3722,6 +3736,23 @@ function FullscreenIcon() {
   );
 }
 
+const TOOL_COLOR_CLASS: Record<ToolColorToken, string> = {
+  green: "text-sol-green/80",
+  blue: "text-sol-blue/80",
+  violet: "text-sol-violet/80",
+  orange: "text-sol-orange/80",
+  cyan: "text-sol-cyan/80",
+  magenta: "text-sol-magenta/80",
+  red: "text-sol-red/80",
+  textDim: "text-sol-text-dim",
+  emerald: "text-emerald-500/80",
+  amber: "text-amber-500/80",
+};
+
+function toolColorClass(name: string): string {
+  return TOOL_COLOR_CLASS[toolVisual(name).color];
+}
+
 function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode, messageId, conversationId, onStartShareSelection, onOpenComments, collapsed, timestamp, images, globalImageMap }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; changeRange?: ToolChangeRange; shareSelectionMode?: boolean; messageId?: string; conversationId?: Id<"conversations">; onStartShareSelection?: (messageId: string) => void; onOpenComments?: () => void; collapsed?: boolean; timestamp?: number; images?: ImageData[]; globalImageMap?: Record<string, ImageData[]> }) {
   // opencode + pi name their built-in tools in lowercase (`edit`/`read`/`bash`/…);
   // gemini's glob matches too. Included alongside Claude's capitalized names and
@@ -3729,15 +3760,14 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   // specialized cards (DiffView, syntax read, bash styling) instead of the generic
   // fallback. Lowercase ids don't collide with claude/codex spellings.
   const isApplyPatch = tool.name === "apply_patch";
-  const isStandardEdit = tool.name === "Edit" || tool.name === "Write" || tool.name === "file_edit" || tool.name === "file_write" || tool.name === "edit" || tool.name === "write";
+  const isStandardEdit = isEditTool(tool.name) || isWriteTool(tool.name);
   const isFileChange = tool.name === "fileChange";
   const isEdit = isStandardEdit || isApplyPatch || isFileChange;
   const [expanded, setExpanded] = useState(isEdit);
-  const isRead = tool.name === "Read" || tool.name === "file_read" || tool.name === "read";
-  const isCodexShell = tool.name === "shell_command" || tool.name === "shell" || tool.name === "exec_command" || tool.name === "container.exec" || tool.name === "commandExecution";
-  const isBash = tool.name === "Bash" || tool.name === "bash" || isCodexShell;
-  const isGlob = tool.name === "Glob" || tool.name === "glob";
-  const isGrep = tool.name === "Grep" || tool.name === "grep";
+  const isRead = isReadTool(tool.name);
+  const isBash = isShellTool(tool.name);
+  const isGlob = isGlobTool(tool.name);
+  const isGrep = isGrepTool(tool.name);
   const isCodeSearch = tool.name === "code_search" || tool.name === "code_analysis";
   // Workflow subagents return their typed result by CALLING StructuredOutput:
   // the input is the whole payload and the result is boilerplate, so rendering
@@ -3762,8 +3792,9 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   const isBrowserBatch = tool.name === BROWSER_BATCH_TOOL;
   const isNested = isCodexExec || isBrowserBatch;
 
-  // claude uses file_path, codex uses path, opencode/pi use filePath (camelCase).
-  const filePath = String(parsedInput.file_path || parsedInput.filePath || parsedInput.path || "");
+  // claude uses file_path, codex uses path, opencode/pi use filePath (camelCase),
+  // grok read_file uses target_file and list_dir uses target_directory.
+  const filePath = toolPathFromInput(parsedInput);
   const relativePath = getRelativePath(filePath);
   // Enables inline line comments on the agent's edits (see DiffView). Scoped to a
   // live conversation; comments land in the shared review batch keyed by the
@@ -3796,7 +3827,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   const isMarkdown = isMarkdownFile(filePath);
   const content = isRead ? (result?.content || "") : String(parsedInput.content || "");
   const isPlan = isMarkdown && isPlanFile(filePath, content);
-  const isPlanWrite = tool.name === "Write" && filePath.includes('.claude/plans/');
+  const isPlanWrite = isWriteTool(tool.name) && filePath.includes('.claude/plans/');
   const [viewMode, setViewMode] = useState<'raw' | 'rendered'>(isMarkdown ? 'rendered' : 'raw');
   const [mdExpanded, setMdExpanded] = useState(false);
   const [mdFullscreen, setMdFullscreen] = useState(false);
@@ -3840,7 +3871,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
     if (isNested) {
       if (nestedActions.length === 1) {
         const inner = nestedActions[0];
-        if (inner.name === "exec_command" || inner.name === "shell_command" || inner.name === "shell" || inner.name === "container.exec" || inner.name === "commandExecution") {
+        if (isShellTool(inner.name)) {
           let innerInput: Record<string, unknown> = {};
           try { innerInput = JSON.parse(inner.input); } catch {}
           const cmd = unwrapShellCommand(String(innerInput.command || innerInput.cmd || ""));
@@ -3855,7 +3886,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
       const cmd = unwrapShellCommand(String(parsedInput.command || parsedInput.cmd || ""));
       if (cmd) return summarizeBashCommand(cmd);
     }
-    if (isGlob && parsedInput.pattern) return String(parsedInput.pattern);
+    if (isGlob) return parsedInput.pattern ? String(parsedInput.pattern) : relativePath;
     if (isGrep && parsedInput.pattern) return String(parsedInput.pattern);
     if (isCodeSearch && parsedInput.query) return truncateStr(String(parsedInput.query), 40);
     if (isStructuredOutput) return structuredPayloadSummary(parsedInput) || null;
@@ -3970,15 +4001,15 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
     if (tool.name === "WebFetch" || tool.name === "web_fetch") return parsedInput.url ? shortenUrl(String(parsedInput.url)) : "Fetch";
     if (tool.name === "NotebookEdit") return parsedInput.notebook_path ? getRelativePath(String(parsedInput.notebook_path)) : "Notebook";
     if (tool.name === "Skill") return parsedInput.skill ? `/${String(parsedInput.skill)}` : "Skill";
-    if (tool.name === "EnterPlanMode") return "Plan mode";
-    if (tool.name === "ExitPlanMode") return "Exit plan";
+    if (tool.name === "EnterPlanMode" || tool.name === "enter_plan_mode") return "Plan mode";
+    if (tool.name === "ExitPlanMode" || tool.name === "exit_plan_mode") return "Exit plan";
     if (tool.name === "TaskOutput") return parsedInput.task_id ? `task ${String(parsedInput.task_id).slice(0, 8)}` : "Output";
     if (tool.name === "TaskStop") return parsedInput.task_id ? `stop ${String(parsedInput.task_id).slice(0, 8)}` : "Stop";
-    if (tool.name === "TodoWrite") {
+    if (isTodoTool(tool.name)) {
       const todos = parsedInput.todos as any[];
       return `${todos?.length || 0} tasks`;
     }
-    if (tool.name === "AskUserQuestion") {
+    if (isAskTool(tool.name)) {
       const questions = parsedInput.questions as any[];
       return questions?.[0]?.question ? truncateStr(String(questions[0].question), 50) : "Question";
     }
@@ -4065,76 +4096,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   };
   const startLine = getStartLine();
 
-  const toolColors: Record<string, string> = {
-    Edit: "text-sol-orange/80",
-    Write: "text-sol-orange/80",
-    Read: "text-sol-blue/80",
-    Bash: "text-sol-green/80",
-    Glob: "text-sol-violet/80",
-    Grep: "text-sol-violet/80",
-    Task: "text-sol-cyan/80",
-    TaskCreate: "text-emerald-500/80",
-    TaskUpdate: "text-emerald-500/80",
-    TaskList: "text-emerald-500/80",
-    TaskGet: "text-emerald-500/80",
-    TaskOutput: "text-emerald-500/80",
-    TaskStop: "text-emerald-500/80",
-    AskUserQuestion: "text-sol-blue/80",
-    TeamCreate: "text-sol-cyan/80",
-    TeamDelete: "text-sol-cyan/80",
-    SendMessage: "text-amber-500/80",
-    StructuredOutput: "text-sol-cyan/80",
-    TodoWrite: "text-sol-magenta/80",
-    WebSearch: "text-sol-violet/80",
-    WebFetch: "text-sol-cyan/80",
-    NotebookEdit: "text-sol-orange/80",
-    Skill: "text-sol-cyan/80",
-    EnterPlanMode: "text-sol-violet/80",
-    ExitPlanMode: "text-sol-violet/80",
-    "mcp__claude-in-chrome__computer": "text-sol-orange/80",
-    "mcp__claude-in-chrome__browser_batch": "text-sol-orange/80",
-    "mcp__claude-in-chrome__navigate": "text-sol-blue/80",
-    "mcp__claude-in-chrome__read_page": "text-sol-blue/80",
-    "mcp__claude-in-chrome__find": "text-sol-violet/80",
-    "mcp__claude-in-chrome__form_input": "text-sol-orange/80",
-    "mcp__claude-in-chrome__javascript_tool": "text-sol-orange/80",
-    "mcp__claude-in-chrome__tabs_context_mcp": "text-sol-text-dim",
-    "mcp__claude-in-chrome__tabs_create_mcp": "text-sol-text-dim",
-    "mcp__claude-in-chrome__update_plan": "text-sol-cyan/80",
-    "mcp__claude-in-chrome__gif_creator": "text-sol-magenta/80",
-    "mcp__claude-in-chrome__read_console_messages": "text-sol-green/80",
-    "mcp__claude-in-chrome__read_network_requests": "text-sol-green/80",
-    "mcp__claude-in-chrome__get_page_text": "text-sol-blue/80",
-    "mcp__claude-in-chrome__upload_image": "text-sol-blue/80",
-    "mcp__claude-in-chrome__resize_window": "text-sol-text-dim",
-    "mcp__claude-in-chrome__shortcuts_list": "text-sol-violet/80",
-    "mcp__claude-in-chrome__shortcuts_execute": "text-sol-violet/80",
-  };
-
-  const codexToolColors: Record<string, string> = {
-    shell_command: "text-sol-green/80",
-    shell: "text-sol-green/80",
-    exec_command: "text-sol-green/80",
-    "container.exec": "text-sol-green/80",
-    commandExecution: "text-sol-green/80",
-    apply_patch: "text-sol-orange/80",
-    file_read: "text-sol-blue/80",
-    file_write: "text-sol-orange/80",
-    file_edit: "text-sol-orange/80",
-    fileChange: "text-sol-orange/80",
-    web_search: "text-sol-violet/80",
-    web_fetch: "text-sol-cyan/80",
-    code_search: "text-sol-violet/80",
-    code_analysis: "text-sol-violet/80",
-  };
-
-  const getMcpColor = (name: string) => {
-    if (codexToolColors[name]) return codexToolColors[name];
-    if (name.startsWith("mcp__")) return "text-sol-cyan/80";
-    return "text-sol-text-dim";
-  };
-
-  const toolColor = toolColors[tool.name] || getMcpColor(tool.name);
+  const toolColor = toolColorClass(tool.name);
 
   const targetStart = changeRange?.start ?? changeIndex;
   const targetEnd = changeRange?.end ?? changeIndex;
@@ -4266,7 +4228,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
           className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset transition-all duration-200"
         >
           {/* Markdown toggle header */}
-          {isMarkdown && (isRead || (tool.name === "Write" && Boolean(parsedInput.content))) && (
+          {isMarkdown && (isRead || (isWriteTool(tool.name) && Boolean(parsedInput.content))) && (
             <div className="flex items-center justify-between px-2 py-1 border-b border-sol-border/20 bg-sol-bg-highlight/30">
               <div className="flex items-center gap-2">
                 <span className="text-[10px] text-sol-text-dim">{language}</span>
@@ -4333,7 +4295,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
               language={language}
               commentContext={lineCommentCtx(filePath)}
             />
-          ) : tool.name === "Write" && !!parsedInput.content ? (
+          ) : isWriteTool(tool.name) && !!parsedInput.content ? (
             isMarkdown && viewMode === 'rendered' ? (
               <>
                 <div
@@ -4573,7 +4535,7 @@ function TodoWriteBlock({ tool }: { tool: ToolCall }) {
       <div className="flex items-center gap-2 py-0.5">
         <span className="w-1.5 h-1.5 rounded-full bg-pink-500 flex-shrink-0" />
         <span className="font-mono text-sm font-medium text-pink-600 dark:text-sol-magenta">
-          TodoWrite
+          {formatToolName(tool.name)}
         </span>
         <span className="text-sol-text-dim text-sm font-mono">
           {completed}/{todos.length} done
@@ -5924,8 +5886,8 @@ function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId
 }
 
 function PlanModeBlock({ tool, result, conversationId, messageId, onSendMessage }: { tool: ToolCall; result?: ToolResult; conversationId?: string; messageId?: string; onSendMessage?: (content: string) => void }) {
-  const isEnter = tool.name === "EnterPlanMode";
-  const isExit = tool.name === "ExitPlanMode";
+  const isEnter = tool.name === "EnterPlanMode" || tool.name === "enter_plan_mode";
+  const isExit = tool.name === "ExitPlanMode" || tool.name === "exit_plan_mode";
   const isWaitingForApproval = isExit && !result && !!onSendMessage;
   const [sent, setSent] = useState(false);
 
@@ -6026,7 +5988,7 @@ function PollCheckIcon({ className }: { className?: string }) {
 }
 
 function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall; result?: ToolResult; onSendMessage?: (content: string) => void }) {
-  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
+  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; multi_select?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
   const [sent, setSent] = useState(() => _askUserSentState.has(tool.id));
   // Per-question selections. multiSelect questions hold several entries (checkbox
@@ -6035,7 +5997,10 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   const [otherOpen, setOtherOpen] = useState<Record<number, boolean>>({});
   const [otherTexts, setOtherTexts] = useState<Record<number, string>>({});
 
-  const questions = parsedInput.questions || [];
+  const questions = (parsedInput.questions || []).map((q) => ({
+    ...q,
+    multiSelect: q.multiSelect ?? q.multi_select,
+  }));
   if (questions.length === 0) return null;
 
   const isMultiQuestion = questions.length > 1;
@@ -6929,6 +6894,45 @@ function MachineMoveDivider({ content, destination, machineChanged, timestamp }:
   );
 }
 
+function AgentSwitchDivider({
+  toLabel, fromLabel, content, timestamp,
+}: {
+  toLabel: string;
+  fromLabel?: string;
+  content: string;
+  timestamp: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const caption = `now using ${toLabel}`;
+  const details = content.trim();
+  const hasDetails = details.includes("\n");
+  return (
+    <div className="my-5">
+      <button
+        type="button"
+        onClick={() => hasDetails && setOpen((o) => !o)}
+        className={`w-full ${hasDetails ? "cursor-pointer group" : "cursor-default"}`}
+        title={`${formatFullTimestamp(timestamp)}${hasDetails ? " — click for details" : ""}`}
+      >
+        <TimelineRule color="var(--sol-violet)" label={caption}>
+          <span className="flex items-center gap-1.5 text-[11px] text-sol-text-dim group-hover:text-sol-text-muted transition-colors">
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4" />
+            </svg>
+            {caption}
+            {fromLabel && <span className="text-sol-text-dim/70">was {fromLabel}</span>}
+          </span>
+        </TimelineRule>
+      </button>
+      {open && hasDetails && (
+        <div className="mt-2 mx-auto max-w-2xl px-4 py-3 rounded-md border border-sol-border bg-sol-card text-xs text-sol-text-muted whitespace-pre-wrap leading-relaxed">
+          {details}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function isTaskNotification(content: string): boolean {
   return content.trim().startsWith('<task-notification>');
 }
@@ -6963,18 +6967,19 @@ function extractCompactionSummaryContent(content: string): string {
 // completion record, marked closed on the way in. Nothing is wrong and nothing
 // is owed, so it wears the same quiet grey as the "monitor ended" line, and the
 // unknown-status fallback lands there too rather than crying wolf.
-const taskStatusConfig: Record<string, { icon: string; color: string; bg: string; eyebrow: string; chip: string }> = {
-  completed: { icon: '\u2713', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', eyebrow: 'text-emerald-400/70', chip: 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10' },
-  killed: { icon: '\u25A0', color: 'text-sol-orange', bg: 'bg-sol-orange/10 border-sol-orange/20', eyebrow: 'text-sol-orange/70', chip: 'border-sol-orange/40 text-sol-orange bg-sol-orange/10' },
-  failed: { icon: '\u2717', color: 'text-sol-red', bg: 'bg-sol-red/10 border-sol-red/20', eyebrow: 'text-sol-red/70', chip: 'border-sol-red/40 text-sol-red bg-sol-red/10' },
-  running: { icon: '\u25B6', color: 'text-sol-blue', bg: 'bg-sol-blue/10 border-sol-blue/20', eyebrow: 'text-sol-blue/70', chip: 'border-sol-blue/40 text-sol-blue bg-sol-blue/10' },
-  stopped: { icon: '\u25A0', color: 'text-sol-text-dim', bg: 'bg-sol-bg-alt/30 border-sol-border/40', eyebrow: 'text-sol-text-dim', chip: 'border-sol-border/60 text-sol-text-dim bg-sol-bg-alt/40' },
+const taskStatusConfig: Record<string, { icon: string; color: string; bg: string; accent: string; eyebrow: string; chip: string }> = {
+  completed: { icon: '\u2713', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', accent: 'border-emerald-500/60 bg-emerald-500/5', eyebrow: 'text-emerald-400/70', chip: 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10' },
+  killed: { icon: '\u25A0', color: 'text-sol-orange', bg: 'bg-sol-orange/10 border-sol-orange/20', accent: 'border-sol-orange/60 bg-sol-orange/5', eyebrow: 'text-sol-orange/70', chip: 'border-sol-orange/40 text-sol-orange bg-sol-orange/10' },
+  failed: { icon: '\u2717', color: 'text-sol-red', bg: 'bg-sol-red/10 border-sol-red/20', accent: 'border-sol-red/60 bg-sol-red/5', eyebrow: 'text-sol-red/70', chip: 'border-sol-red/40 text-sol-red bg-sol-red/10' },
+  running: { icon: '\u25B6', color: 'text-sol-blue', bg: 'bg-sol-blue/10 border-sol-blue/20', accent: 'border-sol-blue/60 bg-sol-blue/5', eyebrow: 'text-sol-blue/70', chip: 'border-sol-blue/40 text-sol-blue bg-sol-blue/10' },
+  stopped: { icon: '\u25A0', color: 'text-sol-text-dim', bg: 'bg-sol-bg-alt/30 border-sol-border/40', accent: 'border-sol-border/60 bg-sol-bg-alt/30', eyebrow: 'text-sol-text-dim', chip: 'border-sol-border/60 text-sol-text-dim bg-sol-bg-alt/40' },
 };
 
 // The statuses whose notification the harness injects as a NEW user turn \u2014 the
 // message the reader is looking at is what pulled the agent back to work, and
-// the turn below it is the response. "stopped" is excluded: those notices are
-// resume-time bookkeeping riding a turn that was starting anyway.
+// the turn below it is the response. Those rows grow the elbow arrow pointing
+// at that turn. "stopped" is excluded: those notices are resume-time
+// bookkeeping riding a turn that was starting anyway.
 const WAKE_STATUSES = new Set(['completed', 'failed', 'killed']);
 
 function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { content: string; timestamp: number; agentNameToChildMap?: Record<string, string> }) {
@@ -7031,27 +7036,33 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
   if (parts) {
     const chipText = `${parsed.status}${parts.exitCode ? ` \u00b7 exit ${parts.exitCode}` : ''}`;
     return (
-      <div
-        className={`mb-2 px-3 py-2 flex items-start gap-2 text-xs border rounded ${cfg.bg}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
-        onClick={childId ? () => router.push(`/conversation/${childId}`) : undefined}
-      >
-        <span className={`font-mono text-sm leading-none shrink-0 mt-0.5 ${cfg.color}`}>{cfg.icon}</span>
-        <span className={`text-[10px] font-medium tracking-wide uppercase shrink-0 mt-px ${cfg.eyebrow}`}>{parts.kind}</span>
-        <ExpandableLine text={parts.description} className="text-sol-text font-medium" title={parsed.summary} />
-        <span className={`px-1 py-0 rounded border text-[9px] font-semibold shrink-0 mt-px ${cfg.chip}`}>{chipText}</span>
-        {childId && (
-          <svg className={`w-3 h-3 shrink-0 mt-0.5 ${cfg.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-          </svg>
-        )}
+      <div className="mb-1.5 mx-1">
+        {/* Same anatomy as a session-message card (left accent, header line) \u2014
+            both are machine deliveries into this thread, so they share one
+            visual language. */}
+        <div
+          className={`rounded border-l-2 ${cfg.accent}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
+          onClick={childId ? () => router.push(`/conversation/${childId}`) : undefined}
+        >
+          <div className="flex items-start gap-2 px-3 py-2 text-xs">
+            <span className={`font-mono text-sm leading-none shrink-0 mt-0.5 ${cfg.color}`}>{cfg.icon}</span>
+            <span className={`text-[10px] font-medium tracking-wide uppercase shrink-0 mt-px ${cfg.eyebrow}`}>{parts.kind}</span>
+            <ExpandableLine text={parts.description} className="text-sol-text font-medium" title={parsed.summary} />
+            <span className={`px-1 py-0 rounded border text-[9px] font-semibold shrink-0 mt-px ${cfg.chip}`}>{chipText}</span>
+            {childId && (
+              <svg className={`w-3 h-3 shrink-0 mt-0.5 ${cfg.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            )}
+            <span className="text-sol-text-dim font-mono text-[10px] shrink-0">{parsed.taskId}</span>
+            <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+          </div>
+        </div>
         {woke && (
-          <span className="flex items-center gap-1 text-[10px] text-sol-text-dim shrink-0 mt-px whitespace-nowrap" title="This notification woke the agent \u2014 the turn below is its response">
-            <Zap className="w-3 h-3" />
-            woke the agent
-          </span>
+          <div className="pl-2 pt-0.5" title="The turn below was woken by this notification">
+            <CornerDownRight className={`w-3.5 h-3.5 ${cfg.color} opacity-60`} />
+          </div>
         )}
-        <span className="text-sol-text-dim font-mono text-[10px] shrink-0">{parsed.taskId}</span>
-        <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
     );
   }
@@ -8108,7 +8119,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           {images.filter(img => !img.tool_use_id).map((img, i) => <ImageBlock key={i} image={img} />)}
         </div>
       )}
-      {decision && !effectivelyCollapsed && <DecisionAnswerFooter decision={decision} conversationId={conversationId} />}
+      {decision && !effectivelyCollapsed && <DecisionAnswerFooter decision={decision} conversationId={conversationId} timestamp={timestamp} />}
       {isTruncated && (
         <button
           onClick={handleToggleExpand}
@@ -8680,7 +8691,7 @@ function AssistantBlockImpl({
     ? linkifyMentions(strippedContent, agentNameToChildMap)
     : strippedContent;
   const parsedApiError = useMemo(() => parseApiErrorContent(displayContent), [displayContent]);
-  const onlyAskUser = toolCalls && toolCalls.length > 0 && toolCalls.every(tc => tc.name === "AskUserQuestion");
+  const onlyAskUser = toolCalls && toolCalls.length > 0 && toolCalls.every(tc => isAskTool(tc.name));
   const hasContent = displayContent && displayContent.trim().length > 0 && !onlyAskUser;
   const hasThinking = !!thinking && thinking.trim().length > 0;
   const visibleThinking = hasThinking && !!showThinking;
@@ -8704,7 +8715,7 @@ function AssistantBlockImpl({
   // later tool-only message. `src` is the message that actually ran it, so
   // comments, share selection and subagent links attribute correctly.
   const renderToolBlock = (tc: ToolCall, result: ToolResult | undefined, src: { messageId: string; messageUuid?: string; timestamp: number }) => (
-    (tc.name === "Task" || tc.name === "Agent") ? (
+    isAgentTool(tc.name) ? (
       <TaskToolBlock
         key={tc.id}
         tool={tc}
@@ -8712,9 +8723,9 @@ function AssistantBlockImpl({
         childConversationId={src.messageUuid && childConversationMap ? childConversationMap[src.messageUuid] : undefined}
         childConversations={childConversations}
       />
-    ) : tc.name === "TodoWrite" ? (
+    ) : isTodoTool(tc.name) ? (
       <TodoWriteBlock key={tc.id} tool={tc} />
-    ) : tc.name === "AskUserQuestion" ? (
+    ) : isAskTool(tc.name) ? (
       <AskUserQuestionBlock key={tc.id} tool={tc} result={result} onSendMessage={onSendInlineMessage} />
     ) : tc.name === "TaskList" ? (
       <TaskListBlock key={tc.id} tool={tc} result={result} taskRecordMap={taskRecordMap} />
@@ -8724,15 +8735,15 @@ function AssistantBlockImpl({
       <SendMessageBlock key={tc.id} tool={tc} agentNameToChildMap={agentNameToChildMap} />
     ) : tc.name === "TeamCreate" || tc.name === "TeamDelete" ? (
       <TeamCreateBlock key={tc.id} tool={tc} />
-    ) : tc.name === "Workflow" ? (
+    ) : tc.name === "Workflow" || tc.name === "workflow" ? (
       <WorkflowToolBlock key={tc.id} tool={tc} result={result} />
     ) : tc.name === "Skill" ? (
       <SkillBlock key={tc.id} tool={tc} />
-    ) : tc.name === "Monitor" || isBackgroundBashToolCall(tc) ? (
+    ) : tc.name === "Monitor" || tc.name === "monitor" || isBackgroundBashToolCall(tc) ? (
       <MonitorBlock key={tc.id} tool={tc} conversationId={conversationId} />
     ) : tc.name === "ScheduleWakeup" ? (
       <ScheduleWakeupBlock key={tc.id} tool={tc} result={result} timestamp={src.timestamp} />
-    ) : tc.name === "EnterPlanMode" || tc.name === "ExitPlanMode" ? (
+    ) : isPlanModeTool(tc.name) ? (
       <PlanModeBlock key={tc.id} tool={tc} result={result} conversationId={conversationId} messageId={src.messageId} onSendMessage={onSendInlineMessage} />
     ) : parseCastCommand(tc) ? (
       <CastCommandBlock key={tc.id} tool={tc} result={result} images={images} globalImageMap={globalImageMap} conversationId={conversationId} />
@@ -9093,6 +9104,8 @@ function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[
 }
 
 function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; subtype?: string; timestamp?: number; messageUuid?: string; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void }) {
+  if (isHiddenSystemSubtype(subtype)) return null;
+
   if (subtype === "compact_boundary") {
     return (
       <div className="my-6 flex items-center gap-3">
@@ -10858,15 +10871,22 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     store.setQueuedMessagesFor(conversationId, next);
   }, [conversationId]);
   const [selectedQueueIndex, setSelectedQueueIndex] = useState<number | null>(null);
+  // Keyboard selection for the suggestion pill row lives inside the component
+  // (the pill list is its server subscription); the composer drives it through
+  // this handle as the top rung of the ↑ ladder: pills over queue over images.
+  const suggestionPillsRef = useRef<SuggestionPillsHandle | null>(null);
+  // Mirror of the pill row's selection, reported up so Escape ownership (the
+  // effect below) can stand the compose popup down while a pill is selected.
+  const [pillSelectionActive, setPillSelectionActive] = useState(false);
   // Tell the host (compose popup) when Escape is spoken for by inner UI — the
   // lightbox, an image/queue chip selection, or the slash-command menu — so its
   // document-capture Escape listener stands down and the textarea handler above
   // gets to unwind that state instead of the whole dialog closing.
   useWatchEffect(() => {
     if (escapeOwnedRef) {
-      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null;
+      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null || pillSelectionActive;
     }
-  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex]);
+  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex, pillSelectionActive]);
   const setSessionHasQueuedMessages = useInboxStore((s) => s.setSessionHasQueuedMessages);
   useWatchEffect(() => {
     setSessionHasQueuedMessages(conversationId, queuedMessages.length > 0);
@@ -11375,6 +11395,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // Fork-and-send: branch the session from its latest message and deliver the
   // composed text into the fork, leaving the parent thread untouched. Shared by
   // the Cmd/Ctrl+Shift+Enter combo and the fork button beside the send arrow.
+  // "Send and stash": deliver, then set the session aside with the agent
+  // still running. Same handler the Alt+Shift+Enter chord fires.
+  const handleSendAndStash = () => {
+    if (!onSendAndDismiss) return;
+    void handleSubmit({ preventDefault: () => {} } as unknown as React.FormEvent).then(() => onSendAndDismiss());
+  };
+
   const handleForkSend = () => {
     if (!onForkSend) return;
     // With a message selected, plain submit already forks from the selection —
@@ -11436,6 +11463,48 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       return;
     }
 
+    // Top rung of the ↑ ladder: a selected suggestion pill. Enter sends it
+    // as-is (the pill contract), Tab drops it into the composer for editing.
+    const pills = suggestionPillsRef.current;
+    if (pills?.active()) {
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        pills.move(-1);
+        return;
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        pills.move(1); // past the last pill exits back to the composer
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        pills.clear();
+        if (queuedMessages.length > 0) setSelectedQueueIndex(0);
+        else if (pastedImages.length > 0) setSelectedImageIndex(0);
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        pills.send();
+        return;
+      }
+      if (e.key === "Tab" && !e.shiftKey) {
+        e.preventDefault();
+        pills.edit();
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        pills.clear();
+        return;
+      }
+      if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) {
+        pills.clear();
+      }
+    }
+
     if (selectedImageIndex !== null && pastedImages.length > 0) {
       if (e.key === "ArrowLeft") {
         e.preventDefault();
@@ -11479,6 +11548,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         }
         return;
       }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        // ↑ from the image strip climbs to the queue row above it.
+        if (queuedMessages.length > 0) {
+          setSelectedImageIndex(null);
+          setLightboxImageIndex(null);
+          setSelectedQueueIndex(queuedMessages.length - 1);
+        }
+        return;
+      }
       if (e.key === "ArrowDown") {
         e.preventDefault();
         setSelectedImageIndex(null);
@@ -11493,6 +11572,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (selectedQueueIndex !== null && queuedMessages.length > 0) {
       if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
         e.preventDefault();
+        // ↑ off the top of the queue climbs to the suggestion pill row.
+        if (e.key === "ArrowUp" && selectedQueueIndex === 0 && pills?.enter()) {
+          setSelectedQueueIndex(null);
+          return;
+        }
         setSelectedQueueIndex(Math.max(0, selectedQueueIndex - 1));
         return;
       }
@@ -11553,6 +11637,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       if (textarea && textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
         e.preventDefault();
         setSelectedQueueIndex(queuedMessages.length - 1);
+        return;
+      }
+    }
+
+    // Last rung: nothing else to select above the caret, climb to the pills.
+    if (e.key === "ArrowUp" && pills?.visible() && selectedImageIndex === null && selectedQueueIndex === null) {
+      const textarea = textareaRef.current;
+      if (textarea && textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
+        e.preventDefault();
+        pills.enter();
         return;
       }
     }
@@ -11992,6 +12086,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           {!bareComposer && suggestionsEnabled && !onGateSend && !onWorkflowLaunch && !hasAskUserQuestion && (
             <div className={`mx-auto px-2 sm:px-4 ${isExpanded ? "conv-col" : "max-w-md"}`}>
               <SuggestionPills
+                ref={suggestionPillsRef}
                 conversationId={conversationId}
                 idle={!isWaitingForResponse && !isThinking && !(agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus))}
                 hidden={!!message || pastedImages.length > 0 || composeMode}
@@ -12000,6 +12095,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 // contract ComposeEditor's onSubmit relies on).
                 onSend={(t) => { setMessage(t); messageRef.current = t; void handleSubmit({ preventDefault: () => {} } as any); }}
                 onEdit={(t) => { setMessage(t); textareaRef.current?.focus(); }}
+                onActiveChange={setPillSelectionActive}
               />
             </div>
           )}
@@ -12124,6 +12220,18 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       >
                         <Minimize2 className="w-3.5 h-3.5" />
                       </button>
+                      {onSendAndDismiss && canSubmit && !onGateSend && !onWorkflowLaunch && (
+                        <ShortcutTooltip label="Send and stash" action="msg.sendDismiss" hint="the agent keeps running out of the inbox" side="top">
+                          <button
+                            type="button"
+                            onClick={handleSendAndStash}
+                            className="w-7 h-7 rounded-full transition-all flex items-center justify-center text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-yellow hover:bg-sol-yellow/10"
+                            aria-label="Send and stash"
+                          >
+                            <Archive className="w-3.5 h-3.5" />
+                          </button>
+                        </ShortcutTooltip>
+                      )}
                       {onForkSend && canSubmit && !onGateSend && !onWorkflowLaunch && (
                         <button
                           type="button"
@@ -12173,6 +12281,18 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       >
                         <Maximize2 className="w-3 h-3" />
                       </button>
+                    )}
+                    {onSendAndDismiss && canSubmit && !onGateSend && !onWorkflowLaunch && (
+                      <ShortcutTooltip label="Send and stash" action="msg.sendDismiss" hint="the agent keeps running out of the inbox" side="top">
+                        <button
+                          type="button"
+                          onClick={handleSendAndStash}
+                          className="w-7 h-7 mb-0.5 rounded-full transition-all flex items-center justify-center text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-yellow hover:bg-sol-yellow/10"
+                          aria-label="Send and stash"
+                        >
+                          <Archive className="w-3.5 h-3.5" />
+                        </button>
+                      </ShortcutTooltip>
                     )}
                     {onForkSend && canSubmit && !onGateSend && !onWorkflowLaunch && (
                       <button
@@ -12231,7 +12351,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             <ShortcutHint keys={["Shift", "Enter"]} label="New line" />
             <ShortcutHint keys={["Ctrl", "Enter"]} label="Queue message" />
             <ShortcutHint keys={["Alt", "Enter"]} label="Reply and advance" />
-            <ShortcutHint keys={["Alt", "Shift", "Enter"]} label="Reply and dismiss" />
+            <ShortcutHint keys={["Alt", "Shift", "Enter"]} label="Send and stash" />
             <ShortcutHint keys={["Cmd", "Shift", "Enter"]} label="Fork and send" />
             <ShortcutHint keys={["Enter"]} label="Send message" />
             <div className="border-t border-sol-border/20 mt-1.5 pt-1.5">
@@ -12853,7 +12973,7 @@ const ConversationViewInner = (
 
     const realAskTimes = withoutProseTwins
       .filter(m =>
-        m.tool_calls?.some(tc => tc.name === "AskUserQuestion") &&
+        m.tool_calls?.some(tc => isAskTool(tc.name)) &&
         !m.message_uuid?.startsWith("interactive-prompt-")
       )
       .map(m => m.timestamp);
@@ -13046,7 +13166,7 @@ const ConversationViewInner = (
     deferredQueriesEnabled,
   );
   const pendingPermissions = pendingPermissionsRaw?.filter((p: any) => !PERMISSION_SKIP_TOOLS.has(p.tool_name));
-  const hasAskUserQuestion = pendingPermissionsRaw?.some((p: any) => p.tool_name === "AskUserQuestion") ?? false;
+  const hasAskUserQuestion = pendingPermissionsRaw?.some((p: any) => isAskTool(p.tool_name)) ?? false;
   // A `cast decide` ask renders as a card inside the pane: blocking owns the
   // pane, advisory docks above the composer (SessionDecisionCard). The queue
   // supplies a stepper — and, for a poll/permission card, the item itself.
@@ -13303,6 +13423,15 @@ const ConversationViewInner = (
 
   // Same capability gate as forkHandler: hide fork-and-send where forks can't run.
   const forkSendHandler = agentSupportsFork(conversation?.agent_type) ? handleForkReply : undefined;
+  // "Send and stash" outside the inbox queue (the conversation page, a stage
+  // pane): the queue passes its own handler with its advance logic; here the
+  // viewer's own session simply hides after the send. Guests and non-owners
+  // can't triage, so they get no button.
+  const sendAndStashConvId = conversation?._id;
+  const sendAndStashFallback = useMemo(
+    () => (isOwner && !guest && sendAndStashConvId ? () => animatedHideSession(sendAndStashConvId, "stash") : undefined),
+    [isOwner, guest, sendAndStashConvId],
+  );
 
   const isForkLoading = false;
   const [loadingBranchId, setLoadingBranchId] = useState<string | null>(null);
@@ -13443,7 +13572,12 @@ const ConversationViewInner = (
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
 
+  // These handlers exist for IMAGE drops. A pane-shaped drag (a session card,
+  // a tab, a pane strip — lib/stage) must fall through untouched so it can
+  // bubble to the stage's drop layer and offer a split; swallowing every drag
+  // here is what made dropping a session onto a conversation a dead gesture.
   const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (dragCarriesPane(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
     dragCounterRef.current++;
@@ -13451,11 +13585,13 @@ const ConversationViewInner = (
   }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (dragCarriesPane(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
   }, []);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (dragCarriesPane(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
     dragCounterRef.current--;
@@ -13463,6 +13599,7 @@ const ConversationViewInner = (
   }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
+    if (dragCarriesPane(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
     dragCounterRef.current = 0;
@@ -13652,7 +13789,7 @@ const ConversationViewInner = (
       const msg = item.data as Message;
       if (msg.role !== 'user') continue;
       const kind = userMsgKindMap.get(msg._id)?.kind;
-      if (kind !== 'command' && kind !== 'bash_input') continue;
+      if (kind !== 'command' && kind !== 'bash_input' && kind !== 'agent_switch') continue;
       let next: Message | null = null;
       for (let j = i + 1; j < timeline.length; j++) {
         if (timeline[j].type === 'message') { next = timeline[j].data as Message; break; }
@@ -13662,6 +13799,9 @@ const ConversationViewInner = (
       if (kind === 'command' && nextKind?.kind === 'skill_expansion') {
         byCommand.set(msg._id, next.content);
         consumed.add(next._id);
+      } else if (kind === 'agent_switch' && nextKind?.kind === 'agent_switch' && isModelSwitchStdout(next.content)) {
+        // /model command + "Set model to …" stdout: keep the prettier stdout divider.
+        consumed.add(msg._id);
       } else if (kind === 'bash_input' && nextKind?.kind === 'bash_output') {
         bashByInput.set(msg._id, { stdout: nextKind.stdout, stderr: nextKind.stderr });
         consumed.add(next._id);
@@ -14199,6 +14339,7 @@ const ConversationViewInner = (
         case 'bash_output': return commandExpansionMap.consumed.has(msg._id) ? 0 : 110;
         case 'interrupt': return 30;
         case 'machine_move': return 34;
+        case 'agent_switch': return commandExpansionMap.consumed.has(msg._id) ? 0 : 40;
         case 'continuation': return 30;
         case 'skill_expansion': return commandExpansionMap.consumed.has(msg._id) ? 0 : 44;
         case 'task_notification': return 40;
@@ -15857,6 +15998,9 @@ const ConversationViewInner = (
           return <InterruptStatusLine key={msg._id} label={kind.tone === 'amber' ? "turn aborted" : undefined} tone={kind.tone} />;
         case 'machine_move':
           return <MachineMoveDivider key={msg._id} content={msg.content || ""} destination={kind.destination} machineChanged={kind.machineChanged} timestamp={msg.timestamp} />;
+        case 'agent_switch':
+          if (commandExpansionMap.consumed.has(msg._id)) return null;
+          return <AgentSwitchDivider key={msg._id} toLabel={kind.toLabel} fromLabel={kind.fromLabel} content={msg.content || ""} timestamp={msg.timestamp} />;
         case 'background_agent_stopped':
           return <InterruptStatusLine key={msg._id} label={kind.agentName ? `background agent "${kind.agentName}" stopped` : "background agent stopped"} tone="amber" />;
         case 'continuation':
@@ -16635,11 +16779,40 @@ const ConversationViewInner = (
                             Switch agent
                           </DropdownMenuSubTrigger>
                           <DropdownMenuSubContent>
-                            {(["claude_code", "codex", "cursor", "gemini"] as const)
+                            {AGENT_LAUNCH_OPTIONS
+                              .map((a) => a.convexType)
                               .filter((t) => t !== conversation.agent_type)
                               .map((t) => (
                                 <DropdownMenuItem
-                                  key={t}
+                                  key={`switch-${t}`}
+                                  onClick={() => {
+                                    const id = conversation._id.toString();
+                                    useInboxStore.getState().setConversationAgent(id, t);
+                                    convCommand(id, "switchSessionAgent", { agent_type: t }).catch((err) => {
+                                      if (isParkedDispatchError(err)) return;
+                                      useInboxStore.getState().setConversationAgent(id, conversation.agent_type || "claude_code");
+                                      toast.error(err instanceof Error ? err.message : "Failed to switch agent");
+                                    });
+                                  }}
+                                >
+                                  <AgentTypeIcon agentType={t} />
+                                  <span className="ml-1.5">{formatAgentType(t)}</span>
+                                </DropdownMenuItem>
+                              ))}
+                          </DropdownMenuSubContent>
+                        </DropdownMenuSub>
+                        <DropdownMenuSub>
+                          <DropdownMenuSubTrigger>
+                            <Split className="w-3 h-3 mr-1.5 text-sol-cyan" />
+                            Fork as
+                          </DropdownMenuSubTrigger>
+                          <DropdownMenuSubContent>
+                            {AGENT_LAUNCH_OPTIONS
+                              .map((a) => a.convexType)
+                              .filter((t) => t !== conversation.agent_type)
+                              .map((t) => (
+                                <DropdownMenuItem
+                                  key={`fork-${t}`}
                                   onClick={() => {
                                     const parentId = conversation._id.toString();
                                     const forkSessionId =
@@ -16651,13 +16824,6 @@ const ConversationViewInner = (
                                           });
                                     const now = Date.now();
                                     const store = useInboxStore.getState();
-
-                                    // Agent switches are full-history forks. Seed and
-                                    // navigate to the client-id stub immediately, then
-                                    // rekey it exactly like every other fork. Without a
-                                    // client session_id, a parked replay spawned an
-                                    // invisible sibling and the draft continuation was
-                                    // permanently lost.
                                     store.syncRecord("conversations", forkSessionId, {
                                       _id: forkSessionId,
                                       session_id: forkSessionId,
@@ -16701,7 +16867,7 @@ const ConversationViewInner = (
                                       // draft or strand a navigated local fork.
                                       useInboxStore.getState().moveDraft(forkSessionId, parentId);
                                       useInboxStore.getState().discardForkStub(forkSessionId, parentId);
-                                      toast.error(err instanceof Error ? err.message : "Failed to switch agent");
+                                      toast.error(err instanceof Error ? err.message : "Failed to fork");
                                     });
                                   }}
                                 >
@@ -17161,7 +17327,7 @@ const ConversationViewInner = (
                   ))}
                 </div>
               ) : null}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingTool={workingTool} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} branchMapNode={treePopoverOpen ? (
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingTool={workingTool} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray
                   open

@@ -1702,8 +1702,9 @@ export class SyncService {
   }
 
   // `origin: "scheduler"` marks a machine-initiated injection (task scheduler):
-  // the server then skips the stash-clear so a stashed looping session keeps
-  // working out of the user's active queue. Human/agent sends omit it.
+  // the server then leaves a HIDDEN stash (`cast stash --hide`) in place so a
+  // looping session keeps working out of the user's active queue; a plain
+  // stash pops back into the inbox on the wake. Human/agent sends omit it.
   async sendMessageToSession(conversationId: string, content: string, origin?: "scheduler"): Promise<string | null> {
     if (!this.apiToken) return null;
     return this.guarded(async () => {

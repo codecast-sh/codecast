@@ -11,6 +11,7 @@ import { ackAssignmentOnEngage, addSessionOwnerRow, listSessionOwnerIds, syncPri
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { insertEnqueuedPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
+import { isStashHidden } from "@codecast/shared/contracts";
 import {
   messagesCommandCoverageTarget,
 } from "./messageViewContracts";
@@ -391,20 +392,23 @@ export async function enqueuePendingMessage(
 
   // Wake-up rules. A human send resurfaces the session everywhere: dismissed,
   // stashed, and killed flags all clear ("I messaged it, show it to me").
-  // A scheduler injection inherits all of that EXCEPT the stash-clear: stash
-  // means "keep working out of my sight", which is exactly the state a user
-  // puts a looping/scheduled session into — the machine waking itself must not
-  // pull it back into the active queue. Dismissed and killed still clear, so a
-  // scheduled follow-up on a session the user closed out does come back (and a
-  // killed one is resurrected for delivery) — that revival is deliberate and is
-  // surfaced by the schedule strip in the conversation header.
+  // A scheduler injection (a trigger firing) inherits all of that, with one
+  // exception: a stash the user marked HIDDEN (`cast stash --hide`, "Stash and
+  // hide") survives machine wakes — that is the state a user puts a looping
+  // session into when they want it working out of sight. A plain stash pops
+  // back on the wake: something happened to the session, show it. Dismissed
+  // and killed always clear, so a scheduled follow-up on a session the user
+  // closed out does come back (and a killed one is resurrected for delivery) —
+  // that revival is deliberate and is surfaced by the schedule strip in the
+  // conversation header. Predicate shared with the risk-resend twin
+  // (executionBindings) and the web: isStashHidden.
   const machineWake = fields.origin === "scheduler";
   await ctx.db.patch(conversation._id, {
     updated_at: Date.now(),
     has_pending_messages: true,
     ...(conversation.status === "completed" ? { status: "active" } : {}),
     ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
-    ...(conversation.inbox_stashed_at && !machineWake ? { inbox_stashed_at: undefined } : {}),
+    ...(conversation.inbox_stashed_at && !(machineWake && isStashHidden(conversation)) ? { inbox_stashed_at: undefined } : {}),
     ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
   });
 
@@ -420,7 +424,7 @@ export const sendMessageToSession = mutation({
     client_id: v.optional(v.string()),
     // See enqueuePendingMessage: only the daemon's task scheduler passes
     // "scheduler". Self-declared, but the only effect is LESS resurfacing
-    // (the stash-clear is skipped), so a spoofed value can't grab attention.
+    // (a hidden stash survives), so a spoofed value can't grab attention.
     origin: v.optional(v.literal("scheduler")),
     api_token: v.optional(v.string()),
   },
