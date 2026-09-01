@@ -40,7 +40,7 @@ const REGEN = process.env.INBOX_GOLDEN_REGEN === "1";
 const FIXTURE_EPOCH = 1_800_000_000_000;
 
 const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
-  2: "abddb0d7cb6aaa51",
+  2: "5906e6dcc825d83a",
 };
 
 type Expected = {

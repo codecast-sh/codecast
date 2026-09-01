@@ -15,6 +15,7 @@ import {
   type ProjectableInboxRow,
   type WorkingSetWindow,
 } from "./inboxProjection";
+import { AGENT_IDLE_GRACE_MS } from "./agentStatus";
 import {
   GEN_DAY,
   GEN_HOUR,
@@ -203,16 +204,23 @@ describe("epoch monotonicity", () => {
     }
   });
 
-  it("a row's placement depends on the epoch only through the loop wake and the park/verdict clocks", () => {
-    // With no loop state, moving the epoch inside the same minute-grid never
-    // changes a bucket (the trust decay is the caller's, applied before the
-    // shared module sees the row).
+  it("a row's placement depends on the epoch only through the idle grace and the loop wake", () => {
+    // With no loop state and the row already quiet past the idle grace,
+    // moving the epoch never changes a bucket (the trust decay is the
+    // caller's, applied before the shared module sees the row). A row still
+    // inside the grace may settle as the epoch passes updated_at + grace —
+    // that is the one time rule the adapter owns, and it is monotone.
     for (const seed of SEEDS.slice(0, 20)) {
       const rows = genProjectableRows(seed, 50, EPOCH).filter((r) => !r.loop_state);
       for (const r of rows) {
         const a = placeProjectableRow(r, false, EPOCH);
         const b = placeProjectableRow(r, false, EPOCH + 5 * GEN_MIN);
-        expect(b).toEqual(a);
+        if (EPOCH - r.updated_at >= AGENT_IDLE_GRACE_MS) {
+          expect(b).toEqual(a);
+        } else if (b.work_state !== a.work_state) {
+          // Settling can only move a row OUT of the in-flight arm.
+          expect(a.work_state).toBe("working");
+        }
       }
     }
   });

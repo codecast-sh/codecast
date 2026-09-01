@@ -779,22 +779,20 @@ describe("a dead subscription is detected and healed", () => {
     await a.withStore(() => useInboxStore.getState().syncTable("sessions", [
       { _id: ghost, session_id: "sess-ghost", user_id: ME, status: "active", updated_at: vnow, message_count: 3, is_idle: true, title: "Ghost" },
     ] as unknown as InboxSession[]));
+    // Every compare reports the ghost; the persistence rule confirms one
+    // drift per two payload epochs, each confirmation spends a heal, and the
+    // fourth confirmation latches instead of healing.
     let healsRun = 0;
-    for (let round = 0; round < INBOX_HEAL_BUDGET + 1; round++) {
+    let rounds = 0;
+    while (!a.comparer.healLatched() && rounds < 2 * (INBOX_HEAL_BUDGET + 2)) {
       advance(GEN_MIN);
       const out = await quietTick(a);
       expect(out).toMatchObject({ kind: "diff", diff: { missing: [], extra: [ghost] } });
       healsRun += await a.drainHeals();
+      rounds++;
     }
-    // Each confirmed round spent a heal until the budget ran out.
-    expect(a.comparer.counters().heals).toBe(INBOX_HEAL_BUDGET);
+    expect(rounds).toBe(2 * (INBOX_HEAL_BUDGET + 1));
     expect(healsRun).toBe(INBOX_HEAL_BUDGET);
-    // Keep going: the next confirmed diff latches instead of healing.
-    for (let round = 0; round < 3; round++) {
-      advance(GEN_MIN);
-      await quietTick(a);
-      await a.drainHeals();
-    }
     expect(a.comparer.healLatched()).toBe(true);
     expect(a.eventsNamed("inbox_drift_persistent").length).toBe(1);
     expect(a.comparer.counters().heals).toBe(INBOX_HEAL_BUDGET);

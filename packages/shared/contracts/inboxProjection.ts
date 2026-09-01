@@ -5,7 +5,7 @@
 //
 // PURE isomorphic code: no Node or DOM APIs, no BigInt, so the Convex runtime,
 // the daemon, the browser and React Native all run the same bytes.
-import { ACTIVE_AGENT_STATUSES } from "./agentStatus";
+import { ACTIVE_AGENT_STATUSES, isQuietSettled } from "./agentStatus";
 import { isMachineDeliveredMessage } from "./machineMessages";
 import { isLoopFresh, type LoopState } from "./loopState";
 import type { WorkState } from "./workState";
@@ -210,17 +210,20 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   if (agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus)) return "working";
   if (canDeliver && hasPending) return "working";
 
-  // Dead with output → a human needs to read/restart it. A dead daemon cannot
-  // deliver a wake, so no rest verdict survives this arm — except "done", which
-  // trustedAgentStatus never coerces to dead in the first place.
-  if (dead) return hasMsgs ? "needs_input" : "idle";
+  // Dead or unresponsive with output → a human needs to read/restart it. A
+  // dead daemon cannot deliver a wake, so no rest verdict survives this arm —
+  // except "done", which trustedAgentStatus never coerces to dead in the first
+  // place. Unresponsive (a hanging user message or queued work on a daemon
+  // that is gone) is the same hard block whatever is_idle says: the server
+  // keeps is_idle false while work is queued, which used to drop such a row
+  // into the "work in flight" arm below and file it WORKING forever (found by
+  // the two-replica simulation, 2026-09-01).
+  if (dead || isUnresponsive) return hasMsgs ? "needs_input" : "idle";
 
   // Settled with content: who acts next? A rest verdict names a machine (dormant)
   // or nobody (done); otherwise the ball is in the user's court — the web inbox
-  // files that under NEEDS INPUT, so the CLI matches. This also covers
-  // unresponsive sessions (a hanging user message on a dead daemon needs a human
-  // to restart it) — a hard block, so no verdict or park stamp outranks it.
-  if (isIdle) return hasMsgs ? (isUnresponsive ? "needs_input" : restState()) : "idle";
+  // files that under NEEDS INPUT, so the CLI matches.
+  if (isIdle) return hasMsgs ? restState() : "idle";
 
   // Not idle but no active status either: mid-grace right after a turn, or the
   // user just sent a message the agent hasn't picked up — work in flight.
@@ -627,9 +630,27 @@ export function placeProjectableRow(
 ): InboxPlacement {
   const park = rowLastTurnAllowsPark(row);
   const loop = row.loop_state;
+  // The idle grace is a TIME rule, so it lives here at the epoch on both
+  // sides: a row with no active status, no queued work and content, quiet
+  // past AGENT_IDLE_GRACE_MS, has settled whatever the is_idle fact said when
+  // the server last executed (the fact freezes between executions; the
+  // server's is_idle also stays false forever for a user message a live
+  // daemon never answered). One clock, one rule — the web store used to apply
+  // this sweep alone, and the server never did (found by the two-replica
+  // simulation, 2026-09-01).
+  const quietSettled = isQuietSettled(
+    {
+      agent_status: row.agent_status,
+      is_idle: row.is_idle,
+      has_pending: row.has_pending_messages,
+      message_count: row.message_count ?? 0,
+      updated_at: row.updated_at,
+    },
+    epoch,
+  );
   return placeInboxRow({
     agentStatus: row.agent_status ?? undefined,
-    isIdle: !!row.is_idle,
+    isIdle: !!row.is_idle || quietSettled,
     awaitingInput: !!row.awaiting_input,
     hasPending: !!row.has_pending_messages,
     isUnresponsive: !!row.is_unresponsive,

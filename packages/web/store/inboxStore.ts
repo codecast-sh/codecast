@@ -2539,7 +2539,12 @@ function projectableRowOf(s: InboxSession, stale: boolean, decayed: boolean, now
     pending_api_error: s.pending_api_error === true,
     last_user_message: s.last_user_message ?? null,
     agent_status: decayed ? decayedAgentStatus(s, now) : (s.agent_status ?? null),
-    is_idle: stale ? true : (s.is_idle ?? null),
+    // The fact, as is: the idle grace is applied by the SHARED adapter at the
+    // epoch (placeProjectableRow), so a quiet row settles identically on the
+    // server and on every replica. Forcing it here on a liveness-stale row
+    // was a second, client-only clock (found by the two-replica simulation,
+    // 2026-09-01).
+    is_idle: s.is_idle ?? null,
     is_unresponsive: s.is_unresponsive ?? null,
     awaiting_input: s.awaiting_input ?? null,
     last_turn_allows_park: s.last_turn_allows_park ?? null,
