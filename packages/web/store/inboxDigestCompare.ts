@@ -29,7 +29,9 @@ import {
 } from "./inboxOverlays";
 import {
   INBOX_PAYLOAD_FRESH_MS,
+  placeInboxRows,
   projectReplicaInbox,
+  useInboxStore,
   type PlaceInboxState,
   type SessionsProjectionSlot,
 } from "./inboxStore";
@@ -47,9 +49,14 @@ export const INBOX_COMPARE_MAX_PAYLOAD_AGE_MS = INBOX_PAYLOAD_FRESH_MS;
 export const INBOX_PROBE_PAYLOAD_AGE_MS = 300_000;
 /** The stale-payload probe's slow budget: at most one per this window. */
 export const INBOX_PROBE_MIN_INTERVAL_MS = 300_000;
-/** Quiescence: no row apply for this many coarse ticks, nothing in flight. */
-export const INBOX_COMPARE_QUIESCENT_TICKS = 2;
-export const INBOX_COMPARE_QUIESCENT_MS = INBOX_COMPARE_QUIESCENT_TICKS * INBOX_COMPARE_TICK_MS;
+/** Quiescence: no COMMITTED row apply for this settle window, nothing in
+ *  flight. A short window, not a multiple of the tick: on a busy account a
+ *  real row change lands every 20 to 30 seconds (several agents streaming),
+ *  so "N ticks of silence" never held in prod and the compare stayed dark.
+ *  A steady-state apply is not catch-up — the overlay re-executes on the same
+ *  server change and re-stamps — so the gate only needs to outlast the pair
+ *  of pushes (base row and overlay) one server change produces. */
+export const INBOX_COMPARE_QUIESCENT_MS = 5_000;
 /** Heal budget: this many heals per fixed window, then the latch. */
 export const INBOX_HEAL_BUDGET = 3;
 export const INBOX_HEAL_WINDOW_MS = 600_000;
@@ -480,5 +487,79 @@ export function createInboxDigestComparer(io: InboxDigestComparerIO): InboxDiges
       if (cancelHeal) cancelHeal();
       cancelHeal = null;
     },
+  };
+}
+
+
+// ── Dev console handle (never production) ──────────────────────────────────
+// Attached as `window.__inboxDigest` by the hook, same convention as
+// `__inboxStore`. Everything here is READ ONLY over the live store: `evaluate`
+// is the pure compare with the tick's exact context (no heal, no telemetry),
+// `replica` the working-set projection at the payload's epoch, `place` the
+// chokepoint's sections as the panel asks for them, `renderVsStamp` the rows
+// whose render-time placement disagrees with the server stamp (a clock or
+// field gap, the class the 2026-09-01 "stopped" fact bug belonged to).
+export type InboxDigestDevHandle = {
+  evaluate: () => InboxCompareOutcome;
+  replica: () => ReturnType<typeof projectReplicaInbox>;
+  place: (focusedId?: string | null) => ReturnType<typeof placeInboxRows>;
+  renderVsStamp: () => Array<Record<string, unknown>>;
+  counters: InboxDigestComparer["counters"];
+  healLatched: InboxDigestComparer["healLatched"];
+  activity: () => { apply_age_ms: number; inflight: number };
+  /** Logs each CHANGE of outcome (never every tick) so a device with no
+   *  console handle still reports through its Metro output. */
+  logOutcome: (outcome: InboxCompareOutcome) => void;
+};
+
+export function createInboxDigestDevHandle(
+  comparer: InboxDigestComparer,
+  crawlMetaKeyFor: InboxDigestComparerIO["crawlMetaKeyFor"],
+): InboxDigestDevHandle {
+  const evaluate = () => {
+    const state = useInboxStore.getState();
+    const meId = state.currentUser?._id?.toString?.() ?? null;
+    return evaluateInboxCompare(state, {
+      now: Date.now(),
+      nowMono: monotonicNow(),
+      crawlMetaKey: crawlMetaKeyFor(meId),
+      lastApplyMono: lastSyncApplyMono(),
+      inflight: syncInflightCount(),
+    });
+  };
+  const replica = () => {
+    const state = useInboxStore.getState();
+    const slot = state.sessionsProjection?.mine;
+    return projectReplicaInbox(state, { scope: "mine", focusedId: null, epoch: slot?.epoch ?? 0, now: slot?.epoch ?? Date.now() });
+  };
+  const place = (focusedId: string | null = null) => placeInboxRows(useInboxStore.getState(), { scope: "mine", focusedId, now: Date.now() });
+  const renderVsStamp = () => {
+    const state = useInboxStore.getState();
+    const stamps = state.sessionsProjection?.mine?.stamps ?? {};
+    const placed = place(null);
+    const deltas: Array<Record<string, unknown>> = [];
+    for (const [id, stamp] of Object.entries(stamps)) {
+      const p = placed.placements.get(id);
+      if (!p || p.bucket === stamp.bucket) continue;
+      const r: any = state.sessions[id] ?? {};
+      deltas.push({ id: id.slice(0, 7), stamp: stamp.bucket, render: p.bucket, agent_status: r.agent_status, is_idle: r.is_idle, awaiting: r.awaiting_input, thread: r.thread_state_status, verdict: r.settle_verdict, updated_at: r.updated_at, msgs: r.message_count, allows_park: r.last_turn_allows_park });
+    }
+    return deltas;
+  };
+  let lastLogged = "";
+  const logOutcome = (outcome: InboxCompareOutcome) => {
+    const line = `${outcome.kind}${"reason" in outcome && outcome.reason ? ":" + outcome.reason : ""}`;
+    if (line === lastLogged) return;
+    lastLogged = line;
+    console.info(`[inboxDigest] ${line}`, "diff" in outcome && outcome.diff ? outcome.diff : "");
+    const deltas = renderVsStamp();
+    if (deltas.length) console.info("[inboxDigest] render_vs_stamp", JSON.stringify(deltas));
+  };
+  return {
+    evaluate, replica, place, renderVsStamp,
+    counters: comparer.counters,
+    healLatched: comparer.healLatched,
+    activity: () => ({ apply_age_ms: monotonicNow() - lastSyncApplyMono(), inflight: syncInflightCount() }),
+    logOutcome,
   };
 }

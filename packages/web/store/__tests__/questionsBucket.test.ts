@@ -95,6 +95,24 @@ describe("the questions bucket", () => {
     expect(placed.needsInput).toEqual([]);
   });
 
+  it("grouping never crosses a section: a teammate nests under its lead only in the lead's bucket", () => {
+    // Prod, 2026-09-01: seven teammates (spawned_by + agent_team_name, their
+    // own members per rollupParentIdOf) sat in needs_input on the server and
+    // in the tally, but the panel nested them under working / pinned leads
+    // and rendered "Needs Input (2)" against a tally of 12.
+    const lead = row("lead1", { agent_status: "working", is_idle: false });
+    const mateDone = row("mate1", { spawned_by_conversation_id: "lead1", agent_team_name: "team", agent_status: "stopped" });
+    const mateWorking = row("mate2", { spawned_by_conversation_id: "lead1", agent_team_name: "team", agent_status: "working", is_idle: false });
+    const placed = place([lead, mateDone, mateWorking]);
+    expect(placed.placements.get("mate1")?.bucket).toBe("needs_input");
+    expect(ids(placed.needsInput)).toEqual(["mate1"]);
+    expect(placed.tally.shown.needs_input).toBe(1);
+    expect(ids(placed.working).sort()).toEqual(["lead1"]);
+    // The working teammate shares the lead's bucket and nests as before.
+    expect(ids(placed.subsByParent.get("lead1") ?? [])).toEqual(["mate2"]);
+    expect(placed.tally.shown.working).toBe(2);
+  });
+
   it("a killed child's question lifts nothing", () => {
     const parent = row("par1");
     const sub = row("sub1", { parent_conversation_id: "par1", agent_status: "permission_blocked", inbox_killed_at: T0 });

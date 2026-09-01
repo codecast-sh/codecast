@@ -291,15 +291,29 @@ export async function createDataContext(ctx: { db: any }, opts: DataContextOpts)
   return self;
 }
 
+// Deleting a team has no cascade for everything stamped with its id, so a
+// team reference must be checked against the row before it is treated as an
+// access boundary. Missing team = the reference is debris, not a denial.
+async function teamExists(ctx: { db: any }, teamId: Id<"teams">): Promise<boolean> {
+  return !!(await ctx.db.get(teamId));
+}
+
 async function resolveWorkspace(ctx: { db: any }, opts: DataContextOpts): Promise<Workspace> {
   if (opts.workspace === "personal") {
     return { type: "personal", userId: opts.userId };
   }
   if (opts.workspace === "team" && opts.team_id) {
-    await requireTeamMembership(ctx, opts.userId, opts.team_id);
-    return { type: "team", teamId: opts.team_id };
-  }
-  if (opts.workspace === "team") {
+    // An explicit team that no longer exists is dangling data, not an access
+    // question — the same rule as the mapping branch below. Callers derive
+    // this team from a conversation's stamp (tasks/plans/docs create), and a
+    // row stamped before its team was deleted must fall through to the
+    // directory rule, not fail "team membership required" (codecast repo,
+    // 2026-08-30: 4347 conversations carried a team deleted in April).
+    if (await teamExists(ctx, opts.team_id)) {
+      await requireTeamMembership(ctx, opts.userId, opts.team_id);
+      return { type: "team", teamId: opts.team_id };
+    }
+  } else if (opts.workspace === "team") {
     invalidScope("team_id is required for the team workspace");
   }
   if (opts.project_path) {
@@ -319,8 +333,7 @@ async function resolveWorkspace(ctx: { db: any }, opts: DataContextOpts): Promis
       // 2026-08-30 — the team died in April, the mapping survived). A missing
       // team resolves as unmapped; a LIVE team without membership still fails
       // closed exactly as before.
-      const team = await ctx.db.get(result.teamId);
-      if (!team) {
+      if (!(await teamExists(ctx, result.teamId))) {
         return { type: "personal", userId: opts.userId };
       }
       if (!(await isTeamMember(ctx, opts.userId, result.teamId))) {

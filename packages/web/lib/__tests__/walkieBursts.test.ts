@@ -457,3 +457,53 @@ describe("walkie: the fill locking a hold", () => {
     expect(MIN_BURST_MS).toBeLessThan(WALKIE_LOCK_MS - 200);
   });
 });
+
+// The blunt words. Every state the corner card can be in has one loud badge
+// and one instruction, and both are pinned here so a surface cannot soften
+// them back into a tooltip.
+import { walkieStageWords } from "../../hooks/useWalkie";
+
+describe("walkie: the stage words", () => {
+  const base = { sending: null, incoming: false, locked: false, muted: true, dropped: false, micDenied: false, name: "Jordan" };
+
+  it("says RECORDING with the release and the lock in one breath", () => {
+    const w = walkieStageWords({ ...base, sending: { live: true, heardLive: false } });
+    expect(w.stage).toBe("recording");
+    expect(w.badge).toBe("RECORDING");
+    expect(w.hint).toContain("Release to send");
+    expect(w.hint).toContain("keep holding to lock in");
+  });
+
+  it("says LIVE only once the room actually carries the voice", () => {
+    expect(walkieStageWords({ ...base, sending: { live: true, heardLive: true } }).badge).toBe("LIVE");
+    expect(walkieStageWords({ ...base, sending: { live: false, heardLive: false } }).badge).toBe("OPENING MIC");
+  });
+
+  it("says ON THE LINE hands free, and names END as the door", () => {
+    const w = walkieStageWords({ ...base, locked: true, muted: false });
+    expect(w.badge).toBe("ON THE LINE");
+    expect(w.hint).toContain("Hands free");
+    expect(w.hint).toContain("END");
+  });
+
+  it("muted on the line is said first, because it flips every other promise", () => {
+    const w = walkieStageWords({ ...base, locked: true, muted: true });
+    expect(w.badge).toContain("MUTED");
+    expect(w.hint).toContain("cannot hear you");
+  });
+
+  it("an incoming voice lists all three answers", () => {
+    const w = walkieStageWords({ ...base, incoming: true });
+    expect(w.badge).toBe("INCOMING");
+    for (const word of ["HOLD", "JOIN LIVE", "SNOOZE"]) expect(w.hint).toContain(word);
+  });
+
+  it("bad news first: a dropped room outranks everything", () => {
+    const w = walkieStageWords({ ...base, sending: { live: true, heardLive: true }, incoming: true, dropped: true });
+    expect(w.badge).toBe("NOT HEARD");
+  });
+
+  it("a denied mic is said as a state, not hidden in a sentence", () => {
+    expect(walkieStageWords({ ...base, micDenied: true }).badge).toBe("MIC OFF");
+  });
+});

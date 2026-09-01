@@ -326,15 +326,22 @@ export const FACES_PADDING = 8;
  * one line of 9.5px mono in a pill.
  */
 export const CHROME_BUTTON = 28;
+/** A chrome button's WIDTH: an icon and one short word ("Talker", "Unmute",
+ *  "Window"). Every button says what it does, because a circle floating over
+ *  somebody's work has no other place to say it. Six characters of 10.5px
+ *  mono plus the icon fit here; a label longer than that is the wrong label. */
+export const CHROME_BUTTON_W = 68;
 /** The chrome's width for a row of `buttons` of them — the buttons, their 4px
  *  gaps and the pill's own 3px padding. Both floating circle surfaces size
  *  their hover chrome from this, whatever buttons each one carries. */
 export function chromeWidth(buttons: number): number {
-  return CHROME_BUTTON * buttons + 4 * (buttons - 1) + 3 * 2;
+  return CHROME_BUTTON_W * buttons + 4 * (buttons - 1) + 3 * 2;
 }
 export const CHROME_WIDTH = chromeWidth(4);
 export const CHROME_HEIGHT = CHROME_BUTTON + 3 * 2;
-export const NAME_HEIGHT = 18;
+/** Two lines: the name and its activity, and the gesture under them. The
+ *  call circles' single name line sits in the same band. */
+export const NAME_HEIGHT = 32;
 /** Between the circles and the name, and between the name and the chrome. */
 export const ROW_GAP = 4;
 /** Everything hovering adds below the circles. */

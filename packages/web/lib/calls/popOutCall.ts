@@ -5,6 +5,7 @@ import {
   canPopOutCall,
   isDesktop,
   openCallPanel,
+  type CallWindowSize,
 } from "../desktop";
 import { popOutVia } from "../popOut";
 import { callHandoffState } from "./callHandoff";
@@ -37,12 +38,13 @@ import { setCallOutlivesWindow } from "./callManager";
  * we just asked to keep. `setCallOutlivesWindow` is what beforeunload and a
  * mislabeled SFU eviction both read, so popping out cannot kill the call.
  */
-export async function popOutCall(): Promise<void> {
+export async function popOutCall(opts: { size?: CallWindowSize } = {}): Promise<void> {
   const state = callHandoffState();
   if (!state) return;
   if (!canPopOutCall()) return;
 
-  const { room, ...payload } = state;
+  const { room, ...rest } = state;
+  const payload = opts.size ? { ...rest, size: opts.size } : rest;
   // A click after the panel handed the call back is a request to go out
   // again, so the suppress the handback planted must not stick.
   clearAutoPopSuppress(room);

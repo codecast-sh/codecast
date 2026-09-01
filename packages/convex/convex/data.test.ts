@@ -73,6 +73,32 @@ describe("createDataContext — work items follow directory→team privacy", () 
     expect(inserted[0].doc.team_id).toBeUndefined();
   });
 
+  // The explicit-team branch has the same trap: tasks/plans/docs create hand
+  // the session's stamped team in as `workspace: "team"`, and a conversation
+  // stamped before its team was deleted used to fail "team membership
+  // required" on every write from that session.
+  test("an explicit DELETED team falls through to the directory rule", async () => {
+    const { ctx, inserted } = mockDb({ mappings: [], isMember: false, deletedTeams: [UNION] });
+    const dc = await createDataContext(ctx, {
+      userId: "u1" as any,
+      workspace: "team",
+      team_id: UNION as any,
+      project_path: "/Users/j/code/re-underwriting",
+    });
+    expect(dc.workspace).toEqual({ type: "personal", userId: "u1" as any });
+    await dc.insert("tasks", { title: "still works" });
+    expect(inserted[0].doc.team_id).toBeUndefined();
+  });
+
+  test("an explicit LIVE team without membership still fails closed", async () => {
+    const { ctx } = mockDb({ mappings: [], isMember: false });
+    await expect(createDataContext(ctx, {
+      userId: "u1" as any,
+      workspace: "team",
+      team_id: UNION as any,
+    })).rejects.toThrow(/team membership required/);
+  });
+
   test("a mapping to a LIVE team the user left still fails closed", async () => {
     const { ctx } = mockDb({ mappings: [mapping], isMember: false });
     await expect(createDataContext(ctx, {

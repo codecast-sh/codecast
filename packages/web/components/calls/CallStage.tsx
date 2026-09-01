@@ -140,11 +140,11 @@ type StageView = "auto" | "speaker" | "grid";
  */
 const SMALL_SIZE_CHROME: Record<
   SmallCallWindowSize,
-  { icon: typeof Users; hint: string }
+  { icon: typeof Users; label: string; hint: string }
 > = {
-  circles: { icon: Users, hint: "Shrink to a row of faces over your work" },
-  speaker: { icon: CircleUserRound, hint: "Shrink to one circle: whoever is talking" },
-  tiny: { icon: Circle, hint: "Shrink to one circle the size of a menu bar icon" },
+  circles: { icon: Users, label: "All faces", hint: "Float everyone on the call as circles over your work" },
+  speaker: { icon: CircleUserRound, label: "Who's talking", hint: "Float one circle over your work: whoever is talking" },
+  tiny: { icon: Circle, label: "Tiny", hint: "One tiny circle, the size of a menu bar icon" },
 };
 type RailTab = "transcript" | "chat";
 
@@ -401,7 +401,7 @@ export function CallStage({
                 title={chrome.hint}
               >
                 <chrome.icon className="h-3.5 w-3.5" />
-                {size}
+                {chrome.label}
               </StageChromeButton>
             );
           })}

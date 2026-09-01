@@ -64,7 +64,7 @@ declare global {
       // shell hides the window (the huddle stays there). Absent on older
       // builds — gate on them.
       isCallPanelWindow?: boolean;
-      openCallPanel?: (roomKey: string, opts?: { mic?: boolean; camera?: boolean; scribe?: boolean }) => Promise<void>;
+      openCallPanel?: (roomKey: string, opts?: { mic?: boolean; camera?: boolean; scribe?: boolean; size?: CallWindowSize }) => Promise<void>;
       showCallPanel?: () => Promise<boolean>;
       closeCallPanel?: (opts?: { ended?: boolean }) => Promise<void>;
       // The panel keeps the shell told what it is hosting, so the shell can
@@ -315,7 +315,7 @@ export const PEOPLE_ROUTE = "/people";
 
 /** What every surface calls the gesture, so three of them cannot call it three
  *  different things. */
-export const POP_OUT_PEOPLE_TITLE = "Pop out the people window";
+export const POP_OUT_PEOPLE_TITLE = "Float the team over your work";
 
 // This renderer IS the people window. It draws the panel, mounts the call,
 // walkie and ring pumps, and (on the desktop) is the shell's notification
@@ -422,7 +422,10 @@ export function canPopOutCall(): boolean {
 /** Tell the shell to open (or move) the panel onto this room. */
 export async function openCallPanel(
   roomKey: string,
-  opts?: { mic?: boolean; camera?: boolean; scribe?: boolean },
+  /** `size` opens the window straight into that shape — the walkie card's
+   *  "Float over your work" wants circles, not a stage that shrinks a frame
+   *  later. Absent, the shell uses the size the person last left. */
+  opts?: { mic?: boolean; camera?: boolean; scribe?: boolean; size?: CallWindowSize },
 ): Promise<boolean> {
   const open = bridge("openCallPanel");
   if (!open) return false;

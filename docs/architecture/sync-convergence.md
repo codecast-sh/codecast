@@ -80,7 +80,12 @@ message body). The overlay also carries fact rows for the live CHILDREN it probe
 child facts. Facts have one writer: `syncTable` strips fact fields from every other
 sessions channel, so no channel can write a torn or stale value over a fresher one. The
 fact field names live in one shared constant; the server strip list and the client
-preserve list both derive from it, with a signature test.
+preserve list both derive from it, with a signature test. Every fact is explicit on the
+wire, null when there is none, and the replica reads an absent fact as null. Convex drops
+an undefined key, and a merge that only writes the keys it receives keeps the previous
+execution's value: a "stopped" from the day a daemon died outlived the managed row and
+filed a declared done session under Needs Input on every replica while the stamp beside
+it said done.
 
 Rows the scan does not cover (past a window cap, killed and unpinned, outside every
 window) keep their last synced facts until a crawl or a semantic transition refreshes
@@ -318,6 +323,13 @@ never re-ticks on iOS today.
 **Recovery discipline.** Every subscription pairs with an error handler and a
 controller backed probe; no feeder adds a bespoke interval beyond the ones named here.
 
+**Grouping never crosses a section boundary.** A subagent is never its own member and
+rides its present parent. An agent team teammate is a member (it counts in its own
+bucket, on the server and on every replica) and nests under its lead only while the two
+share a bucket; otherwise it renders flat in its own section. A section header count is
+therefore the count of rows placed in that bucket, which is what the tally and the CLI
+report.
+
 ### C6 The compare
 
 The compare medium is the stamp map, not an opaque hash: the client diffs its own per
@@ -333,9 +345,14 @@ diff does all three.
    silence plus a signal, never a storm.
 3. Payload age (receipt clock) is under the bound; otherwise skip, count, and consider
    a probe (C2).
-4. The appliers are quiescent: no sync applies for the last N coarse ticks, no in
-   flight sync log range, crawl page, or recovery poll. Mid catch up divergence is
-   ordinary eventual consistency, not drift.
+4. The appliers are quiescent: no committed row apply inside a short settle window
+   (five seconds; a value identical re-push does not count), no in flight sync log
+   range, crawl page, or recovery poll. Mid catch up divergence is ordinary eventual
+   consistency, not drift. The window is short on purpose: on a busy account a real
+   row change lands every 20 to 30 seconds, so a rule of "N ticks of silence" never
+   held in production and the compare stayed dark. A steady state apply is not catch
+   up, because the overlay re-executes on the same server change and re-stamps; the
+   gate only needs to outlast the pair of pushes one change produces.
 5. The replica is complete for the scope: the completeness crawl has stamped
    `backfilledAt`. A cold device compares nothing until it can honestly claim the set.
 6. Scope is covered (personal scope; team scope is out, C4).

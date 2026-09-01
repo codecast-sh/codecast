@@ -188,6 +188,16 @@ describe("overlay projection — placement rules", () => {
     expect(liveness.conversations_child_auq.last_turn_allows_park).toBeDefined();
     // An idle child is not probed and ships no fact row.
     expect(Object.keys(liveness)).not.toContain("conversations_child_quiet");
+    // Every fact is EXPLICIT on the wire (C1, one writer): a row with no
+    // managed status ships `agent_status: null`, never an absent key — Convex
+    // drops undefined, and a replica that merges only the keys it receives
+    // kept a "stopped" from the day the daemon died (prod, 2026-09-01).
+    const wire = JSON.parse(JSON.stringify(liveness));
+    expect(wire.conversations_decide.agent_status).toBeNull();
+    for (const [id, row] of Object.entries<any>(wire)) {
+      if (row.bucket === undefined) continue; // fact-only child rows carry what the probe read
+      for (const f of INBOX_FACT_FIELDS) expect(Object.prototype.hasOwnProperty.call(row, f), `${id}.${f}`).toBe(true);
+    }
   });
 
   test("armed_trigger_kind on the row drives dormancy with no agent_tasks read", async () => {

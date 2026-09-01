@@ -1236,6 +1236,10 @@ export type ClientUI = {
   // including off — so sticky can't decay into stuck. The legacy key still
   // lingers in server docs; nothing may ever read it (resolveShowOld).
   inbox_show_old?: boolean;
+  // When the user last said "Not now" to the "clear out your working set"
+  // prompt. Stamped LWW: a snooze on one device silences the prompt on every
+  // device for its window (STALE_PROMPT_SNOOZE_MS in GlobalSessionPanel).
+  inbox_stale_prompt_snoozed_at?: number;
   // Inbox scope. "mine" (default) is the personal inbox: your own sessions plus
   // any explicitly routed to you. "team" turns the inbox into a shared board of
   // every team-visible session across the active team (a superset of "mine").
@@ -1796,12 +1800,22 @@ export const SESSIONS_PRESERVE_FIELDS: readonly string[] = [
 // derived from the shared constant.
 export const SESSIONS_STRIP_FIELDS: readonly string[] = [...INBOX_PROJECTION_FIELDS];
 const SESSIONS_STRIP_FIELD_SET: ReadonlySet<string> = new Set(SESSIONS_STRIP_FIELDS);
+const INBOX_FACT_FIELD_SET: ReadonlySet<string> = new Set(INBOX_FACT_FIELDS);
 
 // The one fact merge: an overlay row's FACTS onto a session row, field by
 // field (stamps never reach a row), leaving an unchanged row's identity alone.
+// An overlay row is the fact writer for its row, so every fact field it does
+// not carry reads as null — never "keep what was there": the server's trusted
+// status is undefined once the managed row is gone, the key is absent from
+// the payload, and a stale "stopped" would otherwise outlive it and file a
+// declared-done session under Needs Input on this replica alone.
 function mergeOverlayFacts(target: Record<string, unknown>, facts: Record<string, unknown>): void {
+  for (const key of INBOX_FACT_FIELDS) {
+    const next = facts[key] === undefined ? null : facts[key];
+    if (!Object.is(target[key], next)) target[key] = next;
+  }
   for (const key in facts) {
-    if (SESSIONS_STRIP_FIELD_SET.has(key)) continue;
+    if (SESSIONS_STRIP_FIELD_SET.has(key) || INBOX_FACT_FIELD_SET.has(key)) continue;
     if (!Object.is(target[key], facts[key])) target[key] = facts[key];
   }
 }
@@ -2823,13 +2837,25 @@ export function placeInboxRows(
   const allIds = new Set(sorted.map((s) => s._id));
 
   // 5. Nesting (both child kinds — see nestParentIdOf) and fork grouping.
+  // Grouping never crosses a section boundary: a subagent is never its own
+  // member and always rides its present parent, but an agent-team teammate IS
+  // a member (the shared rollupParentIdOf: it counts in its own bucket, on the
+  // server and here) and nests under its lead only while the two share a
+  // bucket. A teammate that needs input under a working lead renders flat in
+  // Needs Input — nesting it hid an actionable row and made the header count
+  // (2) disagree with the tally (12) every replica and the CLI agreed on
+  // (prod, 2026-09-01).
   const subsByParent = new Map<string, InboxSession[]>();
   for (const s of sorted) {
     const nestParent = nestParentIdOf(s);
-    if (nestParent && allIds.has(nestParent)) {
-      if (!subsByParent.has(nestParent)) subsByParent.set(nestParent, []);
-      subsByParent.get(nestParent)!.push(s);
+    if (!nestParent || !allIds.has(nestParent)) continue;
+    if (isMemberCandidate(s)) {
+      const own = placements.get(s._id)?.bucket;
+      const lead = placements.get(nestParent)?.bucket;
+      if (own !== lead) continue;
     }
+    if (!subsByParent.has(nestParent)) subsByParent.set(nestParent, []);
+    subsByParent.get(nestParent)!.push(s);
   }
   for (const subs of subsByParent.values()) {
     subs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
@@ -5131,7 +5157,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 export const STAMPED_UI_KEYS = new Set([
   "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "show_triggers", "card_bars", "inbox_show_old",
   "simple_view", "inbox_image_thumbs", "composer_suggestions", "inbox_home", "threads_include_sessions",
-  "walkie_hold_seen", "call_camera_on", "triage_bar_compact",
+  "walkie_hold_seen", "call_camera_on", "triage_bar_compact", "inbox_stale_prompt_snoozed_at",
   // The sound gates and volume: a mute is a per-user preference, not a
   // per-device one — turning sounds off anywhere must silence every client,
   // localhost dev origins included.
@@ -8104,9 +8130,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   syncTable: sync(function (this: Draft, field: string, incoming: any, opts?: SyncOpts) {
     if (!incoming && incoming !== 0) return;
-    // Quiescence clock for the digest compare (sync-convergence C6): a row
-    // channel is applying, so the replica is mid catch-up until it settles.
-    if (SYNC_ACTIVITY_FIELDS.has(field)) noteSyncApply();
     const config = SYNC_REGISTRY[field] ? { ...SYNC_REGISTRY[field], ...opts } : (opts || {});
     const kind = config.kind ?? "collection";
 
@@ -8294,6 +8317,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
       }
     }
 
+    // Quiescence clock for the digest compare (sync-convergence C6): a row
+    // channel COMMITTED a change, so the replica is mid catch-up until it
+    // settles. Stamped here, past the no-op bail above, because a busy account
+    // re-pushes the sessions channel every few seconds (liveness heartbeats
+    // re-emit the live window; facts are stripped from this channel, so those
+    // pushes are value-identical) and a value-identical push is not catch-up
+    // — stamping it kept the compare gated on not_quiescent forever. Decided
+    // by IDENTITY, like the no-op bail: applySyncTable hands back the previous
+    // table and pending objects when nothing it compares changed (the sessions
+    // channel registers a transform, so it never reaches that bail).
+    if (SYNC_ACTIVITY_FIELDS.has(field) && (base[field] !== table || base.pending !== (pending as any))) noteSyncApply();
     // applySyncTable returns the PREVIOUS table/pending objects untouched when
     // a push changed nothing (whole-collection identity reuse) — skip the draft
     // writes so a no-op sync produces no commit at all.

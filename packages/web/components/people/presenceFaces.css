@@ -137,3 +137,28 @@
 .presence-grip:active {
   cursor: grabbing;
 }
+
+/* The slot is two lines now: the name and its activity, then the gesture.
+   The legend alone when nothing is pointed at — the window is hovered, so
+   the person is looking for what to do. */
+.presence-desc {
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  border-radius: 10px;
+}
+.presence-desc-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  overflow: hidden;
+}
+.presence-desc-gesture {
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.72);
+}
+.presence-desc-legend {
+  padding: 4px 10px;
+}

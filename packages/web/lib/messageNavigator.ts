@@ -11,6 +11,7 @@ import {
   stickyPromptContent,
   type MachineDeliveredKind,
 } from "../components/sessionMessage";
+import { formatShortDate } from "./utils";
 
 // Row kinds hidden behind the "other" chip: machine-delivered messages plus
 // bare "continue" nudges the human typed — navigation noise either way.
@@ -101,7 +102,7 @@ export function formatTimeAgo(ts: number, now: number = Date.now()): string {
   if (minutes < 60) return `${minutes}m`;
   if (hours < 24) return `${hours}h`;
   if (days < 30) return `${days}d`;
-  return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
+  return formatShortDate(ts);
 }
 
 // Build the navigator rows from the complete user-message list. Machine-delivered
