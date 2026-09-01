@@ -567,7 +567,7 @@
 
 /* MY circle carries the warm tone — this is my voice going OUT — where the
  * talker's carries the cool one the shared face style already draws. */
-.walkie-strip-face-tx {
+.walkie-strip-face.walkie-strip-face-tx {
   position: relative;
   box-shadow:
     0 0 0 calc(2px + var(--level) * 3px) color-mix(in srgb, var(--walkie-tx) 70%, transparent),
@@ -576,7 +576,7 @@
 
 /* Muted while live: the face dims and wears the fact, so a silent room is
  * explained by a glance at the corner rather than by doubt. */
-.walkie-strip-face-muted {
+.walkie-strip-face.walkie-strip-face-muted {
   opacity: 0.6;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--sol-text-dim) 55%, transparent);
 }
@@ -927,4 +927,108 @@
   .walkie-coach {
     animation: none;
   }
+}
+
+/* ── The state, in one loud word ──────────────────────────────────────────
+ *
+ * The first line of the card: RECORDING, LIVE, ON THE LINE, INCOMING. It is
+ * uppercase and coloured by direction — warm going out, cool coming in, red
+ * for a state that needs a hand — because a person glancing at the corner
+ * of a screen reads a colour and a word before a sentence.
+ */
+.walkie-stage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 9px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  --stage-tone: var(--sol-text-muted);
+}
+.walkie-stage-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--stage-tone);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--stage-tone) 22%, transparent);
+  animation: walkie-stage-blink 1.2s ease-in-out infinite;
+}
+.walkie-stage-badge {
+  font-weight: 700;
+  color: var(--stage-tone);
+}
+.walkie-stage-with {
+  color: var(--sol-text-muted);
+  text-transform: none;
+  letter-spacing: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.walkie-stage-opening   { --stage-tone: color-mix(in srgb, var(--walkie-tx) 60%, var(--sol-text-dim)); }
+.walkie-stage-recording,
+.walkie-stage-live,
+.walkie-stage-both,
+.walkie-stage-locked    { --stage-tone: var(--walkie-tx); }
+.walkie-stage-incoming  { --stage-tone: var(--walkie-rx); }
+.walkie-stage-dropped,
+.walkie-stage-mic-off   { --stage-tone: var(--sol-red); }
+.walkie-stage-open      { --stage-tone: var(--sol-text-dim); }
+.walkie-stage-open .walkie-stage-dot,
+.walkie-stage-locked .walkie-stage-dot { animation: none; }
+@keyframes walkie-stage-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .walkie-stage-dot { animation: none; }
+}
+
+/* WHAT YOUR HANDS DO NEXT: the instruction under the words, plain and always
+ * there. It reads as a caption, not as the headline, so the sentence about
+ * who hears whom keeps the weight. */
+.walkie-strip-hint {
+  margin-top: 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--sol-text) 6%, transparent);
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--sol-text-muted);
+}
+
+/* The top-right tools carry their word: nobody should hover to learn what an
+ * X does next to an open microphone. */
+.walkie-strip-icon {
+  align-items: center;
+  gap: 4px;
+  padding: 4px 7px 4px 5px;
+}
+.walkie-strip-icon-word {
+  font-size: 11.5px;
+}
+
+/* End says what it does, and Float is the door to the circles. */
+.walkie-strip-end {
+  gap: 7px;
+}
+.walkie-strip-float {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 9px;
+  font-size: 13.5px;
+  white-space: nowrap;
+  color: var(--sol-text);
+  background: var(--sol-bg-highlight);
+  border: 1px dashed color-mix(in srgb, var(--sol-text) 30%, transparent);
+  transition: filter 120ms;
+}
+.walkie-strip-float:hover {
+  filter: brightness(1.15);
 }

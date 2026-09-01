@@ -42,7 +42,13 @@ const noop = () => {};
 
 const BASE = {
   name: "Riley Chen",
+  stage: "incoming" as const,
+  badge: "INCOMING",
+  hint: "Riley Chen is talking to you. HOLD their face to reply.",
   headline: "Riley Chen is talking",
+  locked: false,
+  together: false,
+  muted: true,
   words: "",
   face: { image: undefined, name: "Riley Chen" },
   tx: false,
@@ -91,11 +97,22 @@ describe("a teammate is talking to me", () => {
     expect(html).not.toContain("walkie-strip-tx");
   });
 
-  test("carries the face, the two tools and the key", () => {
+  test("carries the face, the two tools and the key — each tool with its word", () => {
     expect(html).toContain("walkie-strip-face");
-    expect(html).toContain('aria-label="Open the DM"');
-    expect(html).toContain('aria-label="Leave the room"');
+    expect(html).toContain('aria-label="Open the chat with them"');
+    expect(html).toContain(">Chat<");
+    expect(html).toContain('aria-label="Close this and leave the room"');
+    expect(html).toContain(">Close<");
     expect(html).toContain("walkie-strip-reply");
+  });
+
+  test("says its state in one loud word, and what the hands do next", () => {
+    // The founder's rule: bang me over the head. The badge is the first line
+    // of the card and the hint is always there, whatever else the card says.
+    expect(html).toContain("walkie-stage-incoming");
+    expect(html).toContain(">INCOMING<");
+    expect(html).toContain("walkie-strip-hint");
+    expect(html).toContain("HOLD their face to reply");
   });
 
   test("and no emoji anywhere in it", () => {
@@ -333,5 +350,36 @@ describe("the live words come from the burst, not from the open channel", () => 
 
   test("cut from the front, so the newest words are the ones kept", () => {
     expect(source).toContain("`…${text.slice(-TAIL)}`");
+  });
+});
+
+describe("on the line, hands free", () => {
+  const html = render({
+    stage: "locked",
+    badge: "ON THE LINE",
+    hint: "Hands free. Riley Chen hears everything you say. Press END to hang up.",
+    headline: "Riley Chen hears you",
+    locked: true,
+    muted: false,
+    actions: false,
+    myFace: { image: undefined, name: "Me" },
+    onMuteToggle: noop,
+    onFloat: noop,
+  } as any);
+
+  test("the badge burns warm and the End button says what it does", () => {
+    expect(html).toContain("walkie-stage-locked");
+    expect(html).toContain(">ON THE LINE<");
+    expect(html).toContain("End — hang up");
+    expect(html).toContain("Float faces over my work");
+  });
+
+  test("one door: the top-right Close goes, End is the way out", () => {
+    expect(html).not.toContain('aria-label="Close this and leave the room"');
+  });
+
+  test("my own face is on the card, warm, and pops in", () => {
+    expect(html).toContain("walkie-strip-face-tx");
+    expect(html).toContain("walkie-face-pop");
   });
 });
