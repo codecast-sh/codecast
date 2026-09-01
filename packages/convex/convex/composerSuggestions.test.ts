@@ -1,7 +1,118 @@
 import { describe, expect, test } from "bun:test";
-import { minePhrases, normalizeForMatch, rankInputs, sanitizeSuggestions } from "./composerSuggestions";
+import {
+  getRecentUserInputs,
+  isMachineDrivenConversation,
+  minePhrases,
+  normalizeForMatch,
+  parseMinedProfile,
+  rankInputs,
+  sanitizeSuggestions,
+} from "./composerSuggestions";
 
 const DAY = 24 * 60 * 60 * 1000;
+
+// Minimal ctx.db for the collector: the two indexed reads it makes, with
+// the same filter/order/take semantics. Same convex-test-free idiom as
+// calls.test.ts — drive the real handler through its exported config.
+function fakeDb(conversations: any[], messages: any[]) {
+  const q = {
+    field: (name: string) => (row: any) => row[name],
+    eq: (get: any, val: any) => (row: any) => get(row) === val,
+    neq: (get: any, val: any) => (row: any) => get(row) !== val,
+    and: (...preds: any[]) => (row: any) => preds.every((p) => p(row)),
+  };
+  return {
+    query: (table: string) => {
+      let rows = table === "conversations" ? conversations : messages;
+      const chain: any = {
+        withIndex: (_name: string, fn: (b: any) => any) => {
+          const eqs: Array<[string, any]> = [];
+          const b: any = { eq: (f: string, v: any) => (eqs.push([f, v]), b) };
+          fn(b);
+          rows = rows.filter((r) => eqs.every(([f, v]) => r[f] === v));
+          return chain;
+        },
+        filter: (fn: (b: any) => any) => {
+          const pred = fn(q);
+          rows = rows.filter(pred);
+          return chain;
+        },
+        order: (dir: "asc" | "desc") => {
+          const key = table === "conversations" ? "updated_at" : "timestamp";
+          rows = [...rows].sort((a, b) => (dir === "asc" ? a[key] - b[key] : b[key] - a[key]));
+          return chain;
+        },
+        take: async (n: number) => rows.slice(0, n),
+      };
+      return chain;
+    },
+  };
+}
+
+async function collect(conversations: any[], messages: any[]) {
+  const handler = (getRecentUserInputs as any)._handler ?? (getRecentUserInputs as any).handler;
+  return (await handler({ db: fakeDb(conversations, messages) }, { user_id: "u1" })) as Array<{
+    text: string;
+    ts: number;
+  }>;
+}
+
+const POLISH =
+  "you are a world class product engineer and designer, you push the final mile to polish a product to incredible detail and thoughtfulness. when you think you are done and its perfect, do another 10 rounds of iteration to improve it. do work that you are extremely proud of. I believe in you.";
+
+describe("getRecentUserInputs", () => {
+  test("reads the opening brief of a long session, not just its newest nudges", async () => {
+    const conv = { _id: "c1", _creationTime: 1000, user_id: "u1", updated_at: 5000 };
+    const messages = [
+      { _id: "m0", conversation_id: "c1", role: "user", content: `make the create team flow amazing. ${POLISH}`, timestamp: 1000 },
+      ...Array.from({ length: 40 }, (_, i) => ({
+        _id: `n${i}`, conversation_id: "c1", role: "user", content: "continue", timestamp: 2000 + i,
+      })),
+      { _id: "t1", conversation_id: "c1", role: "user", content: "now verify it in the browser", timestamp: 4000 },
+      { _id: "tr", conversation_id: "c1", role: "user", content: "carrier", tool_results: [{}], timestamp: 4500 },
+      { _id: "a1", conversation_id: "c1", role: "assistant", content: "done", timestamp: 4600 },
+    ];
+    const out = await collect([conv], messages);
+    const texts = out.map((r) => r.text);
+    expect(texts.some((t) => t.includes("10 rounds of iteration"))).toBe(true);
+    expect(texts).toContain("now verify it in the browser");
+    expect(texts).not.toContain("continue");
+    expect(texts).not.toContain("carrier");
+  });
+
+  test("skips machine-driven sessions and fork-copied history", async () => {
+    const conversations = [
+      { _id: "human", _creationTime: 100, user_id: "u1", updated_at: 900 },
+      { _id: "worker", _creationTime: 100, user_id: "u1", updated_at: 800, is_workflow_sub: true },
+      { _id: "fork", _creationTime: 500, user_id: "u1", updated_at: 700, forked_from: "human" },
+    ];
+    const messages = [
+      { _id: "h1", conversation_id: "human", role: "user", content: "plan and task this out deeply", timestamp: 200 },
+      { _id: "w1", conversation_id: "worker", role: "user", content: "Adversarially verify this code-review finding", timestamp: 200 },
+      // Copied from `human` with its original timestamp (older than the fork).
+      { _id: "f0", conversation_id: "fork", role: "user", content: "plan and task this out deeply", timestamp: 200 },
+      { _id: "f1", conversation_id: "fork", role: "user", content: "take the other branch here", timestamp: 600 },
+    ];
+    const out = await collect(conversations, messages);
+    const texts = out.map((r) => r.text);
+    expect(texts.filter((t) => t === "plan and task this out deeply")).toHaveLength(1);
+    expect(texts).toContain("take the other branch here");
+    expect(texts.some((t) => t.startsWith("Adversarially"))).toBe(false);
+  });
+
+  test("isMachineDrivenConversation covers every agent-authored session shape", () => {
+    expect(isMachineDrivenConversation({})).toBe(false);
+    expect(isMachineDrivenConversation({ forked_from: "x" } as any)).toBe(false);
+    for (const shape of [
+      { is_subagent: true },
+      { is_workflow_sub: true },
+      { workflow_run_id: "r" },
+      { parent_conversation_id: "p" },
+      { spawned_by_conversation_id: "s" },
+      { comment_fork_parent: "c" },
+    ]) expect(isMachineDrivenConversation(shape)).toBe(true);
+  });
+});
 
 describe("minePhrases", () => {
   test("finds a phrase recurring inside different sentences", () => {
@@ -161,7 +272,62 @@ describe("sanitizeSuggestions", () => {
     expect(sanitizeSuggestions("proceed", null)).toEqual([]);
   });
 
-  test("over-long pills are dropped", () => {
-    expect(sanitizeSuggestions(["x".repeat(121)], null)).toEqual([]);
+  test("a full reusable prompt survives; only a pasted wall is dropped", () => {
+    const longPrompt =
+      "you are a world class product engineer and designer, you push the final mile to polish a product to incredible detail and thoughtfulness. when you think you are done and its perfect, do another 10 rounds of iteration to improve it. do work that you are extremely proud of. I believe in you.";
+    expect(sanitizeSuggestions([{ text: longPrompt, confidence: 0.9 }], null)).toEqual([longPrompt]);
+    expect(sanitizeSuggestions(["x".repeat(1001)], null)).toEqual([]);
+  });
+
+  test("a reusable prompt removed from the ban set comes back as a pill", () => {
+    const reusable = "plan, and task this out deeply, bind to it and then run a deep workflow against it";
+    const banned = new Set([reusable, "fix the linkedin urls in team.ts"].map(normalizeForMatch));
+    // The action deletes mined prompts from the ban set before sanitizing.
+    banned.delete(normalizeForMatch(reusable));
+    expect(
+      sanitizeSuggestions(
+        [
+          { text: reusable, confidence: 0.9 },
+          { text: "fix the linkedin urls in team.ts", confidence: 0.9 },
+        ],
+        null,
+        banned,
+      ),
+    ).toEqual([reusable]);
+  });
+});
+
+describe("parseMinedProfile", () => {
+  test("reads patterns and full-text prompts, dropping under-supported and nudge entries", () => {
+    const mined = parseMinedProfile({
+      patterns: [
+        { pattern: "demands e2e verification before accepting work", example: "verify it e2e first", count: 4 },
+        { pattern: "one-off", example: "whatever", count: 1 },
+        { pattern: "nudge habit", example: "continue", count: 9 },
+      ],
+      prompts: [
+        { text: "build all of the above and then find 10 ways it can be clearer, fix those 10, validate, and repeat 5 times", count: 3 },
+        { text: "go ahead", count: 6 },
+        { text: "ship it now", count: 2 },
+      ],
+    });
+    expect(mined?.patterns.map((p) => p.pattern)).toEqual([
+      "demands e2e verification before accepting work",
+    ]);
+    expect(mined?.prompts.map((p) => p.count)).toEqual([3, 2]);
+    expect(mined?.prompts[0].text.startsWith("build all of the above")).toBe(true);
+  });
+
+  test("legacy bare-array output reads as patterns only", () => {
+    const mined = parseMinedProfile([
+      { pattern: "asks for a polished summary page", example: "publish a full page", count: 2 },
+    ]);
+    expect(mined?.patterns.length).toBe(1);
+    expect(mined?.prompts).toEqual([]);
+  });
+
+  test("garbage yields null", () => {
+    expect(parseMinedProfile("nope")).toBeNull();
+    expect(parseMinedProfile({ patterns: [], prompts: [] })).toBeNull();
   });
 });

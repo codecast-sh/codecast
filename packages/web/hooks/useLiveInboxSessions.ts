@@ -3,6 +3,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, InboxSession } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
+import { useIsSyncHost } from "./useSyncRole";
 
 // Record the live (recent) id set, change-guarded so an identical payload doesn't
 // re-render every subscriber (or touch IDB). "Old" = cached top-level sessions
@@ -47,7 +48,9 @@ export function applyLiveInboxIds(sessions: any[]) {
 export const LIST_INBOX_SESSIONS_ARGS = { show_all: false, include_liveness: false, fast_fields_in_overlay: true } as const;
 
 export function useLiveInboxSessions(opts?: { onSync?: (sessions: any[]) => void }) {
-  const inboxSessions = useQuery(api.conversations.listInboxSessions, LIST_INBOX_SESSIONS_ARGS);
+  // Follower windows receive `sessions` over replication; only a host feeds it.
+  const isSyncHost = useIsSyncHost();
+  const inboxSessions = useQuery(api.conversations.listInboxSessions, isSyncHost ? LIST_INBOX_SESSIONS_ARGS : "skip");
   const syncTable = useInboxStore((s) => s.syncTable);
   const onSyncRef = useRef(opts?.onSync);
   onSyncRef.current = opts?.onSync;

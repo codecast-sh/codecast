@@ -2058,6 +2058,14 @@ export default defineSchema({
       example: v.string(),
       count: v.number(),
     }))),
+    // Reusable prompts mined by LLM: full-text directives the user resends
+    // across sessions near-verbatim ("you are a world class product
+    // engineer… do another 10 rounds"). Unlike pattern examples these are
+    // MEANT to be replayed, adapted to the current conversation.
+    prompts: v.optional(v.array(v.object({
+      text: v.string(),
+      count: v.number(),
+    }))),
     recent: v.array(v.string()),
     generated_at: v.number(),
   }).index("by_user_id", ["user_id"]),
