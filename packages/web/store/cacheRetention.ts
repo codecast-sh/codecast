@@ -3,6 +3,7 @@
 // idbCache.native.ts) the same way idbCollectionDiff is. The generic partition
 // and tombstone expiry live in @platform/engine (cacheRetention / idbCache
 // there); this module injects codecast's session-shaped policy.
+import { WORKING_SET_RECENCY_MS } from "@codecast/shared/contracts";
 import {
   partitionCacheRetention,
   deriveRegistryMaps,
@@ -30,7 +31,7 @@ import { CLIENT_SYNC_REGISTRY } from "./clientSyncRegistry";
 //   • anything touched inside the TTL, capped at the newest MAX_CACHED_SESSIONS.
 // Anything older is dropped from memory AND disk; it stays reachable via
 // search/deep-link, which re-fetch from the server and re-seed the cache.
-export const SESSION_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // mirrors DISMISS_RECONCILE_WINDOW_MS / the server crawl window
+export const SESSION_CACHE_TTL_MS = WORKING_SET_RECENCY_MS; // the shared recency horizon (server scan, selection, reconcile window)
 export const MAX_CACHED_SESSIONS = 1200;
 
 export function partitionSessionRetention(

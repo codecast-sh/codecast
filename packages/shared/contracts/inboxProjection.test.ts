@@ -12,6 +12,12 @@ import {
   digestProjection,
   emptyInboxTally,
   fnv1a32,
+  fnv1a32Update,
+  FNV1A32_OFFSET,
+  isBelowFoldAt,
+  isFoldExempt,
+  isWorkingSetWindow,
+  rollupParentIdOf,
   inWorkingSet,
   inboxEpoch,
   isHardBlocked,
@@ -332,7 +338,7 @@ describe("computeFold", () => {
       row("old_dismissed", { updated_at: EPOCH - 20 * HOUR, inbox_dismissed_at: EPOCH - HOUR }),
     ];
     const { members } = selectWorkingSet(rows, EPOCH);
-    const { belowFold, cutoff } = computeFold(members, EPOCH);
+    const { belowFold, cutoff } = computeFold(members);
     // The row AT the gap is the cut and never folds itself.
     expect(cutoff).toBe(EPOCH - 15 * HOUR);
     expect(belowFold.has("edge")).toBe(false);
@@ -346,14 +352,14 @@ describe("computeFold", () => {
 
   test("no gap, no fold; deliberate rows cannot bridge a gap", () => {
     const noGap = selectWorkingSet([row("a"), row("b", { updated_at: EPOCH - 3 * HOUR })], EPOCH);
-    expect(computeFold(noGap.members, EPOCH)).toEqual({ belowFold: new Set(), cutoff: 0 });
+    expect(computeFold(noGap.members)).toEqual({ belowFold: new Set(), cutoff: 0 });
     // A pinned row sitting inside the gap must not hide it.
     const bridged = selectWorkingSet([
       row("fresh", { updated_at: EPOCH - HOUR }),
       row("bridge", { updated_at: EPOCH - 8 * HOUR, inbox_pinned_at: EPOCH - HOUR }),
       row("old", { updated_at: EPOCH - 16 * HOUR }),
     ], EPOCH);
-    const { belowFold, cutoff } = computeFold(bridged.members, EPOCH);
+    const { belowFold, cutoff } = computeFold(bridged.members);
     expect(cutoff).toBe(EPOCH - 16 * HOUR);
     expect(belowFold.has("old")).toBe(false); // at the cut, not under it
   });
@@ -374,7 +380,7 @@ describe("projectInbox", () => {
   ];
 
   test("membership, fold, placement, tallies and digest in one call", () => {
-    const p = projectInbox(rows(), { showOld: false }, EPOCH, { asking: (id) => id === "ask" });
+    const p = projectInbox(rows(), EPOCH, { asking: (id) => id === "ask" });
     expect(p.placements.get("working")).toMatchObject({ bucket: "working", below_fold: false });
     expect(p.placements.get("needs")).toMatchObject({ bucket: "needs_input", work_state: "needs_input" });
     expect(p.placements.get("ask")).toMatchObject({ bucket: "questions" });
@@ -395,8 +401,8 @@ describe("projectInbox", () => {
   });
 
   test("deterministic: same rows and epoch give identical output; showOld never changes it", () => {
-    const a = projectInbox(rows(), { showOld: false }, EPOCH);
-    const b = projectInbox([...rows()].reverse(), { showOld: true }, EPOCH);
+    const a = projectInbox(rows(), EPOCH);
+    const b = projectInbox([...rows()].reverse(), EPOCH);
     expect(b.set_digest).toBe(a.set_digest);
     expect(b.tally).toEqual(a.tally);
     expect(new Map(b.placements)).toEqual(new Map(a.placements));
@@ -451,5 +457,43 @@ describe("isStashHidden — the stash mode flag", () => {
     // A stale flag on an unstashed row is dead state, not a hide.
     expect(isStashHidden({ inbox_stashed_at: null, inbox_stash_hidden: true })).toBe(false);
     expect(isStashHidden({})).toBe(false);
+  });
+});
+
+describe("rollupParentIdOf — the one child → parent rule", () => {
+  test("a subagent or orphan rolls up to its parent; a plan handoff speaks for itself", () => {
+    expect(rollupParentIdOf({ parent_conversation_id: "p", is_subagent: true, parent_message_uuid: "m" })).toBe("p");
+    expect(rollupParentIdOf({ parent_conversation_id: "p" })).toBe("p"); // orphan: no parent message
+    expect(rollupParentIdOf({ parent_conversation_id: "p", parent_message_uuid: "plan-handoff" })).toBeNull();
+  });
+  test("an agent-team teammate rolls up to its lead; a plain spawned session does not", () => {
+    expect(rollupParentIdOf({ spawned_by_conversation_id: "lead", agent_team_name: "team" })).toBe("lead");
+    expect(rollupParentIdOf({ spawned_by_conversation_id: "lead" })).toBeNull();
+    expect(rollupParentIdOf({})).toBeNull();
+  });
+});
+
+describe("isBelowFoldAt — the per-row fold rule computeFold's loop reads", () => {
+  const base: WorkingSetRow = { _id: "x", status: "active", updated_at: 100, message_count: 3 };
+  test("no cut, exempt rows and queued work never fold; otherwise under the cut folds", () => {
+    expect(isBelowFoldAt(base, 0)).toBe(false);
+    expect(isBelowFoldAt(base, 200)).toBe(true);
+    expect(isBelowFoldAt({ ...base, updated_at: 200 }, 200)).toBe(false);
+    expect(isBelowFoldAt({ ...base, has_pending_messages: true }, 200)).toBe(false);
+    for (const exempt of [{ inbox_pinned_at: 1 }, { inbox_dismissed_at: 1 }, { inbox_stashed_at: 1 }, { owned_by_me: true }]) {
+      expect(isFoldExempt({ ...base, ...exempt })).toBe(true);
+      expect(isBelowFoldAt({ ...base, ...exempt }, 200)).toBe(false);
+    }
+  });
+});
+
+describe("fnv1a32Update — the incremental form of the digest hash", () => {
+  test("folding a string in pieces equals hashing it whole", () => {
+    const whole = fnv1a32("abc:working:0");
+    expect(fnv1a32Update(fnv1a32Update(FNV1A32_OFFSET, "abc:"), "working:0")).toBe(whole);
+  });
+  test("isWorkingSetWindow names exactly the five windows", () => {
+    for (const w of ["recent", "pinned", "dismissed", "stashed", "owned"] as const) expect(isWorkingSetWindow(w)).toBe(true);
+    for (const t of ["members", "member_rows", "foreign_scan"] as const) expect(isWorkingSetWindow(t)).toBe(false);
   });
 });

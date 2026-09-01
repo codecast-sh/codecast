@@ -222,6 +222,72 @@ describe("server projection == replica projection", () => {
     expect(placed.tally).toEqual(overlay.projection.tally);
   });
 
+  it("a plan handoff under a dismissed planner is a member on BOTH sides — stamped, selected, rendered flat", async () => {
+    // createConversation writes exactly this shape for the daemon's plan
+    // handoff: a parent pointer, parent_message_uuid "plan-handoff", no
+    // is_subagent. The server treats it as a first-class member; the replica
+    // used to skip every row with a parent pointer, so the compare reported it
+    // missing at every epoch, each heal was a no-op, and the third heal
+    // latched (inbox_drift_persistent).
+    const db = makeFakeDb({
+      users: [{ _id: ME, name: "Me", email: "me@example.com" }],
+      session_owners: [],
+      conversations: [
+        conv("planner", { inbox_dismissed_at: EPOCH - H }),
+        conv("impl", { parent_conversation_id: cid("planner"), parent_message_uuid: "plan-handoff", updated_at: EPOCH - MIN }),
+        conv("working", { updated_at: EPOCH - MIN }),
+      ],
+      managed_sessions: [managed("working", "working")],
+      messages: [],
+      session_decisions: [],
+    });
+    const { overlay } = await feedServer(db);
+    expect(overlay.liveness[cid("impl")]?.bucket).toBe("needs_input");
+    expect(evaluateInboxCompare(replica(), ctx)).toMatchObject({ kind: "clean", short_circuit: true });
+    const placed = placeInboxRows(replica(), { scope: "mine", now: NOW });
+    expect(placed.placements.get(cid("impl"))?.bucket).toBe("needs_input");
+    expect(placed.tally).toEqual(overlay.projection.tally);
+    expect(placed.tally.shown.needs_input).toBe(1);
+    // Its nest parent is set aside, so it renders as its own flat card.
+    expect(placed.needsInput.map((s) => s._id)).toEqual([cid("impl")]);
+  });
+
+  it("a child's pending `cast decide` and a teammate's open prompt lift the parent on BOTH sides (one rollup rule)", async () => {
+    // (a) A `cast spawn --subagent` worker posts `cast decide` on ITS session.
+    // (b) An agent-team teammate (spawned_by + agent_team_name, its own
+    //     member) sits on a permission prompt.
+    // (c) A row whose newest turn is a login banner is blocked on plumbing,
+    //     not a decision — its permission status does not ask.
+    const db = makeFakeDb({
+      users: [{ _id: ME, name: "Me", email: "me@example.com" }],
+      session_owners: [],
+      conversations: [
+        conv("parent", { updated_at: EPOCH - MIN }),
+        conv("worker", { is_subagent: true, parent_conversation_id: cid("parent"), updated_at: EPOCH - MIN }),
+        conv("lead", { updated_at: EPOCH - MIN }),
+        conv("mate", { spawned_by_conversation_id: cid("lead"), agent_team_name: "team", updated_at: EPOCH - MIN }),
+        conv("banner", { pending_api_error: true, pending_api_error_kind: "auth", updated_at: EPOCH - MIN }),
+      ],
+      managed_sessions: [managed("mate", "permission_blocked"), managed("banner", "permission_blocked")],
+      messages: [],
+      session_decisions: [
+        { _id: "sd_w", user_id: ME, conversation_id: cid("worker"), status: "pending", created_at: EPOCH - MIN },
+      ],
+    });
+    const { overlay } = await feedServer(db);
+    const b = (tag: string) => overlay.liveness[cid(tag)]?.bucket;
+    expect(b("parent")).toBe("questions");
+    expect(b("lead")).toBe("questions");
+    expect(b("mate")).toBe("questions");
+    expect(b("banner")).toBe("needs_input");
+    expect(evaluateInboxCompare(replica(), ctx)).toMatchObject({ kind: "clean", short_circuit: true });
+    const placed = placeInboxRows(replica(), { scope: "mine", now: NOW });
+    for (const tag of ["parent", "lead", "mate", "banner"]) {
+      expect({ tag, bucket: placed.placements.get(cid(tag))?.bucket }).toEqual({ tag, bucket: b(tag) });
+    }
+    expect(placed.tally).toEqual(overlay.projection.tally);
+  });
+
   it("show old on both sides changes nothing about the digest (shown + folded is the headline, not the set)", async () => {
     const db = fixture();
     const { overlay } = await feedServer(db);

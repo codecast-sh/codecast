@@ -51,8 +51,8 @@ describe("determinism per epoch", () => {
     for (const seed of SEEDS) {
       const rows = genProjectableRows(seed, 80, EPOCH);
       const asking = new Set(rows.filter((_, i) => i % 7 === 0).map((r) => String(r._id)));
-      const a = projectInbox(rows, { showOld: false }, EPOCH, { asking: (id) => asking.has(id) });
-      const b = projectInbox(shuffled(rows, seed * 3), { showOld: true }, EPOCH, { asking: (id) => asking.has(id) });
+      const a = projectInbox(rows, EPOCH, { asking: (id) => asking.has(id) });
+      const b = projectInbox(shuffled(rows, seed * 3), EPOCH, { asking: (id) => asking.has(id) });
       expect(sortedEntries(b)).toEqual(sortedEntries(a));
       expect(b.set_digest).toBe(a.set_digest);
       expect(b.tally).toEqual(a.tally);
@@ -68,7 +68,7 @@ describe("determinism per epoch", () => {
     for (const seed of SEEDS.slice(0, 20)) {
       const rows = genProjectableRows(seed, 60, EPOCH);
       const copies = rows.map((r) => JSON.parse(JSON.stringify(r)));
-      expect(projectInbox(copies, { showOld: false }, EPOCH).set_digest).toBe(projectInbox(rows, { showOld: false }, EPOCH).set_digest);
+      expect(projectInbox(copies, EPOCH).set_digest).toBe(projectInbox(rows, EPOCH).set_digest);
     }
   });
 });
@@ -77,7 +77,7 @@ describe("the fold", () => {
   it("never changes membership or buckets: shown + folded per bucket equals the placed count", () => {
     for (const seed of SEEDS) {
       const rows = genProjectableRows(seed, 100, EPOCH);
-      const p = projectInbox(rows, { showOld: false }, EPOCH);
+      const p = projectInbox(rows, EPOCH);
       const counted: Record<string, number> = {};
       for (const [, b] of p.entries) counted[b] = (counted[b] ?? 0) + 1;
       for (const b of INBOX_BUCKETS) {
@@ -86,7 +86,7 @@ describe("the fold", () => {
       }
       // The fold flag on every entry agrees with computeFold over the selection.
       const { members } = selectWorkingSet(rows, EPOCH);
-      const { belowFold } = computeFold(members, EPOCH);
+      const { belowFold } = computeFold(members);
       for (const [id, , fold] of p.entries) expect(fold).toBe(belowFold.has(id));
     }
   });
@@ -94,11 +94,11 @@ describe("the fold", () => {
   it("only recent-only members fold; a deliberate seat or queued work is always above the fold", () => {
     for (const seed of SEEDS) {
       const rows = genProjectableRows(seed, 100, EPOCH);
-      const p = projectInbox(rows, { showOld: false }, EPOCH);
+      const p = projectInbox(rows, EPOCH);
       for (const [id, , fold] of p.entries) {
         if (!fold) continue;
         const row = rows.find((r) => String(r._id) === id)!;
-        expect(isFoldExempt(row, p.windows.get(id))).toBe(false);
+        expect(isFoldExempt(row)).toBe(false);
         expect(!!row.has_pending_messages).toBe(false);
       }
     }
@@ -107,7 +107,7 @@ describe("the fold", () => {
   it("a fold flip on any single entry changes the digest; unchanged buckets are not enough to hide it", () => {
     for (const seed of SEEDS.slice(0, 30)) {
       const rows = genProjectableRows(seed, 40, EPOCH);
-      const p = projectInbox(rows, { showOld: false }, EPOCH);
+      const p = projectInbox(rows, EPOCH);
       const base = digestProjection(p.entries);
       expect(base).toBe(p.set_digest);
       for (let i = 0; i < p.entries.length; i++) {
@@ -121,12 +121,12 @@ describe("the fold", () => {
     for (const seed of SEEDS) {
       const rows = genProjectableRows(seed, 100, EPOCH);
       const { members } = selectWorkingSet(rows, EPOCH);
-      const { belowFold, cutoff } = computeFold(members, EPOCH);
+      const { belowFold, cutoff } = computeFold(members);
       if (cutoff === 0) {
         expect(belowFold.size).toBe(0);
         continue;
       }
-      const recentOnly = [...members.values()].filter((m) => !isFoldExempt(m.row, m.windows));
+      const recentOnly = [...members.values()].filter((m) => !isFoldExempt(m.row));
       // The cutoff is the activity time of the row AT the gap (it never folds
       // itself); the nearest recent-only activity strictly above it is more
       // than 12h away.
@@ -186,7 +186,7 @@ describe("truncation flags", () => {
   it("projectInbox reports the same flags as the selection it ran", () => {
     for (const seed of SEEDS.slice(0, 10)) {
       const rows = [...genProjectableRows(seed, 30, EPOCH), ...rowsIn("stashed", INBOX_WINDOW_CAPS.stashed + 1)];
-      expect(projectInbox(rows, { showOld: false }, EPOCH).truncated).toEqual(selectWorkingSet(rows, EPOCH).truncated);
+      expect(projectInbox(rows, EPOCH).truncated).toEqual(selectWorkingSet(rows, EPOCH).truncated);
     }
   });
 });
@@ -204,9 +204,10 @@ describe("epoch monotonicity", () => {
   });
 
   it("a row's placement depends on the epoch only through the loop wake and the park/verdict clocks", () => {
-    // With no loop state, moving the epoch inside the same minute-grid never
-    // changes a bucket (the trust decay is the caller's, applied before the
-    // shared module sees the row).
+    // With no loop state, moving the epoch never changes a bucket: every
+    // other time rule (trust decay, the idle grace) is applied by the caller
+    // to the FACTS before the shared module sees the row, so a replica and
+    // the server evaluating the same facts at different minutes agree.
     for (const seed of SEEDS.slice(0, 20)) {
       const rows = genProjectableRows(seed, 50, EPOCH).filter((r) => !r.loop_state);
       for (const r of rows) {
@@ -221,7 +222,7 @@ describe("epoch monotonicity", () => {
 describe("the digest", () => {
   it("is order independent and 16 lowercase hex characters over any generated set", () => {
     for (const seed of SEEDS.slice(0, 20)) {
-      const p = projectInbox(genProjectableRows(seed, 70, EPOCH), { showOld: false }, EPOCH);
+      const p = projectInbox(genProjectableRows(seed, 70, EPOCH), EPOCH);
       expect(p.set_digest).toMatch(/^[0-9a-f]{16}$/);
       expect(digestProjection(shuffled(p.entries, seed))).toBe(p.set_digest);
     }
@@ -229,7 +230,7 @@ describe("the digest", () => {
 
   it("hidden rows are in the digest but never in a tally", () => {
     for (const seed of SEEDS.slice(0, 20)) {
-      const p = projectInbox(genProjectableRows(seed, 70, EPOCH), { showOld: false }, EPOCH);
+      const p = projectInbox(genProjectableRows(seed, 70, EPOCH), EPOCH);
       const hidden = p.entries.filter(([, b]) => b === "hidden");
       if (hidden.length === 0) continue;
       const without = p.entries.filter(([, b]) => b !== "hidden");
@@ -240,7 +241,7 @@ describe("the digest", () => {
 
   it("a bucket change on any single member changes the digest", () => {
     for (const seed of SEEDS.slice(0, 10)) {
-      const p = projectInbox(genProjectableRows(seed, 30, EPOCH), { showOld: false }, EPOCH);
+      const p = projectInbox(genProjectableRows(seed, 30, EPOCH), EPOCH);
       for (let i = 0; i < p.entries.length; i++) {
         const [, bucket] = p.entries[i];
         const other: InboxBucket = bucket === "working" ? "done" : "working";

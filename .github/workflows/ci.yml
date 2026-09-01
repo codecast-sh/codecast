@@ -98,16 +98,14 @@ jobs:
 
       - name: Unit tests (shared/contracts — capability layer)
         working-directory: packages/shared
-        # The capability contracts, the resolver and the fleet diff are read by
-        # the CLI, the daemon, Convex and the browser, so a regression here is a
-        # regression everywhere — and until this step existed nothing in CI ran
-        # them at all.
-        #
-        # Named files rather than `bun test contracts/` for the same reason the
-        # step above is scoped: contracts/modelOptions.test.ts currently fails
-        # for unrelated reasons, and a step that is red on arrival teaches people
-        # to ignore it. Widen this to the whole directory once that is green.
-        run: bun test contracts/capabilities.test.ts contracts/capabilityResolver.test.ts contracts/fleetDiff.test.ts
+        # The contracts are read by the CLI, the daemon, Convex and the browser,
+        # so a regression here is a regression everywhere. The whole directory:
+        # the capability layer, and the shared inbox projection with its golden
+        # hash gate (tied to INBOX_PROJECTION_VERSION), digest vector and
+        # property suite — the validation plan in
+        # docs/architecture/sync-convergence.md rests on these running on every
+        # merge.
+        run: bun test contracts/
 
   test-cli:
     runs-on: ubuntu-latest

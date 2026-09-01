@@ -510,8 +510,7 @@ export const NEEDS_INPUT_PERMISSION_CHECK_DELAY_MS = 10_000;
 // patch (message_count) settle before the dedupe key is computed.
 export const NEEDS_INPUT_AUQ_CHECK_DELAY_MS = 2_000;
 
-// Daemon liveness window shared by the needs-input check. 90s everywhere:
-// conversations.ts (INBOX_HEARTBEAT_ALIVE_MS / HEARTBEAT_ALIVE_MS) keeps its
-// own local copies that predate this export.
+// Daemon liveness window shared by the needs-input check, the inbox scan and
+// the projection deadlines (conversations.ts imports it).
 export const HEARTBEAT_ALIVE_MS = 90 * 1000;
 

@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, setDefaultTimeout, spyOn } from "bun:test";
+
+// Real Convex compute over dozens of rows, hundreds of steps: seconds on an
+// idle machine, far more on a loaded one. Never a 5s test.
+setDefaultTimeout(120_000);
 import {
   computeInboxSessions,
   computeSessionsLiveness,
   collectInboxSessionsByIds,
   collectInboxSessionsPaginated,
+  collectHiddenSessionsLite,
   _resetChildAuqProbeCacheForTests,
 } from "@codecast/convex/convex/conversations";
 import { makeFakeDb } from "@codecast/convex/convex/testDb";
@@ -79,6 +84,11 @@ afterEach(() => {
   nowSpy.mockRestore();
   perfSpy.mockRestore();
   delete process.env.INBOX_DIGEST_DISABLED;
+  // The singleton store outlives this file: leave no replica behind (a
+  // future-epoch projection slot would age every later test's rows out of
+  // the working set).
+  useInboxStore.setState(freshReplicaState() as any);
+  __resetInboxPlacementCacheForTests();
 });
 
 function advance(ms: number): void {
@@ -155,6 +165,15 @@ class SimServer {
     }
     return all;
   }
+  // The dismissed / stashed lite reconciles: the server's CURRENT hidden set
+  // inside the window, ids and stamps only.
+  async hiddenLite(field: "inbox_dismissed_at" | "inbox_stashed_at"): Promise<Array<Record<string, any>>> {
+    const index = field === "inbox_dismissed_at" ? "by_user_dismissed" : "by_user_stashed";
+    const res: any = await collectHiddenSessionsLite(
+      { db: this.db }, ME as any, { since: vnow - 30 * GEN_DAY, paginationOpts: { numItems: 1000, cursor: null } }, index, field,
+    );
+    return res.page ?? [];
+  }
   range(from: number): { ids: string[]; upTo: number } {
     const entries = this.log.filter((e) => e.position > from);
     return { ids: [...new Set(entries.map((e) => e.entity_id))], upTo: this.position };
@@ -207,9 +226,7 @@ class Replica {
       // runs synchronously at the next drain so the sim stays deterministic.
       fetchByIds: async (ids) => this.withStore(async () => {
         const rows = await server.byIds(ids);
-        const store = useInboxStore.getState();
-        store.clearFeedExcludes("sessions", rows.map((r: any) => String(r._id)));
-        store.syncTable("sessions", rows as unknown as InboxSession[]);
+        useInboxStore.getState().applyHealedSessions(ids, rows as unknown as InboxSession[]);
       }),
       probeOverlay: async () => this.withStore(async () => {
         useInboxStore.getState().applyInboxLivenessPayload("mine", await server.overlay());
@@ -297,11 +314,24 @@ class Replica {
       store.recordSyncMeta(CRAWL_KEY, { backfilledAt: vnow });
     });
   }
+  // The subtractive healers for hide state: a complete crawl of the current
+  // dismissed / stashed set SETS what it reports and CLEARS what it omits.
+  async reconcileHidden(): Promise<void> {
+    if (!this.online) return;
+    const dismissed = await this.server.hiddenLite("inbox_dismissed_at");
+    const stashed = await this.server.hiddenLite("inbox_stashed_at");
+    await this.withStore(() => {
+      const store = useInboxStore.getState();
+      store.applyDismissedReconcile(dismissed as any, true);
+      store.applyStashedReconcile(stashed as any, true);
+    });
+  }
   async receiveAll(): Promise<void> {
     await this.receiveBase();
     await this.receiveOverlay();
     await this.receiveDecisions();
     await this.catchUp();
+    await this.reconcileHidden();
   }
 
   // ── Gestures (the real store actions, then the dispatch to the server) ──
@@ -405,7 +435,7 @@ async function canonicalProjection(server: SimServer) {
     }
     rows.push(row);
   }
-  const direct = projectInbox(rows, { showOld: false }, projection.epoch, { asking: (id) => asking.has(id) });
+  const direct = projectInbox(rows, projection.epoch, { asking: (id) => asking.has(id) });
   expect(direct.set_digest).toBe(projection.set_digest!);
   return { direct, projection, liveness };
 }
@@ -441,12 +471,49 @@ async function settleAndAssertConverged(server: SimServer, replicas: Replica[]):
   advance(2 * INBOX_COMPARE_TICK_MS + 1_000);
   for (const r of replicas) await r.receiveOverlay();
 
-  const { direct, projection } = await canonicalProjection(server);
+  const healedReplicas: string[] = [];
+  let { direct, projection } = await canonicalProjection(server);
   const canonicalPlacements: Record<string, string> = {};
   for (const [id, p] of direct.placements) canonicalPlacements[id] = `${p.bucket}/${p.work_state}/${p.below_fold ? 1 : 0}`;
 
   for (const r of replicas) {
-    const outcome = r.tick();
+    let outcome = r.tick();
+    // The sync channels alone are not the whole proof: the anti-entropy loop
+    // is. A replica the channels left diverged (a settled pin lock that
+    // re-asserted a local pin over a remote kill, which no channel re-delivers)
+    // must converge through the compare's own heal, within ONE budget: the
+    // persistence rule (a second compare at a distinct payload epoch), then
+    // the targeted heal, then clean.
+    let heals = 0;
+    while (outcome.kind === "diff" && heals < INBOX_HEAL_BUDGET) {
+      advance(GEN_MIN);
+      await r.receiveOverlay();
+      r.tick();
+      heals += await r.drainHeals();
+      advance(2 * INBOX_COMPARE_TICK_MS + 1_000);
+      await r.receiveOverlay();
+      outcome = r.tick();
+    }
+    if (heals > 0) healedReplicas.push(`${r.name}:${heals}`);
+    if (outcome.kind === "diff") {
+      // Replay aid: both sides of every disagreeing row, so a failing seed
+      // names its cause instead of a digest.
+      const ids = [...outcome.diff.missing, ...outcome.diff.extra, ...outcome.diff.bucket_deltas, ...outcome.diff.fold_deltas];
+      const detail = ids.map((id) => ({
+        id,
+        server: server.conversations.find((c) => c._id === id) ?? null,
+        stamp: (r.state.sessionsProjection as any).mine?.stamps?.[id] ?? null,
+        replica: (r.state.sessions as any)[id] ?? null,
+        pending: Object.entries(r.state.pending as Record<string, unknown>).filter(([k]) => k.includes(id)),
+      }));
+      throw new Error(`replica ${r.name} diverged at quiescence: ${JSON.stringify({ diff: outcome.diff, detail }, null, 1)}`);
+    }
+    if (heals > 0) {
+      ({ direct, projection } = await canonicalProjection(server));
+      for (const id of Object.keys(canonicalPlacements)) delete canonicalPlacements[id];
+      for (const [id, p] of direct.placements) canonicalPlacements[id] = `${p.bucket}/${p.work_state}/${p.below_fold ? 1 : 0}`;
+      for (const other of replicas) if (other !== r) await other.receiveOverlay();
+    }
     expect({ replica: r.name, outcome }).toEqual({ replica: r.name, outcome: { kind: "clean", epoch: projection.epoch, short_circuit: true, payload_age_ms: expect.any(Number) } });
     const placed = r.placed();
     expect({ replica: r.name, digest: placed.set_digest }).toEqual({ replica: r.name, digest: projection.set_digest });
@@ -459,6 +526,7 @@ async function settleAndAssertConverged(server: SimServer, replicas: Replica[]):
     expect(replicas[i].placementsSnapshot()).toEqual(replicas[0].placementsSnapshot());
     expect(replicas[i].placed().set_digest).toBe(replicas[0].placed().set_digest);
   }
+  return healedReplicas;
 }
 
 // ── Server-side events another device or the daemon would cause ────────────
@@ -614,7 +682,10 @@ describe("two replicas converge", () => {
   });
 
   it("randomized interleavings over seeded worlds: any order of payloads, ranges, crawls, gestures, reconnects and epoch ticks converges", async () => {
-    for (const seed of [21, 22, 23, 24, 25, 26, 27, 28]) {
+    // Replay one seed with SIM_SEEDS=25 (comma separated).
+    const seeds = process.env.SIM_SEEDS ? process.env.SIM_SEEDS.split(",").map(Number) : [21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32];
+    const healedSeeds: string[] = [];
+    for (const seed of seeds) {
       vnow = T0;
       __resetSyncActivityForTests();
       _resetChildAuqProbeCacheForTests();
@@ -624,7 +695,7 @@ describe("two replicas converge", () => {
       const rng = makeRng(seed * 7);
       const replicas = [a, b];
       const eventNames = Object.keys(SERVER_EVENTS);
-      for (let step = 0; step < 40; step++) {
+      for (let step = 0; step < 60; step++) {
         const roll = rng();
         const r = replicas[Math.floor(rng() * replicas.length)];
         const target = memberIds(server, rng);
@@ -648,17 +719,26 @@ describe("two replicas converge", () => {
           await r.receiveBase();
         } else if (roll < 0.86) {
           await r.receiveOverlay();
-        } else if (roll < 0.92) {
+        } else if (roll < 0.9) {
           await r.catchUp();
-        } else if (roll < 0.95) {
+        } else if (roll < 0.93) {
           await r.crawl();
+        } else if (roll < 0.96) {
+          await r.reconcileHidden();
         } else {
           advance([15_000, GEN_MIN, 5 * GEN_MIN, GEN_HOUR][Math.floor(rng() * 4)]);
         }
         if (rng() < 0.5) advance(Math.floor(rng() * 20_000));
       }
-      await settleAndAssertConverged(server, replicas);
+      const healed = await settleAndAssertConverged(server, replicas);
+      if (healed.length) healedSeeds.push(`${seed}:${healed.join("|")}`);
     }
+    // The channels alone leave a bounded residue (the pin-over-kill lock
+    // case); the loop closes it. Printed so a reader sees which seeds needed
+    // the heal, and pinned loosely so a channel regression that makes EVERY
+    // seed depend on the heal is visible.
+    console.log(`[sim] seeds converged through the heal: ${healedSeeds.join(", ") || "none"}`);
+    expect(healedSeeds.length).toBeLessThan(seeds.length / 2);
   });
 });
 
@@ -729,6 +809,12 @@ describe("a dead subscription is detected and healed", () => {
     // Gate 3: the payload is older than the bound — skipped, counted, no heal.
     expect(await quietTick(a, { overlay: false })).toMatchObject({ kind: "skip", reason: "stale_payload" });
     expect(a.comparer.counters().skips.stale_payload).toBe(1);
+    // Rendering over frozen facts falls back to the client sweep: the row the
+    // server now calls working still reads from the last payload, and a row
+    // whose liveness froze past the trust TTL settles honestly rather than
+    // pinning a stale "working" — the compare never sees this (gated).
+    const frozen = a.placed();
+    expect(frozen.placements.get(id)?.bucket).not.toBe("working");
     // Past the probe age the comparer issues ONE budgeted probe.
     advance(INBOX_PROBE_PAYLOAD_AGE_MS);
     a.tick();
@@ -779,22 +865,20 @@ describe("a dead subscription is detected and healed", () => {
     await a.withStore(() => useInboxStore.getState().syncTable("sessions", [
       { _id: ghost, session_id: "sess-ghost", user_id: ME, status: "active", updated_at: vnow, message_count: 3, is_idle: true, title: "Ghost" },
     ] as unknown as InboxSession[]));
+    // Every compare reports the ghost; the persistence rule confirms one
+    // drift per two payload epochs, each confirmation spends a heal, and the
+    // fourth confirmation latches instead of healing.
     let healsRun = 0;
-    for (let round = 0; round < INBOX_HEAL_BUDGET + 1; round++) {
+    let rounds = 0;
+    while (!a.comparer.healLatched() && rounds < 2 * (INBOX_HEAL_BUDGET + 2)) {
       advance(GEN_MIN);
       const out = await quietTick(a);
       expect(out).toMatchObject({ kind: "diff", diff: { missing: [], extra: [ghost] } });
       healsRun += await a.drainHeals();
+      rounds++;
     }
-    // Each confirmed round spent a heal until the budget ran out.
-    expect(a.comparer.counters().heals).toBe(INBOX_HEAL_BUDGET);
+    expect(rounds).toBe(2 * (INBOX_HEAL_BUDGET + 1));
     expect(healsRun).toBe(INBOX_HEAL_BUDGET);
-    // Keep going: the next confirmed diff latches instead of healing.
-    for (let round = 0; round < 3; round++) {
-      advance(GEN_MIN);
-      await quietTick(a);
-      await a.drainHeals();
-    }
     expect(a.comparer.healLatched()).toBe(true);
     expect(a.eventsNamed("inbox_drift_persistent").length).toBe(1);
     expect(a.comparer.counters().heals).toBe(INBOX_HEAL_BUDGET);

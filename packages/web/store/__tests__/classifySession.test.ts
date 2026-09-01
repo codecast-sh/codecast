@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
+import { classifyWorkState, type WorkState } from "@codecast/shared/contracts";
 import {
   classifySession,
   isSessionEffectivelyIdle,
-  isSessionWaitingForInput,
+  verdictOfWorkState,
   type InboxSession,
 } from "../inboxStore";
 
@@ -19,20 +20,51 @@ const sess = (extra: Partial<InboxSession> = {}): InboxSession => ({
   ...extra,
 });
 
-describe("classifySession", () => {
-  it("matches the underlying predicates it memoizes", () => {
+// The SHARED work state a row's raw facts produce (no staleness sweep, no
+// trust decay — those are the chokepoint's time-driven inputs).
+const sharedWorkState = (s: InboxSession): WorkState =>
+  classifyWorkState({
+    agentStatus: s.agent_status ?? undefined,
+    isIdle: !!s.is_idle,
+    awaitingInput: !!s.awaiting_input,
+    hasPending: !!s.has_pending,
+    isUnresponsive: !!s.is_unresponsive,
+    messageCount: s.message_count ?? 0,
+    killed: !!s.inbox_killed_at,
+    pendingApiError: s.pending_api_error === true,
+    settleVerdict: s.settle_verdict ?? null,
+    declaredStatus: s.thread_state_status ?? null,
+  });
+
+describe("classifySession is a thin adapter over the shared classifier (no second classifier)", () => {
+  it("equals verdictOfWorkState(classifyWorkState(row)) on every branch", () => {
     for (const s of [
       sess({ is_idle: true }),
       sess({ awaiting_input: true }),
       sess({ agent_status: "permission_blocked", message_count: 2 }),
       sess({ agent_status: "running", is_idle: false }),
       sess({ message_count: 0 }),
+      sess({ agent_status: "stopped" }),
+      sess({ is_unresponsive: true, is_idle: false, has_pending: true }),
+      sess({ agent_status: "dormant" }),
+      sess({ agent_status: "done" }),
+      sess({ settle_verdict: "done" }),
+      sess({ thread_state_status: "blocked", settle_verdict: "done" }),
+      sess({ inbox_killed_at: 5, agent_status: "working", is_idle: false }),
+      sess({ pending_api_error: true, agent_status: "working", is_idle: false }),
     ]) {
       const c = classifySession(s);
-      expect(c.idle).toBe(isSessionEffectivelyIdle(s));
-      // The memo stores the NO-in-flight verdict (categorize layers in-flight on top).
-      expect(c.waiting).toBe(isSessionWaitingForInput(s));
+      expect(c).toEqual(verdictOfWorkState(sharedWorkState(s)));
+      expect(isSessionEffectivelyIdle(s)).toBe(c.idle);
     }
+  });
+
+  it("an unresponsive row with queued work is NEEDS INPUT — the arm the legacy chain never had (ct: two-replica simulation)", () => {
+    // message_count 12, is_idle false, has_pending true, no status: the
+    // legacy isSessionWaitingForInput read `canDeliver && has_pending` as
+    // working; the shared rule files a dead daemon's queue as a hard block.
+    const c = classifySession(sess({ message_count: 12, is_idle: false, has_pending: true, is_unresponsive: true }));
+    expect(c).toEqual({ idle: true, waiting: true, rest: "needs_input" });
   });
 
   it("is identity-stable: the same object reference reuses the cached verdict", () => {

@@ -141,6 +141,7 @@ export function TriageBar() {
     if (!activeId) return;
     if (verb.id === "defer" || verb.id === "dormant") triage.park(activeId, verb.id, "button");
     else if (verb.id === "stash" || verb.id === "kill") triage.hide(activeId, verb.id, "button");
+    else if (verb.id === "hide") triage.hide(activeId, "stash", "button", { hidden: true });
     else if (verb.id === "pin") triage.pin(activeId);
     else if (verb.id === "label") triage.label(activeId);
     // Label opens a picker; flashing "Labeled" before a label is chosen would

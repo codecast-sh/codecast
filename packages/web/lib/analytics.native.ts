@@ -9,6 +9,8 @@ export function initAnalytics() {}
 export function identifyUser(_userId: string, _traits?: Record<string, unknown>) {}
 export function resetUser() {}
 export function track(_event: string, _properties?: Record<string, unknown>) {}
+export type AnalyticsPlatform = "desktop" | "web" | "mobile";
+export function getPlatform(): AnalyticsPlatform { return "mobile"; }
 export function captureError(_error: Error, _context?: Record<string, unknown>) {}
 export function setupErrorToasts() {}
 export const Sentry = undefined as any;

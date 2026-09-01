@@ -225,7 +225,7 @@
     {
       "_id": "mid_grace",
       "status": "active",
-      "updated_at": "E-26m",
+      "updated_at": "E-30s",
       "message_count": 5,
       "is_idle": false
     },
@@ -386,6 +386,22 @@
       "message_count": 3,
       "is_idle": true,
       "inbox_killed_at": "E-1h"
+    },
+    {
+      "_id": "quiet_unanswered",
+      "status": "active",
+      "updated_at": "E-26m",
+      "message_count": 5,
+      "is_idle": false
+    },
+    {
+      "_id": "unresponsive_not_idle",
+      "status": "active",
+      "updated_at": "E-3h",
+      "message_count": 5,
+      "is_idle": false,
+      "is_unresponsive": true,
+      "has_pending_messages": true
     }
   ],
   "expected": {
@@ -395,10 +411,10 @@
         "questions": 1,
         "pinned": 3,
         "new": 2,
-        "needs_input": 17,
+        "needs_input": 18,
         "done": 3,
         "dormant": 6,
-        "working": 3,
+        "working": 4,
         "idle": 0,
         "stashed": 1,
         "dismissed": 1,
@@ -418,7 +434,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "64f894581fb377a2",
+    "set_digest": "ab847b4985bf1a3d",
     "placements": {
       "anchorblockedz130000000000000000": [
         "needs_input",
@@ -555,6 +571,11 @@
         "working",
         false
       ],
+      "quietunansweredz1500000000000000": [
+        "working",
+        "working",
+        false
+      ],
       "rowdonenodaemonz1500000000000000": [
         "done",
         "done",
@@ -582,6 +603,11 @@
       ],
       "stashedz700000000000000000000000": [
         "stashed",
+        "needs_input",
+        false
+      ],
+      "unresponsivenotidlez190000000000": [
+        "needs_input",
         "needs_input",
         false
       ],

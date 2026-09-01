@@ -250,7 +250,11 @@ export function warmVisibleSessions(convex: ConvexClient): void {
 
 // Dev console access (same convention as window.__inboxStore): the last pass
 // and the shared in-flight/synced maps, for verifying the loop in a browser.
+// NODE_ENV (not import.meta.env.DEV): this module reaches the Expo bundle
+// through useSyncCore, and Hermes cannot parse `import.meta`; both Vite and
+// Metro statically replace NODE_ENV.
+declare const process: { env: { NODE_ENV?: string } };
 let lastPass: { at: number; planned: number; kinds: string[] } | null = null;
-if (typeof window !== "undefined" && import.meta.env?.DEV) {
+if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
   (window as any).__inboxWarm = { get lastPass() { return lastPass; }, inFlight, syncedCount };
 }

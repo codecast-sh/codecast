@@ -68,11 +68,48 @@ export const TRIAGE_PENDING_FIELDS = [
   "is_deferred",
 ] as const;
 
+// A queued/optimistic outbound message is a "pending send" until the server
+// echoes it back (which prunes it) or it fails. This is the durable,
+// persisted, local-first signal that we've sent something and are waiting to
+// confirm delivery — independent of whether ConversationView is mounted.
+export function convHasPendingSend(pending?: Array<{ _isFailed?: boolean }>): boolean {
+  return !!pending?.some((m) => !m._isFailed);
+}
+
+// Conversation ids that currently have an unconfirmed outbound message.
+export function sessionsWithPendingSend(
+  pendingMessages: Record<string, Array<{ _isFailed?: boolean }>>,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const id in pendingMessages) {
+    if (convHasPendingSend(pendingMessages[id])) ids.add(id);
+  }
+  return ids;
+}
+
+// Session ids whose blocked-banner revive request is still inside the trust
+// window — the `revive` overlay's member set. The chokepoint folds these into
+// the in-flight set (the same "the user already acted" forcing a queued send
+// gets) and the banner/pill excludes them, so clicking continue/switch moves
+// the fleet instantly.
+export function freshReviveRequestIds(
+  reviveRequestedAt: Record<string, number> | undefined,
+  now: number,
+): Set<string> {
+  const ids = new Set<string>();
+  if (!reviveRequestedAt) return ids;
+  for (const id in reviveRequestedAt) {
+    if (now - reviveRequestedAt[id] < BLOCKED_REVIVE_TTL_MS) ids.add(id);
+  }
+  return ids;
+}
+
 // The store state the overlay predicates read. Structural (never the store
 // type itself) so the compare module and tests can hand in plain objects.
 export type InboxOverlayState = {
   sessions: Record<string, { _id: string; _hasDraft?: boolean } & Record<string, any>>;
   pending: Record<string, { type: string; ts?: number } & Record<string, any>>;
+  pendingMessages?: Record<string, Array<{ _isFailed?: boolean }>>;
   pendingSessionCreates: Record<string, unknown>;
   currentSessionId: string | null;
   sessionsWithQueuedMessages: ReadonlySet<string>;
@@ -90,8 +127,8 @@ export type InboxOverlayDeps = {
   triagePendingIds: ReadonlySet<string>;
   /** Queued (Ctrl+Enter) or optimistic pending sends still unconfirmed. */
   pendingSendIds: ReadonlySet<string>;
-  /** Blocked-banner revive stamps (bounded by BLOCKED_REVIVE_TTL_MS). */
-  reviveRequestedAt: Readonly<Record<string, number>>;
+  /** Blocked-banner revive stamps still inside BLOCKED_REVIVE_TTL_MS. */
+  reviveIds: ReadonlySet<string>;
   /** Kept-draft blank stubs (`_hasDraft`) rendered as local `new` rows. */
   draftIds: ReadonlySet<string>;
 };
@@ -129,26 +166,32 @@ export function collectInboxOverlayDeps(
   for (const id in state.sessions) {
     if (state.sessions[id]?._hasDraft) draftIds.add(id);
   }
+  // The pending_send members: a queued (Ctrl+Enter) send and an optimistic
+  // outbox entry are the same "the user already acted" signal.
+  const pendingSendIds = opts?.pendingSendIds
+    ?? new Set([...state.sessionsWithQueuedMessages, ...sessionsWithPendingSend(state.pendingMessages ?? {})]);
   return {
     now,
     focusedId: state.currentSessionId ?? null,
     pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates ?? {})),
     triagePendingIds: collectTriagePendingIds(state.pending ?? {}, now),
-    pendingSendIds: opts?.pendingSendIds ?? new Set([...state.sessionsWithQueuedMessages]),
-    reviveRequestedAt: state.blockedReviveRequestedAt ?? {},
+    pendingSendIds,
+    reviveIds: freshReviveRequestIds(state.blockedReviveRequestedAt, now),
     draftIds,
   };
 }
 
 // Which declared overlays currently touch this id. Order matches the alphabet.
+// THE predicate list: the compare's carve-out and the chokepoint's keep /
+// in-flight rules all derive from this one function, so an overlay cannot be
+// honored by the renderer and missed by the compare (or the reverse).
 export function overlaysAffecting(id: string, deps: InboxOverlayDeps): DeclaredInboxOverlay[] {
   const out: DeclaredInboxOverlay[] = [];
   if (!isConvexId(id) || deps.pendingCreateIds.has(id)) out.push("create_stub");
   if (deps.triagePendingIds.has(id)) out.push("triage_gesture");
   if (deps.focusedId != null && id === deps.focusedId) out.push("focused");
   if (deps.pendingSendIds.has(id)) out.push("pending_send");
-  const revivedAt = deps.reviveRequestedAt[id];
-  if (revivedAt != null && deps.now - revivedAt < BLOCKED_REVIVE_TTL_MS) out.push("revive");
+  if (deps.reviveIds.has(id)) out.push("revive");
   if (deps.draftIds.has(id)) out.push("draft_blank");
   return out;
 }
@@ -157,26 +200,21 @@ export function overlaysAffecting(id: string, deps: InboxOverlayDeps): DeclaredI
 // is dropped from the per-row diff — local deviation there is intentional,
 // bounded, and self-healing, never drift.
 export function isOverlayAffected(id: string, deps: InboxOverlayDeps): boolean {
-  if (!isConvexId(id) || deps.pendingCreateIds.has(id)) return true;
-  if (deps.triagePendingIds.has(id)) return true;
-  if (deps.focusedId != null && id === deps.focusedId) return true;
-  if (deps.pendingSendIds.has(id)) return true;
-  const revivedAt = deps.reviveRequestedAt[id];
-  if (revivedAt != null && deps.now - revivedAt < BLOCKED_REVIVE_TTL_MS) return true;
-  return deps.draftIds.has(id);
+  return overlaysAffecting(id, deps).length > 0;
 }
 
 // True while ANY declared overlay is active — the digest short-circuit gate:
 // with no overlay active a matching digest proves convergence outright; with
 // one active the compare must fall through to the per-row diff so it can drop
-// exactly the affected ids.
+// exactly the affected ids. Derived from the deps sizes: every per-id set in
+// overlaysAffecting, plus the focused id.
 export function anyOverlayActive(deps: InboxOverlayDeps): boolean {
-  if (deps.pendingCreateIds.size > 0) return true;
-  if (deps.triagePendingIds.size > 0) return true;
-  if (deps.focusedId != null) return true;
-  if (deps.pendingSendIds.size > 0) return true;
-  for (const id in deps.reviveRequestedAt) {
-    if (deps.now - deps.reviveRequestedAt[id] < BLOCKED_REVIVE_TTL_MS) return true;
-  }
-  return deps.draftIds.size > 0;
+  return (
+    deps.focusedId != null ||
+    deps.pendingCreateIds.size > 0 ||
+    deps.triagePendingIds.size > 0 ||
+    deps.pendingSendIds.size > 0 ||
+    deps.reviveIds.size > 0 ||
+    deps.draftIds.size > 0
+  );
 }

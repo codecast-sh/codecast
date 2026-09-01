@@ -5,7 +5,7 @@ import {
   isSessionHidden,
   isSessionKilled,
   isSessionEffectivelyIdle,
-  isSessionWaitingForInput,
+  classifySession,
   useInboxStore,
   type InboxSession,
 } from "../inboxStore";
@@ -57,6 +57,11 @@ describe("isSessionKilled", () => {
   });
 });
 
+// The web reads the SHARED classifier through classifySession; `waiting` is
+// its settled verdict (needs_input / done / dormant), so a killed row — filed
+// `idle` by the killed precedence — never waits.
+const waits = (s: InboxSession) => classifySession(s).waiting;
+
 describe("killed precedence in the shared classifiers", () => {
   it("a killed row is effectively idle even while its agent_status still says working", () => {
     expect(isSessionEffectivelyIdle(killed({ agent_status: "working", is_idle: false }))).toBe(true);
@@ -69,28 +74,28 @@ describe("killed precedence in the shared classifiers", () => {
   });
 
   it("a killed row never waits for input — not on an open poll", () => {
-    expect(isSessionWaitingForInput(killed({ awaiting_input: true }))).toBe(false);
-    expect(isSessionWaitingForInput(session(REAL_A, { awaiting_input: true }))).toBe(true);
+    expect(waits(killed({ awaiting_input: true }))).toBe(false);
+    expect(waits(session(REAL_A, { awaiting_input: true }))).toBe(true);
   });
 
   it("a killed row never waits for input — not on a permission block", () => {
-    expect(isSessionWaitingForInput(killed({ agent_status: "permission_blocked" }))).toBe(false);
-    expect(isSessionWaitingForInput(session(REAL_A, { agent_status: "permission_blocked" }))).toBe(true);
+    expect(waits(killed({ agent_status: "permission_blocked" }))).toBe(false);
+    expect(waits(session(REAL_A, { agent_status: "permission_blocked" }))).toBe(true);
   });
 
   it("a killed row never waits for input — not on an unresolved auth banner", () => {
-    expect(isSessionWaitingForInput(killed({ pending_api_error: true }))).toBe(false);
-    expect(isSessionWaitingForInput(session(REAL_A, { pending_api_error: true }))).toBe(true);
+    expect(waits(killed({ pending_api_error: true }))).toBe(false);
+    expect(waits(session(REAL_A, { pending_api_error: true }))).toBe(true);
   });
 
   it("a killed row never waits for input — not as a dead agent with output", () => {
-    expect(isSessionWaitingForInput(killed({ agent_status: "stopped" }))).toBe(false);
-    expect(isSessionWaitingForInput(session(REAL_A, { agent_status: "stopped" }))).toBe(true);
+    expect(waits(killed({ agent_status: "stopped" }))).toBe(false);
+    expect(waits(session(REAL_A, { agent_status: "stopped" }))).toBe(true);
   });
 
   it("a killed row never waits for input — not as a plain finished turn", () => {
-    expect(isSessionWaitingForInput(killed({ is_idle: true }))).toBe(false);
-    expect(isSessionWaitingForInput(session(REAL_A, { is_idle: true }))).toBe(true);
+    expect(waits(killed({ is_idle: true }))).toBe(false);
+    expect(waits(session(REAL_A, { is_idle: true }))).toBe(true);
   });
 });
 

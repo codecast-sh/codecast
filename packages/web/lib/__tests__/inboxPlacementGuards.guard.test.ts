@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { MOBILE_ROOT, WEB_ROOT, offendersUnder } from "./sourceWalk";
 
 // THE PLACEMENT CHOKEPOINT GUARD (docs/architecture/sync-convergence.md C5).
 //
@@ -21,42 +22,13 @@ import { join } from "node:path";
 // If this fails on new code, call placeInboxRows (or read its returned
 // sections/placements/tally) — do not re-create a classifier.
 
-const WEB_ROOT = join(import.meta.dir, "..", "..");
-const MOBILE_ROOT = join(WEB_ROOT, "..", "mobile");
+// The deleted classifiers, and the deleted per-row chain (sync-convergence
+// C3: `isSessionWaitingForInput` / `sessionRestState` / `isSessionHardWaiting`
+// were deleted, not wrapped — classifySession is a thin adapter over the
+// shared work state).
+const BANNED = /\b(categorizeSessions|categorizeMineSessions|partitionOldSessions|liftQuestions|isSessionWaitingForInput|sessionRestState|isSessionHardWaiting)\b/;
 
-const BANNED = /\b(categorizeSessions|categorizeMineSessions|partitionOldSessions|liftQuestions)\b/;
-
-function walk(dir: string, out: string[] = []): string[] {
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return out;
-  }
-  for (const name of entries) {
-    if (name === "node_modules" || name === "__tests__" || name === ".next" || name === ".expo") continue;
-    const full = join(dir, name);
-    if (statSync(full).isDirectory()) walk(full, out);
-    else if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name)) out.push(full);
-  }
-  return out;
-}
-
-function offendersIn(root: string, dirs: string[]): string[] {
-  const offenders: string[] = [];
-  for (const dir of dirs) {
-    for (const file of walk(join(root, dir))) {
-      const rel = file.slice(root.length + 1);
-      const src = readFileSync(file, "utf8");
-      src.split("\n").forEach((line, i) => {
-        const t = line.trim();
-        if (t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")) return;
-        if (BANNED.test(line)) offenders.push(`${rel}:${i + 1}: ${t}`);
-      });
-    }
-  }
-  return offenders;
-}
+const offendersIn = (root: string, dirs: string[]) => offendersUnder(root, dirs, BANNED);
 
 describe("the deleted classifiers stay deleted (placeInboxRows is the chokepoint)", () => {
   test("web: no source file references a deleted classifier", () => {

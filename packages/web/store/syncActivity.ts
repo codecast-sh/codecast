@@ -19,7 +19,11 @@ let _lastApplyMono = Number.NEGATIVE_INFINITY;
 let _applySeq = 0;
 const _inflight: Record<SyncInflightKind, number> = { range: 0, crawl: 0, poll: 0 };
 
-function mono(): number {
+// Receipt clock for payload age (sync-convergence C2): monotonic where
+// available — immune to wall-clock jumps across sleep/NTP — with Date.now()
+// as the last resort. The ONE receipt clock: the store's applier, the compare
+// and this module all read it from here.
+export function monotonicNow(): number {
   return typeof performance !== "undefined" && typeof performance.now === "function"
     ? performance.now()
     : Date.now();
@@ -27,7 +31,7 @@ function mono(): number {
 
 /** A row channel applied a payload (syncTable on a replica collection). */
 export function noteSyncApply(): void {
-  _lastApplyMono = mono();
+  _lastApplyMono = monotonicNow();
   _applySeq++;
 }
 

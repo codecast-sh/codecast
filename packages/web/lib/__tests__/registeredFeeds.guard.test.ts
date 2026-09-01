@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { walkSources } from "./sourceWalk";
 import { join } from "node:path";
 import { REGISTERED_FEEDS } from "../../store/clientSyncRegistry";
 
@@ -25,15 +26,7 @@ const ALLOWED = new Map<string, string>([
   ["components/DashboardSyncEffects.tsx", "mounts the app-wide feeders"],
 ]);
 
-function walk(dir: string, out: string[] = []): string[] {
-  for (const name of readdirSync(dir)) {
-    if (name === "node_modules" || name === "__tests__" || name === ".next") continue;
-    const full = join(dir, name);
-    if (statSync(full).isDirectory()) walk(full, out);
-    else if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name)) out.push(full);
-  }
-  return out;
-}
+const walk = (dir: string) => walkSources(dir);
 
 describe("registered feeds are subscribed only by feeder hooks", () => {
   test("no component or page subscribes directly to a query registered as a store feed", () => {

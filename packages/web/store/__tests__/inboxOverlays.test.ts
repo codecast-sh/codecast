@@ -6,6 +6,7 @@ import {
   anyOverlayActive,
   collectInboxOverlayDeps,
   collectTriagePendingIds,
+  freshReviveRequestIds,
   isOverlayAffected,
   overlaysAffecting,
   type InboxOverlayDeps,
@@ -28,7 +29,7 @@ const emptyDeps = (over: Partial<InboxOverlayDeps> = {}): InboxOverlayDeps => ({
   pendingCreateIds: new Set(),
   triagePendingIds: new Set(),
   pendingSendIds: new Set(),
-  reviveRequestedAt: {},
+  reviveIds: new Set(),
   draftIds: new Set(),
   ...over,
 });
@@ -67,12 +68,33 @@ describe("overlaysAffecting / isOverlayAffected", () => {
   });
 
   it("the revive overlay expires at BLOCKED_REVIVE_TTL_MS — bounded, then the server flag resurfaces", () => {
-    const fresh = emptyDeps({ reviveRequestedAt: { [CID]: NOW - BLOCKED_REVIVE_TTL_MS + 1 } });
+    // freshReviveRequestIds is the ONE revive predicate: the deps carry its
+    // result, so the chokepoint, the banner and the compare read one set.
+    const fresh = emptyDeps({ reviveIds: freshReviveRequestIds({ [CID]: NOW - BLOCKED_REVIVE_TTL_MS + 1 }, NOW) });
     expect(overlaysAffecting(CID, fresh)).toEqual(["revive"]);
     expect(isOverlayAffected(CID, fresh)).toBe(true);
-    const expired = emptyDeps({ reviveRequestedAt: { [CID]: NOW - BLOCKED_REVIVE_TTL_MS } });
+    const expired = emptyDeps({ reviveIds: freshReviveRequestIds({ [CID]: NOW - BLOCKED_REVIVE_TTL_MS }, NOW) });
     expect(overlaysAffecting(CID, expired)).toEqual([]);
     expect(isOverlayAffected(CID, expired)).toBe(false);
+  });
+
+  it("isOverlayAffected and anyOverlayActive derive from the one predicate list", () => {
+    // Every per-id set flips both; there is no second hand-written list to
+    // fall out of step with overlaysAffecting.
+    for (const over of [
+      { pendingCreateIds: new Set([CID]) },
+      { triagePendingIds: new Set([CID]) },
+      { focusedId: CID },
+      { pendingSendIds: new Set([CID]) },
+      { reviveIds: new Set([CID]) },
+      { draftIds: new Set([CID]) },
+    ] as Array<Partial<InboxOverlayDeps>>) {
+      const deps = emptyDeps(over);
+      expect(overlaysAffecting(CID, deps).length).toBe(1);
+      expect(isOverlayAffected(CID, deps)).toBe(true);
+      expect(anyOverlayActive(deps)).toBe(true);
+    }
+    expect(anyOverlayActive(emptyDeps())).toBe(false);
   });
 
   it("a row can wear several overlays at once, in alphabet order", () => {

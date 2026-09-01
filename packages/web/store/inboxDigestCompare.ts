@@ -17,9 +17,8 @@
 // the whole loop is unit-testable without React, Convex or timers.
 import {
   INBOX_PROJECTION_VERSION,
-  INBOX_WINDOW_CAPS,
   inWorkingSet,
-  type InboxTruncation,
+  isWorkingSetWindow,
   type WorkingSetWindow,
 } from "@codecast/shared/contracts";
 import {
@@ -29,20 +28,21 @@ import {
   type InboxOverlayState,
 } from "./inboxOverlays";
 import {
-  monotonicNow,
+  INBOX_PAYLOAD_FRESH_MS,
   projectReplicaInbox,
-  sessionsWithPendingSend,
   type PlaceInboxState,
   type SessionsProjectionSlot,
 } from "./inboxStore";
-import { lastSyncApplyMono, syncInflightCount } from "./syncActivity";
+import { lastSyncApplyMono, monotonicNow, syncInflightCount } from "./syncActivity";
 
 // ── Constants (the pinned contract) ─────────────────────────────────────────
 
 /** The coarse tick the compare runs on. */
 export const INBOX_COMPARE_TICK_MS = 15_000;
-/** A payload older than this (receipt clock) is skipped: stale_payload. */
-export const INBOX_COMPARE_MAX_PAYLOAD_AGE_MS = 90_000;
+/** A payload older than this (receipt clock) is skipped: stale_payload. The
+ *  same bound past which the store stops trusting the payload's facts
+ *  (overlayCoverage), so the compare never runs over a sweep-adjusted row. */
+export const INBOX_COMPARE_MAX_PAYLOAD_AGE_MS = INBOX_PAYLOAD_FRESH_MS;
 /** Past this age a quiet scope gets ONE budgeted overlay probe (C2). */
 export const INBOX_PROBE_PAYLOAD_AGE_MS = 300_000;
 /** The stale-payload probe's slow budget: at most one per this window. */
@@ -98,6 +98,21 @@ export function isDriftDiffEmpty(d: InboxDriftDiff): boolean {
   return d.missing.length === 0 && d.extra.length === 0 && d.bucket_deltas.length === 0 && d.fold_deltas.length === 0;
 }
 
+// The ids that appear in BOTH diffs under the same category — the part of a
+// diff that persisted from one payload epoch to the next.
+export function intersectDriftDiff(a: InboxDriftDiff, b: InboxDriftDiff): InboxDriftDiff {
+  const keep = (xs: string[], ys: string[]) => {
+    const set = new Set(ys);
+    return xs.filter((id) => set.has(id));
+  };
+  return {
+    missing: keep(a.missing, b.missing),
+    extra: keep(a.extra, b.extra),
+    bucket_deltas: keep(a.bucket_deltas, b.bucket_deltas),
+    fold_deltas: keep(a.fold_deltas, b.fold_deltas),
+  };
+}
+
 export type InboxCompareOutcome =
   /** Kill switch (C8): the payload carries no digest. Compare AND heal off. */
   | { kind: "disabled" }
@@ -106,7 +121,8 @@ export type InboxCompareOutcome =
   | { kind: "diff"; epoch: number; diff: InboxDriftDiff; payload_age_ms: number; set_digest: string };
 
 export type InboxCompareContext = {
-  /** Wall clock: overlay bounds and trust decay (the server applied the same TTLs). */
+  /** Wall clock: overlay bounds ONLY. The projection itself is evaluated at
+   *  the payload's epoch (C2) — the device clock never enters the comparison. */
   now: number;
   /** Receipt clock: payload age. */
   nowMono: number;
@@ -117,11 +133,6 @@ export type InboxCompareContext = {
   /** Which stamp slot to evaluate. Only "mine" is covered (C4). */
   scopeKey?: string;
 };
-
-const WINDOW_KINDS: ReadonlySet<string> = new Set(Object.keys(INBOX_WINDOW_CAPS));
-function isWindowKind(t: InboxTruncation): t is WorkingSetWindow {
-  return WINDOW_KINDS.has(t);
-}
 
 function anyCrawlLoading(progress: InboxCompareState["syncProgress"]): boolean {
   for (const ns in progress) if (progress[ns]?.loading) return true;
@@ -166,21 +177,22 @@ export function evaluateInboxCompare(state: InboxCompareState, ctx: InboxCompare
     return { kind: "skip", reason: "truncated_windows", payload_age_ms };
   }
 
-  // The procedure. The replica's projection at the payload's epoch.
+  // The procedure. The replica's projection at the payload's epoch — `now`
+  // is the epoch too, so the trust decay is applied exactly where the server
+  // applied it (see projectReplicaInbox).
   const focusedId = state.currentSessionId ?? null;
-  const { proj, rowById, adapted } = projectReplicaInbox(state, { scope: "mine", focusedId, epoch: slot.epoch, now: ctx.now });
-  const pendingSendIds = new Set<string>([...state.sessionsWithQueuedMessages, ...sessionsWithPendingSend(state.pendingMessages)]);
+  const { proj, rowById, adapted } = projectReplicaInbox(state, { scope: "mine", focusedId, epoch: slot.epoch, now: slot.epoch, nowMono: ctx.nowMono });
   const deps = collectInboxOverlayDeps(
     {
       sessions: state.sessions,
       pending: state.pending,
+      pendingMessages: state.pendingMessages,
       pendingSessionCreates: state.pendingSessionCreates ?? {},
       currentSessionId: focusedId,
       sessionsWithQueuedMessages: state.sessionsWithQueuedMessages,
       blockedReviveRequestedAt: state.blockedReviveRequestedAt ?? {},
     },
     ctx.now,
-    { pendingSendIds },
   );
   if (!anyOverlayActive(deps) && proj.set_digest === slot.set_digest) {
     return { kind: "clean", epoch: slot.epoch, short_circuit: true, payload_age_ms };
@@ -188,8 +200,8 @@ export function evaluateInboxCompare(state: InboxCompareState, ctx: InboxCompare
 
   // Per-row diff with the carve-outs.
   const truncatedWindows = new Set<WorkingSetWindow>();
-  for (const t of slot.truncated) if (isWindowKind(t)) truncatedWindows.add(t);
-  for (const t of proj.truncated) if (isWindowKind(t)) truncatedWindows.add(t);
+  for (const t of slot.truncated) if (isWorkingSetWindow(t)) truncatedWindows.add(t);
+  for (const t of proj.truncated) if (isWorkingSetWindow(t)) truncatedWindows.add(t);
   const foreignScan = slot.truncated.includes("foreign_scan");
   const meId = state.currentUser?._id?.toString?.() ?? null;
   const dropped = (id: string): boolean => {
@@ -234,7 +246,7 @@ export type InboxHeartbeatCounters = {
   checks: number;
   mismatches: number;
   heals: number;
-  /** Heals that had to hydrate missing bodies (getInboxSessionsByIds) — counted separately. */
+  /** Heals that hydrated ids by getInboxSessionsByIds (missing bodies, re-read extras) — counted separately. */
   heals_missing: number;
   max_payload_age_ms: number;
   skips: Record<InboxCompareSkip, number>;
@@ -290,9 +302,11 @@ export function createInboxDigestComparer(io: InboxDigestComparerIO): InboxDiges
 
   let counters = emptyHeartbeatCounters();
   let heartbeatAt: number | null = null;
-  // Persistence rule (C6): a diff counts only when it persists across two
-  // consecutive compares at DISTINCT payload epochs.
-  let pendingDiffEpoch: number | null = null;
+  // Persistence rule (C6): a diff counts only when the SAME id, in the same
+  // category, persists across two consecutive compares at DISTINCT payload
+  // epochs. Two unrelated transient diffs at consecutive payloads (a row
+  // crossing a time boundary at each) are not drift.
+  let pendingDiff: { epoch: number; diff: InboxDriftDiff } | null = null;
   // Heal budget (C7): fixed window, then the latch until reload.
   let healWindowStart = 0;
   let healsInWindow = 0;
@@ -339,16 +353,25 @@ export function createInboxDigestComparer(io: InboxDigestComparerIO): InboxDiges
 
   function runHeal(diff: InboxDriftDiff): void {
     healInFlight = true;
-    const missing = diff.missing.slice();
+    // Missing bodies AND extras hydrate by id through the authorized byIds
+    // channel. A missing row gets its body (its facts arrive with the probe's
+    // overlay, which now has a row to land on). An extra is re-read: a row
+    // the replica still counts but the server does not stamp is usually a
+    // field the replica holds wrong — the two-replica simulation found a pin
+    // lock re-asserting a local pin over a remote kill, and once the lock
+    // settled no channel ever re-delivered the killed row, so the replica
+    // kept a killed-but-pinned card forever. The authoritative row lands its
+    // fields; a row the server no longer returns is left alone (deletion
+    // truth is authorized absence) and stays a reported extra. Bucket/fold
+    // deltas on held rows are stale facts, and facts have one writer — the
+    // probe alone heals them.
+    const hydrate = [...diff.missing, ...diff.extra];
     cancelHeal = schedule(() => {
       cancelHeal = null;
       (async () => {
         try {
-          // Missing bodies first: their facts arrive with the probe's overlay,
-          // which now has rows to land on. Bucket/fold deltas on held rows are
-          // stale facts, and facts have one writer — the probe alone heals them.
-          if (missing.length) {
-            await io.fetchByIds(missing);
+          if (hydrate.length) {
+            await io.fetchByIds(hydrate);
             counters.heals_missing++;
           }
           await io.probeOverlay();
@@ -413,7 +436,7 @@ export function createInboxDigestComparer(io: InboxDigestComparerIO): InboxDiges
     switch (outcome.kind) {
       case "disabled":
         counters.disabled++;
-        pendingDiffEpoch = null;
+        pendingDiff = null;
         break;
       case "skip":
         counters.skips[outcome.reason]++;
@@ -426,17 +449,22 @@ export function createInboxDigestComparer(io: InboxDigestComparerIO): InboxDiges
       case "clean":
         counters.checks++;
         counters.max_payload_age_ms = Math.max(counters.max_payload_age_ms, outcome.payload_age_ms);
-        pendingDiffEpoch = null;
+        pendingDiff = null;
         break;
       case "diff":
         counters.checks++;
         counters.max_payload_age_ms = Math.max(counters.max_payload_age_ms, outcome.payload_age_ms);
-        if (pendingDiffEpoch !== null && pendingDiffEpoch !== outcome.epoch) {
-          // Persisted across two compares at distinct payload epochs: drift.
-          pendingDiffEpoch = null;
-          onConfirmedDrift(outcome, t);
-        } else if (pendingDiffEpoch === null) {
-          pendingDiffEpoch = outcome.epoch;
+        if (pendingDiff !== null && pendingDiff.epoch !== outcome.epoch) {
+          // A later payload epoch: what persisted from the previous diff is
+          // drift; anything that cleared in between was transient.
+          const persisted = intersectDriftDiff(pendingDiff.diff, outcome.diff);
+          pendingDiff = { epoch: outcome.epoch, diff: outcome.diff };
+          if (!isDriftDiffEmpty(persisted)) {
+            pendingDiff = null;
+            onConfirmedDrift({ ...outcome, diff: persisted }, t);
+          }
+        } else if (pendingDiff === null) {
+          pendingDiff = { epoch: outcome.epoch, diff: outcome.diff };
         }
         break;
     }

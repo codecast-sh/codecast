@@ -210,17 +210,20 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   if (agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus)) return "working";
   if (canDeliver && hasPending) return "working";
 
-  // Dead with output → a human needs to read/restart it. A dead daemon cannot
-  // deliver a wake, so no rest verdict survives this arm — except "done", which
-  // trustedAgentStatus never coerces to dead in the first place.
-  if (dead) return hasMsgs ? "needs_input" : "idle";
+  // Dead or unresponsive with output → a human needs to read/restart it. A
+  // dead daemon cannot deliver a wake, so no rest verdict survives this arm —
+  // except "done", which trustedAgentStatus never coerces to dead in the first
+  // place. Unresponsive (a hanging user message or queued work on a daemon
+  // that is gone) is the same hard block whatever is_idle says: the server
+  // keeps is_idle false while work is queued, which used to drop such a row
+  // into the "work in flight" arm below and file it WORKING forever (found by
+  // the two-replica simulation, 2026-09-01).
+  if (dead || isUnresponsive) return hasMsgs ? "needs_input" : "idle";
 
   // Settled with content: who acts next? A rest verdict names a machine (dormant)
   // or nobody (done); otherwise the ball is in the user's court — the web inbox
-  // files that under NEEDS INPUT, so the CLI matches. This also covers
-  // unresponsive sessions (a hanging user message on a dead daemon needs a human
-  // to restart it) — a hard block, so no verdict or park stamp outranks it.
-  if (isIdle) return hasMsgs ? (isUnresponsive ? "needs_input" : restState()) : "idle";
+  // files that under NEEDS INPUT, so the CLI matches.
+  if (isIdle) return hasMsgs ? restState() : "idle";
 
   // Not idle but no active status either: mid-grace right after a turn, or the
   // user just sent a message the agent hasn't picked up — work in flight.
@@ -313,13 +316,21 @@ export function computeBucketStale(
 // FNV-1a 32 over the string's UTF-16 code units. Ids and bucket names are
 // ASCII, so this equals the byte form; defined over code units so every runtime
 // hashes identically without an encoder.
-export function fnv1a32(s: string): number {
-  let h = 0x811c9dc5;
+export const FNV1A32_OFFSET = 0x811c9dc5;
+
+// One step of the hash: fold `s` into a running state `h`. Callers that hash a
+// stream of tags (the store's deadline signature) use this instead of
+// concatenating a whole-set string.
+export function fnv1a32Update(h: number, s: string): number {
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
     h = Math.imul(h, 0x01000193) >>> 0;
   }
   return h >>> 0;
+}
+
+export function fnv1a32(s: string): number {
+  return fnv1a32Update(FNV1A32_OFFSET, s);
 }
 
 function hex8(n: number): string {
@@ -372,6 +383,28 @@ export function isOrphanOrSubagent(conv: InboxRowIdentity): boolean {
   if (conv.is_workflow_sub === true) return true;
   if (conv.parent_conversation_id && !conv.parent_message_uuid) return true;
   return false;
+}
+
+// The parent a child's state rolls up to (its open ask lifts the parent into
+// QUESTIONS; its producing status keeps the parent working). ONE rule for the
+// server pool grouping (groupPoolChildren) and the replica's asking
+// derivation, so a parent can never be lifted on one side only:
+//   - a row that is never its own member (isOrphanOrSubagent) rolls up to its
+//     parent_conversation_id;
+//   - a plan handoff (parent pointer + parent message, not a subagent) is its
+//     own member and speaks for itself — no rollup;
+//   - an agent-team teammate (spawned_by + agent_team_name, no parent pointer)
+//     is its own member AND rolls up to its lead: the lead card is where the
+//     team's asks surface.
+export function rollupParentIdOf(row: InboxRowIdentity & {
+  spawned_by_conversation_id?: unknown;
+  agent_team_name?: string | null;
+}): string | null {
+  if (row.parent_conversation_id) {
+    return isOrphanOrSubagent(row) ? String(row.parent_conversation_id) : null;
+  }
+  if (row.agent_team_name && row.spawned_by_conversation_id) return String(row.spawned_by_conversation_id);
+  return null;
 }
 
 export interface InboxVisibilityRow extends InboxRowIdentity {
@@ -445,7 +478,13 @@ export const INBOX_WINDOW_CAPS = {
 
 export type WorkingSetWindow = keyof typeof INBOX_WINDOW_CAPS;
 
-const WORKING_SET_WINDOWS = Object.keys(INBOX_WINDOW_CAPS) as WorkingSetWindow[];
+export const WORKING_SET_WINDOWS = Object.keys(INBOX_WINDOW_CAPS) as readonly WorkingSetWindow[];
+
+// Is this truncation flag one of the five windows (as opposed to a member or
+// scan cap)? The compare drops a row whose every window overflowed.
+export function isWorkingSetWindow(t: InboxTruncation): t is WorkingSetWindow {
+  return (WORKING_SET_WINDOWS as readonly string[]).includes(t);
+}
 
 // How far back a row's stamp may be and still hold its window seat.
 export const WORKING_SET_RECENCY_MS = 30 * 24 * 60 * 60 * 1000;
@@ -538,10 +577,21 @@ export function selectWorkingSet<Row extends WorkingSetRow>(
 // (convex isBelowInboxFold); a parallel predicate keyed on window membership
 // instead of the stamp diverged exactly at the 30-day stamp horizon (found by
 // the generated-world property test, 2026-09-01).
-export function isFoldExempt(row: WorkingSetRow, windows?: readonly WorkingSetWindow[]): boolean {
+export function isFoldExempt(row: WorkingSetRow): boolean {
   if (row.inbox_pinned_at || row.inbox_dismissed_at || row.inbox_stashed_at) return true;
-  if (row.owned_by_me || windows?.includes("owned")) return true;
-  return false;
+  return !!row.owned_by_me;
+}
+
+// The per-row half of the fold, given the cut: exempt rows never fold, queued
+// work (has_pending_messages) is about to move so it never folds either, and
+// everything else folds when its activity is under the cut. A cutoff of 0
+// means no fold. The shared loop below and the server's per-row flag
+// (convex isBelowInboxFold) both call this, so the two cannot diverge.
+export function isBelowFoldAt(row: WorkingSetRow, cutoff: number): boolean {
+  if (cutoff <= 0) return false;
+  if (isFoldExempt(row)) return false;
+  if (row.has_pending_messages) return false;
+  return row.updated_at < cutoff;
 }
 
 // Deterministic 12h gap cut by updated_at over members NOT filed on purpose
@@ -554,11 +604,10 @@ export function isFoldExempt(row: WorkingSetRow, windows?: readonly WorkingSetWi
 // the tally and the default rendering.
 export function computeFold(
   members: ReadonlyMap<string, WorkingSetMember>,
-  _epoch: number,
 ): { belowFold: Set<string>; cutoff: number } {
   const candidates: Array<{ id: string; row: WorkingSetRow }> = [];
   for (const [id, m] of members) {
-    if (isFoldExempt(m.row, m.windows)) continue;
+    if (isFoldExempt(m.row)) continue;
     candidates.push({ id, row: m.row });
   }
   candidates.sort((a, b) => b.row.updated_at - a.row.updated_at);
@@ -570,11 +619,8 @@ export function computeFold(
     }
   }
   const belowFold = new Set<string>();
-  if (cutoff > 0) {
-    for (const c of candidates) {
-      if (c.row.has_pending_messages) continue;
-      if (c.row.updated_at < cutoff) belowFold.add(c.id);
-    }
+  for (const c of candidates) {
+    if (isBelowFoldAt(c.row, cutoff)) belowFold.add(c.id);
   }
   return { belowFold, cutoff };
 }
@@ -659,13 +705,12 @@ export type InboxProjectionInputs = {
 };
 
 // Membership, fold, placement, tallies and digest over a replica's rows at one
-// epoch. `viewState.showOld` does not change the computation — it names which
+// epoch. The show-old view key does not enter the computation — it names which
 // tally is the headline (`shown` vs `shown + folded`); both are always
 // returned so a toggle costs no recompute. Hidden-bucket rows enter `entries`
 // and the digest but never the tallies.
 export function projectInbox<Row extends ProjectableInboxRow>(
   rows: Iterable<Row>,
-  _viewState: { showOld: boolean },
   epoch: number,
   overlays?: InboxProjectionInputs,
 ): {
@@ -679,7 +724,7 @@ export function projectInbox<Row extends ProjectableInboxRow>(
   windows: Map<string, WorkingSetWindow[]>;
 } {
   const { members, truncated } = selectWorkingSet(rows, epoch);
-  const { belowFold } = computeFold(members, epoch);
+  const { belowFold } = computeFold(members);
   const entries: Array<readonly [string, InboxBucket, boolean]> = [];
   const placements = new Map<string, InboxPlacement & { below_fold: boolean }>();
   const windows = new Map<string, WorkingSetWindow[]>();

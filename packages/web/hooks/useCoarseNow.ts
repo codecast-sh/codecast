@@ -26,25 +26,32 @@ function clockFor(intervalMs: number): Clock {
   return c;
 }
 
+// Subscribe a plain listener to the shared clock for `intervalMs` — the same
+// fan-out useCoarseNow rides, usable outside React (a store-level loop such as
+// the digest compare ticks here instead of owning a private interval). The
+// timer starts with the first listener and stops with the last.
+export function subscribeCoarseTick(intervalMs: number, listener: () => void): () => void {
+  const c = clockFor(intervalMs);
+  c.listeners.add(listener);
+  if (c.timer === null) {
+    c.timer = setInterval(() => {
+      c.now = Date.now();
+      c.listeners.forEach((l) => l());
+    }, intervalMs);
+  }
+  return () => {
+    c.listeners.delete(listener);
+    if (c.listeners.size === 0 && c.timer !== null) {
+      clearInterval(c.timer);
+      c.timer = null;
+    }
+  };
+}
+
 export function useCoarseNow(intervalMs: number): number {
   const c = clockFor(intervalMs);
   return useSyncExternalStore(
-    (notify) => {
-      c.listeners.add(notify);
-      if (c.timer === null) {
-        c.timer = setInterval(() => {
-          c.now = Date.now();
-          c.listeners.forEach((l) => l());
-        }, intervalMs);
-      }
-      return () => {
-        c.listeners.delete(notify);
-        if (c.listeners.size === 0 && c.timer !== null) {
-          clearInterval(c.timer);
-          c.timer = null;
-        }
-      };
-    },
+    (notify) => subscribeCoarseTick(intervalMs, notify),
     () => c.now,
     () => c.now,
   );

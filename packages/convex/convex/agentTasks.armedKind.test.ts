@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readdirSync } from "node:fs";
 import { refreshArmedTriggerKind } from "./agentTasks";
 import { armedTriggerKindFor, isArmedTriggerHomeOfKind } from "./dormancy";
 import { pinCapExceeded, INBOX_PINNED_CAP } from "./inboxProjection";
@@ -234,5 +235,25 @@ describe("every agent_tasks writer restamps the home (exhaustive)", () => {
     expect(src).toMatch(/await ctx\.db\.delete\(task\._id\);\s*\n\s*if \(task\.originating_conversation_id\) await refreshArmedTriggerKind\(ctx, task\.originating_conversation_id\);/);
     // webDelete routes through the cascade.
     expect(src).toMatch(/export const webDelete[\s\S]{0,400}deleteTaskCascade\(ctx, task\)/);
+  });
+});
+
+describe("agent_tasks has ONE writer module (repo-wide)", () => {
+  // The chokepoint guard above reads agentTasks.ts alone. This closes it: no
+  // other convex module inserts an agent_tasks row or patches a row it read
+  // from the agent_tasks table, so a future writer cannot escape the home
+  // restamp unseen. dormancy.ts and docs.ts QUERY the table; that is fine.
+  test("no convex file other than agentTasks.ts inserts into or patches agent_tasks rows", () => {
+    const offenders: string[] = [];
+    for (const name of readdirSync(import.meta.dir)) {
+      if (!name.endsWith(".ts") || name.endsWith(".test.ts") || name === "agentTasks.ts") continue;
+      const src = readFileSync(join(import.meta.dir, name), "utf8");
+      if (/\.insert\(\s*"agent_tasks"/.test(src)) offenders.push(`${name}: insert`);
+      // A patch of a row obtained from the agent_tasks table: the query and a
+      // db.patch in one function body is the shape; approximate it as both
+      // tokens present in one file, then confirm by hand on a hit.
+      if (/query\(\s*"agent_tasks"/.test(src) && /ctx\.db\.patch\(\s*(task|t|row|trigger)\b/.test(src)) offenders.push(`${name}: patch`);
+    }
+    expect(offenders).toEqual([]);
   });
 });

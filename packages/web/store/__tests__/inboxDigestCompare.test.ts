@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { INBOX_PROJECTION_VERSION, inboxEpoch, type InboxBucket } from "@codecast/shared/contracts";
+import { INBOX_PROJECTION_VERSION, STATUS_TRUST_TTL_MS, inboxEpoch, type InboxBucket } from "@codecast/shared/contracts";
 import {
   INBOX_COMPARE_MAX_PAYLOAD_AGE_MS,
   INBOX_COMPARE_QUIESCENT_MS,
@@ -81,8 +81,11 @@ function baseState(sessions: Record<string, InboxSession>, over: Partial<InboxCo
 }
 
 // The server's run of the shared module over the same rows → stamps + digest.
+// The server evaluates AT THE EPOCH (computeSessionsLiveness: now =
+// inboxEpoch(Date.now())), trust decay included — never at its wall clock.
 function serverSlot(state: InboxCompareState, over: Partial<SessionsProjectionSlot> = {}): SessionsProjectionSlot {
-  const { proj } = projectReplicaInbox(state, { scope: "mine", focusedId: null, epoch: EPOCH, now: NOW });
+  const epoch = over.epoch ?? EPOCH;
+  const { proj } = projectReplicaInbox(state, { scope: "mine", focusedId: null, epoch, now: epoch });
   const stamps: Record<string, InboxProjectionStamp> = {};
   for (const [id, p] of proj.placements) {
     stamps[id] = { bucket: p.bucket, work_state: p.work_state, asking: false, below_fold: p.below_fold, bucket_stale_at: null, stale_bucket: null };
@@ -332,7 +335,42 @@ function cleanState(epoch = EPOCH, receivedAtMono = MONO): InboxCompareState {
   return withSlot(baseState({ [A]: row(A), [B]: row(B) }), { epoch, receivedAtMono });
 }
 
+describe("the device clock never enters the comparison (C2)", () => {
+  it("a quiet 'waiting' row whose trust TTL expires between the epoch and the tick compares clean", () => {
+    // The server stamped it dormant at the epoch (an inferred "waiting" no
+    // open_tasks report vouches for decays after STATUS_TRUST_TTL_MS); at the
+    // tick, 100s later, the same decay would file it needs_input. The compare
+    // must evaluate at the epoch, so this is not a bucket delta.
+    const waiting = row(A, { agent_status: "waiting", updated_at: EPOCH + 100_000 - STATUS_TRUST_TTL_MS });
+    const state = withSlot(baseState({ [A]: waiting, [B]: row(B) }));
+    expect(state.sessionsProjection.mine.stamps[A].bucket).toBe("dormant");
+    const tick = ctx({ now: EPOCH + 110_000, nowMono: MONO + 60_000 });
+    expect(evaluateInboxCompare(state, tick)).toMatchObject({ kind: "clean" });
+  });
+});
+
 describe("persistence rule (C6)", () => {
+  it("two unrelated transient diffs at consecutive epochs are not drift; the same id twice is", () => {
+    const h = harness();
+    // Epoch E: B disagrees. Epoch E+1: only C disagrees (B healed itself).
+    const first = baseState({ [A]: row(A), [B]: row(B, { agent_status: "working", is_idle: false }), [C]: row(C) });
+    const atE = baseState({ [A]: row(A), [B]: row(B), [C]: row(C) }, { sessionsProjection: { mine: serverSlot(first, { epoch: EPOCH }) } });
+    const second = baseState({ [A]: row(A), [B]: row(B), [C]: row(C, { agent_status: "working", is_idle: false }) });
+    const atE1 = baseState({ [A]: row(A), [B]: row(B), [C]: row(C) }, { sessionsProjection: { mine: serverSlot(second, { epoch: EPOCH + MIN, receivedAtMono: MONO + 30_000 }) } });
+    expect(h.comparer.tick(atE).kind).toBe("diff");
+    h.clock.mono += 30_000;
+    expect(h.comparer.tick(atE1).kind).toBe("diff");
+    expect(h.comparer.counters().mismatches).toBe(0);
+    expect(h.events).toEqual([]);
+    // Epoch E+2: C still disagrees — the same id, the same category: drift.
+    const atE2 = baseState({ [A]: row(A), [B]: row(B), [C]: row(C) }, { sessionsProjection: { mine: serverSlot(second, { epoch: EPOCH + 2 * MIN, receivedAtMono: MONO + 60_000 }) } });
+    h.clock.mono += 30_000;
+    expect(h.comparer.tick(atE2).kind).toBe("diff");
+    expect(h.comparer.counters().mismatches).toBe(1);
+    expect(h.events.map((e) => e.event)).toEqual(["inbox_drift"]);
+    expect(h.events[0].props.bucket_deltas).toBe(1);
+  });
+
   it("a diff counts only when it persists across two compares at distinct payload epochs", async () => {
     const h = harness();
     // Same epoch twice: a race, not divergence.
@@ -377,7 +415,7 @@ describe("heal (C7)", () => {
     expect(h.comparer.counters()).toMatchObject({ heals: 1, heals_missing: 0 });
   });
 
-  it("extras are reported, never deleted", async () => {
+  it("extras are re-read by id and reported, never deleted", async () => {
     const h = harness();
     const full = baseState({ [A]: row(A) });
     const slot = serverSlot(full);
@@ -385,7 +423,10 @@ describe("heal (C7)", () => {
     h.comparer.tick(extra);
     h.comparer.tick({ ...extra, sessionsProjection: { mine: { ...slot, epoch: EPOCH + MIN } } });
     await h.flushHeal();
-    expect(h.fetched).toEqual([]);
+    // The heal asks the authorized byIds channel for the extra: a row the
+    // replica holds wrong (a settled pin lock over a remote kill) lands its
+    // fields; a row the server does not return is left exactly as it was.
+    expect(h.fetched).toEqual([[B]]);
     expect(h.events.find((e) => e.event === "inbox_drift")?.props).toMatchObject({ extra: 1, missing: 0 });
     expect(extra.sessions[B]).toBeDefined();
   });

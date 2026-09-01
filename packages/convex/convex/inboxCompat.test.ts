@@ -7,7 +7,7 @@ import {
   INBOX_LIVENESS_FIELDS,
   INBOX_FAST_FIELDS,
 } from "./conversations";
-import { INBOX_FACT_FIELDS, INBOX_WINDOW_CAPS, inboxEpoch, selectWorkingSet } from "@codecast/shared/contracts";
+import { INBOX_FACT_FIELDS, INBOX_WINDOW_CAPS, inboxEpoch, selectWorkingSet, WORKING_SET_RECENCY_MS } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
 
 // FROZEN CONTRACTS for deployed binaries (sync-convergence C9). Mobile builds
@@ -203,5 +203,17 @@ describe("one visibility rule, one selection (sync-convergence C4)", () => {
   test("the window caps re-derive from the shared single source", () => {
     expect(INBOX_WINDOW_CAPS.recent).toBe(200);
     expect(INBOX_WINDOW_CAPS.pinned).toBe(100);
+  });
+
+  test("the 30-day recency horizon is ONE constant: the scan windows derive from WORKING_SET_RECENCY_MS", () => {
+    // The scan cutoffs (recent, dismissed/stashed) and the replica's
+    // inWorkingSet must agree at the horizon; five agreeing literals only
+    // agree until one is edited.
+    const conversations = readFileSync(join(import.meta.dir, "conversations.ts"), "utf8");
+    expect(conversations).toContain("const INBOX_SESSION_WINDOW_MS = WORKING_SET_RECENCY_MS;");
+    expect(conversations).toContain("const INBOX_DISMISSED_WINDOW_MS = WORKING_SET_RECENCY_MS;");
+    // No inbox window constant carries its own literal any more.
+    expect(conversations).not.toMatch(/INBOX_(?:SESSION|DISMISSED)_WINDOW_MS = \d/);
+    expect(WORKING_SET_RECENCY_MS).toBe(30 * 24 * 60 * 60 * 1000);
   });
 });
