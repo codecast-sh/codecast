@@ -150,7 +150,12 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef }: {
     const focusInput = () => {
       const root = rootRef.current;
       if (!root || root.contains(document.activeElement)) return;
-      root.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+      const ta = root.querySelector<HTMLTextAreaElement>("textarea");
+      if (!ta) return;
+      ta.focus();
+      // Caret at the end: a seeded draft (doc-review feedback, selected-task
+      // refs) expects typing to append, but focus() alone leaves the caret at 0.
+      ta.setSelectionRange(ta.value.length, ta.value.length);
     };
     const t = setTimeout(focusInput, 60);
     window.addEventListener("focus", focusInput);
