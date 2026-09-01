@@ -9,8 +9,10 @@ import { registerCapabilityCommand } from "./capabilities/cli.js";
 import { registerDecideCommand } from "./decideCommand.js";
 import { registerImageCommand } from "./imageCommand.js";
 import { registerStateCommand, warnIfThreadStateStale } from "./stateCommand.js";
+import { registerSwitchCommand } from "./switchCommand.js";
 import { buildTaskStartBody } from "./taskClaim.js";
 import { registerBrowserCommand } from "./browser/cli.js";
+import { registerExecCommand } from "./execCommand.js";
 import open from "open";
 import * as fs from "fs";
 import * as path from "path";
@@ -2905,7 +2907,9 @@ registerCapabilityCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerDecideCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerImageCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerStateCommand(program, { getCliEndpoint, detectCurrentSessionId });
+registerSwitchCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId });
+registerExecCommand(program);
 
 program
   .command("auth")
@@ -2992,30 +2996,35 @@ program
     "Stash a session — out of the inbox, the agent keeps running\n\n" +
     "Moves the session to the Stashed bucket: out of the active inbox, agent\n" +
     "alive and resumable. Use it to tidy finished or parked workers out of the\n" +
-    "human's view without killing them. A stashed session stays silent except\n" +
-    "for asks: a machine wake never un-stashes it, but a settle declared\n" +
-    "--status blocked, a --needs-attention run, or a stall (permission prompt,\n" +
-    "open question, dead process) returns it to the inbox. An empty never-used\n" +
-    "session is cleaned up entirely. Reverse with cast restore.\n\n" +
+    "human's view without killing them. A stashed session returns to the inbox\n" +
+    "when a trigger fires into it (something happened — show it), when a settle\n" +
+    "is declared --status blocked, a run completes --needs-attention, or it\n" +
+    "stalls (permission prompt, open question, dead process). Pass --hide to\n" +
+    "keep it out of sight through trigger wakes: only the asks bring it back.\n" +
+    "An empty never-used session is cleaned up entirely. Reverse with cast\n" +
+    "restore.\n\n" +
     "Examples:\n" +
     "  cast stash jx7c6zk\n" +
+    "  cast stash --hide jx7c6zk  # a reviewed loop the human wants quiet\n" +
     "  cast stash               # current session (tidy yourself away when done)"
   )
   .argument("[session]", "Session short ID (default: current session)")
-  .action(async (session: string | undefined) => {
+  .option("--hide", "Stash and stay hidden: trigger wakes don't bring the session back, only asks do")
+  .action(async (session: string | undefined, opts: { hide?: boolean }) => {
     const target = session || detectCurrentSessionId();
     if (!target) {
       console.error("No session given and none detected — pass a short ID (e.g. cast stash jx7c6zk)");
       process.exit(1);
     }
-    const result = await cliPost("/cli/sessions/dismiss", { session: target });
+    const result = await cliPost("/cli/sessions/dismiss", { session: target, ...(opts.hide ? { hidden: true } : {}) });
     const grouped = result.cascaded_children
       ? ` with ${result.cascaded_children} nested worker${result.cascaded_children === 1 ? "" : "s"}`
       : "";
+    const wake = opts.hide ? "stays hidden through trigger wakes" : "returns on the next trigger wake";
     const note = result.outcome === "reap"
       ? ` ${c.dim}(empty session — cleaned up entirely)${c.reset}`
-      : ` ${c.dim}— hidden from inbox${grouped}, agent still alive (cast restore ${result.short_id} to bring back)${c.reset}`;
-    console.log(`${c.green}ok${c.reset} stashed ${c.cyan}${result.short_id}${c.reset}${note}`);
+      : ` ${c.dim}— hidden from inbox${grouped}, agent still alive, ${wake} (cast restore ${result.short_id} to bring back)${c.reset}`;
+    console.log(`${c.green}ok${c.reset} ${opts.hide ? "stashed and hid" : "stashed"} ${c.cyan}${result.short_id}${c.reset}${note}`);
   });
 
 program
@@ -10708,13 +10717,15 @@ program
     "  cast spawn - <<'EOF'\n" +
     "  Multi-line briefing with headings and code blocks,\n" +
     "  delivered exactly as written.\n" +
-    "  EOF"
+    "  EOF\n\n" +
+    "To run a prompt, wait, and print the result (no inbox card), use `cast exec`."
   )
   .argument("<prompts...>", "One task per session; '-' reads a prompt from stdin (several '-' split stdin on lines containing only ---)")
   .option("-C, --dir <path>", "Working directory (default: current project)")
     .option("--agent <type>", "Agent: claude (default), codex, cursor, gemini, opencode, pi, grok", "claude")
   .option("--subagent [parent]", "Nest under a parent session as a subagent row (default parent: the session running this command)")
   .option("--model <model>", "Model override (e.g. opus, sonnet)")
+  .option("--effort <level>", "Reasoning effort (claude: low|medium|high|max; varies by agent)")
   .option("--isolated", "Give each session its own git worktree")
   .option("--device <name>", "Machine to start on (label or device id, e.g. nose); falls back to an online machine with the repo if it's offline")
   .option("--label <name>", "File each spawned session under a label (created if new)")
@@ -10778,6 +10789,7 @@ program
           git_root: gitRoot,
           agent_type: agentType,
           model: options.model,
+          effort: options.effort,
           isolated: options.isolated || undefined,
           device: options.device,
           parent_session: parentSession,

@@ -10,6 +10,7 @@ import {
   CornerDownRight,
   Cpu,
   ExternalLink,
+  EyeOff,
   FileText,
   Forward,
   Link as LinkIcon,
@@ -523,6 +524,13 @@ export function SessionMenuItems({
         onSelect={onStash ?? (() => undoableHideSession(id, "stash"))}
       >
         Stash
+      </CtxItem>
+      <CtxItem
+        icon={EyeOff}
+        shortcut="session.stashHide"
+        onSelect={() => undoableHideSession(id, "stash", { hidden: true })}
+      >
+        Stash and hide — stays out through trigger wakes
       </CtxItem>
       <CtxItem
         icon={Clock}
