@@ -2087,14 +2087,12 @@ async function postChatMessage(
   const here = mentionsHere(content);
   if (here) await chatRateLimit(ctx, authorId, "chat.here", HERE_LIMIT);
 
-  // Personify a session-typed line. The id is caller-supplied, so the title
-  // snapshot happens only when the sender OWNS that session — otherwise any
-  // api_token holder could read a teammate's private session title into a
-  // channel by guessing its id. An unowned or unknown id still lands (it names
-  // nothing the viewer can resolve without access), only the snapshot is
-  // withheld. Title through the same one-line sanitizer as every name that
-  // crosses onto someone else's screen.
-  let originSession: { title?: string; agent_type?: string } | undefined;
+  // Personify a session-typed line. The id is caller-supplied, so the identity
+  // is attached only when the sender OWNS that session — otherwise any api_token
+  // holder could dress a line as a teammate's private session by guessing its
+  // id. Store the canonical conversation id, not the native Claude/Codex id the
+  // CLI has on hand, because this field is also the UI's conversation link.
+  let originSession: { id: string; title?: string; agent_type?: string } | undefined;
   if (opts.origin === "agent" && opts.originSessionId) {
     const conv = await findConversationByAnyRefWhere(
       ctx,
@@ -2103,6 +2101,7 @@ async function postChatMessage(
     );
     if (conv) {
       originSession = {
+        id: conv._id.toString(),
         title: conv.title ? oneLine(conv.title, 80) : undefined,
         agent_type: conv.agent_type,
       };
@@ -2124,7 +2123,7 @@ async function postChatMessage(
     call: opts.call,
     client_id: opts.clientId,
     origin: opts.origin,
-    origin_session_id: opts.origin === "agent" ? opts.originSessionId : undefined,
+    origin_session_id: originSession?.id,
     origin_session_title: originSession?.title,
     origin_agent_type: originSession?.agent_type,
     created_at: now,
@@ -2158,16 +2157,22 @@ export const repairMissingOriginSession = internalMutation({
     if (!message || message.origin !== "agent" || message.author_kind === "agent") {
       throw new Error("Message is not session-authored");
     }
-    if (message.origin_session_id) return { repaired: false };
     const conversation = await findConversationByAnyRefWhere(
       ctx,
       args.session_ref,
       (candidate) => isConversationOwner(ctx, message.user_id, candidate),
     );
     if (!conversation) throw new Error("Session is not owned by the message author");
+    const sessionId = conversation._id.toString();
+    const title = conversation.title ? oneLine(conversation.title, 80) : undefined;
+    if (
+      message.origin_session_id === sessionId
+      && message.origin_session_title === title
+      && message.origin_agent_type === conversation.agent_type
+    ) return { repaired: false };
     await patchChat(ctx, message._id, {
-      origin_session_id: args.session_ref,
-      origin_session_title: conversation.title ? oneLine(conversation.title, 80) : undefined,
+      origin_session_id: sessionId,
+      origin_session_title: title,
       origin_agent_type: conversation.agent_type,
     });
     return { repaired: true };

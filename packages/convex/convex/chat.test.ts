@@ -1151,7 +1151,7 @@ describe("the anchor in a thread", () => {
       channel_id: CHANNEL, content: "tests are green", origin: "agent", origin_session_id: "sess-alice",
     });
     const mineRow = messagesIn(ctx).find((m: any) => m._id === mine.message_id);
-    expect(mineRow.origin_session_id).toBe("sess-alice");
+    expect(mineRow.origin_session_id).toBe("conv-alice");
     expect(mineRow.origin_session_title).toBe("Fix the auth race");
     expect(mineRow.origin_agent_type).toBe("codex");
     // The bell speaks as the session, not as the human it ran as.
@@ -1161,7 +1161,7 @@ describe("the anchor in a thread", () => {
       channel_id: CHANNEL, content: "leak?", origin: "agent", origin_session_id: "sess-bob",
     });
     const theirsRow = messagesIn(ctx).find((m: any) => m._id === theirs.message_id);
-    expect(theirsRow.origin_session_id).toBe("sess-bob");
+    expect(theirsRow.origin_session_id).toBeUndefined();
     expect(theirsRow.origin_session_title).toBeUndefined();
     expect(theirsRow.origin_agent_type).toBeUndefined();
 
@@ -1203,10 +1203,14 @@ describe("the anchor in a thread", () => {
       session_ref: "sess-alice",
     })).toEqual({ repaired: true });
     expect(messagesIn(ctx)[0]).toMatchObject({
-      origin_session_id: "sess-alice",
+      origin_session_id: "conv-alice",
       origin_session_title: "C3 attrition carve-out decision",
       origin_agent_type: "claude_code",
     });
+    expect(await call(repairMissingOriginSession, ctx, {
+      message_id: "chat-message-agent-origin",
+      session_ref: "sess-alice",
+    })).toEqual({ repaired: false });
   });
 
   test("an anchor with no session yet keeps the message and reports why", async () => {
