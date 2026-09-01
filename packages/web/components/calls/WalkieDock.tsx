@@ -36,11 +36,13 @@
 // stylesheet (components/__tests__/walkieStrip.test.tsx). WalkieBanner is the
 // half that knows where those props come from.
 import { useCallback, useSyncExternalStore, type ReactNode, type RefCallback } from "react";
-import { BellOff, MessageSquare, MicOff, X } from "lucide-react";
+import { BellOff, MessageSquare, MicOff, PictureInPicture2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { leaveCall, setMuted } from "../../lib/calls/callManager";
+import { popOutCall } from "../../lib/calls/popOutCall";
+import { canPopOutCall } from "../../lib/desktop";
 import { getWalkieStatus, joinWalkieLive, shutWalkieDoor, walkieJoinedRoom } from "../../lib/calls/walkie";
 import { getJoinAnnouncement, joinTitle, subscribeJoinAnnouncement } from "../../lib/calls/joinAnnounce";
 import {
@@ -48,6 +50,7 @@ import {
   useWalkieLevelVar,
   useWalkieStatus,
   walkieStripState,
+  type WalkieStage,
 } from "../../hooks/useWalkie";
 import { useChatMessageRow } from "../../hooks/useChatSync";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
@@ -185,11 +188,14 @@ export function WalkieBanner() {
       faceRef={faceRef}
       myFace={{ image: myImage, name: myName }}
       myFaceRef={myFaceRef}
+      stage={strip.stage}
+      badge={strip.badge}
+      hint={strip.hint}
       tx={strip.tx}
       rx={strip.rx}
       locked={strip.locked}
       together={strip.together}
-      muted={s.call.muted !== false}
+      muted={strip.locked && s.call.muted !== false}
       hotMic={strip.hotMic}
       micDenied={strip.micDenied}
       quiet={strip.quiet}
@@ -204,6 +210,9 @@ export function WalkieBanner() {
       actions={(!strip.tx || strip.rx) && headline === strip.headline && !strip.locked}
       onMute={() => void setMuted(true)}
       onMuteToggle={() => void setMuted(s.call.muted === false)}
+      // THE CALL, AS CIRCLES OVER THE WORK: the founder's picture of a voice
+      // call. Only where the shell can make a see-through window.
+      onFloat={canPopOutCall() ? () => void popOutCall({ size: "speaker" }) : undefined}
       onJoin={() => void joinWalkieLive(target.roomKey, { name })}
       onSnooze={snoozeWalkie}
       onOpenDm={() => router.push(`/chat/${target.channelId}`)}
@@ -213,6 +222,7 @@ export function WalkieBanner() {
           roomKey={target.roomKey}
           resolveChannelId={() => target.channelId}
           size="lg"
+          label="Hold to reply"
           title="Hold to reply"
         />
       }
@@ -257,6 +267,11 @@ function snoozeWalkie(): void {
  */
 export function WalkieStripView(props: {
   name: string;
+  /** The loud word, the sentence, and what the hands do next — all from
+   *  walkieStageWords, so this surface decides nothing about them. */
+  stage: WalkieStage;
+  badge: string;
+  hint: string;
   headline: string;
   /** The live transcript tail. Empty until the recognizer says something. */
   words: string;
@@ -286,6 +301,8 @@ export function WalkieStripView(props: {
   actions: boolean;
   onMute: () => void;
   onMuteToggle?: () => void;
+  /** Float the call as circles over the work. Absent where the shell cannot. */
+  onFloat?: () => void;
   onJoin: () => void;
   onSnooze: () => void;
   onOpenDm: () => void;
@@ -321,6 +338,18 @@ export function WalkieStripView(props: {
         .filter(Boolean)
         .join(" ")}
     >
+      {/* THE STATE, IN ONE LOUD WORD. Read first, from across the room:
+          RECORDING, LIVE, ON THE LINE, INCOMING. The sentence and the hint
+          under the face say the rest. */}
+      <div className={`walkie-stage walkie-stage-${props.stage}`} role="status" aria-live="polite">
+        <span className="walkie-stage-dot" aria-hidden="true" />
+        <span className="walkie-stage-badge">{props.badge}</span>
+        <span className="walkie-stage-with">
+          {props.stage === "open" || props.stage === "incoming" ? "" : "with "}
+          {props.stage === "open" || props.stage === "incoming" ? "" : props.name}
+        </span>
+      </div>
+
       {props.hotMic && <HotMicLine name={props.name} onMute={props.onMute} />}
 
       <div className="walkie-strip-head">
@@ -367,21 +396,27 @@ export function WalkieStripView(props: {
           <button
             type="button"
             className="walkie-strip-icon"
-            aria-label="Open the DM"
-            title="Open the DM"
+            aria-label="Open the chat with them"
+            title="Open the chat with them — every burst is there as a message"
             onClick={props.onOpenDm}
           >
             <MessageSquare className="h-4 w-4" />
+            <span className="walkie-strip-icon-word">Chat</span>
           </button>
-          <button
-            type="button"
-            className="walkie-strip-icon"
-            aria-label="Leave the room"
-            title="Leave the room"
-            onClick={props.onLeave}
-          >
-            <X className="h-4 w-4" />
-          </button>
+          {/* Locked, the red End below is the one door; a second X up here
+              would be the same door with a different name. */}
+          {!locked && (
+            <button
+              type="button"
+              className="walkie-strip-icon"
+              aria-label="Close this and leave the room"
+              title="Close this and leave the room"
+              onClick={props.onLeave}
+            >
+              <X className="h-4 w-4" />
+              <span className="walkie-strip-icon-word">Close</span>
+            </button>
+          )}
         </div>
         {/* Talking back without joining anything: the walkie, still. Beside
             the face rather than in the button row, because it is a different
@@ -390,7 +425,7 @@ export function WalkieStripView(props: {
             ring sits against their cool one. Not while locked: the mic is
             already open on purpose, and a hold-to-reply next to it would be a
             second way to do what is already happening. */}
-        {props.replyKey && !locked && <div className="walkie-strip-reply">{props.replyKey}</div>}
+        {props.replyKey && !locked && !(tx && !rx) && <div className="walkie-strip-reply">{props.replyKey}</div>}
       </div>
 
       {!!props.words && (
@@ -399,6 +434,11 @@ export function WalkieStripView(props: {
         </div>
       )}
       {props.quiet && <div className="walkie-strip-quiet">recording, no live words</div>}
+
+      {/* WHAT YOUR HANDS DO NEXT. Blunt on purpose: every claim on this card
+          is about an open microphone, and nobody should have to guess what
+          letting go, or pressing a button, will do. */}
+      <div className="walkie-strip-hint">{props.hint}</div>
 
       {/* LOCKED: the two controls a live seat needs, full width and unmissable
           — this is an open microphone with nobody's hand on it, so what stops
@@ -414,8 +454,20 @@ export function WalkieStripView(props: {
             {props.muted ? "Unmute" : "Mute"}
           </button>
           <button type="button" className="walkie-strip-end" onClick={props.onLeave}>
-            End
+            <X className="h-4 w-4" />
+            End — hang up
           </button>
+          {props.onFloat && (
+            <button
+              type="button"
+              className="walkie-strip-float"
+              onClick={props.onFloat}
+              title="Float the call as face circles over your work"
+            >
+              <PictureInPicture2 className="h-4 w-4" />
+              Float faces over my work
+            </button>
+          )}
         </div>
       )}
 

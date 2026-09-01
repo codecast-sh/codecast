@@ -795,7 +795,62 @@ export function senderHearingFrom(
  * with a voice going each way, and the face carries a warm ring and a cool one
  * at the same time.
  */
-export type WalkieStrip = {
+/**
+ * WHAT STAGE THE WALKIE IS AT, said bluntly.
+ *
+ * `badge` is the loud word a person reads first (RECORDING, LIVE, ON THE
+ * LINE), `hint` is what their hands should do next. Both come from the same
+ * facts the headline is built from, in one place, so the corner card, the
+ * keys and a screen reader can never disagree about what pressing does.
+ */
+export type WalkieStage =
+  | "opening"
+  | "recording"
+  | "live"
+  | "both"
+  | "dropped"
+  | "locked"
+  | "incoming"
+  | "mic-off"
+  | "open";
+
+export type WalkieStageWords = { stage: WalkieStage; badge: string; hint: string };
+
+export function walkieStageWords(input: {
+  sending: { live: boolean; heardLive: boolean } | null;
+  incoming: boolean;
+  locked: boolean;
+  muted: boolean;
+  dropped: boolean;
+  micDenied: boolean;
+  name: string;
+}): WalkieStageWords {
+  const { sending, incoming, locked, muted, dropped, micDenied, name } = input;
+  const holdHint = "Release to send · keep holding to lock in and go hands free";
+  if (sending) {
+    if (dropped) return { stage: "dropped", badge: "NOT HEARD", hint: `Still recording. ${name} gets it as a message.` };
+    if (!sending.live) return { stage: "opening", badge: "OPENING MIC", hint: "Keep holding. Do not talk yet." };
+    if (incoming) return { stage: "both", badge: "BOTH TALKING", hint: holdHint };
+    if (sending.heardLive) return { stage: "live", badge: "LIVE", hint: `${name} hears you now. ${holdHint}` };
+    return { stage: "recording", badge: "RECORDING", hint: `${name} gets it when you let go. ${holdHint}` };
+  }
+  if (locked) {
+    return muted
+      ? { stage: "locked", badge: "ON THE LINE · MUTED", hint: `${name} cannot hear you. Press UNMUTE to talk, END to hang up.` }
+      : { stage: "locked", badge: "ON THE LINE", hint: `Hands free. ${name} hears everything you say. Press END to hang up.` };
+  }
+  if (micDenied) return { stage: "mic-off", badge: "MIC OFF", hint: `You can hear ${name}. Your mic permission is denied, so you cannot answer.` };
+  if (incoming) {
+    return {
+      stage: "incoming",
+      badge: "INCOMING",
+      hint: `${name} is talking to you. HOLD their face to reply · JOIN LIVE to talk hands free · SNOOZE to stop bursts for an hour.`,
+    };
+  }
+  return { stage: "open", badge: "LINE OPEN", hint: `Still open with ${name} for a moment. Hold a face to talk.` };
+}
+
+export type WalkieStrip = WalkieStageWords & {
   headline: string;
   /** This client is talking. */
   tx: boolean;
@@ -848,15 +903,27 @@ export function walkieStripState(
   // the fill locking and the Join live button land in the same state.
   const joined = walkieJoinedRoom(status);
   const locked = !!joined && call.roomKey === joined && call.phase !== "idle";
+  // Their face belongs on the card whenever they are IN THE ROOM with me:
+  // their voice playing, their deliberate join, or simply their seat — the
+  // auto-listen puts them there the moment my voice arrives, and two people
+  // in one room is two faces, whoever opened which seat.
+  const me = String(state.currentUser?._id ?? "");
+  const seats = locked ? ((state.callOccupancy?.[joined!] as any[]) ?? []) : [];
   const together =
     rx ||
     (locked &&
-      otherJoinedLive(
-        (state.callOccupancy?.[joined!] as any[]) ?? [],
-        String(state.currentUser?._id ?? ""),
-        status.liveRoom?.since ?? 0,
-      ));
+      (seats.some((r) => String(r?.user_id ?? "") !== me) ||
+        otherJoinedLive(seats, me, status.liveRoom?.since ?? 0)));
   return {
+    ...walkieStageWords({
+      sending: sending ? { live: sending.live, heardLive: sending.heardLive } : null,
+      incoming: rx,
+      locked,
+      muted: call.muted !== false,
+      dropped,
+      micDenied,
+      name,
+    }),
     headline: stripHeadline({ status, state, name, now: ctx.now, dropped, micDenied }),
     tx,
     rx,
