@@ -357,6 +357,15 @@ diff does all three.
    `backfilledAt`. A cold device compares nothing until it can honestly claim the set.
 6. Scope is covered (personal scope; team scope is out, C4).
 
+**A capped window excuses membership only.** When a window overflowed its cap on either
+side, a row that only that window admits may be missing on one side and selected on the
+other because of the cut, so such a row is not reported missing or extra. A bucket or fold
+difference on a row BOTH sides selected is always reported: the cap explains a row one side
+cut, never a verdict both sides hold. On a busy account the recent window overflows every
+day, and treating every recent only row as dark blinded the proof to the rows that matter.
+A foreign row under a budgeted foreign scan is dark for facts and membership alike, because
+the server may not have probed it.
+
 **Procedure.** Evaluate the shared module at the payload's epoch over the replica's
 selection. If no declared overlay is active and the local digest equals `set_digest`,
 the check passes (the digest is the cheap short circuit). Otherwise diff per row:
