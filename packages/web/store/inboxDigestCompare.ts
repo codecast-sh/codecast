@@ -211,8 +211,24 @@ export function evaluateInboxCompare(state: InboxCompareState, ctx: InboxCompare
   for (const t of proj.truncated) if (isWorkingSetWindow(t)) truncatedWindows.add(t);
   const foreignScan = slot.truncated.includes("foreign_scan");
   const meId = state.currentUser?._id?.toString?.() ?? null;
-  const dropped = (id: string): boolean => {
+  // A truncated window excuses a MEMBERSHIP difference only (a row the cap cut
+  // on one side), never a bucket or fold difference on a row both sides
+  // selected: on a busy account the recent window overflows every day, and
+  // dropping every recent-only row made the proof blind to the rows that
+  // matter (prod, 2026-09-01: four declared-done rows filed needs_input on
+  // every replica behind a clean compare).
+  // A foreign row under a budgeted foreign scan may not have been probed, so
+  // its stamp is not a verdict: dark for facts AND membership.
+  const droppedFacts = (id: string): boolean => {
     if (isOverlayAffected(id, deps)) return true;
+    if (foreignScan && meId) {
+      const row = rowById.get(id);
+      if (row?.user_id && row.user_id !== meId) return true;
+    }
+    return false;
+  };
+  const droppedMembership = (id: string): boolean => {
+    if (droppedFacts(id)) return true;
     if (truncatedWindows.size > 0) {
       // Eligibility windows, not just the selected ones: a held row the cap
       // cut on one side only is exactly the overflow case the flag names.
@@ -220,27 +236,23 @@ export function evaluateInboxCompare(state: InboxCompareState, ctx: InboxCompare
       const windows = row ? inWorkingSet(row, slot.epoch) : proj.windows.get(id);
       if (windows && windows.length > 0 && windows.every((w) => truncatedWindows.has(w))) return true;
     }
-    if (foreignScan && meId) {
-      const row = rowById.get(id);
-      if (row?.user_id && row.user_id !== meId) return true;
-    }
     return false;
   };
   const diff: InboxDriftDiff = { missing: [], extra: [], bucket_deltas: [], fold_deltas: [] };
   const stamps = slot.stamps;
   for (const id in stamps) {
-    if (dropped(id)) continue;
     const local = proj.placements.get(id);
     if (!local) {
-      diff.missing.push(id);
+      if (!droppedMembership(id)) diff.missing.push(id);
       continue;
     }
+    if (droppedFacts(id)) continue;
     const stamp = stamps[id];
     if (local.bucket !== stamp.bucket) diff.bucket_deltas.push(id);
     else if (local.below_fold !== stamp.below_fold) diff.fold_deltas.push(id);
   }
   for (const id of proj.placements.keys()) {
-    if (id in stamps || dropped(id)) continue;
+    if (id in stamps || droppedMembership(id)) continue;
     diff.extra.push(id);
   }
   if (isDriftDiffEmpty(diff)) return { kind: "clean", epoch: slot.epoch, short_circuit: false, payload_age_ms };
