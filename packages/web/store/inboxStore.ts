@@ -1236,6 +1236,10 @@ export type ClientUI = {
   // including off — so sticky can't decay into stuck. The legacy key still
   // lingers in server docs; nothing may ever read it (resolveShowOld).
   inbox_show_old?: boolean;
+  // When the user last said "Not now" to the "clear out your working set"
+  // prompt. Stamped LWW: a snooze on one device silences the prompt on every
+  // device for its window (STALE_PROMPT_SNOOZE_MS in GlobalSessionPanel).
+  inbox_stale_prompt_snoozed_at?: number;
   // Inbox scope. "mine" (default) is the personal inbox: your own sessions plus
   // any explicitly routed to you. "team" turns the inbox into a shared board of
   // every team-visible session across the active team (a superset of "mine").
@@ -5173,7 +5177,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 export const STAMPED_UI_KEYS = new Set([
   "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "show_triggers", "card_bars", "inbox_show_old",
   "simple_view", "inbox_image_thumbs", "composer_suggestions", "inbox_home", "threads_include_sessions",
-  "walkie_hold_seen", "call_camera_on", "triage_bar_compact",
+  "walkie_hold_seen", "call_camera_on", "triage_bar_compact", "inbox_stale_prompt_snoozed_at",
   // The sound gates and volume: a mute is a per-user preference, not a
   // per-device one — turning sounds off anywhere must silence every client,
   // localhost dev origins included.
