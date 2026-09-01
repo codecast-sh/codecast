@@ -315,7 +315,7 @@ export const PEOPLE_ROUTE = "/people";
 
 /** What every surface calls the gesture, so three of them cannot call it three
  *  different things. */
-export const POP_OUT_PEOPLE_TITLE = "Pop out the people window";
+export const POP_OUT_PEOPLE_TITLE = "Float the team over your work";
 
 // This renderer IS the people window. It draws the panel, mounts the call,
 // walkie and ring pumps, and (on the desktop) is the shell's notification

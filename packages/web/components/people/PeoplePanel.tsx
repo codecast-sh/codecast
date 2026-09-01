@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { ChevronRight, Headphones, LayoutGrid, List, MessageSquare, PictureInPicture2, Pin, Volume2, VolumeX } from "lucide-react";
 import { PeopleStrip } from "./PeopleStrip";
+import { PeopleLegend } from "./PeopleLegend";
 import { TeamPulseLine } from "./TeamPulseLine";
 import { usePulseFrom } from "./usePulseFrom";
 import { type TeamPulse } from "./teamPulse";
@@ -114,6 +115,7 @@ export function PeoplePanel() {
               <PeopleWallView callsEnabled={callsEnabled} data={data} />
             )}
           </div>
+          {callsEnabled && <PeopleLegend />}
         </>
       )}
       {/* The phone's own ringer and strip live HERE, in the window that hosts
