@@ -249,18 +249,20 @@ function MiniWindow({
           <button
             type="button"
             onClick={onExpand}
-            className="cursor-pointer rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
+            className="flex cursor-pointer items-center rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
             title="Expand to the full stage"
           >
             <Maximize2 className="h-3.5 w-3.5" />
+            <span className="ml-1 font-mono text-[10px]">Expand</span>
           </button>
           <button
             type="button"
             onClick={onUnpin}
-            className="cursor-pointer rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
+            className="flex cursor-pointer items-center rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
             title="Unpin — shrink to the pill, the call continues"
           >
             <PinOff className="h-3.5 w-3.5" />
+            <span className="ml-1 font-mono text-[10px]">Pill</span>
           </button>
         </div>
       </div>
@@ -308,27 +310,50 @@ function MiniWindow({
 
       {call.roomKey && call.phase === "connected" && <RoomKnocks roomKey={call.roomKey} />}
 
-      <div className="flex shrink-0 items-center justify-center gap-1 px-2 py-1.5">
-        <MicButton muted={call.muted} size="compact" />
-        <button
-          onClick={() => void setCamera(!call.camera)}
-          className={`rounded-md p-1.5 transition-colors ${
-            call.camera ? "bg-sol-cyan/15 text-sol-cyan" : "text-sol-text-muted hover:bg-sol-bg-highlight"
-          }`}
-          title={call.camera ? "Turn camera off" : "Turn camera on"}
-        >
-          {call.camera ? <Video className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}
-        </button>
+      {/* Every control wears its word. A row of five icons is a quiz; a row
+          of five words is a control bar. */}
+      <div className="flex shrink-0 items-start justify-center gap-1 px-2 py-1.5">
+        <DockControl word={call.muted ? "Unmute" : "Mute"}>
+          <MicButton muted={call.muted} size="compact" />
+        </DockControl>
+        <DockControl word={call.camera ? "Cam off" : "Camera"}>
+          <button
+            onClick={() => void setCamera(!call.camera)}
+            className={`rounded-md p-1.5 transition-colors ${
+              call.camera ? "bg-sol-cyan/15 text-sol-cyan" : "text-sol-text-muted hover:bg-sol-bg-highlight"
+            }`}
+            title={call.camera ? "Turn camera off" : "Turn camera on"}
+          >
+            {call.camera ? <Video className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}
+          </button>
+        </DockControl>
         {call.roomKey && call.phase === "connected" && (
           <>
-            <AddPeopleButton roomKey={call.roomKey} />
-            <RoomLockButton roomKey={call.roomKey} />
+            <DockControl word="Add">
+              <AddPeopleButton roomKey={call.roomKey} />
+            </DockControl>
+            <DockControl word="Lock">
+              <RoomLockButton roomKey={call.roomKey} />
+            </DockControl>
           </>
         )}
-        <div className="mx-0.5 h-5 w-px bg-sol-border" />
-        <HangUpButton size="compact" />
+        <div className="mx-0.5 h-5 w-px self-center bg-sol-border" />
+        <DockControl word="End">
+          <HangUpButton size="compact" />
+        </DockControl>
       </div>
     </div>
+  );
+}
+
+/** A control and its word, stacked: the word is the control's name, not a
+ *  tooltip the pointer has to earn. */
+function DockControl({ word, children }: { word: string; children: React.ReactNode }) {
+  return (
+    <span className="flex flex-col items-center gap-0.5 [&>span:only-child]:hidden">
+      {children}
+      <span className="font-mono text-[9.5px] leading-none text-sol-text-dim">{word}</span>
+    </span>
   );
 }
 

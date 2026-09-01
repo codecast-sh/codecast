@@ -45,32 +45,37 @@ export function FacesChrome({
 }) {
   return (
     <div className="faces-chrome" data-chrome-hit>
+      {/* Every button says its word. The tooltip carries the long form. */}
       <button
         data-chrome-btn="mode"
         className="faces-btn"
         onClick={onMode}
-        title={mode === "speaker" ? "Show everyone" : "Show whoever is talking"}
+        title={mode === "speaker" ? "Show everyone on the call" : "Show only whoever is talking"}
       >
         {mode === "speaker" ? <Users className="h-4 w-4" /> : <User className="h-4 w-4" />}
+        <span className="faces-btn-word">{mode === "speaker" ? "All" : "Talker"}</span>
       </button>
       <button
         data-chrome-btn="mute"
         className={`faces-btn${muted ? " faces-btn--alert" : " faces-btn--on"}`}
         onClick={onMute}
-        title={muted ? "Unmute" : "Mute"}
+        title={muted ? "Unmute — they hear you again" : "Mute — they stop hearing you"}
       >
         {muted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+        <span className="faces-btn-word">{muted ? "Unmute" : "Mute"}</span>
       </button>
-      <button data-chrome-btn="restore" className="faces-btn" onClick={onRestore} title="Back to the call window">
+      <button data-chrome-btn="restore" className="faces-btn" onClick={onRestore} title="Back to the full call window">
         <Maximize2 className="h-4 w-4" />
+        <span className="faces-btn-word">Window</span>
       </button>
       <button
         data-chrome-btn="leave"
         className="faces-btn faces-btn--alert"
         onClick={onLeave}
-        title={held ? "Leave the call" : "Close this window — the call stays where it is"}
+        title={held ? "Leave the call — hang up" : "Close this window — the call stays where it is"}
       >
         {held ? <PhoneOff className="h-4 w-4" /> : <X className="h-4 w-4" />}
+        <span className="faces-btn-word">{held ? "Leave" : "Close"}</span>
       </button>
     </div>
   );

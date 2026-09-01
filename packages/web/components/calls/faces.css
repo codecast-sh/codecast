@@ -218,16 +218,28 @@
   pointer-events: auto;
 }
 
+/* A button is an icon AND its word — a circle floating over somebody's work
+   has nowhere else to say what a button does. Fixed width (CHROME_BUTTON_W in
+   faceCrop.ts) so the window can be sized for the chrome before it is drawn. */
 .faces-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
+  gap: 4px;
+  width: 68px;
   height: 28px;
-  border-radius: 50%;
+  padding: 0 4px;
+  border-radius: 999px;
   color: var(--sol-text-muted);
   background: transparent;
   transition: background 120ms ease, color 120ms ease;
+}
+.faces-btn-word {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 .faces-btn:hover {
   background: color-mix(in srgb, var(--sol-text) 12%, transparent);
