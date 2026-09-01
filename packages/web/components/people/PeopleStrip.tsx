@@ -10,6 +10,7 @@ import { peopleHeadClass } from "./usePeopleDensity";
 import { WallFaceButton, type FaceDescription } from "./PeopleWall";
 import { useWall } from "./usePeopleWall";
 import { TeamPulseLine } from "./TeamPulseLine";
+import { PeopleLegend } from "./PeopleLegend";
 import { type PeopleRosterData } from "./usePeopleRoster";
 import { type TeamPulse } from "./teamPulse";
 import "./people.css";
@@ -81,7 +82,10 @@ export function PeopleStrip({
             <span className={`truncate ${desc.tone}`}>{desc.text}</span>
           </div>
         ) : (
-          <TeamPulseLine pulse={pulse} />
+          <div className="flex min-w-0 items-baseline gap-2">
+            <TeamPulseLine pulse={pulse} />
+            {callsEnabled && <PeopleLegend inline />}
+          </div>
         )}
       </div>
       {pin}

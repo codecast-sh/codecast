@@ -125,9 +125,9 @@ export function PresenceFaces() {
             className="presence-chip"
             data-face-hit
             style={{ width: OVERFLOW_CHIP_PX, height: OVERFLOW_CHIP_PX }}
-            title={`${overflow} more — open the people window`}
-            aria-label={`${overflow} more teammates. Open the people window.`}
-            onClick={() => void popOutPeople()}
+            title={`${overflow} more — open the full people list`}
+            aria-label={`${overflow} more teammates. Open the full people list.`}
+            onClick={() => void popOutPeople({ list: true })}
           >
             +{overflow}
           </button>
@@ -136,11 +136,23 @@ export function PresenceFaces() {
 
       {/* The slot: the hovered face's name and activity line (or its refusal
           reason), in the band the window grows on hover. */}
-      {desc && (
+      {desc ? (
         <div className="presence-desc" data-refused={desc.refused ? "1" : undefined} aria-hidden="true">
-          <span className="presence-desc-name">{desc.name}</span>
-          <span className={`presence-desc-line ${desc.tone}`}>{desc.text}</span>
+          <span className="presence-desc-row">
+            <span className="presence-desc-name">{desc.name}</span>
+            <span className={`presence-desc-line ${desc.tone}`}>{desc.text}</span>
+          </span>
+          {!desc.refused && (
+            <span className="presence-desc-gesture">HOLD to talk · TAP to message</span>
+          )}
         </div>
+      ) : (
+        hovered &&
+        callsEnabled && (
+          <div className="presence-desc presence-desc-legend" aria-hidden="true">
+            <span className="presence-desc-gesture">HOLD a face to talk · TAP to message</span>
+          </div>
+        )
       )}
 
       <div className="faces-chrome" data-chrome-hit>
@@ -154,23 +166,26 @@ export function PresenceFaces() {
           onPointerCancel={endDrag}
         >
           <GripVertical className="h-4 w-4" />
+          <span className="faces-btn-word">Drag</span>
         </button>
         <button
           data-chrome-btn="everyone"
           className={`faces-btn${everyone ? " faces-btn--on" : ""}`}
           onClick={() => setEveryone((v) => !v)}
           aria-pressed={everyone}
-          title={everyone ? "Show only who's around" : "Show everyone"}
+          title={everyone ? "Showing everyone — click to show only who's around" : "Showing who's around — click to show everyone"}
         >
           <Users className="h-4 w-4" />
+          <span className="faces-btn-word">{everyone ? "Here" : "All"}</span>
         </button>
         <button
           data-chrome-btn="people"
           className="faces-btn"
-          onClick={() => void popOutPeople()}
-          title="Open the people window"
+          onClick={() => void popOutPeople({ list: true })}
+          title="Open the full people list in a window"
         >
           <PanelTop className="h-4 w-4" />
+          <span className="faces-btn-word">List</span>
         </button>
         <button
           data-chrome-btn="close"
@@ -179,6 +194,7 @@ export function PresenceFaces() {
           title="Close the floating faces"
         >
           <X className="h-4 w-4" />
+          <span className="faces-btn-word">Close</span>
         </button>
       </div>
     </div>

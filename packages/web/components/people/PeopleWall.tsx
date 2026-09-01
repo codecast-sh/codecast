@@ -288,6 +288,12 @@ export function WallFaceButton({
         <span className={`people-face-line ${refused && blocked ? "text-sol-red" : PRESENCE_META[visual].text}`}>
           {refused && blocked ? blocked : line}
         </span>
+        {/* The gesture, under every face, every time: nobody should have to
+            guess what pressing a face does. Off while a refusal is showing —
+            the reason is the whole message then. */}
+        {!(refused && blocked) && !blocked && (
+          <span className="people-face-gesture">HOLD to talk · TAP to message</span>
+        )}
       </span>
     </span>
   );

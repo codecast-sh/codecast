@@ -1,5 +1,5 @@
 import { toast } from "sonner";
-import { PEOPLE_ROUTE, bridge } from "../../lib/desktop";
+import { PEOPLE_ROUTE, bridge, canOpenFacesOverlay, openFacesWindow } from "../../lib/desktop";
 import { popOutWindow } from "../../lib/popOut";
 
 /**
@@ -16,7 +16,15 @@ import { popOutWindow } from "../../lib/popOut";
  * popup, and it fires from the toast's own click, so it carries a fresh user
  * gesture and the blocker lets it through.
  */
-export async function popOutPeople(): Promise<void> {
+export async function popOutPeople(opts: { list?: boolean } = {}): Promise<void> {
+  // THE FLOATING FACES ARE THE DEFAULT. Popping the team out means "keep them
+  // over my work", and a see-through row of faces is that with no window
+  // around it. The buddy list is the shell's fallback and one click away from
+  // the overlay's own chrome (`list: true` asks for it outright).
+  if (!opts.list && canOpenFacesOverlay()) {
+    await openFacesWindow();
+    return;
+  }
   const outcome = await popOutWindow(PEOPLE_ROUTE, bridge("openPeopleWindow"), {
     name: "codecast-people",
     width: 320,
