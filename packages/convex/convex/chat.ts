@@ -3506,10 +3506,11 @@ async function maybeRelayToOriginSession(
   // The session's own line under its own root is not a reply to itself.
   if (opts.message.origin_session_id === root.origin_session_id) return no(null);
 
-  const conversation = await ctx.db
-    .query("conversations")
-    .withIndex("by_session_id", (q: any) => q.eq("session_id", root.origin_session_id))
-    .first();
+  // The root carries the canonical conversation id (sendMessage resolves the
+  // caller's ref before storing it); historical rows may still hold a native
+  // session id, and the shared resolver accepts either. Access is decided
+  // below, so any conversation is accepted here.
+  const conversation = await findConversationByAnyRefWhere(ctx, root.origin_session_id, () => true);
   if (!conversation) return no("session_not_found");
   if (!(await canSendProductMessage(ctx, opts.senderId, conversation))) return no("no_access");
 
