@@ -46,8 +46,7 @@ export function ChatLabel({ card }: { card: ThreadCardModel }) {
 }
 
 /** A chat timeline inside a card: the unread rule, grouped rows, the usual
- *  message actions. Bounded height; the page scrolls BETWEEN cards, the card
- *  scrolls WITHIN one. Shared by the chat and DM kinds. */
+ *  message actions. Shared by the chat and DM kinds. */
 export function ChatTimelineRows({
   messages,
   channelId,

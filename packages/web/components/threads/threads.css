@@ -352,6 +352,11 @@
 
 .th-card-auto .th-question-context { max-height: 140px; }
 
+.th-kind-chat .th-card-replies {
+  max-height: none;
+  overflow-y: visible;
+}
+
 /* The comment thread on the card's own surface. Its composer wears the app's
    one composer frame — CommentKind hands CommentComposer the `ch-composer`
    class, which draws the border, background and focus ring AND cancels the
