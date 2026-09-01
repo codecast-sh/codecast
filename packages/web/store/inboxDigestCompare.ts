@@ -29,7 +29,9 @@ import {
 } from "./inboxOverlays";
 import {
   INBOX_PAYLOAD_FRESH_MS,
+  placeInboxRows,
   projectReplicaInbox,
+  useInboxStore,
   type PlaceInboxState,
   type SessionsProjectionSlot,
 } from "./inboxStore";
@@ -47,9 +49,14 @@ export const INBOX_COMPARE_MAX_PAYLOAD_AGE_MS = INBOX_PAYLOAD_FRESH_MS;
 export const INBOX_PROBE_PAYLOAD_AGE_MS = 300_000;
 /** The stale-payload probe's slow budget: at most one per this window. */
 export const INBOX_PROBE_MIN_INTERVAL_MS = 300_000;
-/** Quiescence: no row apply for this many coarse ticks, nothing in flight. */
-export const INBOX_COMPARE_QUIESCENT_TICKS = 2;
-export const INBOX_COMPARE_QUIESCENT_MS = INBOX_COMPARE_QUIESCENT_TICKS * INBOX_COMPARE_TICK_MS;
+/** Quiescence: no COMMITTED row apply for this settle window, nothing in
+ *  flight. A short window, not a multiple of the tick: on a busy account a
+ *  real row change lands every 20 to 30 seconds (several agents streaming),
+ *  so "N ticks of silence" never held in prod and the compare stayed dark.
+ *  A steady-state apply is not catch-up — the overlay re-executes on the same
+ *  server change and re-stamps — so the gate only needs to outlast the pair
+ *  of pushes (base row and overlay) one server change produces. */
+export const INBOX_COMPARE_QUIESCENT_MS = 5_000;
 /** Heal budget: this many heals per fixed window, then the latch. */
 export const INBOX_HEAL_BUDGET = 3;
 export const INBOX_HEAL_WINDOW_MS = 600_000;
@@ -362,10 +369,14 @@ export function createInboxDigestComparer(io: InboxDigestComparerIO): InboxDiges
     // settled no channel ever re-delivered the killed row, so the replica
     // kept a killed-but-pinned card forever. The authoritative row lands its
     // fields; a row the server no longer returns is left alone (deletion
-    // truth is authorized absence) and stays a reported extra. Bucket/fold
-    // deltas on held rows are stale facts, and facts have one writer — the
-    // probe alone heals them.
-    const hydrate = [...diff.missing, ...diff.extra];
+    // truth is authorized absence) and stays a reported extra. A bucket or
+    // fold delta on a held row is re-read by id TOO: a stale fact heals with
+    // the probe, but the replica may hold a stale BASE field the overlay
+    // never carries — a phone whose copy of a folded row predated its settle
+    // verdict filed it needs_input against a done stamp, and a probe-only
+    // heal could never move it (prod, 2026-09-01). One byIds fetch per heal,
+    // bounded by the heal budget.
+    const hydrate = [...diff.missing, ...diff.extra, ...diff.bucket_deltas, ...diff.fold_deltas];
     cancelHeal = schedule(() => {
       cancelHeal = null;
       (async () => {
@@ -480,5 +491,85 @@ export function createInboxDigestComparer(io: InboxDigestComparerIO): InboxDiges
       if (cancelHeal) cancelHeal();
       cancelHeal = null;
     },
+  };
+}
+
+
+// ── Dev console handle (never production) ──────────────────────────────────
+// Attached as `window.__inboxDigest` by the hook, same convention as
+// `__inboxStore`. Everything here is READ ONLY over the live store: `evaluate`
+// is the pure compare with the tick's exact context (no heal, no telemetry),
+// `replica` the working-set projection at the payload's epoch, `place` the
+// chokepoint's sections as the panel asks for them, `renderVsStamp` the rows
+// whose render-time placement disagrees with the server stamp (a clock or
+// field gap, the class the 2026-09-01 "stopped" fact bug belonged to).
+export type InboxDigestDevHandle = {
+  evaluate: () => InboxCompareOutcome;
+  replica: () => ReturnType<typeof projectReplicaInbox>;
+  place: (focusedId?: string | null) => ReturnType<typeof placeInboxRows>;
+  renderVsStamp: () => Array<Record<string, unknown>>;
+  counters: InboxDigestComparer["counters"];
+  healLatched: InboxDigestComparer["healLatched"];
+  activity: () => { apply_age_ms: number; inflight: number };
+  /** Logs each CHANGE of outcome (never every tick) so a device with no
+   *  console handle still reports through its Metro output. */
+  logOutcome: (outcome: InboxCompareOutcome) => void;
+};
+
+export function createInboxDigestDevHandle(
+  comparer: InboxDigestComparer,
+  crawlMetaKeyFor: InboxDigestComparerIO["crawlMetaKeyFor"],
+): InboxDigestDevHandle {
+  const evaluate = () => {
+    const state = useInboxStore.getState();
+    const meId = state.currentUser?._id?.toString?.() ?? null;
+    return evaluateInboxCompare(state, {
+      now: Date.now(),
+      nowMono: monotonicNow(),
+      crawlMetaKey: crawlMetaKeyFor(meId),
+      lastApplyMono: lastSyncApplyMono(),
+      inflight: syncInflightCount(),
+    });
+  };
+  const replica = () => {
+    const state = useInboxStore.getState();
+    const slot = state.sessionsProjection?.mine;
+    return projectReplicaInbox(state, { scope: "mine", focusedId: null, epoch: slot?.epoch ?? 0, now: slot?.epoch ?? Date.now() });
+  };
+  const place = (focusedId: string | null = null) => placeInboxRows(useInboxStore.getState(), { scope: "mine", focusedId, now: Date.now() });
+  const renderVsStamp = () => {
+    const state = useInboxStore.getState();
+    const stamps = state.sessionsProjection?.mine?.stamps ?? {};
+    const placed = place(null);
+    const rep = replica();
+    const deltas: Array<Record<string, unknown>> = [];
+    for (const [id, stamp] of Object.entries(stamps)) {
+      const p = placed.placements.get(id);
+      if (!p || p.bucket === stamp.bucket) continue;
+      const r: any = state.sessions[id] ?? {};
+      const a: any = rep.adapted.get(id) ?? {};
+      deltas.push({
+        id: id.slice(0, 7), stamp: stamp.bucket, render: p.bucket, replica: rep.proj.placements.get(id)?.bucket ?? null,
+        row: { agent_status: r.agent_status, is_idle: r.is_idle, awaiting: r.awaiting_input, thread: r.thread_state_status, verdict: r.settle_verdict, updated_at: r.updated_at, msgs: r.message_count, allows_park: r.last_turn_allows_park, dormant_at: r.inbox_dormant_at, is_dormant: r.is_dormant, armed: r.armed_trigger_kind, has_pending: r.has_pending_messages, api_err: r.pending_api_error },
+        adapted: { agent_status: a.agent_status, is_idle: a.is_idle, verdict: a.settle_verdict, verdict_at: a.settle_verdict_at, dormant_at: a.inbox_dormant_at, has_pending: a.has_pending_messages },
+      });
+    }
+    return deltas;
+  };
+  let lastLogged = "";
+  const logOutcome = (outcome: InboxCompareOutcome) => {
+    const line = `${outcome.kind}${"reason" in outcome && outcome.reason ? ":" + outcome.reason : ""}`;
+    if (line === lastLogged) return;
+    lastLogged = line;
+    console.info(`[inboxDigest] ${line}`, "diff" in outcome && outcome.diff ? outcome.diff : "");
+    const deltas = renderVsStamp();
+    if (deltas.length) console.info("[inboxDigest] render_vs_stamp", JSON.stringify(deltas));
+  };
+  return {
+    evaluate, replica, place, renderVsStamp,
+    counters: comparer.counters,
+    healLatched: comparer.healLatched,
+    activity: () => ({ apply_age_ms: monotonicNow() - lastSyncApplyMono(), inflight: syncInflightCount() }),
+    logOutcome,
   };
 }

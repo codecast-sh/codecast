@@ -59,6 +59,20 @@ divergence. The list must cover what the message flush path ACTUALLY writes — 
 against live data). `pending_api_error*`/`loop_state` stay non exempt: the patch includes
 them only on genuine transitions.
 
+**What the exemption does to placement.** The inbox placement of a settled row (sync
+convergence C2, C6) reads two kinds of input: transition fields (`thread_state_status`,
+`settle_verdict`, `settle_verdict_at`, `armed_trigger_kind`) and clock fields that decide
+whether those verdicts have expired (`updated_at`, `last_heartbeat`, `agent_status_updated_at`,
+through `bucket_stale_at`). The transition fields change on real transitions and emit sync
+actions, so a replica holds them exactly. The clock fields are churn exempt, so a replica's
+copy of them lags for every row outside the live windows. That lag is why the liveness
+overlay is the fact writer for `updated_at` and the trust decay: a replica must never expire
+a dormant or done verdict from its own stale copy of a churn exempt clock. The rule the two
+documents share: a verdict expiry is evaluated only against clock facts the overlay refreshed
+inside the compare's payload age bound, and a row the overlay stopped covering keeps its last
+verdict until a semantic transition or the completeness crawl re-delivers it. Widening
+`CHURN_ONLY_FIELDS` with a field the placement reads as a transition breaks that rule.
+
 **Coalescing (bounded table).** An entity's active row in a scope is MOVED to the new head
 (patch position + op + ts) instead of appended again, so the table is bounded by churned
 entity count per scope plus revocation tombstones — not change volume. The rule is keyed by

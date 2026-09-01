@@ -405,14 +405,17 @@ describe("heal (C7)", () => {
     expect(h.comparer.counters()).toMatchObject({ heals: 1, heals_missing: 1, mismatches: 1 });
   });
 
-  it("bucket/fold deltas on held rows heal by one probe only — never a refetch", async () => {
+  it("bucket/fold deltas on held rows re-read the row by id AND probe once — never a working-set refetch", async () => {
+    // The probe heals a stale FACT; the byIds read heals a stale BASE field
+    // (a settle verdict a phone's folded copy never received — prod,
+    // 2026-09-01). Both ride one heal, inside one budget slot.
     const h = harness();
     h.comparer.tick(driftingState());
     h.comparer.tick(driftingState(EPOCH + MIN));
     await h.flushHeal();
-    expect(h.fetched).toEqual([]);
+    expect(h.fetched).toEqual([[B]]);
     expect(h.probes).toBe(1);
-    expect(h.comparer.counters()).toMatchObject({ heals: 1, heals_missing: 0 });
+    expect(h.comparer.counters()).toMatchObject({ heals: 1, heals_missing: 1 });
   });
 
   it("extras are re-read by id and reported, never deleted", async () => {

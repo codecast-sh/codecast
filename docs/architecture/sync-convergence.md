@@ -345,9 +345,14 @@ diff does all three.
    silence plus a signal, never a storm.
 3. Payload age (receipt clock) is under the bound; otherwise skip, count, and consider
    a probe (C2).
-4. The appliers are quiescent: no sync applies for the last N coarse ticks, no in
-   flight sync log range, crawl page, or recovery poll. Mid catch up divergence is
-   ordinary eventual consistency, not drift.
+4. The appliers are quiescent: no committed row apply inside a short settle window
+   (five seconds; a value identical re-push does not count), no in flight sync log
+   range, crawl page, or recovery poll. Mid catch up divergence is ordinary eventual
+   consistency, not drift. The window is short on purpose: on a busy account a real
+   row change lands every 20 to 30 seconds, so a rule of "N ticks of silence" never
+   held in production and the compare stayed dark. A steady state apply is not catch
+   up, because the overlay re-executes on the same server change and re-stamps; the
+   gate only needs to outlast the pair of pushes one change produces.
 5. The replica is complete for the scope: the completeness crawl has stamped
    `backfilledAt`. A cold device compares nothing until it can honestly claim the set.
 6. Scope is covered (personal scope; team scope is out, C4).
