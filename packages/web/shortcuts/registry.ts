@@ -69,6 +69,7 @@ export type ShortcutAction =
   | 'review.prevFile'
   | 'review.comment'
   | 'compose.focus'
+  | 'compose.richToggle'
   | 'sidebar.toggleLeft'
   | 'sidebar.toggleRight'
   | 'sidebar.toggleComments'
@@ -94,6 +95,19 @@ export type ShortcutAction =
   | 'list.search'
   | 'list.edit'
   | 'list.actions'
+  | 'list.create'
+  | 'list.selectAll'
+  | 'list.first'
+  | 'list.last'
+  | 'list.tab'
+  | 'task.status'
+  | 'task.priority'
+  | 'task.labels'
+  | 'task.assign'
+  | 'task.back'
+  | 'doc.type'
+  | 'doc.labels'
+  | 'doc.toggleEdit'
   | 'vault.quickSwitch'
   | 'vault.search'
   | 'vault.find'
@@ -219,6 +233,13 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'r', action: 'conv.review', when: 'conversation', description: 'Quote selected text into your reply' },
   { key: 'meta+shift+l', action: 'conv.copyLink', when: 'conversation', skipInputCheck: true, description: 'Copy conversation link' },
   { key: 'ctrl+shift+c', mac: 'meta+shift+c', action: 'conv.cycleDensity', when: 'conversation', skipInputCheck: true, description: 'Cycle message density' },
+  // ⌘⇧E swaps the plain composer textarea for the rich (TipTap) editor. The
+  // handler is hand-rolled inside the composer — it has to run with the
+  // textarea focused and move focus into the editor it creates — so this def
+  // exists to list the key in the shortcuts help (the pushToTalk pattern).
+  // meta with no ctrl variant on purpose: ctrl+shift+e is session.rename,
+  // which wins at the capture listener.
+  { key: 'meta+shift+e', action: 'compose.richToggle', when: 'conversation', skipInputCheck: true, description: 'Toggle rich compose editor' },
 
   { key: 'escape', action: 'msg.clearSelection', when: 'conversation', skipInputCheck: true, description: 'Clear selection' },
   { key: 'alt+j', action: 'msg.next', when: 'conversation', description: 'Next user message' },
@@ -278,6 +299,25 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: '/', action: 'list.search', when: 'list', description: 'Search' },
   { key: 'e', action: 'list.edit', when: 'list', description: 'Edit name' },
   { key: 'd', action: 'list.actions', when: 'list', description: 'Actions menu' },
+  { key: 'c', action: 'list.create', when: 'list', description: 'New item' },
+  { key: 'ctrl+a', mac: 'meta+a', action: 'list.selectAll', when: 'list', description: 'Select all' },
+  { key: '1', action: 'list.tab', when: 'list', description: 'Switch tab (1–9)' },
+  { key: 'home', action: 'list.first', when: 'list', description: 'Jump to top' },
+  { key: 'end', action: 'list.last', when: 'list', description: 'Jump to bottom' },
+
+  // Tasks and Docs keys, hand-rolled where they live (the list pages' palette
+  // shortcuts in app/tasks and app/docs, the task detail page's handler, and
+  // DocumentDetailLayout's edit toggle). The defs exist so the shortcuts help
+  // covers them; the 'tasks'/'docs' contexts are never activated, so they are
+  // inert in dispatch.
+  { key: 's', action: 'task.status', when: 'tasks', description: 'Set status' },
+  { key: 'p', action: 'task.priority', when: 'tasks', description: 'Set priority' },
+  { key: 'l', action: 'task.labels', when: 'tasks', description: 'Edit labels' },
+  { key: 'a', action: 'task.assign', when: 'tasks', description: 'Assign (task list)' },
+  { key: 'backspace', action: 'task.back', when: 'tasks', description: 'Back to task list (detail page)' },
+  { key: 't', action: 'doc.type', when: 'docs', description: 'Set doc type' },
+  { key: 'l', action: 'doc.labels', when: 'docs', description: 'Edit labels' },
+  { key: 'ctrl+e', mac: 'meta+e', action: 'doc.toggleEdit', when: 'docs', description: 'Toggle edit mode (doc page)' },
 ];
 
 export const shortcutCatalog = createShortcutCatalog(SHORTCUTS);

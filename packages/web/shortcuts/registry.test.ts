@@ -1,5 +1,25 @@
 import { test, expect, describe } from "bun:test";
 import { SHORTCUTS, inputGuardBypass, hasOpenModal, type ShortcutAction, type ShortcutDef } from "./registry";
+import { HELP_SECTIONS } from "./sections";
+
+// The "?" panel renders one section per context in HELP_SECTIONS; a def whose
+// `when` has no section row is silently invisible in the help. Coverage of the
+// catalog is total or the panel lies about what the keyboard can do.
+describe("shortcuts help covers the whole catalog", () => {
+  test("every binding context has a help panel section", () => {
+    const sectionWhens = new Set(HELP_SECTIONS.map((s) => s.when));
+    const missing = [...new Set(SHORTCUTS.map((d) => d.when))].filter(
+      (w) => !sectionWhens.has(w),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  test("help sections carry no dead contexts", () => {
+    const defWhens = new Set(SHORTCUTS.map((d) => d.when));
+    const dead = HELP_SECTIONS.map((s) => s.when).filter((w) => !defWhens.has(w));
+    expect(dead).toEqual([]);
+  });
+});
 
 // Regression guard for the "session died mysteriously" incident: a ctrl+shift+
 // backspace kill chord fired while the composer was focused (ctrl+backspace is the

@@ -2,6 +2,7 @@ import { cloneElement, isValidElement, useEffect, useMemo, useRef, useState, typ
 import { X, Keyboard } from "lucide-react";
 import { formatShortcutParts, formatAcceleratorParts, getShortcutsForAction, getShortcutsByContext } from "../shortcuts";
 import type { ShortcutAction, ShortcutDef } from "../shortcuts";
+import { HELP_SECTIONS } from "../shortcuts/sections";
 import { useTrackedStore } from "../store/inboxStore";
 import { useEventListener } from "../hooks/useEventListener";
 import { DESKTOP_SHORTCUTS, getDesktopShortcutConfig } from "../lib/desktop";
@@ -23,14 +24,6 @@ export function KeyCap({ children, size = "sm" }: { children: React.ReactNode; s
   );
 }
 
-const SECTION_ORDER: { when: string | undefined; label: string; accent: string }[] = [
-  { when: undefined, label: "Global", accent: "bg-sol-cyan" },
-  { when: "conversation", label: "Conversation", accent: "bg-sol-blue" },
-  { when: "diff", label: "Diff", accent: "bg-sol-green" },
-  { when: "list", label: "List", accent: "bg-sol-orange" },
-  { when: "review", label: "Review", accent: "bg-sol-violet" },
-  { when: "desktop", label: "Desktop", accent: "bg-sol-yellow" },
-];
 
 export function KeyboardShortcutsPanel() {
   const s = useTrackedStore([
@@ -63,7 +56,7 @@ export function KeyboardShortcutsPanel() {
   const sections = useMemo(() => {
     const seen = new Set<string>();
     const result: { label: string; accent: string; shortcuts: ShortcutDef[] }[] = [];
-    for (const { when, label, accent } of SECTION_ORDER) {
+    for (const { when, label, accent } of HELP_SECTIONS) {
       const defs = getShortcutsByContext(when).filter(d => {
         if (seen.has(d.action)) return false;
         seen.add(d.action);

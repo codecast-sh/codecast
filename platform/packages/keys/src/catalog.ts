@@ -146,6 +146,8 @@ function formatPart(part: string, isMac: boolean): string {
     case 'arrowright': return '→';
     case 'space': return '␣';
     case 'delete': return isMac ? '⌦' : 'Del';
+    case 'home': return 'Home';
+    case 'end': return 'End';
     default: return part.toUpperCase();
   }
 }
