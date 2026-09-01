@@ -9202,7 +9202,13 @@ function deriveLivenessAt(
   }
 
   return {
-    agent_status: agentStatus,
+    // Every fact is EXPLICIT, null when there is none (C1: facts have one
+    // writer). Convex drops an undefined key from the payload, and a replica
+    // that merges only the keys it receives then keeps the previous
+    // execution's value forever — a "stopped" from the day the daemon died
+    // outlived the managed row and filed a declared-done session under Needs
+    // Input on every replica while this stamp said done (prod, 2026-09-01).
+    agent_status: agentStatus ?? null,
     is_idle: isIdle,
     is_unresponsive: isUnresponsive,
     awaiting_input: awaitingInput,

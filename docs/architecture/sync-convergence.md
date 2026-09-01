@@ -80,7 +80,12 @@ message body). The overlay also carries fact rows for the live CHILDREN it probe
 child facts. Facts have one writer: `syncTable` strips fact fields from every other
 sessions channel, so no channel can write a torn or stale value over a fresher one. The
 fact field names live in one shared constant; the server strip list and the client
-preserve list both derive from it, with a signature test.
+preserve list both derive from it, with a signature test. Every fact is explicit on the
+wire, null when there is none, and the replica reads an absent fact as null. Convex drops
+an undefined key, and a merge that only writes the keys it receives keeps the previous
+execution's value: a "stopped" from the day a daemon died outlived the managed row and
+filed a declared done session under Needs Input on every replica while the stamp beside
+it said done.
 
 Rows the scan does not cover (past a window cap, killed and unpinned, outside every
 window) keep their last synced facts until a crawl or a semantic transition refreshes

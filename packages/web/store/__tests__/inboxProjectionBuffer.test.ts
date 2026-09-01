@@ -109,6 +109,23 @@ describe("applyInboxLivenessPayload — the one applier for { liveness, projecti
     expect(slot.stamps[A]).toEqual(stamp as any);
   });
 
+  it("an absent fact is null: a stale \"stopped\" does not outlive the payload that dropped it", () => {
+    // Prod, 2026-09-01: the managed row aged out, the server's trusted status
+    // became undefined, Convex dropped the key, and a merge that only wrote the
+    // keys it received kept "stopped" from the day the daemon died — filing a
+    // declared-done session under Needs Input on every replica while the stamp
+    // beside it said done.
+    useInboxStore.setState({ sessions: { [A]: row(A, { agent_status: "stopped", thread_state_status: "done", message_count: 40 }) } } as any);
+    useInboxStore.getState().applyInboxLivenessPayload("mine", {
+      liveness: { [A]: { is_idle: true, awaiting_input: false, is_connected: false, message_count: 40, updated_at: 5, ...stamp, bucket: "done", work_state: "done" } },
+      projection: { v: INBOX_PROJECTION_VERSION, epoch: 60_000, tally: null, set_digest: null, truncated: [] },
+    });
+    const s = useInboxStore.getState().sessions[A] as any;
+    expect(s.agent_status).toBeNull();
+    expect(s.is_idle).toBe(true);
+    expect(s.thread_state_status).toBe("done");
+  });
+
   it("a fact-only child row (no bucket key) merges facts but adds no stamp", () => {
     useInboxStore.getState().applyInboxLivenessPayload("mine", {
       liveness: { [CHILD]: { agent_status: "working", is_idle: false } },
