@@ -4,6 +4,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import {
   createInboxDigestComparer,
+  createInboxDigestDevHandle,
   INBOX_COMPARE_TICK_MS,
   type InboxDigestComparer,
 } from "../store/inboxDigestCompare";
@@ -29,10 +30,11 @@ export function startInboxDigestCompare(
   convex: { query: (fn: any, args: any) => Promise<any> },
   subscribeTick: (intervalMs: number, fn: () => void) => () => void = subscribeCoarseTick,
 ): { comparer: InboxDigestComparer; dispose: () => void } {
+  const crawlMetaKeyFor = (meId: string | null) => (meId ? syncMetaKey("sessions", inboxCrawlWsKey(meId)) : null);
   const comparer = createInboxDigestComparer({
     platform: getPlatform(),
     track,
-    crawlMetaKeyFor: (meId) => (meId ? syncMetaKey("sessions", inboxCrawlWsKey(meId)) : null),
+    crawlMetaKeyFor,
     fetchByIds: async (ids) => {
       const rows = await batchGet(convex, "sessions", ids);
       useInboxStore.getState().applyHealedSessions(ids, rows);
@@ -43,9 +45,23 @@ export function startInboxDigestCompare(
       useInboxStore.getState().applyInboxLivenessPayload("mine", fresh);
     },
   });
+  // Dev console handle (same convention as __inboxStore): the read-only
+  // diagnostics live in the compare module (an allowed reader of the stamp
+  // buffer); this mount only adds the two IO peeks and attaches it.
+  const dev = process.env.NODE_ENV !== "production" ? createInboxDigestDevHandle(comparer, crawlMetaKeyFor) : null;
+  if (dev && typeof window !== "undefined") {
+    (window as any).__inboxDigest = {
+      ...dev,
+      /** One raw overlay execution, as the server ships it (nothing applied). */
+      overlay: () => convex.query(api.conversations.sessionsLiveness, { _probe: Date.now() }),
+      /** The server's current rows for ids (read only; nothing applied). */
+      peek: (ids: string[]) => batchGet(convex, "sessions", ids),
+    };
+  }
   const unsubscribe = subscribeTick(INBOX_COMPARE_TICK_MS, () => {
     try {
-      comparer.tick(useInboxStore.getState());
+      const outcome = comparer.tick(useInboxStore.getState());
+      dev?.logOutcome(outcome);
     } catch (err) {
       console.warn("[inboxDigest] tick failed", err);
     }

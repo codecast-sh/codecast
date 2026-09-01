@@ -8146,9 +8146,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   syncTable: sync(function (this: Draft, field: string, incoming: any, opts?: SyncOpts) {
     if (!incoming && incoming !== 0) return;
-    // Quiescence clock for the digest compare (sync-convergence C6): a row
-    // channel is applying, so the replica is mid catch-up until it settles.
-    if (SYNC_ACTIVITY_FIELDS.has(field)) noteSyncApply();
     const config = SYNC_REGISTRY[field] ? { ...SYNC_REGISTRY[field], ...opts } : (opts || {});
     const kind = config.kind ?? "collection";
 
@@ -8336,6 +8333,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
       }
     }
 
+    // Quiescence clock for the digest compare (sync-convergence C6): a row
+    // channel COMMITTED a change, so the replica is mid catch-up until it
+    // settles. Stamped here, past the no-op bail above, because a busy account
+    // re-pushes the sessions channel every few seconds (liveness heartbeats
+    // re-emit the live window; facts are stripped from this channel, so those
+    // pushes are value-identical) and a value-identical push is not catch-up
+    // — stamping it kept the compare gated on not_quiescent forever. Decided
+    // by IDENTITY, like the no-op bail: applySyncTable hands back the previous
+    // table and pending objects when nothing it compares changed (the sessions
+    // channel registers a transform, so it never reaches that bail).
+    if (SYNC_ACTIVITY_FIELDS.has(field) && (base[field] !== table || base.pending !== (pending as any))) noteSyncApply();
     // applySyncTable returns the PREVIOUS table/pending objects untouched when
     // a push changed nothing (whole-collection identity reuse) — skip the draft
     // writes so a no-op sync produces no commit at all.
