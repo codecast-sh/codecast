@@ -62,12 +62,11 @@ import {
  * the window boundary.
  *
  * ── How it leaves ─────────────────────────────────────────────────────────
- * Closing this window is a request to carry on in the main window, not a
- * hang-up: the shell hands the room back and the main window joins it, which
- * evicts this one by the same mechanism, in the same order. Hanging up is the
- * other door and it is explicit — the control bar's own button ends the call,
- * and this window then closes behind it having declared that the call is over,
- * so nothing is handed anywhere.
+ * The X hides this window, like the palette: the huddle stays here, the
+ * microphone stays open, and the main window does not grow a card trapped in
+ * its edges. Hanging up is the other door and it is explicit — the control
+ * bar's own button ends the call, and this window then closes behind it
+ * having declared that the call is over.
  */
 
 /**

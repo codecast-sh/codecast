@@ -20,6 +20,7 @@ import { nextShortId } from "./counters";
 import { internal } from "./_generated/api";
 import { isViableInboxParent } from "./inboxFilters";
 import { listLiveManagedSessions } from "./lib/liveSessions";
+import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { bucketTs } from "./presenceState";
 import { enqueuePendingMessage } from "./pendingMessages";
@@ -2312,11 +2313,13 @@ export const webGetByIds = query({
     // activity fresh (the store preserves the field across list deltas, which
     // never send it). Bounded: ≤300 ids, one indexed lookup each. History is
     // heavier (needs user enrichment) and still rides only webGetTaskDetail.
+    // session_info must ride along: this merges into the same tasks[id].comments
+    // the enriched detail query fills, and a raw row here clobbers it.
     for (const task of result) {
-      task.comments = await ctx.db
+      task.comments = await attachCommentSessionInfo(ctx, await ctx.db
         .query("task_comments")
         .withIndex("by_task_id", (q: any) => q.eq("task_id", task._id))
-        .collect();
+        .collect());
     }
     return { items: result };
   },
@@ -2641,10 +2644,10 @@ export const webGet = query({
 
     if (!task || !(await canAccessTask(ctx, userId, task))) return null;
 
-    const comments = await ctx.db
+    const comments = await attachCommentSessionInfo(ctx, await ctx.db
       .query("task_comments")
       .withIndex("by_task_id", (q) => q.eq("task_id", task!._id))
-      .collect();
+      .collect());
 
     let plan = null;
     if (task.plan_id) {

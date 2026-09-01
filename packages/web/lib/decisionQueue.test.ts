@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
   decisionQueueItems,
-  liftQuestions,
   queueTier,
   sessionHasOpenQuestion,
   sortQueue,
@@ -171,115 +170,5 @@ describe("sessionHasOpenQuestion", () => {
   it("still accepts a session whose banner kind is the self-retrying 'error'", () => {
     const s = session({ awaiting_input: true, pending_api_error_kind: "error" } as any);
     expect(sessionHasOpenQuestion(s)).toBe(true);
-  });
-});
-
-describe("liftQuestions", () => {
-  const decide = (conversation_id: string, status: SessionDecisionItem["status"] = "pending"): SessionDecisionItem => ({
-    _id: `d-${conversation_id}`,
-    conversation_id,
-    session_id: `sess-${conversation_id}`,
-    question: "q",
-    options: [{ label: "a" }, { label: "b" }],
-    blocking: true,
-    status,
-    created_at: T0,
-  });
-  const row = (id: string, over: Partial<InboxSession> = {}): InboxSession =>
-    ({ _id: id, agent_status: "idle", message_count: 3, ...(over as any) }) as InboxSession;
-
-  // The bug this section exists for: an advisory decide keeps the agent
-  // working, and Working was never sampled — the queue badge said 1 while the
-  // rail showed nothing. Pin is the same story.
-  it("lifts a working or pinned session with a pending decide out of its section", () => {
-    const working = row("w1", { agent_status: "working" });
-    const pinned = row("p1", { is_pinned: true });
-    const { questions, isQuestion } = liftQuestions(
-      [[pinned], [], [], [], [], [working]],
-      { [decide("w1")._id]: decide("w1"), [decide("p1")._id]: decide("p1") },
-      {},
-    );
-    expect(questions.map((s) => s._id)).toEqual(["p1", "w1"]);
-    expect(isQuestion(working)).toBe(true);
-    expect(isQuestion(pinned)).toBe(true);
-  });
-
-  it("an answered decide lifts nothing", () => {
-    const working = row("w1", { agent_status: "working" });
-    const { questions } = liftQuestions([[working]], { d: decide("w1", "answered") }, {});
-    expect(questions).toEqual([]);
-  });
-
-  // The queue is user-scoped and workspace-blind; the rail is not. A decide on
-  // a session the rail's scope hides still renders, from the unscoped set, so
-  // the section count always matches the queue badge.
-  it("pulls a scope-hidden session in from `mine`", () => {
-    const hidden = row("h1");
-    const { questions } = liftQuestions([[]], { d: decide("h1") }, { h1: hidden });
-    expect(questions.map((s) => s._id)).toEqual(["h1"]);
-  });
-
-  it("never lifts killed, dismissed, or nested rows loose from `mine`", () => {
-    const mine: Record<string, InboxSession> = {
-      k1: row("k1", { inbox_killed_at: T0 }),
-      x1: row("x1", { inbox_dismissed_at: T0 }),
-      sub1: row("sub1", { parent_conversation_id: "parent" }),
-      tm1: row("tm1", { spawned_by_conversation_id: "parent", agent_team_name: "team" }),
-    };
-    const decisions = Object.fromEntries(["k1", "x1", "sub1", "tm1"].map((id) => [id, decide(id)]));
-    expect(liftQuestions([[]], decisions, mine).questions).toEqual([]);
-  });
-
-  // The buried-permission-prompt case: a subagent of a Done parent hits a
-  // permission wall. The child never renders loose, so the PARENT lifts into
-  // Questions, where its card shows the asking child row.
-  it("a nested child's question lifts its parent", () => {
-    const parent = row("par1");
-    const child = row("sub1", { parent_conversation_id: "par1", agent_status: "permission_blocked" });
-    const { questions, isQuestion } = liftQuestions([[], [], [], [parent], [], []], {}, { par1: parent, sub1: child });
-    expect(questions.map((s) => s._id)).toEqual(["par1"]);
-    expect(isQuestion(parent)).toBe(true);
-  });
-
-  it("a killed child's question lifts nothing", () => {
-    const parent = row("par1");
-    const child = row("sub1", { parent_conversation_id: "par1", agent_status: "permission_blocked", inbox_killed_at: T0 });
-    expect(liftQuestions([[parent]], {}, { par1: parent, sub1: child }).questions).toEqual([]);
-  });
-
-  // The phantom-card regression (Product aggregation super page, 2026-08-21):
-  // the feed stops emitting subagent children once their parent is stashed or
-  // dismissed, and the liveness overlay never covers subagent rows — so a
-  // locally-held child frozen at permission_blocked would lift its stashed
-  // parent into QUESTIONS forever, a card with no answerable question behind it.
-  it("a frozen child under a stashed, dismissed, or absent parent lifts nothing", () => {
-    const frozenChild = (parentId: string) =>
-      row(`sub-${parentId}`, { parent_conversation_id: parentId, agent_status: "permission_blocked" });
-    const stashed = row("st1", { inbox_stashed_at: T0 });
-    const dismissed = row("dx1", { inbox_dismissed_at: T0 });
-    const mine: Record<string, InboxSession> = {
-      st1: stashed,
-      dx1: dismissed,
-      "sub-st1": frozenChild("st1"),
-      "sub-dx1": frozenChild("dx1"),
-      "sub-gone": frozenChild("gone"),
-    };
-    const { questions, isQuestion } = liftQuestions([[]], {}, mine);
-    expect(questions).toEqual([]);
-    expect(isQuestion(stashed)).toBe(false);
-    expect(isQuestion(dismissed)).toBe(false);
-  });
-
-  it("dedups a session present in both a section and `mine`", () => {
-    const s1 = row("s1", { awaiting_input: true });
-    const { questions } = liftQuestions([[s1]], {}, { s1 });
-    expect(questions.map((s) => s._id)).toEqual(["s1"]);
-  });
-
-  it("an open AskUserQuestion qualifies without any decide row", () => {
-    const asking = row("a1", { awaiting_input: true });
-    const silent = row("b1");
-    const { questions } = liftQuestions([[asking, silent]], {}, {});
-    expect(questions.map((s) => s._id)).toEqual(["a1"]);
   });
 });

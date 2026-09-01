@@ -10,7 +10,6 @@ import { urlSessionId } from "../../lib/pathLabel";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DashboardLayout } from "../../components/DashboardLayout";
-import { KeyCap } from "../../components/KeyboardShortcutsHelp";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { ConversationPlaceholder } from "../../components/ConversationPlaceholder";
 import { ConversationDiffLayout } from "../../components/ConversationDiffLayout";
@@ -20,7 +19,7 @@ import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, isInterruptControlMessage, ensureHydrated, sessionRowFromSummary, resolveInboxHome } from "../../store/inboxStore";
 import { FleetBoard, InboxHomeToggle } from "../../components/FleetBoard";
 import { SharePopover } from "../../components/SharePopover";
-import { SessionErrorBanner } from "../../components/SessionErrorBanner";
+import { SessionErrorBanner, SessionResumeBanner } from "../../components/SessionErrorBanner";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { EmptyState } from "../../components/EmptyState";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
@@ -168,20 +167,12 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
 
   return (
     <div className="relative h-full flex flex-col">
-      {isOwnSession && (resumeState === "resuming" || resumeState === "sent") && (
-        <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-orange/90 text-sol-bg text-xs backdrop-blur-sm">
-          <span className="w-1.5 h-1.5 rounded-full bg-sol-bg animate-pulse" />
-          Resuming session...
-        </div>
-      )}
-      {isOwnSession && resumeState === "failed" && (
-        <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-red/90 text-sol-bg text-xs backdrop-blur-sm">
-          <span className="w-1.5 h-1.5 rounded-full bg-sol-bg" />
-          Resume timed out
-          <button onClick={handleManualResume} className="ml-1 px-1.5 py-0.5 rounded bg-sol-bg/20 hover:bg-sol-bg/30 transition-colors">
-            Retry
-          </button>
-        </div>
+      {isOwnSession && (
+        <SessionResumeBanner
+          resumeState={resumeState}
+          looksAbandoned={looksAbandoned && !sessionError}
+          onResume={handleManualResume}
+        />
       )}
       {isOwnSession && sessionError && resumeState === "idle" && (
         <SessionErrorBanner
@@ -193,15 +184,6 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
           ownerDeviceId={(conversation as any).owner_device_id}
           onResume={handleManualResume}
         />
-      )}
-      {isOwnSession && looksAbandoned && !sessionError && resumeState === "idle" && (
-        <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-bg-alt/90 border-b border-sol-border/50 text-sol-text-dim text-xs backdrop-blur-sm">
-          <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/50" />
-          Session unresponsive — send a message or
-          <button onClick={handleManualResume} className="px-1.5 py-0.5 rounded bg-sol-cyan/10 hover:bg-sol-cyan/20 border border-sol-cyan/30 text-sol-cyan transition-colors">
-            Resume
-          </button>
-        </div>
       )}
       <div className="flex-1 min-h-0">
         <ConversationDiffLayout
@@ -284,12 +266,6 @@ export function QueuePageClient() {
   // chronological feed. Persisted per-user (stamped LWW).
   const inboxHome = useInboxStore((s) => resolveInboxHome(s.clientState.ui));
   const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
-
-  // inbox_shortcuts_hidden is mirrored to localStorage (see CRITICAL_UI_KEYS in
-  // inboxStore.ts), so it's seeded synchronously and correct on first paint.
-  const shortcutsHidden = useInboxStore(s => s.clientState.ui?.inbox_shortcuts_hidden ?? false);
-  const showShortcuts = !shortcutsHidden;
-
 
 
   const isPopstateRef = useRef(false);
@@ -717,25 +693,7 @@ export function QueuePageClient() {
   return (
     <DashboardLayout>
       <InboxShortcuts />
-      <div className="flex flex-col h-full">
-      <div className="flex-1 min-h-0">{inboxContent}</div>
-      {showShortcuts && (
-        <div className="flex-shrink-0 px-3 py-1 border-t border-sol-border/30 bg-sol-bg-alt/30 flex items-center gap-3 text-[10px] text-sol-text-dim">
-          <span className="flex items-center gap-1">
-            <span className="flex items-center gap-[2px]"><KeyCap size="xs">{"\u2303"}</KeyCap><KeyCap size="xs">J</KeyCap><span className="text-sol-text-dim/40">/</span><KeyCap size="xs">K</KeyCap></span> nav
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="flex items-center gap-[2px]"><KeyCap size="xs">{"\u2303"}</KeyCap><KeyCap size="xs">I</KeyCap></span> idle
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="flex items-center gap-[2px]"><KeyCap size="xs">{"\u2303"}</KeyCap><KeyCap size="xs">{"\u232b"}</KeyCap></span> dismiss
-          </span>
-          <button onClick={() => useInboxStore.getState().toggleShortcutsPanel()} className="ml-auto flex items-center gap-1 hover:text-sol-text-muted transition-colors">
-            <KeyCap size="xs">?</KeyCap> all shortcuts
-          </button>
-        </div>
-      )}
-      </div>
+      <div className="h-full">{inboxContent}</div>
     </DashboardLayout>
   );
 }

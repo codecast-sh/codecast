@@ -23,6 +23,15 @@ import {
 
 class FakeTrack {
   readyState = "live";
+  /** The last applyConstraints payload — how a test sees the echo-cancellation
+   *  flip when the loopback feed lands. */
+  constraints: Record<string, unknown> | null = null;
+  onended: (() => void) | null = null;
+  constructor(public kind: string = "audio") {}
+  applyConstraints(c: Record<string, unknown>) {
+    this.constraints = c;
+    return Promise.resolve();
+  }
   stop() {
     this.readyState = "ended";
   }
@@ -55,6 +64,9 @@ class FakeAudioContext {
   }
   createGain() {
     return { gain: { value: 1 }, connect() {}, disconnect() {} };
+  }
+  createMediaStreamDestination() {
+    return { stream: new (globalThis as any).MediaStream([]) };
   }
   get destination() {
     return {};
@@ -92,6 +104,13 @@ class FakeMediaRecorder {
 let micTracks: FakeTrack[] = [];
 /** What getUserMedia does when the recorder asks. */
 let micGrants = true;
+/** The desktop loopback feed: what getDisplayMedia does when the recorder
+ *  asks for the computer's audio. */
+let displayGrants = true;
+let sysTracks: Array<{ video: FakeTrack; audio: FakeTrack }> = [];
+/** When set, getDisplayMedia waits on it — a permission prompt somebody
+ *  answers after the recording is already over. */
+let displayGate: Promise<void> | null = null;
 
 // Bun runs every test file in ONE process, so a global this file replaces is a
 // global the next file inherits. Restoring by assignment is not enough: a key
@@ -107,6 +126,7 @@ const ORIGINAL_KEYS = [
   "fetch",
   "requestAnimationFrame",
   "cancelAnimationFrame",
+  "window",
 ];
 
 // ── the fake convex client ─────────────────────────────────────────────────
@@ -133,6 +153,9 @@ beforeEach(() => {
   mutations = [];
   micTracks = [];
   micGrants = true;
+  displayGrants = true;
+  sysTracks = [];
+  displayGate = null;
   uploadWorks = true;
   FakeAudioContext.made = [];
   FakeMediaRecorder.made = [];
@@ -144,12 +167,15 @@ beforeEach(() => {
   install("AudioContext", FakeAudioContext);
   install("MediaRecorder", FakeMediaRecorder);
   (globalThis as any).MediaStream = class {
-    constructor(public tracks: unknown[] = []) {}
+    constructor(public tracks: Array<{ kind?: string }> = []) {}
     getTracks() {
       return this.tracks;
     }
     getAudioTracks() {
-      return this.tracks;
+      return this.tracks.filter((t) => t?.kind !== "video");
+    }
+    getVideoTracks() {
+      return this.tracks.filter((t) => t?.kind === "video");
     }
   };
   install("MediaStream", (globalThis as any).MediaStream);
@@ -160,6 +186,14 @@ beforeEach(() => {
         const track = new FakeTrack();
         micTracks.push(track);
         return new (globalThis as any).MediaStream([track]);
+      },
+      getDisplayMedia: async () => {
+        if (displayGate) await displayGate;
+        if (!displayGrants) throw new Error("NotAllowedError");
+        const video = new FakeTrack("video");
+        const audio = new FakeTrack("audio");
+        sysTracks.push({ video, audio });
+        return new (globalThis as any).MediaStream([video, audio]);
       },
     },
   });
@@ -206,10 +240,11 @@ describe("the recorder", () => {
     expect(micTracks[0].readyState).toBe("live");
     expect(FakeMediaRecorder.made).toHaveLength(1);
     expect(FakeMediaRecorder.made[0].state).toBe("recording");
-    // Two audio contexts, both opened synchronously by the press: the
-    // recognizer's capture and the meter's analyser. If capture ever moved
-    // behind a round trip again, everything said in that gap would be lost.
-    expect(FakeAudioContext.made.length).toBe(2);
+    // Three audio contexts, all opened synchronously by the press: the
+    // recognizer's capture, the meter's analyser, and the audio file's mix.
+    // If capture ever moved behind a round trip again, everything said in
+    // that gap would be lost.
+    expect(FakeAudioContext.made.length).toBe(3);
   });
 
   test("every recording gets its own id", async () => {
@@ -274,6 +309,15 @@ describe("the recorder", () => {
     expect(status.error).toContain("microphone");
   });
 
+  test("a browser recording never asks for the computer's audio", async () => {
+    // No desktop shell, no loopback: getDisplayMedia stays untouched and the
+    // status says the honest thing.
+    await startRecording();
+    await Bun.sleep(1);
+    expect(sysTracks).toHaveLength(0);
+    expect(getRecorderStatus().systemAudio).toBe(false);
+  });
+
   test("a recording holds its own lease while it runs", async () => {
     // There is no room and no seat to keep it alive, so the beat is the only
     // thing standing between a live recording and the orphan sweep.
@@ -285,5 +329,62 @@ describe("the recorder", () => {
     const beatsAfterStop = called("transcripts:beat").length;
     await Bun.sleep(20);
     expect(called("transcripts:beat").length).toBe(beatsAfterStop);
+  });
+});
+
+describe("system audio (desktop loopback)", () => {
+  // The recorder recognizes the desktop by the shell's bridge object; the
+  // descriptor dance in beforeEach restores `window` to absent afterwards.
+  const onDesktop = () =>
+    Object.defineProperty(globalThis, "window", {
+      value: { __CODECAST_ELECTRON__: {} },
+      configurable: true,
+      writable: true,
+    });
+
+  test("the computer's audio joins the recording, and stop lets go of it", async () => {
+    onDesktop();
+    await startRecording();
+    await Bun.sleep(1);
+
+    expect(getRecorderStatus().systemAudio).toBe(true);
+    expect(sysTracks).toHaveLength(1);
+    // The video track is the toll of the getDisplayMedia API — put down on
+    // arrival, while the audio feed stays live.
+    expect(sysTracks[0].video.readyState).toBe("ended");
+    expect(sysTracks[0].audio.readyState).toBe("live");
+    // With a direct feed in hand, the microphone narrows to the person:
+    // echo cancellation flips on so speakers are not transcribed twice.
+    expect(micTracks[0].constraints?.echoCancellation).toBe(true);
+
+    await stopRecording();
+    expect(sysTracks[0].audio.readyState).toBe("ended");
+    expect(getRecorderStatus().systemAudio).toBe(false);
+    expect(FakeAudioContext.open()).toBe(0);
+  });
+
+  test("a refused loopback leaves the recording exactly what it was", async () => {
+    onDesktop();
+    displayGrants = false;
+    await startRecording();
+    await Bun.sleep(1);
+    expect(getRecorderStatus().phase).toBe("recording");
+    expect(getRecorderStatus().systemAudio).toBe(false);
+    await stopRecording();
+    expect(called("transcripts:stop")).toHaveLength(1);
+  });
+
+  test("a loopback that lands after stop is put down, not attached", async () => {
+    onDesktop();
+    // The screen-permission prompt is answered after the recording is over.
+    let openGate!: () => void;
+    displayGate = new Promise((r) => (openGate = r));
+    await startRecording();
+    await stopRecording();
+    openGate();
+    await Bun.sleep(1);
+    expect(sysTracks).toHaveLength(1);
+    expect(sysTracks[0].audio.readyState).toBe("ended");
+    expect(getRecorderStatus().systemAudio).toBe(false);
   });
 });

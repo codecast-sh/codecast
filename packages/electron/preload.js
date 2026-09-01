@@ -154,17 +154,14 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   getAlwaysOnTop: () => ipcRenderer.invoke("get-always-on-top"),
   // The call panel: a huddle in a window of its own (route /call-panel). One
   // per app, because one call at a time. `isCallPanelWindow` tells this
-  // renderer it IS that window, so it takes the call over on load and treats
-  // its own closing as a handoff rather than a hang-up.
+  // renderer it IS that window, so it takes the call over on load.
   //
-  // `closeCallPanel({ended})` is how the panel says WHY it is closing: a
-  // hang-up ended the call and nothing is handed anywhere, while any other
-  // close — including the OS close box, which says nothing — hands the room
-  // back to the main window. `reportCallPanelState` keeps the shell holding
-  // the payload for that handback: the same room, in the same mic, camera and
-  // scribe state the person was already in.
+  // `closeCallPanel({ended})` is hang-up: destroy the window. Any other close
+  // — the X, the OS close box — HIDES it, like the palette. The huddle stays
+  // here. `showCallPanel` raises it again from the rest of the app.
   isCallPanelWindow: process.argv.includes("--call-panel-window"),
   openCallPanel: (roomKey, opts) => ipcRenderer.invoke("open-call-panel", roomKey, opts ?? {}),
+  showCallPanel: () => ipcRenderer.invoke("show-call-panel"),
   closeCallPanel: (opts) => ipcRenderer.invoke("close-call-panel", opts ?? {}),
   reportCallPanelState: (state) => ipcRenderer.send("report-call-panel-state", state),
   onCallPanelHandback,
