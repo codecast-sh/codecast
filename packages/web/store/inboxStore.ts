@@ -2370,6 +2370,10 @@ export type InboxRowPlacement = {
   below_fold: boolean;
 };
 
+export type InboxSectionKey = "questions" | "pinned" | "newSessions" | "needsInput" | "done" | "dormant" | "working";
+const SECTION_OF_BUCKET: Partial<Record<InboxBucket, InboxSectionKey>> = {
+  questions: "questions", pinned: "pinned", new: "newSessions", needs_input: "needsInput", done: "done", dormant: "dormant", working: "working",
+};
 export interface PlacedInbox {
   /** The projection clock this placement was evaluated at (renderInboxEpoch). */
   epoch: number;
@@ -2405,6 +2409,8 @@ export interface PlacedInbox {
   forksByParent: Map<string, InboxSession[]>;
   /** Membership of the QUESTIONS section (the ask outranks placement). */
   isQuestion: (s: InboxSession) => boolean;
+  /** Rows placed in each section: flat cards plus members nested under a same-bucket lead — the header number. */
+  counts: Record<InboxSectionKey, number>;
 }
 
 // The store-state subset the chokepoint reads. Structural (never the store
@@ -2833,13 +2839,25 @@ export function placeInboxRows(
   const allIds = new Set(sorted.map((s) => s._id));
 
   // 5. Nesting (both child kinds — see nestParentIdOf) and fork grouping.
+  // Grouping never crosses a section boundary: a subagent is never its own
+  // member and always rides its present parent, but an agent-team teammate IS
+  // a member (the shared rollupParentIdOf: it counts in its own bucket, on the
+  // server and here) and nests under its lead only while the two share a
+  // bucket. A teammate that needs input under a working lead renders flat in
+  // Needs Input — nesting it hid an actionable row and made the header count
+  // (2) disagree with the tally (12) every replica and the CLI agreed on
+  // (prod, 2026-09-01).
   const subsByParent = new Map<string, InboxSession[]>();
   for (const s of sorted) {
     const nestParent = nestParentIdOf(s);
-    if (nestParent && allIds.has(nestParent)) {
-      if (!subsByParent.has(nestParent)) subsByParent.set(nestParent, []);
-      subsByParent.get(nestParent)!.push(s);
+    if (!nestParent || !allIds.has(nestParent)) continue;
+    if (isMemberCandidate(s)) {
+      const own = placements.get(s._id)?.bucket;
+      const lead = placements.get(nestParent)?.bucket;
+      if (own !== lead) continue;
     }
+    if (!subsByParent.has(nestParent)) subsByParent.set(nestParent, []);
+    subsByParent.get(nestParent)!.push(s);
   }
   for (const subs of subsByParent.values()) {
     subs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
@@ -2944,6 +2962,19 @@ export function placeInboxRows(
     questions.push(s);
   }
   const isQuestion = (s: InboxSession) => questionIds.has(s._id);
+  // Section header counts: every row PLACED in the bucket, flat or nested
+  // under a same-bucket lead (grouping never crosses a section, so a nested
+  // member always belongs to the section it nests inside). This is the number
+  // the tally and the CLI report; the arrays above hold only the flat cards.
+  const counts: Record<InboxSectionKey, number> = {
+    questions: questions.length, pinned: pinned.length, newSessions: newSessions.length,
+    needsInput: needsInput.length, done: done.length, dormant: dormant.length, working: working.length,
+  };
+  for (const id of subsWithParent) {
+    const b = placements.get(id)?.bucket;
+    const k = b ? SECTION_OF_BUCKET[b] : undefined;
+    if (k) counts[k]++;
+  }
   // Pinning is manual curation: stable order by pin time, oldest first, so
   // existing pins keep their place when a new one lands.
   pinned.sort((a, b) => {
@@ -2988,6 +3019,7 @@ export function placeInboxRows(
     subsByParent: reuseArrayMap(prev?.subsByParent, subsByParent),
     forksByParent: reuseArrayMap(prev?.forksByParent, forksByParent),
     isQuestion,
+    counts,
   };
 
   // 8. Dev-only convergence check (C5): the full shared computation over the
