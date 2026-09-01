@@ -15,6 +15,10 @@ import { isLowSignalPrompt } from "./titleGeneration";
 
 const PROFILE_TTL_MS = 12 * 60 * 60 * 1000;
 const MAX_SUGGESTIONS = 3;
+// A pill may carry a full working prompt (a reusable multi-sentence
+// directive), not just a verdict — so the cap is "not a pasted wall", not
+// "fits on one line". The row truncates visually; the send carries it whole.
+const MAX_SUGGESTION_CHARS = 1000;
 
 // A message row that carries a real human-readable turn (mirrors
 // idleSummary.isSummarizableMessage without the low-signal filter, which we
@@ -136,7 +140,11 @@ export const getRecentUserInputs = internalQuery({
       for (const m of rows) {
         const text = (m.content || "").trim();
         if (!text || m.tool_results?.length || m.is_encrypted) continue;
-        if (text.length > 300 || isLowSignalPrompt(text)) continue;
+        // The cap only excludes pasted walls (logs, transcripts). A long
+        // typed directive — the multi-sentence "polish this to perfection"
+        // prompt a developer reuses across sessions — is the richest input
+        // the miner gets, so it must survive whole.
+        if (text.length > 2000 || isLowSignalPrompt(text)) continue;
         // Machine-carrier turns (session messages, scheduled-task briefings,
         // pasted transcripts) start with markup — not something the user typed.
         if (text.startsWith("<")) continue;
@@ -167,6 +175,7 @@ export const storeSuggestionProfile = internalMutation({
       example: v.string(),
       count: v.number(),
     }))),
+    prompts: v.optional(v.array(v.object({ text: v.string(), count: v.number() }))),
     recent: v.array(v.string()),
     generated_at: v.number(),
   },
@@ -180,6 +189,7 @@ export const storeSuggestionProfile = internalMutation({
         frequent: args.frequent,
         phrases: args.phrases,
         patterns: args.patterns,
+        prompts: args.prompts,
         recent: args.recent,
         generated_at: args.generated_at,
       });
@@ -205,7 +215,7 @@ export const recordSuggestionOutcome = mutation({
       user_id: userId,
       conversation_id: args.conversation_id,
       anchor_message_uuid: args.anchor_message_uuid,
-      suggestion: args.suggestion.slice(0, 300),
+      suggestion: args.suggestion.slice(0, MAX_SUGGESTION_CHARS),
       outcome: args.outcome,
       created_at: Date.now(),
     });
@@ -378,7 +388,7 @@ export function sanitizeSuggestions(
       ?.toString()
       .trim()
       .replace(/^["'`]+|["'`]+$/g, "");
-    if (!text || text.length > 120) continue;
+    if (!text || text.length > MAX_SUGGESTION_CHARS) continue;
     if (/^(i cannot|i can't|i'm sorry|sorry|as an ai|i don't have)/i.test(text)) continue;
     const key = normalizeForMatch(text);
     if (GENERIC_NUDGES.has(key)) continue;
@@ -397,69 +407,105 @@ export function sanitizeSuggestions(
   return out;
 }
 
-// LLM pass over the mined corpus: learn the user's recurring BEHAVIOR
-// PATTERNS — what they habitually demand, abstracted from topic — each with
-// one real quote as voice evidence. The suggester then APPLIES a pattern to
-// the current conversation's specifics; it never replays the old message
-// (that was the verbatim-quote failure mode). Runs once per profile refresh
-// (12h TTL), so its cost is a rounding error. Returns null on any failure so
-// the caller can fall back to the n-gram phrases.
+export type MinedProfile = {
+  patterns: Array<{ pattern: string; example: string; count: number }>;
+  prompts: Array<{ text: string; count: number }>;
+};
+
+// Shape-check and cap the miner's JSON. Two lists come back: generalized
+// habits (one quote each, for voice) and reusable prompts (full text — the
+// developer resends these, so the whole wording IS the value). A bare array
+// is the pre-`prompts` shape and reads as patterns only.
+export function parseMinedProfile(parsed: unknown): MinedProfile | null {
+  const obj: any = Array.isArray(parsed) ? { patterns: parsed } : parsed;
+  if (!obj || typeof obj !== "object") return null;
+  const patterns = (Array.isArray(obj.patterns) ? obj.patterns : [])
+    .filter(
+      (p: any) =>
+        p &&
+        typeof p.pattern === "string" &&
+        typeof p.example === "string" &&
+        typeof p.count === "number" &&
+        p.count >= 2,
+    )
+    .map((p: any) => ({
+      pattern: String(p.pattern).trim().slice(0, 200),
+      example: String(p.example).trim().slice(0, 300),
+      count: Math.round(p.count),
+    }))
+    // A habit whose best example is itself a bare nudge is the nudge habit
+    // in disguise — the one pattern the suggester must not learn.
+    .filter((p: { example: string }) => !GENERIC_NUDGES.has(normalizeForMatch(p.example)))
+    .slice(0, 15);
+  const prompts = (Array.isArray(obj.prompts) ? obj.prompts : [])
+    .filter(
+      (p: any) =>
+        p && typeof p.text === "string" && typeof p.count === "number" && p.count >= 2,
+    )
+    .map((p: any) => ({
+      text: String(p.text).replace(/\s+/g, " ").trim().slice(0, MAX_SUGGESTION_CHARS),
+      count: Math.round(p.count),
+    }))
+    // A reusable prompt is a directive with content; a nudge or a fragment
+    // is not one, whatever the model says.
+    .filter(
+      (p: { text: string }) =>
+        p.text.split(/\s+/).length >= 4 && !GENERIC_NUDGES.has(normalizeForMatch(p.text)),
+    )
+    .slice(0, 12);
+  return patterns.length || prompts.length ? { patterns, prompts } : null;
+}
+
+// LLM pass over the mined corpus. Two outputs:
+// - BEHAVIOR PATTERNS: what the user habitually demands, abstracted from
+//   topic, each with one real quote as voice evidence. The suggester APPLIES
+//   a pattern to the current conversation; it never replays the quote.
+// - REUSABLE PROMPTS: directives the user resends across sessions in nearly
+//   the same words ("you are a world class product engineer… do another 10
+//   rounds"). These are topic-free by construction — that is WHY they
+//   recur — so the suggester may offer them close to verbatim, adapted to
+//   the conversation at hand.
+// Runs once per profile refresh (12h TTL), so its cost is a rounding error.
+// Returns null on any failure so the caller can fall back to n-gram phrases.
 export async function minePatternsWithLLM(
   inputs: string[],
-): Promise<{
-  patterns: Array<{ pattern: string; example: string; count: number }>;
-  usage?: unknown;
-} | null> {
+): Promise<(MinedProfile & { usage?: unknown }) | null> {
   // Bare nudges dominate any raw corpus (a "go" for every agent turn) and
   // would surface as the top "habit" — noise that biases the suggester
   // toward exactly what it must never output. Mine only substantive inputs.
+  // Long directives are kept nearly whole: a reusable prompt is only useful
+  // if the miner sees its full wording.
   const corpus = inputs
     .filter((t) => t.trim().split(/\s+/).length >= 3)
     .slice(0, 250)
-    .map((t) => t.replace(/\s+/g, " ").slice(0, 200))
+    .map((t) => t.replace(/\s+/g, " ").slice(0, 600))
     .join("\n");
-  const prompt = `You are analyzing one developer's messages to their coding agents, collected across many sessions. Learn their recurring BEHAVIOR PATTERNS — what they habitually ask for, demand, or decide — so another model can apply those habits to a brand-new conversation.
+  const prompt = `You are analyzing one developer's messages to their coding agents, collected across many sessions. Learn two things so another model can predict what they will type into a brand-new conversation: their recurring BEHAVIOR PATTERNS, and the REUSABLE PROMPTS they send again and again.
 
-Return ONLY a JSON array: [{"pattern": string, "example": string, "count": number}]
+Return ONLY a JSON object: {"patterns": [{"pattern": string, "example": string, "count": number}], "prompts": [{"text": string, "count": number}]}
 
-- "pattern": a short, generalized description of the habit, freed from any specific topic, written so it could guide a reply in ANY conversation. Good: "after seeing a finished feature, asks for several concrete ways to make it better", "demands thorough end-to-end testing with visual proof before accepting work", "tells the agent to proceed autonomously and patch everything it found rather than asking". Bad (too topic-bound): "asks about screenshots rendering inline".
+patterns — generalized habits:
+- "pattern": a short description of the habit, freed from any specific topic, written so it could guide a reply in ANY conversation. Good: "after seeing a finished feature, asks for several concrete ways to make it better", "demands thorough end-to-end testing with visual proof before accepting work", "tells the agent to proceed autonomously and patch everything it found rather than asking". Bad (too topic-bound): "asks about screenshots rendering inline".
 - "example": ONE real quote from the messages that best shows the habit and the developer's voice.
 - "count": how many distinct messages express this habit.
 
+prompts — reusable directives:
+- "text": the FULL text of a prompt the developer sends repeatedly across sessions in the same or nearly the same words — a standing instruction about how to work (quality bar, process, iteration, validation, planning), not a request about one specific feature. Quote it in full, in the developer's own wording; pick the most complete instance when wordings differ slightly. Do not shorten or paraphrase it.
+- "count": how many distinct messages contain this prompt or a near-identical version.
+
 Rules:
-- A pattern must be expressed in at least 2 distinct messages; cluster different wordings of the same intent.
-- Generalize the INTENT and drop the topic: the topic belongs to old conversations, the habit transfers.
+- Every entry must be supported by at least 2 distinct messages; cluster different wordings of the same intent.
+- For patterns, generalize the INTENT and drop the topic: the topic belongs to old conversations, the habit transfers. For prompts, keep the exact wording: it recurs because it works.
 - Exclude one-off requests, greetings, filler, and bare nudges ("continue", "go", "do it").
-- Sort by count descending. At most 15 entries. No markdown, no commentary.
+- Sort each list by count descending. At most 15 patterns and 12 prompts. No markdown, no commentary.
 
 Messages (one per line):
 ${corpus}`;
 
-  const completion = await llmComplete({ provider: "anthropic", prompt, maxTokens: 1200 });
+  const completion = await llmComplete({ provider: "anthropic", prompt, maxTokens: 3000 });
   if (!completion) return null;
-  {
-    const parsed = parseJsonBlock(completion.text);
-    if (!Array.isArray(parsed)) return null;
-    const out = parsed
-      .filter(
-        (p: any) =>
-          p &&
-          typeof p.pattern === "string" &&
-          typeof p.example === "string" &&
-          typeof p.count === "number" &&
-          p.count >= 2,
-      )
-      .map((p: any) => ({
-        pattern: String(p.pattern).trim().slice(0, 200),
-        example: String(p.example).trim().slice(0, 160),
-        count: Math.round(p.count),
-      }))
-      // A habit whose best example is itself a bare nudge is the nudge habit
-      // in disguise — the one pattern the suggester must not learn.
-      .filter((p: { example: string }) => !GENERIC_NUDGES.has(normalizeForMatch(p.example)))
-      .slice(0, 15);
-    return out.length ? { patterns: out, usage: completion.usage } : null;
-  }
+  const mined = parseMinedProfile(parseJsonBlock(completion.text));
+  return mined ? { ...mined, usage: completion.usage } : null;
 }
 
 function buildPrompt(
@@ -478,6 +524,7 @@ function buildPrompt(
     frequent: Array<{ text: string; count: number }>;
     phrases: Array<{ text: string; count: number }>;
     patterns: Array<{ pattern: string; example: string; count: number }>;
+    prompts: Array<{ text: string; count: number }>;
     recent: string[];
   },
 ): string {
@@ -507,8 +554,16 @@ function buildPrompt(
     : profile.phrases.length
       ? profile.phrases.map((f) => `- (×${f.count}) says things like: "${f.text}"`).join("\n")
       : "- none mined yet";
+  // Reusable prompts are quoted whole: the wording is the point. Recent
+  // messages are voice evidence only, so a long one is trimmed here (its
+  // full text, if it is a reusable prompt, already appears above).
+  const promptsText = profile.prompts.length
+    ? profile.prompts.map((p) => `- (×${p.count}) "${p.text}"`).join("\n")
+    : "- none mined yet";
   const recentText = profile.recent.length
-    ? profile.recent.map((t) => `- ${t}`).join("\n")
+    ? profile.recent
+        .map((t) => `- ${t.length > 300 ? t.slice(0, 300) + " […]" : t}`)
+        .join("\n")
     : "- none";
 
   const c = context.conversation;
@@ -532,17 +587,19 @@ Read the moment first — the agent's final message decides everything:
 - The agent finished work → suggest the natural next directive, grounded in what this session shows is still undone (verify, test, commit, deploy, fix the thing it flagged).
 - The agent is mid-task, or the reply needs knowledge only the developer has (their opinion, product intent, something outside the session) → return [].
 
-How to use the habits: each habit is a generalized tendency with one example quote for voice. Apply the TENDENCY to what is on the table right now, filling in this session's actual subject — the feature, file, bug, or decision in front of them. The example shows HOW they talk, not WHAT to say: a suggestion that repeats an example, or any past message, is wrong by definition, because it is about some other conversation.
+The profile has two kinds of evidence, and they work differently:
+- HABITS are generalized tendencies, each with one example quote for voice. Apply the TENDENCY to what is on the table right now, filling in this session's actual subject — the feature, file, bug, or decision in front of them. The example shows HOW they talk, not WHAT to say: a suggestion that repeats a habit's example is wrong by definition, because it is about some other conversation.
+- REUSABLE PROMPTS are standing instructions this developer deliberately sends again and again, in nearly the same words, whenever the moment fits — a quality bar, a way of working, an iteration loop. These you MAY suggest close to verbatim: keep their wording and force, and adapt only what the moment needs (name the actual feature, file, or task in front of them; drop a clause that does not apply). When the agent has just finished or proposed something and one of these prompts is what this developer typically sends next, it is the best suggestion you can make. Prefer the full prompt over a shortened gist: the length is part of what makes it work.
 
-Voice: copy the developer's register from the examples and recent messages — casing, punctuation, brevity, bluntness. If they write terse lowercase commands, so do you. Every suggestion must read like THEY typed it, about THIS conversation, and be sendable exactly as written; each will be sent with one click.
+Voice: copy the developer's register from the prompts, examples and recent messages — casing, punctuation, brevity, bluntness. If they write terse lowercase commands, so do you. Every suggestion must read like THEY typed it, about THIS conversation, and be sendable exactly as written; each will be sent with one click.
 
 Hard rules:
 - Quality over count. One suggestion the developer actually sends is the win; two mediocre ones teach them to ignore the feature. When you're not confident, return [].
 - Never suggest a bare continuation nudge — "continue", "go", "proceed", "do it", "yes", or anything the developer could type in one keystroke. A suggestion earns its place by carrying content: a concrete directive, answer, or decision specific to this moment.
-- Never output a past message or an example quote verbatim or near-verbatim. Only its habit transfers.
+- Never replay a habit's example quote or an ordinary past message verbatim or near-verbatim; only its habit transfers. Reusable prompts are the one exception — they are meant to be resent.
 - Suggestions must differ in intent, not phrasing.
-- Keep each under 60 characters unless the moment clearly requires a longer reply.
-- Never repeat what has already been said, asked, or done in the session; never contradict the developer's last instruction.
+- Length follows the moment: a verdict or an answer stays short; a full working prompt can run several sentences. Never pad, never truncate a reusable prompt to make it look tidy.
+- Never repeat what has already been said, asked, or done in the session; never contradict the developer's last instruction. Do not suggest a reusable prompt the developer already sent in this session unless the agent has since completed a full round of work that invites it again.
 - Never invent file paths, commands, names, or ids that do not appear in the session.
 
 Session:
@@ -550,6 +607,9 @@ ${meta || "- (no metadata)"}
 
 This developer's recurring habits (×N = seen in N separate messages across their history):
 ${habitsText}
+
+Reusable prompts this developer sends again and again (×N = separate messages; quote closely, adapt to this conversation):
+${promptsText}
 
 Their most recent messages, for voice only (newest first):
 ${recentText}
@@ -621,6 +681,65 @@ export function parseJsonBlock(raw: string): unknown | null {
   }
 }
 
+// Two full reusable prompts plus a verdict fit comfortably; the cap only
+// stops a runaway completion.
+const SUGGEST_MAX_TOKENS = 1200;
+
+type StoredProfile = {
+  frequent: Array<{ text: string; count: number }>;
+  phrases?: Array<{ text: string; count: number }>;
+  patterns?: Array<{ pattern: string; example: string; count: number }>;
+  prompts?: Array<{ text: string; count: number }>;
+  recent: string[];
+  generated_at: number;
+};
+
+function profileForPrompt(profile: StoredProfile) {
+  return {
+    frequent: profile.frequent,
+    phrases: profile.phrases ?? [],
+    patterns: profile.patterns ?? [],
+    prompts: profile.prompts ?? [],
+    recent: profile.recent,
+  };
+}
+
+// Rebuild one user's profile from their input history: collect, rank, mine,
+// store. Shared by the lazy TTL refresh inside the suggester and the
+// on-demand internal action below.
+async function refreshProfile(ctx: any, userId: Id<"users">, now: number): Promise<StoredProfile> {
+  const inputs = await ctx.runQuery(internal.composerSuggestions.getRecentUserInputs, {
+    user_id: userId,
+  });
+  const ranked = rankInputs(inputs, now);
+  // Generalized habits beat literal quotes; the n-gram phrases are the
+  // fallback when the miner call fails, so a bad LLM day degrades, never
+  // blanks.
+  const mined = await minePatternsWithLLM(inputs.map((r: { text: string }) => r.text));
+  const profile: StoredProfile = {
+    frequent: ranked.frequent,
+    phrases: ranked.phrases,
+    patterns: mined?.patterns,
+    prompts: mined?.prompts,
+    recent: ranked.recent,
+    generated_at: now,
+  };
+  await ctx.runMutation(internal.composerSuggestions.storeSuggestionProfile, {
+    user_id: userId,
+    ...profile,
+  });
+  return profile;
+}
+
+// Force a profile rebuild ahead of the TTL — after a miner change, or to
+// inspect what the miner learns for one user. Returns the stored profile.
+export const refreshSuggestionProfile = internalAction({
+  args: { user_id: v.id("users") },
+  handler: async (ctx, args): Promise<StoredProfile> => {
+    return await refreshProfile(ctx, args.user_id, Date.now());
+  },
+});
+
 // Side-by-side provider comparison over real conversations — the evidence
 // behind the SUGGESTIONS_PROVIDER choice. Internal-only; run via
 // `npx convex run` with a user id and conversation ids. Makes no writes.
@@ -648,16 +767,11 @@ export const bakeoffSuggestions = internalAction({
         results.push({ cid, skipped: "no assistant tail" });
         continue;
       }
-      const prompt = buildPrompt(context, {
-        frequent: profile.frequent,
-        phrases: profile.phrases ?? [],
-        patterns: profile.patterns ?? [],
-        recent: profile.recent,
-      });
+      const prompt = buildPrompt(context, profileForPrompt(profile));
       const t0 = Date.now();
-      const haiku = await llmComplete({ provider: "anthropic", prompt, maxTokens: 600 });
+      const haiku = await llmComplete({ provider: "anthropic", prompt, maxTokens: SUGGEST_MAX_TOKENS });
       const t1 = Date.now();
-      const luna = await llmComplete({ provider: "openai", prompt, maxTokens: 600 });
+      const luna = await llmComplete({ provider: "openai", prompt, maxTokens: SUGGEST_MAX_TOKENS });
       const t2 = Date.now();
       const tailMsg = [...context.turns].reverse().find((t) => t.role === "assistant");
       results.push({
@@ -707,47 +821,31 @@ export const generateComposerSuggestions = action({
       return { status: "skipped", reason: "already_generated" };
     }
 
-    let profile = await ctx.runQuery(internal.composerSuggestions.getSuggestionProfile, {
-      user_id: user._id,
-    });
+    let profile: StoredProfile | null = await ctx.runQuery(
+      internal.composerSuggestions.getSuggestionProfile,
+      { user_id: user._id },
+    );
     if (!profile || now - profile.generated_at > PROFILE_TTL_MS) {
-      const inputs = await ctx.runQuery(internal.composerSuggestions.getRecentUserInputs, {
-        user_id: user._id,
-      });
-      const ranked = rankInputs(inputs, now);
-      // Generalized habits beat literal quotes; the n-gram phrases are the
-      // fallback when the miner call fails, so a bad LLM day degrades, never
-      // blanks.
-      const mined = await minePatternsWithLLM(inputs.map((r) => r.text));
-      await ctx.runMutation(internal.composerSuggestions.storeSuggestionProfile, {
-        user_id: user._id,
-        frequent: ranked.frequent,
-        phrases: ranked.phrases,
-        patterns: mined?.patterns,
-        recent: ranked.recent,
-        generated_at: now,
-      });
-      profile = { ...ranked, patterns: mined?.patterns, generated_at: now } as any;
+      profile = await refreshProfile(ctx, user._id, now);
     }
 
-    const prompt = buildPrompt(context, {
-      frequent: profile!.frequent,
-      phrases: profile!.phrases ?? [],
-      patterns: profile!.patterns ?? [],
-      recent: profile!.recent,
-    });
+    const prompt = buildPrompt(context, profileForPrompt(profile));
     // Anything the user has literally said before — recent messages, mined
-    // examples, repeated whole inputs — may not come back as a pill.
+    // examples, repeated whole inputs — may not come back as a pill…
     const bannedVerbatim = new Set<string>([
-      ...profile!.recent.map(normalizeForMatch),
-      ...profile!.frequent.map((f) => normalizeForMatch(f.text)),
-      ...(profile!.patterns ?? []).map((p) => normalizeForMatch(p.example)),
+      ...profile.recent.map(normalizeForMatch),
+      ...profile.frequent.map((f) => normalizeForMatch(f.text)),
+      ...(profile.patterns ?? []).map((p) => normalizeForMatch(p.example)),
       ...context.turns.filter((t) => t.role === "user").map((t) => normalizeForMatch(t.content)),
     ]);
+    // …except a reusable prompt, which the user resends on purpose. The
+    // last-user-message check in sanitizeSuggestions still stops an
+    // immediate echo.
+    for (const p of profile.prompts ?? []) bannedVerbatim.delete(normalizeForMatch(p.text));
 
     try {
       const provider = process.env.SUGGESTIONS_PROVIDER === "openai" ? "openai" : "anthropic";
-      const completion = await llmComplete({ provider, prompt, maxTokens: 600 });
+      const completion = await llmComplete({ provider, prompt, maxTokens: SUGGEST_MAX_TOKENS });
       if (!completion) return { status: "error", reason: "provider_failed" };
       const parsed = parseJsonBlock(completion.text);
       if (parsed === null) return { status: "error", reason: "invalid_json" };

@@ -777,3 +777,101 @@ export function collectionRowHydrator(key: string): ClientSyncRegistryEntry["hyd
   const entry = CLIENT_SYNC_REGISTRY[key as ClientSyncStoreKey] as ClientSyncRegistryEntry | undefined;
   return entry?.hydrateRow;
 }
+
+// ── Cross-window replication classification (docs/architecture/sync-host.md).
+//
+// "shared" keys are the slice the sync host broadcasts to follower windows and
+// followers offer their optimistic writes back from. "local" keys never cross
+// the wire: per-window optimism bookkeeping (`pending` above all), per-window
+// paging state, and UI arrangement whose live cross-window sync would CHANGE
+// semantics (tabs, activeTabId, sidePanelSessionId keep today's behavior:
+// shared on disk at boot, live-synced only through the server echo).
+//
+// Every registry key MUST be classified — the Record type makes an
+// unclassified new key a compile error, so the choice is always conscious.
+export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "local"> = {
+  sessions: "shared",
+  conversations: "shared",
+  tasks: "shared",
+  capabilityBindings: "shared",
+  capabilityState: "shared",
+  docs: "shared",
+  docDetails: "shared",
+  sessionDecisions: "shared",
+  savedViews: "shared",
+  plans: "shared",
+  projects: "shared",
+  buckets: "shared",
+  bucketAssignments: "shared",
+  comments: "shared",
+  chatChannels: "shared",
+  chatMessages: "shared",
+  chatReactions: "shared",
+  chatReads: "shared",
+  chatRail: "shared",
+  threadInbox: "shared",
+  threadUnread: "shared",
+  pageThreads: "shared",
+  agentTasks: "shared",
+  agentTaskRuns: "shared",
+  workflows: "shared",
+  workflowRuns: "shared",
+  artifacts: "shared",
+  anchorSpaces: "shared",
+  anchors: "shared",
+  sessionThreads: "shared",
+  commits: "shared",
+  pullRequests: "shared",
+  managedSessions: "shared",
+  sessionMetricsAggregate: "shared",
+  pendingPermissions: "shared",
+  pendingMessageStatus: "shared",
+  messageFeed: "shared",
+  machineRoster: "shared",
+  notifications: "shared",
+  clientState: "shared",
+  liveInboxIdList: "shared",
+  teamInboxIdSnapshot: "shared",
+  _lastViewedAt: "shared",
+  _seenUpToAt: "shared",
+  _seenMessageCount: "shared",
+  teams: "shared",
+  teamMembers: "shared",
+  teamUnreadCount: "shared",
+  syncMeta: "shared",
+  docProjectPaths: "shared",
+  favorites: "shared",
+  bookmarks: "shared",
+  currentUser: "shared",
+  // Local: this window's own story, never another window's business.
+  pending: "local",
+  drafts: "local",
+  queuedMessages: "local",
+  pendingMessages: "local",
+  blockedReviveRequestedAt: "local",
+  lastFocusedConversationId: "local",
+  recentVisits: "local",
+  recentProjects: "local",
+  recentProjectsByDevice: "local",
+  collapsedSections: "local",
+  sidebarNavExpanded: "local",
+  feedConversations: "local",
+  feedHasMore: "local",
+  feedCursors: "local",
+  tabs: "local",
+  activeTabId: "local",
+  sidePanelSessionId: "local",
+};
+
+/** The slice the sync host replicates to follower windows. */
+export const REPLICATED_STORE_KEYS = (Object.keys(REPLICATION_CLASSIFICATION) as ClientSyncStoreKey[])
+  .filter((key) => REPLICATION_CLASSIFICATION[key] === "shared");
+
+const REPLICATED_COLLECTION_SET = new Set<string>(
+  REGISTERED_COLLECTION_KEYS.filter((key) => REPLICATION_CLASSIFICATION[key] === "shared"),
+);
+
+/** Whether a replicated key holds an id-keyed row map (vs a whole value). */
+export function isReplicatedCollectionKey(key: string): boolean {
+  return REPLICATED_COLLECTION_SET.has(key);
+}

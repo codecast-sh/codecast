@@ -200,7 +200,9 @@ export const SuggestionPills = memo(forwardRef<SuggestionPillsHandle, {
             // preventDefault so the composer keeps focus through the click.
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => { report(text, "sent"); onSend(text); }}
-            title="Send"
+            // A pill may carry a full multi-sentence prompt that the row
+            // truncates; hover shows the whole text that a click will send.
+            title={text}
             className={`flex items-center gap-1.5 min-w-0 pl-2.5 pr-1 py-1 text-[11px] leading-none transition-colors ${
               selIdx === i ? "text-sol-text" : "text-sol-text-muted group-hover:text-sol-text"
             }`}

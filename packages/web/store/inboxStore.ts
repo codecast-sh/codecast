@@ -4231,6 +4231,12 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // True while durable IndexedDB writes exceed the enqueue watchdog. Delivery
   // is unaffected; the banner tells the user durability is degraded.
   storageDegraded: boolean;
+  // Cross-window replication role (store/syncReplication.ts). "host" mounts the
+  // global feeders and owns IDB write-through; "follower" receives the shared
+  // slice from the host instead. Defaults to host: a window with no transport
+  // (mobile, SSR, share pages) or no living host behaves exactly as today.
+  syncRole: "host" | "follower";
+  _applyReplicatedRemovals: (key: string, ids: string[]) => void;
   // Last PERMANENT dispatch rejection (server ran the write and refused it) —
   // ephemeral, raw-set by the dispatch error handler; a platform-specific
   // surface (web: toast bridge in providers.tsx) turns it into user feedback.
@@ -5272,6 +5278,12 @@ function quantizePresence<T>(rec: T): T {
     if (typeof v === "number") setQ(k, Math.floor(v / COUNTER_QUANTUM) * COUNTER_QUANTUM, v);
   }
   return out;
+}
+
+// Whether a store key has registered sync opts (store/syncReplication.ts uses
+// this to decide when a replicated value needs a shape-derived kind instead).
+export function hasSyncRegistryEntry(key: string): boolean {
+  return !!SYNC_REGISTRY[key];
 }
 
 const SYNC_REGISTRY: Record<string, SyncOpts> = {
@@ -6527,6 +6539,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   pending: {},
   dispatchErrors: 0,
   storageDegraded: false,
+  syncRole: "host",
   lastDispatchFailure: null,
   currentSessionId: null,
   lastFocusedConversationId: null,
@@ -6609,6 +6622,18 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // sync(): the id set is server truth (or its persisted snapshot) — persist to
   // IDB via patches, never dispatch. Both twins move together so the persisted
   // array can never drift from what the UI filtered against.
+  // Row deletions arriving over cross-window replication. A local include
+  // pending (an optimistic create this window still awaits an ack for) outranks
+  // a peer's delete — the same rule applySyncTable applies to server payloads.
+  _applyReplicatedRemovals: sync(function (this: Draft, key: string, ids: string[]) {
+    const table = (this as any)[key];
+    if (!table) return;
+    for (const id of ids) {
+      if (this.pending[`${key}:${id}`]?.type === "include") continue;
+      if (table[id] !== undefined) delete table[id];
+    }
+  }),
+
   setLiveInboxIds: sync(function (this: Draft, ids: string[]) {
     this.liveInboxIds = new Set(ids);
     this.liveInboxIdList = ids;
