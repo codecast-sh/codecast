@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { exhaustionBannerCopy, isAgentSpawnedConversation, isSubagentConversation, subagentLinkFields } from "./ccAccountsShared";
+import { exhaustionBannerCopy, isAgentSpawnedConversation, isSubagentConversation, subagentLinkFields,
+  profileHasToken,
+  tokenBackedProfile,
+  activeTokenProfile,
+} from "./ccAccountsShared";
 
 // Regression (ct-37439): a subagent active in the last 30d is pulled into the
 // inbox via the top-level scan (recentConversations), NOT only as a child of its
@@ -148,5 +152,40 @@ describe("exhaustionBannerCopy", () => {
 
   test("no usage data at all — attempts copy (nothing to back the claim)", () => {
     expect(exhaustionBannerCopy([{}, { usage: null }], now)).not.toContain("at their limits");
+  });
+});
+
+describe("per-session account tokens", () => {
+  const now = 1_000_000;
+  const accounts = {
+    active_email: "a@x.com",
+    profiles: [
+      { name: "a", email: "a@x.com", token: { stored_at: 1, expires_at: now + 1 } },
+      { name: "b", email: "b@x.com", token: { stored_at: 1, expires_at: now } }, // expired
+      { name: "c", email: "c@x.com" }, // never minted
+    ],
+  };
+
+  test("a token counts only while its lifetime is not up", () => {
+    expect(profileHasToken(accounts.profiles[0], now)).toBe(true);
+    expect(profileHasToken(accounts.profiles[1], now)).toBe(false);
+    expect(profileHasToken(accounts.profiles[2], now)).toBe(false);
+    expect(profileHasToken(undefined, now)).toBe(false);
+  });
+
+  test("pins to the device-local name only when that profile has a live token", () => {
+    expect(tokenBackedProfile(accounts, { email: "a@x.com" }, now)).toBe("a");
+    expect(tokenBackedProfile(accounts, { profile: "a" }, now)).toBe("a");
+    expect(tokenBackedProfile(accounts, { email: "b@x.com" }, now)).toBeUndefined();
+    expect(tokenBackedProfile(accounts, { profile: "c" }, now)).toBeUndefined();
+    expect(tokenBackedProfile(accounts, { profile: "nope" }, now)).toBeUndefined();
+    expect(tokenBackedProfile(undefined, { profile: "a" }, now)).toBeUndefined();
+  });
+
+  test("a new session pins to the active login's profile, or nowhere", () => {
+    expect(activeTokenProfile(accounts, now)).toBe("a");
+    expect(activeTokenProfile({ ...accounts, active_email: "c@x.com" }, now)).toBeUndefined();
+    expect(activeTokenProfile({ ...accounts, active_email: undefined }, now)).toBeUndefined();
+    expect(activeTokenProfile(undefined, now)).toBeUndefined();
   });
 });
