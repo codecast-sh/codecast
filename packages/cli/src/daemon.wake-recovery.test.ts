@@ -160,3 +160,18 @@ test("freeze ledger sums freezes inside the trailing window and drops older ones
   expect(ledger.recentMs(70_001)).toBe(48_000); // the 10s freeze aged out
   expect(ledger.recentMs(200_000)).toBe(0);
 });
+
+// A probe tick that lands minutes late with ~no CPU burned is a suspend, not
+// load. Counting it lit "daemon under load" for a minute after every wake.
+import { isSuspendGap } from "./daemon.js";
+
+test("a long gap with almost no CPU is a suspend; a busy or short gap is a freeze", () => {
+  // Lid closed for 15 minutes: 6ms of CPU.
+  expect(isSuspendGap(937_000, 6)).toBe(true);
+  expect(isSuspendGap(81_000, 21)).toBe(true);
+  // A 42s walk blocked on a busy disk still churned 928ms between syscalls.
+  expect(isSuspendGap(42_000, 928)).toBe(false);
+  // Short gaps always count: a 5s blocked spawn is real, a 5s sleep is not a thing.
+  expect(isSuspendGap(6_000, 0)).toBe(false);
+  expect(isSuspendGap(29_999, 0)).toBe(false);
+});

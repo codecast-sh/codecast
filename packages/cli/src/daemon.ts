@@ -18838,6 +18838,20 @@ export class LoopFreezeLedger {
 const loopFreezes = new LoopFreezeLedger();
 const daemonStartedAt = Date.now();
 
+// A probe tick that lands minutes late with almost no CPU burned is the machine
+// having been asleep, not the loop being pinned: a closed lid yields a 15-minute
+// gap with ~6ms of CPU, while a loop genuinely blocked on a busy disk still
+// accrues tens of ms per second churning between syscalls (the 42s walk freeze
+// of 2026-09-02 burned 928ms). Counting a suspend as a freeze lit "daemon under
+// load" for a minute after every wake — ~30 times a day on a laptop — over a
+// daemon that was doing nothing wrong. Short gaps always count: a 5s sleep is
+// not a thing, and a 5s blocked spawn is real. Exported for tests.
+export const SUSPEND_GAP_MIN_MS = 30_000;
+export const SUSPEND_CPU_RATE = 0.005;
+export function isSuspendGap(lateMs: number, cpuMs: number): boolean {
+  return lateMs >= SUSPEND_GAP_MIN_MS && cpuMs < lateMs * SUSPEND_CPU_RATE;
+}
+
 export function summarizeSamplingTraces(raw: unknown, top = 5): string {
   let parsed: any = raw;
   if (typeof raw === "string") {
@@ -18899,11 +18913,12 @@ function startLoopFreezeProbe(): NodeJS.Timeout {
     let traces: unknown = null;
     try { traces = drainTraces?.(); } catch {}
     if (late >= LOOP_FREEZE_REPORT_MS) {
-      loopFreezes.record(late, now);
       const cpuMs = Math.round((cpu.user + cpu.system) / 1000);
+      const suspend = isSuspendGap(late, cpuMs);
+      if (!suspend) loopFreezes.record(late, now);
       const hot = summarizeSamplingTraces(traces);
       log(
-        `[LOOP-FREEZE] event loop blocked ${Math.round(late / 1000)}s (${cpuMs}ms CPU during the freeze); ` +
+        `[LOOP-FREEZE] event loop blocked ${Math.round(late / 1000)}s (${cpuMs}ms CPU during the freeze${suspend ? "; machine was suspended, not counted as load" : ""}); ` +
         `last log before it: ${logAtLastProbe}${hot ? `; hot stacks: ${hot}` : ""}`,
       );
     }
