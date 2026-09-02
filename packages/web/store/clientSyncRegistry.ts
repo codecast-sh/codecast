@@ -19,6 +19,9 @@ export type RegistrySyncOpts = {
   altKey?: string;
   keepSelected?: string;
   ignoreFields?: string[];
+  // Server-joined object fields (recomputed without a scalar change on the
+  // row) the identity reuse compares by content — see the engine's SyncOpts.
+  deepFields?: string[];
   preserveFields?: string[];
 };
 
@@ -245,8 +248,10 @@ export const CLIENT_SYNC_REGISTRY = {
     localFirst: true,
     workspaceScoped: true,
     // Liberal delta cache like the others; a snapshot here was the one
-    // remaining collection that pruned by absence.
-    sync: { isDelta: true },
+    // remaining collection that pruned by absence. The member counts are joined
+    // from tasks/plans/docs and move without any scalar on the row changing,
+    // so they must be content-compared or a refetch lands as a no-op.
+    sync: { isDelta: true, deepFields: ["task_counts"] },
   },
   buckets: {
     persistence: { kind: "collection", key: "buckets" },

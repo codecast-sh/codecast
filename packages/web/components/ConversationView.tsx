@@ -11844,14 +11844,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                         permissionMode === "dontAsk" ? "bg-sol-yellow" :
                         "bg-sol-base00/50"
                       }`} />
-                      {/* A non-default mode is worth a word, not just a dot:
-                          "bypass" changes what the agent may do. The label
-                          brightens for a beat when the mode cycles, then
-                          settles to a quiet reading. */}
+                      {/* The mode label appears for a beat when the mode
+                          cycles, then collapses back to the dot. Hover the
+                          dot for the full name. */}
                       {permissionMode !== "default" && (
                         <span
-                          className={`text-[10px] font-mono transition-opacity duration-300 ease-out whitespace-nowrap ${
-                            showModeLabel ? "opacity-100" : "opacity-60"
+                          className={`text-[10px] font-mono transition-all duration-300 ease-out overflow-hidden whitespace-nowrap ${
+                            showModeLabel ? "max-w-[80px] opacity-100 translate-x-0" : "max-w-0 opacity-0 -translate-x-1"
                           } ${
                             permissionMode === "plan" ? "text-sol-blue" :
                             permissionMode === "acceptEdits" ? "text-emerald-400" :

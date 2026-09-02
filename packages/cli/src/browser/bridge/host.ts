@@ -185,11 +185,11 @@ export async function proveBridgeHost(state: BridgeState, timeoutMs = 1200): Pro
  * separate process. An impostor on the port is named rather than raced: a
  * host we start could not bind anyway.
  */
-export async function ensureBridgeHost(): Promise<ProvenBridge> {
+export async function ensureBridgeHost(): Promise<ProvenBridge & { started: boolean }> {
   const state = ensureBridgeConfig();
   const probe = await probeHost(state);
-  if (probe === "alive") return { ...state, proven: true };
-  if (probe === "impostor") return proveBridgeHost(state);
+  if (probe === "alive") return { ...state, proven: true, started: false };
+  if (probe === "impostor") return { ...(await proveBridgeHost(state)), started: false };
 
   // Respawn ourselves. Under bun/node the entry script must be repeated;
   // in the compiled binary process.execPath IS the cast binary.
@@ -201,7 +201,7 @@ export async function ensureBridgeHost(): Promise<ProvenBridge> {
 
   const deadline = Date.now() + 6000;
   while (Date.now() < deadline) {
-    if (await isHostAlive(state, 500)) return { ...(readBridgeState() ?? state), proven: true };
+    if (await isHostAlive(state, 500)) return { ...(readBridgeState() ?? state), proven: true, started: true };
     await sleep(150);
   }
   throw new Error(
@@ -221,17 +221,35 @@ export function stopBridgeHost(): boolean {
   }
 }
 
-/** Ask a running host whether the extension is connected. */
-export async function bridgeStatus(state: ProvenBridge): Promise<{
+export interface BridgeHostStatus {
   extensionConnected: boolean;
   extensionVersion?: string;
   extensionProtocol?: number;
-}> {
+}
+
+/** Ask a running host whether the extension is connected. */
+export async function bridgeStatus(state: ProvenBridge): Promise<BridgeHostStatus> {
   const res = await fetch(`http://127.0.0.1:${state.port}/status?token=${encodeURIComponent(state.token)}`, {
     signal: AbortSignal.timeout(3000),
   });
   if (!res.ok) throw new Error(`bridge host answered ${res.status} — token mismatch? re-run \`cast browser extension setup\``);
-  return (await res.json()) as any;
+  return (await res.json()) as BridgeHostStatus;
+}
+
+/**
+ * The host's status once the extension is connected, or the last status seen
+ * when `timeoutMs` passes first. The extension reconnects on its own a few
+ * seconds after a host comes up (background.js retries at 1 s, 2 s and 5 s,
+ * then every 30 s), so a caller that just started the host, or just handed
+ * the extension a token, asks here instead of declaring it absent at once.
+ */
+export async function waitForExtension(state: ProvenBridge, timeoutMs: number): Promise<BridgeHostStatus> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const status = await bridgeStatus(state);
+    if (status.extensionConnected || Date.now() >= deadline) return status;
+    await sleep(250);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -456,8 +474,10 @@ export function startBridgeHost(opts: { port: number; token: string }): Promise<
         const sessionId = crypto.randomBytes(16).toString("hex").toUpperCase();
         client.sessions.set(sessionId, tabId);
         const t = (await listTabs()).find((x) => x.tabId === tabId);
-        // Attaching to a grouped tab adopts its group; an ungrouped tab (a
-        // human's tab named with --tab) leaves the session's group alone.
+        // Attaching to a grouped tab adopts its group. The extension reports
+        // a group only for groups it created itself (background.js
+        // ownedGroups), so a human's tab, grouped by the human or not, never
+        // hands the session a group of the human's.
         if (t?.group) client.group = t.group;
         sendJson(client.ws, {
           method: "Target.attachedToTarget",
