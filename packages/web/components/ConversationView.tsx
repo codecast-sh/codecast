@@ -7036,33 +7036,38 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
   if (parts) {
     const chipText = `${parsed.status}${parts.exitCode ? ` \u00b7 exit ${parts.exitCode}` : ''}`;
     return (
-      <div className="mb-1.5 mx-1">
-        {/* Same anatomy as a session-message card (left accent, header line) \u2014
-            both are machine deliveries into this thread, so they share one
-            visual language. */}
-        <div
-          className={`rounded border-l-2 ${cfg.accent}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
-          onClick={childId ? () => router.push(`/conversation/${childId}`) : undefined}
-        >
-          <div className="flex items-start gap-2 px-3 py-2 text-xs">
+      /* Same anatomy as a session-message card (left accent, header line) \u2014
+         both are machine deliveries into this thread, so they share one
+         visual language. */
+      <div
+        className={`mb-1.5 mx-1 rounded border-l-2 ${cfg.accent}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
+        onClick={childId ? () => router.push(`/conversation/${childId}`) : undefined}
+      >
+        <div className="flex items-start gap-2 px-3 py-2 text-xs">
+          {woke ? (
+            /* The wake cue takes the status glyph's slot: a corner arrow
+               pointing down and into the row below \u2014 the turn this
+               notification pulled the agent back for. The status itself still
+               reads from the chip on the right. */
+            <CornerDownRight
+              className={`w-3.5 h-3.5 shrink-0 mt-px ${cfg.color}`}
+              strokeWidth={2.25}
+              aria-label="Woke the agent"
+            />
+          ) : (
             <span className={`font-mono text-sm leading-none shrink-0 mt-0.5 ${cfg.color}`}>{cfg.icon}</span>
-            <span className={`text-[10px] font-medium tracking-wide uppercase shrink-0 mt-px ${cfg.eyebrow}`}>{parts.kind}</span>
-            <ExpandableLine text={parts.description} className="text-sol-text font-medium" title={parsed.summary} />
-            <span className={`px-1 py-0 rounded border text-[9px] font-semibold shrink-0 mt-px ${cfg.chip}`}>{chipText}</span>
-            {childId && (
-              <svg className={`w-3 h-3 shrink-0 mt-0.5 ${cfg.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-            )}
-            <span className="text-sol-text-dim font-mono text-[10px] shrink-0">{parsed.taskId}</span>
-            <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
-          </div>
+          )}
+          <span className={`text-[10px] font-medium tracking-wide uppercase shrink-0 mt-px ${cfg.eyebrow}`}>{parts.kind}</span>
+          <ExpandableLine text={parts.description} className="text-sol-text font-medium" title={parsed.summary} />
+          <span className={`px-1 py-0 rounded border text-[9px] font-semibold shrink-0 mt-px ${cfg.chip}`}>{chipText}</span>
+          {childId && (
+            <svg className={`w-3 h-3 shrink-0 mt-0.5 ${cfg.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          )}
+          <span className="text-sol-text-dim font-mono text-[10px] shrink-0">{parsed.taskId}</span>
+          <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         </div>
-        {woke && (
-          <div className="pl-2 pt-0.5" title="The turn below was woken by this notification">
-            <CornerDownRight className={`w-3.5 h-3.5 ${cfg.color} opacity-60`} />
-          </div>
-        )}
       </div>
     );
   }
