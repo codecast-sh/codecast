@@ -7,11 +7,10 @@ import * as path from "node:path";
 import { randomUUID, randomBytes } from "node:crypto";
 import { hasTmux, tmuxRun } from "../tmux.js";
 import { STUB_SOURCE, resolveStubRuntime } from "../doctor.js";
-import { spawnHarness, sweepStaleSessions, waitFor, readJsonlMessages, type Harness } from "../test-helpers/messagingHarness.js";
+import { spawnHarness, sweepStaleSessions, shellQuote, waitFor, readJsonlMessages, type Harness } from "../test-helpers/messagingHarness.js";
 
 const runtime = resolveStubRuntime();
 const prefix = `cc-claude-test-benchload-${randomBytes(3).toString("hex")}`;
-const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 describe.skipIf(!hasTmux() || !runtime)("bench load spawner", () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "bench-load-"));
@@ -33,10 +32,10 @@ describe.skipIf(!hasTmux() || !runtime)("bench load spawner", () => {
       const jsonlPath = path.join(cwd, "transcripts", `${sessionId}.jsonl`);
       const registryPath = path.join(cwd, "registry", `${sessionId}.json`);
       registryPaths.push(registryPath);
-      const command = `DOCTOR_BOOT_TOKEN='boot-${i}' exec ${q(runtime!)} ${q(stubPath)} ${q(sessionId)} ${q(jsonlPath)} ${q(registryPath)}`;
+      const command = `DOCTOR_BOOT_TOKEN='boot-${i}' exec ${shellQuote(runtime!)} ${shellQuote(stubPath)} ${shellQuote(sessionId)} ${shellQuote(jsonlPath)} ${shellQuote(registryPath)}`;
       harnesses.push(spawnHarness({ cwd, sessionId, jsonlPath, tmuxPrefix: prefix, command }));
     }
-    expect(harnesses.every((h) => h.shimPath === "")).toBe(true);
+    expect(harnesses.every((h) => h.shimPath === null)).toBe(true);
 
     for (const [i, h] of harnesses.entries()) {
       const registryPath = registryPaths[i];

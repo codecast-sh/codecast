@@ -62,6 +62,8 @@ export interface LoopLagResult {
 
 const PROBE_TIMEOUT_MS = 60_000;
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 async function timedGet(url: string, headers?: Record<string, string>): Promise<{ ms: number; status: number | null }> {
   const start = performance.now();
   try {
@@ -91,24 +93,21 @@ export async function runLoopLagProbe(opts: {
   const samples: number[] = [];
   let skipped = 0;
   let errors = 0;
-  let inFlight = 0;
   const pending = new Set<Promise<void>>();
   const deadline = performance.now() + opts.durationMs;
 
   while (performance.now() < deadline && !opts.signal?.aborted) {
-    if (inFlight >= maxInFlight) {
+    if (pending.size >= maxInFlight) {
       skipped++;
     } else {
-      inFlight++;
       const p = timedGet(url).then((r) => {
-        inFlight--;
         if (r.status === 200) samples.push(r.ms);
         else errors++;
       });
       pending.add(p);
       void p.finally(() => pending.delete(p));
     }
-    await new Promise<void>((r) => setTimeout(r, intervalMs));
+    await sleep(intervalMs);
   }
   await Promise.all(pending);
   return { summary: summarizeLatency(samples), samples, skipped, errors, intervalMs, durationMs: opts.durationMs };
@@ -139,7 +138,37 @@ export async function runLatencyProbe(opts: {
     const key = r.status === null ? "error" : String(r.status);
     statuses[key] = (statuses[key] ?? 0) + 1;
     const wait = intervalMs - r.ms;
-    if (wait > 0) await new Promise<void>((res) => setTimeout(res, wait));
+    if (wait > 0) await sleep(wait);
   }
   return { url: opts.url, summary: summarizeLatency(samples), statuses, intervalMs };
+}
+
+export interface RouteProbes {
+  loopLag: LoopLagResult;
+  hookStatus: LatencyProbeResult;
+  /** null when there is no terminal token to authenticate with. */
+  termSessions: LatencyProbeResult | null;
+}
+
+/**
+ * The three probes a bench run takes, together: loop lag on /health plus the
+ * two loopback routes the daemon answers from the same event loop. Observe
+ * mode runs them on an idle daemon and load mode runs them again alongside the
+ * churn, so both read the same numbers from the same code.
+ */
+export async function runRouteProbes(opts: {
+  port: number;
+  durationMs: number;
+  authHeaders: Record<string, string> | null;
+  signal?: AbortSignal;
+}): Promise<RouteProbes> {
+  const { port, durationMs, signal } = opts;
+  const [loopLag, hookStatus, termSessions] = await Promise.all([
+    runLoopLagProbe({ port, durationMs, signal }),
+    runLatencyProbe({ url: `http://127.0.0.1:${port}/hook/status`, durationMs, signal }),
+    opts.authHeaders
+      ? runLatencyProbe({ url: `http://127.0.0.1:${port}/term/sessions`, headers: opts.authHeaders, durationMs, signal })
+      : Promise.resolve(null),
+  ]);
+  return { loopLag, hookStatus, termSessions };
 }
