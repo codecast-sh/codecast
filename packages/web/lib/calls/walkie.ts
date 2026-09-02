@@ -36,7 +36,7 @@
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
 import { CHAT_CHANNEL_STUB_PREFIX, newChatMessageClientId, resolveChannelStubId } from "../../store/chatSlice";
-import { joinCall, leaveCall, mediaFailureReason, setMuted } from "./callManager";
+import { joinCall, leaveCall, mediaFailureReason, setCamera, setMuted } from "./callManager";
 import { openAsrPipe, type AsrPipe } from "./asrPipe";
 import {
   acquireMic,
@@ -833,6 +833,19 @@ async function openRoomForBurst(b: Burst, track: MediaStreamTrack): Promise<void
     if (b.done || !inRoom(b.roomKey)) return;
     b.openAt = Date.now();
     publishSending(b);
+    // YOUR OWN FACE, while you hold the key. A walkie is a person talking, and
+    // hearing a voice out of a dark circle is less of a conversation than
+    // seeing who is speaking.
+    //
+    // Only when the camera is off: one already on belongs to the person (or to
+    // the huddle this hold is happening inside), and the release must not
+    // close it. Only after the room exists, since a camera with nowhere to
+    // publish is a device light for no reason. Failure is survivable — the
+    // burst is audio, and a refused camera must never cost the message.
+    if (!useInboxStore.getState().call.camera) {
+      cameraByBurst = true;
+      await setCamera(true, { remember: false }).catch(() => {});
+    }
   } catch {}
 }
 
@@ -874,6 +887,30 @@ export function noteBurstUnheard(): void {
  * lurker in a huddle the moment anybody stepped into a burst there.
  */
 let mutedByRelease: string | null = null;
+
+/**
+ * THE CAMERA THE HOLD OPENED, and the only camera the release may close.
+ *
+ * Holding the key shows your own face while you talk — the founder's ask, and
+ * the reason it is safe here and nowhere else in the walkie: YOU pressed
+ * something. A camera opened by somebody else's burst arriving would be a
+ * machine deciding to film you, which is why the auto-answer seat stays dark.
+ *
+ * Remembered as a flag rather than assumed on release, because the person may
+ * have had their camera on already (holding the key inside a huddle): closing
+ * it then would turn off a camera the release never turned on.
+ */
+let cameraByBurst = false;
+
+/** Put the camera back the way the hold found it. Idempotent, and safe on
+ *  every exit path — a burst that never opened one has nothing to close. */
+async function closeBurstCamera(): Promise<void> {
+  if (!cameraByBurst) return;
+  cameraByBurst = false;
+  // `remember: false`: a hold is not a decision about how the next huddle
+  // starts, so this must not rewrite the person's camera preference.
+  await setCamera(false, { remember: false }).catch(() => {});
+}
 
 /** Somebody stepped into the room this burst is being spoken into, so it is a
  *  call now and the release must treat it as one: no sign-off, no mute. Read
@@ -933,6 +970,12 @@ async function abortBurst(b: Burst): Promise<void> {
  *  recognizer, which still owes this burst its last sentence. */
 function stopBurstWork(b: Burst) {
   b.done = true;
+  // The camera the hold opened goes with the hold, on every path that ends
+  // one — the release, the length cap, and a setup that failed. UNLESS
+  // somebody stepped in: the burst is a call now, the face belongs to the
+  // conversation, and closing it would blank the person mid-sentence.
+  if (!burstUpgraded(b)) void closeBurstCamera();
+  else cameraByBurst = false;
   if (b.pushTimer) clearInterval(b.pushTimer);
   if (b.maxTimer) clearTimeout(b.maxTimer);
   b.pushTimer = null;

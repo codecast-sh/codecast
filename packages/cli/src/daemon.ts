@@ -9,7 +9,7 @@ import { parseProcessTable } from "./processTable.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
-import { walkFiles } from "./fsWalk.js";
+import { walkFiles, walkDirs, walkDirsSync, type WalkEntry, type WalkOptions } from "./fsWalk.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
 import { reconcileClaudeSettingsModel } from "./claudeDefaultModel.js";
 import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, recordConvergenceSignals } from "./capabilities/heartbeat.js";
@@ -13055,147 +13055,133 @@ function indexSessionFile(
 // (`<ISO-ts>_<uuid>.jsonl`) filename — the session id both stores key by.
 const TRAILING_UUID_JSONL_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 
-function buildSessionFileIndex(): { index: Map<string, SessionFileInfo>; codexRollouts: Map<string, string> } {
-  const index = new Map<string, SessionFileInfo>();
-  const codexRollouts = new Map<string, string>();
-  const home = process.env.HOME || "";
-
-  // Claude: mirror claudeTranscriptCandidates — per project dir, top-level
-  // <sessionId>.jsonl first, then each session subdir's own files, its
-  // subagents/, and subagents/workflows/<run>/ files.
-  const claudeProjectsDir = path.join(home, ".claude", "projects");
-  try {
-    for (const dir of fs.readdirSync(claudeProjectsDir, { withFileTypes: true })) {
-      if (!dir.isDirectory()) continue;
-      const dirPath = path.join(claudeProjectsDir, dir.name);
-      let subDirs: string[];
-      try {
-        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-        for (const e of entries) {
-          if (e.isFile() && e.name.endsWith(".jsonl")) {
-            indexSessionFile(index, e.name.slice(0, -6), path.join(dirPath, e.name), "claude");
-          }
-        }
-        subDirs = entries.filter(e => e.isDirectory()).map(e => e.name);
-      } catch { continue; }
-      for (const subDir of subDirs) {
-        const parentDir = path.join(dirPath, subDir);
-        try {
-          for (const e of fs.readdirSync(parentDir, { withFileTypes: true })) {
-            if (e.isFile() && e.name.endsWith(".jsonl")) {
-              indexSessionFile(index, e.name.slice(0, -6), path.join(parentDir, e.name), "claude");
-            }
-          }
-        } catch { continue; }
-        const subagentsDir = path.join(parentDir, "subagents");
-        try {
-          for (const e of fs.readdirSync(subagentsDir, { withFileTypes: true })) {
-            if (e.isFile() && e.name.endsWith(".jsonl")) {
-              indexSessionFile(index, e.name.slice(0, -6), path.join(subagentsDir, e.name), "claude");
-            }
-          }
-        } catch { continue; }
-        const workflowsDir = path.join(subagentsDir, "workflows");
-        try {
-          for (const wfRun of fs.readdirSync(workflowsDir, { withFileTypes: true })) {
-            if (!wfRun.isDirectory()) continue;
-            const runDir = path.join(workflowsDir, wfRun.name);
-            for (const e of fs.readdirSync(runDir, { withFileTypes: true })) {
-              if (e.isFile() && e.name.endsWith(".jsonl")) {
-                indexSessionFile(index, e.name.slice(0, -6), path.join(runDir, e.name), "claude");
-              }
-            }
-          }
-        } catch {}
-      }
-    }
-  } catch {}
-
-  // Codex: ~/.codex/sessions/YYYY/MM/DD/<name>-<ts>-<sessionId>.jsonl,
-  // recursive like the old findCodexRolloutPath walk. Fills the codex-only map
-  // too (first wins, matching the old walk's first-found-in-recursion answer).
-  const codexSessionsDir = path.join(home, ".codex", "sessions");
-  const walkCodex = (dir: string): void => {
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walkCodex(fullPath);
-      } else if (entry.isFile()) {
-        const m = TRAILING_UUID_JSONL_RE.exec(entry.name);
-        if (m) {
-          indexSessionFile(index, m[1], fullPath, "codex");
-          if (!codexRollouts.has(m[1])) codexRollouts.set(m[1], fullPath);
-        }
-      }
-    }
-  };
-  walkCodex(codexSessionsDir);
-
-  // Gemini: ~/.gemini/tmp/<hash>/chats/<sessionId>.json
-  const geminiTmpDir = path.join(home, ".gemini", "tmp");
-  try {
-    for (const dir of fs.readdirSync(geminiTmpDir, { withFileTypes: true })) {
-      if (!dir.isDirectory()) continue;
-      const chatsDir = path.join(geminiTmpDir, dir.name, "chats");
-      try {
-        for (const e of fs.readdirSync(chatsDir, { withFileTypes: true })) {
-          if (e.isFile() && e.name.endsWith(".json")) {
-            indexSessionFile(index, e.name.slice(0, -5), path.join(chatsDir, e.name), "gemini");
-          }
-        }
-      } catch {}
-    }
-  } catch {}
-
-  // pi: ~/.pi/agent/sessions/<cwd-slug>/<ISO-ts>_<sessionId>.jsonl — the id is
-  // the filename's trailing uuid.
-  const piSessionsDir = path.join(home, ".pi", "agent", "sessions");
-  try {
-    for (const slugDir of fs.readdirSync(piSessionsDir, { withFileTypes: true })) {
-      if (!slugDir.isDirectory()) continue;
-      const dirPath = path.join(piSessionsDir, slugDir.name);
-      try {
-        for (const e of fs.readdirSync(dirPath, { withFileTypes: true })) {
-          if (!e.isFile()) continue;
-          const m = TRAILING_UUID_JSONL_RE.exec(e.name);
-          if (m) indexSessionFile(index, m[1], path.join(dirPath, e.name), "pi");
-        }
-      } catch {}
-    }
-  } catch {}
-
-  // grok: ~/.grok/sessions/<url-encoded-cwd>/<sessionId>/updates.jsonl — the
-  // session DIRECTORY is named by the id.
-  const grokSessionsDir = path.join(home, ".grok", "sessions");
-  try {
-    for (const slugDir of fs.readdirSync(grokSessionsDir, { withFileTypes: true })) {
-      if (!slugDir.isDirectory()) continue;
-      const dirPath = path.join(grokSessionsDir, slugDir.name);
-      try {
-        for (const sessionDir of fs.readdirSync(dirPath, { withFileTypes: true })) {
-          if (!sessionDir.isDirectory()) continue;
-          const updatesPath = path.join(dirPath, sessionDir.name, "updates.jsonl");
-          if (fs.existsSync(updatesPath)) {
-            indexSessionFile(index, sessionDir.name, updatesPath, "grok");
-          }
-        }
-      } catch {}
-    }
-  } catch {}
-
-  return { index, codexRollouts };
+// One transcript store per client: where it lives, how deep to look, and how
+// a file's path names its session. Both index builders below walk exactly
+// these, so the sync cold build and the async refresh cannot drift apart.
+// Enumeration order per store mirrors the old per-call probe order (a
+// directory's own files before its subdirectories, so a top-level
+// <sessionId>.jsonl wins over a nested twin), and stores are merged
+// claude-first.
+type IndexStore = {
+  root: string;
+  agentType: AgentClientId;
+  walk: WalkOptions;
+  idOf: (f: WalkEntry) => string | null;
+};
+const segs = (rel: string) => rel.split(path.sep);
+function sessionFileIndexStores(home: string): IndexStore[] {
+  return [
+    // Claude: <project>/<id>.jsonl, <project>/<session>/<id>.jsonl, its
+    // subagents/, and subagents/workflows/<run>/ — never tool-results etc.
+    {
+      root: path.join(home, ".claude", "projects"),
+      agentType: "claude",
+      walk: {
+        maxDepth: 6,
+        dirFilter: (rel) => {
+          const d = segs(rel);
+          return d.length <= 2 || (d.length === 3 && d[2] === "subagents") || (d.length === 4 && d[3] === "workflows") || d.length === 5;
+        },
+        fileFilter: (rel) => rel.endsWith(".jsonl") && segs(rel).length !== 5,
+      },
+      idOf: (f) => f.name.slice(0, -6),
+    },
+    // Codex: ~/.codex/sessions/YYYY/MM/DD/<name>-<ts>-<sessionId>.jsonl, recursive.
+    {
+      root: path.join(home, ".codex", "sessions"),
+      agentType: "codex",
+      walk: {},
+      idOf: (f) => TRAILING_UUID_JSONL_RE.exec(f.name)?.[1] ?? null,
+    },
+    // Gemini: ~/.gemini/tmp/<hash>/chats/<sessionId>.json
+    {
+      root: path.join(home, ".gemini", "tmp"),
+      agentType: "gemini",
+      walk: { maxDepth: 3, dirFilter: (rel) => { const d = segs(rel); return d.length === 1 || d[1] === "chats"; }, fileFilter: (rel) => rel.endsWith(".json") && segs(rel).length === 3 },
+      idOf: (f) => f.name.slice(0, -5),
+    },
+    // pi: ~/.pi/agent/sessions/<cwd-slug>/<ISO-ts>_<sessionId>.jsonl
+    {
+      root: path.join(home, ".pi", "agent", "sessions"),
+      agentType: "pi",
+      walk: { maxDepth: 2, fileFilter: (rel) => segs(rel).length === 2 },
+      idOf: (f) => TRAILING_UUID_JSONL_RE.exec(f.name)?.[1] ?? null,
+    },
+    // grok: ~/.grok/sessions/<url-encoded-cwd>/<sessionId>/updates.jsonl — the
+    // session DIRECTORY is named by the id.
+    {
+      root: path.join(home, ".grok", "sessions"),
+      agentType: "grok",
+      walk: { maxDepth: 3, fileFilter: (rel) => segs(rel).length === 3 && path.basename(rel) === "updates.jsonl" },
+      idOf: (f) => segs(f.rel)[1],
+    },
+  ];
 }
 
-function rebuildSessionFileIndex(): void {
-  sessionFileIndexHome = process.env.HOME || "";
-  const built = buildSessionFileIndex();
+type SessionFileIndexBuild = { index: Map<string, SessionFileInfo>; codexRollouts: Map<string, string> };
+function recordIndexFiles(build: SessionFileIndexBuild, store: IndexStore, files: WalkEntry[]): void {
+  for (const f of files) {
+    const id = store.idOf(f);
+    if (!id) continue;
+    indexSessionFile(build.index, id, f.path, store.agentType);
+    // The codex store's own view: first found wins, as the old recursive walk did.
+    if (store.agentType === "codex" && !build.codexRollouts.has(id)) build.codexRollouts.set(id, f.path);
+  }
+}
+
+// Synchronous: for a lookup that cannot wait (no index yet, or HOME changed
+// under a test). readdir only, ~4ms warm; never the periodic path.
+function buildSessionFileIndex(home: string): SessionFileIndexBuild {
+  const build: SessionFileIndexBuild = { index: new Map(), codexRollouts: new Map() };
+  for (const store of sessionFileIndexStores(home)) {
+    walkDirsSync(store.root, store.walk, (files) => recordIndexFiles(build, store, files));
+  }
+  return build;
+}
+
+async function buildSessionFileIndexAsync(home: string): Promise<SessionFileIndexBuild> {
+  const build: SessionFileIndexBuild = { index: new Map(), codexRollouts: new Map() };
+  for (const store of sessionFileIndexStores(home)) {
+    await walkDirs(store.root, store.walk, (files) => recordIndexFiles(build, store, files));
+  }
+  return build;
+}
+
+function installSessionFileIndex(home: string, built: SessionFileIndexBuild): void {
+  sessionFileIndexHome = home;
   sessionFileIndex = built.index;
   codexRolloutIndex = built.codexRollouts;
   sessionFileIndexBuiltAt = Date.now();
   sessionFileKnownMisses.clear();
   codexRolloutKnownMisses.clear();
+}
+
+function rebuildSessionFileIndex(): void {
+  const home = process.env.HOME || "";
+  installSessionFileIndex(home, buildSessionFileIndex(home));
+}
+
+// The periodic path. The cold sync build blocked the loop 6s at boot under
+// load (LOOP-FREEZE 2026-09-02, collectResourceSnapshot → sessionBorrowsProcess
+// → this walk) and again every TTL; the same walk on the libuv pool costs the
+// loop nothing, and lookups keep answering from the previous map meanwhile
+// (hits are stat-validated, so a stale map is never wrong, only incomplete).
+// One refresh in flight at a time; the boot path kicks the first one so the
+// first lookup rarely has to build cold.
+let sessionFileIndexRefresh: Promise<void> | null = null;
+export function refreshSessionFileIndex(): Promise<void> {
+  if (sessionFileIndexRefresh) return sessionFileIndexRefresh;
+  const home = process.env.HOME || "";
+  sessionFileIndexRefresh = buildSessionFileIndexAsync(home)
+    .then((built) => {
+      // A sync build that ran meanwhile (HOME swap, cold lookup) is at least as
+      // fresh as this one only if it is newer than our start; simpler and safe:
+      // install unless HOME moved under us.
+      if ((process.env.HOME || "") === home) installSessionFileIndex(home, built);
+    })
+    .catch(() => {})
+    .finally(() => { sessionFileIndexRefresh = null; });
+  return sessionFileIndexRefresh;
 }
 
 // The shared freshness policy for both index maps: stat-validated hits, one
@@ -13208,13 +13194,11 @@ function indexedSessionLookup<T>(
   sessionId: string,
 ): T | null {
   let rebuiltThisCall = false;
-  if (
-    !getMap() ||
-    sessionFileIndexHome !== (process.env.HOME || "") ||
-    Date.now() - sessionFileIndexBuiltAt > SESSION_FILE_INDEX_TTL_MS
-  ) {
+  if (!getMap() || sessionFileIndexHome !== (process.env.HOME || "")) {
     rebuildSessionFileIndex();
     rebuiltThisCall = true;
+  } else if (Date.now() - sessionFileIndexBuiltAt > SESSION_FILE_INDEX_TTL_MS) {
+    void refreshSessionFileIndex(); // serve the current map; the fresh one lands async
   }
   let hit = getMap()!.get(sessionId);
   if (hit !== undefined && !fs.existsSync(pathOf(hit))) {
@@ -13225,11 +13209,12 @@ function indexedSessionLookup<T>(
     if (rebuiltThisCall) {
       // Confirmed absent by the walk this call just did.
       knownMisses.add(sessionId);
-    } else if (Date.now() - sessionFileIndexBuiltAt > SESSION_FILE_INDEX_MISS_REBUILD_MS) {
+    } else if (Date.now() - sessionFileIndexBuiltAt > SESSION_FILE_INDEX_MISS_REBUILD_MS && !sessionFileIndexRefresh) {
       // An UNSEEN id missing from a stale index: the file may have been created
       // since the last walk (a fresh session, a repair write). One rebuild per
       // window. Only a miss CONFIRMED by a fresh walk is remembered — a query
-      // inside the throttle window stays unmarked so it retries next call.
+      // inside the throttle window (or while an async refresh is already
+      // walking) stays unmarked so it retries next call.
       rebuildSessionFileIndex();
       const rebuilt = getMap()!.get(sessionId);
       if (rebuilt !== undefined && fs.existsSync(pathOf(rebuilt))) hit = rebuilt;
@@ -15320,6 +15305,61 @@ export function getInitialManagedSessionId(
   return expectedSessionId;
 }
 
+// ── Fresh-launch pane readiness ──────────────────────────────────────────────
+// Shared by first-message delivery (tryStartedTmux) and discovery below: both
+// need to know whether a pane the daemon just launched is at its input prompt.
+// The prompt pattern is per client, from the registry: Claude/cursor ❯ or ⏵,
+// Codex > at line end, Gemini > at line end or "gemini". It intentionally
+// DISAGREES with the shared /[❯›]/ of the resume-readiness / picker paths; the
+// registry's promptReadyPattern encodes THIS fresh-launch site. Do not collapse
+// the two.
+export type StartedPaneState = "ready" | "booting" | "trust" | "fatal" | "gone";
+
+const STARTED_PANE_FATAL_ERRORS = [
+  "cannot be launched inside another",
+  "command not found",
+  "No such file or directory",
+  "ENOENT",
+];
+const TRUST_PROMPT_RE = /trust this folder|safety check|Is this a project/i;
+
+// Pure classification of one pane capture. Only output below the echoed launch
+// command is scanned for launch errors (see paneContentAfterLaunchEcho). The
+// workspace trust prompt paints a ❯ of its own, so it wins over the prompt
+// pattern: a pane showing it is "trust", never "ready".
+export function classifyStartedPane(paneContent: string, promptPattern: RegExp): StartedPaneState {
+  const agentPane = paneContentAfterLaunchEcho(paneContent);
+  if (STARTED_PANE_FATAL_ERRORS.some(e => agentPane.includes(e))) return "fatal";
+  if (TRUST_PROMPT_RE.test(paneContent)) return "trust";
+  return promptPattern.test(agentPane) ? "ready" : "booting";
+}
+
+// Captures and classifies a started pane. Accepts the trust prompt when it is
+// showing ("Yes, I trust" is preselected; Enter accepts) and reports "trust" so
+// the caller keeps polling. A failed capture is "booting" while the tmux
+// session exists and "gone" once it does not.
+async function probeStartedPane(entry: StartedSessionInfo): Promise<{ state: StartedPaneState; pane: string }> {
+  let paneContent: string;
+  try {
+    ({ stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", entry.tmuxSession, "-S", "-20"]));
+  } catch {
+    const alive = await tmuxExec(["has-session", "-t", entry.tmuxSession]).then(() => true, () => false);
+    return { state: alive ? "booting" : "gone", pane: "" };
+  }
+  const state = classifyStartedPane(paneContent, AGENT_CLIENTS[entry.agentType].promptReadyPattern);
+  if (state === "trust") {
+    log(`Started session ${entry.tmuxSession} showing trust prompt, sending Enter to accept`);
+    await tmuxExec(["send-keys", "-t", entry.tmuxSession, "Enter"]).catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+  return { state, pane: paneContentAfterLaunchEcho(paneContent) };
+}
+
+// Discovery polls every 2s; 60 polls = 120s, the same budget as
+// MAX_RESUME_READINESS_POLL_MS, so a boot under load (seven launches in one
+// second has been observed) still binds.
+const DISCOVERY_POLL_ATTEMPTS = 60;
+
 async function discoverAndLinkSession(
   conversationId: string,
   tmuxSession: string,
@@ -15334,11 +15374,59 @@ async function discoverAndLinkSession(
     if (UUID_JSONL_RE.test(f)) existingFiles.add(f);
   }
 
-  for (let attempt = 0; attempt < 30; attempt++) {
+  const link = (linkedSessionId: string, how: string): void => {
+    const startedEntry = startedSessionTmux.get(conversationId);
+    const cache = readConversationCache();
+    const reverseCache = buildReverseConversationCache(cache);
+    if (reverseCache[conversationId]) {
+      log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked to ${reverseCache[conversationId].slice(0, 8)} by another writer`);
+      deleteStartedSession(conversationId);
+      return;
+    }
+    cache[linkedSessionId] = conversationId;
+    if (conversationCacheRef) {
+      conversationCacheRef[linkedSessionId] = conversationId;
+    }
+    saveConversationCache(cache);
+    if (syncServiceRef) {
+      // Reconcile project_path/git_root to the real session cwd (see Claude
+      // match branch). `cwd` is authoritative here: the pane was launched in it.
+      const discoveryGitInfo = getGitInfo(cwd);
+      void pushSessionIdBinding(conversationId, linkedSessionId, cwd, discoveryGitInfo?.repoRoot || discoveryGitInfo?.root);
+      registerManagedStartedSession(conversationId, linkedSessionId, tmuxSession);
+      if (startedEntry?.sessionId && startedEntry.sessionId !== linkedSessionId) {
+        stopManagedSessionHeartbeat(startedEntry.sessionId);
+      }
+    }
+    deleteStartedSession(conversationId);
+    log(`[DISCOVER] Linked session ${linkedSessionId.slice(0, 8)} to conversation ${conversationId.slice(0, 12)} via ${how}`);
+  };
+
+  for (let attempt = 0; attempt < DISCOVERY_POLL_ATTEMPTS; attempt++) {
     await new Promise(resolve => setTimeout(resolve, 2000));
-    if (!startedSessionTmux.has(conversationId)) {
+    const entry = startedSessionTmux.get(conversationId);
+    if (!entry) {
       log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked by watcher, stopping discovery`);
       return;
+    }
+    // An assigned `--session-id` needs no file to discover: the pane at its
+    // input prompt IS the session. Claude writes <uuid>.jsonl only on the first
+    // turn, so a new session nobody has typed into has no transcript to find;
+    // waiting on the file left every such session unbound after the timeout
+    // (its card never left the unstarted state) while the agent sat ready.
+    // Binding still waits for the prompt on purpose: an early cache entry would
+    // let deliverMessage skip the readiness-gated started-tmux path and paste
+    // the first message into a still-booting prompt.
+    if (entry.sessionId) {
+      const probe = await probeStartedPane(entry);
+      if (probe.state === "ready") {
+        link(entry.sessionId, "prompt readiness");
+        return;
+      }
+      if (probe.state === "fatal" || probe.state === "gone") {
+        log(`[DISCOVER] Started session ${entry.tmuxSession} is ${probe.state}, stopping discovery for ${conversationId.slice(0, 12)}${probe.pane ? `: ${probe.pane.slice(0, 200)}` : ""}`);
+        return;
+      }
     }
     const names = await fs.promises.readdir(projectDir).catch(() => null);
     if (!names) continue;
@@ -15380,36 +15468,26 @@ async function discoverAndLinkSession(
       linkedSessionId = candidates[0];
     }
     if (linkedSessionId) {
-      const startedEntry = startedSessionTmux.get(conversationId);
-      const cache = readConversationCache();
-      const reverseCache = buildReverseConversationCache(cache);
-      if (reverseCache[conversationId]) {
-        log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked to ${reverseCache[conversationId].slice(0, 8)} by another writer`);
-        deleteStartedSession(conversationId);
-        return;
-      }
-      cache[linkedSessionId] = conversationId;
-      if (conversationCacheRef) {
-        conversationCacheRef[linkedSessionId] = conversationId;
-      }
-      saveConversationCache(cache);
-      if (syncServiceRef) {
-        // Reconcile project_path/git_root to the real session cwd (see Claude
-        // match branch). `cwd` is authoritative here: the linked candidate's
-        // JSONL was found under the cwd-derived project dir.
-        const discoveryGitInfo = getGitInfo(cwd);
-        void pushSessionIdBinding(conversationId, linkedSessionId, cwd, discoveryGitInfo?.repoRoot || discoveryGitInfo?.root);
-        registerManagedStartedSession(conversationId, linkedSessionId, tmuxSession);
-        if (startedEntry?.sessionId && startedEntry.sessionId !== linkedSessionId) {
-          stopManagedSessionHeartbeat(startedEntry.sessionId);
-        }
-      }
-      deleteStartedSession(conversationId);
-      log(`[DISCOVER] Linked session ${linkedSessionId.slice(0, 8)} to conversation ${conversationId.slice(0, 12)} via JSONL discovery`);
+      link(linkedSessionId, "JSONL discovery");
       return;
     }
   }
   log(`[DISCOVER] Timed out discovering session for conversation ${conversationId.slice(0, 12)}`);
+}
+
+// A daemon restart reloads startedSessionTmux from disk but not the discovery
+// polls that were running against those panes. Every persisted pane whose
+// conversation is still unlinked gets its discovery restarted, so a restart
+// during a boot never leaves a ready agent with an unbound card.
+function resumeStartedSessionDiscovery(): void {
+  const reverse = buildReverseConversationCache(readConversationCache());
+  for (const [conversationId, entry] of startedSessionTmux) {
+    if (!entry.sessionId || reverse[conversationId]) continue;
+    log(`[DISCOVER] Resuming discovery for ${conversationId.slice(0, 12)} in ${entry.tmuxSession} after restart`);
+    discoverAndLinkSession(conversationId, entry.tmuxSession, entry.projectPath).catch(err => {
+      log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
+    });
+  }
 }
 
 // The resume tmux name is built in resumeCommand.ts (resumeTmuxName /
@@ -17321,50 +17399,22 @@ async function deliverMessage(
     const tryStartedTmux = async (entry: StartedSessionInfo): Promise<boolean> => {
       try {
         await tmuxExec(["has-session", "-t", entry.tmuxSession]);
-        // Fresh-launch readiness pattern, per client, from the registry:
-        // Claude/cursor: ❯ or ⏵   Codex: > at line end   Gemini: > at line end or "gemini".
-        // NOTE: this per-client pattern intentionally DISAGREES with the shared
-        // /[❯›]/ used by the resume-readiness / picker paths (e.g. daemon resume at
-        // ~11279); the registry's promptReadyPattern encodes THIS fresh-launch site,
-        // and both behaviors are preserved as-is. Do not collapse the two.
-        const promptPattern = AGENT_CLIENTS[entry.agentType].promptReadyPattern;
-        const fatalErrors = [
-          "cannot be launched inside another",
-          "command not found",
-          "No such file or directory",
-          "ENOENT",
-        ];
         let ready = false;
         const startTime = Date.now();
-        const trustPromptPatterns = /trust this folder|safety check|Is this a project/i;
         for (let i = 0; i < 60; i++) {
           await new Promise(resolve => setTimeout(resolve, 250));
-          try {
-            const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", entry.tmuxSession, "-S", "-20"]);
-            // Scan only output below the echoed launch command — shell rc noise
-            // above it must not read as a fatal launch error (see paneContentAfterLaunchEcho).
-            const agentPane = paneContentAfterLaunchEcho(paneContent);
-            if (fatalErrors.some(e => agentPane.includes(e))) {
-              log(`Started session ${entry.tmuxSession} hit fatal error, falling through. Pane: ${agentPane.slice(0, 200)}`);
-              deleteStartedSession(conversationId);
-              return false;
-            }
-            // Dismiss workspace trust prompt if detected (shows ❯ but isn't the input prompt)
-            if (trustPromptPatterns.test(paneContent)) {
-              log(`Started session ${entry.tmuxSession} showing trust prompt, sending Enter to accept`);
-              await tmuxExec(["send-keys", "-t", entry.tmuxSession, "Enter"]);
-              await new Promise(resolve => setTimeout(resolve, 2000));
-              continue;
-            }
-            if (promptPattern.test(agentPane)) {
-              // Verify it's the actual input prompt, not the trust prompt's ❯
-              const lastLines = paneContent.split("\n").slice(-10).join("\n");
-              if (trustPromptPatterns.test(lastLines)) continue;
-              log(`Started session ${entry.tmuxSession} ready (prompt visible) after ${Date.now() - startTime}ms`);
-              ready = true;
-              break;
-            }
-          } catch {}
+          const probe = await probeStartedPane(entry);
+          if (probe.state === "gone") throw new Error(`tmux session ${entry.tmuxSession} is gone`);
+          if (probe.state === "fatal") {
+            log(`Started session ${entry.tmuxSession} hit fatal error, falling through. Pane: ${probe.pane.slice(0, 200)}`);
+            deleteStartedSession(conversationId);
+            return false;
+          }
+          if (probe.state === "ready") {
+            log(`Started session ${entry.tmuxSession} ready (prompt visible) after ${Date.now() - startTime}ms`);
+            ready = true;
+            break;
+          }
         }
         if (!ready) {
           log(`Started session ${entry.tmuxSession} startup timed out after ${Date.now() - startTime}ms, proceeding anyway`);
@@ -19584,6 +19634,7 @@ async function main(): Promise<void> {
   const isRestart = process.env.CODECAST_RESTART === "1";
   const startMsg = `v${daemonVersion} PID=${process.pid}${isRestart ? " (restart after update)" : ""}${crashRecoveryInfo}`;
   logLifecycle("daemon_start", startMsg);
+  void refreshSessionFileIndex(); // warm the transcript index off the loop before the first lookup
   sendLogImmediate("info", `[LIFECYCLE] daemon_start: ${startMsg}`, { error_code: "daemon_start" });
   log(`PID: ${process.pid}`);
 
@@ -19626,6 +19677,7 @@ async function main(): Promise<void> {
     userId: config.user_id,
   });
   syncServiceRef = syncService;
+  resumeStartedSessionDiscovery();
 
   // Register this device EARLY + on its own interval, so device presence never
   // depends on the rest of (potentially slow/headless-stalling) init. Logs the

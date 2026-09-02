@@ -49,6 +49,33 @@
   display: none;
 }
 
+/* A CIRCLE NEEDS AN EDGE. These faces float over whatever the person is
+   working in, so a dark avatar on a dark editor — or a light one on a light
+   document — dissolves into the background and the row reads as a smear
+   rather than as people. The `+N` pebble beside them has carried a hairline
+   since it was drawn; the faces went without one.
+
+   Two rings, not one: a light hairline so the disc holds its shape against a
+   dark backdrop, and a dark halo just outside it so it still holds against a
+   light one. Both are drawn from theme tokens rather than fixed colours, and
+   both sit on the avatar element the ask ring uses, so a face being asked to
+   talk simply stacks its orange ring outside these. */
+.presence-faces .people-face-av,
+.presence-faces .presence-me > * {
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, var(--sol-text) 30%, transparent),
+    0 0 0 3px color-mix(in srgb, #000 32%, transparent);
+  border-radius: 999px;
+}
+
+/* Being asked to talk still wins the edge: the orange goes outside the
+   hairline instead of replacing it, so the circle keeps its shape. */
+.presence-faces .people-face-seat[data-ask] .people-face-av {
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, var(--sol-text) 30%, transparent),
+    0 0 0 3.5px color-mix(in srgb, var(--sol-orange) 75%, transparent);
+}
+
 /* The empty state: your own face, draggable, quiet. */
 .presence-me {
   display: inline-flex;

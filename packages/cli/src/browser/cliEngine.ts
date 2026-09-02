@@ -1014,6 +1014,13 @@ The cheap-browsing loop — scope reads instead of dumping whole pages:
   grant                    camera/mic/clipboard permission for this origin — no prompt, no restart
   shot -s <sel>            screenshot ONE element (--annotate numbers refs on a full shot)
 
+The human's real Chrome instead of the clone (they want to watch, or a site fights the clone):
+
+  target real              sticky for this session; --real / --clone on any verb overrides it once
+  open <url>               a tab of its own there, in a blue tab group named "cast <session>";
+                           act only on tabs you opened. Needs the extension paired once by
+                           the human: cast browser extension setup
+
 \`cast browser help <command>\` documents every flag; \`cast browser skills get core --full\` is the engine's full guide.`,
   );
 

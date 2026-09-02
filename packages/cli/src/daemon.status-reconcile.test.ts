@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { classifyCodexTranscriptTail, classifyLivePaneFor, classifyTmuxLiveState, classifyTranscriptTail, extractTmuxLiveRegion, findCachedSessionIdForConversation, findSessionFile, glyphlessPromptPattern, workflowAgentTranscriptPathFor, isInterruptControlMessage, paneReconcileTarget, preferLiveSessionId, reconciledStatus, resetSessionFileIndexForTests, resumeShortId, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked } from "./daemon.js";
+import { classifyCodexTranscriptTail, classifyLivePaneFor, classifyTmuxLiveState, classifyTranscriptTail, extractTmuxLiveRegion, findCachedSessionIdForConversation, findSessionFile, glyphlessPromptPattern, workflowAgentTranscriptPathFor, isInterruptControlMessage, paneReconcileTarget, preferLiveSessionId, reconciledStatus, resetSessionFileIndexForTests, refreshSessionFileIndex, resumeShortId, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked } from "./daemon.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 import type { TranscriptTurnState } from "./daemon.js";
 
@@ -447,6 +447,64 @@ describe("findSessionFile subagent layouts", () => {
       fs.writeFileSync(b, "{}\n");
       resetSessionFileIndexForTests();
       expect(findSessionFile("bbbbbbbb-0000-0000-0000-000000000002")?.path).toBe(b);
+    } finally {
+      process.env.HOME = prevHome;
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  // The periodic index refresh walks off the event loop (the cold sync build
+  // froze the loop 6s at boot under load, 2026-09-02). Both builders read the
+  // same store table, so the async one must resolve every client's layout and
+  // keep the same precedence: a top-level transcript beats its nested twin.
+  test("async index refresh resolves every store layout with the sync build's precedence", async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "cc-index-async-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+    try {
+      const proj = path.join(tmpHome, ".claude", "projects", "-Users-x-proj");
+      const sid = "cccccccc-0000-0000-0000-000000000003";
+      const wf = path.join(proj, sid, "subagents", "workflows", "wf_1");
+      fs.mkdirSync(wf, { recursive: true });
+      fs.mkdirSync(path.join(proj, sid, "tool-results"), { recursive: true });
+      fs.writeFileSync(path.join(proj, `${sid}.jsonl`), "{}\n");
+      fs.writeFileSync(path.join(proj, sid, `${sid}.jsonl`), "{}\n"); // nested twin loses
+      fs.writeFileSync(path.join(proj, sid, "subagents", "agent-sub1.jsonl"), "{}\n");
+      fs.writeFileSync(path.join(wf, "agent-wf1.jsonl"), "{}\n");
+      fs.writeFileSync(path.join(proj, sid, "tool-results", "not-a-session.jsonl"), "{}\n");
+      const codexDay = path.join(tmpHome, ".codex", "sessions", "2026", "09", "02");
+      fs.mkdirSync(codexDay, { recursive: true });
+      const codexId = "dddddddd-0000-0000-0000-000000000004";
+      fs.writeFileSync(path.join(codexDay, `rollout-2026-09-02T00-00-00-${codexId}.jsonl`), "{}\n");
+      const gem = path.join(tmpHome, ".gemini", "tmp", "hash1", "chats");
+      fs.mkdirSync(gem, { recursive: true });
+      fs.writeFileSync(path.join(gem, "gem-session.json"), "{}\n");
+      const pi = path.join(tmpHome, ".pi", "agent", "sessions", "--Users-x-proj--");
+      fs.mkdirSync(pi, { recursive: true });
+      const piId = "eeeeeeee-0000-0000-0000-000000000005";
+      fs.writeFileSync(path.join(pi, `2026-09-02T00-00-00_${piId}.jsonl`), "{}\n");
+      const grokId = "ffffffff-0000-0000-0000-000000000006";
+      const grok = path.join(tmpHome, ".grok", "sessions", "%2FUsers%2Fx", grokId);
+      fs.mkdirSync(grok, { recursive: true });
+      fs.writeFileSync(path.join(grok, "updates.jsonl"), "{}\n");
+      fs.writeFileSync(path.join(grok, "chat_history.jsonl"), "{}\n");
+
+      resetSessionFileIndexForTests();
+      await refreshSessionFileIndex();
+      const expectAll = () => {
+        expect(findSessionFile(sid)?.path).toBe(path.join(proj, `${sid}.jsonl`));
+        expect(findSessionFile("agent-sub1")?.path).toBe(path.join(proj, sid, "subagents", "agent-sub1.jsonl"));
+        expect(findSessionFile("agent-wf1")?.path).toBe(path.join(wf, "agent-wf1.jsonl"));
+        expect(findSessionFile("not-a-session")).toBeNull();
+        expect(findSessionFile(codexId)?.agentType).toBe("codex");
+        expect(findSessionFile("gem-session")?.agentType).toBe("gemini");
+        expect(findSessionFile(piId)?.agentType).toBe("pi");
+        expect(findSessionFile(grokId)?.path).toBe(path.join(grok, "updates.jsonl"));
+      };
+      expectAll();
+      // The sync cold build must agree with it.
+      resetSessionFileIndexForTests();
+      expectAll();
     } finally {
       process.env.HOME = prevHome;
       fs.rmSync(tmpHome, { recursive: true, force: true });

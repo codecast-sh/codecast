@@ -9,7 +9,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ownerState, sessionEndpoint, type LiveOwners } from "./engineReap.js";
 import { writeBridgeState } from "./bridge/host.js";
-import { realSessionKey } from "./engine.js";
+import { engineStateDir, realSessionKey } from "./engine.js";
 
 let dir: string;
 let prevEnv: string | undefined;
@@ -61,5 +61,16 @@ describe("ownerState reads the agent off a -real key", () => {
     expect(ownerState("pane--12", live)).toBe("alive");
     expect(ownerState("pane--12-real", live)).toBe("alive");
     expect(ownerState("pane--13-real", live)).toBe("dead");
+  });
+});
+
+describe("engineStateDir follows the engine's socket dir rule", () => {
+  test("AGENT_BROWSER_SOCKET_DIR wins, then XDG_RUNTIME_DIR, then the home dir", () => {
+    expect(engineStateDir({ AGENT_BROWSER_SOCKET_DIR: "/s", XDG_RUNTIME_DIR: "/x" })).toBe("/s");
+    expect(engineStateDir({ AGENT_BROWSER_SOCKET_DIR: "", XDG_RUNTIME_DIR: "/x" })).toBe(path.join("/x", "agent-browser"));
+    expect(engineStateDir({})).toBe(path.join(os.homedir(), ".agent-browser"));
+  });
+  test("AGENT_BROWSER_HOME is not a name the engine reads, so it must not move the state dir", () => {
+    expect(engineStateDir({ AGENT_BROWSER_HOME: "/elsewhere" })).toBe(path.join(os.homedir(), ".agent-browser"));
   });
 });
