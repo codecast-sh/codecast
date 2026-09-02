@@ -29,6 +29,14 @@ function createDesktopApp(userConfig, electron = require("electron")) {
     ? createNotificationRouter(cfg.notificationRouter)
     : { pickWindow, chooseLeader, RecentKeys };
   const PRELOAD = path.join(__dirname, "preload.js");
+  // The preload is a Node module: it requires ./bridge, and an app's own
+  // preload composes this package the same way. A sandboxed renderer
+  // (Electron's default whenever nodeIntegration is off) only polyfills
+  // `require` for electron, events, timers and url, so under it the preload
+  // dies at its first require and the bridge global never appears — the page
+  // then runs as if in a plain browser. contextIsolation still keeps Node out
+  // of page JS; only Chromium's OS sandbox around the renderer is given up.
+  const PRELOAD_PREFS = { preload: PRELOAD, contextIsolation: true, nodeIntegration: false, sandbox: false };
   const BRIDGE_ARG = `--bridge-global=${cfg.bridgeGlobal}`;
   const HTML_CLASS_JS = `document.documentElement.classList.add(${JSON.stringify(cfg.events.htmlClass)})`;
   const navigateJs = (detail) =>
@@ -210,9 +218,7 @@ function createDesktopApp(userConfig, electron = require("electron")) {
       titleBarStyle: "hiddenInset",
       trafficLightPosition: cfg.window.trafficLightPosition,
       webPreferences: {
-        preload: PRELOAD,
-        contextIsolation: true,
-        nodeIntegration: false,
+        ...PRELOAD_PREFS,
         zoomFactor: zoom,
         additionalArguments: [`--zoom-factor=${zoom}`, BRIDGE_ARG],
         // Keep the live-query WebSocket alive when the window is
@@ -352,9 +358,7 @@ function createDesktopApp(userConfig, electron = require("electron")) {
       titleBarStyle: "hiddenInset",
       trafficLightPosition: cfg.window.trafficLightPosition,
       webPreferences: {
-        preload: PRELOAD,
-        contextIsolation: true,
-        nodeIntegration: false,
+        ...PRELOAD_PREFS,
         zoomFactor: zoom,
         additionalArguments: [`--zoom-factor=${zoom}`, "--tab-window", BRIDGE_ARG],
         // Same as the main window: keep live-query WebSockets delivering while
@@ -547,9 +551,7 @@ function createDesktopApp(userConfig, electron = require("electron")) {
       show: false,
       hasShadow: false,
       webPreferences: {
-        preload: PRELOAD,
-        contextIsolation: true,
-        nodeIntegration: false,
+        ...PRELOAD_PREFS,
         additionalArguments: [BRIDGE_ARG],
       },
     });

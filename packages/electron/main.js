@@ -195,6 +195,30 @@ function getAutoZoomFactor() {
   return 1.0;
 }
 
+// EVERY WINDOW LOADS THE SAME PRELOAD, AND THE PRELOAD IS A NODE MODULE.
+//
+// preload.js composes @platform/desktop's bridge with Codecast's own half,
+// which means a `require` of a package at load time. A sandboxed renderer —
+// Electron's default since 20 whenever nodeIntegration is off — only
+// polyfills `require` for electron, events, timers and url, so the preload
+// died on its second line ("module not found: @platform/desktop"), nothing
+// reached window.__CODECAST_ELECTRON__, and every page ran as if in a plain
+// browser: no titlebar inset past the traffic lights, no back/forward, no
+// deep links, no in-process updater (desktop 1.1.100).
+//
+// Page JS still never sees Node: contextIsolation keeps the preload's world
+// apart from the page's. What changes is that the renderer runs outside
+// Chromium's OS sandbox. preload.sandbox.test.js loads the real preload
+// under exactly these preferences, so the bridge cannot silently vanish again.
+function preloadPrefs() {
+  return {
+    preload: path.join(__dirname, "preload.js"),
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: false,
+  };
+}
+
 function createWindow() {
   const zoom = getAutoZoomFactor();
   mainWindow = new BrowserWindow({
@@ -205,9 +229,7 @@ function createWindow() {
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 12 },
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
+      ...preloadPrefs(),
       zoomFactor: zoom,
       additionalArguments: [`--zoom-factor=${zoom}`],
       // Keep the Convex live-query WebSocket alive when the window is
@@ -352,9 +374,7 @@ function buildTabWindow() {
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 12 },
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
+      ...preloadPrefs(),
       zoomFactor: zoom,
       additionalArguments: [`--zoom-factor=${zoom}`, "--tab-window"],
       // Same as the main window: keep live-query WebSockets delivering while
@@ -571,9 +591,7 @@ function createPeopleWindow() {
     // Restored from the last session: a pinned buddy list stays pinned.
     alwaysOnTop: state.alwaysOnTop === true,
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
+      ...preloadPrefs(),
       zoomFactor: zoom,
       additionalArguments: [`--zoom-factor=${zoom}`, "--people-window"],
       // It is the phone: rings, presence and walkie audio must keep arriving
@@ -912,9 +930,7 @@ function createCallWindow(roomKey, opts) {
     // over somebody's work.
     hasShadow: false,
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
+      ...preloadPrefs(),
       zoomFactor: zoom,
       additionalArguments: [`--zoom-factor=${zoom}`, "--call-panel-window"],
       // It holds the call. Throttling this window would throttle the media —
@@ -1303,9 +1319,7 @@ function createFacesWindow() {
     // is the entry button's job, not the window manager's.
     skipTaskbar: true,
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
+      ...preloadPrefs(),
       zoomFactor: zoom,
       additionalArguments: [`--zoom-factor=${zoom}`, "--faces-window"],
       // Presence must keep moving while the overlay sits unfocused over other
@@ -1576,9 +1590,7 @@ function createPaletteWindow() {
     show: false,
     hasShadow: false,
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
+      ...preloadPrefs(),
     },
   });
 
@@ -1750,9 +1762,7 @@ function createMeetingOfferWindow() {
     hasShadow: false,
     focusable: true,
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
+      ...preloadPrefs(),
       zoomFactor: zoom,
       additionalArguments: [`--zoom-factor=${zoom}`, "--meeting-offer-window"],
       // It records. While it does, it is by definition behind the meeting —
@@ -1852,9 +1862,7 @@ function createCallRingWindow() {
     show: false,
     hasShadow: false,
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
+      ...preloadPrefs(),
       zoomFactor: zoom,
       additionalArguments: [`--zoom-factor=${zoom}`, "--call-ring-window"],
       // It rings on a timer. Throttled timers in a background window would
