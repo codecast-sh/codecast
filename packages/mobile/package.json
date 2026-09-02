@@ -24,6 +24,8 @@
     "@expo/vector-icons": "^15.0.3",
     "@livekit/react-native": "^2.12.0",
     "@livekit/react-native-webrtc": "^144.1.2",
+    "@platform/analytics": "file:../../../platform/packages/analytics",
+    "@platform/flags": "file:../../../platform/packages/flags",
     "@react-navigation/native": "^7.1.8",
     "@sentry/react-native": "^8.5.0",
     "convex": "^1.31.2",
