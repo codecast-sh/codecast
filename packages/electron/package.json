@@ -6,6 +6,12 @@
   "private": true,
   "license": "MIT",
   "scripts": {
+    "native": "scripts/build-native.sh",
+    "prestart": "npm run native",
+    "predev": "npm run native",
+    "prebuild": "npm run native",
+    "prebuild:dir": "npm run native",
+    "prebuild:local": "npm run native",
     "start": "electron .",
     "dev": "CODECAST_URL=https://local.codecast.sh electron .",
     "build": "NOTARIZE_KEYCHAIN_PROFILE=codecast electron-builder -m",
@@ -34,9 +40,13 @@
       "shortcutSettings.js",
       "updaterNet.js",
       "preload.js",
+      "native/notifications.node",
       "assets/icon.png",
       "assets/trayTemplate.png",
       "assets/trayTemplate@2x.png"
+    ],
+    "asarUnpack": [
+      "native/*.node"
     ],
     "directories": {
       "buildResources": "assets"
