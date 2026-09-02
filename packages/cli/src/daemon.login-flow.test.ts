@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildLoginFlowCommand, summarizeLoginPaneTail } from "./daemon.js";
+import { buildLoginFlowCommand, buildMintFlowCommand, summarizeLoginPaneTail } from "./daemon.js";
 
 // The login-flow watcher reports the dying pane's last meaningful line as the
 // rejection reason — the CLI's own words are the most honest "why" available.
@@ -49,5 +49,17 @@ describe("buildLoginFlowCommand", () => {
     const cmd = buildLoginFlowCommand("a'; rm -rf /; '@b.com");
     expect(cmd).not.toContain("--email a'; rm");
     expect(cmd).toContain("--email 'a'\\''; rm -rf /; '\\''@b.com'");
+  });
+});
+
+describe("buildMintFlowCommand", () => {
+  test("runs setup-token with $BROWSER pointed at the URL hook, PATH carried, grace sleep appended", () => {
+    const cmd = buildMintFlowCommand("/Users/me/.codecast/mint-browser-hook.sh");
+    expect(cmd).toMatch(/^PATH='[^']+' BROWSER='\/Users\/me\/\.codecast\/mint-browser-hook\.sh' claude setup-token; sleep 4$/);
+  });
+
+  test("a hook path with a quote cannot break out of the shell word", () => {
+    const cmd = buildMintFlowCommand("/tmp/it's/hook.sh");
+    expect(cmd).toContain("BROWSER='/tmp/it'\\''s/hook.sh' claude setup-token");
   });
 });

@@ -455,6 +455,9 @@ export const daemonHeartbeat = mutation({
 
     // Per-device row upsert (multi-machine): the stable, non-clobbered source the
     // read paths consume via getOnlineLocalRoots (union across online devices).
+    // Read back to the daemon: per-session accounts flag (it drives the
+    // daemon's auto-mint; the web sets it).
+    let sessionTokensEnabled = false;
     if (args.device_id) {
       const existingDevice = await ctx.db
         .query("devices")
@@ -462,6 +465,7 @@ export const daemonHeartbeat = mutation({
           q.eq("user_id", auth.userId).eq("device_id", args.device_id!),
         )
         .first();
+      sessionTokensEnabled = existingDevice?.cc_session_tokens === true;
       const devicePatch = {
         ...deviceLabelWrite({ deviceLabel: args.device_label, platform: args.platform, isNew: !existingDevice }),
         platform: args.platform,
@@ -602,6 +606,7 @@ export const daemonHeartbeat = mutation({
       })),
       sync_mode: user?.sync_mode ?? "all",
       sync_projects: user?.sync_projects ?? [],
+      cc_session_tokens: sessionTokensEnabled,
       team_id: user?.active_team_id ?? user?.team_id ?? undefined,
       min_cli_version: minVersionConfig?.value ?? undefined,
       agent_permission_modes: user?.agent_permission_modes ?? undefined,

@@ -31,6 +31,9 @@ import {
   accountSourcePrefix,
   accountTokenFilePath,
   SETUP_TOKEN_LIFETIME_MS,
+  extractSetupToken,
+  parseRateLimitFingerprint,
+  sameAccountFingerprint,
 } from "./ccAccounts.js";
 
 const CRED = JSON.stringify({
@@ -844,5 +847,46 @@ describe("account setup-token file", () => {
     writeAccountToken("union", TOKEN);
     expect(removeAccountToken("union")).toBe(true);
     expect(accountTokenInfo("union")).toBeNull();
+  });
+});
+
+describe("setup-token extraction + account fingerprint", () => {
+  const TOKEN = "sk-ant-oat01-" + "Ab_-".repeat(20);
+
+  it("pulls the token out of pane text (joined lines) and ignores other key shapes", () => {
+    const pane = ` Your OAuth token (valid for 1 year):\n\n ${TOKEN}\n\n Store this token securely.`;
+    expect(extractSetupToken(pane)).toBe(TOKEN);
+    expect(extractSetupToken("sk-ant-api03-" + "x".repeat(60))).toBeNull();
+    expect(extractSetupToken("Opening browser to sign in…")).toBeNull();
+  });
+
+  it("reads the unified rate-limit windows off response headers", () => {
+    const h = new Headers({
+      "anthropic-ratelimit-unified-5h-reset": "1788324000",
+      "anthropic-ratelimit-unified-5h-utilization": "0.34",
+      "anthropic-ratelimit-unified-7d-reset": "1788861600",
+      "anthropic-ratelimit-unified-7d-utilization": "0.27",
+    });
+    expect(parseRateLimitFingerprint(h)).toEqual({
+      five_hour_reset: 1788324000,
+      seven_day_reset: 1788861600,
+      five_hour_utilization: 0.34,
+      seven_day_utilization: 0.27,
+    });
+    expect(parseRateLimitFingerprint(new Headers())).toEqual({
+      five_hour_reset: null,
+      seven_day_reset: null,
+      five_hour_utilization: null,
+      seven_day_utilization: null,
+    });
+  });
+
+  it("same account = both reset timestamps match; unknown windows never match", () => {
+    const a = { five_hour_reset: 1, seven_day_reset: 2, five_hour_utilization: 0.1, seven_day_utilization: 0.5 };
+    expect(sameAccountFingerprint(a, { ...a, five_hour_utilization: 0.9 })).toBe(true);
+    expect(sameAccountFingerprint(a, { ...a, five_hour_reset: 3 })).toBe(false);
+    expect(sameAccountFingerprint(a, { ...a, seven_day_reset: 9 })).toBe(false);
+    const unknown = { five_hour_reset: null, seven_day_reset: null, five_hour_utilization: null, seven_day_utilization: null };
+    expect(sameAccountFingerprint(unknown, unknown)).toBe(false);
   });
 });

@@ -4334,6 +4334,8 @@ accountsCmd
       console.error(err instanceof CcAccountError ? err.message : String(err));
       process.exit(1);
     }
+    // Token metadata rides the accounts inventory — show it in Settings now.
+    await publishAccountsInventory();
   });
 
 // A mass revive resumes one claude process per blocked session — past this
