@@ -15325,6 +15325,61 @@ export function getInitialManagedSessionId(
   return expectedSessionId;
 }
 
+// ── Fresh-launch pane readiness ──────────────────────────────────────────────
+// Shared by first-message delivery (tryStartedTmux) and discovery below: both
+// need to know whether a pane the daemon just launched is at its input prompt.
+// The prompt pattern is per client, from the registry: Claude/cursor ❯ or ⏵,
+// Codex > at line end, Gemini > at line end or "gemini". It intentionally
+// DISAGREES with the shared /[❯›]/ of the resume-readiness / picker paths; the
+// registry's promptReadyPattern encodes THIS fresh-launch site. Do not collapse
+// the two.
+export type StartedPaneState = "ready" | "booting" | "trust" | "fatal" | "gone";
+
+const STARTED_PANE_FATAL_ERRORS = [
+  "cannot be launched inside another",
+  "command not found",
+  "No such file or directory",
+  "ENOENT",
+];
+const TRUST_PROMPT_RE = /trust this folder|safety check|Is this a project/i;
+
+// Pure classification of one pane capture. Only output below the echoed launch
+// command is scanned for launch errors (see paneContentAfterLaunchEcho). The
+// workspace trust prompt paints a ❯ of its own, so it wins over the prompt
+// pattern: a pane showing it is "trust", never "ready".
+export function classifyStartedPane(paneContent: string, promptPattern: RegExp): StartedPaneState {
+  const agentPane = paneContentAfterLaunchEcho(paneContent);
+  if (STARTED_PANE_FATAL_ERRORS.some(e => agentPane.includes(e))) return "fatal";
+  if (TRUST_PROMPT_RE.test(paneContent)) return "trust";
+  return promptPattern.test(agentPane) ? "ready" : "booting";
+}
+
+// Captures and classifies a started pane. Accepts the trust prompt when it is
+// showing ("Yes, I trust" is preselected; Enter accepts) and reports "trust" so
+// the caller keeps polling. A failed capture is "booting" while the tmux
+// session exists and "gone" once it does not.
+async function probeStartedPane(entry: StartedSessionInfo): Promise<{ state: StartedPaneState; pane: string }> {
+  let paneContent: string;
+  try {
+    ({ stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", entry.tmuxSession, "-S", "-20"]));
+  } catch {
+    const alive = await tmuxExec(["has-session", "-t", entry.tmuxSession]).then(() => true, () => false);
+    return { state: alive ? "booting" : "gone", pane: "" };
+  }
+  const state = classifyStartedPane(paneContent, AGENT_CLIENTS[entry.agentType].promptReadyPattern);
+  if (state === "trust") {
+    log(`Started session ${entry.tmuxSession} showing trust prompt, sending Enter to accept`);
+    await tmuxExec(["send-keys", "-t", entry.tmuxSession, "Enter"]).catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+  return { state, pane: paneContentAfterLaunchEcho(paneContent) };
+}
+
+// Discovery polls every 2s; 60 polls = 120s, the same budget as
+// MAX_RESUME_READINESS_POLL_MS, so a boot under load (seven launches in one
+// second has been observed) still binds.
+const DISCOVERY_POLL_ATTEMPTS = 60;
+
 async function discoverAndLinkSession(
   conversationId: string,
   tmuxSession: string,
@@ -15339,11 +15394,59 @@ async function discoverAndLinkSession(
     if (UUID_JSONL_RE.test(f)) existingFiles.add(f);
   }
 
-  for (let attempt = 0; attempt < 30; attempt++) {
+  const link = async (linkedSessionId: string, how: string): Promise<void> => {
+    const startedEntry = startedSessionTmux.get(conversationId);
+    const cache = readConversationCache();
+    const reverseCache = buildReverseConversationCache(cache);
+    if (reverseCache[conversationId]) {
+      log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked to ${reverseCache[conversationId].slice(0, 8)} by another writer`);
+      deleteStartedSession(conversationId);
+      return;
+    }
+    cache[linkedSessionId] = conversationId;
+    if (conversationCacheRef) {
+      conversationCacheRef[linkedSessionId] = conversationId;
+    }
+    saveConversationCache(cache);
+    if (syncServiceRef) {
+      // Reconcile project_path/git_root to the real session cwd (see Claude
+      // match branch). `cwd` is authoritative here: the pane was launched in it.
+      const discoveryGitInfo = await getGitInfo(cwd);
+      void pushSessionIdBinding(conversationId, linkedSessionId, cwd, discoveryGitInfo?.repoRoot || discoveryGitInfo?.root);
+      registerManagedStartedSession(conversationId, linkedSessionId, tmuxSession);
+      if (startedEntry?.sessionId && startedEntry.sessionId !== linkedSessionId) {
+        stopManagedSessionHeartbeat(startedEntry.sessionId);
+      }
+    }
+    deleteStartedSession(conversationId);
+    log(`[DISCOVER] Linked session ${linkedSessionId.slice(0, 8)} to conversation ${conversationId.slice(0, 12)} via ${how}`);
+  };
+
+  for (let attempt = 0; attempt < DISCOVERY_POLL_ATTEMPTS; attempt++) {
     await new Promise(resolve => setTimeout(resolve, 2000));
-    if (!startedSessionTmux.has(conversationId)) {
+    const entry = startedSessionTmux.get(conversationId);
+    if (!entry) {
       log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked by watcher, stopping discovery`);
       return;
+    }
+    // An assigned `--session-id` needs no file to discover: the pane at its
+    // input prompt IS the session. Claude writes <uuid>.jsonl only on the first
+    // turn, so a new session nobody has typed into has no transcript to find;
+    // waiting on the file left every such session unbound after the timeout
+    // (its card never left the unstarted state) while the agent sat ready.
+    // Binding still waits for the prompt on purpose: an early cache entry would
+    // let deliverMessage skip the readiness-gated started-tmux path and paste
+    // the first message into a still-booting prompt.
+    if (entry.sessionId) {
+      const probe = await probeStartedPane(entry);
+      if (probe.state === "ready") {
+        await link(entry.sessionId, "prompt readiness");
+        return;
+      }
+      if (probe.state === "fatal" || probe.state === "gone") {
+        log(`[DISCOVER] Started session ${entry.tmuxSession} is ${probe.state}, stopping discovery for ${conversationId.slice(0, 12)}${probe.pane ? `: ${probe.pane.slice(0, 200)}` : ""}`);
+        return;
+      }
     }
     const names = await fs.promises.readdir(projectDir).catch(() => null);
     if (!names) continue;
@@ -15385,36 +15488,26 @@ async function discoverAndLinkSession(
       linkedSessionId = candidates[0];
     }
     if (linkedSessionId) {
-      const startedEntry = startedSessionTmux.get(conversationId);
-      const cache = readConversationCache();
-      const reverseCache = buildReverseConversationCache(cache);
-      if (reverseCache[conversationId]) {
-        log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked to ${reverseCache[conversationId].slice(0, 8)} by another writer`);
-        deleteStartedSession(conversationId);
-        return;
-      }
-      cache[linkedSessionId] = conversationId;
-      if (conversationCacheRef) {
-        conversationCacheRef[linkedSessionId] = conversationId;
-      }
-      saveConversationCache(cache);
-      if (syncServiceRef) {
-        // Reconcile project_path/git_root to the real session cwd (see Claude
-        // match branch). `cwd` is authoritative here: the linked candidate's
-        // JSONL was found under the cwd-derived project dir.
-        const discoveryGitInfo = getGitInfo(cwd);
-        void pushSessionIdBinding(conversationId, linkedSessionId, cwd, discoveryGitInfo?.repoRoot || discoveryGitInfo?.root);
-        registerManagedStartedSession(conversationId, linkedSessionId, tmuxSession);
-        if (startedEntry?.sessionId && startedEntry.sessionId !== linkedSessionId) {
-          stopManagedSessionHeartbeat(startedEntry.sessionId);
-        }
-      }
-      deleteStartedSession(conversationId);
-      log(`[DISCOVER] Linked session ${linkedSessionId.slice(0, 8)} to conversation ${conversationId.slice(0, 12)} via JSONL discovery`);
+      await link(linkedSessionId, "JSONL discovery");
       return;
     }
   }
   log(`[DISCOVER] Timed out discovering session for conversation ${conversationId.slice(0, 12)}`);
+}
+
+// A daemon restart reloads startedSessionTmux from disk but not the discovery
+// polls that were running against those panes. Every persisted pane whose
+// conversation is still unlinked gets its discovery restarted, so a restart
+// during a boot never leaves a ready agent with an unbound card.
+function resumeStartedSessionDiscovery(): void {
+  const reverse = buildReverseConversationCache(readConversationCache());
+  for (const [conversationId, entry] of startedSessionTmux) {
+    if (!entry.sessionId || reverse[conversationId]) continue;
+    log(`[DISCOVER] Resuming discovery for ${conversationId.slice(0, 12)} in ${entry.tmuxSession} after restart`);
+    discoverAndLinkSession(conversationId, entry.tmuxSession, entry.projectPath).catch(err => {
+      log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
+    });
+  }
 }
 
 // The resume tmux name is built in resumeCommand.ts (resumeTmuxName /
@@ -17326,50 +17419,22 @@ async function deliverMessage(
     const tryStartedTmux = async (entry: StartedSessionInfo): Promise<boolean> => {
       try {
         await tmuxExec(["has-session", "-t", entry.tmuxSession]);
-        // Fresh-launch readiness pattern, per client, from the registry:
-        // Claude/cursor: ❯ or ⏵   Codex: > at line end   Gemini: > at line end or "gemini".
-        // NOTE: this per-client pattern intentionally DISAGREES with the shared
-        // /[❯›]/ used by the resume-readiness / picker paths (e.g. daemon resume at
-        // ~11279); the registry's promptReadyPattern encodes THIS fresh-launch site,
-        // and both behaviors are preserved as-is. Do not collapse the two.
-        const promptPattern = AGENT_CLIENTS[entry.agentType].promptReadyPattern;
-        const fatalErrors = [
-          "cannot be launched inside another",
-          "command not found",
-          "No such file or directory",
-          "ENOENT",
-        ];
         let ready = false;
         const startTime = Date.now();
-        const trustPromptPatterns = /trust this folder|safety check|Is this a project/i;
         for (let i = 0; i < 60; i++) {
           await new Promise(resolve => setTimeout(resolve, 250));
-          try {
-            const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", entry.tmuxSession, "-S", "-20"]);
-            // Scan only output below the echoed launch command — shell rc noise
-            // above it must not read as a fatal launch error (see paneContentAfterLaunchEcho).
-            const agentPane = paneContentAfterLaunchEcho(paneContent);
-            if (fatalErrors.some(e => agentPane.includes(e))) {
-              log(`Started session ${entry.tmuxSession} hit fatal error, falling through. Pane: ${agentPane.slice(0, 200)}`);
-              deleteStartedSession(conversationId);
-              return false;
-            }
-            // Dismiss workspace trust prompt if detected (shows ❯ but isn't the input prompt)
-            if (trustPromptPatterns.test(paneContent)) {
-              log(`Started session ${entry.tmuxSession} showing trust prompt, sending Enter to accept`);
-              await tmuxExec(["send-keys", "-t", entry.tmuxSession, "Enter"]);
-              await new Promise(resolve => setTimeout(resolve, 2000));
-              continue;
-            }
-            if (promptPattern.test(agentPane)) {
-              // Verify it's the actual input prompt, not the trust prompt's ❯
-              const lastLines = paneContent.split("\n").slice(-10).join("\n");
-              if (trustPromptPatterns.test(lastLines)) continue;
-              log(`Started session ${entry.tmuxSession} ready (prompt visible) after ${Date.now() - startTime}ms`);
-              ready = true;
-              break;
-            }
-          } catch {}
+          const probe = await probeStartedPane(entry);
+          if (probe.state === "gone") throw new Error(`tmux session ${entry.tmuxSession} is gone`);
+          if (probe.state === "fatal") {
+            log(`Started session ${entry.tmuxSession} hit fatal error, falling through. Pane: ${probe.pane.slice(0, 200)}`);
+            deleteStartedSession(conversationId);
+            return false;
+          }
+          if (probe.state === "ready") {
+            log(`Started session ${entry.tmuxSession} ready (prompt visible) after ${Date.now() - startTime}ms`);
+            ready = true;
+            break;
+          }
         }
         if (!ready) {
           log(`Started session ${entry.tmuxSession} startup timed out after ${Date.now() - startTime}ms, proceeding anyway`);
@@ -19556,6 +19621,7 @@ async function main(): Promise<void> {
   const isRestart = process.env.CODECAST_RESTART === "1";
   const startMsg = `v${daemonVersion} PID=${process.pid}${isRestart ? " (restart after update)" : ""}${crashRecoveryInfo}`;
   logLifecycle("daemon_start", startMsg);
+  void refreshSessionFileIndex(); // warm the transcript index off the loop before the first lookup
   sendLogImmediate("info", `[LIFECYCLE] daemon_start: ${startMsg}`, { error_code: "daemon_start" });
   log(`PID: ${process.pid}`);
 
@@ -19598,6 +19664,7 @@ async function main(): Promise<void> {
     userId: config.user_id,
   });
   syncServiceRef = syncService;
+  resumeStartedSessionDiscovery();
 
   // Register this device EARLY + on its own interval, so device presence never
   // depends on the rest of (potentially slow/headless-stalling) init. Logs the
