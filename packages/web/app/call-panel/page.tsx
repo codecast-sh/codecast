@@ -6,6 +6,7 @@ import { CallPanel } from "../../components/calls/CallPanel";
 import { TeamMembersPump } from "../../components/TeamAvatarBar";
 import { useEnsureDispatch } from "../../hooks/useEnsureDispatch";
 import { useChatChannelsSync } from "../../hooks/useChatSync";
+import { useSyncReplication } from "../../hooks/useSyncRole";
 import { useSyncTeams } from "../../hooks/useSyncTeams";
 import { useCallSync } from "../../hooks/useCallSync";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -78,6 +79,7 @@ function CallPanelSyncEffects() {
   // which held until routes started rendering without a sidebar.
   useSyncTeams();
   // Channel rooms are named from the rail (a huddle in #design says so).
+  useSyncReplication(false);
   useChatChannelsSync();
   // The call plane: occupancy, live rooms, the lock — and `bindConvex`, which
   // is what lets this window take the call over in the first place.

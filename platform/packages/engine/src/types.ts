@@ -97,6 +97,11 @@ export type MergeSpec = MergePolicy | MergeSpecMap | MergeFn;
 
 export type SyncOpts = {
   kind?: "collection" | "singleton" | "list" | "scalar";
+  // Skip the updated_at version bail. Replicated OPTIMISTIC rows change fields
+  // without bumping updated_at, so to the version heuristic they look like
+  // heartbeat no-ops and are dropped. Field-level identity reuse still applies,
+  // so a genuinely unchanged row remains a no-op.
+  force?: boolean;
   merge?: Record<string, MergeSpec>;
   altKey?: string;
   keepSelected?: string;
@@ -270,5 +275,6 @@ export type PlatformStoreInternals = {
   _clearRuntimeBindings: () => void;
   _setDispatchError: (fn: (action: string, error: unknown, args?: unknown) => void) => void;
   _setStorageHealth: (fn: ((healthy: boolean, elapsedMs: number) => void) | null) => void;
+  _setActionTee: (fn: ((actionName: string, patches: any[], state: any) => void) | null) => void;
   _dispatch: (action: string, args: any, patches?: any, result?: any) => Promise<any>;
 };

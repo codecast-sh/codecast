@@ -75,7 +75,10 @@ describe("useSyncCore owns the full feeder mount set", () => {
   test("the recovery probe and the subscription share ONE args constant", () => {
     const live = read(join(WEB_ROOT, "hooks", "useLiveInboxSessions.ts"));
     expect(live.includes("export const LIST_INBOX_SESSIONS_ARGS")).toBe(true);
-    expect(live.includes("useQuery(api.conversations.listInboxSessions, LIST_INBOX_SESSIONS_ARGS)")).toBe(true);
+    // The one sanctioned args shape, now behind the sync-role gate: the
+    // constant when this window hosts its own feeds, "skip" as a follower
+    // (docs/architecture/sync-host.md).
+    expect(live.includes('useQuery(api.conversations.listInboxSessions, isSyncHost ? LIST_INBOX_SESSIONS_ARGS : "skip")')).toBe(true);
     const syncSrc = read(join(WEB_ROOT, "hooks", "useSyncInboxSessions.ts"));
     expect(syncSrc.includes("{ ...LIST_INBOX_SESSIONS_ARGS, _probe: Date.now() }")).toBe(true);
     // No hand-built listInboxSessions args anywhere in the two files: every

@@ -8,6 +8,7 @@ import { useEnsureDispatch } from "../../hooks/useEnsureDispatch";
 import { useSyncInboxSessions } from "../../hooks/useSyncInboxSessions";
 import { useSyncTeamInboxSessions } from "../../hooks/useSyncTeamInboxSessions";
 import { useChatChannelsSync } from "../../hooks/useChatSync";
+import { useSyncReplication } from "../../hooks/useSyncRole";
 import { useSyncTeams } from "../../hooks/useSyncTeams";
 import { useCallSync } from "../../hooks/useCallSync";
 import { useCallRing } from "../../hooks/useCallRing";
@@ -76,6 +77,7 @@ function PeopleSyncEffects() {
   useSyncTeamInboxSessions();
   // The chat rail: the DM unread counts on the rows, and the channel ids the
   // walkie and the call occupancy both resolve their rooms through.
+  useSyncReplication(false);
   useChatChannelsSync();
   // The phone. Ring toasts and knock sounds land in this window because the
   // shell elects it leader while it lives; these are what produce them.
