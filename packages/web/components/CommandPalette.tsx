@@ -1,3 +1,4 @@
+import { withInboxView } from "../lib/inboxViewHistory";
 import { useTeamFeature, useCallsAvailable } from "../lib/teamFeatures";
 import type { TeamFeatureKey } from "@codecast/shared/contracts";
 import { useState, useCallback, useMemo, useRef, memo } from "react";
@@ -1747,7 +1748,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         store.navigateToSession(conv._id);
       }
       if (isInboxRoute(pathname) || pathname?.startsWith("/conversation/")) {
-        window.history.pushState({ inboxId: conv._id }, "", conversationPath);
+        window.history.pushState(withInboxView({ inboxId: conv._id }), "", conversationPath);
       } else {
         router.push(conversationPath);
       }
