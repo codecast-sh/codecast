@@ -6,26 +6,14 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { WebSocket } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import { CdpConnection, CdpError, listTargets } from "../cdp.js";
-import { startBridgeHost, type RunningHost } from "./host.js";
-import { BRIDGE_PROTOCOL, CLOSE_BAD_TOKEN, targetIdOfTab, type BridgeTab } from "./protocol.js";
+import { freePort } from "../instance.js";
+import { probeHost, startBridgeHost, type RunningHost } from "./host.js";
+import { BRIDGE_PROTOCOL, bridgeProof, CLOSE_BAD_TOKEN, randomNonce, secretMatches, targetIdOfTab, type BridgeTab } from "./protocol.js";
 
 const TOKEN = "t".repeat(64);
 let host: RunningHost | null = null;
-
-async function freePort(): Promise<number> {
-  const net = await import("node:net");
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.once("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const addr = srv.address();
-      const p = typeof addr === "object" && addr ? addr.port : 0;
-      srv.close(() => resolve(p));
-    });
-  });
-}
 
 async function freshHost(): Promise<RunningHost> {
   host = await startBridgeHost({ port: await freePort(), token: TOKEN });
@@ -56,9 +44,11 @@ function closeCode(ws: WebSocket, timeoutMs = 3000): Promise<number> {
 }
 
 /**
- * A scripted stand-in for the extension. Answers tabs.list from `tabs`,
- * records attach/detach, keeps the group a tab was created with, and echoes
- * cdp calls as `{echo: {tabId, method, params}}`.
+ * A scripted stand-in for the extension. Performs the mutual handshake the
+ * way background.js does (hello with a nonce and its auth, then refuses to
+ * do anything for a host whose welcome proof is wrong), answers tabs.list
+ * from `tabs`, records attach/detach, keeps the group a tab was created
+ * with, and echoes cdp calls as `{echo: {tabId, method, params}}`.
  */
 class FakeExtension {
   ws!: WebSocket;
@@ -67,7 +57,7 @@ class FakeExtension {
   seen: any[] = [];
   private nextTab = 100;
 
-  constructor(tabs: BridgeTab[]) {
+  constructor(tabs: BridgeTab[], readonly token = TOKEN) {
     this.tabs = tabs;
   }
 
@@ -75,9 +65,29 @@ class FakeExtension {
     return { tabId, url, title, active: false, windowId: 1, attached: false };
   }
 
+  /** Dial and handshake. Rejects when the host cannot prove it holds the token. */
   async connect(port: number): Promise<this> {
-    this.ws = await dial(port, `/ext?token=${TOKEN}`, { origin: "chrome-extension://fakeextensionid" });
-    this.ws.send(JSON.stringify({ op: "hello", version: "9.9.9", protocol: BRIDGE_PROTOCOL, userAgent: "FakeChrome/1" }));
+    this.ws = await dial(port, "/ext", { origin: "chrome-extension://fakeextensionid" });
+    const nonce = randomNonce();
+    const welcome = new Promise<any>((resolve, reject) => {
+      this.ws.once("message", (raw) => resolve(JSON.parse(String(raw))));
+      this.ws.once("close", (code) => reject(new Error(`closed ${code} before welcome`)));
+    });
+    this.ws.send(
+      JSON.stringify({
+        op: "hello",
+        nonce,
+        auth: bridgeProof(this.token, "ext", nonce),
+        version: "9.9.9",
+        protocol: BRIDGE_PROTOCOL,
+        userAgent: "FakeChrome/1",
+      }),
+    );
+    const w = await welcome;
+    if (w.op !== "welcome" || !secretMatches(bridgeProof(this.token, "host", nonce), w.proof)) {
+      this.ws.close(CLOSE_BAD_TOKEN, "host could not prove the token");
+      throw new Error("the host could not prove it holds the token");
+    }
     this.ws.on("message", (raw) => {
       const m = JSON.parse(String(raw));
       if (m.op === "ping") return;
@@ -133,12 +143,66 @@ class FakeExtension {
 const cdpEndpoint = (port: number) => ({ port, token: TOKEN });
 
 describe("bridge host auth", () => {
-  test("rejects a missing or wrong token on every socket path", async () => {
+  test("rejects a missing or wrong token on every CDP socket path", async () => {
     const h = await freshHost();
-    for (const path of ["/ext", "/devtools/browser", `/devtools/browser/${"x".repeat(64)}`, `/ext?token=${"x".repeat(64)}`]) {
+    for (const path of ["/devtools/browser", `/devtools/browser/${"x".repeat(64)}`, `/devtools/browser?token=${"x".repeat(64)}`]) {
       const ws = new WebSocket(`ws://127.0.0.1:${h.port}${path}`);
       expect(await closeCode(ws)).toBe(CLOSE_BAD_TOKEN);
     }
+  });
+
+  test("an extension with the wrong token is closed with CLOSE_BAD_TOKEN, and never becomes the extension", async () => {
+    const h = await freshHost();
+    await expect(new FakeExtension([], "x".repeat(64)).connect(h.port)).rejects.toThrow(`closed ${CLOSE_BAD_TOKEN}`);
+    expect(h.extensionConnected()).toBe(false);
+    // The old protocol (token in the URL, a hello with no proof) is refused the same way.
+    const old = await dial(h.port, `/ext?token=${TOKEN}`);
+    old.send(JSON.stringify({ op: "hello", version: "0.0.1", protocol: 3 }));
+    expect(await closeCode(old)).toBe(CLOSE_BAD_TOKEN);
+    // So is a socket that opens and says something other than hello, or nothing that parses.
+    const mute = await dial(h.port, "/ext");
+    mute.send("not json");
+    expect(await closeCode(mute)).toBe(CLOSE_BAD_TOKEN);
+    expect(h.extensionConnected()).toBe(false);
+  });
+
+  test("a host that cannot prove the token is rejected by the extension before any op runs", async () => {
+    // A squatter on the port: accepts /ext, answers the hello with a wrong
+    // proof, then asks for a tab list. The extension must never answer it.
+    const port = await freePort();
+    const wss = new WebSocketServer({ port, host: "127.0.0.1" });
+    const answered: string[] = [];
+    wss.on("connection", (ws) => {
+      ws.on("message", (raw) => {
+        const m = JSON.parse(String(raw));
+        if (m.op === "hello") {
+          ws.send(JSON.stringify({ op: "welcome", proof: "0".repeat(64) }));
+          ws.send(JSON.stringify({ id: 1, op: "tabs.list" }));
+        } else answered.push(String(raw));
+      });
+    });
+    try {
+      const ext = new FakeExtension([FakeExtension.tab(7)]);
+      await expect(ext.connect(port)).rejects.toThrow(/could not prove/);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(answered).toEqual([]);
+      expect(ext.ws.readyState).not.toBe(WebSocket.OPEN);
+    } finally {
+      for (const c of wss.clients) c.terminate();
+      await new Promise<void>((r) => wss.close(() => r()));
+    }
+  });
+
+  test("/healthz proves the token to a nonce, and probeHost tells a host from a squatter", async () => {
+    const h = await freshHost();
+    const nonce = randomNonce();
+    const body = await fetch(`http://127.0.0.1:${h.port}/healthz?nonce=${nonce}`).then((r) => r.text());
+    expect(body).toBe(`cast-bridge protocol=${BRIDGE_PROTOCOL} proof=${bridgeProof(TOKEN, "healthz", nonce)}`);
+    // A malformed nonce earns no proof at all; a proof is never minted over attacker-shaped input.
+    expect(await fetch(`http://127.0.0.1:${h.port}/healthz?nonce=ext:abc`).then((r) => r.text())).toBe(`cast-bridge protocol=${BRIDGE_PROTOCOL}`);
+    expect(await probeHost({ port: h.port, token: TOKEN })).toBe("alive");
+    expect(await probeHost({ port: h.port, token: "x".repeat(64) })).toBe("impostor");
+    expect(await probeHost({ port: await freePort(), token: TOKEN })).toBe("down");
   });
 
   test("rejects a correct token when the upgrade carries a web-page Origin", async () => {
@@ -377,13 +441,19 @@ describe("bridge host as a CDP endpoint", () => {
     conn.close();
   });
 
-  test("a newer extension connection replaces the old one", async () => {
+  test("a newer PROVEN extension connection replaces the old one; an unproven one cannot", async () => {
     const h = await freshHost();
-    const ext1 = await dial(h.port, `/ext?token=${TOKEN}`);
-    const replaced = closeCode(ext1);
-    const ext2 = await dial(h.port, `/ext?token=${TOKEN}`);
+    const ext1 = await new FakeExtension([]).connect(h.port);
+    const replaced = closeCode(ext1.ws);
+    // A socket that never proves itself does not displace the real extension.
+    const squatter = await dial(h.port, "/ext");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(h.extensionConnected()).toBe(true);
+    expect(ext1.ws.readyState).toBe(WebSocket.OPEN);
+    squatter.close();
+    const ext2 = await new FakeExtension([]).connect(h.port);
     expect(await replaced).toBe(1000);
     expect(h.extensionConnected()).toBe(true);
-    ext2.close();
+    ext2.ws.close();
   });
 });

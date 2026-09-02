@@ -2,9 +2,18 @@
  * Cast Browser Bridge — MV3 service worker.
  *
  * Connects OUT to the cast bridge host on localhost (an extension cannot
- * listen), authenticates with the token the user pasted in the options page,
- * and executes the small op set the cast CLI sends: tab management,
- * chrome.debugger attach/detach, and raw CDP commands per tab.
+ * listen), proves it holds the token the user paired in the options page and
+ * makes the host prove the same back (below), and executes the small op set
+ * the cast CLI sends: tab management, chrome.debugger attach/detach, and raw
+ * CDP commands per tab.
+ *
+ * The token never goes on the wire. Any local account can bind the bridge
+ * port while no host is running, and a socket that merely opened proves
+ * nothing, so the handshake is mutual: we send a fresh nonce with
+ * HMAC(token, "ext:" + nonce), the host answers HMAC(token, nonce), and not
+ * one op is executed before that answer checks out. A host that cannot
+ * answer is treated like a bad token: the socket is closed and the retry
+ * alarm stays quiet until the human re-pairs.
  *
  * Visibility is a feature, not an accident: chrome.debugger shows Chrome's own
  * "is debugging this browser" banner for as long as a tab is attached, and we
@@ -21,7 +30,7 @@
  * backstop that reconnects after the worker is ever torn down.
  */
 
-const PROTOCOL = 3;
+const PROTOCOL = 4;
 
 let ws = null;
 let status = { state: "no-config", detail: "no token saved yet" };
@@ -59,14 +68,17 @@ async function connect() {
   }
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
-  const sock = new WebSocket(`ws://127.0.0.1:${cfg.port}/ext?token=${encodeURIComponent(cfg.token)}`);
+  const sock = new WebSocket(`ws://127.0.0.1:${cfg.port}/ext`);
   ws = sock;
   setStatus("connecting", `127.0.0.1:${cfg.port}`);
+  const nonce = randomHex(32);
+  let proven = false;
 
-  sock.onopen = () => {
-    setStatus("connected", `127.0.0.1:${cfg.port}`);
+  sock.onopen = async () => {
     send({
       op: "hello",
+      nonce,
+      auth: await hmacHex(cfg.token, "ext:" + nonce),
       version: chrome.runtime.getManifest().version,
       protocol: PROTOCOL,
       userAgent: navigator.userAgent,
@@ -78,6 +90,19 @@ async function connect() {
     try {
       msg = JSON.parse(e.data);
     } catch {
+      return;
+    }
+    // Nothing is executed for a host that has not proved it holds the token.
+    if (!proven) {
+      if (msg.op !== "welcome") return;
+      if (sameHex(msg.proof, await hmacHex(cfg.token, nonce))) {
+        proven = true;
+        setStatus("connected", `127.0.0.1:${cfg.port}`);
+      } else {
+        // Close first, then set the status: the close handler reads it.
+        sock.close(4401, "host could not prove the token");
+        setStatus("bad-token", "the host on that port could not prove it holds the token — is something else on it? re-run `cast browser extension setup`");
+      }
       return;
     }
     if (msg.op === "ping") return send({ op: "pong" });
@@ -93,8 +118,11 @@ async function connect() {
   sock.onclose = (e) => {
     if (ws !== sock) return;
     ws = null;
-    // 4401 is the host's "bad token" close — retrying the same token is noise.
-    if (e.code === 4401) {
+    // 4401 is the "bad token" close, from either side — retrying the same
+    // token is noise. Our own close already set a more specific status.
+    if (status.state === "bad-token") {
+      /* keep it */
+    } else if (e.code === 4401) {
       setStatus("bad-token", "the host rejected the token — re-run `cast browser extension setup` and paste the new one");
     } else {
       setStatus("disconnected", "host closed or unreachable; will retry");
@@ -111,6 +139,30 @@ async function connect() {
 
 function send(msg) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+// --------------------------------------------------------------------------
+// The handshake's arithmetic: HMAC-SHA256 as hex, mirroring bridgeProof in
+// packages/cli/src/browser/bridge/protocol.ts.
+// --------------------------------------------------------------------------
+
+function randomHex(bytes) {
+  return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function hmacHex(key, message) {
+  const enc = new TextEncoder();
+  const k = await crypto.subtle.importKey("raw", enc.encode(key), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", k, enc.encode(message));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Constant-time equality for hex strings of the same length. */
+function sameHex(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
 // Reconnect backstop: fires even after the service worker was torn down.
@@ -370,8 +422,18 @@ chrome.tabGroups.onRemoved.addListener((g) => {
 // Border overlay: a coloured frame around the driven page
 // --------------------------------------------------------------------------
 
-const BORDER_ID = "cast-browser-bridge-border";
+/**
+ * Everything the overlay does runs in an isolated world named for us, never
+ * in the page's own: the page cannot wrap document.getElementById there to
+ * learn when a screenshot is about to be taken, and cannot reach our script
+ * at all. The DOM itself is shared, so a hostile page can still hide or
+ * remove the element; what it loses is the timing signal. The element id is
+ * random per attach, so no stylesheet written in advance can target it.
+ */
+const WORLD = "cast-browser-bridge";
 const borderScripts = new Map(); // tabId → Page.addScriptToEvaluateOnNewDocument identifier
+const borderIds = new Map(); // tabId → this attach's element id
+const worlds = new Map(); // tabId → executionContextId of our isolated world in the top frame
 
 /** Hex for chrome.tabGroups.Color, matched by eye to Chrome's own group swatches. */
 const GROUP_COLOR_HEX = {
@@ -392,10 +454,10 @@ const GROUP_COLOR_HEX = {
  * that). Top frame only. Runs before the document has an element on a fresh
  * navigation, so it waits for one when it must.
  */
-function borderSource(color) {
+function borderSource(id, color) {
   return `(() => {
     if (window !== window.top) return;
-    const ID = ${JSON.stringify(BORDER_ID)};
+    const ID = ${JSON.stringify(id)};
     const mount = () => {
       const root = document.documentElement;
       if (!root) return false;
@@ -419,35 +481,71 @@ async function borderColor(tabId) {
   return GROUP_COLOR_HEX[g && g.color] || "#c62828";
 }
 
+/**
+ * Our isolated world's context in the tab's top frame, created on first use
+ * and again after every navigation (Runtime.executionContextsCleared drops
+ * the cached id). Chrome keys isolated worlds by name per frame, so the
+ * world the on-new-document script ran in is the one this returns.
+ */
+async function worldContext(tabId) {
+  const cached = worlds.get(tabId);
+  if (cached) return cached;
+  const { frameTree } = await chrome.debugger.sendCommand({ tabId }, "Page.getFrameTree", {});
+  const { executionContextId } = await chrome.debugger.sendCommand({ tabId }, "Page.createIsolatedWorld", {
+    frameId: frameTree.frame.id,
+    worldName: WORLD,
+    grantUniveralAccess: false,
+  });
+  worlds.set(tabId, executionContextId);
+  return executionContextId;
+}
+
+/** Run a script in our world; a stale context (a navigation raced us) is retried once. */
+async function evalInWorld(tabId, expression) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const contextId = await worldContext(tabId);
+      return await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", { expression, contextId });
+    } catch (err) {
+      worlds.delete(tabId);
+      if (attempt) throw err;
+    }
+  }
+}
+
 async function installBorder(tabId) {
-  const source = borderSource(await borderColor(tabId));
+  const id = "cast-" + randomHex(8);
+  borderIds.set(tabId, id);
+  const source = borderSource(id, await borderColor(tabId));
   const r = await chrome.debugger
-    .sendCommand({ tabId }, "Page.addScriptToEvaluateOnNewDocument", { source })
+    .sendCommand({ tabId }, "Page.addScriptToEvaluateOnNewDocument", { source, worldName: WORLD })
     .catch(() => null);
   if (r && r.identifier) borderScripts.set(tabId, r.identifier);
-  await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", { expression: source }).catch(() => {});
+  await evalInWorld(tabId, source).catch(() => {});
 }
 
 async function removeBorder(tabId) {
   const identifier = borderScripts.get(tabId);
+  const id = borderIds.get(tabId);
   borderScripts.delete(tabId);
+  borderIds.delete(tabId);
   if (identifier) {
     await chrome.debugger.sendCommand({ tabId }, "Page.removeScriptToEvaluateOnNewDocument", { identifier }).catch(() => {});
   }
-  await chrome.debugger
-    .sendCommand({ tabId }, "Runtime.evaluate", {
-      expression: `(() => { const e = document.getElementById(${JSON.stringify(BORDER_ID)}); if (e) e.remove(); })()`,
-    })
-    .catch(() => {});
+  if (id) {
+    await evalInWorld(tabId, `(() => { const e = document.getElementById(${JSON.stringify(id)}); if (e) e.remove(); })()`).catch(() => {});
+  }
+  worlds.delete(tabId);
 }
 
 /** Hidden around a screenshot so the capture shows the page, not our frame. */
 async function setBorderVisible(tabId, visible) {
-  await chrome.debugger
-    .sendCommand({ tabId }, "Runtime.evaluate", {
-      expression: `(() => { const e = document.getElementById(${JSON.stringify(BORDER_ID)}); if (e) e.style.visibility = ${JSON.stringify(visible ? "visible" : "hidden")}; })()`,
-    })
-    .catch(() => {});
+  const id = borderIds.get(tabId);
+  if (!id) return;
+  await evalInWorld(
+    tabId,
+    `(() => { const e = document.getElementById(${JSON.stringify(id)}); if (e) e.style.visibility = ${JSON.stringify(visible ? "visible" : "hidden")}; })()`,
+  ).catch(() => {});
 }
 
 // --------------------------------------------------------------------------
@@ -455,6 +553,8 @@ async function setBorderVisible(tabId, visible) {
 // --------------------------------------------------------------------------
 
 chrome.debugger.onEvent.addListener((source, method, params) => {
+  // A navigation tore every context down, our world with it.
+  if (method === "Runtime.executionContextsCleared" && source.tabId) worlds.delete(source.tabId);
   if (source.tabId && attached.has(source.tabId)) {
     send({ op: "event", tabId: source.tabId, method, params: params || {} });
   }
@@ -465,6 +565,8 @@ chrome.debugger.onDetach.addListener((source) => {
   if (source.tabId && attached.has(source.tabId)) {
     attached.delete(source.tabId);
     borderScripts.delete(source.tabId); // the session is gone, and its scripts with it
+    borderIds.delete(source.tabId);
+    worlds.delete(source.tabId);
     markDriven(source.tabId, false);
     send({ op: "detached", tabId: source.tabId });
   }
@@ -486,5 +588,7 @@ chrome.tabs.onRemoved.addListener((tabId, info) => {
   attached.delete(tabId);
   tabGroupOf.delete(tabId);
   borderScripts.delete(tabId);
+  borderIds.delete(tabId);
+  worlds.delete(tabId);
   send({ op: "tab", kind: "removed", tab: { tabId, url: "", title: "", active: false, windowId: info.windowId, attached: false } });
 });
