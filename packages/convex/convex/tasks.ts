@@ -45,6 +45,7 @@ import {
   workspaceForConversation,
   workspaceForResource,
   workspacesMatch,
+  visibleInTeamList,
 } from "./lib/access";
 import { forbidden, notFound } from "./lib/auth";
 export { canAccessTask };
@@ -1661,7 +1662,10 @@ async function insertTaskComment(
     comment_type: fields.comment_type as any,
     created_at: now,
   });
-  await ctx.db.patch(taskId, { updated_at: now });
+  // last_comment_at is the replica's refetch trigger for cached comments
+  // (sync-log-cargo E7): the log ships task rows only, and a clock-only bump
+  // cannot be told apart from any other write once cargo coalesces.
+  await ctx.db.patch(taskId, { updated_at: now, last_comment_at: now });
   const task = await ctx.db.get(taskId);
   if (task) {
     await touchThread(ctx, {
@@ -2177,7 +2181,13 @@ export const webList = query({
           collectByTeam(args.team_id),
           collectByAssignee(String(userId)),
         ]);
-        for (const t of teamTasks) pushUnique(t);
+        // The routing index returns every task tagged to the team, including
+        // ones whose ACCESS key is user:<owner> (private inside a team). The
+        // bootstrap floor must agree with byIds and the sync log's projection,
+        // so filter through the one access rule (sync fast path on stored keys).
+        for (const t of teamTasks) {
+          if (await visibleInTeamList(ctx, userId, "tasks", t, args.team_id)) pushUnique(t);
+        }
         for (const t of assignedTasks) {
           if (String(t.team_id) === String(args.team_id)) pushUnique(t);
         }
@@ -2194,8 +2204,10 @@ export const webList = query({
           collectByUser(userId),
           collectByAssignee(String(userId)),
         ]);
-        for (const teamTasks of teamLists) {
-          for (const t of teamTasks) pushUnique(t);
+        for (let i = 0; i < teamLists.length; i++) {
+          for (const t of teamLists[i]) {
+            if (await visibleInTeamList(ctx, userId, "tasks", t, memberships[i].team_id)) pushUnique(t);
+          }
         }
         for (const t of userTasks) pushUnique(t);
         for (const t of assignedTasks) pushUnique(t);
@@ -2392,6 +2404,13 @@ export const webListPaginated = query({
     // also holds the user's team-tagged tasks — those belong to their team
     // workspaces and must not ship in a personal-scoped response.
     if (args.workspace === "personal") rows = rows.filter((t: any) => !t.team_id);
+    // Team crawl: same access rule as webList (private-inside-a-team rows never
+    // reach a teammate's floor).
+    if (args.workspace === "team" && args.team_id) {
+      const kept: any[] = [];
+      for (const t of rows) if (await visibleInTeamList(ctx, userId, "tasks", t, args.team_id)) kept.push(t);
+      rows = kept;
+    }
     if (args.project_path) rows = scopeByProject(rows, args.project_path);
     await enrichTasks(ctx, userId, rows);
 

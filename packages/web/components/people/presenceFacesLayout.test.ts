@@ -65,10 +65,14 @@ describe("overlayFaces", () => {
 });
 
 describe("overlayWindowSize", () => {
-  it("is the circles, their gaps and the ring padding — nothing else", () => {
-    const size = overlayWindowSize([56, 44, 34]);
-    expect(size.width).toBe(56 + 44 + 34 + 2 * FACE_GAP + 2 * FACES_PADDING);
-    expect(size.height).toBe(56 + 2 * FACES_PADDING);
+  it("is the circles, their gaps and the ring padding — and never narrower than the chrome", () => {
+    const wide = overlayWindowSize([72, 72, 72, 72, 72]);
+    expect(wide.width).toBe(5 * 72 + 4 * FACE_GAP + 2 * FACES_PADDING);
+    expect(wide.height).toBe(72 + 2 * FACES_PADDING);
+    // A short row sits on chrome-wide glass at rest, so hovering moves nothing.
+    const short = overlayWindowSize([56, 44]);
+    expect(short.width).toBe(CHROME_WIDTH + 2 * FACES_PADDING);
+    expect(overlayWindowSize([56, 44], { hovered: true }).width).toBe(short.width);
   });
 
   it("hovering adds the slot and the chrome below the circles", () => {
@@ -77,7 +81,7 @@ describe("overlayWindowSize", () => {
     expect(hovered.height).toBe(rest.height + HOVER_ROWS);
   });
 
-  it("hovering never lets the chrome clip: one small face widens to the chrome", () => {
+  it("hovering never lets the chrome clip", () => {
     const hovered = overlayWindowSize([28], { hovered: true });
     expect(hovered.width).toBe(CHROME_WIDTH + 2 * FACES_PADDING);
   });

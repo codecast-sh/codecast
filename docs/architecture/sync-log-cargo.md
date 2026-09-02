@@ -39,52 +39,79 @@ that id (the row lives outside the client's cached window).
 
 ### E2 — Coalescing merges cargo
 
-Moving an entity's row to the new head (D1) now also merges cargo: `patch = { ...old,
-...new }`, `unset = union minus keys reintroduced by new`, `full = old.full || new.full`.
-The coalesced row therefore carries every field changed since the row was last pruned — at
-worst the whole document, which is the insert case anyway. The table stays bounded by
-churned entity count.
+Moving an entity's row to the new head (D1) also merges cargo, with these rules (the
+implemented `mergeCargo`, pinned by unit tests):
+
+- `patch = { ...old.patch, ...new.patch }`; a key in `new.unset` is removed from the merged
+  patch; a key re set by `new.patch` drops out of `unset`; `unset` is otherwise the union.
+- A FULL incoming cargo (insert/replace) replaces everything, including a prior partial.
+- `partial` is STICKY: `old.partial || new.partial` until a full cargo replaces it (a reader
+  whose cursor sat below the old position sees only the coalesced row and must keep
+  refetching until the row can prove its contents again).
+- An incoming cargo with no patch (kill switch, oversized) poisons the row to partial with
+  no patch.
+- `omitted` names accumulate (E3).
+- A `delete` clears cargo AND the access stamp (a tombstone's stamp is never reused).
+
+**Self heal.** Hot rows never prune (their `ts` stays young), so a merged cargo would grow
+toward the whole document and a sticky partial would be permanent. Therefore, whenever the
+merged cargo is partial or exceeds `CARGO_MAX_BYTES` (16 KB), the interceptor rebuilds it as
+a FULL cargo from the post write document (denylist applied); if that fits it replaces the
+merge, otherwise the row stays partial without a patch. Partial is thus a one time state
+for any row whose document fits, and the row's cargo is bounded by the cap, not by its
+lifetime.
 
 ### E3 — Payload denylist and size guard
 
-`PAYLOAD_DENYLIST[table]` names fields that never ride the log: `docs.content` (doc bodies
-have their own delta channel and the list caches are deliberately thin), plus any field the
-enrichment audit classifies as heavy. A patch that touches a denylisted field carries the
-other fields and sets `partial: true`. A serialized patch over 64 KB is dropped to
-`partial: true` with no fields (protects the 1 MB document ceiling and keeps range pages
-cheap). `partial` tells the client to schedule a `byIds` refetch of that id after applying
-what it has — the enrichment path, not the hot path.
+`PAYLOAD_DENYLIST[table]` names OMIT class fields: ones the client's LIST rows never carry
+(`docs.content`, `embedding`, `entries`; tasks' `drive`/`steps`/… detail only fields; plans'
+logs; conversations' embeddings and machine state) plus `team_id` for docs and plans (the
+list channels rewrite it to the effective team; the client derives it from `workspace`).
+Dropping them loses nothing and must NOT mark the row partial — a partial that never heals
+would put every edited doc on the byIds path for its whole life (review). Their NAMES ride
+along in `omitted` so a client that derives something from one (a plan mode doc's
+`display_title` from its body) can choose to refetch.
 
-### E4 — Access enters the log, enforced at read
+`CHURN_ONLY_FIELDS` never ride cargo at all, even inside a semantic patch (review): churn only
+writes emit no action, so a churn value captured on a semantic write would go stale in the
+coalesced row and revert the live value on the next move. The live window and the liveness
+overlay own those fields (D1).
 
-Each action row gains an ACCESS stamp, distinct from `scope_key` (routing):
+`partial: true` comes from exactly two places: the size guard (a serialized patch over
+`CARGO_MAX_BYTES`) and the cargo kill switch. Both heal per E2.
 
-```
-access_owner:  user id           (always)
-access_key:    workspace key      (tasks/docs/plans/projects: the stored `workspace`;
-                                   conversations: none — owner scope only)
-access_grants: user id[]          (tasks: assignee; extension point, usually empty)
-```
+### E4 — Access derived fan out, and a stamp enforced at read
 
-`getRange` PROJECTS every row through the caller before returning it: caller is owner, or
-in grants, or holds `access_key` (a team membership) → the row as written (`upsert` +
-cargo); otherwise → `{ op: "delete" }` with no cargo. Delivery of an id you may not read is
-today's behavior (the change feed fans ids); delivery of FIELDS you may not read never
-happens, and a caller who loses access sees a delete on the next range — which is how a
-`workspace` recompute (private inside a team) or an assignee change revokes without per
-viewer rows and survives coalescing (the LATEST stamp governs, so a revoke then restore
-resolves correctly for every reader).
+**Fan out follows access, not routing (review blocker).** The transport's scopes are derived
+from the access facts of the post write document: the owner's user scope always; the
+workspace key's team when the stored key is a team key; each explicit grant (a task's
+assignee) in their own user scope; conversations owner only. A routing `team_id` whose
+workspace is `user:<owner>` (private inside a team) therefore never enters the team scope —
+no existence leak, no projected delete probes — and every reader who may read a row holds a
+scope it fans to, which is the property retiring the live lists needs (a task assigned to
+you with no team, or in a team you are not in, reaches your user scope; today only
+`webList`'s assignee union carries it). Assignee and workspace changes are scope moves (D4):
+the departed scope gets a revocation delete.
 
-Owner scope rows are always authorized (caller is owner by construction). The stamp is
-read from the document AFTER the write (the same post write read the interceptor already
-does when scope fields change); `computeWorkspaceKey` writers are ordinary patches through
-the wrapped builders, so an access change appends an action like any other.
+**The stamp.** Each action row carries `access_owner`, `access_key` (the resolved workspace
+key — stored, else computed — never for conversations) and `access_grants` (assignee). It is
+ALWAYS read from the post write document, one memoized read per tracked write (a reused
+stamp can outlive a scope move or a delete tombstone; review). `getRange` projects every row
+per caller: owner, grant, or held key → the row with cargo; a row with no stamp → no cargo
+(fail closed); otherwise → a bare `delete`. Cargo rides only when the caller opts in
+(`cargo: true`), so deployed bundles keep thin rows.
 
-This crosses the routing/access line from CLAUDE.md deliberately: `scope_key` remains
-routing and is never compared to `workspace`; `access_key` IS the access predicate and is
-enforced by one equality in `getRange`, exactly like every other workspace read. The
-source guard test extends to assert (a) `getRange` is the only reader of `access_key`, and
-(b) no path derives access from `scope_key`.
+**One predicate.** `accessStampFor` / `accessStampFromDoc` and `authorizedFor` live in
+`lib/access.ts`, and `canAccessTask/Doc/Plan/Project` are DEFINED as evaluating that stamp,
+so the log and the byIds queries cannot disagree by construction; a property test pins the
+pure evaluator to the ctx bound one. The team list bootstrap queries (`webList`,
+`webListPaginated`) filter their routing index reads through the same rule
+(`visibleInTeamList`), closing a pre existing hole where a private inside a team task
+reached teammates' floors.
+
+This is the existing contract on a new table, not a crossing of the routing/access line:
+`scope_key` derives from access facts, `access_key` is a write time copy of `workspace` read
+only by `getRange`'s projection, and the source guard names `syncLog.ts`.
 
 ### E5 — Deletes keep authorized absence
 
@@ -95,14 +122,20 @@ viewer in both departed and entered team still holds the row).
 
 ### E6 — Client application
 
-For each range action, in position order, through the store's sync actions only
-(replication invariant 4: replicated data enters via `syncTable`/`syncRecord`):
+Scopes are fetched and applied strictly one at a time in one queue (review): positions
+are per scope with no cross scope order, and a page's cargo is only as fresh as its fetch,
+so pages must apply in fetch order. For each range action, in position order, through the
+store's sync actions only (replication invariant 4):
 
-1. `delete` → collect for the E5 verification batch.
+1. `delete` → collect for the E5 verification batch, unless the replica does not hold the
+   id (nothing to prune, no probe).
 2. `full` → `clearFeedExcludes` + `syncTable(coll, [row], isDelta)`.
-3. patch, base present → `syncRecord(coll, id, fields)` (per field merge; the engine's
-   `applySyncRecord` re asserts pending field locks, so local first protection is
-   unchanged), then apply `unset`.
+3. patch, base present → `applyCargoFields` → the engine's `applySyncPatch` (review
+   blocker): it visits ONLY the locks for fields the patch or `unset` names, so a lock on an
+   omitted field — a local clear is a lock with value undefined — survives; a named field's
+   lock wins until its value echoes; an `unset` echoes an undefined valued lock. The
+   collection's strip list applies here as on every channel. Only the collection itself is
+   written — the `conversations` meta twin has its own feeders.
 4. patch, base absent → collect for the `byIds` batch (out of window row).
 5. `partial` or a patch touching `ENRICH_TRIGGER_FIELDS[coll]` → also collect for a
    `byIds` refetch (re enrichment), after applying the raw fields so the visible change is
@@ -143,11 +176,18 @@ the bytes is reverted, not kept.
 ### E9 — Rollout and compat
 
 Server first, additive: new optional fields; emission on by default with an env kill switch
-(`SYNC_LOG_PAYLOADS_DISABLED=1` → rows carry no cargo, clients fall back to `byIds`
-automatically because absence of `patch` IS the fallback signal). Old client bundles ignore
-the new fields and keep working (they call `byIds` for every id as today). The projected
-delete in E4 is safe for them too: an unauthorized id already pruned via absence. Client
-second, per collection, behind the E8 measurements. Every phase lists what it deletes.
+(`SYNC_LOG_PAYLOADS_DISABLED=1` → rows are poisoned to partial, clients fall back to `byIds`
+automatically; the self heal restores full cargo on the next write after re enabling). Old
+client bundles never see cargo (they do not send `cargo: true`) and keep working. The
+projected delete in E4 is safe for them too: an unauthorized id already pruned via absence.
+Client second, per collection, behind the E8 measurements. `localStorage SYNCLOG_CARGO_OFF=1`
+is the client side kill switch.
+
+**`SYNC_LOG_DISABLED` is different (review).** With emission off, writes reach documents
+but no coalesced row, so after re enabling both the rows' cargo and every client's base
+lie. Ops must run `syncLogPrune:markResyncAll` once after re enabling: it sets every scope's
+floor to its head, so every client takes the D7 resync path (drop cursor, full cold
+backfill) instead of trusting its base.
 
 ### E10 — Validation
 

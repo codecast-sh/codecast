@@ -3003,6 +3003,10 @@ export default defineSchema({
     project_path: v.optional(v.string()),
 
     created_at: v.number(),
+    // Stamped by every task_comments insert (insertTaskComment): the one field
+    // that tells a replica "a joined comment changed" — the sync log carries
+    // task rows only, so this is the refetch trigger for cached comments.
+    last_comment_at: v.optional(v.number()),
     updated_at: v.number(),
     closed_at: v.optional(v.number()),
   })
@@ -4070,6 +4074,28 @@ export default defineSchema({
       v.literal("scope_removed"),
     ),
     ts: v.number(),
+    // ── Cargo (docs/architecture/sync-log-cargo.md E1–E3) ──
+    // The changed TOP-LEVEL fields as a merge patch ({ field: value }); `unset`
+    // lists removed fields; `full` marks a whole-document patch (insert/replace)
+    // that needs no base row; `partial` marks a payload that omitted denylisted
+    // or oversized fields — the client applies what is here and refetches the
+    // row for the rest. Absent `patch` with op upsert means "no cargo": the
+    // client falls back to the authorized byIds fetch (old rows, kill switch).
+    patch: v.optional(v.any()),
+    unset: v.optional(v.array(v.string())),
+    full: v.optional(v.boolean()),
+    partial: v.optional(v.boolean()),
+    omitted: v.optional(v.array(v.string())),
+    // ── Access stamp (E4) — enforced at READ by getRange, never by scope_key ──
+    // scope_key stays ROUTING (which scopes the row fans to). These three say
+    // who may read the cargo: the owner, explicit grants (a task's assignee),
+    // and holders of the workspace access key. getRange projects a row the
+    // caller may not read to a bare delete. Stamped from the post-write
+    // document; a write that changes access is itself an action, so readers
+    // who lose access see the delete on their next range.
+    access_owner: v.optional(v.string()),
+    access_key: v.optional(v.string()),
+    access_grants: v.optional(v.array(v.string())),
   })
     .index("by_scope_position", ["scope_key", "position"])
     // Coalescing lookup: is this entity's latest action already at the head?

@@ -106,7 +106,13 @@ Exactly the `change_log` set: conversations, tasks, docs, plans, projects, plus 
 membership actions (D5). Extension is declarative: a table joins by entering the tracked set
 and satisfying the same uniform `{ user_id, team_id? }` scope shape.
 
-### D3 — Scope stamping mirrors change_log semantics exactly
+### D3 — Scope stamping (superseded by sync-log-cargo E4)
+
+Originally one action row per ROUTING scope (owner + `team_id`). Since the cargo design
+(pl-498) the log's scopes derive from ACCESS facts — owner, the workspace key's team, and
+explicit grants — so every reader who may read a row holds a scope it fans to and a private
+inside a team row never enters the team scope. `change_log` (old clients) keeps routing
+semantics. The paragraph below describes the routing era and is kept for history.
 
 One action row per scope. Tasks, docs, plans, projects: always the owner scope
 (`user:<user_id>`); additionally the team scope (`team:<team_id>`) when `team_id` is set.

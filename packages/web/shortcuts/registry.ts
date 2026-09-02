@@ -217,7 +217,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   // A modifier chord, and skipInputCheck, because the hand that wants to talk is
   // resting in the composer: the binding has to survive a focused text box, and
   // anything that survives a text box must be impossible to type.
-  { key: 'ctrl+shift+space', action: 'chat.pushToTalk', when: 'chat.dm', skipInputCheck: true, description: 'Hold to talk in this DM' },
+  { key: 'ctrl+shift+space', action: 'chat.pushToTalk', when: 'chat.dm', skipInputCheck: true, description: 'Talk in this DM (press again to stop)' },
   { key: 'meta+k', action: 'palette.toggle', skipInputCheck: true, description: 'Toggle command palette' },
   // THE TEAM, FROM ANYWHERE. The wall answers "who is around, and can I just
   // ask them?" — a question people have in the middle of something else, so it

@@ -1,10 +1,11 @@
 // The wall: everyone at once, sized by how present they are, and each face is
-// the key you hold to talk to them.
-import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
+// a button with three actions under it: Talk, Ring, Message.
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useInboxStore } from "../../store/inboxStore";
+import { useEventListener } from "../../hooks/useEventListener";
 import { navigateMainWindow } from "../../lib/desktop";
-import { WALKIE_LOCK_MS } from "../../lib/calls/walkie";
 import { MemberFace } from "../presence/MemberFace";
+import { FaceActions } from "../presence/FaceActions";
 import { useFaceKey } from "../presence/useFaceKey";
 import {
   PRESENCE_META,
@@ -44,11 +45,10 @@ export interface FaceDescription {
  * says it instead, and it says it from across the room — the person worth a
  * word is the biggest circle on the screen before you have read a single name.
  *
- * AND THE FACE IS THE KEY. Hold it and you are talking to them: no hover, no
- * menu, no small target: the whole circle, up to 88 pixels of it. Let go under
- * a third of a second and it was a click, which opens the DM instead. That
- * doubling is only safe because the engine discards bursts under 700ms, so a
- * click can never land a burst — see WALL_TAP_MS.
+ * AND THE FACE IS A BUTTON. Click it and three labeled actions appear under
+ * it — Talk, Ring, Message — so nothing about a person's circle has to be
+ * guessed. No hold: a press that opened a microphone felt like an accident
+ * every time, so it was turned off.
  */
 /** The wall with its own roster read — for the modal, which mounts only while
  *  open. The always-mounted panel uses PeopleWallView with the data it already
@@ -103,10 +103,14 @@ export function WallFaceButton({
   data,
   callsEnabled,
   onDescribe,
+  onActivate,
 }: {
   face: WallFace<any>;
   data: PeopleRosterData;
   callsEnabled: boolean;
+  /** A surface with a slot of its own takes the click: the floating faces
+   *  draw the three actions in their slot rather than under the circle. */
+  onActivate?: (face: WallFace<any>) => void;
   /** Called with the face's words as a pointer or focus arrives (and again if
    *  a refusal changes them), null as it leaves. The strip renders these in
    *  its text slot; the wall floats its own label and passes nothing.
@@ -138,51 +142,40 @@ export function WallFaceButton({
     if (!navigateMainWindow(path)) window.location.href = path;
   }, [id]);
 
-  // THE FACE IS THE KEY, and it is the same key the avatar bar in the shell
-  // holds — hold to talk, tap to open the conversation, a warm ring going out
-  // and a cool one coming in. One hook, so the two surfaces cannot drift into
-  // two answers for the same gesture.
-  const key = useFaceKey({ viewerId, memberId: id, callsEnabled, talking, onTap: openDm, name });
-  const { state, sending, refused, blocked } = key;
+  // THE FACE IS A BUTTON WITH THREE ACTIONS UNDER IT — Talk, Ring, Message —
+  // and the same face the avatar bar in the shell draws. One hook, so the two
+  // surfaces cannot drift into two answers for the same click.
+  const key = useFaceKey({ viewerId, memberId: id, callsEnabled, talking });
+  const { state, sending, blocked } = key;
+
+  // The actions open on a click and close on Escape, a second click, or a
+  // click anywhere else. A surface with a slot of its own (the floating
+  // faces) takes the click instead and draws the actions there.
+  const [open, setOpen] = useState(false);
+  const seatRef = useRef<HTMLSpanElement | null>(null);
+  useEventListener("pointerdown", (e: Event) => {
+    if (open && seatRef.current && !seatRef.current.contains(e.target as Node)) setOpen(false);
+  });
 
   // The describe channel: the same words the label under the face shows, told
-  // to the surface. `attended` remembers a pointer or focus is on the face, so
-  // a refusal that expires mid-hover can put the ordinary line back — and a
-  // refusal speaks even UNATTENDED, because the hand that pressed has often
-  // left by the time the reason lands, and a reason nobody gets to read is a
-  // dead press wearing a different hat.
+  // to the surface as a pointer or focus arrives, and taken back as it leaves.
   const attended = useRef(false);
-  const describe = useCallback(
-    (refusedNow: boolean) => {
-      const refusal = refusedNow && !!blocked;
-      if (!onDescribe || (!attended.current && !refusal)) return;
-      onDescribe({
-        id,
-        name,
-        refused: refusal,
-        text: refusal ? blocked : line,
-        tone: refusal ? "text-sol-red" : PRESENCE_META[visual].text,
-      });
-    },
-    [onDescribe, id, name, blocked, line, visual],
-  );
+  const describe = useCallback(() => {
+    if (!onDescribe || !attended.current) return;
+    onDescribe({ id, name, text: line, tone: PRESENCE_META[visual].text });
+  }, [onDescribe, id, name, line, visual]);
   const attend = () => {
     attended.current = true;
-    describe(refused);
+    describe();
   };
   const unattend = () => {
     attended.current = false;
-    // A live refusal outlasts the pointer; its expiry clears it below.
-    if (!refused) onDescribe?.(null);
+    onDescribe?.(null);
   };
-  // The words follow the refusal in and out. Attended, the ordinary line
-  // returns when the refusal expires; unattended, expiry is a scoped clear,
-  // so it only empties the slot if the slot still shows THIS face.
+  // The activity line moves while the face is attended; the words follow it.
   useLayoutEffect(() => {
-    if (refused) describe(true);
-    else if (attended.current) describe(false);
-    else onDescribe?.(null, id);
-  }, [refused, describe, onDescribe, id]);
+    if (attended.current) describe();
+  }, [describe]);
 
   const unread = dm?.unread ?? 0;
 
@@ -202,7 +195,6 @@ export function WallFaceButton({
   // element already running an animation ignores being told to run the same one
   // again, so the two identical keyframes take turns. The equality guard makes
   // the effect safe to run twice, which React does in development.
-  const seatRef = useRef<HTMLSpanElement | null>(null);
   const drawnPx = useRef(px);
   useLayoutEffect(() => {
     const el = seatRef.current;
@@ -216,29 +208,19 @@ export function WallFaceButton({
     <span
       ref={seatRef}
       className="people-face-seat"
-      // The lock's clock, written where the stylesheet can read it: the fill
-      // arc animates over exactly the duration the latch fires on, from one
-      // constant, so the picture and the promise cannot drift apart.
-      style={{ ["--face" as string]: `${px}px`, ["--walkie-lock-ms" as string]: `${WALKIE_LOCK_MS}ms` }}
+      style={{ ["--face" as string]: `${px}px` }}
       data-hold={key.holding ? "1" : undefined}
-      data-refused={refused ? "1" : undefined}
       data-ask={fleet && fleet.needsYou > 0 ? "1" : undefined}
     >
       <button
         type="button"
-        // Not `disabled`: a disabled button swallows the press, and the whole
-        // point here is that a refused hold still answers. The state is in
-        // aria-disabled, in the ring, and in the sentence under the face.
-        aria-disabled={blocked ? true : undefined}
         aria-label={
           // The count belongs IN the name: the badge that draws it is decorative
-          // (aria-hidden), so this sentence is the whole of what a reader gets,
-          // and "3 unread" is the reason to reach for a face at all.
-          `${name}.${unread > 0 ? ` ${unread} unread.` : ""}${line ? ` ${line}.` : ""} ${
-            blocked ? blocked : "Hold to talk, click to open the conversation."
-          }`
+          // (aria-hidden), so this sentence is the whole of what a reader gets.
+          `${name}.${unread > 0 ? ` ${unread} unread.` : ""}${line ? ` ${line}.` : ""} Click for Talk, Ring and Message.`
         }
-        title={blocked ?? `Hold to talk to ${name} · click to open the DM`}
+        aria-expanded={onActivate ? undefined : open}
+        title={`${name} — click for Talk, Ring, Message`}
         className="people-face"
         // The circle IS the hit area, said in the attribute the floating
         // overlay's click-through test measures. Inert in the people window.
@@ -246,17 +228,28 @@ export function WallFaceButton({
         data-tx={sending ? "1" : undefined}
         data-rx={talking ? "1" : undefined}
         data-walkie-state={state}
-        {...key.keyProps}
-        // The describe channel rides on top of the gesture: the face tells the
-        // surface its words as a pointer or focus arrives, and takes them back
-        // as it leaves. The hold's own handlers run first in every case.
-        onPointerEnter={onDescribe ? attend : undefined}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (onActivate) onActivate(face);
+          else setOpen((v) => !v);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && open) {
+            e.stopPropagation();
+            setOpen(false);
+          }
+        }}
+        onPointerEnter={() => {
+          key.warmProps.onPointerEnter();
+          attend();
+        }}
         onPointerLeave={() => {
-          key.keyProps.onPointerLeave?.();
+          key.warmProps.onPointerLeave();
           unattend();
         }}
         onFocus={() => {
-          key.keyProps.onFocus?.();
+          key.warmProps.onFocus();
           attend();
         }}
         onBlur={unattend}
@@ -282,19 +275,31 @@ export function WallFaceButton({
       {/* The name and what they are doing, floating under the face rather than
           taking a row of its own: a wall of forty people cannot afford forty
           lines of text, and the one you are pointing at is the only one you are
-          reading. A refused press forces it open and puts the reason there. */}
-      <span className="people-face-label" aria-hidden="true">
-        <span className="people-face-name">{name}</span>
-        <span className={`people-face-line ${refused && blocked ? "text-sol-red" : PRESENCE_META[visual].text}`}>
-          {refused && blocked ? blocked : line}
+          reading. */}
+      {!open && (
+        <span className="people-face-label" aria-hidden="true">
+          <span className="people-face-name">{name}</span>
+          <span className={`people-face-line ${PRESENCE_META[visual].text}`}>{line}</span>
+          <span className="people-face-gesture">CLICK for Talk · Ring · Message</span>
         </span>
-        {/* The gesture, under every face, every time: nobody should have to
-            guess what pressing a face does. Off while a refusal is showing —
-            the reason is the whole message then. */}
-        {!(refused && blocked) && !blocked && (
-          <span className="people-face-gesture">HOLD to talk · TAP to message</span>
-        )}
-      </span>
+      )}
+      {/* THE THREE ACTIONS, under the face that was clicked. */}
+      {open && (
+        <span className="people-face-actions">
+          <span className="people-face-actions-name">{name}</span>
+          <FaceActions
+            ptt={key.ptt}
+            blocked={blocked}
+            roomKey={key.roomKey}
+            ringIds={[id]}
+            onMessage={() => {
+              setOpen(false);
+              openDm();
+            }}
+            size="sm"
+          />
+        </span>
+      )}
     </span>
   );
 }

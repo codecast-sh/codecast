@@ -1,0 +1,69 @@
+/* The three buttons under a face: Talk, Ring, Message. Blunt on purpose —
+   a word and an icon, full contrast, a warm fill while talking. */
+.face-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.face-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--sol-border);
+  background: var(--sol-bg-alt);
+  color: var(--sol-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.face-actions-sm .face-action {
+  padding: 4px 9px;
+  font-size: 11px;
+}
+.face-action-icon {
+  width: 14px;
+  height: 14px;
+}
+.face-action:hover:not(:disabled) {
+  background: var(--sol-bg-highlight);
+}
+.face-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.face-action-talk:not(:disabled) {
+  border-color: color-mix(in srgb, var(--walkie-tx) 60%, transparent);
+  color: var(--walkie-tx);
+}
+/* TALKING. The button is the state: warm, filled, and it says Stop. */
+.face-action-talk-on {
+  background: var(--walkie-tx) !important;
+  border-color: var(--walkie-tx) !important;
+  color: var(--sol-bg) !important;
+  animation: face-action-talk-breathe 1.6s ease-in-out infinite;
+}
+@keyframes face-action-talk-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--walkie-tx) 45%, transparent); }
+  50%      { box-shadow: 0 0 0 5px color-mix(in srgb, var(--walkie-tx) 0%, transparent); }
+}
+.face-action-ring:not(:disabled) {
+  border-color: color-mix(in srgb, var(--sol-violet) 55%, transparent);
+  color: var(--sol-violet);
+}
+.face-actions-reason {
+  flex-basis: 100%;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--sol-red);
+}
+@media (prefers-reduced-motion: reduce) {
+  .face-action-talk-on { animation: none; }
+}

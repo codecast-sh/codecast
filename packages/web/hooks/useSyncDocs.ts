@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useQuery, usePaginatedQuery, useConvex } from "convex/react";
+import { useQuery, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, DocDetail } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
-import { useWatchEffect } from "./useWatchEffect";
+import { useBootstrapCollection } from "./useBootstrapCollection";
 import { countLogMissedRows, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
 import { track } from "../lib/analytics";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -69,22 +69,17 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
   const convex = useConvex();
   const syncTable = useInboxStore((s) => s.syncTable);
 
-  // 1) LIVE: only the first (most-recent) page. No auto-load-all.
-  const { results, status } = usePaginatedQuery(
+  // 1) BOOTSTRAP FLOOR: the first (most-recent) page, ONE-SHOT per workspace
+  //    per page session (sync-log-cargo E8) — no longer a live subscription
+  //    that re-pushes the page on every doc write. The sync log's cargo carries
+  //    later changes; docProjectPaths is left to the full reconcile so it
+  //    reflects ALL docs, not just this page.
+  const [results, setResults] = useState<any[] | undefined>(undefined);
+  useBootstrapCollection(
+    "docs",
     api.docs.webListPaginated,
-    wsArgs === "skip" ? "skip" : wsArgs,
-    { initialNumItems: LIVE_PAGE_SIZE }
-  );
-
-  // Sync the live page as a DELTA: overlay recent docs onto the cache without
-  // pruning the older cached docs (snapshot mode would drop everything not on
-  // this page). docProjectPaths is left to the full reconcile so it reflects
-  // ALL docs, not just this page.
-  useConvexSync(
-    status !== "LoadingFirstPage" ? results : undefined,
-    useCallback((docs: any) => {
-      syncTable("docs", docs, { isDelta: true });
-    }, [syncTable])
+    wsArgs === "skip" ? "skip" : { ...(wsArgs as object), paginationOpts: { numItems: LIVE_PAGE_SIZE, cursor: null } },
+    { select: (r: any) => r?.page, liveLoadingScope: "docs", onRows: setResults },
   );
 
   // BODY PREFETCH for the recent page: the list channels are thin (bodies
@@ -138,13 +133,6 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
     })();
     return () => { cancelled = true; };
   }, [convex, results, prefetchHydrated, wsSkip]);
-
-  // Header SyncStatusChip: spin only while the LIVE first page is loading on a
-  // cold open. The background reconcile crawl below is housekeeping (it pages
-  // every doc at a throttled pace, for minutes) and must NOT drive the chip.
-  useWatchEffect(() => {
-    useInboxStore.getState().setLiveLoading("docs", status === "LoadingFirstPage");
-  }, [status]);
 
   // 2) BACKGROUND RECONCILE: crawl every page once (one-shot queries, NOT live
   //    subscriptions), then sync the full set with a workspace-scoped

@@ -25,11 +25,11 @@ import type { Wall, WallFace, WallTier } from "./peopleWallLayout";
  * people are drawn only when the everyone toggle asks for them.
  */
 export const OVERLAY_FACE_PX: Record<WallTier, number> = {
-  loud: 56,
-  here: 44,
-  idle: 34,
-  away: 28,
-  gone: 24,
+  loud: 72,
+  here: 60,
+  idle: 46,
+  away: 38,
+  gone: 32,
 };
 
 /** The most circles the overlay will float. Thirteenth teammate onward folds
@@ -70,17 +70,27 @@ export function overlayFaces<T>(
  * `px` includes every seat — faces and the overflow chip — so the window and
  * the row can never disagree about what a seat costs.
  */
+/** How much taller the band is while a clicked face's three actions are in
+ *  the slot: a row of buttons under the name. */
+export const ACTIONS_ROW = 36;
+
 export function overlayWindowSize(
   px: number[],
-  opts?: { hovered?: boolean },
+  opts?: { hovered?: boolean; actions?: boolean },
 ): { width: number; height: number } {
   const tallest = px.reduce((a, b) => Math.max(a, b), 0) || OVERLAY_FACE_PX.here;
   const row = px.length
     ? px.reduce((a, b) => a + b, 0) + (px.length - 1) * FACE_GAP
     : OVERLAY_FACE_PX.here;
-  const width = opts?.hovered ? Math.max(row, CHROME_WIDTH) : row;
+  // ALWAYS as wide as the chrome, hovered or not. Growing sideways on hover
+  // slid the circles out from under the pointer, the chrome then hid, the
+  // window shrank, the circles slid back, and the loop read as a flicker. The
+  // extra width at rest is transparent, click-through glass: it costs nothing.
+  const width = Math.max(row, CHROME_WIDTH);
   return {
     width: Math.round(width + FACES_PADDING * 2),
-    height: Math.round(tallest + (opts?.hovered ? HOVER_ROWS : 0) + FACES_PADDING * 2),
+    height: Math.round(
+      tallest + (opts?.hovered || opts?.actions ? HOVER_ROWS : 0) + (opts?.actions ? ACTIONS_ROW : 0) + FACES_PADDING * 2,
+    ),
   };
 }
