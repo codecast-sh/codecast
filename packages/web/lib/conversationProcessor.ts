@@ -59,6 +59,18 @@ export function isHiddenSystemNotice(content: string | null | undefined, subtype
   return subtype === "informational" && !!content && REMOTE_CONTROL_NOTICE_RE.test(content.trim());
 }
 
+// The usage-limit notices among those status lines ("Usage limit reached ·
+// continuing automatically at 2:20am · esc or type to cancel", "Automatic
+// continue cancelled · /rate-limit-options to re-arm", "You've hit your
+// session limit · resets 11:30pm") explain why the agent stopped, so every
+// renderer paints them in the warning tone instead of the neutral system gray.
+const LIMIT_NOTICE_RE =
+  /^(?:(?:claude (?:ai )?)?usage limit reached\b|automatic continue cancelled\b|approaching (?:your )?usage limit\b|you['’]ve (?:hit|reached) your [\w -]{1,40}limit\b)/i;
+
+export function isWarningSystemNotice(content: string | null | undefined, subtype?: string | null): boolean {
+  return subtype === "informational" && !!content && LIMIT_NOTICE_RE.test(content.trim());
+}
+
 /** Synthetic truncation notice the CLI injects into imported sessions for the
  * model's context. Context-only — hide it from every user-facing surface. */
 export const IMPORT_NOTICE_PREFIX = "[Codecast import]";

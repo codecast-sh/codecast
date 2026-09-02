@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { classifyFeedMessage, isNoiseUserMessage, isHiddenSystemNotice, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, cleanTitle } from "./conversationProcessor";
+import { classifyFeedMessage, isNoiseUserMessage, isHiddenSystemNotice, isWarningSystemNotice, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, cleanTitle } from "./conversationProcessor";
 
 // Regression: the message feed was dumping raw <task-notification> XML and other
 // structured/machine messages as cards. classifyFeedMessage is the single shared
@@ -140,5 +140,26 @@ describe("isHiddenSystemNotice — Remote Control notices are hidden", () => {
   test("the text alone is not enough — a user typing it is not a notice", () => {
     expect(isHiddenSystemNotice("Remote Control disconnected", undefined)).toBe(false);
     expect(isHiddenSystemNotice("Remote Control disconnected", "local_command")).toBe(false);
+  });
+});
+
+// Usage-limit status lines render in the warning tone; the rest of the
+// informational lines keep the neutral system gray.
+describe("isWarningSystemNotice — usage-limit notices are warnings", () => {
+  test("limit pauses, cancelled auto-continue, hit-your-limit forms", () => {
+    expect(isWarningSystemNotice("Usage limit reached · continuing automatically at 5:50pm · esc or type to cancel", "informational")).toBe(true);
+    expect(isWarningSystemNotice("Claude usage limit reached. Your limit will reset at 3am (America/New_York)", "informational")).toBe(true);
+    expect(isWarningSystemNotice("Automatic continue cancelled · /rate-limit-options to re-arm", "informational")).toBe(true);
+    expect(isWarningSystemNotice("You've hit your session limit · resets 11:30pm (America/New_York)", "informational")).toBe(true);
+  });
+
+  test("other informational lines stay neutral", () => {
+    expect(isWarningSystemNotice("Unknown command: /loginq. Did you mean /login?", "informational")).toBe(false);
+    expect(isWarningSystemNotice("Remote Control disconnected — OAuth token unavailable — run /login", "informational")).toBe(false);
+  });
+
+  test("the text alone is not enough — a user typing it is not a notice", () => {
+    expect(isWarningSystemNotice("Usage limit reached", undefined)).toBe(false);
+    expect(isWarningSystemNotice("Usage limit reached", "local_command")).toBe(false);
   });
 });
