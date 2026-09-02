@@ -24,6 +24,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID, randomBytes } from "node:crypto";
+import {
+  runDoctor as runChecks,
+  formatCheckLine,
+  type DoctorCheck as CheckSpec,
+  type FormatOptions,
+} from "@platform/cli-kit/doctor";
 import { spawnSync } from "./proc.js";
 import { cliFetch } from "./cliHttp.js";
 import { fetchExport } from "./jsonlGenerator.js";
@@ -80,6 +86,15 @@ export interface DoctorCheck {
   /** Milliseconds, for e2e legs. */
   elapsedMs?: number;
 }
+
+// One line per check, printed by @platform/cli-kit/doctor in the product's own
+// colors. The passive checks below are `CheckSpec`s the package's runner
+// executes; the e2e legs and the per-client probe record their lines directly,
+// because each of those produces several checks from one flow.
+const CHECK_FORMAT: FormatOptions = {
+  color: { success: fmt.success, warning: fmt.warning, error: fmt.error, muted: fmt.muted },
+  nameWidth: 22,
+};
 
 export interface DoctorReport {
   ok: boolean;
@@ -275,12 +290,11 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
   };
   const record = (check: DoctorCheck) => {
     checks.push(check);
-    const glyph =
-      check.status === "pass" ? fmt.success("✓") :
-      check.status === "warn" ? fmt.warning("!") :
-      check.status === "skip" ? fmt.muted("-") : fmt.error("✗");
-    const timing = check.elapsedMs !== undefined ? fmt.muted(`  ${(check.elapsedMs / 1000).toFixed(1)}s`) : "";
-    say(`  ${glyph} ${check.name.padEnd(22)} ${check.detail}${timing}`);
+    say(formatCheckLine(
+      { name: check.name, status: check.status, detail: check.detail, elapsedMs: check.elapsedMs ?? 0 },
+      // Passive checks carry no timing; an e2e leg always shows the one it measured.
+      { ...CHECK_FORMAT, timingThresholdMs: check.elapsedMs === undefined ? Infinity : 0 },
+    ));
   };
 
   say("");
@@ -288,69 +302,90 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
   say("");
 
   // ── passive health ──
+  // Registered with the package's runner: it runs them in order, turns a thrown
+  // error into a failure, and streams each result back through `record` so the
+  // output appears as the check finishes rather than at the end.
   const state = deps.readDaemonState();
-  if (state?.authExpired) {
-    record({ name: "auth", status: "fail", detail: "expired — run `cast auth`" });
-  } else {
-    record({ name: "auth", status: "pass", detail: "authenticated" });
-  }
-
-  try {
-    const mk = getMachineKey();
-    const binding = hardwareId()
-      ? "hardware-bound"
-      : "no hardware id, clone detection disabled";
-    record({
-      name: "device",
-      status: "pass",
-      detail: `${deviceId()} (${binding})${mk.previousSecret ? " — key was rotated after a hardware clone" : ""}`,
-    });
-  } catch (e: any) {
-    record({ name: "device", status: "warn", detail: `machine key unreadable: ${e?.message ?? e}` });
-  }
-
   const pid = deps.getDaemonPid();
   const launchd = deps.getLaunchdStatus();
-  if (!pid) {
-    record({
-      name: "daemon",
-      status: "fail",
-      detail: `not running${launchd?.configured ? ` (launchd state: ${launchd.state ?? "unknown"})` : ""} — run \`cast start\``,
-    });
-  } else {
-    const tick = state?.lastHeartbeatTick || state?.lastWatchdogCheck || 0;
-    const stale = tick > 0 && Date.now() - tick > HEARTBEAT_FRESH_MS;
-    record({
-      name: "daemon",
-      status: stale ? "fail" : "pass",
-      detail: `running (pid ${pid}${launchd?.pid === pid ? ", launchd-managed" : ""}), heartbeat ${formatAgo(tick)}${stale ? " — event loop looks wedged, run `cast restart`" : ""}`,
-    });
-  }
+  const passive: CheckSpec[] = [];
 
-  const connected = !!pid && (state?.connected ?? false);
-  record({
-    name: "convex",
-    status: connected ? "pass" : "fail",
-    detail: connected
-      ? `connected (last sync ${formatAgo(state?.lastSyncTime)})`
-      : `disconnected${pid ? " — check network / `cast restart`" : ""}`,
+  passive.push({
+    name: "auth",
+    run: () => state?.authExpired
+      ? { ok: false, detail: "expired — run `cast auth`" }
+      : { ok: true, detail: "authenticated" },
   });
 
-  const stuck = deps.getStuckSyncs();
-  let retryDepth = 0;
-  try {
-    const retry = JSON.parse(fs.readFileSync(path.join(deps.configDir, "retry-queue.json"), "utf-8"));
-    retryDepth = Array.isArray(retry) ? retry.length : 0;
-  } catch {}
-  const backlogBad = stuck.length > 0;
-  record({
+  passive.push({
+    name: "device",
+    run: () => {
+      try {
+        const mk = getMachineKey();
+        const binding = hardwareId()
+          ? "hardware-bound"
+          : "no hardware id, clone detection disabled";
+        return {
+          ok: true,
+          detail: `${deviceId()} (${binding})${mk.previousSecret ? " — key was rotated after a hardware clone" : ""}`,
+        };
+      } catch (e: any) {
+        return { ok: false, warn: true, detail: `machine key unreadable: ${e?.message ?? e}` };
+      }
+    },
+  });
+
+  passive.push({
+    name: "daemon",
+    run: () => {
+      if (!pid) {
+        return {
+          ok: false,
+          detail: `not running${launchd?.configured ? ` (launchd state: ${launchd.state ?? "unknown"})` : ""} — run \`cast start\``,
+        };
+      }
+      const tick = state?.lastHeartbeatTick || state?.lastWatchdogCheck || 0;
+      const stale = tick > 0 && Date.now() - tick > HEARTBEAT_FRESH_MS;
+      return {
+        ok: !stale,
+        detail: `running (pid ${pid}${launchd?.pid === pid ? ", launchd-managed" : ""}), heartbeat ${formatAgo(tick)}${stale ? " — event loop looks wedged, run `cast restart`" : ""}`,
+      };
+    },
+  });
+
+  passive.push({
+    name: "convex",
+    run: () => {
+      const connected = !!pid && (state?.connected ?? false);
+      return {
+        ok: connected,
+        detail: connected
+          ? `connected (last sync ${formatAgo(state?.lastSyncTime)})`
+          : `disconnected${pid ? " — check network / `cast restart`" : ""}`,
+      };
+    },
+  });
+
+  passive.push({
     name: "sync backlog",
-    status: backlogBad ? "warn" : "pass",
-    detail: backlogBad
-      ? `${stuck.length} stuck session(s), ${retryDepth} retry item(s) — see \`cast health\``
-      : retryDepth > 0
-        ? `${retryDepth} retry item(s) draining`
-        : "clear",
+    run: () => {
+      const stuck = deps.getStuckSyncs();
+      let retryDepth = 0;
+      try {
+        const retry = JSON.parse(fs.readFileSync(path.join(deps.configDir, "retry-queue.json"), "utf-8"));
+        retryDepth = Array.isArray(retry) ? retry.length : 0;
+      } catch {}
+      const backlogBad = stuck.length > 0;
+      return {
+        ok: !backlogBad,
+        warn: true,
+        detail: backlogBad
+          ? `${stuck.length} stuck session(s), ${retryDepth} retry item(s) — see \`cast health\``
+          : retryDepth > 0
+            ? `${retryDepth} retry item(s) draining`
+            : "clear",
+      };
+    },
   });
 
   // ── leaked Claude session markers ──
@@ -359,106 +394,131 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
   // claude launched there saves no transcript and never syncs (agentEnv.ts).
   // The tmux global env is the persistent carrier, so clear it here.
   if (hasBin("tmux")) {
-    const shown = spawnSync("tmux", ["show-environment", "-g"], { encoding: "utf-8" });
-    const leaked = shown.status === 0 ? leakedTmuxGlobalMarkers(shown.stdout ?? "") : [];
-    if (leaked.length === 0) {
-      record({ name: "agent env", status: "pass", detail: "no Claude session markers in the tmux global env" });
-    } else {
-      for (const v of leaked) spawnSync("tmux", ["set-environment", "-gu", v], { stdio: "ignore" });
-      record({
-        name: "agent env",
-        status: "warn",
-        detail: `tmux global env carried ${leaked.join(", ")} (cleared) — panes opened before this ran may be saving no transcript; restart them`,
-      });
-    }
+    passive.push({
+      name: "agent env",
+      run: () => {
+        const shown = spawnSync("tmux", ["show-environment", "-g"], { encoding: "utf-8" });
+        const leaked = shown.status === 0 ? leakedTmuxGlobalMarkers(shown.stdout ?? "") : [];
+        if (leaked.length === 0) {
+          return { ok: true, detail: "no Claude session markers in the tmux global env" };
+        }
+        for (const v of leaked) spawnSync("tmux", ["set-environment", "-gu", v], { stdio: "ignore" });
+        return {
+          ok: false,
+          warn: true,
+          detail: `tmux global env carried ${leaked.join(", ")} (cleared) — panes opened before this ran may be saving no transcript; restart them`,
+        };
+      },
+    });
   }
 
   // Settings-level backstop for the same class: ~/.claude/settings.json pins
   // CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 for every claude on the machine,
   // so an inherited CLAUDE_CODE_CHILD_SESSION can never silence a transcript
   // (agentEnv.ts). The daemon asserts this on boot; re-assert and report here.
-  try {
-    const pin = ensureClaudeSettingsPersistence();
-    record({
-      name: "transcript pin",
-      status: pin === "wrote" || pin === "already-pinned" ? "pass" : "warn",
-      detail:
-        pin === "wrote"
-          ? "pinned CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 in ~/.claude/settings.json"
-          : pin === "already-pinned"
-            ? "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 pinned in ~/.claude/settings.json"
-            : pin === "unparseable"
-              ? "~/.claude/settings.json is not valid JSON — cannot pin transcript persistence; fix the file"
-              : "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE set to a non-\"1\" value in ~/.claude/settings.json — a leaked CLAUDE_CODE_CHILD_SESSION would silence transcripts",
-    });
-  } catch (err) {
-    record({ name: "transcript pin", status: "warn", detail: `check failed: ${err instanceof Error ? err.message : String(err)}` });
-  }
+  passive.push({
+    name: "transcript pin",
+    run: () => {
+      try {
+        const pin = ensureClaudeSettingsPersistence();
+        return {
+          ok: pin === "wrote" || pin === "already-pinned",
+          warn: true,
+          detail:
+            pin === "wrote"
+              ? "pinned CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 in ~/.claude/settings.json"
+              : pin === "already-pinned"
+                ? "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 pinned in ~/.claude/settings.json"
+                : pin === "unparseable"
+                  ? "~/.claude/settings.json is not valid JSON — cannot pin transcript persistence; fix the file"
+                  : "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE set to a non-\"1\" value in ~/.claude/settings.json — a leaked CLAUDE_CODE_CHILD_SESSION would silence transcripts",
+        };
+      } catch (err) {
+        return { ok: false, warn: true, detail: `check failed: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    },
+  });
 
   // ── tmux server generations ──
   // A replaced default socket leaves the old server running unreachable with
   // every pane and agent of its generation (see processTable.ts). Invisible to
   // `tmux list-sessions`, visible only in the process table.
   if (hasBin("tmux")) {
-    const procs = snapshotProcessTable();
-    const stale = findStaleTmuxServers(procs, liveTmuxServerPid());
-    if (stale.length === 0) {
-      record({ name: "tmux servers", status: "pass", detail: "one server on the default socket" });
-    } else {
-      const trees = stale.reduce((n, s) => n + s.descendants, 0);
-      const agents = stale.reduce((n, s) => n + s.agents, 0);
-      const summary = `${stale.length} stale server(s) (pid ${stale.map((s) => s.pid).join(", ")}) holding ${trees} process(es), ${agents} agent(s), unreachable from tmux`;
-      if (opts.reapTmux) {
+    passive.push({
+      name: "tmux servers",
+      run: async () => {
+        const procs = snapshotProcessTable();
+        const stale = findStaleTmuxServers(procs, liveTmuxServerPid());
+        if (stale.length === 0) return { ok: true, detail: "one server on the default socket" };
+        const trees = stale.reduce((n, s) => n + s.descendants, 0);
+        const agents = stale.reduce((n, s) => n + s.agents, 0);
+        const summary = `${stale.length} stale server(s) (pid ${stale.map((s) => s.pid).join(", ")}) holding ${trees} process(es), ${agents} agent(s), unreachable from tmux`;
+        if (!opts.reapTmux) {
+          return { ok: false, warn: true, detail: `${summary} — run \`cast doctor --no-e2e --reap-tmux\` to kill them` };
+        }
         let killed = 0;
         for (const s of stale) {
           const r = await killProcessTree([...descendantPids(procs, s.pid), s.pid]);
           killed += r.terminated + r.killed;
         }
-        record({ name: "tmux servers", status: "warn", detail: `${summary} — reaped ${killed} process(es)` });
         cleanup.push(`reaped stale tmux server(s) ${stale.map((s) => s.pid).join(", ")}`);
-      } else {
-        record({ name: "tmux servers", status: "warn", detail: `${summary} — run \`cast doctor --no-e2e --reap-tmux\` to kill them` });
-      }
-    }
+        return { ok: false, warn: true, detail: `${summary} — reaped ${killed} process(es)` };
+      },
+    });
   }
 
   // ── macOS app-data access (TCC) ──
   // Reading another app's data (Cursor's chat db) needs a per-app macOS grant;
   // the daemon records the outcome in its state file (see cursorWatcherDecision).
   if (process.platform === "darwin") {
-    const cursorPref = deps.config.cursor_sync;
-    const cursorAccess = state?.cursorAccess;
-    if (cursorPref === "off") {
-      record({ name: "cursor sync", status: "skip", detail: "disabled (`cast cursor on` to enable)" });
-    } else if (cursorAccess === "granted") {
-      record({ name: "cursor sync", status: "pass", detail: "app data access granted" });
-    } else if (cursorAccess === "denied") {
-      record({
-        name: "cursor sync",
-        status: "warn",
-        detail: "macOS denied access to Cursor's data — System Settings → Privacy & Security → allow codecast (or grant Full Disk Access), then `cast cursor on`",
-      });
-    } else if (fs.existsSync(defaultCursorPath())) {
-      record({ name: "cursor sync", status: "warn", detail: "Cursor detected but not synced — run `cast cursor on` (macOS asks to allow access once)" });
-    } else {
-      record({ name: "cursor sync", status: "skip", detail: "Cursor not installed" });
-    }
+    passive.push({
+      name: "cursor sync",
+      run: () => {
+        const cursorPref = deps.config.cursor_sync;
+        const cursorAccess = state?.cursorAccess;
+        if (cursorPref === "off") return { ok: true, skip: true, detail: "disabled (`cast cursor on` to enable)" };
+        if (cursorAccess === "granted") return { ok: true, detail: "app data access granted" };
+        if (cursorAccess === "denied") {
+          return {
+            ok: false,
+            warn: true,
+            detail: "macOS denied access to Cursor's data — System Settings → Privacy & Security → allow codecast (or grant Full Disk Access), then `cast cursor on`",
+          };
+        }
+        if (fs.existsSync(defaultCursorPath())) {
+          return { ok: false, warn: true, detail: "Cursor detected but not synced — run `cast cursor on` (macOS asks to allow access once)" };
+        }
+        return { ok: true, skip: true, detail: "Cursor not installed" };
+      },
+    });
 
     // Permission grants attach to the daemon's code-signing identity. Release
     // binaries are Developer ID-signed with a stable identifier, so grants
     // survive updates; a from-source daemon runs under the ad-hoc-signed bun
     // binary, so prompts say "bun" and grants can reset when bun updates.
+    // Registered only when it has something to say: a healthy identity was
+    // never worth a line of its own.
+    let launcher = "";
     try {
-      const launcher = fs.readFileSync(path.join(deps.configDir, "daemon-launcher.sh"), "utf-8");
-      if (/\/\.bun\/bin\/bun|[\s']bun[\s']/.test(launcher)) {
-        record({
-          name: "tcc identity",
-          status: "warn",
-          detail: "daemon runs from source under bun — permission prompts show \"bun\" and grants reset on bun updates; use the installed binary for a stable identity",
-        });
-      }
+      launcher = fs.readFileSync(path.join(deps.configDir, "daemon-launcher.sh"), "utf-8");
     } catch {}
+    if (/\/\.bun\/bin\/bun|[\s']bun[\s']/.test(launcher)) {
+      passive.push({
+        name: "tcc identity",
+        run: () => ({
+          ok: false,
+          warn: true,
+          detail: "daemon runs from source under bun — permission prompts show \"bun\" and grants reset on bun updates; use the installed binary for a stable identity",
+        }),
+      });
+    }
   }
+
+  await runChecks(passive, {
+    product: "Codecast",
+    version: deps.version,
+    onCheck: (r) => record({ name: r.name, status: r.status, detail: r.detail }),
+  });
 
   const tmuxAvailable = hasBin("tmux");
   const runtime = resolveStubRuntime();
