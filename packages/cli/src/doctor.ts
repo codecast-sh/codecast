@@ -220,7 +220,7 @@ export function exportHasToken(
   return messages.some((m) => (!role || m.role === role) && typeof m.content === "string" && m.content.includes(token));
 }
 
-async function doctorPost(siteUrl: string, apiToken: string, urlPath: string, body: Record<string, unknown>): Promise<any> {
+export async function doctorPost(siteUrl: string, apiToken: string, urlPath: string, body: Record<string, unknown>): Promise<any> {
   const response = await cliFetch(`${siteUrl}${urlPath}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -237,7 +237,7 @@ async function doctorPost(siteUrl: string, apiToken: string, urlPath: string, bo
   return result;
 }
 
-function readConversationMapping(configDir: string, sessionId: string): string | null {
+export function readConversationMapping(configDir: string, sessionId: string): string | null {
   try {
     const cache = JSON.parse(fs.readFileSync(path.join(configDir, "conversations.json"), "utf-8"));
     return typeof cache[sessionId] === "string" ? cache[sessionId] : null;

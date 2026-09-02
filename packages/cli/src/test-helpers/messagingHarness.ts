@@ -25,6 +25,12 @@ export interface HarnessOptions extends ShimOptions {
   pathPrefix?: string[];
   /** Tmux session prefix. Default: "cc-claude-test". */
   tmuxPrefix?: string;
+  /** A bash -c body to exec instead of the fake claude shim (the bench runs the
+   *  doctor's node stub this way, because the daemon only treats agent binaries
+   *  and node/bun/deno as live agents). */
+  command?: string;
+  /** Transcript path override; the default encodes cwd with "/" to "-". */
+  jsonlPath?: string;
 }
 
 export interface Harness {
@@ -47,16 +53,15 @@ export function spawnHarness(opts: HarnessOptions = {}): Harness {
   const tmuxSession = `${tmuxPrefix}-${randomUUID().slice(0, 8)}`;
   const cwd = opts.cwd ?? fs.mkdtempSync(path.join(os.tmpdir(), "codecast-test-cwd-"));
   const sessionId = opts.sessionId ?? randomUUID();
-  const shimPath = writeShimScript({ ...opts, sessionId });
+  const shimPath = opts.command ? "" : writeShimScript({ ...opts, sessionId });
   const shellQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
 
   // The shim must be discoverable as `claude` on PATH so an invocation of
   // `claude` lands on it. We do this by symlinking (or copying) it to a
   // dedicated dir whose name is `claude`-friendly and prepending to PATH.
-  const shimDir = path.dirname(shimPath);
   const env: Record<string, string> = {
     ...process.env,
-    PATH: [shimDir, ...(opts.pathPrefix ?? []), process.env.PATH ?? ""].join(":"),
+    PATH: [...(shimPath ? [path.dirname(shimPath)] : []), ...(opts.pathPrefix ?? []), process.env.PATH ?? ""].join(":"),
     FAKE_CLAUDE_SESSION_ID: sessionId,
   };
 
@@ -68,9 +73,11 @@ export function spawnHarness(opts: HarnessOptions = {}): Harness {
   // Fatal-mode intentionally exits before the normal liveness probe. Retain
   // that pane so the test can prove the shim ran and inspect its real status;
   // unrelated bash/tmux startup failures still make the session disappear.
-  const shimCommand = opts.fatal
-    ? `tmux set-option -p remain-on-exit on && exec ${shellQuote(shimPath)}`
-    : `exec ${shellQuote(shimPath)}`;
+  const shimCommand = opts.command
+    ? opts.command
+    : opts.fatal
+      ? `tmux set-option -p remain-on-exit on && exec ${shellQuote(shimPath)}`
+      : `exec ${shellQuote(shimPath)}`;
   const spawnOnce = (): { status: number | null; stderr: string; stdout: string } => tmuxRun([
     "new-session", "-d", "-s", tmuxSession,
     "-x", "200", "-y", "50",
@@ -108,7 +115,7 @@ export function spawnHarness(opts: HarnessOptions = {}): Harness {
   ACTIVE_SESSIONS.add(tmuxSession);
 
   const projectDirName = cwd.replace(/\//g, "-");
-  const jsonlPath = path.join(os.homedir(), ".claude", "projects", projectDirName, `${sessionId}.jsonl`);
+  const jsonlPath = opts.jsonlPath ?? path.join(os.homedir(), ".claude", "projects", projectDirName, `${sessionId}.jsonl`);
 
   return {
     tmuxSession,
@@ -136,7 +143,7 @@ export function spawnHarness(opts: HarnessOptions = {}): Harness {
     tearDown(): void {
       tmuxRun(["kill-session", "-t", tmuxSession]);
       ACTIVE_SESSIONS.delete(tmuxSession);
-      cleanupShimScript(shimPath);
+      if (shimPath) cleanupShimScript(shimPath);
       try {
         fs.unlinkSync(jsonlPath);
         fs.rmdirSync(path.dirname(jsonlPath));

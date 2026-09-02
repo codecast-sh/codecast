@@ -731,6 +731,10 @@ const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
 const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
 const VERSION_FILE = path.join(CONFIG_DIR, "daemon.version");
 const HOOK_PORT_FILE = path.join(CONFIG_DIR, "hook-port");
+// Port plus terminal token for local tools (cast bench, and the boot reuse in
+// pl-497 unit D). The token sits at rest at mode 0600, the same trust boundary
+// as the api token in config.json; the decision is recorded on pl-497.
+const LOOPBACK_IDENTITY_FILE = path.join(CONFIG_DIR, "loopback-identity.json");
 const STARTED_SESSIONS_FILE = path.join(CONFIG_DIR, "started-sessions.json");
 // Learned project-path map: basename/recorded-path -> local dir, auto-populated from
 // repos observed locally (see recordProjectMapping). Lets cross-machine forks resume
@@ -1515,6 +1519,17 @@ function startHookServer(
       hookServerPort = addr.port;
       try {
         fs.writeFileSync(HOOK_PORT_FILE, String(hookServerPort));
+      } catch {}
+      try {
+        // Not unlinked on stop: unit D reads it back at boot. Readers detect a
+        // stale file through the port in hook-port and the pid.
+        fs.writeFileSync(
+          LOOPBACK_IDENTITY_FILE,
+          JSON.stringify({ port: hookServerPort, token: terminalToken, pid: process.pid }),
+          { mode: 0o600 },
+        );
+        // writeFileSync applies mode only when it creates the file.
+        fs.chmodSync(LOOPBACK_IDENTITY_FILE, 0o600);
       } catch {}
       log(`Hook server listening on 127.0.0.1:${hookServerPort}`);
     }
