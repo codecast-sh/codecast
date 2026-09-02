@@ -57,6 +57,18 @@ export function createReplicationHost(opts: ReplicationHostOptions): Replication
   let currentOrigin = hostId;
 
   const isReplicated = (key: string) => opts.replicatedKeys.includes(key);
+  // The collection object last broadcast, per key. A feed push that changes
+  // one row replaces the whole table object, so without this every such push
+  // would ship every row; with it the tee ships an identity diff.
+  const shadows = new Map<string, Record<string, any>>();
+  const refreshShadows = (state: any) => {
+    for (const key of opts.replicatedKeys) {
+      if (!opts.isCollectionKey(key)) continue;
+      const table = state?.[key];
+      if (table && typeof table === "object") shadows.set(key, table);
+    }
+  };
+  refreshShadows(opts.getState());
 
   const broadcast = (updates: ReplicationUpdate[], origin: string) => {
     if (updates.length === 0) return;
@@ -92,9 +104,12 @@ export function createReplicationHost(opts: ReplicationHostOptions): Replication
     tee(patches, state) {
       if (stopped) return;
       broadcast(
-        extractReplicationUpdates(patches, state, isReplicated, opts.isCollectionKey),
+        extractReplicationUpdates(patches, state, isReplicated, opts.isCollectionKey, {
+          shadowOf: (key) => shadows.get(key),
+        }),
         currentOrigin,
       );
+      refreshShadows(state);
     },
     seq: () => seq,
     stop() {
