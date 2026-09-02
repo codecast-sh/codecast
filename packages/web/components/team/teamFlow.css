@@ -25,7 +25,10 @@
   background-color: color-mix(in srgb, var(--team-flow-accent) 36%, transparent);
   -webkit-mask-image: radial-gradient(36rem 18rem at 22.5rem 8rem, black, transparent 75%);
   mask-image: radial-gradient(36rem 18rem at 22.5rem 8rem, black, transparent 75%);
-  transition: background-color 400ms ease;
+  /* 300ms everywhere the accent lands, matching the crest tile and icon, so a
+     new swatch re-tints the whole surface as one move instead of the wash
+     trailing the crest it surrounds. */
+  transition: background-color 300ms ease;
   pointer-events: none;
 }
 
@@ -35,14 +38,14 @@
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--team-flow-accent) 40%, transparent),
     0 14px 36px -8px color-mix(in srgb, var(--team-flow-accent) 60%, transparent);
-  transition: box-shadow 400ms ease;
+  transition: box-shadow 300ms ease;
 }
 
 /* The flow name above the crest picks up the accent. Mixed toward
    --sol-text so the 11px caps stay readable for every team color. */
 .tf-eyebrow {
   color: color-mix(in srgb, var(--team-flow-accent) 55%, var(--sol-text));
-  transition: color 400ms ease;
+  transition: color 300ms ease;
 }
 
 /* Staggered reveal on first paint only. --tf-i is the item's order; motion
@@ -246,6 +249,23 @@
   background: color-mix(in srgb, var(--team-flow-accent) 30%, transparent);
 }
 
+/* A quiet call to action in a team's own color, for surfaces outside the
+   flow that belong to one team (the feed's share nudge). Set --tf-acc from
+   the team's color token on the element; it falls back to cyan. */
+.tf-accent-card {
+  border-color: color-mix(in srgb, var(--tf-acc, var(--sol-cyan)) 30%, transparent);
+  background: color-mix(in srgb, var(--tf-acc, var(--sol-cyan)) 6%, transparent);
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+.tf-accent-card:hover {
+  border-color: color-mix(in srgb, var(--tf-acc, var(--sol-cyan)) 50%, transparent);
+  background: color-mix(in srgb, var(--tf-acc, var(--sol-cyan)) 12%, transparent);
+}
+.tf-accent-card:focus-visible {
+  outline: 2px solid var(--tf-acc, var(--sol-cyan));
+  outline-offset: 2px;
+}
+
 /* Accent-colored text and badges (icons, match labels, the recommended tag). */
 .tf-accent-text {
   color: var(--tf-acc, var(--sol-cyan));
@@ -277,6 +297,11 @@
   z-index: 1;
   background: var(--sol-bg);
   padding-bottom: 0.75rem;
+  /* The wash pools at the top of the surface. Tinting the rule above the
+     actions closes the frame, so the team color holds both ends of the step
+     instead of fading out halfway down the page. */
+  border-top-color: color-mix(in srgb, var(--team-flow-accent) 32%, var(--sol-border));
+  transition: border-top-color 300ms ease;
 }
 
 /* Bottom fade on the workspace scroll list. Visible only while rows remain
