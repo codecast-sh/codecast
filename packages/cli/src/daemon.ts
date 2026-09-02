@@ -4591,7 +4591,7 @@ async function executeRemoteCommand(
                 saveConversationCache(cache);
                 if (conversationCacheRef) conversationCacheRef[realForkId] = conversationId;
                 seedOpencodeForkSyncBaseline(realForkId);
-                const forkGitInfo = projectPath ? getGitInfo(projectPath) : undefined;
+                const forkGitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
                 void pushSessionIdBinding(conversationId, realForkId, projectPath || undefined, forkGitInfo?.repoRoot || forkGitInfo?.root);
                 log(`[REMOTE] opencode fork: ${parsed.parent_session_id.slice(0, 12)} → ${realForkId.slice(0, 12)} for conv ${conversationId.slice(0, 12)}`);
               } catch (forkErr) {
@@ -4711,7 +4711,7 @@ async function executeRemoteCommand(
             if (forked.thread.path && fs.existsSync(forked.thread.path)) {
               setPosition(forked.thread.path, fs.statSync(forked.thread.path).size);
             }
-            const forkGitInfo = getGitInfo(cwd);
+            const forkGitInfo = await getGitInfo(cwd);
             await pushSessionIdBinding(conversationId, realThreadId, cwd, forkGitInfo?.repoRoot || forkGitInfo?.root);
             syncServiceRef?.claimSession(conversationId).catch(logConvexFailure);
             syncServiceRef?.markSessionActive(conversationId).catch(logConvexFailure);
@@ -5595,33 +5595,34 @@ interface GitInfo {
 // for backward compatibility with tests that import them from "./daemon.js".
 export { TEST_SCRATCH_DIRNAME, isTestScratchPath, isProjectAllowedToSync };
 
-function getGitInfo(projectPath: string): GitInfo | undefined {
-  const execGit = (args: string): string | undefined => {
-    try {
-      return execSync(`git ${args}`, {
+// Eight git child processes per call, and `git diff` / `git status` on a busy
+// repo take seconds when the disk is contended (8s and 14s on 2026-09-02, a
+// 23s loop freeze inside session discovery). Async, sequential: commands on
+// one repo contend on index.lock, so parallel would not be faster anyway.
+async function getGitInfo(projectPath: string): Promise<GitInfo | undefined> {
+  const execGit = (args: string): Promise<string | undefined> =>
+    new Promise((resolve) => {
+      execFile("git", args.split(" "), {
         cwd: projectPath,
         encoding: "utf-8",
-        stdio: ["pipe", "pipe", "ignore"],
         maxBuffer: 10 * 1024 * 1024,
-      }).trim();
-    } catch {
-      return undefined;
-    }
-  };
+        timeout: 60_000,
+      }, (err, stdout) => resolve(err ? undefined : String(stdout).trim()));
+    });
 
-  const commitHash = execGit("rev-parse HEAD");
+  const commitHash = await execGit("rev-parse HEAD");
   if (!commitHash) {
     return undefined;
   }
 
-  const branch = execGit("rev-parse --abbrev-ref HEAD");
-  const remoteUrl = execGit("remote get-url origin");
-  const status = execGit("status --porcelain");
-  const diff = execGit("diff");
-  const diffStaged = execGit("diff --cached");
-  const root = execGit("rev-parse --show-toplevel");
+  const branch = await execGit("rev-parse --abbrev-ref HEAD");
+  const remoteUrl = await execGit("remote get-url origin");
+  const status = await execGit("status --porcelain");
+  const diff = await execGit("diff");
+  const diffStaged = await execGit("diff --cached");
+  const root = await execGit("rev-parse --show-toplevel");
 
-  const commonDir = execGit("rev-parse --path-format=absolute --git-common-dir");
+  const commonDir = await execGit("rev-parse --path-format=absolute --git-common-dir");
   const repoRoot = commonDir?.endsWith("/.git") ? commonDir.slice(0, -5) : root;
 
   const worktreeMatch = projectPath.match(/(?:\.codecast\/worktrees|\.conductor|\.claude-worktrees\/[^/]+)\/([^/]+)/);
@@ -6671,7 +6672,7 @@ export async function processSessionFile(
   let stats;
 
   try {
-    stats = fs.statSync(filePath);
+    stats = await fs.promises.stat(filePath);
   } catch (err: any) {
     if (err.code === 'EACCES' || err.code === 'EPERM') {
       log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
@@ -6718,15 +6719,18 @@ export async function processSessionFile(
     return;
   }
 
-  let fd;
+  let fd: fs.promises.FileHandle | undefined;
   try {
-    fd = fs.openSync(filePath, "r");
+    // The read is async: a 1MB window still blocked the loop 8s when the disk
+    // was contended (2026-09-02). The JSON parse below stays on the loop, which
+    // is what SYNC_BYTES_PER_PASS bounds.
+    fd = await fs.promises.open(filePath, "r");
     const available = stats.size - lastPosition;
     // Read at most SYNC_BYTES_PER_PASS so a large backlog drains in bounded,
     // convergent steps (see constant above) rather than one giant batch.
     let readLen = Math.min(available, SYNC_BYTES_PER_PASS);
     let buffer = Buffer.alloc(readLen);
-    fs.readSync(fd, buffer, 0, readLen, lastPosition);
+    await fd.read(buffer, 0, readLen, lastPosition);
     let rawContent = buffer.toString("utf-8");
     let lastNewline = rawContent.lastIndexOf("\n");
     // A single JSONL entry larger than the cap (e.g. a big inlined image) has no
@@ -6735,11 +6739,12 @@ export async function processSessionFile(
     if (lastNewline < 0 && readLen < available) {
       readLen = available;
       buffer = Buffer.alloc(readLen);
-      fs.readSync(fd, buffer, 0, readLen, lastPosition);
+      await fd.read(buffer, 0, readLen, lastPosition);
       rawContent = buffer.toString("utf-8");
       lastNewline = rawContent.lastIndexOf("\n");
     }
-    fs.closeSync(fd);
+    await fd.close();
+    fd = undefined;
 
     // Only process complete lines — a trailing partial line (no newline at end)
     // may be a large JSONL entry (e.g. screenshot) still being written.
@@ -6863,7 +6868,7 @@ export async function processSessionFile(
         recordedCwd: extractCwd(headContent),
         home: process.env.HOME,
       });
-      const gitInfo = actualProjectPath ? getGitInfo(actualProjectPath) : undefined;
+      const gitInfo = actualProjectPath ? await getGitInfo(actualProjectPath) : undefined;
 
       const firstUserMessage = messages.find(msg => msg.role === "user");
       const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
@@ -7210,7 +7215,7 @@ export async function processSessionFile(
         recordedCwd: extractCwd(retryHeadContent),
         home: process.env.HOME,
       });
-      const gitInfo = retryProjectPath ? getGitInfo(retryProjectPath) : undefined;
+      const gitInfo = retryProjectPath ? await getGitInfo(retryProjectPath) : undefined;
 
       retryQueue.add("createConversation", {
         userId,
@@ -7404,7 +7409,7 @@ export async function processSessionFile(
       recordedCwd: extractCwd(recreateHeadContent),
       home: process.env.HOME,
     });
-    const gitInfo = recreateProjectPath ? getGitInfo(recreateProjectPath) : undefined;
+    const gitInfo = recreateProjectPath ? await getGitInfo(recreateProjectPath) : undefined;
 
     try {
       const firstUserMessage = messages.find(msg => msg.role === "user");
@@ -7845,7 +7850,7 @@ async function processCursorTranscriptFile(
       const firstMessageTimestamp = messages[0]?.timestamp;
       const firstUserMessage = messages.find(msg => msg.role === "user");
       const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
-      const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
+      const gitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
 
       try {
         conversationId = await syncService.createConversation({
@@ -7932,7 +7937,7 @@ async function processCursorTranscriptFile(
         const firstMessageTimestamp = messages[0]?.timestamp;
         const firstUserMessage = messages.find(m => m.role === "user");
         const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
-        const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
+        const gitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
 
         conversationId = await syncService.createConversation({
           userId,
@@ -7989,7 +7994,7 @@ async function processCodexSession(
   let stats;
 
   try {
-    stats = fs.statSync(filePath);
+    stats = await fs.promises.stat(filePath);
   } catch (err: any) {
     if (err.code === 'EACCES' || err.code === 'EPERM') {
       log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
@@ -8162,7 +8167,7 @@ async function processCodexSession(
           // Reconcile project_path/git_root to the real session cwd (see Claude
           // match branch): the stub's stored path was a guess made before the
           // session existed and may not match where it actually runs.
-          const codexGitInfo = projectPath ? getGitInfo(projectPath) : undefined;
+          const codexGitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
           void pushSessionIdBinding(conversationId, sessionId, projectPath || undefined, codexGitInfo?.repoRoot || codexGitInfo?.root);
           if (tmuxEntry) {
             registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
@@ -8658,7 +8663,7 @@ async function processOpencodeSession(
         const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
-        const gitInfo = cwd ? getGitInfo(cwd) : undefined;
+        const gitInfo = cwd ? await getGitInfo(cwd) : undefined;
         void pushSessionIdBinding(conversationId, sessionId, cwd || undefined, gitInfo?.repoRoot || gitInfo?.root);
         if (tmuxEntry) {
           registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
@@ -8690,7 +8695,7 @@ async function processOpencodeSession(
             parentConversationId,
             isSubagent: lineage.parentSessionId ? true : undefined,
             subagentDescription: parentConversationId ? lineage.agentName : undefined,
-            gitInfo: cwd ? getGitInfo(cwd) : undefined,
+            gitInfo: cwd ? await getGitInfo(cwd) : undefined,
           });
         } catch (err) {
           if (err instanceof AuthExpiredError && handleAuthFailure()) {
@@ -8946,7 +8951,7 @@ async function processTranscriptDeltaSession(
           const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
-          const piGitInfo = projectPath ? getGitInfo(projectPath) : undefined;
+          const piGitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
           void pushSessionIdBinding(conversationId, sessionId, projectPath || undefined, piGitInfo?.repoRoot || piGitInfo?.root);
           if (tmuxEntry) {
             registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
