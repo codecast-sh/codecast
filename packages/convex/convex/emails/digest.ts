@@ -17,7 +17,14 @@
 //    (only items created after email_digest_last_sent_at are included)
 
 import { v } from "convex/values";
-import { alphabet, generateRandomString } from "oslo/crypto";
+import {
+  DEFAULT_DIGEST_POLICY,
+  createEntryCapper,
+  listUnsubscribeHeaders,
+  runDigestSweep,
+  unsubscribeByToken as unsubscribeWithHooks,
+  type DigestRecipient,
+} from "@platform/email";
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { internalAction, internalMutation } from "../functions";
@@ -26,15 +33,21 @@ import { deliver } from "./send";
 import { notificationDigest, type DigestEntry, type DigestSection } from "./templates";
 import { BRAND } from "./render";
 
-export const GRACE_MS = 10 * 60 * 1000;
-export const WINDOW_MS = 45 * 60 * 1000;
-export const COOLDOWN_MS = 30 * 60 * 1000;
-export const ACTIVE_MS = 15 * 60 * 1000;
-/** Never reach further back than this, even for a first-ever digest. */
-export const MAX_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
-/** Bound one sweep's work; the next sweep picks up the rest. */
-const MAX_USERS_PER_SWEEP = 100;
-const MAX_ENTRIES_PER_SECTION = 6;
+// The scheduling policy — grace, window, cooldown, presence, lookback, the
+// per-sweep and per-section caps, the sweep loop, the unsubscribe token and its
+// one-click headers — lives in @platform/email, which this file was extracted
+// from. The constants and the eligibility rule are re-exported so callers and
+// tests keep importing them from here. Everything below is codecast's: which
+// notification types are worth an email, how a row becomes a digest entry, and
+// where each entry links.
+export {
+  ACTIVE_MS,
+  COOLDOWN_MS,
+  GRACE_MS,
+  MAX_LOOKBACK_MS,
+  WINDOW_MS,
+  digestEligible,
+} from "@platform/email";
 
 /** Direct, personal notification types. Everything else never emails. */
 export const EMAIL_WORTHY = new Set([
@@ -57,22 +70,6 @@ export const EMAIL_WORTHY = new Set([
 // ---------------------------------------------------------------------------
 // Pure helpers (unit tested in digest.test.ts)
 // ---------------------------------------------------------------------------
-
-export function digestEligible(args: {
-  emailPref: boolean | undefined;
-  lastSentAt: number | undefined;
-  lastInputAt: number | undefined;
-  now: number;
-}): { send: boolean; reason: string } {
-  if (args.emailPref === false) return { send: false, reason: "unsubscribed" };
-  if (args.lastInputAt !== undefined && args.now - args.lastInputAt < ACTIVE_MS) {
-    return { send: false, reason: "active" };
-  }
-  if (args.lastSentAt !== undefined && args.now - args.lastSentAt < COOLDOWN_MS) {
-    return { send: false, reason: "cooldown" };
-  }
-  return { send: true, reason: "ok" };
-}
 
 const TITLE_BY_TYPE: Record<string, string> = {
   mention: "mentioned you",
@@ -195,98 +192,103 @@ function siteUrl(): string {
   return (process.env.SITE_URL ?? BRAND.url).replace(/\/$/, "");
 }
 
+/** The digest body the sweep builds and the delivery action renders. */
+type Digest = {
+  subject: string;
+  preheader: string;
+  sections: DigestSection[];
+  moreCount: number;
+};
+
 export const sweep = internalMutation({
   args: {},
   handler: async (ctx) => {
-    const now = Date.now();
-    const from = now - WINDOW_MS;
-    const to = now - GRACE_MS;
+    // The loop, the eligibility rule and the caps are @platform/email's; every
+    // read and write below is codecast's.
+    return await runDigestSweep<Digest>(
+      {
+        // Candidates: anyone with an email-worthy unread notification, or a
+        // pending decision, created inside the sweep window.
+        async candidates({ from, to }) {
+          const recentNotifs = await ctx.db
+            .query("notifications")
+            .withIndex("by_created", (q) => q.gte("created_at", from).lte("created_at", to))
+            .collect();
+          const recentDecisions = await ctx.db
+            .query("session_decisions")
+            .withIndex("by_status_created", (q) =>
+              q.eq("status", "pending").gte("created_at", from).lte("created_at", to),
+            )
+            .collect();
 
-    // Candidates: anyone with an email-worthy unread notification, or a
-    // pending decision, created inside [from, to].
-    const recentNotifs = await ctx.db
-      .query("notifications")
-      .withIndex("by_created", (q) => q.gte("created_at", from).lte("created_at", to))
-      .collect();
-    const recentDecisions = await ctx.db
-      .query("session_decisions")
-      .withIndex("by_status_created", (q) =>
-        q.eq("status", "pending").gte("created_at", from).lte("created_at", to),
-      )
-      .collect();
+          const ids: string[] = [];
+          for (const n of recentNotifs) {
+            if (!n.read && EMAIL_WORTHY.has(n.type)) ids.push(n.recipient_user_id.toString());
+          }
+          for (const d of recentDecisions) ids.push(d.user_id.toString());
+          return ids;
+        },
 
-    const candidates = new Set<string>();
-    for (const n of recentNotifs) {
-      if (!n.read && EMAIL_WORTHY.has(n.type)) candidates.add(n.recipient_user_id.toString());
-    }
-    for (const d of recentDecisions) candidates.add(d.user_id.toString());
+        async recipient(id) {
+          const userId = id as Id<"users">;
+          const user = await ctx.db.get(userId);
+          if (!user?.email) return null;
 
-    let sent = 0;
-    for (const userIdStr of [...candidates].slice(0, MAX_USERS_PER_SWEEP)) {
-      const userId = userIdStr as Id<"users">;
-      const user = await ctx.db.get(userId);
-      if (!user?.email) continue;
+          // Presence: freshest human input across surfaces.
+          const presenceRows = await ctx.db
+            .query("user_presence")
+            .withIndex("by_user", (q) => q.eq("user_id", userId))
+            .collect();
+          return {
+            id,
+            email: user.email,
+            emailPref: user.notification_preferences?.email_notifications,
+            lastSentAt: user.email_digest_last_sent_at,
+            lastInputAt: presenceRows.length
+              ? Math.max(...presenceRows.map((p) => p.last_input_at))
+              : undefined,
+            unsubToken: user.email_unsub_token,
+          };
+        },
 
-      // Presence: freshest human input across surfaces.
-      const presenceRows = await ctx.db
-        .query("user_presence")
-        .withIndex("by_user", (q) => q.eq("user_id", userId))
-        .collect();
-      const lastInputAt = presenceRows.length
-        ? Math.max(...presenceRows.map((p) => p.last_input_at))
-        : undefined;
+        build: (recipient, range) => buildDigestForUser(ctx, recipient.id as Id<"users">, range),
 
-      const eligibility = digestEligible({
-        emailPref: user.notification_preferences?.email_notifications,
-        lastSentAt: user.email_digest_last_sent_at,
-        lastInputAt,
-        now,
-      });
-      if (!eligibility.send) continue;
+        async saveToken(id, token) {
+          await ctx.db.patch(id as Id<"users">, { email_unsub_token: token });
+        },
 
-      const digest = await buildDigestForUser(ctx, user, now);
-      if (!digest) continue;
+        async markSent(id, now) {
+          await ctx.db.patch(id as Id<"users">, { email_digest_last_sent_at: now });
+        },
 
-      let token = user.email_unsub_token;
-      if (!token) {
-        token = generateRandomString(32, alphabet("a-z", "0-9"));
-        await ctx.db.patch(userId, { email_unsub_token: token });
-      }
-      await ctx.db.patch(userId, { email_digest_last_sent_at: now });
-
-      await ctx.scheduler.runAfter(0, internal.emails.digest.sendDigest, {
-        to: user.email,
-        subject: digest.subject,
-        preheader: digest.preheader,
-        sections: digest.sections,
-        more_count: digest.moreCount,
-        unsub_token: token,
-      });
-      sent++;
-    }
-    return { candidates: candidates.size, sent };
+        async send(recipient: DigestRecipient, digest: Digest, unsubToken: string) {
+          await ctx.scheduler.runAfter(0, internal.emails.digest.sendDigest, {
+            to: recipient.email!,
+            subject: digest.subject,
+            preheader: digest.preheader,
+            sections: digest.sections,
+            more_count: digest.moreCount,
+            unsub_token: unsubToken,
+          });
+        },
+      },
+      Date.now(),
+    );
   },
 });
 
 async function buildDigestForUser(
   ctx: { db: any },
-  user: Doc<"users">,
-  now: number,
-): Promise<{
-  subject: string;
-  preheader: string;
-  sections: DigestSection[];
-  moreCount: number;
-} | null> {
+  userId: Id<"users">,
+  { since, cutoff }: { since: number; cutoff: number },
+): Promise<Digest | null> {
   const base = siteUrl();
-  const since = Math.max(user.email_digest_last_sent_at ?? 0, now - MAX_LOOKBACK_MS);
-  const cutoff = now - GRACE_MS;
 
   // --- Unread email-worthy notifications since the last digest ---
   const notifRows: Doc<"notifications">[] = await ctx.db
     .query("notifications")
     .withIndex("by_recipient_created", (q: any) =>
-      q.eq("recipient_user_id", user._id).gt("created_at", since),
+      q.eq("recipient_user_id", userId).gt("created_at", since),
     )
     .collect();
   const worthy = notifRows.filter(
@@ -334,7 +336,7 @@ async function buildDigestForUser(
   // --- Pending decisions (cast decide) ---
   const pendingDecisions: Doc<"session_decisions">[] = await ctx.db
     .query("session_decisions")
-    .withIndex("by_user_status", (q: any) => q.eq("user_id", user._id).eq("status", "pending"))
+    .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending"))
     .collect();
   const newDecisions = pendingDecisions.filter(
     (d) => d.created_at > since && d.created_at <= cutoff,
@@ -347,7 +349,7 @@ async function buildDigestForUser(
   let chatCount = 0;
   const memberships = await ctx.db
     .query("team_memberships")
-    .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
     .collect();
   for (const membership of memberships.slice(0, 5)) {
     const channels = await ctx.db
@@ -360,7 +362,7 @@ async function buildDigestForUser(
       const read = await ctx.db
         .query("chat_reads")
         .withIndex("by_user_channel", (q: any) =>
-          q.eq("user_id", user._id).eq("channel_id", channel._id),
+          q.eq("user_id", userId).eq("channel_id", channel._id),
         )
         .first();
       if (!read) continue;
@@ -372,7 +374,7 @@ async function buildDigestForUser(
         )
         .take(UNREAD_CAP * 2 + 1);
       const counted = rows.filter(
-        (r) => countableChatMessage(r, user._id.toString()) && r.created_at <= cutoff,
+        (r) => countableChatMessage(r, userId.toString()) && r.created_at <= cutoff,
       );
       if (counted.length === 0) continue;
       const capped = counted.length > UNREAD_CAP;
@@ -399,14 +401,10 @@ async function buildDigestForUser(
   }
 
   const sections: DigestSection[] = [];
-  let moreCount = 0;
-  const capped = <T>(items: T[]): T[] => {
-    moreCount += Math.max(0, items.length - MAX_ENTRIES_PER_SECTION);
-    return items.slice(0, MAX_ENTRIES_PER_SECTION);
-  };
+  const cap = createEntryCapper(DEFAULT_DIGEST_POLICY.maxEntriesPerSection);
 
   if (newDecisions.length > 0 || olderPending > 0) {
-    const entries = capped(newDecisions).map(
+    const entries = cap.take(newDecisions).map(
       (d): DigestEntry => ({
         title: `**${d.question}**`,
         excerpt: d.context_md
@@ -426,13 +424,13 @@ async function buildDigestForUser(
     sections.push({ heading: "Decisions waiting on you", entries });
   }
   if (personal.length > 0) {
-    sections.push({ heading: "Mentions & comments", entries: capped(personal).map(toEntry) });
+    sections.push({ heading: "Mentions & comments", entries: cap.take(personal).map(toEntry) });
   }
   if (handed.length > 0) {
-    sections.push({ heading: "Handed to you", entries: capped(handed).map(toEntry) });
+    sections.push({ heading: "Handed to you", entries: cap.take(handed).map(toEntry) });
   }
   if (chatLines.length > 0) {
-    sections.push({ heading: "Unread chat", entries: capped(chatLines) });
+    sections.push({ heading: "Unread chat", entries: cap.take(chatLines) });
   }
 
   const { subject, preheader } = digestSubject({
@@ -443,7 +441,7 @@ async function buildDigestForUser(
     chatChannels,
     chatCount,
   });
-  return { subject, preheader, sections, moreCount };
+  return { subject, preheader, sections, moreCount: cap.moreCount() };
 }
 
 // ---------------------------------------------------------------------------
@@ -480,34 +478,38 @@ export const sendDigest = internalAction({
       settingsUrl: `${base}/settings/notifications`,
       unsubscribeUrl: unsubUrl,
     });
-    await deliver(args.to, email, "digest", {
-      headers: {
-        "List-Unsubscribe": `<${unsubUrl}>`,
-        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-      },
-    });
+    await deliver(args.to, email, "digest", { headers: listUnsubscribeHeaders(unsubUrl) });
   },
 });
 
 export const unsubscribeByToken = internalMutation({
   args: { token: v.string() },
   handler: async (ctx, args) => {
-    if (args.token.length < 16) return { ok: false };
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_email_unsub_token", (q) => q.eq("email_unsub_token", args.token))
-      .first();
-    if (!user) return { ok: false };
-    await ctx.db.patch(user._id, {
-      notification_preferences: {
-        ...(user.notification_preferences ?? {
-          team_session_start: true,
-          mention: true,
-          permission_request: true,
-        }),
-        email_notifications: false,
+    // Token validation and the idempotent shape are @platform/email's; the
+    // lookup index and the preference write are codecast's.
+    return await unsubscribeWithHooks(args.token, {
+      async lookup(token) {
+        const user = await ctx.db
+          .query("users")
+          .withIndex("by_email_unsub_token", (q) => q.eq("email_unsub_token", token))
+          .first();
+        return user ? { id: user._id } : null;
+      },
+      async apply(id) {
+        const userId = id as Id<"users">;
+        const user = await ctx.db.get(userId);
+        if (!user) return;
+        await ctx.db.patch(userId, {
+          notification_preferences: {
+            ...(user.notification_preferences ?? {
+              team_session_start: true,
+              mention: true,
+              permission_request: true,
+            }),
+            email_notifications: false,
+          },
+        });
       },
     });
-    return { ok: true };
   },
 });
