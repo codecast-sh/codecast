@@ -18375,35 +18375,39 @@ function acquireLock(): boolean {
   return tryAcquirePidFileLock(PID_FILE, process.pid);
 }
 
-async function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
-  const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-  const staleFiles: { path: string; mtimeMs: number }[] = [];
+// The watchdog's three stale sweeps differ only in where they look and what
+// makes one file stale; skipping a missing tree, ignoring anything older than
+// maxAgeMs and returning newest first is common to all three. The walk is async
+// so a sweep over tens of thousands of transcripts never pins the loop.
+async function findStaleFiles(
+  root: string,
+  walk: WalkOptions,
+  maxAgeMs: number,
+  isStale: (file: WalkFile) => boolean,
+): Promise<string[]> {
+  if (!fs.existsSync(root)) return [];
   const now = Date.now();
+  const stale: WalkFile[] = [];
+  await walkFiles(root, walk, (f) => {
+    if (now - f.stat.mtimeMs > maxAgeMs) return;
+    try {
+      if (isStale(f)) stale.push(f);
+    } catch {
+      // unreadable this pass
+    }
+  });
+  stale.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+  return stale.map((f) => f.path);
+}
 
-  if (!fs.existsSync(claudeProjectsDir)) {
-    return [];
-  }
-
-  // Top-level <project>/<session>.jsonl only, as before; async so the watchdog's
-  // sweep over the whole tree never pins the loop.
-  try {
-    await walkFiles(
-      claudeProjectsDir,
-      { maxDepth: 2, fileFilter: (rel) => rel.endsWith(".jsonl") },
-      (f) => {
-        if (now - f.stat.mtimeMs > maxAgeMs) return;
-        const syncRecord = getSyncRecord(f.path);
-        if (shouldTreatClaudeFileAsStale(f.stat, syncRecord)) {
-          staleFiles.push({ path: f.path, mtimeMs: f.stat.mtimeMs });
-        }
-      },
-    );
-  } catch (err) {
-    log(`Watchdog: Error scanning for stale files: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  staleFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return staleFiles.map(f => f.path);
+// Top-level <project>/<session>.jsonl only.
+function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
+  return findStaleFiles(
+    path.join(process.env.HOME || "", ".claude", "projects"),
+    { maxDepth: 2, fileFilter: (rel) => rel.endsWith(".jsonl") },
+    maxAgeMs,
+    (f) => shouldTreatClaudeFileAsStale(f.stat, getSyncRecord(f.path)),
+  );
 }
 
 export function shouldTreatClaudeFileAsStale(
@@ -18424,31 +18428,15 @@ export function shouldTreatClaudeFileAsStale(
 // importers of "./daemon.js" (e.g. daemon.stale.test.ts).
 export { isAppServerManagedCodexSessionHead };
 
-async function findStaleCodexSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
-  const codexSessionsDir = path.join(process.env.HOME || "", ".codex", "sessions");
-  const staleFiles: { path: string; mtimeMs: number }[] = [];
-  const now = Date.now();
-
-  if (!fs.existsSync(codexSessionsDir)) {
-    return [];
-  }
-
-  await walkFiles(codexSessionsDir, { fileFilter: (rel) => rel.endsWith(".jsonl") }, (f) => {
-    if (now - f.stat.mtimeMs > maxAgeMs) return;
-    try {
-      const lastPosition = getPosition(f.path);
-      if (f.stat.size !== lastPosition) {
-        const headContent = readFileHead(f.path, 2048);
-        if (isAppServerManagedCodexSessionHead(headContent)) return;
-        staleFiles.push({ path: f.path, mtimeMs: f.stat.mtimeMs });
-      }
-    } catch {
-      // unreadable this pass
-    }
-  });
-
-  staleFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return staleFiles.map(f => f.path);
+// A codex transcript the app server manages is written by that server, not by
+// us, so a position behind its size is expected and not stale.
+function findStaleCodexSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
+  return findStaleFiles(
+    path.join(process.env.HOME || "", ".codex", "sessions"),
+    { fileFilter: (rel) => rel.endsWith(".jsonl") },
+    maxAgeMs,
+    (f) => f.stat.size !== getPosition(f.path) && !isAppServerManagedCodexSessionHead(readFileHead(f.path, 2048)),
+  );
 }
 
 function detectCursorPath(): string {
@@ -18652,34 +18640,13 @@ function findStaleCursorSessions(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): St
   return staleSessions;
 }
 
-async function findStaleCursorTranscriptFiles(
-  maxAgeMs: number = 7 * 24 * 60 * 60 * 1000
-): Promise<string[]> {
-  const cursorProjectsDir = path.join(process.env.HOME || "", ".cursor", "projects");
-  const staleFiles: { path: string; mtimeMs: number }[] = [];
-  const now = Date.now();
-
-  if (!fs.existsSync(cursorProjectsDir)) {
-    return [];
-  }
-
-  await walkFiles(
-    cursorProjectsDir,
+function findStaleCursorTranscriptFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
+  return findStaleFiles(
+    path.join(process.env.HOME || "", ".cursor", "projects"),
     { fileFilter: (rel) => rel.endsWith(".txt") && rel.includes(`${path.sep}agent-transcripts${path.sep}`) },
-    (f) => {
-      if (now - f.stat.mtimeMs > maxAgeMs) return;
-      try {
-        if (f.stat.size !== getPosition(f.path)) {
-          staleFiles.push({ path: f.path, mtimeMs: f.stat.mtimeMs });
-        }
-      } catch {
-        // unreadable this pass
-      }
-    },
+    maxAgeMs,
+    (f) => f.stat.size !== getPosition(f.path),
   );
-
-  staleFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return staleFiles.map(f => f.path);
 }
 
 interface WatchdogDependencies {
