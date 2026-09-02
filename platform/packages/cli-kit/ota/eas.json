@@ -1,0 +1,33 @@
+{
+  "cli": {
+    "version": ">= 15.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "ios": { "simulator": true }
+    },
+    "preview": {
+      "distribution": "internal",
+      "channel": "preview",
+      "ios": { "resourceClass": "m-medium" }
+    },
+    "production": {
+      "autoIncrement": true,
+      "channel": "production",
+      "ios": { "resourceClass": "m-medium" }
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "ascAppId": "<app-store-connect-app-id>",
+        "ascApiKeyPath": "<path-to-AuthKey.p8>",
+        "ascApiKeyId": "<key-id>",
+        "ascApiKeyIssuerId": "<issuer-id>"
+      }
+    }
+  }
+}
