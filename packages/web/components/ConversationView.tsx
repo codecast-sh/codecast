@@ -8,7 +8,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
-import { useShortcutContext, useShortcutAction, isMac, getShortcutsForAction, formatShortcutParts, hasOpenModal, altChordDirection, type ShortcutAction } from "../shortcuts";
+import { useShortcutContext, useShortcutAction, isMac, getShortcutsForAction, formatShortcutParts, formatAcceleratorParts, hasOpenModal, altChordDirection, type ShortcutAction } from "../shortcuts";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useChatMessageRow, useEnsureChatMessage } from "../hooks/useChatSync";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
@@ -26,7 +26,7 @@ import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemSubtype, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
+import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
 import { splitMarkdownBlocks } from "../lib/markdownBlocks";
 import { classifyApiErrorBanner, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "./DecisionAnswerFooter";
@@ -145,7 +145,7 @@ const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { AssignmentBadge } from "./AssignmentBadge";
 import { AssignedToYouBanner, useOwnersFromStore } from "./OwnersBadge";
-import { TmuxAttachPill } from "./TmuxAttachPill";
+import { TmuxAttachPill, useAttachCopy } from "./TmuxAttachPill";
 import { SessionDaemonChip } from "./DaemonStatusChip";
 import { SessionFilesButton } from "./SessionFilesButton";
 import { ConversationTerminalSplit } from "./terminal/ConversationTerminal";
@@ -9104,7 +9104,7 @@ function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[
 }
 
 function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; subtype?: string; timestamp?: number; messageUuid?: string; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void }) {
-  if (isHiddenSystemSubtype(subtype)) return null;
+  if (isHiddenSystemNotice(content, subtype)) return null;
 
   if (subtype === "compact_boundary") {
     return (
@@ -9702,6 +9702,20 @@ function GitDiffView({ diff }: { diff: string }) {
   );
 }
 
+// The composer's own send chords. They are handled inline in handleKeyDown
+// (they must run from a focused textarea, which the global registry never
+// does), so this table is their one source of truth for the "?" popover;
+// every other binding lives in the registry and shows in the shortcuts panel.
+const SEND_CHORDS: ReadonlyArray<{ accel: string; label: string }> = [
+  { accel: "enter", label: "Send" },
+  { accel: "shift+enter", label: "New line" },
+  { accel: "ctrl+enter", label: "Queue for later" },
+  { accel: "alt+enter", label: "Send and advance" },
+  { accel: "alt+shift+enter", label: "Send and stash" },
+  { accel: "meta+shift+enter", label: "Fork and send" },
+  { accel: "meta+shift+e", label: "Rich editor" },
+];
+
 function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
   return (
     <div className="flex items-center justify-between">
@@ -9712,69 +9726,6 @@ function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
         ))}
       </span>
     </div>
-  );
-}
-
-type CyclingHint =
-  | { action: ShortcutAction; label: string }
-  | { keys: string[]; label: string };
-
-// Registry-bound hints derive their keycaps from the live shortcut definition, so
-// rebinding an action can never leave the footer advertising a key that no longer
-// works. Only the two Escape gestures and the Claude Code mode cycle — which have
-// no entry in the shortcut registry — carry literal caps.
-const CYCLING_SHORTCUTS: CyclingHint[] = [
-  { action: "palette.toggle", label: "command palette" },
-  { action: "session.jumpIdle", label: "jump to needs input" },
-  { action: "session.next", label: "next session" },
-  { action: "session.prev", label: "previous session" },
-  { action: "session.mruSwitch", label: "MRU next" },
-  { action: "session.deferAdvance", label: "defer & next session" },
-  { action: "session.stash", label: "stash session" },
-  { keys: ["Esc"], label: "escape to session" },
-  { keys: ["Esc", "Esc"], label: "send escape" },
-  { action: "conv.cycleDensity", label: "collapse tool blocks" },
-  { action: "ui.zenToggle", label: "zen mode" },
-  { keys: [isMac ? "⇧" : "Shift", "Tab"], label: "cycle CC mode" },
-  { action: "conv.copyLink", label: "copy link" },
-];
-
-function cyclingHintCaps(entry: CyclingHint): string[] {
-  if ("keys" in entry) return entry.keys;
-  const defs = getShortcutsForAction(entry.action);
-  return defs.length > 0 ? formatShortcutParts(defs[0]) : [];
-}
-
-function CyclingShortcutHint() {
-  const [index, setIndex] = useState(0);
-  const [animating, setAnimating] = useState(false);
-
-  useMountEffect(() => {
-    const interval = setInterval(() => {
-      setAnimating(true);
-      setTimeout(() => {
-        setIndex(i => (i + 1) % CYCLING_SHORTCUTS.length);
-        setAnimating(false);
-      }, 200);
-    }, 180000);
-    return () => clearInterval(interval);
-  });
-
-  const entry = CYCLING_SHORTCUTS[index];
-  const caps = cyclingHintCaps(entry);
-  return (
-    <p className="text-[11px] opacity-[0.55] hidden sm:flex items-center gap-1 overflow-hidden h-[18px]">
-      <span
-        className={`flex items-center gap-1 transition-all duration-200 ${
-          animating ? "-translate-y-full opacity-0" : "translate-y-0 opacity-100"
-        }`}
-      >
-        {caps.map((k, i) => (
-          <KeyCap key={i} size="xs">{k}</KeyCap>
-        ))}
-        <span className="ml-1.5 text-[10px] opacity-80">{entry.label}</span>
-      </span>
-    </p>
   );
 }
 
@@ -11755,7 +11706,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   return (
     <div ref={composerRootRef} data-sv-composer className={`shrink-0 pointer-events-none sticky bottom-0 ${lightboxImageIndex !== null ? "z-[10002]" : "z-10"}`}>
       {lightboxImageIndex === null && <div className="h-16 bg-gradient-to-t from-sol-bg via-[color-mix(in_srgb,var(--sol-bg)_80%,transparent)] to-transparent -mt-16 relative" />}
-      <div className={`pb-4 pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
+      <div className={`${bareComposer ? "pb-4" : "pb-3"} pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
         <div className="relative">
           {serverDeleted && !isRestarting && (
             <div className={`mx-auto px-4 mb-2 ${isExpanded ? "conv-col" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
@@ -11893,7 +11844,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 ) : isInactive ? "Session idle — message to resume" : "\u00A0"}
               </p>
               <div className="flex items-center gap-2">
-                <CyclingShortcutHint />
                 <button
                   type="button"
                   onClick={() => {
@@ -12330,30 +12280,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             (window as any).__shortcutTooltipTimer = setTimeout(() => setShortcutTooltip(null), 150);
           }}
         >
-          <div className="text-[10px] font-medium text-sol-text/80 mb-2">Keyboard Shortcuts</div>
+          <div className="text-[10px] font-medium text-sol-text/80 mb-2">Sending</div>
           <div className="space-y-1.5 text-[9px] text-sol-text-dim/70">
-            <ShortcutHint keys={["Cmd", "K"]} label="Command palette" />
-            <ShortcutHint keys={["Ctrl", "I"]} label="Jump to needs input" />
-            <ShortcutHint keys={["Ctrl", "J"]} label="Next session" />
-            <ShortcutHint keys={["Ctrl", "K"]} label="Previous session" />
-            <ShortcutHint keys={["Ctrl", "Tab"]} label="MRU next" />
-            <ShortcutHint keys={["Shift", "Ctrl", "Tab"]} label="MRU previous" />
-            <ShortcutHint keys={["Shift", "←"]} label="Defer session" />
-            <ShortcutHint keys={["Ctrl", "←"]} label="Dismiss session" />
-            <ShortcutHint keys={["Esc"]} label="Escape to session" />
-            <ShortcutHint keys={["Esc", "Esc"]} label="Send escape" />
-            <ShortcutHint keys={["Cmd", "Shift", "C"]} label="Cycle view density" />
-            <ShortcutHint keys={["Ctrl", "."]} label="Zen mode" />
-            <ShortcutHint keys={["Shift", "Tab"]} label="Cycle CC mode" />
-            <ShortcutHint keys={["Cmd", "Shift", "L"]} label="Copy link" />
-            <div className="border-t border-sol-border/20 my-1.5" />
-            <ShortcutHint keys={["Cmd", "Shift", "E"]} label="Compose mode" />
-            <ShortcutHint keys={["Shift", "Enter"]} label="New line" />
-            <ShortcutHint keys={["Ctrl", "Enter"]} label="Queue message" />
-            <ShortcutHint keys={["Alt", "Enter"]} label="Reply and advance" />
-            <ShortcutHint keys={["Alt", "Shift", "Enter"]} label="Send and stash" />
-            <ShortcutHint keys={["Cmd", "Shift", "Enter"]} label="Fork and send" />
-            <ShortcutHint keys={["Enter"]} label="Send message" />
+            {SEND_CHORDS.map(({ accel, label }) => (
+              <ShortcutHint key={accel} keys={formatAcceleratorParts(accel)} label={label} />
+            ))}
             <div className="border-t border-sol-border/20 mt-1.5 pt-1.5">
               <button
                 onClick={() => { setShortcutTooltip(null); useInboxStore.getState().toggleShortcutsPanel(); }}
@@ -12858,6 +12789,9 @@ const ConversationViewInner = (
     };
   }));
   const isSessionLive = !!managedSession?.is_connected;
+  // The simple-view menu's "Copy tmux attach" — the same gesture as the header
+  // pill's copy button, so it copies the same command for the same machine.
+  const { copyAttach: copyTmuxAttach } = useAttachCopy(managedSession?.tmux_session, conversation?._id?.toString());
 
   // Store-fed (hooks/useSyncWorkflows): the gate banner paints from the cached
   // run on the first frame; the feeder keeps it live.
@@ -16646,7 +16580,7 @@ const ConversationViewInner = (
                         them here so the hamburger stays the full command
                         surface in that mode. */}
                     {simpleViewPref && managedSession?.tmux_session && (
-                      <DropdownMenuItem onSelect={() => { setTimeout(() => { const cmd = `tmux attach -t '${managedSession.tmux_session}'`; copyToClipboard(cmd).then(() => toast.success("tmux attach copied")).catch(() => toast.error("Failed to copy")); }); }}>
+                      <DropdownMenuItem onSelect={() => { setTimeout(() => copyTmuxAttach()); }}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                         </svg>
