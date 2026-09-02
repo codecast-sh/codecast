@@ -182,13 +182,17 @@ export const SuggestionPills = memo(forwardRef<SuggestionPillsHandle, {
 
   if (!visible) return null;
 
+  // One line, always: the sparkle, the pills, the dismiss. Pills share the
+  // row and truncate (the full text is the hover title); nothing wraps under
+  // the composer, and no chord renders at rest — the ladder's keys show only
+  // once a pill is selected, which is the moment they apply.
   return (
-    <div className="flex items-center gap-1.5 flex-wrap pb-1.5">
+    <div className="flex items-center gap-1.5 min-w-0 pb-1.5">
       <Sparkles className="w-3 h-3 text-sol-violet/60 shrink-0" />
       {suggestions.map((text, i) => (
         <span
           key={text}
-          className={`group inline-flex items-center max-w-full rounded-full border transition-colors animate-fadeSlideIn ${
+          className={`group inline-flex items-center min-w-0 rounded-full border transition-colors animate-fadeSlideIn ${
             selIdx === i
               ? "border-sol-violet/60 bg-sol-violet/15"
               : "border-sol-border/50 bg-sol-bg-alt/70 hover:border-sol-violet/40 hover:bg-sol-violet/10"
@@ -200,7 +204,9 @@ export const SuggestionPills = memo(forwardRef<SuggestionPillsHandle, {
             // preventDefault so the composer keeps focus through the click.
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => { report(text, "sent"); onSend(text); }}
-            title="Send"
+            // A pill may carry a full multi-sentence prompt that the row
+            // truncates; hover shows the whole text that a click will send.
+            title={text}
             className={`flex items-center gap-1.5 min-w-0 pl-2.5 pr-1 py-1 text-[11px] leading-none transition-colors ${
               selIdx === i ? "text-sol-text" : "text-sol-text-muted group-hover:text-sol-text"
             }`}
@@ -229,16 +235,11 @@ export const SuggestionPills = memo(forwardRef<SuggestionPillsHandle, {
       >
         <X className="w-3 h-3" />
       </button>
-      {selIdx !== null ? (
-        <span className="text-[9px] text-sol-text-dim flex items-center gap-2 pl-1">
-          <span className="inline-flex items-center gap-1"><KeyCap size="xs">←</KeyCap><KeyCap size="xs">→</KeyCap> navigate</span>
+      {selIdx !== null && (
+        <span className="text-[9px] text-sol-text-dim flex items-center gap-2 pl-1 shrink-0 whitespace-nowrap animate-in fade-in-0 duration-150">
           <span className="inline-flex items-center gap-1"><KeyCap size="xs">Enter</KeyCap> send</span>
           <span className="inline-flex items-center gap-1"><KeyCap size="xs">Tab</KeyCap> edit</span>
-          <span className="inline-flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> deselect</span>
-        </span>
-      ) : (
-        <span className="text-[9px] text-sol-text-dim/60 flex items-center gap-1 pl-1">
-          <KeyCap size="xs">↑</KeyCap> select
+          <span className="inline-flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> back</span>
         </span>
       )}
     </div>
