@@ -132,16 +132,20 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
               title={collapsed ? "Show the full pinned state" : "Collapse the pinned state"}
               className="flex items-center gap-2 min-w-0 flex-1 text-left"
             >
-              <Pin className={`w-3 h-3 shrink-0 ${tone.label}`} strokeWidth={2.2} />
-              <span className={`text-[10px] uppercase tracking-wider font-semibold shrink-0 ${tone.label}`}>
-                State
-              </span>
-              {statusMeta && (
+              {/* The pin is the whole label: it says "pinned state" on hover,
+                  the status chip says which state, and the headline says what.
+                  A "STATE" word next to them was a third voice for one idea. */}
+              <Pin className={`w-3 h-3 shrink-0 ${tone.label}`} strokeWidth={2.2} aria-label="Pinned state" />
+              {statusMeta ? (
                 <span
                   className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-[9px] font-semibold uppercase tracking-wide ${statusMeta.chip}`}
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-current" />
                   {statusMeta.label}
+                </span>
+              ) : (
+                <span className={`text-[10px] uppercase tracking-wider font-semibold shrink-0 ${tone.label}`}>
+                  Pinned
                 </span>
               )}
               {collapsed && (
