@@ -794,46 +794,96 @@ const inboxVariant = (skip: { children?: boolean; auq?: boolean; refs?: boolean 
 // and latency samples are too noisy on a loaded backend to show a cut of
 // hundreds of cheap batched reads. Wraps ctx.db so every read is tallied by
 // index name / table. Safe to delete.
+// The op-tallying db wrapper shared by the count* harnesses below. Wraps ctx.db
+// so every read is tallied by index name / table; `report()` renders the tally.
+function countingDbFor(db: any) {
+  const byKey: Record<string, number> = {};
+  let total = 0;
+  const bump = (key: string) => { byKey[key] = (byKey[key] ?? 0) + 1; total++; };
+  const getIds = new Set<string>();
+  const getTables: Record<string, number> = {};
+  const countingDb = {
+    ...db,
+    get: async (id: any) => {
+      bump("get");
+      getIds.add(String(id));
+      const doc = await db.get(id);
+      // Ids are opaque; classify by doc shape so the get mix is readable.
+      const kind = !doc ? "missing"
+        : doc.session_id !== undefined ? "conversation"
+        : doc.node_statuses !== undefined || doc.workflow_name !== undefined ? "workflow_run"
+        : doc.goal !== undefined ? "plan"
+        : doc.priority !== undefined ? "task"
+        : doc.email !== undefined ? "user"
+        : "other";
+      getTables[kind] = (getTables[kind] ?? 0) + 1;
+      return doc;
+    },
+    query: (table: string) => {
+      const q = db.query(table);
+      const origWithIndex = q.withIndex.bind(q);
+      q.withIndex = (name: string, fn?: any) => { bump(`${table}.${name}`); return origWithIndex(name, fn); };
+      return q;
+    },
+  };
+  const report = () => ({ total_ops: total, by_key: byKey, distinct_get_ids: getIds.size, gets_by_kind: getTables });
+  return { countingDb, report };
+}
+
 export const countInboxOps = internalQuery({
   args: { who: v.string(), include_liveness: v.optional(v.boolean()), skip_children: v.optional(v.boolean()), _n: v.optional(v.number()) },
   handler: async (ctx: any, args) => {
     const user = await debugResolveUser(ctx, args.who);
     if (!user) return { error: "no user" };
-    const byKey: Record<string, number> = {};
-    let total = 0;
-    const bump = (key: string) => { byKey[key] = (byKey[key] ?? 0) + 1; total++; };
-    const db = ctx.db;
-    const getIds = new Set<string>();
-    const getTables: Record<string, number> = {};
-    const countingDb = {
-      ...db,
-      get: async (id: any) => {
-        bump("get");
-        getIds.add(String(id));
-        const doc = await db.get(id);
-        // Ids are opaque; classify by doc shape so the get mix is readable.
-        const kind = !doc ? "missing"
-          : doc.session_id !== undefined ? "conversation"
-          : doc.node_statuses !== undefined || doc.workflow_name !== undefined ? "workflow_run"
-          : doc.goal !== undefined ? "plan"
-          : doc.priority !== undefined ? "task"
-          : doc.email !== undefined ? "user"
-          : "other";
-        getTables[kind] = (getTables[kind] ?? 0) + 1;
-        return doc;
-      },
-      query: (table: string) => {
-        const q = db.query(table);
-        const origWithIndex = q.withIndex.bind(q);
-        q.withIndex = (name: string, fn?: any) => { bump(`${table}.${name}`); return origWithIndex(name, fn); };
-        return q;
-      },
-    };
+    const { countingDb, report } = countingDbFor(ctx.db);
     const { sessions } = await computeInboxSessions({ ...ctx, db: countingDb }, user._id, {
       includeLiveness: args.include_liveness ?? false,
       ...(args.skip_children ? { _skip: { children: true } } : {}),
     });
-    return { rows: sessions.length, total_ops: total, by_key: byKey, distinct_get_ids: getIds.size, gets_by_kind: getTables };
+    return { rows: sessions.length, ...report() };
+  },
+});
+
+// TEMPORARY: the same op tally for the heartbeat-hot sessionsLiveness path,
+// plus the probes that located its cost (2026-09-01: a 15s SYSTEM timeout on
+// db wait, not an op count — see the memory note on index tombstone piles).
+//   scan       scanInboxConversations({includeLiveness: true}) only
+//   full       the whole overlay
+//   maps       buildUserSessionMaps' one read: managed_sessions by_user_id collect
+//   maps_hb    the live rows through by_user_heartbeat (skips the tombstone pile)
+//   maps_split live rows by heartbeat range + a point lookup per other candidate
+// Time them with timeInboxMatrix ("countLivenessOps:<stage>"). Safe to delete.
+export const countLivenessOps = internalQuery({
+  args: { who: v.string(), stage: v.optional(v.string()), _n: v.optional(v.number()) },
+  handler: async (ctx: any, args) => {
+    const user = await debugResolveUser(ctx, args.who);
+    if (!user) return { error: "no user" };
+    const { countingDb, report } = countingDbFor(ctx.db);
+    const cctx = { ...ctx, db: countingDb };
+    const uid = user._id.toString();
+    if (args.stage === "maps") {
+      const rows = await countingDb.query("managed_sessions").withIndex("by_user_id", (q: any) => q.eq("user_id", user._id)).collect();
+      return { managed_rows: rows.length, ...report() };
+    }
+    if (args.stage === "maps_hb") {
+      const rows = await countingDb.query("managed_sessions").withIndex("by_user_heartbeat", (q: any) => q.eq("user_id", user._id).gte("last_heartbeat", Date.now() - 6 * 60 * 1000)).collect();
+      return { managed_rows: rows.length, ...report() };
+    }
+    if (args.stage === "maps_split") {
+      const { conversations } = await scanInboxConversations(cctx, user._id, Date.now(), { includeLiveness: false });
+      const live = await countingDb.query("managed_sessions").withIndex("by_user_heartbeat", (q: any) => q.eq("user_id", user._id).gte("last_heartbeat", Date.now() - 10 * 60 * 1000)).collect();
+      const liveIds = new Set(live.filter((r: any) => r.conversation_id).map((r: any) => r.conversation_id.toString()));
+      const rest = conversations.filter((c: any) => !liveIds.has(c._id.toString()));
+      const found = await Promise.all(rest.map((c: any) => countingDb.query("managed_sessions").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", c._id)).first()));
+      return { candidates: conversations.length, live_rows: live.length, looked_up: rest.length, found: found.filter(Boolean).length, ...report() };
+    }
+    if ((args.stage ?? "scan") === "scan") {
+      const { conversations } = await scanInboxConversations(cctx, user._id, Date.now(), { includeLiveness: true });
+      const foreign = conversations.filter((c: any) => c.user_id.toString() !== uid).length;
+      return { candidates: conversations.length, foreign_rows: foreign, ...report() };
+    }
+    const { liveness } = await computeSessionsLiveness(cctx, user._id);
+    return { rows: Object.keys(liveness).length, ...report() };
   },
 });
 
@@ -848,24 +898,26 @@ export const timeInboxBare = inboxVariant({ children: true, auq: true, refs: tru
 // each variant via runQuery isolates backend cost from CLI startup. Reports
 // min/median over N reps per variant. Safe to delete.
 export const timeInboxMatrix = internalAction({
-  args: { who: v.string(), reps: v.optional(v.number()) },
+  args: { who: v.string(), reps: v.optional(v.number()), variants: v.optional(v.array(v.string())) },
   handler: async (ctx, args) => {
     const reps = args.reps ?? 5;
-    const variants = [
+    // A variant is "fn" or "fn:stage" (stage forwarded as the query's `stage` arg).
+    const variants = args.variants ?? [
       "timeInboxScanOnly", "timeInboxBare", "timeInboxNoChildren", "timeInboxNoAuq",
       "timeInboxNoRefs", "timeInboxFull", "timeSessionsLiveness",
-    ] as const;
+    ];
     const out: Record<string, { min: number; median: number; all: number[] }> = {};
-    for (const name of variants) {
+    for (const variant of variants) {
+      const [name, stage] = variant.split(":");
       const samples: number[] = [];
       for (let i = 0; i < reps; i++) {
         const t0 = Date.now();
         // Fresh args per rep so Convex can't serve the previous rep's cached result.
-        await ctx.runQuery(anyApi.debugTmp[name], { who: args.who, _n: Date.now() + i });
+        await ctx.runQuery(anyApi.debugTmp[name], { who: args.who, _n: Date.now() + i, ...(stage ? { stage } : {}) });
         samples.push(Date.now() - t0);
       }
       const sorted = [...samples].sort((a, b) => a - b);
-      out[name] = { min: sorted[0], median: sorted[Math.floor(sorted.length / 2)], all: samples };
+      out[variant] = { min: sorted[0], median: sorted[Math.floor(sorted.length / 2)], all: samples };
     }
     const census = await ctx.runQuery(anyApi.debugTmp.managedSessionCensus, { who: args.who });
     return { ...out, census };
