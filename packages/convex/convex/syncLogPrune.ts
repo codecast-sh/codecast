@@ -180,8 +180,10 @@ export const pruneSyncActions = internalMutation({
 // back a client's cached base and the row's cargo both lie. Treat the gap as
 // retention: set every scope's floor to its head, so every client takes the D7
 // resync path (drop cursor, full cold backfill) instead of trusting its base.
-// Ops runs this ONCE right after re-enabling:
-//   npx convex run syncLogPrune:markResyncAll
+// Ops runs this ONCE right after re-enabling (through the wrapper — a bare
+// `npx convex run` from this checkout is hijacked to the anonymous local
+// deployment by the repo-root .env.local, exactly like deploy):
+//   packages/convex/run.sh syncLogPrune:markResyncAll
 export const markResyncAll = internalMutation({
   args: { after_scope_key: v.optional(v.string()) },
   handler: async (ctx, args): Promise<{ marked: number; done: boolean }> => {
