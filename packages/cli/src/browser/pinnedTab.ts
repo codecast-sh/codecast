@@ -25,7 +25,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { CdpConnection, cdpHttpUrl, type CdpEndpoint } from "./cdp.js";
-import { engineSession, engineStateDir, isRealSession, REAL_SESSION_SUFFIX } from "./engine.js";
+import { baseSessionKey, engineSession, engineStateDir, isRealSession } from "./engine.js";
 import { readState } from "./instance.js";
 import { bridgeEndpointIfConfigured } from "./bridge/real.js";
 import { isPidAlive } from "../workspace/chrome.js";
@@ -74,9 +74,7 @@ async function targetAlive(endpoint: CdpEndpoint, targetId: string): Promise<boo
  * can tell whose it is at a glance: `cast ` plus the start of the session id.
  */
 export function sessionTabGroupTitle(session: string): string {
-  const id = session
-    .slice(0, isRealSession(session) ? -REAL_SESSION_SUFFIX.length : undefined)
-    .replace(/^(?:env|session)-/, "");
+  const id = baseSessionKey(session).replace(/^(?:env|session)-/, "");
   return `cast ${id.slice(0, 7)}`;
 }
 
@@ -91,12 +89,13 @@ export interface PinnedTabBrowser {
  * A `-real` session (engine.ts) pins into the human's Chrome through the
  * bridge, grouped under the session's name; the extra `castGroup` param is
  * the bridge host's, stripped before the call reaches Chrome. Any other
- * session pins into the managed Chrome. Null when that browser is not up:
- * the pinned tab is a courtesy and never starts one.
+ * session pins into the managed Chrome. Null when that browser is not up
+ * (or, for the bridge, cannot prove it is ours): the pinned tab is a
+ * courtesy and never starts one.
  */
-export function pinnedTabBrowser(session: string): PinnedTabBrowser | null {
+export async function pinnedTabBrowser(session: string): Promise<PinnedTabBrowser | null> {
   if (isRealSession(session)) {
-    const endpoint = bridgeEndpointIfConfigured();
+    const endpoint = await bridgeEndpointIfConfigured();
     if (!endpoint) return null;
     return {
       endpoint,
@@ -115,7 +114,7 @@ export function pinnedTabBrowser(session: string): PinnedTabBrowser | null {
  */
 export async function ensurePinnedTab(session = engineSession()): Promise<void> {
   try {
-    const browser = pinnedTabBrowser(session);
+    const browser = await pinnedTabBrowser(session);
     if (!browser) return;
     if (sessionDaemonPid(session)) return;
     const bound = readBoundTarget(session);

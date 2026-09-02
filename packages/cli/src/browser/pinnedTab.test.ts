@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pinnedTabBrowser, readBoundTarget, sessionDaemonPid, sessionTabGroupTitle, writeBoundTarget } from "./pinnedTab.js";
 import { writeBridgeState } from "./bridge/host.js";
+import { testBridgeHost } from "./bridge/host.testutil.js";
 
 const TARGET = "2BE86883491FD502B8D986C164423006";
 
@@ -71,23 +72,29 @@ describe("pinnedTabBrowser", () => {
     fs.rmSync(home, { recursive: true, force: true });
   });
 
-  test("a -real session pins into the bridge, in the background, under the session's tab group", () => {
-    writeBridgeState({ port: 47123, token: "tok" });
-    expect(pinnedTabBrowser("env-1234567890-real")).toEqual({
-      endpoint: { port: 47123, token: "tok" },
-      create: { url: "about:blank", background: true, castGroup: { title: "cast 1234567", color: "blue" } },
-    });
+  test("a -real session pins into a proven bridge host, in the background, under the session's tab group", async () => {
+    const host = await testBridgeHost();
+    try {
+      expect(await pinnedTabBrowser("env-1234567890-real")).toEqual({
+        endpoint: { port: host.port, token: host.token },
+        create: { url: "about:blank", background: true, castGroup: { title: "cast 1234567", color: "blue" } },
+      });
+    } finally {
+      await host.close();
+    }
   });
 
-  test("a -real session with no bridge set up pins nowhere", () => {
-    expect(pinnedTabBrowser("env-abc-real")).toBeNull();
+  test("a -real session with no bridge set up, or no host answering, pins nowhere", async () => {
+    expect(await pinnedTabBrowser("env-abc-real")).toBeNull();
+    writeBridgeState({ port: 1, token: "tok" });
+    expect(await pinnedTabBrowser("env-abc-real")).toBeNull();
   });
 
-  test("a plain session never pins into the bridge", () => {
+  test("a plain session never pins into the bridge", async () => {
     writeBridgeState({ port: 47123, token: "tok" });
     // No managed browser runs under this CODECAST_DIR, so there is nothing to
     // pin into; the point is that the bridge is not offered instead.
-    expect(pinnedTabBrowser("env-abc")).toBeNull();
+    expect(await pinnedTabBrowser("env-abc")).toBeNull();
   });
 });
 
