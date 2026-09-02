@@ -7,7 +7,7 @@
 // outage can never fail or slow a user-facing write.
 
 import { v } from "convex/values";
-import { Resend as ResendAPI } from "resend";
+import { resendTransportForBrand, senderAddress } from "@platform/email";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "../_generated/api";
 import { internalAction, mutation } from "../functions";
@@ -19,12 +19,17 @@ import {
   welcome,
 } from "./templates";
 
-export const EMAIL_FROM = `${BRAND.name} <${BRAND.supportEmail}>`;
+export const EMAIL_FROM = senderAddress(BRAND);
 
 /**
  * Deliver a rendered email via Resend. `tag` labels the template in the
  * Resend dashboard so per-template deliverability is visible. `opts.headers`
  * carries per-message headers (List-Unsubscribe for the digest).
+ *
+ * The transport is @platform/email's: same HTTP call the resend SDK made, with
+ * the key injected. It warns and skips when the key is absent, so auth and team
+ * flows stay usable on dev deployments. The key is read per send, not at import,
+ * because Convex actions get their env at run time.
  */
 export async function deliver(
   to: string,
@@ -32,27 +37,8 @@ export async function deliver(
   tag: string,
   opts?: { headers?: Record<string, string> },
 ): Promise<void> {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) {
-    // Dev deployments without a key: log instead of throwing so auth and
-    // team flows stay usable locally.
-    console.warn(`[emails] RESEND_API_KEY not set; skipping "${tag}" to ${to}`);
-    return;
-  }
-  const resend = new ResendAPI(apiKey);
-  const { error } = await resend.emails.send({
-    from: EMAIL_FROM,
-    to: [to],
-    replyTo: BRAND.supportEmail,
-    subject: email.subject,
-    html: email.html,
-    text: email.text,
-    tags: [{ name: "template", value: tag }],
-    ...(opts?.headers ? { headers: opts.headers } : {}),
-  });
-  if (error) {
-    throw new Error(`Resend ${tag} to ${to} failed: ${JSON.stringify(error)}`);
-  }
+  const transport = resendTransportForBrand(BRAND, process.env.RESEND_API_KEY);
+  await transport.send({ to, ...email }, { tag, headers: opts?.headers });
 }
 
 // ---------------------------------------------------------------------------

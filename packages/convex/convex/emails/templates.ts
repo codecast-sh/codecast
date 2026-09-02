@@ -1,123 +1,37 @@
-// Every transactional email Codecast sends, defined as data and rendered by
-// emails/render.ts. Each factory returns {subject, html, text}.
+// Every transactional email Codecast sends. The four that every product needs
+// — verify, password reset, password changed, welcome — come from
+// @platform/email bound to codecast's BRAND. The three below them are
+// codecast's own: they name codecast products and routes, so they stay here and
+// use the same block DSL through the bound renderer.
 //
 // Copy rules: subjects say what happened and name the product; one-time codes
 // lead the subject so inbox previews and OTP autofill can pick them up; every
 // email states in the footer why it was received; anything the user did NOT
 // initiate says clearly what to do if it wasn't them.
 
-import { BRAND, renderEmail, type EmailBlock, type RenderedEmail } from "./render";
-
-const OTP_EXPIRY_MINUTES = 15;
-
-function formatWhen(timestampMs: number): string {
-  // A fixed, unambiguous format — security notices must read the same in
-  // every locale the email lands in.
-  const d = new Date(timestampMs);
-  const iso = d.toISOString();
-  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
-}
+import { createTemplates, type RenderedEmail } from "@platform/email";
+import { BRAND, renderEmail, type EmailBlock } from "./render";
 
 // ---------------------------------------------------------------------------
-// Auth
+// Auth — the generic set, with codecast's brand and its own welcome copy
 // ---------------------------------------------------------------------------
 
-export function verifyEmail(args: { code: string; email: string }): RenderedEmail {
-  return renderEmail({
-    subject: `${args.code} is your Codecast verification code`,
-    preheader: `Enter this code to confirm ${args.email}. It expires in ${OTP_EXPIRY_MINUTES} minutes.`,
-    eyebrow: "verify your email",
-    heading: "Confirm your email address",
-    blocks: [
-      {
-        kind: "text",
-        value: `Enter this code to finish creating your Codecast account for **${args.email}**.`,
-      },
-      {
-        kind: "code",
-        code: args.code,
-        hint: `expires in ${OTP_EXPIRY_MINUTES} minutes`,
-      },
-      {
-        kind: "note",
-        value:
-          "Didn't create a Codecast account? You can safely ignore this email — nothing happens without the code.",
-      },
-    ],
-    reason: `You received this email because ${args.email} was used to sign up at codecast.sh.`,
-  });
-}
+const templates = createTemplates(BRAND);
 
-export function passwordReset(args: { code: string; email: string }): RenderedEmail {
-  return renderEmail({
-    subject: "Reset your Codecast password",
-    preheader: `Your reset code is ${args.code}. It expires in ${OTP_EXPIRY_MINUTES} minutes.`,
-    eyebrow: "password reset",
-    heading: "Reset your password",
-    blocks: [
-      {
-        kind: "text",
-        value: `We received a request to reset the password for **${args.email}**. Enter this code to choose a new one.`,
-      },
-      {
-        kind: "code",
-        code: args.code,
-        hint: `expires in ${OTP_EXPIRY_MINUTES} minutes`,
-      },
-      {
-        kind: "note",
-        value:
-          "Didn't request this? Ignore this email — your password stays unchanged unless the code is used.",
-      },
-    ],
-    reason: `You received this email because a password reset was requested for ${args.email} at codecast.sh.`,
-  });
-}
-
-export function passwordChanged(args: { email: string; changedAt: number }): RenderedEmail {
-  return renderEmail({
-    subject: "Your Codecast password was changed",
-    preheader: "If this was you, no action is needed.",
-    eyebrow: "security",
-    heading: "Your password was changed",
-    blocks: [
-      {
-        kind: "text",
-        value: "The password for your Codecast account was just changed.",
-      },
-      {
-        kind: "meta",
-        rows: [
-          { label: "account", value: args.email },
-          { label: "when", value: formatWhen(args.changedAt) },
-        ],
-      },
-      {
-        kind: "text",
-        value: "If this was you, no action is needed.",
-      },
-      {
-        kind: "text",
-        value: `If this **wasn't** you, someone else may have access to your account. Reset your password now and email us at **${BRAND.supportEmail}**.`,
-      },
-      { kind: "button", label: "Secure my account", url: `${BRAND.url}/forgot-password` },
-    ],
-    reason: `You received this security notice because the password for ${args.email} was changed at codecast.sh.`,
-  });
-}
+export const verifyEmail = templates.verifyEmail;
+export const passwordReset = templates.passwordReset;
+export const passwordChanged = templates.passwordChanged;
 
 export function welcome(args: { email: string; name?: string }): RenderedEmail {
-  const greeting = args.name?.trim() ? `Welcome, ${args.name.trim()}.` : "Welcome.";
-  return renderEmail({
+  return templates.welcome({
+    email: args.email,
+    name: args.name,
     subject: "Welcome to Codecast — your agents, on air",
     preheader: "Connect your machine and every coding agent session lands in one inbox.",
-    eyebrow: "welcome",
     heading: "You're on the air",
+    intro:
+      "Codecast is mission control for your coding agents: every Claude Code and Codex session on your machines streams into one live inbox, where you can read, steer, and hand off work from anywhere.",
     blocks: [
-      {
-        kind: "text",
-        value: `${greeting} Codecast is mission control for your coding agents: every Claude Code and Codex session on your machines streams into one live inbox, where you can read, steer, and hand off work from anywhere.`,
-      },
       {
         kind: "text",
         value: "Connect your first machine — one command, about a minute:",
@@ -135,13 +49,8 @@ export function welcome(args: { email: string; name?: string }): RenderedEmail {
         value:
           "From there: search every past session like a shared memory, message any running agent, publish pages and dashboards straight from a conversation, and invite your team to see it all live.",
       },
-      { kind: "button", label: "Open your inbox", url: `${BRAND.url}/inbox` },
-      {
-        kind: "note",
-        value: `Questions? Just reply — or write **${BRAND.supportEmail}**. A human reads every message.`,
-      },
     ],
-    reason: `You received this one-time email because ${args.email} created a Codecast account.`,
+    cta: { label: "Open your inbox", url: `${BRAND.url}/inbox` },
   });
 }
 
