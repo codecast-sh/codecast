@@ -20,15 +20,18 @@
     border: 1px solid #8886; border-radius: 4px; background: transparent; color: inherit;
   }
   #status { margin-top: 1.25rem; padding: 0.6rem; border-radius: 4px; background: #8881; }
+  #notice { margin-top: 1rem; padding: 0.6rem; border-radius: 4px; background: #2e7d3222; }
   .ok { color: #2e7d32; } .bad { color: #c62828; } .muted { opacity: 0.65; }
 </style>
 </head>
 <body>
   <h1>Cast Browser Bridge</h1>
   <p class="muted">
-    Run <code>cast browser extension setup</code> in a terminal on this machine,
-    then paste the token it prints. The token never leaves this computer.
+    Run <code>cast browser extension setup</code> in a terminal on this machine.
+    It opens this page with the token filled in; if it could not, paste the
+    token it prints. The token never leaves this computer.
   </p>
+  <div id="notice" hidden></div>
   <label for="token">Token</label>
   <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="64 hex characters">
   <label for="port">Port</label>

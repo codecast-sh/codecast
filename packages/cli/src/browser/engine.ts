@@ -134,6 +134,12 @@ export interface EngineOptions {
   session?: string | null;
   /** Override the managed browser's port; defaults to the state file's. */
   port?: number;
+  /**
+   * What `--cdp` is handed instead of the port: a browser socket URL. The
+   * extension bridge host needs this, since its `/json/version` route refuses
+   * a caller with no token and the token rides in the URL path.
+   */
+  cdp?: string;
   timeoutMs?: number;
   /** Stream output straight through instead of capturing it. */
   inherit?: boolean;
@@ -157,7 +163,27 @@ export function engineSession(detectSessionId?: () => string | null): string {
 /** An owner key as the engine session name: names end up in paths and process
  *  listings, so keep them plain. */
 export function engineSessionKey(owner: string): string {
-  return owner.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 60);
+  return owner.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, SESSION_KEY_MAX);
+}
+
+const SESSION_KEY_MAX = 60;
+
+/**
+ * Real mode is a second engine session on the bridge port. The daemon resets
+ * its tab whenever a session's launch flags change, so a session driving the
+ * real Chrome and the same session driving the clone must never share a key:
+ * the real one carries this suffix, and every other part of the CLI (the
+ * reaper, the pinned tab, the footer) reads the mode back off the key.
+ */
+export const REAL_SESSION_SUFFIX = "-real";
+
+export function realSessionKey(session: string): string {
+  if (isRealSession(session)) return session;
+  return `${session.slice(0, SESSION_KEY_MAX - REAL_SESSION_SUFFIX.length)}${REAL_SESSION_SUFFIX}`;
+}
+
+export function isRealSession(session: string): boolean {
+  return session.endsWith(REAL_SESSION_SUFFIX);
 }
 
 // ---------------------------------------------------------------------------
@@ -201,13 +227,13 @@ export function runEngine(args: string[], opts: EngineOptions = {}): EngineRun {
         `\`npm install -g ${ENGINE_PACKAGE}\``,
     );
   }
-  const port = opts.port ?? managedPort();
-  if (!port) {
+  const cdp = opts.cdp ?? opts.port ?? managedPort();
+  if (!cdp) {
     return { status: 1, stdout: "", stderr: "no managed browser is running — run `cast browser start`" };
   }
 
   const session = opts.session ?? engineSession();
-  const full = [...args, "--cdp", String(port), "--pin-tab"];
+  const full = [...args, "--cdp", String(cdp), "--pin-tab"];
 
   // The engine raises Chrome as a side effect of ordinary commands; if it
   // takes the front during this call, hand focus back (focusGuard.ts).

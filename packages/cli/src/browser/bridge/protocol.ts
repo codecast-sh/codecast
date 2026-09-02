@@ -19,13 +19,54 @@
  *
  * Only the extension face is ours, and it is tiny: tab management,
  * attach/detach, raw CDP per tab, plus events flowing back.
+ *
+ * Two things ride on that face that plain CDP has no word for. A tab can be
+ * created in the background (`active: false`, so Chrome does not steal the
+ * human's focus) and inside a Chrome tab group (`group`), which is how a
+ * session's tabs stay together and how the extension shows work in progress:
+ * it animates the group title while a `cdp` op is in flight. The host maps
+ * `Target.createTarget {background, castGroup}` onto these and never lets
+ * `castGroup` or a group leak back to a client.
  */
 
-/** Bumped when a message shape changes incompatibly. Both ends report theirs. */
-export const BRIDGE_PROTOCOL = 2;
+import { createHash } from "node:crypto";
+
+/**
+ * Bumped when a message shape changes incompatibly. Both ends report theirs.
+ * 3: tabs.create takes `background` and `group`; tabs carry `group`.
+ */
+export const BRIDGE_PROTOCOL = 3;
 
 /** Default loopback port for the bridge host. Override: CAST_BRIDGE_PORT. */
 export const BRIDGE_DEFAULT_PORT = 41729;
+
+/**
+ * The extension's ID, the same on every machine because the manifest carries
+ * a fixed public key (`key` in packages/browser-extension/manifest.json). Chrome
+ * derives the ID from that key: SHA-256 of the DER-encoded public key, the
+ * first 32 hex characters, each digit mapped from 0-9a-f onto a-p (an ID is
+ * letters only so it can never look like a number). `extensionIdOfKey` is that
+ * rule; the test checks the constant against the manifest with it, and a
+ * scratch Chrome for Testing reported the same value from chrome.runtime.id.
+ * Without a key an unpacked extension is named after its install path, which
+ * is why the key is committed: `cast browser extension setup` opens the
+ * options page by this ID to hand the token over without a paste.
+ */
+export const BRIDGE_EXTENSION_ID = "dfimhlggoaabdefnfhlpboehapdaakol";
+
+/** Chrome's rule for the ID of an extension whose manifest carries `key` (base64 DER). */
+export function extensionIdOfKey(keyBase64: string): string {
+  const hex = createHash("sha256").update(Buffer.from(keyBase64, "base64")).digest("hex").slice(0, 32);
+  return hex.replace(/[0-9a-f]/g, (c) => String.fromCharCode(97 + parseInt(c, 16)));
+}
+
+/**
+ * The options page with the pairing data in the fragment. The page saves it
+ * and connects; a fragment never reaches a server and is cleared on arrival.
+ */
+export function bridgePairingUrl(state: { token: string; port: number }): string {
+  return `chrome-extension://${BRIDGE_EXTENSION_ID}/options.html#${new URLSearchParams({ token: state.token, port: String(state.port) })}`;
+}
 
 /** WS close code the host uses for a bad or missing token. */
 export const CLOSE_BAD_TOKEN = 4401;
@@ -41,12 +82,25 @@ export type BridgeOp =
   | "detach"
   | "cdp";
 
+/** The colours Chrome accepts for a tab group (chrome.tabGroups.Color). */
+export type BridgeGroupColor = "grey" | "blue" | "red" | "yellow" | "green" | "pink" | "purple" | "cyan" | "orange";
+
+/** A Chrome tab group as the bridge names it: by title within a window. */
+export interface BridgeGroup {
+  title: string;
+  color: BridgeGroupColor;
+}
+
 /** Host → extension request. */
 export interface BridgeRequest {
   id: number;
   op: BridgeOp;
   tabId?: number;
   url?: string;
+  /** tabs.create: open without activating the tab (default false). */
+  background?: boolean;
+  /** tabs.create: put the tab in this group, reusing one with the same title in the same window. */
+  group?: BridgeGroup;
   method?: string;
   params?: Record<string, unknown>;
 }
@@ -77,6 +131,8 @@ export interface BridgeTab {
   active: boolean;
   windowId: number;
   attached: boolean;
+  /** The tab's group with its plain title (never the animated one), absent when ungrouped. */
+  group?: BridgeGroup;
 }
 
 // ---------------------------------------------------------------------------

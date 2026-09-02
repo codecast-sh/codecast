@@ -26,8 +26,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "../proc.js";
-import { engineHome, engineSession, engineStateDir, findEngine, managedPort, runEngine } from "./engine.js";
-import { CdpConnection } from "./cdp.js";
+import {
+  engineHome, engineSession, engineStateDir, findEngine, isRealSession, managedPort, REAL_SESSION_SUFFIX, runEngine,
+  type EngineOptions,
+} from "./engine.js";
+import { CdpConnection, type CdpEndpoint } from "./cdp.js";
+import { bridgeEndpointIfConfigured, engineBrowserFor } from "./bridge/real.js";
 
 /** How long a browser with an unknowable owner may sit untouched. */
 export const ENGINE_IDLE_MS = 2 * 60 * 60 * 1000;
@@ -162,6 +166,8 @@ export function scanLiveOwners(opts: { registryDir?: string; projectsDir?: strin
  * `env:<uuid>` reads back as `env-<uuid>` and `pane:%12` as `pane--12`.
  */
 export function ownerState(key: string, live: LiveOwners): OwnerState {
+  // A real-mode session is the same agent under a suffixed key (engine.ts).
+  if (isRealSession(key)) key = key.slice(0, -REAL_SESSION_SUFFIX.length);
   const env = /^(?:env|session)-(.+)$/.exec(key);
   if (env) return live.session(env[1]);
   const pane = /^pane-(.+)$/.exec(key);
@@ -209,10 +215,29 @@ export function sessionTargetId(key: string, stateDir = engineStateDir()): strin
   }
 }
 
-/** Close a tab in the managed browser by target id, over CDP. Best effort. */
-export function closeTargetLater(targetId: string, port: number | null = managedPort()): void {
-  if (!port) return;
-  void CdpConnection.fromPort(port, 3_000)
+/**
+ * Where a session's tab lives, for a raw CDP call: the bridge for a `-real`
+ * key (the human's Chrome), the managed browser for any other. Null when that
+ * browser was never set up, so there is nothing to close.
+ */
+export function sessionEndpoint(key: string): CdpEndpoint | null {
+  return isRealSession(key) ? bridgeEndpointIfConfigured() : managedPort();
+}
+
+/** The engine options that reach a session's browser, or null when a real
+ *  session's bridge was never configured (its daemon can still be closed). */
+function engineOptionsFor(key: string): (EngineOptions & { session: string }) | null {
+  try {
+    return engineBrowserFor(key);
+  } catch {
+    return null;
+  }
+}
+
+/** Close a tab by target id, over CDP. Best effort. */
+export function closeTargetLater(targetId: string, endpoint: CdpEndpoint | null): void {
+  if (!endpoint) return;
+  void CdpConnection.fromPort(endpoint, 3_000)
     .then(async (conn) => {
       try {
         await conn.send("Target.closeTarget", { targetId }, undefined, 3_000);
@@ -234,15 +259,16 @@ export function closeTargetLater(targetId: string, port: number | null = managed
 export function closeSessionTab(key: string): boolean {
   const target = sessionTargetId(key);
   const binary = findEngine();
+  const browser = engineOptionsFor(key);
   let ok = false;
-  if (binary) {
+  if (binary && browser) {
     const env = { ...process.env, AGENT_BROWSER_SESSION: key };
-    const closedTab = runEngine(["tab", "close"], { session: key, timeoutMs: 15_000 });
-    if (closedTab.status !== 0 && target) closeTargetLater(target);
+    const closedTab = runEngine(["tab", "close"], { ...browser, timeoutMs: 15_000 });
+    if (closedTab.status !== 0 && target) closeTargetLater(target, sessionEndpoint(key));
     const res = spawnSync(binary, ["close"], { encoding: "utf-8", timeout: 20_000, stdio: ["ignore", "pipe", "pipe"], env });
     ok = res.status === 0;
   } else if (target) {
-    closeTargetLater(target);
+    closeTargetLater(target, sessionEndpoint(key));
   }
   return ok;
 }
@@ -317,7 +343,7 @@ export function reapEngineOrphans(opts: ReapOptions = {}): ReapReport {
     } else {
       // The daemon died but its tab may still be open in the shared browser.
       const target = sessionTargetId(s.key, stateDir);
-      if (target) closeTargetLater(target);
+      if (target) closeTargetLater(target, sessionEndpoint(s.key));
     }
     gone.add(s.key);
   }

@@ -2,8 +2,9 @@
   "manifest_version": 3,
   "name": "Cast Browser Bridge",
   "version": "0.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw46Qcb9BYV9TSDQdsCiMwljPrj8xuWm/68v3WQ6St89FVeq4mEziHfpuokT+SxhCWh+4rq2eOD+jTFCgYHAMu5B6VRnaV3Ik9jugMYF8LHPwwKSOjnXGIKenlJDQ9VbA/cpSr9dPfhj0cd5pt3mElFEkTO/PS99ueOeq3pOX+xwUembbsaqZfyn7HtT4dpq8hivTN0+XbPl1pEsw0rZ6pe95neJi/JDl80F470U0VzsKNQIZCDbI08YHaYFBOtfkOmxiM3FJmZkLpiCBU2RwwWw95LsEOP/1aE1uF8ItC2KDlLtNQ3Rk0RNTU1BMLs3AXE59KCIShbr2LSLhKEaEBQIDAQAB",
   "description": "Lets the cast CLI drive tabs in this Chrome over a token-authenticated localhost bridge. Driven tabs show Chrome's debugging banner and a badge.",
-  "permissions": ["debugger", "tabs", "storage", "alarms"],
+  "permissions": ["debugger", "tabs", "tabGroups", "storage", "alarms"],
   "background": {
     "service_worker": "background.js"
   },
