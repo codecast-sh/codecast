@@ -159,7 +159,7 @@ export function HuddleButton({
       }
     >
       <Headphones className="h-3 w-3" />
-      <span>huddle</span>
+      <span>{ring?.length ? "Ring" : "Huddle"}</span>
     </button>
   );
 }

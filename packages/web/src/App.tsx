@@ -103,6 +103,7 @@ const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
 const Faces = lazy(() => import("@/app/faces/page"));
 const MeetingOffer = lazy(() => import("@/app/meeting-offer/page"));
+const CallRing = lazy(() => import("@/app/call-ring/page"));
 
 const Settings = lazy(() => import("@/app/settings/page"));
 const SettingsCli = lazy(() => import("@/app/settings/cli/page"));
@@ -268,6 +269,7 @@ export function App() {
               <Route path="call-panel" element={<E name="CallPanel"><CallPanel /></E>} />
               <Route path="faces" element={<E name="Faces"><Faces /></E>} />
               <Route path="meeting-offer" element={<E name="MeetingOffer"><MeetingOffer /></E>} />
+              <Route path="call-ring" element={<E name="CallRing"><CallRing /></E>} />
             </Route>
 
             {/* The people window (AIM buddy list): the roster, calling and the
