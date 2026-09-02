@@ -59,6 +59,22 @@ export async function pruneScope(
   budget: number,
 ): Promise<{ pruned: number; budget: number; done: boolean }> {
   let pruned = 0;
+  // Rows AT or BELOW the floor are unreachable by every reader (a cursor under
+  // the floor resyncs, never reads), so they are dead regardless of age — a
+  // resync sweep (markResyncAll) leaves a whole scope's rows there (review).
+  // Reap them first, under the same budget.
+  if ((head.floor ?? 0) > 0) {
+    while (budget > 0) {
+      const dead: { _id: any }[] = await db
+        .query("sync_actions")
+        .withIndex("by_scope_position", (q: any) =>
+          q.eq("scope_key", head.scope_key).lt("position", (head.floor ?? 0) + 1))
+        .take(Math.min(PER_SCOPE_PAGE, budget));
+      for (const row of dead) { await db.delete(row._id); pruned++; budget--; }
+      if (dead.length < Math.min(PER_SCOPE_PAGE, budget + dead.length)) break;
+    }
+    if (budget <= 0) return { pruned, budget, done: false };
+  }
   // Probe: the oldest retained action past the floor. Young (or absent with
   // nothing to advance) → this scope costs exactly one read.
   const oldest = await db

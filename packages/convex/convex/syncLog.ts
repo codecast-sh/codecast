@@ -205,8 +205,14 @@ export function buildCargo(
 // oversized) poisons the row to partial so readers refetch. Unit-tested.
 export function mergeCargo(prev: Cargo | null | undefined, next: Cargo): Cargo {
   // A full cargo is the whole document: it supersedes everything, including a
-  // prior partial (that is the self-heal path).
-  if (next.full) return next;
+  // prior partial (that is the self-heal path). Accumulated `unset` names
+  // survive (minus keys the full doc carries): a reader with a base that still
+  // holds a field the document dropped must learn it is gone (review).
+  if (next.full) {
+    const carried = (prev?.unset ?? []).filter((k) => !(next.patch && k in next.patch));
+    const unsetSet = new Set([...carried, ...(next.unset ?? [])]);
+    return { ...next, unset: unsetSet.size ? [...unsetSet] : undefined, omitted: mergeOmittedNames(prev?.omitted, next.omitted) };
+  }
   const omittedSet = new Set([...(prev?.omitted ?? []), ...(next.omitted ?? [])]);
   const omitted = omittedSet.size ? [...omittedSet] : undefined;
   // partial is STICKY (review): a reader whose cursor sat below the old
@@ -422,6 +428,11 @@ function cargoRowFields(c: Cargo): Record<string, any> {
   return { patch: c.patch, unset: c.unset, full: c.full, partial: c.partial, omitted: c.omitted };
 }
 
+function mergeOmittedNames(a?: string[], b?: string[]): string[] | undefined {
+  const set = new Set([...(a ?? []), ...(b ?? [])]);
+  return set.size ? [...set] : undefined;
+}
+
 function mergeOmitted(a?: string[], b?: string[]): string[] | undefined {
   const set = new Set([...(a ?? []), ...(b ?? [])]);
   return set.size ? [...set] : undefined;
@@ -457,6 +468,30 @@ export async function emitSyncActions(
   }
   for (const scopeKey of current) {
     await appendSyncAction(db, collector, scopeKey, entityType, entityId, op, extra);
+  }
+}
+
+// Transitional revocation (review): before cargo the log fanned on team_id, so
+// an entity can still hold an `upsert` row in a routing team scope that its
+// access-derived scopes no longer include. Any write to the entity flips that
+// stale row to a delete, so readers who cached it under the old fan-out drop
+// it. Cheap: one indexed lookup, only when the change_log row names a team the
+// current scopes do not.
+export async function revokeStaleScope(
+  db: any,
+  collector: SyncAckCollector | null,
+  entityType: ChangeEntity,
+  entityId: string,
+  staleScope: SyncScopeKey,
+  currentScopes: readonly SyncScopeKey[],
+): Promise<void> {
+  if (currentScopes.includes(staleScope)) return;
+  const row = await db
+    .query("sync_actions")
+    .withIndex("by_scope_entity", (q: any) => q.eq("scope_key", staleScope).eq("entity_id", entityId))
+    .first();
+  if (row && row.op === "upsert") {
+    await appendSyncAction(db, collector, staleScope, entityType, entityId, "delete");
   }
 }
 

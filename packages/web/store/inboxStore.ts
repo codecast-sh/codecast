@@ -4326,6 +4326,11 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // synclog_apply metric: how many actions applied directly vs went to byIds.
   syncLogApplyStats: { direct: number; refetch: number };
   noteSyncLogApply: (direct: number, refetch: number) => void;
+  // Set once the applier has captured heads and stamped every scope cursor
+  // this page session. The bootstrap floors wait for it (sync-log-cargo E8 /
+  // D9): a floor cut BEFORE the cursor is stamped can miss writes that commit
+  // between the floor's query and the heads capture. Ephemeral.
+  syncLogStampedAt: number | null;
 
   // -- Generic sync --
   syncTable: (field: string, incoming: any, opts?: SyncOpts) => void;
@@ -9459,6 +9464,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   liveLoading: {},
   syncLogLag: {},
   syncLogApplyStats: { direct: 0, refetch: 0 },
+  syncLogStampedAt: null,
   mentionIndex: { tasks: {}, docs: {}, plans: {} },
   docs: {},
   plans: {},
