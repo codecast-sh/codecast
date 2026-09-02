@@ -1,0 +1,48 @@
+{
+  "name": "@platform/auth",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./convex": "./src/convex/index.ts",
+    "./web": "./src/web/index.ts",
+    "./native": "./src/native/index.ts",
+    "./cli": "./src/cli/index.ts"
+  },
+  "files": [
+    "src",
+    "patches"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "peerDependencies": {
+    "@auth/core": "^0.37.2",
+    "@convex-dev/auth": "0.0.79",
+    "convex": "^1.31.6",
+    "jose": "5.10.0",
+    "oslo": "^1.2.1",
+    "react": "^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": { "optional": true },
+    "@auth/core": { "optional": true },
+    "jose": { "optional": true },
+    "oslo": { "optional": true }
+  },
+  "devDependencies": {
+    "@auth/core": "^0.37.2",
+    "@convex-dev/auth": "0.0.79",
+    "@types/bun": "latest",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "convex": "^1.31.6",
+    "jose": "5.10.0",
+    "oslo": "^1.2.1",
+    "react": "19.1.0",
+    "typescript": "^5.7.2"
+  }
+}

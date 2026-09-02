@@ -1,0 +1,27 @@
+{
+  "name": "@platform/snippets",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./doctrine": "./doctrine/index.ts"
+  },
+  "files": [
+    "src",
+    "doctrine"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@platform/cli-kit": "file:../cli-kit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.2"
+  }
+}
