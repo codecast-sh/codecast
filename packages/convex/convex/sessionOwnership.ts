@@ -91,11 +91,21 @@ async function resolveOwnableConversation(
   return conversation;
 }
 
-async function teamMemberDocs(ctx: { db: any }, teamId: any): Promise<any[]> {
-  const memberships = await ctx.db
+// Picker roster cap. The live listOwners subscription must NEVER walk the
+// team — that collect + N user-doc reads is what blew the syscall budget
+// (and re-ran on every teammate daemon heartbeat, because those user docs
+// are heartbeat-hot). Mutations still resolve names against the full set.
+export const OWNER_CANDIDATE_CAP = 250;
+
+async function teamMemberDocs(
+  ctx: { db: any },
+  teamId: any,
+  cap?: number,
+): Promise<any[]> {
+  const q = ctx.db
     .query("team_memberships")
-    .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
-    .collect();
+    .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId));
+  const memberships = cap ? await q.take(cap) : await q.collect();
   return (
     await Promise.all(memberships.map((m: any) => ctx.db.get(m.user_id)))
   ).filter(Boolean) as any[];
@@ -490,7 +500,11 @@ const toOwnerCandidate = (u: any): OwnerCandidate => ({
 // the session is teamless (self-claim). The pickers render exactly this list;
 // a roster taken from the viewer's ACTIVE team offers people the server would
 // reject whenever the session is stamped with a different team.
-async function listOwnerCandidates(
+//
+// Cap the membership walk: a reactive subscriber that collected the whole
+// team paid N user-doc reads (and re-ran on every teammate heartbeat). The
+// picker is a one-shot open; 250 candidates is more humans than we show.
+async function ownerCandidatesFor(
   ctx: { db: any },
   authUserId: Id<"users">,
   conversation: any,
@@ -499,16 +513,19 @@ async function listOwnerCandidates(
     const me = await ctx.db.get(authUserId);
     return me ? [toOwnerCandidate(me)] : [];
   }
-  return (await teamMemberDocs(ctx, conversation.team_id)).map(toOwnerCandidate);
+  return (await teamMemberDocs(ctx, conversation.team_id, OWNER_CANDIDATE_CAP)).map(
+    toOwnerCandidate,
+  );
 }
 
-// The full owner SET for one session — the session panel's owner chips — plus
-// the candidate roster the picker offers (see listOwnerCandidates). Fetched
-// on demand for a single session, so the inbox list never pays a per-row lookup.
-// Returns null (never throws) when the ref doesn't resolve to an accessible
-// session: this is a reactive read the web subscribes to while a session is
-// open, and it legitimately races creation — an optimistic stub's client UUID
-// only resolves once the server row syncs back.
+// The owner SET for one session — chips, the "assigned to you" banner, ack
+// state. Fetched on demand for a single open session, so the inbox list never
+// pays a per-row lookup. Deliberately does NOT include the picker roster:
+// that collect is bounded but still N user-doc reads, and this query is
+// live-subscribed for as long as the thread is open. Returns null (never
+// throws) when the ref doesn't resolve to an accessible session: the web
+// subscribes while a session is open, and it legitimately races creation —
+// an optimistic stub's client UUID only resolves once the server row syncs.
 export async function performListOwners(
   ctx: { db: any },
   authUserId: Id<"users">,
@@ -517,7 +534,6 @@ export async function performListOwners(
   short_id: string;
   conversation_id: Id<"conversations">;
   owners: OwnerInfo[];
-  team_members: OwnerCandidate[];
 } | null> {
   const conversation = await findOwnableConversation(ctx, authUserId, sessionId);
   if (!conversation) return null;
@@ -525,15 +541,53 @@ export async function performListOwners(
     short_id: conversation.short_id ?? conversation._id.toString().slice(0, 7),
     conversation_id: conversation._id,
     owners: await listOwnerInfos(ctx, conversation._id),
-    team_members: await listOwnerCandidates(ctx, authUserId, conversation),
   };
 }
 
 export const listOwners = query({
   args: { session_id: SESSION_REF, api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const authUserId = await requireAuth(ctx, args.api_token);
+    // A missing session-cookie (guest, stale tab) is "no data", not a thrown
+    // error: useQuery rethrows those and unmounts ConversationView. CLI tokens
+    // still fail loudly so `cast owners` doesn't print an empty set for a
+    // bad token.
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      if (args.api_token) throw new Error("Authentication failed: invalid token or session");
+      return null;
+    }
     return performListOwners(ctx, authUserId, args.session_id);
+  },
+});
+
+// Picker roster — session team's members, not the viewer's active team.
+// Subscribed only while the assignment menu is open, never for the banner
+// or the header chip.
+export async function performListOwnerCandidates(
+  ctx: { db: any },
+  authUserId: Id<"users">,
+  sessionId: string,
+): Promise<{
+  conversation_id: Id<"conversations">;
+  team_members: OwnerCandidate[];
+} | null> {
+  const conversation = await findOwnableConversation(ctx, authUserId, sessionId);
+  if (!conversation) return null;
+  return {
+    conversation_id: conversation._id,
+    team_members: await ownerCandidatesFor(ctx, authUserId, conversation),
+  };
+}
+
+export const listOwnerCandidates = query({
+  args: { session_id: SESSION_REF, api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      if (args.api_token) throw new Error("Authentication failed: invalid token or session");
+      return null;
+    }
+    return performListOwnerCandidates(ctx, authUserId, args.session_id);
   },
 });
 

@@ -4,8 +4,10 @@
  * The OWNERS axis of a session — the SET of teammates whose inboxes it appears
  * in and who receive its notifications. This is the platform-free core shared
  * by the web AssignmentBadge and the mobile AssignmentChip: it owns the live
- * listOwners query and the optimistic in-flight overrides, and exposes toggle /
- * clearAll / display helpers.
+ * listOwners query (owner set only — the picker roster is a separate
+ * listOwnerCandidates subscription, mounted only while the menu is open) and
+ * the optimistic in-flight overrides, and exposes toggle / clearAll / display
+ * helpers.
  *
  * MOBILE-SAFE by construction: this file is bundled into the Expo app, so no
  * DOM, no sonner, no window/document (see shared-code Hermes traps). The
@@ -15,11 +17,12 @@
  */
 
 import { useMemo, useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { humanizeConvexError } from "@codecast/shared/contracts";
 import { isConvexId } from "../lib/entityLinks";
 import { useWatchEffect } from "./useWatchEffect";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 
 type OwnerInfo = {
   user_id: string;
@@ -34,8 +37,8 @@ type OwnerInfo = {
 };
 
 export type OwnersEnv = {
-  // Warm-paint fallback roster only: once listOwners answers, its
-  // team_members (the SESSION team's roster) replaces this.
+  // Warm-paint fallback roster only: the picker overlays the SESSION team's
+  // members via listOwnerCandidates (subscribed only while the menu is open).
   teamMembers: any[] | undefined;
   currentUser: any;
   notify?: (msg: string, kind: "success" | "error") => void;
@@ -45,20 +48,19 @@ export type OwnersEnv = {
  * Whether the live listOwners subscription should run. Skipped while the row
  * is an optimistic stub (client UUID, no server row yet) — the query resolves
  * null for a ref the server doesn't know — and whenever there is no current
- * user: listOwners requires auth, so an unauthenticated subscriber (a guest on
- * a share link) gets a thrown query error that crashes the view, and every
- * feature this hook powers is per-user anyway.
+ * user: every feature this hook powers is per-user, and a guest on a share
+ * link has nothing to assign. The server also returns null without auth
+ * rather than throwing, so a stale cookie cannot unmount the view.
  */
 export function shouldQueryOwners(conversationId: string, currentUser: unknown): boolean {
   return Boolean(conversationId && isConvexId(conversationId) && currentUser);
 }
 
 /**
- * The roster the picker offers. The server's list wins — listOwners returns
- * the SESSION team's members, the only people the owner mutations accept.
- * The injected roster (the viewer's active team) is a warm-paint fallback for
- * while the query loads, and for an older server that doesn't send
- * team_members yet.
+ * The roster the picker offers. The server's list wins — listOwnerCandidates
+ * returns the SESSION team's members, the only people the owner mutations
+ * accept. The injected roster (the viewer's active team) is a warm-paint
+ * fallback for while that query loads.
  */
 export function pickRoster(
   serverMembers: any[] | undefined,
@@ -67,10 +69,32 @@ export function pickRoster(
   return serverMembers ?? injected ?? [];
 }
 
+/**
+ * Session-team roster for the assignment picker. Skip while the menu is
+ * closed: this is the collect that timed listOwners out when it ran for
+ * every open conversation.
+ */
+export function useOwnerCandidates(
+  conversationId: string,
+  currentUser: unknown,
+  enabled = true,
+) {
+  const { data } = useQueryNoThrow(
+    api.sessionOwnership.listOwnerCandidates,
+    enabled && shouldQueryOwners(conversationId, currentUser)
+      ? { session_id: conversationId }
+      : "skip",
+  );
+  return data?.team_members;
+}
+
 export function useOwners(conversationId: string, env: OwnersEnv) {
   const { teamMembers, currentUser, notify } = env;
 
-  const data = useQuery(
+  // useQueryNoThrow: listOwners is enrichment (chips, the handoff banner). A
+  // timeout or auth miss must not unmount ConversationView — that is what
+  // useQuery does with a terminal server error.
+  const { data } = useQueryNoThrow(
     api.sessionOwnership.listOwners,
     shouldQueryOwners(conversationId, currentUser) ? { session_id: conversationId } : "skip",
   );
@@ -93,10 +117,7 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
     return s;
   }, [serverIds, overrides]);
 
-  const roster: any[] = useMemo(
-    () => pickRoster((data as any)?.team_members, teamMembers),
-    [data, teamMembers],
-  );
+  const roster: any[] = useMemo(() => teamMembers ?? [], [teamMembers]);
 
   const memberById = useMemo(() => {
     const m = new Map<string, any>();
