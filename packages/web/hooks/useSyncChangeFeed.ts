@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, syncLogScopeMetaKey } from "../store/inboxStore";
+import { planCargoApply } from "../lib/syncLogCargo";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { onSyncWake } from "./syncWake";
 import { beginSyncInflight } from "../store/syncActivity";
@@ -166,7 +167,18 @@ async function applyEntityIds(
   return applied;
 }
 
-type LogAction = { position: number; entity_type: string; entity_id: string; op: string };
+type LogAction = {
+  position: number;
+  entity_type: string;
+  entity_id: string;
+  op: string;
+  // Cargo (sync-log-cargo E1/E6): present when the server shipped the changed
+  // fields; absent means "fetch through byIds" (old rows, kill switch).
+  patch?: Record<string, any>;
+  unset?: string[];
+  full?: boolean;
+  partial?: boolean;
+};
 
 // Apply one scope's range page: scope lifecycle first, then acked-pending
 // retirement (BEFORE the overlay, so authoritative post-write rows land
@@ -203,7 +215,40 @@ async function applyLogPage(
     entityActions.push(a);
   }
   store.retireAckedPending(scopeKey, upTo);
-  await applyEntityIds(convex, planFeedApply(entityActions));
+  // Cargo first (E6): actions that carry their fields apply directly through
+  // the store's pending-aware merge; everything else — deletes (authorized
+  // absence, E5), rows with no base, partial cargo, and enrichment triggers —
+  // goes through the byIds path exactly as before. Dedupe keeps the LAST
+  // action per entity (planFeedApply's rule), so a coalesced page applies once.
+  const byIds: FeedChange[] = [];
+  const latest = new Map<string, LogAction>();
+  for (const a of entityActions) latest.set(`${a.entity_type}:${a.entity_id}`, a);
+  let direct = 0;
+  const state = useInboxStore.getState();
+  for (const a of latest.values()) {
+    const coll = ENTITY_COLLECTION[a.entity_type];
+    if (!coll) continue;
+    if (a.op !== "upsert" || !a.patch) { byIds.push(a); continue; }
+    if (a.full) {
+      // A whole raw document: lift any exclude and overlay it as a row; the
+      // enrichment joins arrive through the refetch when the audit says so.
+      const plan = planCargoApply(coll, a, undefined);
+      state.clearFeedExcludes(coll, [a.entity_id]);
+      state.syncTable(coll, [{ _id: a.entity_id, ...plan.fields }] as any, { isDelta: true } as any);
+      direct++;
+      if (plan.refetch) byIds.push(a);
+      continue;
+    }
+    const existing = (state as any)[coll]?.[a.entity_id];
+    if (!existing) { byIds.push(a); continue; }
+    const plan = planCargoApply(coll, a, existing);
+    const applied = state.applyCargoFields(coll, a.entity_id, plan.fields, plan.unset);
+    if (!applied) { byIds.push(a); continue; }
+    direct++;
+    if (plan.refetch) byIds.push(a);
+  }
+  state.noteSyncLogApply(direct, byIds.length);
+  if (byIds.length) await applyEntityIds(convex, planFeedApply(byIds));
   store.recordSyncMeta(scopeMetaKey(scopeKey), { cursor: upTo });
 }
 

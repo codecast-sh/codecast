@@ -7,6 +7,7 @@ import { useTrackedStore } from "../store/inboxStore";
 import { useEventListener } from "../hooks/useEventListener";
 import { DESKTOP_SHORTCUTS, getDesktopShortcutConfig } from "../lib/desktop";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
+import { isTriageBarCompact, toggleTriageBarCompact } from "./triage/graduation";
 
 const KEYCAP_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
 
@@ -28,7 +29,10 @@ export function KeyCap({ children, size = "sm" }: { children: React.ReactNode; s
 export function KeyboardShortcutsPanel() {
   const s = useTrackedStore([
     s => s.shortcutsPanelOpen,
+    s => s.clientState.ui?.triage_bar_compact,
+    s => s.clientState.ui?.inbox_shortcuts_hidden,
   ]);
+  const triageBarHidden = isTriageBarCompact(s.clientState.ui);
 
   useEventListener("keydown", (e: KeyboardEvent) => {
     if (s.shortcutsPanelOpen && e.key === "Escape") {
@@ -120,12 +124,22 @@ export function KeyboardShortcutsPanel() {
 
         <div className="px-4 py-2.5 border-t border-sol-border/30 text-[10px] text-sol-text-dim flex items-center gap-1.5 whitespace-nowrap">
           <KeyCap size="xs">?</KeyCap> toggles this panel
-          <button
-            onClick={() => s.setTriageNuxOpen(true)}
-            className="ml-auto text-sol-text-dim hover:text-sol-cyan transition-colors"
-          >
-            Replay the tour
-          </button>
+          <span className="ml-auto flex items-center gap-3">
+            {triageBarHidden && (
+              <button
+                onClick={toggleTriageBarCompact}
+                className="text-sol-text-dim hover:text-sol-cyan transition-colors"
+              >
+                Show triage bar
+              </button>
+            )}
+            <button
+              onClick={() => s.setTriageNuxOpen(true)}
+              className="text-sol-text-dim hover:text-sol-cyan transition-colors"
+            >
+              Replay the tour
+            </button>
+          </span>
         </div>
       </div>
     </div>

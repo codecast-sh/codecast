@@ -2,14 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Check } from "lucide-react";
+import { Check, MoreHorizontal } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { getShortcutsForAction, matchShortcut, type ShortcutAction } from "../../shortcuts";
 import { MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { track } from "../../lib/analytics";
 import { isInboxSessionView } from "../../lib/inboxRouting";
-import { PARK_VERBS, TRIAGE_VERBS, type TriageVerb, type TriageVerbId } from "./verbs";
+import { PARK_VERBS, PRIMARY_VERBS, SECONDARY_VERBS, type TriageVerb, type TriageVerbId } from "./verbs";
 
 // The intro tour: four screens that teach the codecast loop — cards arrive,
 // the inbox sorts them by who acts next, and you clear them with one
@@ -156,21 +156,37 @@ function StepVerbs() {
       lede={<>Open the top card and read it. If it needs words, reply. If not, one keystroke files it. The keys work from an empty composer.</>}
     >
       <div className="space-y-1">
-        {TRIAGE_VERBS.map((v, i) => {
+        {PRIMARY_VERBS.map((v, i) => {
           const Icon = v.icon;
           return (
             <div
               key={v.id}
-              className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-sol-bg-alt/60 animate-in fade-in-0 slide-in-from-bottom-1 duration-300 [animation-fill-mode:backwards]"
-              style={{ animationDelay: `${100 + i * 80}ms` }}
+              className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-sol-bg-alt/60 animate-in fade-in-0 slide-in-from-bottom-1 duration-300 [animation-fill-mode:backwards]"
+              style={{ animationDelay: `${100 + i * 90}ms` }}
             >
               <Icon className={cn("w-3.5 h-3.5 shrink-0", v.text)} strokeWidth={1.75} />
-              <span className={cn("w-16 shrink-0 text-[12px] font-medium", v.text)}>{v.label}</span>
+              <span className={cn("w-14 shrink-0 text-[12px] font-medium", v.text)}>{v.label}</span>
               <span className="text-[11px] text-sol-text-muted leading-snug flex-1">{v.blurb}</span>
               <Caps action={v.action} />
             </div>
           );
         })}
+        {/* The rest of the vocabulary, the way the bar files it: behind "more". */}
+        <div
+          className="flex items-start gap-3 rounded-md px-2 py-2 animate-in fade-in-0 slide-in-from-bottom-1 duration-300 [animation-fill-mode:backwards]"
+          style={{ animationDelay: `${100 + PRIMARY_VERBS.length * 90}ms` }}
+        >
+          <MoreHorizontal className="w-3.5 h-3.5 shrink-0 mt-[1px] text-sol-text-dim" strokeWidth={1.75} />
+          <span className="w-14 shrink-0 text-[12px] font-medium text-sol-text-dim">More</span>
+          <span className="flex-1 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-sol-text-muted leading-snug">
+            {SECONDARY_VERBS.map((v) => (
+              <span key={v.id} className="flex items-center gap-1.5">
+                <span className={v.text}>{v.label}</span>
+                <Caps action={v.action} />
+              </span>
+            ))}
+          </span>
+        </div>
       </div>
       <p className="mt-4 text-[11px] text-sol-text-dim flex items-center gap-1.5">
         Every verb is undoable: <Caps action="ui.undo" />
@@ -243,7 +259,7 @@ function StepPractice({ cleared, clearedBy, onClear, onFinish }: {
               the bar's location as it clears the cards. */}
           <div className="mt-1.5 flex items-center justify-center gap-1">
             <span className="text-[10px] text-sol-text-dim/70 mr-1">or click</span>
-            {PARK_VERBS.map((v) => {
+            {PRIMARY_VERBS.map((v) => {
               const Icon = v.icon;
               return (
                 <button

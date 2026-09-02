@@ -395,7 +395,10 @@ export function facesWindowSize(
   const d = TIER_DIAMETER[tier];
   const count = mode === "speaker" ? 1 : Math.max(1, faces);
   const circles = count * d + (count - 1) * FACE_GAP;
-  const width = opts?.hovered ? Math.max(circles, CHROME_WIDTH) : circles;
+  // Always as wide as the chrome: a window that widens on hover slides its
+  // circles out from under the pointer (the overlay's flicker). Transparent
+  // glass either side of a lone circle costs nothing.
+  const width = Math.max(circles, CHROME_WIDTH);
   return {
     width: Math.round(width + FACES_PADDING * 2),
     height: Math.round(d + (opts?.hovered ? HOVER_ROWS : 0) + FACES_PADDING * 2),

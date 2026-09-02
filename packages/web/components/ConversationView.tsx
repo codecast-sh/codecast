@@ -11724,8 +11724,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               </div>
             </div>
           )}
-          {!bareComposer && (isFocused || reviewCount > 0 || shortcutTooltip || showStuckBanner || isSessionStarting || isSessionReady || isInactive || optimisticSending || isSessionDisconnected || (pendingMessageId || existingPending) || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
-            <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "conv-col" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
+          {/* The composer's status line: always one row tall, so focusing the
+              box or the agent changing state never shifts the composer. The
+              left side carries the live status (or nothing); the right side
+              is the send-options "?" and the permission mode dot. */}
+          {!bareComposer && (
+            <div className={`mx-auto px-2 sm:px-4 mb-1 min-h-[18px] flex justify-between items-center ${isExpanded ? "conv-col" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
               <p className="text-[11px] text-sol-text-dim/70 pl-1">
                 {((isSessionStarting && !agentStatus) || isAgentStarting) && !showStuckBanner ? (
                   <span className="flex items-center gap-1.5">
@@ -11860,7 +11864,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       if (!document.querySelector('[data-shortcut-tooltip]:hover')) setShortcutTooltip(null);
                     }, 150);
                   }}
-                  className="text-[9px] text-sol-text-dim hover:text-sol-text transition-colors w-4 h-4 flex items-center justify-center rounded-full border border-sol-text-dim/50 hover:border-sol-text-dim bg-sol-bg-alt font-semibold"
+                  aria-label="Send options"
+                  className="text-[9px] text-sol-text-dim/70 hover:text-sol-text transition-colors w-4 h-4 flex items-center justify-center rounded-full border border-sol-text-dim/40 hover:border-sol-text-dim bg-sol-bg-alt font-semibold"
                 >
                   ?
                 </button>

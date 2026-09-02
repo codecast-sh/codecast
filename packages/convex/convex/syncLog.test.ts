@@ -3,6 +3,12 @@ import { makeChangeTrackedDb } from "./changeLog";
 import {
   appendSyncAction,
   readRangePage,
+  buildCargo,
+  mergeCargo,
+  accessStampFromDoc,
+  authorizedFor,
+  projectAction,
+  CARGO_MAX_BYTES,
   emitSyncActions,
   isChurnOnlyPatch,
   makeSyncAckCollector,
@@ -408,5 +414,156 @@ describe("readRangePage (review C19)", () => {
     const { db } = makeFakeDb();
     const r = await readRangePage(db, "user:u1", 0, 10);
     expect(r).toMatchObject({ actions: [], nextFrom: 0, hasMore: false });
+  });
+});
+
+// ── Cargo (sync-log-cargo E1–E4) ─────────────────────────────────────────────
+
+describe("buildCargo", () => {
+  test("carries top-level fields, turns undefined into unset, drops system fields", () => {
+    expect(buildCargo("tasks", { _id: "x", title: "t", status: undefined }, { full: false }))
+      .toEqual({ patch: { title: "t" }, unset: ["status"], full: undefined, partial: undefined });
+  });
+  test("denylisted fields are dropped and flag partial", () => {
+    const c = buildCargo("docs", { title: "d", content: "big body", team_id: "teams:1" }, { full: false });
+    expect(c.patch).toEqual({ title: "d" });
+    expect(c.partial).toBe(true);
+  });
+  test("oversized patch drops cargo to partial", () => {
+    const c = buildCargo("tasks", { description: "x".repeat(CARGO_MAX_BYTES + 1) }, { full: false });
+    expect(c.patch).toBeUndefined();
+    expect(c.partial).toBe(true);
+  });
+  test("full flag rides through", () => {
+    expect(buildCargo("projects", { title: "p" }, { full: true }).full).toBe(true);
+  });
+  test("kill switch strips cargo but keeps the action honest (partial)", () => {
+    const prev = process.env.SYNC_LOG_PAYLOADS_DISABLED;
+    process.env.SYNC_LOG_PAYLOADS_DISABLED = "1";
+    try { expect(buildCargo("tasks", { title: "t" }, { full: false })).toEqual({ partial: true }); }
+    finally { if (prev === undefined) delete process.env.SYNC_LOG_PAYLOADS_DISABLED; else process.env.SYNC_LOG_PAYLOADS_DISABLED = prev; }
+  });
+});
+
+describe("mergeCargo (coalesce merge, E2)", () => {
+  test("later fields overlay, unset removes, re-set clears unset", () => {
+    const a = { patch: { title: "a", status: "open" } };
+    const b = { patch: { status: "done" }, unset: ["title"] };
+    const ab = mergeCargo(a, b);
+    expect(ab.patch).toEqual({ status: "done" });
+    expect(ab.unset).toEqual(["title"]);
+    const c = { patch: { title: "c" } };
+    const abc = mergeCargo(ab, c);
+    expect(abc.patch).toEqual({ status: "done", title: "c" });
+    expect(abc.unset).toBeUndefined();
+  });
+  test("set → unset → set converges to the same row for every reader (idempotent merge)", () => {
+    const steps = [{ patch: { x: 1 } }, { unset: ["x"], patch: {} }, { patch: { x: 3 } }];
+    const merged = steps.reduce((acc: any, s) => mergeCargo(acc, s), null);
+    // A reader at cursor 0 applies merged; a reader at cursor 2 applies step 3 — same end state.
+    const applyTo = (row: any, c: any) => { const r = { ...row, ...(c.patch ?? {}) }; for (const k of c.unset ?? []) delete r[k]; return r; };
+    expect(applyTo({}, merged)).toEqual({ x: 3 });
+    expect(applyTo(applyTo(applyTo({}, steps[0]), steps[1]), steps[2])).toEqual({ x: 3 });
+  });
+  test("a full cargo replaces whatever came before", () => {
+    expect(mergeCargo({ patch: { a: 1 }, unset: ["b"] }, { patch: { c: 3 }, full: true }))
+      .toEqual({ patch: { c: 3 }, full: true });
+  });
+  test("an incoming cargo without a patch poisons the row to partial", () => {
+    const m = mergeCargo({ patch: { a: 1 } }, { partial: true });
+    expect(m.patch).toBeUndefined();
+    expect(m.partial).toBe(true);
+  });
+  test("partial is sticky across merges until a full cargo", () => {
+    const m = mergeCargo({ patch: { a: 1 }, partial: true }, { patch: { b: 2 } });
+    expect(m.partial).toBe(true);
+    expect(mergeCargo(m, { patch: { z: 1 }, full: true }).partial).toBeUndefined();
+  });
+});
+
+describe("access stamp + projection (E4)", () => {
+  test("stamp: owner always, workspace key for scoped tables, assignee grant for tasks, none for conversations", () => {
+    expect(accessStampFromDoc("tasks", { user_id: "u1", workspace: "team:T", assignee: "u2" }))
+      .toEqual({ access_owner: "u1", access_key: "team:T", access_grants: ["u2"] });
+    expect(accessStampFromDoc("conversations", { user_id: "u1", workspace: "team:T" }))
+      .toEqual({ access_owner: "u1" });
+    expect(accessStampFromDoc("docs", null)).toBeNull();
+  });
+  test("authorizedFor: owner, grant, held key; pre-cargo rows pass", () => {
+    const held = new Set(["user:u9", "team:T"]);
+    expect(authorizedFor({ access_owner: "u1", access_key: "team:T" }, "u9", held)).toBe(true);
+    expect(authorizedFor({ access_owner: "u1", access_key: "user:u1" }, "u9", held)).toBe(false);
+    expect(authorizedFor({ access_owner: "u1", access_key: "user:u1", access_grants: ["u9"] }, "u9", held)).toBe(true);
+    expect(authorizedFor({ access_owner: "u9", access_key: "user:u9" }, "u9", new Set())).toBe(true);
+    expect(authorizedFor({}, "u9", new Set())).toBe(true);
+  });
+  test("projectAction: unauthorized upsert becomes a bare delete; authorized carries cargo", () => {
+    const row = { position: 5, entity_type: "tasks", entity_id: "t1", op: "upsert",
+      patch: { title: "secret" }, access_owner: "u1", access_key: "user:u1" };
+    expect(projectAction(row, { userId: "u9", heldKeys: new Set(["team:T"]) }))
+      .toEqual({ position: 5, entity_type: "tasks", entity_id: "t1", op: "delete" });
+    expect(projectAction(row, { userId: "u1", heldKeys: new Set() }).patch).toEqual({ title: "secret" });
+  });
+});
+
+describe("interceptor cargo end to end", () => {
+  test("insert carries a full patch with the access stamp; a later patch merges and keeps the stamp", async () => {
+    const { db, actions } = makeFakeDb();
+    const tdb = makeChangeTrackedDb(db, makeSyncAckCollector());
+    const id = await tdb.insert("tasks", { user_id: "users:1", team_id: "teams:9", workspace: "team:teams:9", title: "a", status: "open" });
+    let row = actions(teamScopeKey("teams:9"))[0];
+    expect(row.full).toBe(true);
+    expect(row.patch).toMatchObject({ title: "a", status: "open" });
+    expect(row.access_owner).toBe("users:1");
+    expect(row.access_key).toBe("team:teams:9");
+    const tdb2 = makeChangeTrackedDb(db, makeSyncAckCollector());
+    await tdb2.patch(id, { status: "done" });
+    row = actions(teamScopeKey("teams:9"))[0];
+    expect(row.patch).toMatchObject({ title: "a", status: "done" });
+    expect(row.full).toBe(true);
+    expect(row.access_key).toBe("team:teams:9"); // reused, no access field touched
+  });
+  test("a workspace change re-stamps; the team member then reads a projected delete", async () => {
+    const { db, actions } = makeFakeDb();
+    const tdb = makeChangeTrackedDb(db, makeSyncAckCollector());
+    const id = await tdb.insert("tasks", { user_id: "users:1", team_id: "teams:9", workspace: "team:teams:9", title: "a" });
+    const tdb2 = makeChangeTrackedDb(db, makeSyncAckCollector());
+    await tdb2.patch(id, { workspace: "user:users:1" }); // private inside the team
+    const page = await readRangePage(db, teamScopeKey("teams:9"), 0, 10, { userId: "users:7", heldKeys: new Set(["user:users:7", "team:teams:9"]) });
+    expect(page.actions[0].op).toBe("delete");
+    expect((page.actions[0] as any).patch).toBeUndefined();
+    const owner = await readRangePage(db, teamScopeKey("teams:9"), 0, 10, { userId: "users:1", heldKeys: new Set(["user:users:1"]) });
+    expect(owner.actions[0].op).toBe("upsert");
+  });
+  test("delete clears cargo so a later re-insert cannot resurrect stale fields", async () => {
+    const { db, actions } = makeFakeDb();
+    const tdb = makeChangeTrackedDb(db, makeSyncAckCollector());
+    const id = await tdb.insert("docs", { user_id: "users:1", title: "d", content: "body" });
+    const tdb2 = makeChangeTrackedDb(db, makeSyncAckCollector());
+    await tdb2.delete(id);
+    const row = actions(userScopeKey("users:1"))[0];
+    expect(row.op).toBe("delete");
+    expect(row.patch).toBeUndefined();
+  });
+  test("docs content change ships partial (denylisted) so the client refetches the title", async () => {
+    const { db, actions } = makeFakeDb();
+    const tdb = makeChangeTrackedDb(db, makeSyncAckCollector());
+    const id = await tdb.insert("docs", { user_id: "users:1", title: "d", content: "v1" });
+    const tdb2 = makeChangeTrackedDb(db, makeSyncAckCollector());
+    await tdb2.patch(id, { content: "v2" });
+    const row = actions(userScopeKey("users:1"))[0];
+    expect(row.partial).toBe(true);
+    expect(row.patch.content).toBeUndefined();
+  });
+  test("two writes to one entity in one transaction merge cargo without a second position", async () => {
+    const { db, actions, head } = makeFakeDb();
+    const c = makeSyncAckCollector();
+    const tdb = makeChangeTrackedDb(db, c);
+    const id = await tdb.insert("tasks", { user_id: "users:1", title: "a" });
+    await tdb.patch(id, { status: "done" });
+    const rows = actions(userScopeKey("users:1"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].patch).toMatchObject({ title: "a", status: "done" });
+    expect(head(userScopeKey("users:1"))?.position).toBe(1);
   });
 });

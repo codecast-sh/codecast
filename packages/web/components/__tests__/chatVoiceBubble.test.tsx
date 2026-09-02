@@ -165,10 +165,17 @@ describe("which surface the dock shows", () => {
     asr: "live",
     error: null,
   } as const;
-  /** The walkie in a room, as the engine publishes it. */
+  /** The walkie in a room, as the engine publishes it. A burst in flight
+   *  carries `sending`; a burst MODE with no sending is the seat lingering
+   *  after my own talk ended. */
   const held = (mode: "burst" | "listen" | "call", key = ROOM) => ({
     ...base,
+    sending: mode === "burst" ? ({ roomKey: key } as any) : null,
     liveRoom: { key, mode, since: 1_700_000_000_000 },
+  });
+  const lingering = (mode: "burst" | "listen", key = ROOM) => ({
+    ...held(mode, key),
+    sending: null,
   });
   /** This client's own seat through a burst: the engine unmutes to publish. */
   const seated = { roomKey: ROOM, phase: "connected" };
@@ -186,13 +193,14 @@ describe("which surface the dock shows", () => {
     expect(surface(held("listen"), seated, true)).toBe("walkie");
   });
 
-  test("the room held open after the key comes up is still the walkie's", () => {
+  test("the room held open after the key comes up is still the walkie's — and draws no card for the sender", () => {
     // The gap this closes: between the burst clearing and the room being held
     // the engine used to answer for nobody, and the dock took a room the walkie
-    // had not let go of — measured at 861ms, the length of the audio upload.
-    // The live room spans the whole of it now, mic open or shut.
-    expect(surface(held("burst"), { ...seated, muted: true })).toBe("walkie");
-    expect(surface(held("listen"), { ...seated, muted: false })).toBe("walkie");
+    // had not let go of. The live room spans the whole of it now — but MY OWN
+    // lingering seat draws nothing: Stop means the card goes. A listener's
+    // linger keeps its card, which carries Talk and Join live.
+    expect(surface(lingering("burst"), { ...seated, muted: true })).toBe("none");
+    expect(surface(lingering("listen"), { ...seated, muted: false })).toBe("walkie");
   });
 
   test("somebody stepping in on purpose keeps the walkie's shape while the room is voice", () => {

@@ -7,6 +7,9 @@ import { useInboxStore } from "../../store/inboxStore";
 import { useOpenDm } from "../../hooks/useChatSync";
 import { memberDisplayName } from "./memberPresence";
 import { MemberFace } from "./MemberFace";
+import { useRef, useState } from "react";
+import { useEventListener } from "../../hooks/useEventListener";
+import { FaceActions } from "./FaceActions";
 import { useFaceKey, useRecentJoin, type WalkieFaces } from "./useFaceKey";
 import "../calls/walkie.css";
 import "../people/people.css";
@@ -60,12 +63,15 @@ export function TeamBarFace({
     memberId: id,
     callsEnabled: callsEnabled && !isSelf,
     talking,
-    // The tap, and the DM is opened (or created) at PRESS time, never at
-    // render: pointing along a bar of six faces must not create six
-    // conversations.
-    onTap: () => openDm([id]),
   });
   const joined = useRecentJoin(key.roomKey, faces.joinedRoom);
+  // A click opens the three actions under the face; Escape, a second click or
+  // a click anywhere else closes them.
+  const [open, setOpen] = useState(false);
+  const seatRef = useRef<HTMLSpanElement | null>(null);
+  useEventListener("pointerdown", (e: Event) => {
+    if (open && seatRef.current && !seatRef.current.contains(e.target as Node)) setOpen(false);
+  });
 
   // A BURST IS NOT A HUDDLE. `in_huddle` is true for any live seat, so the
   // violet chip lit for three seconds of somebody's voice and read the same as
@@ -95,27 +101,35 @@ export function TeamBarFace({
 
   return (
     <span
+      ref={seatRef}
       className="people-face-seat people-bar-seat"
       style={{ ["--face" as string]: "32px" }}
       onMouseEnter={onHoverEnter}
       onMouseLeave={onHoverLeave}
       data-hold={key.holding ? "1" : undefined}
-      data-refused={key.refused ? "1" : undefined}
     >
       <button
         type="button"
-        // Not `disabled`: a disabled button swallows the press, and a refused
-        // hold still has to answer. The reason is in aria-disabled, in the
-        // outline, and in the tooltip.
-        aria-disabled={key.blocked ? true : undefined}
-        aria-label={`${name}. ${key.blocked ? key.blocked : "Hold to talk, click to open the conversation."}`}
-        title={key.blocked ?? `Hold to talk to ${name} · click to open the DM`}
+        aria-label={`${name}. Click for Talk, Ring and Message.`}
+        aria-expanded={open}
+        title={`${name} — click for Talk, Ring, Message`}
         className="people-face"
         data-tx={key.sending ? "1" : undefined}
         data-rx={talking ? "1" : undefined}
         data-joined={joined ? "1" : undefined}
         data-walkie-state={key.state}
-        {...key.keyProps}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && open) {
+            e.stopPropagation();
+            setOpen(false);
+          }
+        }}
+        {...key.warmProps}
         onContextMenu={onContextMenu}
       >
         <span ref={key.txRef} className="people-face-ring people-face-ring-tx" aria-hidden="true" />
@@ -134,7 +148,27 @@ export function TeamBarFace({
           joined
         </span>
       )}
-      {card}
+      {/* THE THREE ACTIONS, under the clicked face. The hover card stands
+          down while they are open: two floating things under one face is one
+          too many. */}
+      {open ? (
+        <span className="people-face-actions">
+          <span className="people-face-actions-name">{name}</span>
+          <FaceActions
+            ptt={key.ptt}
+            blocked={key.blocked}
+            roomKey={key.roomKey}
+            ringIds={[id]}
+            onMessage={() => {
+              setOpen(false);
+              openDm([id]);
+            }}
+            size="sm"
+          />
+        </span>
+      ) : (
+        card
+      )}
     </span>
   );
 }

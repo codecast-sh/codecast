@@ -4317,6 +4317,15 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   purgeTeamScopeRows: (teamId: string) => void;
   clearSyncMeta: (key: string) => void;
   clearCrawlMetaForScope: (scopeKey: string) => void;
+  // Sync-log cargo (sync-log-cargo E6): merge a patch's fields onto an existing
+  // row through the pending-aware per-field merge, then drop `unset` keys. For
+  // `sessions` the same fields land on the `conversations` meta twin when it
+  // exists. Returns false when no base row exists (caller falls back to byIds).
+  applyCargoFields: (coll: "sessions" | "tasks" | "docs" | "plans" | "projects", id: string, fields: Record<string, any>, unset: string[]) => boolean;
+  // Ephemeral per-run counters for the sync pill's detail panel and the
+  // synclog_apply metric: how many actions applied directly vs went to byIds.
+  syncLogApplyStats: { direct: number; refetch: number };
+  noteSyncLogApply: (direct: number, refetch: number) => void;
 
   // -- Generic sync --
   syncTable: (field: string, incoming: any, opts?: SyncOpts) => void;
@@ -7444,6 +7453,47 @@ const inboxStoreConfig = (set: any, get: any) => ({
     delete this.syncMeta[key];
   }),
 
+  applyCargoFields: sync(function (
+    this: Draft,
+    coll: "sessions" | "tasks" | "docs" | "plans" | "projects",
+    id: string,
+    fields: Record<string, any>,
+    unset: string[],
+  ): boolean {
+    const keys: Array<"sessions" | "conversations" | "tasks" | "docs" | "plans" | "projects"> =
+      coll === "sessions" ? ["sessions", "conversations"] : [coll];
+    let applied = false;
+    for (const key of keys) {
+      const collection = (this as any)[key] as Record<string, any> | undefined;
+      const existing = collection?.[id];
+      if (!existing) continue;
+      // An exclude (kill/prune) blocks the whole row; the log's own lifecycle
+      // lifts it (clearFeedExcludes) before an authorized upsert, never here.
+      if (this.pending[`${key}:${id}`]?.type === "exclude") { applied = true; continue; }
+      // Pending field locks win over the patch (local-first); an echoing value
+      // retires its lock — the same rule the byIds path gets from applySyncRecord.
+      const { record, pending } = applySyncRecord(key, id, fields, this.pending);
+      this.pending = pending as any;
+      for (const [k, v] of Object.entries(record)) {
+        if (!Object.is(existing[k], v)) existing[k] = v;
+      }
+      for (const k of unset) {
+        if (this.pending[`${key}:${id}:${k}`]?.type === "field") continue;
+        if (key === "sessions" || key === "conversations") { if (existing[k] !== null) existing[k] = null; }
+        else if (k in existing) delete existing[k];
+      }
+      applied = true;
+    }
+    return applied;
+  }),
+
+  noteSyncLogApply: (direct: number, refetch: number) => {
+    if (!direct && !refetch) return;
+    set((s: any) => ({
+      syncLogApplyStats: { direct: s.syncLogApplyStats.direct + direct, refetch: s.syncLogApplyStats.refetch + refetch },
+    }));
+  },
+
   // Clear every tasks/docs crawl watermark belonging to one sync-log scope, so
   // the next crawl runs as a FULL backfill (design D7 resync / D5 scope_added).
   // Crawl keys are `${ns}:v2:${JSON.stringify(wsArgs)}` — several per scope
@@ -9400,6 +9450,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   syncProgress: {},
   liveLoading: {},
   syncLogLag: {},
+  syncLogApplyStats: { direct: 0, refetch: 0 },
   mentionIndex: { tasks: {}, docs: {}, plans: {} },
   docs: {},
   plans: {},
