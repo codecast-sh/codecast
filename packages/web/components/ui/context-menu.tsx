@@ -256,3 +256,7 @@ export function CtxSubContent({
     </DropdownMenuPortal>
   );
 }
+
+/** The menu surface, for a dropdown that must look like the right-click menu
+ *  (the triage bar's "more" button hosts SessionMenuItems this way). */
+export const CTX_SURFACE = SURFACE;

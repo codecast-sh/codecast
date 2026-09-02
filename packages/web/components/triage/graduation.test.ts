@@ -7,7 +7,7 @@ describe("isTriageBarCompact", () => {
     expect(isTriageBarCompact({})).toBe(false);
   });
 
-  test("the compact toggle hides the bar to a corner button", () => {
+  test("the compact toggle hides the bar", () => {
     expect(isTriageBarCompact({ triage_bar_compact: true })).toBe(true);
     expect(isTriageBarCompact({ triage_bar_compact: false })).toBe(false);
   });

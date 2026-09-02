@@ -110,8 +110,10 @@ import {
   Plus,
   RefreshCw,
   EyeOff,
+  PanelBottom,
 } from "lucide-react";
 import { AnchorGlyph } from "./anchor/AnchorIdentity";
+import { isTriageBarCompact } from "./triage/graduation";
 import { setTaskParent, closeTaskWithGuard } from "../lib/taskActions";
 import type { PalettePickKind, PalettePickTarget } from "../lib/palettePick";
 
@@ -204,7 +206,8 @@ const NAV_PAGES: ReadonlyArray<{
 // and the key — and the keycap hint derives from the registry.
 const GLOBAL_COMMANDS: ReadonlyArray<{
   action: ShortcutAction;
-  label: string;
+  /** A function when the label depends on current state (a toggle's direction). */
+  label: string | (() => string);
   icon: React.ComponentType<{ className?: string }>;
   keywords: string;
   /** Rows that do not apply to every window say so; the people window has the
@@ -222,6 +225,7 @@ const GLOBAL_COMMANDS: ReadonlyArray<{
   { action: "pane.expand", label: "Pane takes the whole stage", icon: StageExpandGlyph, keywords: "split pane expand maximize full stage", hidden: () => !stageIsSplit() },
   { action: "pane.next", label: "Focus next pane", icon: StageNextGlyph, keywords: "split pane focus cycle", hidden: () => !stageIsSplit() },
   { action: "inbox.toggleFlatView", label: "Cycle inbox view", icon: Rows3, keywords: "grouped time label flat layout" },
+  { action: "inbox.toggleTriageBar", label: () => (isTriageBarCompact(useInboxStore.getState().clientState.ui) ? "Show triage bar" : "Hide triage bar"), icon: PanelBottom, keywords: "triage bar defer stash kill verbs footer show hide" },
   { action: "ui.toggleShortcutsHelp", label: "Keyboard shortcuts help", icon: Keyboard, keywords: "keys bindings hotkeys cheatsheet" },
 ];
 
@@ -2819,15 +2823,16 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           <CommandPrimitive.Group heading="Commands" className={groupClass}>
             {GLOBAL_COMMANDS.filter((cmd) => !cmd.hidden?.()).map((cmd) => {
               const Icon = cmd.icon;
+              const label = typeof cmd.label === "function" ? cmd.label() : cmd.label;
               return (
                 <CommandPrimitive.Item
                   key={`cmd-${cmd.action}`}
-                  value={`${cmd.label} ${cmd.keywords}`}
+                  value={`${label} ${cmd.keywords}`}
                   onSelect={() => { closePalette(); dispatchAction(cmd.action); }}
                   className={itemClass}
                 >
                   <Icon className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
-                  <span className="truncate flex-1">{cmd.label}</span>
+                  <span className="truncate flex-1">{label}</span>
                   <MenuKeyCaps action={cmd.action} />
                 </CommandPrimitive.Item>
               );

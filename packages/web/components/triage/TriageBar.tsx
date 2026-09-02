@@ -2,61 +2,54 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { ChevronsDownUp, ChevronsUpDown, Sparkles } from "lucide-react";
+import { MoreHorizontal, PanelBottomClose, Sparkles } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { isInboxSessionView } from "../../lib/inboxRouting";
 import { focusedActionSessionId } from "../../shortcuts/actions";
 import { MenuKeyCaps, ShortcutTooltip } from "../KeyboardShortcutsHelp";
-import { PARK_VERBS, FILE_VERBS, type TriageVerb } from "./verbs";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { CtxItem, CtxSeparator, CTX_SURFACE } from "../ui/context-menu";
+import { PRIMARY_VERBS, SECONDARY_VERBS, type TriageVerb } from "./verbs";
 import { useTriageActions } from "./useTriageActions";
-import { isTriageBarCompact } from "./graduation";
+import { isTriageBarCompact, toggleTriageBarCompact } from "./graduation";
 
-// The inbox's triage bar: the four parking verbs (defer, dormant, stash,
-// kill) plus pin and label. It lives in ONE place — under the composer, in
-// the same column — and acts on the same row the chords act on
-// (focusedActionSessionId), so what you learn by clicking transfers to the
-// keyboard. Rest state is quiet (icon + word). Chords appear on hover of the
-// bar, the same "ask then see" pattern the composer's send-options `?` uses.
-// `triage_bar_compact` hides the row entirely: a corner button, no height.
+// The inbox's triage bar: one quiet row under the composer, in the composer's
+// column, acting on the same row the chords act on (focusedActionSessionId),
+// so what you learn by clicking transfers to the keyboard.
+//
+// At rest it shows only the three verbs that settle nearly every card — not
+// now (defer), out of the way (stash), done (kill) — as icon + word. The
+// chords live in the hover tooltips, never inline. Everything else (dormant,
+// hide, pin, label, the tour, hiding the bar itself) sits one click away
+// behind "more", a menu built from the same verb catalog. Hidden, the bar
+// draws nothing at all; the command palette brings it back.
 
 type Flash = { verb: TriageVerb; key: number };
 
-function VerbButton({ verb, disabled, engaged, onRun }: {
+function VerbButton({ verb, disabled, onRun }: {
   verb: TriageVerb;
   disabled: boolean;
-  /** Pin renders lit while the viewed session is pinned. */
-  engaged?: boolean;
   onRun: () => void;
 }) {
   const Icon = verb.icon;
-  const btn = (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onRun}
-      data-triage-verb={verb.id}
-      className={cn(
-        "flex items-center h-6 px-2 rounded-[5px] transition-colors duration-150",
-        "text-sol-text-muted active:scale-[0.97]",
-        "disabled:opacity-35 disabled:pointer-events-none",
-        verb.hover,
-        engaged && cn(verb.text, verb.bg),
-      )}
-    >
-      <Icon className="w-3.5 h-3.5 shrink-0" strokeWidth={1.75} fill={engaged ? "currentColor" : "none"} />
-      <span className="cq-triage-word ml-1.5 text-[11px] leading-none">{verb.label}</span>
-      <span className="cq-triage-caps" aria-hidden="true">
-        <MenuKeyCaps action={verb.action} className="flex items-center gap-[2px]" />
-      </span>
-    </button>
-  );
-  // Chord is on the button only while the bar is hovered; the tooltip carries
-  // it for the rest of the time (and on a narrow column, where the word goes
-  // too). Same ShortcutTooltip the rest of the app uses for icon actions.
   return (
     <ShortcutTooltip side="top" label={verb.label} action={verb.action} hint={verb.blurb}>
-      {btn}
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onRun}
+        data-triage-verb={verb.id}
+        className={cn(
+          "flex items-center h-6 px-2 rounded-md transition-colors duration-150",
+          "text-sol-text-muted active:scale-[0.97]",
+          "disabled:opacity-35 disabled:pointer-events-none",
+          verb.hover,
+        )}
+      >
+        <Icon className="w-3.5 h-3.5 shrink-0" strokeWidth={1.75} />
+        <span className="cq-triage-word ml-1.5 text-[11px] leading-none">{verb.label}</span>
+      </button>
     </ShortcutTooltip>
   );
 }
@@ -117,13 +110,12 @@ export function TriageBar() {
   // verbs you just practiced live on this bar."
   const [glow, setGlow] = useState(false);
   useEffect(() => {
-    const onGlow = () => {
-      setGlow(true);
-      const t = setTimeout(() => setGlow(false), 2600);
-      return t;
-    };
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const handler = () => { if (timer) clearTimeout(timer); timer = onGlow(); };
+    const handler = () => {
+      if (timer) clearTimeout(timer);
+      setGlow(true);
+      timer = setTimeout(() => setGlow(false), 2600);
+    };
     window.addEventListener("cc-triage-bar-glow", handler);
     return () => {
       window.removeEventListener("cc-triage-bar-glow", handler);
@@ -134,7 +126,8 @@ export function TriageBar() {
   // Zen strips the chrome by definition; the chords still work there. An
   // account with no sessions yet is on the CLI setup hero — a row of disabled
   // verbs under it would be noise, so the bar arrives with the first session.
-  if (!onInboxView || (s.clientState.ui?.zen_mode ?? false)) return null;
+  // Hidden is hidden: no corner button over the composer, no height.
+  if (!onInboxView || (s.clientState.ui?.zen_mode ?? false) || compact) return null;
   if (Object.keys(s.sessions).length === 0) return null;
 
   const run = (verb: TriageVerb) => {
@@ -154,39 +147,6 @@ export function TriageBar() {
   };
 
   const disabled = !activeId;
-  const toggleCompact = () => useInboxStore.getState().updateClientUI({ triage_bar_compact: !compact });
-
-  // Minimized: a corner button, no layout height. Anchored to the same
-  // conv-col as the composer so it sits in the box's left padding — not on
-  // the typed text, and not fighting the call pill on the right.
-  if (compact) {
-    return (
-      <div className="relative h-0 overflow-visible hidden md:block pointer-events-none">
-        <div className="absolute inset-x-0 bottom-2.5 z-20">
-          <div className="mx-auto conv-col px-2 sm:px-4">
-            <ShortcutTooltip side="top" label="Triage actions">
-              <button
-                type="button"
-                data-triage-bar="collapsed"
-                onClick={toggleCompact}
-                aria-label="Show triage actions"
-                className={cn(
-                  "pointer-events-auto flex items-center justify-center w-6 h-6 -translate-x-1/2 rounded-full",
-                  "border border-sol-border/50 bg-sol-bg-alt/95 text-sol-text-dim",
-                  "shadow-sm backdrop-blur-sm",
-                  "hover:text-sol-text hover:border-sol-border hover:bg-sol-bg-alt",
-                  "transition-colors duration-150 active:scale-[0.97]",
-                  glow && "border-sol-cyan/50 text-sol-cyan",
-                )}
-              >
-                <ChevronsUpDown className="w-3 h-3" />
-              </button>
-            </ShortcutTooltip>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   // Same column and padding as the composer (ConversationView MessageInput:
   // `mx-auto conv-col px-2 sm:px-4`). A hairline the width of that column
@@ -204,47 +164,54 @@ export function TriageBar() {
       <div className="mx-auto conv-col px-2 sm:px-4">
         <div
           className={cn(
-            "flex items-center gap-0.5 h-7 border-t",
+            "flex items-center gap-0.5 h-8 border-t transition-colors duration-500",
             glow ? "border-sol-cyan/40" : "border-sol-border/25",
           )}
         >
-          {PARK_VERBS.map((v) => (
+          {PRIMARY_VERBS.map((v) => (
             <VerbButton key={v.id} verb={v} disabled={disabled} onRun={() => run(v)} />
           ))}
-          <span className="w-px h-3.5 bg-sol-border/40 mx-1" aria-hidden />
-          {FILE_VERBS.map((v) => (
-            <VerbButton
-              key={v.id}
-              verb={v}
-              disabled={disabled}
-              engaged={v.id === "pin" && activePinned}
-              onRun={() => run(v)}
-            />
-          ))}
-          {flash && <FlashLine flash={flash} />}
 
-          <span className="ml-auto flex items-center gap-0.5 pl-2">
-            <ShortcutTooltip side="top" label="How the inbox works: a two minute tour">
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                onClick={() => useInboxStore.getState().setTriageNuxOpen(true)}
-                className="flex items-center justify-center w-6 h-6 rounded-[5px] text-sol-text-dim hover:text-sol-violet hover:bg-sol-violet/10 transition-colors duration-150"
-                aria-label="Inbox tour"
+                data-triage-more
+                aria-label="More triage actions"
+                className={cn(
+                  "flex items-center justify-center w-6 h-6 rounded-md transition-colors duration-150",
+                  "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt",
+                  "data-[state=open]:text-sol-text data-[state=open]:bg-sol-bg-alt",
+                )}
               >
-                <Sparkles className="w-3 h-3" />
+                <MoreHorizontal className="w-3.5 h-3.5" />
               </button>
-            </ShortcutTooltip>
-            <ShortcutTooltip side="top" label="Hide the triage bar">
-              <button
-                type="button"
-                onClick={toggleCompact}
-                className="flex items-center justify-center w-6 h-6 rounded-[5px] text-sol-text-dim/70 hover:text-sol-text-muted hover:bg-sol-bg-alt transition-colors duration-150"
-                aria-label="Hide the triage bar"
-              >
-                <ChevronsDownUp className="w-3 h-3" />
-              </button>
-            </ShortcutTooltip>
-          </span>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" side="top" sideOffset={6} className={CTX_SURFACE}>
+              {SECONDARY_VERBS.map((v) => (
+                <CtxItem
+                  key={v.id}
+                  icon={v.icon}
+                  iconClassName={v.text}
+                  shortcut={v.action}
+                  danger={v.danger}
+                  disabled={disabled}
+                  onSelect={() => run(v)}
+                >
+                  {v.id === "pin" && activePinned ? "Unpin" : v.label}
+                </CtxItem>
+              ))}
+              <CtxSeparator />
+              <CtxItem icon={Sparkles} onSelect={() => useInboxStore.getState().setTriageNuxOpen(true)}>
+                How the inbox works
+              </CtxItem>
+              <CtxItem icon={PanelBottomClose} onSelect={toggleTriageBarCompact}>
+                Hide this bar
+              </CtxItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {flash && <FlashLine flash={flash} />}
         </div>
       </div>
     </div>

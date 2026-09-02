@@ -12,11 +12,18 @@ export function isTriageBarCompact(ui: ClientUI | undefined): boolean {
   return ui?.triage_bar_compact ?? ui?.inbox_shortcuts_hidden ?? false;
 }
 
+/** The one writer of the compact pref: the bar's own "Hide this bar", the
+ *  graduation offer, and the palette's "Show/hide triage bar" all call it. */
+export function toggleTriageBarCompact() {
+  const store = useInboxStore.getState();
+  store.updateClientUI({ triage_bar_compact: !isTriageBarCompact(store.clientState.ui) });
+}
+
 // The triage bar starts as a quiet row of verbs under the composer. Once the
 // KEYBOARD has proven it knows them (the chords, not the buttons), the row is
-// dead weight — offer, once, to hide it to a corner button. The offer is a
-// choice, never an automatic re-layout: chrome that rearranges itself
-// unprompted reads as a bug.
+// dead weight — offer, once, to hide it. The offer is a choice, never an
+// automatic re-layout: chrome that rearranges itself unprompted reads as a
+// bug.
 
 const COUNT_KEY = "cc-triage-key-uses";
 const GRADUATION_TIP = "triage-fluent";
@@ -43,7 +50,7 @@ export function noteTriageKeyUse() {
 
   store.updateClientTips({ completed: [...(tips?.completed ?? []), GRADUATION_TIP] });
   toast("You have the triage keys down", {
-    description: "Hide the bar? A button in the corner brings it back.",
+    description: "Hide the bar? \"Show triage bar\" in the command palette brings it back.",
     duration: 12000,
     action: {
       label: "Hide",

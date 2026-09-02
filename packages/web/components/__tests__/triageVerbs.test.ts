@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { PARK_VERBS, FILE_VERBS, TRIAGE_VERBS } from "../triage/verbs";
+import { PARK_VERBS, FILE_VERBS, TRIAGE_VERBS, PRIMARY_VERBS, SECONDARY_VERBS } from "../triage/verbs";
 import { isTriageBarCompact } from "../triage/graduation";
 import { SHORTCUTS } from "../../shortcuts/registry";
 
@@ -37,6 +37,12 @@ describe("triage verb catalog", () => {
       "session.pin",
       "session.moveToBucket",
     ]);
+  });
+
+  test("the bar's top level is defer, stash, kill; the rest sits behind more", () => {
+    expect(PRIMARY_VERBS.map((v) => v.id)).toEqual(["defer", "stash", "kill"]);
+    expect([...PRIMARY_VERBS, ...SECONDARY_VERBS].length).toBe(TRIAGE_VERBS.length);
+    for (const v of SECONDARY_VERBS) expect(PRIMARY_VERBS).not.toContain(v);
   });
 
   test("every verb carries a label, a past tense, and a blurb", () => {
