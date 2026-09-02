@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { useQuery } from "convex/react";
+import { useBootstrapCollection } from "./useBootstrapCollection";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { useWorkspaceArgs, type WorkspaceArgs } from "./useWorkspaceArgs";
@@ -8,22 +9,21 @@ import { useConvexSync } from "./useConvexSync";
 const api = _api as any;
 
 export function useSyncPlansWithArgs(wsArgs: WorkspaceArgs, statusFilter?: string, includeAll?: boolean) {
-  const plans = useQuery(api.plans.webList,
+  // Bootstrap floor, one-shot per workspace (sync-log-cargo E8); steady-state
+  // freshness rides the sync log's cargo. See useBootstrapCollection.
+  const { ready } = useBootstrapCollection(
+    "plans",
+    api.plans.webList,
     wsArgs === "skip" ? "skip" : {
       status: statusFilter || undefined,
       // include_all lifts webList's default done/abandoned filter — for
       // surfaces that read the whole workspace (orchestration).
       include_all: includeAll || undefined,
       ...wsArgs,
-    }
+    },
+    { liveLoadingScope: "plans" },
   );
-  const syncTable = useInboxStore((s) => s.syncTable);
-
-  useConvexSync(plans, useCallback((data: any) => {
-    syncTable("plans", data as any, { isDelta: true });
-  }, [syncTable]));
-
-  return { ready: plans !== undefined };
+  return { ready };
 }
 
 export function useSyncPlans(statusFilter?: string) {

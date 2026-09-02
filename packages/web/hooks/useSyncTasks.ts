@@ -1,21 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { collectionRowValidator } from "../store/clientSyncRegistry";
 import { useConvexSync } from "./useConvexSync";
-import { useWatchEffect } from "./useWatchEffect";
 import { countLogMissedRows, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
+import { useBootstrapCollection } from "./useBootstrapCollection";
+import { useWorkspaceCollection } from "./useWorkspaceCollection";
 import { track } from "../lib/analytics";
 import { useWorkspaceArgs, type WorkspaceArgs } from "./useWorkspaceArgs";
 
 const api = _api as any;
-
-// How long the delta window can grow before we bump the cursor. Reactive
-// ticks within this window don't resubscribe (cheap), but the result set is
-// bounded by ~CURSOR_REFRESH_MS of accumulated changes. 30s strikes a
-// balance between resub churn and reactive payload size.
-const CURSOR_REFRESH_MS = 30_000;
 
 // Full reconcile crawl — pages through EVERY task in the workspace so the store
 // is complete, not just the live channel's most-recent window. Each page is a
@@ -38,10 +33,8 @@ const RECONCILE_THROTTLE_MS = 24 * 60 * 60 * 1000;
  * Core task sync — pulls tasks for the workspace into the store.
  * Shared between web and mobile. Filtering happens client-side.
  *
- * Uses a delta cursor: the first subscription fetches a full snapshot, then
- * subsequent reactive runs receive only tasks whose `updated_at` exceeds the
- * cursor. The cursor is bumped periodically (CURSOR_REFRESH_MS) so the
- * reactive window stays small without resubscribing on every change.
+ * The list query is a one-shot bootstrap floor (sync-log-cargo E8); the sync
+ * log's cargo carries every later change directly into the store.
  *
  * The live "activeSession" overlay is fetched as a separate small query so
  * that daemon heartbeats (which churn managed_sessions every ~30s) don't
@@ -91,80 +84,41 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
 
   const wsKey = wsArgs === "skip" ? "skip" : JSON.stringify(wsArgs);
   const metaKey = syncMetaKey("tasks", wsKey); // shared key — live channel + crawl must match
-  // The live channel is the COMPLETENESS FLOOR, not a delta resume. Cold start
-  // and workspace switch ALWAYS do a full webList snapshot (300 most-recent + every
-  // assignee-rescued task). We deliberately do NOT seed `since` from the persisted
-  // watermark: a delta-on-cold-start silently misses any task the cache happens to
-  // lack ("3 of my 5 tasks" regression). The cursor only advances WITHIN a session
-  // (below) to trim the reactive payload; it resets to undefined on every load and
-  // on workspace switch, so the floor is re-established every time. The persisted
-  // watermark drives only the background reconcile crawl's incremental top-up.
-  const [cursor, setCursor] = useState<number | undefined>(undefined);
-  const lastSeenCursor = useRef<number | undefined>(undefined);
-  const lastWsKey = useRef<string>(wsKey);
-  if (lastWsKey.current !== wsKey) {
-    lastWsKey.current = wsKey;
-    if (cursor !== undefined) setCursor(undefined);
-    lastSeenCursor.current = undefined;
-  }
 
-  const tasksResult = useQuery(api.tasks.webList,
-    wsArgs === "skip" ? "skip" : {
-      ...wsArgs,
-      include_derived: true,
-      ...(cursor !== undefined ? { since: cursor } : {}),
-    }
+  // BOOTSTRAP FLOOR (sync-log-cargo E8): webList runs ONCE per workspace per
+  // page session as a one-shot — the 300 most-recent rows PLUS every task
+  // assigned to you (the completeness floor a cold cache needs; never seeded
+  // from a watermark, see the "3 of my 5 tasks" pitfall). It is no longer a
+  // live subscription: Convex re-pushes a subscription's whole result on any
+  // change, so every edit re-shipped the window to every client. Steady-state
+  // freshness rides the sync log — patches apply directly, assignee changes are
+  // scope moves — and the 24h crawl below stays as the safety net.
+  const { ready } = useBootstrapCollection(
+    "tasks",
+    api.tasks.webList,
+    wsArgs === "skip" ? "skip" : { ...(wsArgs as object), include_derived: true },
+    { select: (r: any) => r?.items ?? r, liveLoadingScope: "tasks", onRows: fetchOriginBadges },
   );
+
   const activeMap = useQuery(api.tasks.webActiveSessions,
     wsArgs === "skip" ? "skip" : {}
   );
-
-  // Sync tasks WITHOUT the activeSession overlay so daemon heartbeats
-  // (which churn activeMap every ~30s) don't re-sync the entire task table.
-  const taskData = useMemo(() => {
-    if (tasksResult === undefined) return undefined;
-    const items: any[] = tasksResult.items ?? tasksResult;
-    return { items, isDelta: !!tasksResult.isDelta, cursor: tasksResult.cursor };
-  }, [tasksResult]);
-
-  // Live channel = DELTA OVERLAY (never prune), even on the first page. EVERY
-  // write to `tasks` is delta — enforced by isDelta:true in SYNC_REGISTRY — so
-  // neither this most-recent 300-row live window nor the reconcile crawl below
-  // can wipe the cache; they only ADD/UPDATE. Deletions arrive as deltas
-  // (status="dropped") and are hidden by read-time filters. Mirrors docs/sessions.
-  useConvexSync(taskData, useCallback((data: any) => {
-    syncTable("tasks", data.items, { isDelta: true });
-    fetchOriginBadges(data.items);
-    if (typeof data.cursor === "number") lastSeenCursor.current = data.cursor;
-  }, [syncTable, fetchOriginBadges]));
 
   // Active sessions stored separately — lightweight update, no task resync.
   useConvexSync(activeMap, useCallback((data: any) => {
     if (data) useInboxStore.setState({ taskActiveSessions: data });
   }, []));
 
-  // Header SyncStatusChip: spin while the LIVE task list loads its first payload
-  // (not the background reconcile crawl below, which pages for minutes). This
-  // hook is page-scoped, so clear on unmount — else navigating away mid-load
-  // would strand the chip lit on every other page.
-  useWatchEffect(() => {
-    // A skipped instance (usePrefetch parked while the tasks page owns the
-    // channel) never resolves its query — it must not claim "loading" forever.
-    useInboxStore.getState().setLiveLoading("tasks", wsArgs !== "skip" && tasksResult === undefined);
-    return () => useInboxStore.getState().setLiveLoading("tasks", false);
-  }, [tasksResult, wsArgs === "skip"]);
-
-  // Periodically promote the latest seen cursor WITHIN this session only. Each
-  // promotion trims the reactive payload (discards already-shipped rows), but it
-  // is NOT persisted — it resets to undefined on the next load so the live channel
-  // re-establishes the full snapshot floor. The crawl owns the durable watermark.
+  // Origin badges for rows that arrive through the sync log (they never pass a
+  // list callback): whenever the applier lands cargo, sweep the workspace's
+  // task rows (through the enumeration chokepoint) for missing badges and
+  // fetch them one-shot. Membership-only reactivity — badge data is stable.
+  const applied = useInboxStore((s) => s.syncLogApplyStats.direct + s.syncLogApplyStats.refetch);
+  const workspaceTasks = useWorkspaceCollection<any>("tasks", null);
   useEffect(() => {
-    const id = setInterval(() => {
-      const next = lastSeenCursor.current;
-      if (next !== undefined && next !== cursor) setCursor(next);
-    }, CURSOR_REFRESH_MS);
-    return () => clearInterval(id);
-  }, [cursor]);
+    if (wsArgs === "skip") return;
+    fetchOriginBadges(workspaceTasks);
+  }, [applied, workspaceTasks, fetchOriginBadges, wsArgs === "skip"]);
 
   // RECONCILE: page through webListPaginated to backfill everything beyond the
   // live channel's most-recent window. The FIRST crawl per workspace is a full
@@ -231,7 +185,7 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
     });
   }, [convex, wsKey, reconcileNonce, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { hasMore: false, loadMore: () => {}, ready: tasksResult !== undefined };
+  return { hasMore: false, loadMore: () => {}, ready };
 }
 
 /**
