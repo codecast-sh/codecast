@@ -196,7 +196,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           title="Start a huddle with several teammates"
         >
           <Headphones className="h-3.5 w-3.5" />
-          Huddle
+          <span className="tb-squeeze-1">Huddle</span>
         </button>
       )}
       {/* Pop the roster out into its own window — the buddy list, floating

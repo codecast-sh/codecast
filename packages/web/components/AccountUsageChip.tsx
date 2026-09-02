@@ -35,7 +35,7 @@ type ProfileRow = {
 function MiniMeter({ percent }: { percent: number }) {
   const tone = usageTone(percent);
   return (
-    <span className="inline-block h-[5px] w-14 overflow-hidden rounded-full bg-sol-bg-inset align-middle">
+    <span className="tb-squeeze-2 inline-block h-[5px] w-14 overflow-hidden rounded-full bg-sol-bg-inset align-middle">
       <span
         className="block h-full rounded-full transition-[width] duration-500"
         style={{ width: `${Math.min(100, Math.max(2, percent))}%`, background: tone }}
@@ -66,7 +66,7 @@ function ProviderSegment({
     <span className="flex items-center gap-1.5" style={{ opacity: stub ? 0.4 : 1 }} title={title}>
       {icon}
       {!stub && (
-        <span className="max-w-[88px] truncate font-mono text-[11px] font-bold" style={{ color: tone }}>
+        <span className="tb-squeeze-1 max-w-[88px] truncate font-mono text-[11px] font-bold" style={{ color: tone }}>
           {label}
         </span>
       )}
