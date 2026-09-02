@@ -32,7 +32,7 @@
  */
 
 import { spawnSync } from "../proc.js";
-import { frontAsn, pidForAsn } from "./focusGuard.js";
+import { frontAsnAsync, pidForAsnAsync } from "./focusGuard.js";
 import { raiseAppByPid } from "./raiseApp.js";
 import { readState } from "./instance.js";
 
@@ -114,11 +114,22 @@ export async function startFocusSentinel(log: (line: string) => void): Promise<N
   const agentByPid = new Map<number, boolean>();
   log("[FOCUS] sentinel armed: unprovoked raises by agent-driven Chromes will be bounced");
 
-  const tick = () => {
-    const asn = frontAsn();
+  // One probe in flight at a time: a slow lsappinfo must not stack ticks.
+  let inFlight = false;
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      await probe();
+    } finally {
+      inFlight = false;
+    }
+  };
+  const probe = async () => {
+    const asn = await frontAsnAsync();
     if (!asn || asn === lastAsn) return;
     lastAsn = asn;
-    const pid = pidForAsn(asn);
+    const pid = await pidForAsnAsync(asn);
     if (!pid) return;
     if (!agentByPid.has(pid)) {
       if (agentByPid.size > 256) agentByPid.clear();
@@ -140,5 +151,5 @@ export async function startFocusSentinel(log: (line: string) => void): Promise<N
       lastAsn = null; // re-read next tick; the raise lands async
     }
   };
-  return setInterval(tick, 1_000);
+  return setInterval(() => { void tick(); }, 1_000);
 }

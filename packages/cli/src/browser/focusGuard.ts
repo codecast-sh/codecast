@@ -18,18 +18,29 @@
  * not through runEngine, so it is never undone.
  */
 
-import { spawnSync } from "../proc.js";
+import { execFile, spawnSync } from "../proc.js";
 import { readState } from "./instance.js";
 import { raiseAppByPidSync } from "./raiseApp.js";
+
+const LSAPPINFO_TIMEOUT_MS = 3_000;
+
+function parseAsn(status: number | null, stdout: string): string | null {
+  const key = stdout.trim();
+  return status === 0 && key ? key : null;
+}
+
+function parsePid(stdout: string): number | null {
+  const pid = parseInt(/=\s*(\d+)/.exec(stdout)?.[1] ?? "", 10);
+  return pid > 0 ? pid : null;
+}
 
 /** ASN key of the frontmost app — cheap (one spawn), stable per app, so a
  *  poller can compare it between ticks and resolve the pid only on change. */
 export function frontAsn(): string | null {
   if (process.platform !== "darwin") return null;
   try {
-    const asn = spawnSync("lsappinfo", ["front"], { encoding: "utf-8", timeout: 3_000 });
-    const key = (asn.stdout ?? "").trim();
-    return asn.status === 0 && key ? key : null;
+    const asn = spawnSync("lsappinfo", ["front"], { encoding: "utf-8", timeout: LSAPPINFO_TIMEOUT_MS });
+    return parseAsn(asn.status, asn.stdout ?? "");
   } catch {
     return null;
   }
@@ -38,12 +49,34 @@ export function frontAsn(): string | null {
 /** Resolve an ASN key from frontAsn() to its pid. */
 export function pidForAsn(key: string): number | null {
   try {
-    const info = spawnSync("lsappinfo", ["info", "-only", "pid", key], { encoding: "utf-8", timeout: 3_000 });
-    const pid = parseInt(/=\s*(\d+)/.exec(info.stdout ?? "")?.[1] ?? "", 10);
-    return pid > 0 ? pid : null;
+    const info = spawnSync("lsappinfo", ["info", "-only", "pid", key], { encoding: "utf-8", timeout: LSAPPINFO_TIMEOUT_MS });
+    return parsePid(info.stdout ?? "");
   } catch {
     return null;
   }
+}
+
+// The sync pair above brackets an engine call inside the `cast browser` CLI,
+// where blocking is the point. A long-lived poller (the daemon's focus
+// sentinel) must not block: `lsappinfo front` takes 1-2s when the machine is
+// busy, and inside the daemon that is 1-2s of no delivery, once a second.
+function lsappinfo(args: string[]): Promise<{ status: number | null; stdout: string }> {
+  return new Promise((resolve) => {
+    execFile("lsappinfo", args, { encoding: "utf-8", timeout: LSAPPINFO_TIMEOUT_MS }, (err, stdout) => {
+      const status = err ? ((err as { code?: unknown }).code as number | null ?? 1) : 0;
+      resolve({ status: typeof status === "number" ? status : 1, stdout: String(stdout ?? "") });
+    });
+  });
+}
+
+export async function frontAsnAsync(): Promise<string | null> {
+  if (process.platform !== "darwin") return null;
+  const r = await lsappinfo(["front"]);
+  return parseAsn(r.status, r.stdout);
+}
+
+export async function pidForAsnAsync(key: string): Promise<number | null> {
+  return parsePid((await lsappinfo(["info", "-only", "pid", key])).stdout);
 }
 
 /** Pid of the frontmost app, or null off-macOS / when it cannot be read. */
