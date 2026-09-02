@@ -21,6 +21,11 @@
  *      landed in a group named for the session, the overlay is in the DOM but
  *      not in the screenshot, and `stop` closes the tab.
  *
+ * Before any of that, the handshake: the real extension is pointed at a
+ * squatter that answers like a host but cannot prove the token, and must
+ * refuse to run a single op for it; then it is paired with a wrong token and
+ * the real host must turn it away.
+ *
  * It launches a SEPARATE Chrome with a scratch profile (never your running
  * browser) and loads the extension unpacked. One piece of scaffolding: the
  * scratch Chrome gets a temporary CDP port used ONLY to paste the token into
@@ -260,6 +265,67 @@ async function seedToken(ext, token, bridgePort) {
   }
 }
 
+/** The extension's own view of its connection, as the options page reads it. */
+const extStatus = (ext) => ext.eval(`chrome.runtime.sendMessage({ op: "status" })`);
+
+async function waitForExtState(ext, state, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await extStatus(ext).catch(() => null);
+    if (last && last.state === state) return last;
+    await sleep(250);
+  }
+  return last;
+}
+
+/**
+ * The handshake, against the real extension. A squatter that answers like a
+ * host but cannot prove the token must get no op executed, and the real host
+ * must turn away an extension holding the wrong token. Both leave the
+ * extension in its bad-token state, which is also what stops the retry alarm
+ * from feeding a squatter every 30 seconds.
+ */
+async function handshake(ext, token, bridgePort) {
+  const squatPort = await freePort();
+  const opsAnswered = [];
+  let hellos = 0;
+  const squatter = Bun.serve({
+    hostname: "127.0.0.1",
+    port: squatPort,
+    fetch(req, server) {
+      if (server.upgrade(req)) return;
+      return new Response("cast-bridge protocol=4 proof=" + "0".repeat(64));
+    },
+    websocket: {
+      message(ws, raw) {
+        const m = JSON.parse(String(raw));
+        if (m.op === "hello") {
+          hellos++;
+          ws.send(JSON.stringify({ op: "welcome", proof: "0".repeat(64), protocol: 4 }));
+          ws.send(JSON.stringify({ id: 1, op: "tabs.list" }));
+        } else opsAnswered.push(m);
+      },
+    },
+  });
+  try {
+    await seedToken(ext, token, squatPort);
+    const st = await waitForExtState(ext, "bad-token");
+    await sleep(500);
+    check("handshake: the extension sent its hello to the squatter", hellos >= 1, `hellos=${hellos}`);
+    check("handshake: a host that cannot prove the token is refused (bad-token, socket closed)", st?.state === "bad-token", JSON.stringify(st));
+    check("handshake: the extension executed no op for it", opsAnswered.length === 0, JSON.stringify(opsAnswered));
+  } finally {
+    squatter.stop(true);
+  }
+
+  await seedToken(ext, "f".repeat(64), bridgePort);
+  const wrong = await waitForExtState(ext, "bad-token");
+  check("handshake: the real host turns away an extension with the wrong token", wrong?.state === "bad-token", JSON.stringify(wrong));
+  const status = await cast(["browser", "extension", "status"]);
+  check("handshake: the host does not count it as connected", /extension not connected/.test(status.all), status.all.slice(0, 300));
+}
+
 /**
  * The top-left pixel of a PNG as [r, g, b]. Every PNG filter leaves the
  * first pixel of the first row untouched (its neighbours are all zero), so
@@ -285,12 +351,16 @@ function pngTopLeftPixel(buf) {
   return [raw[1], raw[2], raw[3]];
 }
 
-const BORDER_ID = "cast-browser-bridge-border";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** What the page says about the overlay: is it mounted, and is it hidden. */
+/**
+ * What the page says about the overlay: is it mounted, and is it hidden. The
+ * element's id is random per attach (a page cannot pre-write a rule against
+ * it), so the overlay is found by its shape: a direct child of <html> that is
+ * aria-hidden and fixed, which the test page has no other of.
+ */
 const BORDER_STATE_EXPR = `(() => {
-  const e = document.getElementById(${JSON.stringify(BORDER_ID)});
+  const e = [...document.documentElement.children].find((c) => c.getAttribute("aria-hidden") === "true" && c.style.position === "fixed");
   if (!e) return { present: false };
   const cs = getComputedStyle(e);
   return { present: true, color: cs.borderTopColor, pointer: cs.pointerEvents, visibility: cs.visibility,
@@ -430,18 +500,21 @@ async function bridgeExtras(bridgePort, token, ext, cdpPort, pageUrl) {
 
 /**
  * The CLI's state, isolated from this machine's: CODECAST_DIR holds the
- * bridge config, the sticky target and the reaper's registry; AGENT_BROWSER_HOME
- * holds the engine daemon's per session files. The engine itself lives under
+ * bridge config, the sticky target and the reaper's registry; AGENT_BROWSER_SOCKET_DIR
+ * holds the engine daemon's per session files (the engine's own name for that
+ * directory, which cast follows in engineStateDir). The engine itself lives under
  * the real CODECAST_DIR, so it is named explicitly. The session id is fixed
  * and every other id a harness could leak (an agent's own session, the tmux
  * pane) is dropped, so the engine session key, and with it the tab group's
  * name, is the same on every run.
  */
 const CLI_SESSION_ID = "smoke-cli";
-const engineHome = path.join(work, "agent-browser");
+// Short on purpose: the engine's daemon socket lives here and macOS caps a
+// Unix socket path at 103 bytes, which the temp dir above already exceeds.
+const engineHome = fs.mkdtempSync("/tmp/cbs-");
 
 function cliEnv(engineBinary) {
-  const e = { ...env, CAST_SESSION_ID: CLI_SESSION_ID, AGENT_BROWSER_HOME: engineHome, CAST_BROWSER_ENGINE: engineBinary };
+  const e = { ...env, CAST_SESSION_ID: CLI_SESSION_ID, AGENT_BROWSER_SOCKET_DIR: engineHome, CAST_BROWSER_ENGINE: engineBinary };
   for (const k of ["CAST_BROWSER_LEGACY", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "CODECAST_SESSION_ID", "CLAUDE_CODE_BRIDGE_SESSION_ID", "TMUX_PANE"]) {
     delete e[k];
   }
@@ -457,7 +530,7 @@ function cliEnv(engineBinary) {
  * while the session drives it, the CLI's own `shot` shows no border, and
  * `stop` closes the tab.
  */
-async function cliRealMode(engineBinary, ext, cdpPort, pageUrl) {
+async function cliRealMode(engineBinary, ext, cdpPort, pageUrl, token) {
   const e = cliEnv(engineBinary);
   const cli = (args) => cast(args, { env: e });
   const url = pageUrl + "cli"; // its own URL, so earlier parts' tabs never match
@@ -481,6 +554,12 @@ async function cliRealMode(engineBinary, ext, cdpPort, pageUrl) {
     open.code === 0 && /Cast Bridge Smoke/.test(open.all) && /real Chrome, via the extension/.test(open.all),
     open.all.slice(0, 400),
   );
+
+  // The engine daemon and every CLI call are up now; none of them may carry
+  // the bridge token on its command line (it reaches the engine through the
+  // environment). ps shows every user's arguments on macOS.
+  const ps = execSync("ps ax -o command=", { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 });
+  check("cli: no process on the machine carries the bridge token in its arguments", !ps.includes(token), ps.split("\n").filter((l) => l.includes(token)).join(" | ").slice(0, 300));
 
   const grouped = await groupTitleOf();
   check(
@@ -541,11 +620,15 @@ const TEST_PAGE = `<!doctype html><html><head><title>Cast Bridge Smoke</title></
 async function main() {
   console.log(`workdir: ${work}\n`);
 
-  // 1. Bridge config + host (isolated under CODECAST_DIR).
-  const setup = await cast(["browser", "extension", "setup", "--json"]);
+  // 1. Bridge config + host (isolated under CODECAST_DIR). The token is
+  //    printed only when asked for; without --show-token it stays in the file.
+  const quiet = await cast(["browser", "extension", "setup", "--json"]);
+  const quietJson = quiet.code === 0 ? JSON.parse(quiet.out.trim().split("\n").pop()) : {};
+  check("setup --json without --show-token prints no token", quiet.code === 0 && !("token" in quietJson) && !/[0-9a-f]{64}/.test(quiet.all), quiet.all.slice(0, 300));
+  const setup = await cast(["browser", "extension", "setup", "--json", "--show-token"]);
   if (setup.code !== 0) throw new Error("extension setup failed: " + setup.all);
   const { port: bridgePort, token } = JSON.parse(setup.out.trim().split("\n").pop());
-  check("bridge host starts and prints token", !!token && !!bridgePort);
+  check("bridge host starts and prints the token on request", !!token && !!bridgePort);
 
   // 2. Local page to act on.
   const pagePort = await freePort();
@@ -596,16 +679,21 @@ async function main() {
   }
   check("scratch Chrome launched with extension", true);
 
-  // 4. Seed the token (the by-hand options-page step, automated).
+  // 4. The handshake against a squatter and with a wrong token, then seed the
+  //    real token (the by-hand options-page step, automated).
   const ext = await extensionContext(cdpPort);
+  await handshake(ext, token, bridgePort);
   await seedToken(ext, token, bridgePort);
   check("token seeded into extension storage", true);
 
-  // 5. Extension connects to the host.
+  // 5. Extension connects to the host. Every status output along the way is
+  //    also the proof that status masks the token.
   let connected = false;
+  const statuses = [];
   const connDeadline = Date.now() + 20_000;
   while (Date.now() < connDeadline) {
     const st = await cast(["browser", "extension", "status"]);
+    statuses.push(st.all);
     if (/extension connected/.test(st.all)) {
       connected = true;
       break;
@@ -614,6 +702,11 @@ async function main() {
   }
   check("extension connected to bridge host", connected);
   if (!connected) throw new Error("extension never connected");
+  check(
+    "status never prints the token",
+    statuses.every((s) => !s.includes(token)) && statuses.some((s) => /<token>/.test(s)),
+    statuses.map((s) => s.slice(0, 120)).join(" | ").slice(0, 300),
+  );
 
   // 6. The MVP verbs, all through --real.
   const open = await cast(["browser", "open", "--real", pageUrl]);
@@ -705,7 +798,7 @@ async function main() {
   await engine(ab, ["--cdp", cdpUrl, "close"]);
 
   // 9. The product path: the CLI on the engine driver, in sticky real mode.
-  await cliRealMode(ab, ext, cdpPort, pageUrl);
+  await cliRealMode(ab, ext, cdpPort, pageUrl, token);
   await ext.close();
 }
 
@@ -730,9 +823,10 @@ async function cleanup() {
     }
   } catch {}
   if (process.env.SMOKE_KEEP) {
-    console.log(`SMOKE_KEEP set — leaving ${work} in place`);
+    console.log(`SMOKE_KEEP set — leaving ${work} and ${engineHome} in place`);
     return;
   }
+  fs.rmSync(engineHome, { recursive: true, force: true });
   // Chrome keeps writing its profile for a moment after SIGTERM; racing it
   // makes rm report half-deleted directories.
   for (let i = 0; i < 3; i++) {

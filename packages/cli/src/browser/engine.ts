@@ -132,12 +132,12 @@ export interface EngineRun {
 export interface EngineOptions {
   /** Override the session key; defaults to this codecast session. */
   session?: string | null;
-  /** Override the managed browser's port; defaults to the state file's. */
-  port?: number;
   /**
-   * What `--cdp` is handed instead of the port: a browser socket URL. The
-   * extension bridge host needs this, since its `/json/version` route refuses
-   * a caller with no token and the token rides in the URL path.
+   * The browser this session drives, as the engine's cdp option takes it: a
+   * browser socket URL for the extension bridge (its `/json/version` route
+   * refuses a caller with no token, and the token rides in the URL path).
+   * Absent for the managed clone, whose port runEngine reads from the state
+   * file.
    */
   cdp?: string;
   timeoutMs?: number;
@@ -173,9 +173,10 @@ const SESSION_KEY_MAX = 60;
  * its tab whenever a session's launch flags change, so a session driving the
  * real Chrome and the same session driving the clone must never share a key:
  * the real one carries this suffix, and every other part of the CLI (the
- * reaper, the pinned tab, the footer) reads the mode back off the key.
+ * reaper, the pinned tab, the footer) reads the mode back off the key with
+ * the three functions below, never by looking at the suffix itself.
  */
-export const REAL_SESSION_SUFFIX = "-real";
+const REAL_SESSION_SUFFIX = "-real";
 
 export function realSessionKey(session: string): string {
   if (isRealSession(session)) return session;
@@ -186,23 +187,43 @@ export function isRealSession(session: string): boolean {
   return session.endsWith(REAL_SESSION_SUFFIX);
 }
 
+/** The inverse of realSessionKey: the key with no mode on it. */
+export function baseSessionKey(session: string): string {
+  return isRealSession(session) ? session.slice(0, -REAL_SESSION_SUFFIX.length) : session;
+}
+
 // ---------------------------------------------------------------------------
 // The browser each session drives
 // ---------------------------------------------------------------------------
 //
-// The engine does not launch a browser of its own. It attaches over CDP to the
-// one managed Chrome on this machine (managedBrowser.ts) — the same browser
-// the built-in driver uses — and pins each session to a tab of its own
-// (`--pin-tab`). That keeps everything the engine is good at (isolation
-// between sessions, its verbs) while the browser itself stays one visible
-// window that opened without taking focus, holds one clone of the human's
-// logins, and can be pointed at by the web's "open tab" link. A browser per
-// session was tried first: each launch is a new Chrome window that takes
-// focus on macOS, and copies of the profile piled up in the tmp dir.
+// The engine does not launch a browser of its own. It attaches over CDP to a
+// browser that already exists and pins each session to a tab of its own
+// (`--pin-tab`). By default that is the one managed Chrome on this machine
+// (managedBrowser.ts) — the same browser the built-in driver uses; for a
+// `-real` session key (realSessionKey) it is the human's own Chrome, reached
+// through the extension bridge host (bridge/real.ts engineBrowserFor). Either
+// way everything the engine is good at (isolation between sessions, its
+// verbs) is kept while the browser itself stays one visible window that
+// opened without taking focus, holds the human's logins, and can be pointed
+// at by the web's "open tab" link. A browser per session was tried first:
+// each launch is a new Chrome window that takes focus on macOS, and copies
+// of the profile piled up in the tmp dir.
 
-/** Where the engine keeps its per-session daemon files (pid, socket, target). */
-export function engineStateDir(): string {
-  return process.env.AGENT_BROWSER_HOME ?? path.join(os.homedir(), ".agent-browser");
+/**
+ * Where the engine keeps its per-session daemon files (pid, socket, target).
+ *
+ * This must resolve exactly as the engine's own `get_socket_dir` does
+ * (connection.rs): `AGENT_BROWSER_SOCKET_DIR` when set and non-empty, else
+ * `$XDG_RUNTIME_DIR/agent-browser` when that is set and non-empty, else
+ * `~/.agent-browser`. cast writes a session's tab binding into this directory
+ * before the daemon's first attach (pinnedTab.ts) and reads it back to reap
+ * (engineReap.ts); a directory the daemon does not read means it never adopts
+ * the pinned tab and opens a second one instead.
+ */
+export function engineStateDir(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.AGENT_BROWSER_SOCKET_DIR) return env.AGENT_BROWSER_SOCKET_DIR;
+  if (env.XDG_RUNTIME_DIR) return path.join(env.XDG_RUNTIME_DIR, "agent-browser");
+  return path.join(os.homedir(), ".agent-browser");
 }
 
 /** The debugging port of the managed browser, or null when none is recorded. */
@@ -212,12 +233,18 @@ export function managedPort(): number | null {
 }
 
 /**
- * Run the engine attached to the managed browser, as this session.
+ * Run the engine attached to the session's browser: the managed clone by
+ * default, the bridge for a `-real` key (opts.cdp).
  *
  * The flags are the same on every call on purpose: the daemon treats a changed
  * launch configuration (a different port, environment or profile) as a reason
  * to reset its tab, so nothing here may vary between one command and the next
  * except the command itself.
+ *
+ * The browser goes in the environment (AGENT_BROWSER_CDP, which the engine
+ * reads exactly as `--cdp`), never on the command line: in real mode it is a
+ * URL carrying the bridge token, and on macOS every user can read every
+ * other user's process arguments.
  */
 export function runEngine(args: string[], opts: EngineOptions = {}): EngineRun {
   const binary = findEngine();
@@ -227,13 +254,13 @@ export function runEngine(args: string[], opts: EngineOptions = {}): EngineRun {
         `\`npm install -g ${ENGINE_PACKAGE}\``,
     );
   }
-  const cdp = opts.cdp ?? opts.port ?? managedPort();
+  const cdp = opts.cdp ?? managedPort();
   if (!cdp) {
     return { status: 1, stdout: "", stderr: "no managed browser is running — run `cast browser start`" };
   }
 
   const session = opts.session ?? engineSession();
-  const full = [...args, "--cdp", String(cdp), "--pin-tab"];
+  const full = [...args, "--pin-tab"];
 
   // The engine raises Chrome as a side effect of ordinary commands; if it
   // takes the front during this call, hand focus back (focusGuard.ts).
@@ -246,6 +273,7 @@ export function runEngine(args: string[], opts: EngineOptions = {}): EngineRun {
       ...process.env,
       // The isolation that replaces our tab-ownership bookkeeping.
       AGENT_BROWSER_SESSION: session,
+      AGENT_BROWSER_CDP: String(cdp),
     },
   });
   restoreFocusIfStolen(front);
@@ -333,8 +361,8 @@ export function engineFitness(): EngineFitness {
 /**
  * The engine's own `--help` for one verb, or null when it cannot answer.
  *
- * Runs the binary directly, without `--cdp`/`--pin-tab`: help must work with
- * no browser running. This is what `cast browser help <verb>` renders from, so
+ * Runs the binary directly, with no browser and no `--pin-tab`: help must
+ * work with no browser running. This is what `cast browser help <verb>` renders from, so
  * the flag documentation is the engine's own and cannot drift from what the
  * passthrough actually accepts.
  */
