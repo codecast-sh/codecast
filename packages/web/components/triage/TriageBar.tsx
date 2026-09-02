@@ -2,36 +2,31 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { MoreHorizontal, PanelBottomClose, Sparkles } from "lucide-react";
+import { EyeOff, MoreHorizontal, PinOff, Sparkles } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { isInboxSessionView } from "../../lib/inboxRouting";
 import { focusedActionSessionId } from "../../shortcuts/actions";
-import { MenuKeyCaps, ShortcutTooltip } from "../KeyboardShortcutsHelp";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
-import { CtxItem, CtxSeparator, CTX_SURFACE } from "../ui/context-menu";
+import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "../KeyboardShortcutsHelp";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent } from "../ui/dropdown-menu";
+import { CTX_SURFACE, CtxItem, CtxSeparator } from "../ui/context-menu";
 import { PRIMARY_VERBS, SECONDARY_VERBS, type TriageVerb } from "./verbs";
 import { useTriageActions } from "./useTriageActions";
 import { isTriageBarCompact, toggleTriageBarCompact } from "./graduation";
 
-// The inbox's triage bar: one quiet row under the composer, in the composer's
-// column, acting on the same row the chords act on (focusedActionSessionId),
-// so what you learn by clicking transfers to the keyboard.
-//
-// At rest it shows only the three verbs that settle nearly every card — not
-// now (defer), out of the way (stash), done (kill) — as icon + word. The
-// chords live in the hover tooltips, never inline. Everything else (dormant,
-// hide, pin, label, the tour, hiding the bar itself) sits one click away
-// behind "more", a menu built from the same verb catalog. Hidden, the bar
-// draws nothing at all; the command palette brings it back.
+// The triage bar: one quiet row under the composer, in the composer's own
+// column. At rest it says three words — Defer, Stash, Kill — the verbs that
+// settle nearly every card. Nothing else is printed: the chord and the
+// meaning of each verb live in its hover tooltip, and the rest of the
+// vocabulary (dormant, hide, pin, label) sits one click away behind the
+// "more" button, chords shown beside each. The bar acts on the row the
+// chords act on (focusedActionSessionId), so what the mouse learns transfers
+// to the keys. Hidden by preference means gone — nothing floats over the
+// composer; the palette command and the shortcuts panel bring it back.
 
 type Flash = { verb: TriageVerb; key: number };
 
-function VerbButton({ verb, disabled, onRun }: {
-  verb: TriageVerb;
-  disabled: boolean;
-  onRun: () => void;
-}) {
+function VerbButton({ verb, disabled, onRun }: { verb: TriageVerb; disabled: boolean; onRun: () => void }) {
   const Icon = verb.icon;
   return (
     <ShortcutTooltip side="top" label={verb.label} action={verb.action} hint={verb.blurb}>
@@ -41,14 +36,14 @@ function VerbButton({ verb, disabled, onRun }: {
         onClick={onRun}
         data-triage-verb={verb.id}
         className={cn(
-          "flex items-center h-6 px-2 rounded-md transition-colors duration-150",
-          "text-sol-text-muted active:scale-[0.97]",
+          "flex items-center gap-1.5 h-6 px-2 rounded-[5px] transition-colors duration-150",
+          "text-sol-text-muted active:scale-[0.97] outline-none focus-visible:ring-1 focus-visible:ring-sol-cyan/40",
           "disabled:opacity-35 disabled:pointer-events-none",
           verb.hover,
         )}
       >
         <Icon className="w-3.5 h-3.5 shrink-0" strokeWidth={1.75} />
-        <span className="cq-triage-word ml-1.5 text-[11px] leading-none">{verb.label}</span>
+        <span className="cq-triage-word text-[11px] leading-none">{verb.label}</span>
       </button>
     </ShortcutTooltip>
   );
@@ -87,9 +82,8 @@ export function TriageBar() {
       const id = focusedActionSessionId(st, isInboxSessionView(pathname, st.currentConversation?.source));
       return id ? (st.sessions[id]?.is_pinned ?? false) : false;
     },
-    // The raw prefs, un-normalized: `?? false` here would erase the
-    // unset→false transition the first compact toggle produces, and the bar
-    // would not re-render on it.
+    // Raw prefs, un-normalized: `?? false` would erase the unset→false
+    // transition the first toggle produces and skip that re-render.
     (st) => st.clientState.ui?.triage_bar_compact,
     (st) => st.clientState.ui?.inbox_shortcuts_hidden,
     (st) => st.clientState.ui?.zen_mode ?? false,
@@ -98,7 +92,6 @@ export function TriageBar() {
   const onInboxView = isInboxSessionView(pathname, s.currentConversation?.source);
   const activeId = focusedActionSessionId(s, onInboxView) ?? null;
   const activePinned = activeId ? (s.sessions[activeId]?.is_pinned ?? false) : false;
-  const compact = isTriageBarCompact(s.clientState.ui);
 
   const triage = useTriageActions(onInboxView);
 
@@ -107,7 +100,7 @@ export function TriageBar() {
   useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); }, []);
 
   // Finishing the intro tour points here: a one-time glow that says "the
-  // verbs you just practiced live on this bar."
+  // verbs you just practiced live on this row."
   const [glow, setGlow] = useState(false);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -126,9 +119,9 @@ export function TriageBar() {
   // Zen strips the chrome by definition; the chords still work there. An
   // account with no sessions yet is on the CLI setup hero — a row of disabled
   // verbs under it would be noise, so the bar arrives with the first session.
-  // Hidden is hidden: no corner button over the composer, no height.
-  if (!onInboxView || (s.clientState.ui?.zen_mode ?? false) || compact) return null;
+  if (!onInboxView || (s.clientState.ui?.zen_mode ?? false)) return null;
   if (Object.keys(s.sessions).length === 0) return null;
+  if (isTriageBarCompact(s.clientState.ui)) return null;
 
   const run = (verb: TriageVerb) => {
     if (!activeId) return;
@@ -145,26 +138,24 @@ export function TriageBar() {
     if (flashTimer.current) clearTimeout(flashTimer.current);
     flashTimer.current = setTimeout(() => setFlash(null), 4000);
   };
-
   const disabled = !activeId;
 
   // Same column and padding as the composer (ConversationView MessageInput:
-  // `mx-auto conv-col px-2 sm:px-4`). A hairline the width of that column
-  // — not the stage — is the only separator, so the verbs read as the row
-  // under the compose box, next to send, not as a second app footer.
+  // `mx-auto conv-col px-2 sm:px-4`). A hairline the width of that column is
+  // the only separator, so the verbs read as the row under the compose box.
   return (
     <div
       data-triage-bar
       className={cn(
         "cq-container flex-shrink-0 hidden md:block select-none",
-        "text-[10px] text-sol-text-dim bg-sol-bg",
+        "text-[10px] text-sol-text-dim bg-sol-bg transition-colors duration-500",
         glow && "bg-sol-cyan/[0.04]",
       )}
     >
       <div className="mx-auto conv-col px-2 sm:px-4">
         <div
           className={cn(
-            "flex items-center gap-0.5 h-8 border-t transition-colors duration-500",
+            "flex items-center gap-0.5 h-7 border-t transition-colors duration-500",
             glow ? "border-sol-cyan/40" : "border-sol-border/25",
           )}
         >
@@ -172,46 +163,62 @@ export function TriageBar() {
             <VerbButton key={v.id} verb={v} disabled={disabled} onRun={() => run(v)} />
           ))}
 
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                data-triage-more
-                aria-label="More triage actions"
-                className={cn(
-                  "flex items-center justify-center w-6 h-6 rounded-md transition-colors duration-150",
-                  "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt",
-                  "data-[state=open]:text-sol-text data-[state=open]:bg-sol-bg-alt",
-                )}
-              >
-                <MoreHorizontal className="w-3.5 h-3.5" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" side="top" sideOffset={6} className={CTX_SURFACE}>
-              {SECONDARY_VERBS.map((v) => (
-                <CtxItem
-                  key={v.id}
-                  icon={v.icon}
-                  iconClassName={v.text}
-                  shortcut={v.action}
-                  danger={v.danger}
+          <DropdownMenu>
+            <ShortcutTooltip side="top" label="More">
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
                   disabled={disabled}
-                  onSelect={() => run(v)}
+                  aria-label="More triage actions"
+                  data-triage-more
+                  className={cn(
+                    "flex items-center justify-center w-6 h-6 rounded-[5px] text-sol-text-dim transition-colors duration-150",
+                    "outline-none focus-visible:ring-1 focus-visible:ring-sol-cyan/40",
+                    "hover:text-sol-text hover:bg-sol-bg-alt data-[state=open]:text-sol-text data-[state=open]:bg-sol-bg-alt",
+                    "disabled:opacity-35 disabled:pointer-events-none",
+                  )}
                 >
-                  {v.id === "pin" && activePinned ? "Unpin" : v.label}
-                </CtxItem>
-              ))}
+                  <MoreHorizontal className="w-3.5 h-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+            </ShortcutTooltip>
+            <DropdownMenuContent align="start" side="top" sideOffset={6} collisionPadding={8} className={CTX_SURFACE}>
+              {SECONDARY_VERBS.map((v) => {
+                const pinned = v.id === "pin" && activePinned;
+                return (
+                  <CtxItem
+                    key={v.id}
+                    icon={pinned ? PinOff : v.icon}
+                    shortcut={v.action}
+                    danger={v.danger}
+                    onSelect={() => run(v)}
+                  >
+                    {pinned ? "Unpin" : v.label}
+                  </CtxItem>
+                );
+              })}
               <CtxSeparator />
               <CtxItem icon={Sparkles} onSelect={() => useInboxStore.getState().setTriageNuxOpen(true)}>
                 How the inbox works
               </CtxItem>
-              <CtxItem icon={PanelBottomClose} onSelect={toggleTriageBarCompact}>
+              <CtxItem icon={EyeOff} onSelect={toggleTriageBarCompact}>
                 Hide this bar
               </CtxItem>
             </DropdownMenuContent>
           </DropdownMenu>
 
           {flash && <FlashLine flash={flash} />}
+
+          <ShortcutTooltip side="top" label="Shortcuts and the tour" action="ui.toggleShortcutsHelp">
+            <button
+              type="button"
+              onClick={() => useInboxStore.getState().toggleShortcutsPanel()}
+              aria-label="Keyboard shortcuts"
+              className="ml-auto flex items-center justify-center w-6 h-6 rounded-[5px] outline-none focus-visible:ring-1 focus-visible:ring-sol-cyan/40 hover:bg-sol-bg-alt transition-colors duration-150"
+            >
+              <KeyCap size="xs">?</KeyCap>
+            </button>
+          </ShortcutTooltip>
         </div>
       </div>
     </div>
