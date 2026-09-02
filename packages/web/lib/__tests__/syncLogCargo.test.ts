@@ -17,6 +17,13 @@ describe("planCargoApply — tasks/docs/plans/projects", () => {
     expect(p.refetch).toBe(true);
     expect(ENRICH_TRIGGER_FIELDS.docs.has("plan_id")).toBe(true);
   });
+  test("a trigger field re-shipped with its UNCHANGED value does not refetch (coalesced/full cargo)", () => {
+    const existing = { _id: "t1", plan_id: "p9", title: "old" };
+    expect(planCargoApply("tasks", { patch: { plan_id: "p9", title: "new" }, full: true }, existing).refetch).toBe(false);
+    expect(planCargoApply("tasks", { patch: { plan_id: "p10", title: "new" } }, existing).refetch).toBe(true);
+    expect(planCargoApply("tasks", { patch: {}, unset: ["plan_id"] }, existing).refetch).toBe(true);
+    expect(planCargoApply("tasks", { patch: {}, unset: ["plan_id"] }, { _id: "t1" }).refetch).toBe(false);
+  });
   test("tasks: session_count derives from conversation_ids; last_comment_at (a joined comment) refetches", () => {
     expect(planCargoApply("tasks", { patch: { conversation_ids: ["a", "b"] } }, {}).fields.session_count).toBe(2);
     expect(planCargoApply("tasks", { patch: { updated_at: 5, last_comment_at: 5 } }, {}).refetch).toBe(true);
