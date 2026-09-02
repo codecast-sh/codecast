@@ -3,6 +3,7 @@ import { ShieldCheck } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { Button } from "../ui/button";
 import { useOsPermissions } from "../../hooks/useOsPermissions";
+import { useFirstRunDialog } from "../../lib/firstRunDialogs";
 import { isDetachedTabWindow, isElectron } from "../../lib/desktop";
 import {
   OS_PERMISSION_KINDS,
@@ -48,6 +49,8 @@ export function DeviceSetupDialog() {
   const [open, setOpen] = useState(false);
   const [autoChecked, setAutoChecked] = useState(false);
   const { permissions, refresh } = useOsPermissions();
+  // Holds the first-run turn while open; waits for it before opening unasked.
+  const { blocked, claim } = useFirstRunDialog("device-setup", open);
 
   useEffect(() => {
     const onOpen = () => setOpen(true);
@@ -57,19 +60,21 @@ export function DeviceSetupDialog() {
 
   // First run: wait for a real read (all-unknown is the pre-read state, and
   // an old shell that stays unknown never opens this), then open once if a
-  // required kind is still actionable.
+  // required kind is still actionable. Another first-run dialog on screen
+  // (the inbox tour) defers the check, not the decision: it re-runs the
+  // moment that dialog closes.
   useEffect(() => {
-    if (autoChecked || open) return;
+    if (autoChecked || open || blocked) return;
     if (isDetachedTabWindow()) return;
     if (OS_PERMISSION_KINDS.every((k) => permissions[k] === "unknown")) return;
+    const needed =
+      !seen() &&
+      OS_PERMISSION_KINDS.some((k) => OS_PERMISSIONS[k].required && isPermissionActionable(permissions[k]));
+    if (needed && !claim()) return;
     setAutoChecked(true);
-    if (seen()) return;
-    const needed = OS_PERMISSION_KINDS.some(
-      (k) => OS_PERMISSIONS[k].required && isPermissionActionable(permissions[k]),
-    );
     if (needed) setOpen(true);
-    else markSeen();
-  }, [permissions, autoChecked, open]);
+    else if (!seen()) markSeen();
+  }, [permissions, autoChecked, open, blocked, claim]);
 
   const close = () => {
     markSeen();

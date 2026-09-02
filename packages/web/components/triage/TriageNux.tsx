@@ -2,14 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Check } from "lucide-react";
+import { Check, MoreHorizontal } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
-import { getShortcutsForAction, matchShortcut, type ShortcutAction } from "../../shortcuts";
+import { getShortcutsForAction, hasOpenModal, matchShortcut, type ShortcutAction } from "../../shortcuts";
 import { MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { track } from "../../lib/analytics";
 import { isInboxSessionView } from "../../lib/inboxRouting";
-import { PARK_VERBS, TRIAGE_VERBS, type TriageVerb, type TriageVerbId } from "./verbs";
+import { useFirstRunDialog } from "../../lib/firstRunDialogs";
+import { PARK_VERBS, PRIMARY_VERBS, SECONDARY_VERBS, type TriageVerb, type TriageVerbId } from "./verbs";
 
 // The intro tour: four screens that teach the codecast loop — cards arrive,
 // the inbox sorts them by who acts next, and you clear them with one
@@ -464,9 +465,10 @@ export function TriageNux() {
 
 // Mounted on the inbox page. Auto-opens the tour once per account, only when
 // there is something real behind it (the user has sessions), never over the
-// CLI setup hero, and never when tips are off. Established users — anyone the
-// tips system already grades phase 3+ — never get the unprompted modal; for
-// them the tour stays a replay entry on the bar and the shortcuts panel.
+// CLI setup hero, never over another dialog, and never when tips are off.
+// Established users — anyone the tips system already grades phase 3+ — never
+// get the unprompted modal; for them the tour stays a replay entry on the bar
+// and the shortcuts panel.
 export function TriageNuxGate() {
   const pathname = usePathname();
   const s = useTrackedStore([
@@ -489,13 +491,25 @@ export function TriageNuxGate() {
   const hasSessions = Object.keys(s.sessions).length > 0;
   // Same thresholds as useTips.currentPhase: 8+ tips absorbed = phase 3.
   const veteran = (tips?.seen?.length ?? 0) + (tips?.completed?.length ?? 0) >= 8;
+  // The tour holds the first-run turn while open (a replay too), and waits
+  // for it while the device-setup dialog has it: one introduction at a time.
+  const { blocked, claim } = useFirstRunDialog("tour", open);
 
   useEffect(() => {
-    if (open || !onInboxView || !initialized || done || off || veteran || !hasSessions) return;
-    // A beat after landing, so the tour never races the page paint.
-    const t = setTimeout(() => useInboxStore.getState().setTriageNuxOpen(true), 1500);
+    if (open || blocked || !onInboxView || !initialized || done || off || veteran || !hasSessions) return;
+    // A beat after landing, so the tour never races the page paint. A modal
+    // the user has up at that moment (new session, settings) keeps its turn:
+    // the beat repeats until the screen is clear.
+    let t: ReturnType<typeof setTimeout>;
+    const arm = () => {
+      t = setTimeout(() => {
+        if (hasOpenModal()) arm();
+        else if (claim()) useInboxStore.getState().setTriageNuxOpen(true);
+      }, 1500);
+    };
+    arm();
     return () => clearTimeout(t);
-  }, [open, onInboxView, initialized, done, off, veteran, hasSessions]);
+  }, [open, blocked, onInboxView, initialized, done, off, veteran, hasSessions, claim]);
 
   if (!open) return null;
   return <TriageNux />;
