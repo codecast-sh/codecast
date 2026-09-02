@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { selectSyncing, selectSyncSummary } from "./SyncStatusChip";
+import { selectColdLoad, selectSyncing, selectSyncSummary } from "./SyncStatusChip";
 import { useInboxStore } from "../store/inboxStore";
 
 // Regression coverage for the header sync chip. The bug: the chip read
@@ -97,5 +97,26 @@ describe("sync log era semantics", () => {
     expect(selectSyncing(useInboxStore.getState())).toBe(true);
     store.setSyncLogLag("user:u", 0);
     expect(selectSyncing(useInboxStore.getState())).toBe(false);
+  });
+});
+
+// The dot itself shows only for a cold first load; a warm-cache log replay
+// (`syncing` true for the sub-second it takes) must not light it. That replay
+// happens on every incoming change and is the sync working, not news.
+describe("selectColdLoad (what the dot shows without a stall)", () => {
+  const warm = { sessions: { a: {} }, tasks: { t: {} }, docs: { d: {} } };
+
+  it("lights for a live first-load into an empty collection", () => {
+    expect(selectColdLoad({ ...warm, sessions: {}, liveLoading: { sessions: true } })).toBe(true);
+  });
+
+  it("stays dark for a log replay on a warm cache even though syncing is true", () => {
+    const replaying = { ...warm, liveLoading: {}, syncLogLag: { "user:u": 2 } };
+    expect(selectSyncing(replaying)).toBe(true);
+    expect(selectColdLoad(replaying)).toBe(false);
+  });
+
+  it("stays dark for a live refresh into a warm collection", () => {
+    expect(selectColdLoad({ ...warm, liveLoading: { sessions: true, docs: true } })).toBe(false);
   });
 });

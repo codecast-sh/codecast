@@ -118,6 +118,13 @@ if (import.meta.hot) {
   import.meta.hot.data.convexClient = convex;
 }
 
+// Dev-only introspection, next to `window.__inboxStore`: the perf harness
+// (scripts/perf/ws-bytes.mjs) names socket traffic by asking the client which
+// query id maps to which function, instead of waiting for Add frames.
+if (import.meta.env.DEV && typeof window !== "undefined") {
+  (window as any).__convexClient = convex;
+}
+
 export function Providers({ children }: { children: ReactNode }) {
   return (
     <ConvexAuthProvider client={convex} storage={durableAuthStorage}>

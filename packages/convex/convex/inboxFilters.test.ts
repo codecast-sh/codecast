@@ -647,6 +647,29 @@ describe("isRealTurn", () => {
     expect(isRealTurn({ role: "system", content: "Remote Control disconnected" })).toBe(false);
     expect(isRealTurn({ role: "user", content: "  " })).toBe(false);
   });
+  test("the CLI's synthetic no-response stub is not a turn", () => {
+    expect(isRealTurn({ role: "assistant", content: "No response requested." })).toBe(false);
+    expect(isRealTurn({ role: "assistant", content: "  No response requested.\n" })).toBe(false);
+    // A real reply that happens to start the same way still counts.
+    expect(isRealTurn({ role: "assistant", content: "No response requested. Moving on to the next step." })).toBe(true);
+  });
+  test("a limit banner followed by the resume hook's stub keeps the session parked", () => {
+    // What the parked transcript holds after the hook pokes it: banner, then
+    // the injected "Continue" meta prompt (skipped by the parser), then the
+    // synthetic stub at the same timestamp, then a Remote Control notice.
+    const batch = [
+      { role: "assistant", content: "You've hit your session limit · resets 10:30pm (America/New_York)", timestamp: 100 },
+      { role: "assistant", content: "No response requested.", timestamp: 170 },
+      { role: "system", content: "Remote Control disconnected — Claude.ai login was rejected", timestamp: 200 },
+    ];
+    const newest = newestSignificantMessage(batch);
+    expect(newest?.timestamp).toBe(100);
+    expect(nextPendingApiError({
+      newestIsBanner: newest != null && isBannerTurn(newest),
+      batchHasRealTurn: batch.some(isRealTurn),
+      conversationPending: false,
+    })).toBe(true);
+  });
 });
 
 describe("classifyWorkState", () => {

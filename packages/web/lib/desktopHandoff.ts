@@ -293,6 +293,8 @@ export function shouldAttemptPreBootHandoff(c: PreBootHandoffContext): boolean {
 // window.__CODECAST_ELECTRON__ is exposed by the desktop preload before any page
 // script runs, but the user-agent check keeps this honest even on a build whose
 // preload failed to load — a desktop window must never hand off to itself.
+// The twin of lib/desktop.ts's isDesktopShell, copied rather than imported
+// because this file is inlined pre-boot and may import nothing.
 function isDesktopShell(): boolean {
   if ((window as any).__CODECAST_ELECTRON__) return true;
   return typeof navigator !== "undefined" && / Electron\//.test(navigator.userAgent);

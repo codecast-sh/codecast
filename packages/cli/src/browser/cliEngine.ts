@@ -34,7 +34,7 @@ import {
   ENGINE_PACKAGE, engineHelpText, engineHome, engineSession, engineTabs, engineVersion, ensureEngine, findEngine, isRealSession,
   realSessionKey, runEngine, runEngineJson,
 } from "./engine.js";
-import { engineBrowserFor, isRealMode, requireRealBridge, splitTargetFlags } from "./bridge/real.js";
+import { engineBrowserFor, isRealMode, realModeHint, requireRealBridge, splitTargetFlags } from "./bridge/real.js";
 import { registerBridgeCommands, targetFlags } from "./bridge/commands.js";
 import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans } from "./engineReap.js";
 import { matchRefs, nearMatches } from "./snapshot.js";
@@ -87,9 +87,24 @@ export interface TargetChoice {
  */
 const CLONE_ONLY: Record<string, string> = {
   grant: "the extension cannot grant site permissions in the human's Chrome",
-  eval: "it has no real-mode path yet",
-  login: "it has no real-mode path yet",
+  eval: "it has no real mode path yet",
+  login: "it has no real mode path yet",
 };
+
+/**
+ * Why a verb refuses the real Chrome, or null when it drives both. The one
+ * reading of CLONE_ONLY: `ctxFor` dies with it before a standalone verb runs,
+ * and `runFlow` fails the step with it inside a `do` flow, so the two paths
+ * cannot disagree about which verbs the real Chrome gets.
+ */
+function cloneOnlyRefusal(verb: string, real: boolean): { message: string; hint: string } | null {
+  const why = CLONE_ONLY[verb];
+  if (!why || !real) return null;
+  return {
+    message: `\`${verb}\` drives the agent browser only: ${why}`,
+    hint: `cast browser ${verb} --clone …, or \`cast browser target clone\``,
+  };
+}
 
 /**
  * Options every engine call carries: this session, and the browser it drives.
@@ -114,10 +129,8 @@ async function ctx(choice: TargetChoice = {}): Promise<Ctx> {
 /** `ctx` for a named verb: a clone-only verb (CLONE_ONLY) asked for the real
  *  Chrome dies here, before any side effect in either browser. */
 async function ctxFor(verb: string, choice: TargetChoice): Promise<Ctx> {
-  const why = CLONE_ONLY[verb];
-  if (why && isRealMode(choice, auditOwner())) {
-    die(`\`${verb}\` drives the agent browser only: ${why}`, `cast browser ${verb} --clone …, or \`cast browser target clone\``);
-  }
+  const refused = cloneOnlyRefusal(verb, isRealMode(choice, auditOwner()));
+  if (refused) die(refused.message, refused.hint);
   return ctx(choice);
 }
 
@@ -530,15 +543,22 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     if (deny) die(deny.message, deny.hint);
   }
 
-  // `tab <id>` takes what the footer printed — the 8-char target id — or a
-  // substring of a URL; the engine wants its own `t<N>` label or a full id.
-  if (verb === "tab" && args[0] && !/^(list|new|close|switch|--.*|t\d+)$/.test(args[0])) {
-    const q = args[0].toLowerCase();
-    const tabs = engineTabs(o);
-    const hit =
-      tabs.find((t) => t.targetId.toLowerCase().startsWith(q)) ??
-      tabs.find((t) => (t.url ?? "").toLowerCase().includes(q));
-    if (hit) args = [hit.targetId, ...args.slice(1)];
+  // `tab <id>`, `tab close <id>` and `tab switch <id>` take what the footer
+  // printed (the 8-char target id) or a substring of a URL; the engine wants
+  // its own `t<N>` label. A full target id would do for the clone, but over
+  // the bridge a target id IS 8 chars and the engine reads anything shorter
+  // than 16 as a label, so the label is the one form that works everywhere.
+  if (verb === "tab") {
+    const at = /^(close|switch)$/.test(args[0] ?? "") ? 1 : 0;
+    const ref = args[at];
+    if (ref && !/^(list|new|close|switch|--.*|t\d+)$/.test(ref)) {
+      const q = ref.toLowerCase();
+      const tabs = engineTabs(o);
+      const hit =
+        tabs.find((t) => t.targetId.toLowerCase().startsWith(q)) ??
+        tabs.find((t) => (t.url ?? "").toLowerCase().includes(q));
+      if (hit) args = [...args.slice(0, at), hit.tabId || hit.targetId, ...args.slice(at + 1)];
+    }
   }
 
   // Ours, never the engine's. `skills` never touches a page, so a failure
@@ -587,7 +607,7 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     if (res.stderr) process.stderr.write(res.stderr);
     if (res.status !== 0) {
       const msg = engineFailureMessage(res.stderr, res.stdout);
-      await emitFailureBlock(engineSource({ session }), msg, { disabled: !capture });
+      await emitFailureBlock(engineSource(o), msg, { disabled: !capture });
       return res.status;
     }
   }
@@ -638,7 +658,7 @@ function printFooter(o: Ctx, verb: string, owner: string | null): void {
     if (warn) console.log(`${fmt.warning("!")} ${warn}`);
     // A login form where the work was expected. Named, with the fix, so an
     // agent does not read it as an empty page or restart the browser over it.
-    const signIn = url ? signInLandingNote(url, keepsOwnLogin) : null;
+    const signIn = url ? signInLandingNote(url, keepsOwnLogin, realModeHint(owner)) : null;
     if (signIn) console.log(`${fmt.warning("!")} ${signIn}`);
   }
 }
@@ -723,6 +743,8 @@ async function loginAsPerson(url: string | undefined, waitSeconds: number, choic
     else console.log(`${fmt.warning("!")} could not raise the window (${raised.reason}); it is the Chrome window titled by the page, behind your others`);
   }
   console.log(fmt.muted("  sign in there once; the login stays in the agent browser across restarts (only `stop --wipe` / `start --fresh` drop it)"));
+  const hint = realModeHint(auditOwner());
+  if (hint) console.log(fmt.muted(`  or skip the sign-in: ${hint}`));
   printFooter(o, "login", auditOwner());
   if (waitSeconds <= 0) return 0;
 
@@ -928,6 +950,10 @@ async function runFlow(
     let ok = true;
     console.log(`${fmt.highlight("›")} ${raw}`);
     try {
+      // The same table the standalone verbs read (cloneOnlyRefusal): a step
+      // the real Chrome cannot take fails here, before anything touches it.
+      const refused = cloneOnlyRefusal(verb, isRealSession(c.session));
+      if (refused) throw new Error(`${refused.message} (${refused.hint})`);
       if (verb === "shot") {
         const si = args.findIndex((a) => a === "-s" || a === "--selector");
         const selector = si >= 0 ? args[si + 1] : undefined;
@@ -935,7 +961,7 @@ async function runFlow(
         await takeShot(rest.find((a) => !a.startsWith("--")), { full: args.includes("--full"), selector }, c, deps);
       } else if (verb === "eval") {
         const script = readEvalScript(rest, null);
-        const out = await evalInPage(script, c.session);
+        const out = await evalInPage(script, c);
         console.log(out.output);
         if (!out.ok) throw new Error(out.hint ?? "eval failed");
       } else if (verb === "find") {
@@ -1237,7 +1263,7 @@ A script that throws prints the page's exception and exits 1.`;
       } catch (err) {
         die((err as Error).message);
       }
-      const out = await evalInPage(script, c.session, timeout);
+      const out = await evalInPage(script, c, timeout);
       console.log(out.output);
       if (!out.ok && out.hint) console.log(fmt.muted(`  ${out.hint}`));
       process.exit(out.ok ? 0 : 1);
@@ -1267,7 +1293,7 @@ sessions' tabs).`,
       const c = await ctxFor("grant", o);
       await ensureBrowser();
       await ensurePinnedTab(c.session);
-      const out = await grantPermissions(permissions, c.session, o);
+      const out = await grantPermissions(permissions, c, o);
       console.log(`${out.ok ? OK : BAD} ${out.output}`);
       if (out.hint) console.log(fmt.muted(`  ${out.hint}`));
       process.exit(out.ok ? 0 : 1);

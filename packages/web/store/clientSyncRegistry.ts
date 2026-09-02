@@ -19,6 +19,9 @@ export type RegistrySyncOpts = {
   altKey?: string;
   keepSelected?: string;
   ignoreFields?: string[];
+  // Server-joined object fields (recomputed without a scalar change on the
+  // row) the identity reuse compares by content — see the engine's SyncOpts.
+  deepFields?: string[];
   preserveFields?: string[];
 };
 
@@ -245,8 +248,10 @@ export const CLIENT_SYNC_REGISTRY = {
     localFirst: true,
     workspaceScoped: true,
     // Liberal delta cache like the others; a snapshot here was the one
-    // remaining collection that pruned by absence.
-    sync: { isDelta: true },
+    // remaining collection that pruned by absence. The member counts are joined
+    // from tasks/plans/docs and move without any scalar on the row changing,
+    // so they must be content-compared or a refetch lands as a no-op.
+    sync: { isDelta: true, deepFields: ["task_counts"] },
   },
   buckets: {
     persistence: { kind: "collection", key: "buckets" },
@@ -863,9 +868,21 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   sidePanelSessionId: "local",
 };
 
+// Ephemeral store slots — never persisted, so never registry keys — that must
+// still agree across windows. The liveness payload's projection slot: its
+// stamps, epoch and receipt clock gate every window's placement (the
+// overlay-coverage rule, sync-convergence), and only the host subscribes to
+// the overlay. A follower without the slot buckets every row by the
+// client-only sweep and disagrees with its host on the rows the payload
+// vouches for (found by the multi-window simulation, 2026-09-02).
+export const REPLICATED_EPHEMERAL_KEYS = ["sessionsProjection"] as const;
+
 /** The slice the sync host replicates to follower windows. */
-export const REPLICATED_STORE_KEYS = (Object.keys(REPLICATION_CLASSIFICATION) as ClientSyncStoreKey[])
-  .filter((key) => REPLICATION_CLASSIFICATION[key] === "shared");
+export const REPLICATED_STORE_KEYS: readonly string[] = [
+  ...(Object.keys(REPLICATION_CLASSIFICATION) as ClientSyncStoreKey[])
+    .filter((key) => REPLICATION_CLASSIFICATION[key] === "shared"),
+  ...REPLICATED_EPHEMERAL_KEYS,
+];
 
 const REPLICATED_COLLECTION_SET = new Set<string>(
   REGISTERED_COLLECTION_KEYS.filter((key) => REPLICATION_CLASSIFICATION[key] === "shared"),

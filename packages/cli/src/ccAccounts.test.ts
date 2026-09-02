@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { readLocalCredentialAsync } from "./remote/session-move.js";
 import {
   buildProfile,
   parseProfile,
@@ -15,6 +16,8 @@ import {
   refreshActiveCredential,
   resnapshotIfActiveFresher,
   activeCredentialExpiresAt,
+  readActiveCredential,
+  readActiveCredentialAsync,
   credentialHealth,
   saveProfile,
   useProfile,
@@ -35,6 +38,7 @@ import {
   parseRateLimitFingerprint,
   sameAccountFingerprint,
   attributeFingerprint,
+  activeAccountSummary,
 } from "./ccAccounts.js";
 
 const CRED = JSON.stringify({
@@ -226,6 +230,20 @@ describe("createMtimeGatedCache", () => {
     expect(calls).toBe(3);
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it("with a ttl, recomputes after the window even when no mtime moved", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mtime-cache-ttl-"));
+    const file = path.join(dir, "a.json");
+    fs.writeFileSync(file, "{}");
+    let calls = 0;
+    const cache = createMtimeGatedCache<number>(() => [file], () => ++calls, { ttlMs: 50 });
+    expect(cache.get()).toBe(1);
+    expect(cache.get()).toBe(1);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(cache.get()).toBe(2);
+    expect(cache.get()).toBe(2);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe("autoSaveActiveProfile + heartbeat payload (sandboxed $HOME)", () => {
@@ -379,9 +397,15 @@ describe("deleteProfile (sandboxed $HOME)", () => {
 
   it("removes a dormant profile's secret + index entry and reports it gone", () => {
     saveProfile("footage");
-    // Log the machine into a DIFFERENT account so "footage" goes dormant.
+    // Log the machine into a DIFFERENT account so "footage" goes dormant. A
+    // real login swaps the credential too — relabelling one credential is the
+    // poisoned shape saveProfile now refuses.
     const other = { accountUuid: "other-uuid", emailAddress: "ashot@union.app" };
     fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: other }));
+    fs.writeFileSync(
+      path.join(home, ".claude", ".credentials.json"),
+      JSON.stringify({ claudeAiOauth: { ...JSON.parse(CRED).claudeAiOauth, accessToken: "at-union" } }),
+    );
     saveProfile("union");
 
     const meta = deleteProfile("footage");
@@ -548,8 +572,8 @@ describe("refreshActiveCredential (sandboxed $HOME, injected fetch)", () => {
     expect(res.reason).toContain("no refresh token");
   });
 
-  it("reads the active token's expiry", () => {
-    expect(activeCredentialExpiresAt()).toBe(1781228581738);
+  it("reads the active token's expiry", async () => {
+    expect(await activeCredentialExpiresAt()).toBe(1781228581738);
   });
 });
 
@@ -584,12 +608,12 @@ describe("resnapshotIfActiveFresher (sandboxed $HOME)", () => {
     invalidateAccountsCache();
   });
 
-  it("re-snapshots the covering profile when the live login is fresher", () => {
+  it("re-snapshots the covering profile when the live login is fresher", async () => {
     writeActive(1000);
     saveProfile("footage"); // stored snapshot: expiresAt 1000
     // A manual /login (or a proactive refresh) bumps the live expiry forward.
     writeActive(9_999_999);
-    const updated = resnapshotIfActiveFresher();
+    const updated = await resnapshotIfActiveFresher();
     expect(updated).toBe("footage");
     const meta = listProfiles().find((p) => p.name === "footage");
     // The re-saved profile now carries the fresher token (assert via the secret).
@@ -600,17 +624,29 @@ describe("resnapshotIfActiveFresher (sandboxed $HOME)", () => {
     expect(meta).toBeDefined();
   });
 
-  it("no-ops when the stored profile is already as fresh", () => {
+  it("no-ops when the stored profile is already as fresh", async () => {
     writeActive(5000);
     saveProfile("footage");
-    expect(resnapshotIfActiveFresher()).toBeNull(); // active == stored
+    expect(await resnapshotIfActiveFresher()).toBeNull(); // active == stored
     writeActive(4000); // live copy is OLDER — still no-op
-    expect(resnapshotIfActiveFresher()).toBeNull();
+    expect(await resnapshotIfActiveFresher()).toBeNull();
   });
 
-  it("no-ops when no saved profile covers the active login", () => {
+  it("no-ops when no saved profile covers the active login", async () => {
     writeActive(1000); // nothing saved yet
-    expect(resnapshotIfActiveFresher()).toBeNull();
+    expect(await resnapshotIfActiveFresher()).toBeNull();
+  });
+
+  // The daemon's timers read the credential off the loop; the async read must
+  // answer from the same store as the sync one, file store and file fallback alike.
+  it("readActiveCredentialAsync and readLocalCredentialAsync match their sync twins", async () => {
+    writeActive(1234);
+    expect(await readActiveCredentialAsync()).toBe(readActiveCredential());
+    // PATH names no real directory, so the keychain call fails and the read
+    // falls back to the file. (Not compared with the sync read: bun's sync
+    // spawn resolves `security` regardless of PATH, so on a Mac the sync
+    // read answers from the real keychain here.)
+    expect(await readLocalCredentialAsync()).toContain('"expiresAt":1234');
   });
 });
 
@@ -921,5 +957,109 @@ describe("attributeFingerprint (token → saved profile via usage snapshots)", (
     expect(attributeFingerprint(fp(1_788_324_000, 1_788_861_600), { z: { uuid: "u-z" } }, usage, now)).toBeNull();
     const twin = { ...usage, "u-b": usage["u-a"] };
     expect(attributeFingerprint(fp(1_788_324_000, 1_788_861_600), profiles, twin, now)).toBeNull();
+  });
+});
+
+// Regression for 2026-09-02: three profiles (claude2, claude3, fresh) all held
+// ONE access token under three names, and the machine ran account B while
+// ~/.claude.json still labelled it A. Root cause: a switch to a profile saved
+// without an identity block left the OUTGOING account's label in place, so
+// every later save-on-switch re-saved the live token under the wrong profile.
+// The mint flow then rejected every token it minted, because attribution
+// judged it against a store that agreed with itself and with nothing real.
+describe("switch identity integrity (sandboxed $HOME)", () => {
+  let home: string;
+  const savedEnv: Record<string, string | undefined> = {};
+  const credFor = (token: string) =>
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: token,
+        refreshToken: `rt-${token}`,
+        expiresAt: Date.now() + 3_600_000,
+        scopes: ["user:inference"],
+        subscriptionType: "max",
+        rateLimitTier: "default_claude_max_20x",
+      },
+    });
+  const label = (uuid: string, email: string) =>
+    fs.writeFileSync(
+      path.join(home, ".claude.json"),
+      JSON.stringify({ oauthAccount: { accountUuid: uuid, emailAddress: email } }),
+    );
+  const activeToken = () =>
+    JSON.parse(fs.readFileSync(path.join(home, ".claude", ".credentials.json"), "utf-8"))
+      .claudeAiOauth.accessToken;
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-identity-test-"));
+    for (const k of ["HOME", "PATH", "CC_ACCOUNTS_FORCE_FILE"]) savedEnv[k] = process.env[k];
+    process.env.HOME = home;
+    process.env.PATH = path.join(home, "empty-path");
+    process.env.CC_ACCOUNTS_FORCE_FILE = "1";
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
+    invalidateAccountsCache();
+  });
+
+  afterEach(() => {
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+    invalidateAccountsCache();
+  });
+
+  it("moves the identity label with the credential, even when the profile saved none", () => {
+    // Save account A normally, then hand-write a profile for B with no identity
+    // block — the shape a profile saved while ~/.claude.json was missing has.
+    fs.writeFileSync(path.join(home, ".claude", ".credentials.json"), credFor("token-a"));
+    label("uuid-a", "a@example.com");
+    saveProfile("aaa");
+    fs.writeFileSync(
+      path.join(home, ".codecast", "cc-accounts", "bbb.json"),
+      JSON.stringify({ credentials: JSON.parse(credFor("token-b")), oauthAccount: {}, saved_at: 1 }),
+    );
+    const index = JSON.parse(fs.readFileSync(path.join(home, ".codecast", "cc-accounts.json"), "utf-8"));
+    index.profiles.bbb = { email: "b@example.com", uuid: "uuid-b" };
+    fs.writeFileSync(path.join(home, ".codecast", "cc-accounts.json"), JSON.stringify(index));
+    invalidateAccountsCache();
+
+    useProfile("bbb");
+    expect(activeToken()).toBe("token-b");
+    // The label must name B. Naming A is what poisoned the store.
+    expect(activeAccountSummary()?.uuid).toBe("uuid-b");
+    expect(listProfiles().find((p) => p.active)?.name).toBe("bbb");
+  });
+
+  it("refuses to save one credential under a second profile name", () => {
+    fs.writeFileSync(path.join(home, ".claude", ".credentials.json"), credFor("token-a"));
+    label("uuid-a", "a@example.com");
+    saveProfile("aaa");
+    // The label lies: the machine still runs A's token, but claims to be B.
+    label("uuid-b", "b@example.com");
+    invalidateAccountsCache();
+    expect(() => saveProfile("bbb")).toThrow(/already stored as "aaa"/);
+    expect(listProfiles().map((p) => p.name)).toEqual(["aaa"]);
+  });
+
+  it("keeps save-on-switch from copying the live token into another profile", () => {
+    fs.writeFileSync(path.join(home, ".claude", ".credentials.json"), credFor("token-a"));
+    label("uuid-a", "a@example.com");
+    saveProfile("aaa");
+    fs.writeFileSync(path.join(home, ".claude", ".credentials.json"), credFor("token-b"));
+    label("uuid-b", "b@example.com");
+    saveProfile("bbb");
+    // Poison the label by hand: the machine holds B's token, labelled A.
+    fs.writeFileSync(path.join(home, ".claude", ".credentials.json"), credFor("token-b"));
+    label("uuid-a", "a@example.com");
+    invalidateAccountsCache();
+
+    // The switch-away re-snapshot must not overwrite aaa with B's token.
+    useProfile("aaa");
+    const stored = JSON.parse(
+      fs.readFileSync(path.join(home, ".codecast", "cc-accounts", "aaa.json"), "utf-8"),
+    );
+    expect(stored.credentials.claudeAiOauth.accessToken).toBe("token-a");
   });
 });

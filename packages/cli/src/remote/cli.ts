@@ -32,6 +32,7 @@ import { reorientationNotice } from "../sessionMoveNotice.js";
 import { deviceInfo, deviceId } from "./device.js";
 import { decryptToken } from "../tokenEncryption.js";
 import { ensureUp, hostState, readHosts as readCloudHosts, toRemoteHost } from "../browser/cloudHost.js";
+import { sshTmuxAttachCommand } from "@codecast/shared/contracts";
 
 /**
  * Find the machine a session should move to, whichever registry it lives in.
@@ -350,7 +351,7 @@ export function registerRemoteCommand(program: Command): void {
         verification: describeVerification(move.verification),
       }));
       console.log("  [4/4] done — session now runs on the Mac");
-      console.log(`  watch: ssh ${host.user}@${host.address} 'tmux attach -t cc-resume-${sessionId.slice(0, 8)}'`);
+      console.log(`  watch: ${sshTmuxAttachCommand(`${host.user}@${host.address}`, `cc-resume-${sessionId.slice(0, 8)}`)}`);
       console.log(`  command_id=${r.command_id}`);
     });
 
