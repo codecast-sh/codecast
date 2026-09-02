@@ -1,8 +1,11 @@
 // Per-team opt-in features (chat, calls). The catalog and the "absent = off"
-// rule live in @codecast/shared/contracts/teamFeatures; this module is the
-// server half: the stored shape, the guard every feature chokepoint calls, the
-// admin toggle, and the per-user snippet availability the daemon heartbeat
-// carries so a member's agent snippets follow the flag.
+// rule live in @codecast/shared/contracts/teamFeatures; the gate machinery —
+// the resolver, the guard, the admin toggle decision, the fan out to attached
+// items, and the wording every surface shares — comes from @platform/flags.
+// This module is the server half: it binds that machinery to codecast's
+// catalog and to how a team's flags are stored (`teams.features`), and adds
+// the per-user snippet availability the daemon heartbeat carries so a member's
+// agent snippets follow the flag.
 import { v } from "convex/values";
 import { mutation } from "./functions";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -10,9 +13,14 @@ import type { Id } from "./_generated/dataModel";
 import {
   TEAM_FEATURE_KEYS,
   TEAM_FEATURES,
-  teamFeatureEnabled,
   type TeamFeatureKey,
 } from "@codecast/shared/contracts";
+import {
+  applyFeatureChange,
+  attachedAvailability,
+  createFeatureGuard,
+  defineFeatures,
+} from "@platform/flags";
 
 const teamFeatureKeyValidator = v.union(
   ...(TEAM_FEATURE_KEYS.map((k) => v.literal(k)) as [any, ...any[]]),
@@ -20,22 +28,35 @@ const teamFeatureKeyValidator = v.union(
 
 type DbCtx = { db: any };
 
+/** codecast's catalog as a @platform/flags catalog. The descriptors are the
+ *  shared table verbatim — `snippets` rides along as an extra field, which is
+ *  what the snippet fan out below reads. */
+export const TEAM_FEATURE_CATALOG = defineFeatures(TEAM_FEATURES);
+
+/** A team, addressed the way the guard loads it: the row lives in this ctx. */
+type TeamScope = { ctx: DbCtx; teamId: Id<"teams"> };
+
+const guard = createFeatureGuard<TeamFeatureKey, TeamScope>({
+  catalog: TEAM_FEATURE_CATALOG,
+  loadFlags: async ({ ctx, teamId }) => (await ctx.db.get(teamId))?.features,
+});
+
+const scopeFor = (ctx: DbCtx, teamId: Id<"teams"> | null | undefined): TeamScope | null =>
+  teamId ? { ctx, teamId } : null;
+
 /** Is `key` on for team `teamId`? Missing team = off. */
 export async function teamHasFeature(
   ctx: DbCtx,
   teamId: Id<"teams"> | null | undefined,
   key: TeamFeatureKey,
 ): Promise<boolean> {
-  if (!teamId) return false;
-  const team = await ctx.db.get(teamId);
-  return teamFeatureEnabled(team, key);
+  return guard.has(scopeFor(ctx, teamId), key);
 }
 
 /** The message a caller sees when a feature is off — the same words on the
  *  CLI, the web and mobile, and it says who can fix it. */
 export function teamFeatureOffMessage(key: TeamFeatureKey): string {
-  const name = TEAM_FEATURES.find((f) => f.key === key)?.name ?? key;
-  return `${name} is not enabled for this team. A team admin can turn it on under Settings → Team.`;
+  return guard.offMessage(key);
 }
 
 /**
@@ -49,7 +70,7 @@ export async function requireTeamFeature(
   key: TeamFeatureKey,
   fail: (message: string) => never = (m) => { throw new Error(m); },
 ): Promise<void> {
-  if (!(await teamHasFeature(ctx, teamId, key))) fail(teamFeatureOffMessage(key));
+  return guard.require(scopeFor(ctx, teamId), key, fail);
 }
 
 /**
@@ -69,12 +90,7 @@ export async function gatedSnippetAvailability(
     .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
     .collect();
   const teams = await Promise.all(memberships.map((m: any) => ctx.db.get(m.team_id)));
-  const out: Record<string, boolean> = {};
-  for (const feature of TEAM_FEATURES) {
-    const on = teams.some((t: any) => teamFeatureEnabled(t, feature.key));
-    for (const slug of feature.snippets) out[slug] = (out[slug] ?? false) || on;
-  }
-  return out;
+  return attachedAvailability(TEAM_FEATURE_CATALOG, teams, (f) => f.snippets);
 }
 
 /** Admin-only: turn one team feature on or off. */
@@ -91,12 +107,14 @@ export const setTeamFeature = mutation({
       .query("team_memberships")
       .withIndex("by_user_team", (q) => q.eq("user_id", userId).eq("team_id", args.team_id))
       .unique();
-    if (!membership || membership.role !== "admin") {
-      throw new Error("Only admins can change team features");
-    }
     const team = await ctx.db.get(args.team_id);
-    if (!team) throw new Error("Team not found");
-    const features = { ...(team.features ?? {}), [args.feature]: args.enabled };
+    const features = applyFeatureChange(TEAM_FEATURE_CATALOG, {
+      isAdmin: membership?.role === "admin",
+      current: team?.features,
+      scopeExists: !!team,
+      key: args.feature,
+      enabled: args.enabled,
+    });
     await ctx.db.patch(args.team_id, { features });
     return { features };
   },
