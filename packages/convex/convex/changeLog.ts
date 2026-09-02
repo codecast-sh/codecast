@@ -9,11 +9,21 @@
 // The pure helpers (scopeFromDoc / decidePatchScope) are unit-tested without a
 // db; the db-touching emit/lookup are thin shells around them.
 import {
+  accessStampFromDoc,
+  buildCargo,
   emitScopeAction,
   emitSyncActions,
   isChurnOnlyPatch,
+  touchesAccessFields,
   type SyncAckCollector,
 } from "./syncLog";
+
+// One memoized post-write document read per tracked write, consulted by the
+// sync log only when the access stamp must be (re)computed (sync-log-cargo E4).
+function lazyAccess(rawDb: any, table: string, id: any, known?: any) {
+  let cached: Promise<any> | null = known !== undefined ? Promise.resolve(known) : null;
+  return async () => accessStampFromDoc(table, await (cached ??= rawDb.get(id)));
+}
 
 export type ChangeEntity =
   | "conversations"
@@ -143,7 +153,11 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
       if (TRACKED_TABLES.has(table as any)) {
         const scope = scopeFromDoc(doc);
         await emitChange(rawDb, table as ChangeEntity, String(id), "upsert", scope, null);
-        await emitSyncActions(rawDb, collector, table as ChangeEntity, String(id), "upsert", scope);
+        await emitSyncActions(rawDb, collector, table as ChangeEntity, String(id), "upsert", scope, null, {
+          cargo: buildCargo(table, doc, { full: true }),
+          access: lazyAccess(rawDb, table, id, doc),
+          accessMayChange: true,
+        });
       } else if (table === "team_memberships" && doc?.user_id && doc?.team_id) {
         await emitScopeAction(rawDb, collector, String(doc.user_id), String(doc.team_id), "scope_added");
       }
@@ -178,6 +192,11 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
           await emitSyncActions(
             rawDb, collector, table, entityId, "upsert", scope,
             preDoc ? scopeFromDoc(preDoc) : null,
+            {
+              cargo: buildCargo(table, fields, { full: false }),
+              access: lazyAccess(rawDb, table, id),
+              accessMayChange: touchesAccessFields(fields),
+            },
           );
         }
       }
@@ -195,6 +214,11 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
         await emitSyncActions(
           rawDb, collector, table, String(id), "upsert", scopeFromDoc(doc),
           preDoc ? scopeFromDoc(preDoc) : null,
+          {
+            cargo: buildCargo(table, doc, { full: true }),
+            access: lazyAccess(rawDb, table, id, doc),
+            accessMayChange: true,
+          },
         );
       }
       return res;

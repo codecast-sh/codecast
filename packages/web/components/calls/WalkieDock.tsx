@@ -40,10 +40,10 @@ import { BellOff, MessageSquare, MicOff, PictureInPicture2, X } from "lucide-rea
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { leaveCall, setMuted } from "../../lib/calls/callManager";
+import { setMuted } from "../../lib/calls/callManager";
 import { popOutCall } from "../../lib/calls/popOutCall";
 import { canPopOutCall } from "../../lib/desktop";
-import { getWalkieStatus, joinWalkieLive, shutWalkieDoor, walkieJoinedRoom } from "../../lib/calls/walkie";
+import { endWalkie, getWalkieStatus, joinWalkieLive, shutWalkieDoor, walkieJoinedRoom } from "../../lib/calls/walkie";
 import { getJoinAnnouncement, joinTitle, subscribeJoinAnnouncement } from "../../lib/calls/joinAnnounce";
 import {
   lastWalkieTarget,
@@ -216,14 +216,14 @@ export function WalkieBanner() {
       onJoin={() => void joinWalkieLive(target.roomKey, { name })}
       onSnooze={snoozeWalkie}
       onOpenDm={() => router.push(`/chat/${target.channelId}`)}
-      onLeave={() => void leaveCall()}
+      onLeave={() => void endWalkie()}
       replyKey={
         <WalkiePttButton
           roomKey={target.roomKey}
           resolveChannelId={() => target.channelId}
           size="lg"
-          label="Hold to reply"
-          title="Hold to reply"
+          label="Talk back"
+          title="Talk back — click to start, click again to stop"
         />
       }
     />

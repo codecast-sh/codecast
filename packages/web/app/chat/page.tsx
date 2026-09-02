@@ -60,7 +60,7 @@ import {
   useThreadMessages,
   useThreadSync,
 } from "../../hooks/useChatSync";
-import { useHoldToTalk } from "../../hooks/useWalkie";
+import { useTalkShortcut } from "../../hooks/useWalkie";
 import { usePagePresence, useTabActive } from "../../hooks/usePagePresence";
 import { prewarmRoom } from "../../lib/calls/roomPrewarm";
 import { ChatChannelRail } from "../../components/chat/ChatChannelRail";
@@ -245,11 +245,11 @@ export default function ChatPage() {
   }
   useThreadSync(threadRootId);
   const thread = useThreadMessages(threadRootId);
-  // The keyboard hold. What this page knows is whether the key has anywhere to
-  // talk: a DM, with no thread covering it. Whether the page is the one on
+  // The keyboard toggle. What this page knows is whether the key has anywhere
+  // to talk: a DM, with no thread covering it. Whether the page is the one on
   // screen is the hook's own question, asked there so no surface can arm a live
   // mic by forgetting to ask it.
-  useHoldToTalk(walkieRoomKey, resolveWalkieChannel, !!walkieRoomKey && !threadRootId);
+  useTalkShortcut(walkieRoomKey, resolveWalkieChannel, !!walkieRoomKey && !threadRootId);
 
   // What the toast layer needs to know: a message in the room ON SCREEN must not
   // interrupt the person already reading it. On screen, not merely mounted — a
@@ -494,8 +494,9 @@ export default function ChatPage() {
                   roomKey={walkieRoomKey}
                   resolveChannelId={resolveWalkieChannel}
                   size="sm"
+                  label="Talk"
                   className="shrink-0"
-                  title="Hold to talk — they hear you now, and the words land here"
+                  title="Talk to them — they see your face and hear you; click again to stop"
                 />
               )}
               {/* Every room can huddle. A DM or group thread rings its people

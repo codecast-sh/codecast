@@ -190,3 +190,82 @@ describe("catchUpScope (review C19)", () => {
     expect(purged.has("T")).toBe(true);
   });
 });
+
+describe("applyCargoFields (sync-log-cargo E6)", () => {
+  test("merges fields onto the row, pending field lock wins, echo retires the lock, unset drops keys", () => {
+    useInboxStore.setState({
+      tasks: { t1: { _id: "t1", title: "old", status: "open", closed_at: 1 } },
+      pending: { "tasks:t1:status": { type: "field", value: "done", ts: 1 } },
+    } as any);
+    const ok = useInboxStore.getState().applyCargoFields("tasks", "t1", { title: "new", status: "open" }, ["closed_at"]);
+    expect(ok).toBe(true);
+    const row = (useInboxStore.getState() as any).tasks.t1;
+    expect(row.title).toBe("new");
+    expect(row.status).toBe("done"); // lock wins over the stale server value
+    expect("closed_at" in row).toBe(false);
+    expect((useInboxStore.getState() as any).pending["tasks:t1:status"]).toBeDefined();
+    useInboxStore.getState().applyCargoFields("tasks", "t1", { status: "done" }, []);
+    expect((useInboxStore.getState() as any).pending["tasks:t1:status"]).toBeUndefined(); // echo retired it
+  });
+  test("returns false when there is no base row (caller falls back to byIds)", () => {
+    expect(useInboxStore.getState().applyCargoFields("docs", "nope", { title: "x" }, [])).toBe(false);
+  });
+  test("sessions land on both the sessions row and the conversations twin; unset nulls", () => {
+    useInboxStore.setState({
+      sessions: { c1: { _id: "c1", title: "a", subtitle: "s" } },
+      conversations: { c1: { _id: "c1", title: "a", subtitle: "s" } },
+    } as any);
+    useInboxStore.getState().applyCargoFields("sessions", "c1", { title: "b" }, ["subtitle"]);
+    const s = useInboxStore.getState() as any;
+    expect(s.sessions.c1.title).toBe("b");
+    expect(s.conversations.c1.title).toBe("b");
+    expect(s.sessions.c1.subtitle).toBeNull();
+  });
+});
+
+describe("applyLogPage with cargo (through catchUpScope)", () => {
+  const { catchUpScope, scopeMetaKey } = require("../../hooks/useSyncChangeFeed");
+  const scripted = (pages: any[]) => {
+    const calls: any[] = [];
+    return { calls, query: async (_fn: any, args: any) => { calls.push(args); return pages.shift(); } };
+  };
+  test("a patch with a base applies directly and issues NO byIds query", async () => {
+    useInboxStore.setState({
+      syncMeta: { [scopeMetaKey("user:u1")]: { cursor: 3 } },
+      tasks: { t1: { _id: "t1", title: "old" } },
+      syncLogApplyStats: { direct: 0, refetch: 0 },
+    } as any);
+    const convex = scripted([
+      { actions: [{ position: 4, entity_type: "tasks", entity_id: "t1", op: "upsert", patch: { title: "new" } }], nextFrom: 4, hasMore: false },
+    ]);
+    await catchUpScope(convex, { scope_key: "user:u1", position: 4, floor: 0 }, new Set());
+    expect((useInboxStore.getState() as any).tasks.t1.title).toBe("new");
+    expect(convex.calls).toHaveLength(1); // the range only — no byIds
+    expect(useInboxStore.getState().syncLogApplyStats).toEqual({ direct: 1, refetch: 0 });
+    expect((useInboxStore.getState().syncMeta as any)[scopeMetaKey("user:u1")].cursor).toBe(4);
+  });
+  test("no base, a delete, and partial cargo all route to byIds (authorized absence prunes)", async () => {
+    useInboxStore.setState({
+      syncMeta: { [scopeMetaKey("user:u1")]: { cursor: 0 } },
+      tasks: { t2: { _id: "t2", title: "keep" } },
+      pending: {},
+      syncLogApplyStats: { direct: 0, refetch: 0 },
+    } as any);
+    const convex = scripted([
+      { actions: [
+        { position: 1, entity_type: "tasks", entity_id: "t9", op: "upsert", patch: { title: "unknown base" } },
+        { position: 2, entity_type: "tasks", entity_id: "t2", op: "delete" },
+        { position: 3, entity_type: "tasks", entity_id: "t3", op: "upsert", patch: { title: "p" }, full: true, partial: true },
+      ], nextFrom: 3, hasMore: false },
+      { items: [{ _id: "t3", title: "p", assignee_info: { name: "x" } }] }, // byIds: t9 gone, t2 gone, t3 enriched
+    ]);
+    await catchUpScope(convex, { scope_key: "user:u1", position: 3, floor: 0 }, new Set());
+    const s = useInboxStore.getState() as any;
+    expect(convex.calls).toHaveLength(2);
+    expect(convex.calls[1].ids.sort()).toEqual(["t2", "t3", "t9"]);
+    expect(s.tasks.t2).toBeUndefined(); // authorized absence pruned the delete
+    expect(s.tasks.t3.assignee_info).toEqual({ name: "x" }); // full applied, then re-enriched
+    expect(s.tasks.t9).toBeUndefined();
+    expect(s.syncLogApplyStats).toEqual({ direct: 1, refetch: 3 });
+  });
+});

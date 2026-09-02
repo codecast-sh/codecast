@@ -89,7 +89,7 @@ import {
 import { parseSessionFile, extractSlug, extractCwd } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { resolveLocalProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
-import { runDoctor } from "./doctor.js";
+import { runDoctor, type DoctorDeps } from "./doctor.js";
 import { deviceId, deviceLabel } from "./remote/device.js";
 import { agentBinaryFromPsRow } from "./sessionProcessMatcher.js";
 import {
@@ -4334,6 +4334,8 @@ accountsCmd
       console.error(err instanceof CcAccountError ? err.message : String(err));
       process.exit(1);
     }
+    // Token metadata rides the accounts inventory — show it in Settings now.
+    await publishAccountsInventory();
   });
 
 // A mass revive resumes one claude process per blocked session — past this
@@ -5215,33 +5217,76 @@ program
   .option("--project-dir <path>", "Scratch project dir for the test transcript (must be syncable)")
   .option("--reap-tmux", "Kill stale tmux server generations (old servers that lost the default socket, with their whole process tree)")
   .action(async (options: any) => {
-    const config = readConfig();
-    if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: cast auth");
-      process.exit(1);
-    }
-    const report = await runDoctor(
-      {
-        config,
-        siteUrl: config.convex_url.replace(".cloud", ".site"),
-        apiToken: config.auth_token,
-        version: getVersion(),
-        configDir: CONFIG_DIR,
-        getDaemonPid,
-        getLaunchdStatus: getMacLaunchdDaemonStatus,
-        readDaemonState,
-        getStuckSyncs,
-      },
-      {
-        e2e: options.e2e !== false,
-        json: options.json === true,
-        keep: options.keep === true,
-        projectDir: options.projectDir,
-        reapTmux: options.reapTmux === true,
-      },
-    );
+    const report = await runDoctor(doctorDeps(requireAuthedConfig()), {
+      e2e: options.e2e !== false,
+      json: options.json === true,
+      keep: options.keep === true,
+      projectDir: options.projectDir,
+      reapTmux: options.reapTmux === true,
+    });
     if (options.json) console.log(JSON.stringify(report, null, 2));
     process.exit(report.ok ? 0 : 1);
+  });
+
+function requireAuthedConfig(): Config & { auth_token: string; convex_url: string } {
+  const config = readConfig();
+  if (!config?.auth_token || !config?.convex_url) {
+    console.error("Not authenticated. Run: cast auth");
+    process.exit(1);
+  }
+  return config as Config & { auth_token: string; convex_url: string };
+}
+
+/** The values doctor and bench take so they stay leaf modules (no daemon import). */
+function doctorDeps(config: Config & { auth_token: string; convex_url: string }): DoctorDeps {
+  return {
+    config,
+    siteUrl: config.convex_url.replace(".cloud", ".site"),
+    apiToken: config.auth_token,
+    version: getVersion(),
+    configDir: CONFIG_DIR,
+    getDaemonPid,
+    getLaunchdStatus: getMacLaunchdDaemonStatus,
+    readDaemonState,
+    getStuckSyncs,
+  };
+}
+
+program
+  .command("bench", { hidden: true })
+  .description("Measure the live daemon: loop lag, loopback route latency, the daemon.log freeze report, and an optional pane load")
+  .argument("<target>", "what to bench (daemon)")
+  .option("--duration <seconds>", "observation window, also the churn window under load", "60")
+  .option("--load <n>", "spawn N stand-in agent panes against the live daemon")
+  .option("--sample <k>", "panes to sample for delivery round trips", "5")
+  .option("--churn-interval <ms>", "milliseconds between transcript appends per pane under load", "2000")
+  .option("--log-since <hours>", "how far back to read daemon.log", "24")
+  .option("--json", "Print the JSON report instead of the markdown table")
+  .option("--keep", "Keep the load panes, transcripts, and server conversations")
+  .option("--project-dir <path>", "Scratch project dir for the load transcripts (must be syncable)")
+  .action(async (target: string, options: any) => {
+    if (target !== "daemon") {
+      console.error(`unknown bench target: ${target} (only "daemon")`);
+      process.exit(1);
+    }
+    const deps = doctorDeps(requireAuthedConfig());
+    if (deps.getDaemonPid() === null) {
+      console.error("no live daemon to measure; the bench never boots one (`cast start`)");
+      process.exit(1);
+    }
+    const { runDaemonBench, renderMarkdown } = await import("./bench/daemonBench.js");
+    const report = await runDaemonBench(deps, {
+      load: options.load ? Number.parseInt(options.load, 10) : undefined,
+      sample: Number.parseInt(options.sample, 10),
+      durationMs: Number.parseFloat(options.duration) * 1000,
+      churnIntervalMs: Number.parseInt(options.churnInterval, 10),
+      logSinceMs: Number.parseFloat(options.logSince) * 3_600_000,
+      json: options.json === true,
+      keep: options.keep === true,
+      projectDir: options.projectDir,
+    }, (line) => { if (!options.json) console.log(line); });
+    console.log(options.json ? JSON.stringify(report, null, 2) : renderMarkdown(report));
+    process.exit(report.load && report.load.teardown.warnings.length > 0 ? 1 : 0);
   });
 
 program

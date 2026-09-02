@@ -43,6 +43,10 @@ const NON_TAB_EXACT = new Set([
   // chromeless corner window. Same rule again — the tab shell intercepting it
   // would rewrite the window's own URL and blank the card.
   "/meeting-offer",
+  // The ring window: an incoming huddle as a small chromeless corner card.
+  // Same rule again — the tab shell intercepting it would rewrite the
+  // window's own URL and blank the card somebody is trying to answer.
+  "/call-ring",
 ]);
 // "/documentation" is a prefix (not exact) so the guide pages under
 // /documentation/<slug> stay outside the tab shell too.

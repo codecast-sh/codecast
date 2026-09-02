@@ -9,10 +9,8 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
 import { dmRoomKey } from "@codecast/shared/contracts";
-import { MIN_BURST_MS } from "../../lib/calls/walkie";
-import { WALL_TAP_MS } from "../people/peopleWallLayout";
 import { teamBarSig } from "../presence/memberPresence";
-import { walkieFacesSig } from "../presence/useFaceKey";
+import { JOINED_MS, walkieFacesSig } from "../presence/useFaceKey";
 import type { PushToTalk } from "../../hooks/useWalkie";
 
 // ── the world the face talks to ─────────────────────────────────────────────
@@ -60,75 +58,6 @@ let openedDms: string[][] = [];
 mock.module("../../hooks/useChatSync", () => ({
   useOpenDm: () => (ids: string[]) => openedDms.push(ids),
 }));
-
-const { pttHoldProps, isWalkieHoldKey } = realWalkieHooks;
-const { faceKeyHandlers, JOINED_MS } = await import("../presence/useFaceKey");
-
-// ── the gesture, driven directly ────────────────────────────────────────────
-
-function handlers(onTap: () => void) {
-  let downAt = 0;
-  return faceKeyHandlers(pttHoldProps(ptt), {
-    begin: () => { downAt = performance.now(); },
-    finish: () => {
-      if (performance.now() - downAt < WALL_TAP_MS) onTap();
-    },
-  });
-}
-
-describe("the face is the key", () => {
-  test("a press keys the mic and a release under the tap window opens the conversation", () => {
-    let taps = 0;
-    const h = handlers(() => { taps++; });
-    const before = ptt.presses;
-    h.onPointerDown({ button: 0, preventDefault: () => {} } as any);
-    h.onPointerUp();
-    expect(ptt.presses).toBe(before + 1);
-    expect(taps).toBe(1);
-  });
-
-  test("a tap can never land a burst — the engine's floor is above the tap window", () => {
-    // The two numbers are load-bearing together: a press opens the microphone
-    // immediately (waiting 300ms to find out what somebody meant would eat the
-    // first word of every sentence), and every gesture short enough to be a tap
-    // is a gesture the engine throws away.
-    expect(WALL_TAP_MS).toBeLessThan(MIN_BURST_MS);
-  });
-
-  test("a hold past the tap window is a hold, not a click", async () => {
-    let taps = 0;
-    const h = handlers(() => { taps++; });
-    h.onPointerDown({ button: 0, preventDefault: () => {} } as any);
-    await Bun.sleep(WALL_TAP_MS + 30);
-    h.onPointerUp();
-    expect(taps).toBe(0);
-    expect(ptt.releases).toBeGreaterThan(0);
-  });
-
-  test("the keyboard holds the same key, and Tab is not a press", () => {
-    let taps = 0;
-    const h = handlers(() => { taps++; });
-    const before = ptt.presses;
-    h.onKeyDown({ key: " ", repeat: false, preventDefault: () => {} } as any);
-    h.onKeyUp({ key: " " } as any);
-    expect(ptt.presses).toBe(before + 1);
-    expect(taps).toBe(1);
-    // Tab times no press, so its keyup must not open a DM on the way past.
-    h.onKeyUp({ key: "Tab" } as any);
-    expect(taps).toBe(1);
-    expect(isWalkieHoldKey("Tab")).toBe(false);
-  });
-
-  test("a pointer crossing a face does not open its microphone; focus does", () => {
-    const h = handlers(() => {});
-    // Six faces sit in the shell's top bar and a mouse on its way anywhere
-    // sweeps them. Warming on hover would light the browser's recording
-    // indicator because somebody moved a pointer. Tabbing onto one is
-    // deliberate in a way that passing over it is not.
-    expect(h.onPointerEnter).toBeUndefined();
-    expect(typeof h.onFocus).toBe("function");
-  });
-});
 
 // ── the flow the bar shows ──────────────────────────────────────────────────
 
@@ -218,7 +147,7 @@ describe("the bar shows the flow", () => {
     keyedRooms = [];
     const f = await mountFace();
     expect(keyedRooms[0]).toBe(ROOM);
-    expect(f.key().getAttribute("title")).toBe(`Hold to talk to Ann Diaz · click to open the DM`);
+    expect(f.key().getAttribute("title")).toBe(`Ann Diaz — click for Talk, Ring, Message`);
     expect(f.key().getAttribute("data-tx")).toBeNull();
     expect(f.key().getAttribute("data-rx")).toBeNull();
     await f.unmount();
@@ -274,26 +203,27 @@ describe("the bar shows the flow", () => {
     await f.unmount();
   });
 
-  test("a refused hold says why, in the tooltip and to a reader", async () => {
+  test("a click opens Talk, Ring and Message under the face, and a blocked Talk says why", async () => {
     ptt.reason = "You are in another call";
     const f = await mountFace();
-    expect(f.key().getAttribute("title")).toBe("You are in another call");
-    expect(f.key().getAttribute("aria-disabled")).toBe("true");
+    await f.act(() => f.key().dispatchEvent(new window.MouseEvent("click", { bubbles: true })));
+    const html = f.html();
+    expect(html).toContain("people-face-actions");
+    for (const word of ["Talk", "Ring", "Message"]) expect(html).toContain(`>${word}<`);
+    expect(html).toContain("You are in another call");
     ptt.reason = null;
-    await f.unmount();
   });
 
-  test("a tap opens the conversation with that person", async () => {
+  test("Message opens the conversation with that person; a click never opens a mic", async () => {
     openedDms = [];
+    const before = ptt.presses;
     const f = await mountFace();
-    const down = new window.Event("pointerdown", { bubbles: true });
-    Object.defineProperty(down, "button", { value: 0 });
-    await f.act(async () => { f.key().dispatchEvent(down); });
-    await f.act(async () => {
-      f.key().dispatchEvent(new window.Event("pointerup", { bubbles: true }));
-    });
+    await f.act(() => f.key().dispatchEvent(new window.MouseEvent("click", { bubbles: true })));
+    const seat = f.key().closest(".people-face-seat") as HTMLElement;
+    const message = [...seat.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Message");
+    await f.act(() => message!.dispatchEvent(new window.MouseEvent("click", { bubbles: true })));
     expect(openedDms).toEqual([[String(MEMBER._id)]]);
-    await f.unmount();
+    expect(ptt.presses).toBe(before);
   });
 });
 

@@ -44,7 +44,7 @@ const BASE = {
   name: "Riley Chen",
   stage: "incoming" as const,
   badge: "INCOMING",
-  hint: "Riley Chen is talking to you. HOLD their face to reply.",
+  hint: "Riley Chen is talking to you. TALK to answer.",
   headline: "Riley Chen is talking",
   locked: false,
   together: false,
@@ -112,7 +112,7 @@ describe("a teammate is talking to me", () => {
     expect(html).toContain("walkie-stage-incoming");
     expect(html).toContain(">INCOMING<");
     expect(html).toContain("walkie-strip-hint");
-    expect(html).toContain("HOLD their face to reply");
+    expect(html).toContain("TALK to answer");
   });
 
   test("and no emoji anywhere in it", () => {

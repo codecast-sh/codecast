@@ -146,6 +146,16 @@ declare global {
       meetingOfferSize?: (size: { width: number; height: number }) => void;
       meetingOfferHide?: () => void;
       meetingOfferOpenCall?: (transcriptId: string) => void;
+      // The ring window: an incoming huddle as a small chromeless corner card
+      // (route /call-ring). `callRingAnswer` hands the room to the CALL window
+      // — the media plane is per-renderer, so a ring card must never join.
+      isCallRingWindow?: boolean;
+      callRingSize?: (size: { width: number; height: number }) => void;
+      callRingHide?: () => void;
+      callRingAnswer?: (inviteId: string, roomKey: string) => void;
+      // Call window only: the ring window answered, accept the invite here —
+      // this is the renderer that will hold the media.
+      onCallRingAccept?: (cb: (payload: { inviteId: string; roomKey: string }) => void) => void;
       platform: string;
     };
   }
@@ -227,6 +237,49 @@ export function meetingOfferHide(): void {
  *  card, not a place to read). */
 export function meetingOfferOpenCall(transcriptId: string): void {
   bridge("meetingOfferOpenCall")?.(transcriptId);
+}
+
+// ── The ring window ───────────────────────────────────────────────────────
+//
+// An incoming huddle, as a card in a window of its own. A ring is the one
+// huddle surface that arrives unannounced, so it is the one that cannot live
+// inside an app window: the person it is for is usually looking at something
+// else entirely.
+
+/** Report the ring card's content size; the shell reshapes the window around
+ *  it and reveals it (without focus) on the first report. */
+export function callRingSize(size: { width: number; height: number }): void {
+  bridge("callRingSize")?.(size);
+}
+
+/** Nothing is ringing — put the glass away rather than float an empty pane. */
+export function callRingHide(): void {
+  bridge("callRingHide")?.();
+}
+
+/**
+ * Answer, in the call window.
+ *
+ * NOT in the ring window: `acceptInvite` joins the media in whichever renderer
+ * calls it, and the media plane is a per-renderer singleton — answering here
+ * would put the huddle in a 340px corner card with no stage and no controls.
+ * The shell opens (or raises) the call window on this room, which joins by the
+ * ordinary route.
+ */
+export function callRingAnswer(inviteId: string, roomKey: string): void {
+  bridge("callRingAnswer")?.(inviteId, roomKey);
+}
+
+/** Whether this build can give a ring a window of its own. False in a browser
+ *  and on a desktop build that predates it — the in-app toast stays the ring
+ *  there, which is why the toast is gated on this rather than deleted. */
+export function canRingInWindow(): boolean {
+  return typeof bridge("callRingSize") === "function";
+}
+
+/** This renderer IS the ring window. */
+export function isCallRingWindow(): boolean {
+  return typeof window !== "undefined" && window.__CODECAST_ELECTRON__?.isCallRingWindow === true;
 }
 
 // What a banner carries besides its text. `key` is a stable id for the event
@@ -467,6 +520,19 @@ export function reportCallPanelState(state: {
   scribe: boolean;
 }): void {
   bridge("reportCallPanelState")?.(state);
+}
+
+/**
+ * Call window: the ring window answered, so accept the invite HERE.
+ *
+ * The accept is what joins the media, and the media plane is per-renderer —
+ * so it has to run in the window that will hold the huddle, not in the 340px
+ * card the person pressed Join on.
+ */
+export function onCallRingAccept(
+  cb: (payload: { inviteId: string; roomKey: string }) => void,
+): void {
+  bridge("onCallRingAccept")?.(cb);
 }
 
 /** Main window: the panel is closing, take the call back. */

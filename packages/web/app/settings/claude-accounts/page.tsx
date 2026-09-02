@@ -16,6 +16,8 @@ import {
   exhaustionBannerCopy,
   isExhaustionCurrent,
   isValidProfileName,
+  profileHasToken,
+  MINT_FLOW_STALE_MS,
   type CcUsage,
 } from "@codecast/convex/convex/ccAccountsShared";
 import { AppLoader } from "../../../components/AppLoader";
@@ -24,7 +26,7 @@ import { Input } from "../../../components/ui/input";
 import { Switch } from "../../../components/ui/switch";
 import { SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { toast } from "sonner";
-import { Check, Copy, KeyRound, Laptop, TimerReset, Trash2, Zap } from "lucide-react";
+import { Check, Copy, KeyRound, Laptop, Pin, TimerReset, Trash2, Zap } from "lucide-react";
 import { AccountUsageBars } from "../../../components/AccountUsageMeter";
 import { formatAgo } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
@@ -37,12 +39,36 @@ type DeviceAccounts = {
   /** Absent on servers that predate the field — those only return online devices. */
   online?: boolean;
   active_email?: string;
-  profiles: Array<{ name: string; email?: string; tier?: string; subscription?: string; usage?: CcUsage }>;
+  profiles: Array<{
+    name: string;
+    email?: string;
+    tier?: string;
+    subscription?: string;
+    usage?: CcUsage;
+    token?: { stored_at: number; expires_at: number };
+  }>;
   auto_switch: boolean;
   /** Absent on servers that predate the field — treated as on. */
   auto_continue?: boolean;
   auto_switch_state?: { last_action_at?: number; last_action?: string; exhausted_at?: number };
+  /** Per-session accounts (setup-tokens). Absent on older servers — off. */
+  session_tokens?: boolean;
+  mint_flow?: {
+    status: "pending" | "confirmed" | "rejected";
+    profile?: string;
+    email?: string;
+    reason?: string;
+    started_at: number;
+    finished_at?: number;
+  };
 };
+
+function tokenBadge(p: { token?: { expires_at: number } }, now: number): { label: string; tone: string } | null {
+  if (!p.token) return null;
+  if (p.token.expires_at <= now) return { label: "token expired", tone: "bg-sol-red/10 text-sol-red" };
+  const days = Math.max(1, Math.ceil((p.token.expires_at - now) / 86_400_000));
+  return { label: `token · ${days}d`, tone: "bg-sol-violet/10 text-sol-violet" };
+}
 
 function planLabel(p: { tier?: string; subscription?: string }): string | null {
   if (!p.subscription) return null;
@@ -117,6 +143,107 @@ function SaveCurrentForm({ device, suggestedName }: { device: DeviceAccounts; su
         </Button>
       </div>
     </div>
+  );
+}
+
+// Per-session accounts: the machine-global keychain login is the DEFAULT; with
+// this on, each new session is pinned to a saved profile's one-year
+// `claude setup-token` instead, so switching the machine's login (by hand or
+// auto-switch on a limit) never moves a running session, and a revived
+// session is pinned to the account it was moved to. Tokens are minted by the
+// daemon — one browser approval per account — and renewed a week before
+// they expire.
+function SessionTokensToggle({ device }: { device: DeviceAccounts }) {
+  const now = useCoarseNow(30_000);
+  const { sessionTokens } = useAccountRecoveryToggles(device);
+  const requestMint = useMutation(api.accountSwitch.requestMintToken);
+  const [minting, setMinting] = useState(false);
+  const online = device.online !== false;
+  const activeProfile = device.profiles.find((p) => p.email && p.email === device.active_email);
+  const activeHasToken = !!activeProfile && profileHasToken(activeProfile, now);
+  const flow = device.mint_flow;
+  const pending = flow?.status === "pending" && now - flow.started_at < MINT_FLOW_STALE_MS;
+  const rejected = flow?.status === "rejected";
+  const withTokens = device.profiles.filter((p) => profileHasToken(p, now)).length;
+
+  const mint = async (force: boolean) => {
+    setMinting(true);
+    try {
+      const res = await requestMint({ device_id: device.device_id, force });
+      toast.success(
+        res?.already_pending
+          ? "A mint is already waiting for the browser approval"
+          : `Minting a token for ${res?.email ?? "the current login"} — approve the sign-in in the browser`,
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Mint failed");
+    } finally {
+      setMinting(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="flex items-center gap-2.5 px-4 py-3 sm:px-5">
+        <Pin className={`h-4 w-4 shrink-0 ${sessionTokens.on ? "text-sol-violet" : "text-sol-text-dim"}`} />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-sol-text">Pin each session to its own account</div>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-sol-text-dim">
+            By default every session on this machine shares one login, so switching accounts moves
+            all of them. With this on, codecast mints a one-year Claude Code token for each saved
+            account (one browser approval per account) and launches every new session on the
+            current account&apos;s token. Sessions then keep their account across switches and
+            restarts, and a session revived on another account is pinned there. Identity and
+            usage meters still come from the saved login. Tokens live in a private file on this
+            machine and are renewed a week before they expire.
+          </p>
+        </div>
+        <Switch
+          checked={sessionTokens.on}
+          onCheckedChange={sessionTokens.set}
+          disabled={sessionTokens.pending}
+          aria-label="Pin each session to its own account"
+        />
+      </div>
+      {sessionTokens.on && (
+        <div className="flex flex-wrap items-center gap-2 px-4 pb-3 pl-[42px] text-[11px] text-sol-text-dim sm:px-5 sm:pl-[46px]">
+          {pending ? (
+            <span className="text-sol-yellow">
+              Minting for {flow?.email ?? flow?.profile ?? "the current login"}… approve the Claude sign-in in your browser.
+            </span>
+          ) : rejected && !activeHasToken ? (
+            <span className="text-sol-red">Mint failed: {flow?.reason ?? "unknown reason"}</span>
+          ) : activeHasToken ? (
+            <span>
+              {withTokens} of {device.profiles.length} saved account{device.profiles.length === 1 ? "" : "s"} have a
+              token. To add one for another account, switch to it and it mints on its own.
+            </span>
+          ) : (
+            <span>The current login has no token yet.</span>
+          )}
+          {online && !pending && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={minting}
+              onClick={() => mint(rejected)}
+              className="h-6 px-2 text-[11px]"
+            >
+              {minting ? "Starting…" : rejected && !activeHasToken ? "Try again" : activeHasToken ? "Re-mint" : "Mint now"}
+            </Button>
+          )}
+          {pending && online && (
+            <button
+              onClick={() => mint(true)}
+              disabled={minting}
+              className="text-sol-text-dim underline decoration-dotted underline-offset-2 hover:text-sol-text"
+            >
+              browser didn&apos;t open? relaunch
+            </button>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -267,6 +394,17 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                     {plan}
                   </span>
                 )}
+                {(() => {
+                  const badge = tokenBadge(p, now);
+                  return badge ? (
+                    <span
+                      className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${badge.tone}`}
+                      title="A one-year setup-token is stored for this account; sessions can be pinned to it"
+                    >
+                      {badge.label}
+                    </span>
+                  ) : null;
+                })()}
                 {isActive ? (
                   <span className="shrink-0 text-[11px] font-medium text-sol-green">active</span>
                 ) : confirmRemove === p.name ? (
@@ -327,6 +465,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
       )}
 
       {!device.is_remote && <AutoSwitchToggle device={device} />}
+      {!device.is_remote && <SessionTokensToggle device={device} />}
 
       {!device.is_remote && online && device.active_email && !activeProfile && (
         <SaveCurrentForm device={device} suggestedName={suggested} />

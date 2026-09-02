@@ -275,72 +275,6 @@
     0 0 calc(4px + var(--level, 0) * 18px) color-mix(in srgb, var(--walkie-tx) 50%, transparent);
 }
 
-/* THE FILL. From the press, a warm arc sweeps once around the face over
-   exactly WALKIE_LOCK_MS (the component writes it as --walkie-lock-ms, so the
-   animation and the latch cannot drift apart): what the arc says is "keep
-   holding and this becomes a call", and the moment it closes, it does. The
-   sweep rides the tx ring's own element as a ::before, under the same mask,
-   so it is the same hollow band the level brightens — one ring with two
-   meanings, time outside, voice inside. Letting go stops it where it was and
-   the arc collapses with the hold, which is the honest picture of a burst. */
-@property --walkie-fill {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
-
-.people-face-seat[data-hold] .people-face-ring-tx::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 999px;
-  background: conic-gradient(
-    from -90deg,
-    color-mix(in srgb, var(--walkie-tx) 85%, #fff 15%) var(--walkie-fill),
-    transparent 0
-  );
-  animation: walkie-lock-fill var(--walkie-lock-ms, 1200ms) linear forwards;
-}
-
-@keyframes walkie-lock-fill {
-  from { --walkie-fill: 0deg; }
-  to   { --walkie-fill: 360deg; }
-}
-
-/* LOCKED. The fill closed and the key latched: hands off, still live. The
-   face comes back up (this is no longer a thing being held), and the band
-   burns steady and whole — the closed arc, kept. The glow breathes very
-   slowly: a state that lasts minutes must be legible from the corner of the
-   eye without blinking at it. */
-.people-face[data-walkie-state="locked"] {
-  transform: scale(1);
-}
-.people-face[data-walkie-state="locked"] .people-face-ring-tx {
-  opacity: 1;
-  box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--walkie-tx) 85%, transparent);
-  animation: people-face-locked-breathe 3.2s ease-in-out infinite;
-}
-
-@keyframes people-face-locked-breathe {
-  0%, 100% { box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--walkie-tx) 85%, transparent); }
-  50%      { box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--walkie-tx) 55%, transparent); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  /* The latch still happens on the clock; only the sweep goes. The band
-     appears whole at the press instead, so the state is still legible. */
-  .people-face-seat[data-hold] .people-face-ring-tx::before {
-    animation: none;
-    background: none;
-  }
-  .people-face-seat[data-hold] .people-face-ring-tx {
-    opacity: 1;
-  }
-  .people-face[data-walkie-state="locked"] .people-face-ring-tx {
-    animation: none;
-  }
-}
-
 /* THEY are talking. A small lift and the cool ring breathing: an incoming burst
    is somebody else's gesture and must not look like one of yours — a held key
    goes DOWN and stays down, a voice arriving rises and pulses. The pulse is on
@@ -763,4 +697,32 @@
 /* A strip narrower than this has no room for the legend beside the pulse. */
 @media (max-width: 460px) {
   .people-legend-inline { display: none; }
+}
+
+/* ── The three actions under a clicked face ────────────────────────────────
+ *
+ * Talk, Ring, Message, on a solid plate under the face — the label's spot,
+ * with buttons in it. Solid because it sits over other faces and over
+ * whatever the window is floating on. */
+.people-face-actions {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  padding: 8px 10px 9px;
+  border-radius: 10px;
+  border: 1px solid var(--sol-border);
+  background: var(--sol-bg-alt);
+  box-shadow: 0 8px 24px color-mix(in srgb, #000 35%, transparent);
+}
+.people-face-actions-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sol-text);
 }
