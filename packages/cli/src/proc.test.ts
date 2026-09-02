@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { promisify } from "node:util";
-import { execFile, execFileSync, spawnSync, withWindowsHide, setSlowSyncSpawnSink, SLOW_SYNC_SPAWN_MS } from "./proc.js";
+import { execFile, execFileSync, spawnSync, withWindowsHide, SLOW_SYNC_SPAWN_MS } from "./proc.js";
+import { setSlowSyncSink } from "./slowSync.js";
 
 describe("withWindowsHide", () => {
   it("appends options when only a command is given", () => {
@@ -57,11 +58,11 @@ describe("wrapped child_process functions", () => {
 describe("slow sync spawn reporting", () => {
   it("reports a sync spawn that outlives the threshold, naming the command", () => {
     const seen: string[] = [];
-    setSlowSyncSpawnSink((m) => seen.push(m));
+    setSlowSyncSink((m) => seen.push(m));
     try {
       execFileSync("sleep", [String((SLOW_SYNC_SPAWN_MS + 200) / 1000)]);
     } finally {
-      setSlowSyncSpawnSink(null);
+      setSlowSyncSink(null);
     }
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatch(/^\[SLOW-SYNC-SPAWN\] execFileSync blocked the event loop \d+ms: sleep 1\.2$/);
@@ -69,20 +70,20 @@ describe("slow sync spawn reporting", () => {
 
   it("stays silent for a fast sync spawn and after the sink is cleared", () => {
     const seen: string[] = [];
-    setSlowSyncSpawnSink((m) => seen.push(m));
+    setSlowSyncSink((m) => seen.push(m));
     execFileSync("true");
-    setSlowSyncSpawnSink(null);
+    setSlowSyncSink(null);
     execFileSync("sleep", [String((SLOW_SYNC_SPAWN_MS + 200) / 1000)]);
     expect(seen).toEqual([]);
   });
 
   it("still reports when the slow command fails", () => {
     const seen: string[] = [];
-    setSlowSyncSpawnSink((m) => seen.push(m));
+    setSlowSyncSink((m) => seen.push(m));
     try {
       expect(() => execFileSync("sh", ["-c", `sleep ${(SLOW_SYNC_SPAWN_MS + 200) / 1000}; exit 3`])).toThrow();
     } finally {
-      setSlowSyncSpawnSink(null);
+      setSlowSyncSink(null);
     }
     expect(seen).toHaveLength(1);
     expect(seen[0]).toContain("execFileSync blocked the event loop");

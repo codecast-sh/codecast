@@ -3,6 +3,7 @@ import * as path from "path";
 import * as fs from "fs";
 import { RecursiveWatcher } from "./recursiveWatcher.js";
 import type { WalkFile } from "./fsWalk.js";
+import { CLAUDE_UUID_RE } from "./resumeCommand.js";
 
 export interface SessionEvent {
   sessionId: string;
@@ -77,6 +78,27 @@ export function watchFilter(relativePath: string): boolean {
     || isWorkflowAgentTranscript(relativePath);
 }
 
+// Whether the walk should enter a directory: only one that can hold a file
+// watchFilter accepts. Without this the priming walk and every rescan read
+// each session's tool-results, memory, session-memory and checkpoint dirs
+// (1510 tool-results dirs on one machine, 3696 dirs walked for 2074 useful)
+// and merely discarded what they found.
+//   <slug>/                                   any project
+//   <slug>/<uuid>/                            a session's own dir
+//   <slug>/<uuid>/subagents|workflows/        Task subagents, run snapshots
+//   <slug>/<uuid>/subagents/workflows/wf_*/   workflow agent transcripts
+export function watchDirFilter(relativeDirPath: string): boolean {
+  const parts = relativeDirPath.split(path.sep);
+  switch (parts.length) {
+    case 1: return true;
+    case 2: return CLAUDE_UUID_RE.test(parts[1]);
+    case 3: return parts[2] === "subagents" || parts[2] === "workflows";
+    case 4: return parts[2] === "subagents" && parts[3] === "workflows";
+    case 5: return parts[2] === "subagents" && parts[3] === "workflows" && parts[4].startsWith("wf_");
+    default: return false;
+  }
+}
+
 export class SessionWatcher extends EventEmitter {
   private watcher: RecursiveWatcher | null = null;
   private projectsPath: string;
@@ -88,9 +110,12 @@ export class SessionWatcher extends EventEmitter {
       path.join(process.env.HOME || "", ".claude", "projects");
   }
 
-  start(): void {
+  /** Resolves once the priming walk has emitted the existing recent files,
+   *  so boot can order work after it. Callers that do not care may ignore
+   *  the promise; the watch itself is live as soon as this returns. */
+  start(): Promise<void> {
     if (this.watcher) {
-      return;
+      return this.watcher.whenPrimed();
     }
 
     if (!fs.existsSync(this.projectsPath)) {
@@ -100,6 +125,7 @@ export class SessionWatcher extends EventEmitter {
     this.watcher = new RecursiveWatcher({
       path: this.projectsPath,
       filter: watchFilter,
+      dirFilter: watchDirFilter,
       callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
       onExisting: (files) => this.emitExistingFilesSorted(files),
       // Deep enough for workflow agent transcripts (6 segments); watchFilter keeps
@@ -111,6 +137,11 @@ export class SessionWatcher extends EventEmitter {
     this.watcher.on("error", (err: Error) => this.emit("error", err));
     this.watcher.on("ready", () => this.emit("ready"));
     this.watcher.start();
+    return this.watcher.whenPrimed();
+  }
+
+  whenPrimed(): Promise<void> {
+    return this.watcher ? this.watcher.whenPrimed() : Promise.resolve();
   }
 
   // Files the watcher's priming walk found (one walk serves both), newest
@@ -141,7 +172,10 @@ export class SessionWatcher extends EventEmitter {
     // (Observed: daemon froze for 27h on wake-from-sleep with both threads
     // wedged on __ulock_wait2.)
     await new Promise((resolve) => setTimeout(resolve, 250));
-    this.start();
+    // Not awaited: the watchdog races this restart against a 10s timeout, and
+    // priming on a contended disk can outlast that. The watch is live here;
+    // whenPrimed() is there for anyone who needs the walk to have finished.
+    void this.start();
   }
 
   private handleFileEvent(

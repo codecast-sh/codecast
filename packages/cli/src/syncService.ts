@@ -3,6 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import * as os from "node:os";
 import * as nodePath from "node:path";
 import { hashImageBytes, lookupByHash, lookupByPath, storeUpload } from "./imageCache.js";
+import { countingSemaphore } from "./semaphore.js";
 import { redactSecrets } from "./redact.js";
 import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
@@ -605,26 +606,9 @@ export class SyncService {
   ): Promise<void> {
     type Img = { mediaType: string; data?: string; localPath?: string; storageId?: string; toolUseId?: string };
 
-    // Simple counting semaphore so uploads run with bounded concurrency across the
-    // whole batch instead of one image at a time.
-    let active = 0;
-    const waiters: Array<() => void> = [];
-    const acquire = (): Promise<void> =>
-      new Promise<void>((resolve) => {
-        if (active < IMAGE_UPLOAD_CONCURRENCY) {
-          active++;
-          resolve();
-        } else {
-          waiters.push(() => {
-            active++;
-            resolve();
-          });
-        }
-      });
-    const release = (): void => {
-      active--;
-      waiters.shift()?.();
-    };
+    // Uploads run with bounded concurrency across the whole batch instead of
+    // one image at a time.
+    const { acquire, release } = countingSemaphore(IMAGE_UPLOAD_CONCURRENCY);
 
     // Resolve a single image to its persisted form (or null = drop). Order-preserving
     // because callers map over the original array.
