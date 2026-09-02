@@ -12,7 +12,7 @@
 import { memberAvatarUrl, memberDisplayName } from "./liveEntities";
 import { compareMembersByPresence } from "../components/presence/memberPresence";
 import type { ChatMessageRow, ChatReactionRow } from "../store/chatSlice";
-import type { ChatAuthor, ChatMessageView, ChatReaction } from "../components/chat/chatTypes";
+import type { ChatAuthor, ChatChannelView, ChatMessageView, ChatReaction } from "../components/chat/chatTypes";
 import { botHandle } from "@codecast/convex/convex/chatText";
 import { chatRoomKey } from "@codecast/shared/contracts";
 import { dmOtherIds } from "@codecast/shared/chat";
@@ -96,6 +96,32 @@ export function channelRowRoomKey(
 }
 
 /** The avatar-bearing side of a 1:1 DM, for surfaces that show a face. */
+/** What a rail row says when the pointer rests on it: the name it wears, the
+ *  topic under it (a channel's), and the one state worth a word — mentions,
+ *  unread, muted, a live huddle. The wide rail shows the name; the narrow
+ *  rail shows only a tile, so this is the whole row's voice there. */
+export function railRowTip(
+  c: ChatChannelView,
+  members: ChatMember[],
+  extra: { live?: boolean } = {},
+): { title: string; detail?: string; state?: string } {
+  const name = channelDisplayName(c, members);
+  const title = c.kind === "dm" ? name : `#${name}`;
+  const detail = c.kind === "dm" ? undefined : c.topic || undefined;
+  const mentions = c.mentionCount ?? 0;
+  const unread = c.unreadCount ?? 0;
+  const state = extra.live
+    ? "Huddle live"
+    : mentions > 0
+      ? `${mentions} mention${mentions === 1 ? "" : "s"}`
+      : unread > 0
+        ? `${unread} unread`
+        : c.muted
+          ? "Muted"
+          : undefined;
+  return { title, detail, state };
+}
+
 export function dmCounterpart(
   view: { kind?: string; dmMemberIds?: string[] },
   members: ChatMember[] | undefined,
