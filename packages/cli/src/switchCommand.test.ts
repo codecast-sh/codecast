@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseSwitchAgentArg } from "./switchCommand.ts";
+import { parseSwitchAgentArg } from "./switchCommand";
 
 describe("parseSwitchAgentArg", () => {
   test("accepts daemon and convex spellings", () => {
