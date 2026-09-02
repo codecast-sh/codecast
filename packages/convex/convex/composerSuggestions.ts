@@ -513,9 +513,7 @@ export function parseMinedProfile(parsed: unknown): MinedProfile | null {
 //   the conversation at hand.
 // Runs once per profile refresh (12h TTL), so its cost is a rounding error.
 // Returns null on any failure so the caller can fall back to n-gram phrases.
-export async function minePatternsWithLLM(
-  inputs: string[],
-): Promise<(MinedProfile & { usage?: unknown }) | null> {
+export function buildMinerPrompt(inputs: string[]): string {
   // Bare nudges dominate any raw corpus (a "go" for every agent turn) and
   // would surface as the top "habit" — noise that biases the suggester
   // toward exactly what it must never output. Mine only substantive inputs.
@@ -526,7 +524,7 @@ export async function minePatternsWithLLM(
     .slice(0, 250)
     .map((t) => t.replace(/\s+/g, " ").slice(0, 600))
     .join("\n");
-  const prompt = `You are analyzing one developer's messages to their coding agents, collected across many sessions. Learn two things so another model can predict what they will type into a brand-new conversation: their recurring BEHAVIOR PATTERNS, and the REUSABLE PROMPTS they send again and again.
+  return `You are analyzing one developer's messages to their coding agents, collected across many sessions. Learn two things so another model can predict what they will type into a brand-new conversation: their recurring BEHAVIOR PATTERNS, and the REUSABLE PROMPTS they send again and again.
 
 Return ONLY a JSON object: {"patterns": [{"pattern": string, "example": string, "count": number}], "prompts": [{"text": string, "count": number}]}
 
@@ -547,7 +545,12 @@ Rules:
 
 Messages (one per line):
 ${corpus}`;
+}
 
+export async function minePatternsWithLLM(
+  inputs: string[],
+): Promise<(MinedProfile & { usage?: unknown }) | null> {
+  const prompt = buildMinerPrompt(inputs);
   const completion = await llmComplete({ provider: "anthropic", prompt, maxTokens: 3000 });
   if (!completion) return null;
   const mined = parseMinedProfile(parseJsonBlock(completion.text));
@@ -786,13 +789,29 @@ export const refreshSuggestionProfile = internalAction({
   },
 });
 
+// The exact miner prompt one user's corpus renders to right now — what the
+// profile refresh would send. Read-only; for inspecting what the miner sees.
+export const previewMinerPrompt = internalAction({
+  args: { user_id: v.id("users") },
+  handler: async (ctx, args): Promise<{ prompt: string; inputs: number }> => {
+    const inputs: Array<{ text: string }> = await ctx.runQuery(
+      internal.composerSuggestions.getRecentUserInputs,
+      { user_id: args.user_id },
+    );
+    return { prompt: buildMinerPrompt(inputs.map((r) => r.text)), inputs: inputs.length };
+  },
+});
+
 // Side-by-side provider comparison over real conversations — the evidence
 // behind the SUGGESTIONS_PROVIDER choice. Internal-only; run via
 // `npx convex run` with a user id and conversation ids. Makes no writes.
+// `prompt_only` returns the rendered prompt per conversation and calls no
+// provider — the exact context the suggester would be sent.
 export const bakeoffSuggestions = internalAction({
   args: {
     user_id: v.id("users"),
     conversation_ids: v.array(v.id("conversations")),
+    prompt_only: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<any> => {
     const profile = await ctx.runQuery(internal.composerSuggestions.getSuggestionProfile, {
@@ -814,6 +833,10 @@ export const bakeoffSuggestions = internalAction({
         continue;
       }
       const prompt = buildPrompt(context, profileForPrompt(profile));
+      if (args.prompt_only) {
+        results.push({ cid, title: context.conversation.title, anchor: context.anchor, prompt });
+        continue;
+      }
       const t0 = Date.now();
       const haiku = await llmComplete({ provider: "anthropic", prompt, maxTokens: SUGGEST_MAX_TOKENS });
       const t1 = Date.now();
