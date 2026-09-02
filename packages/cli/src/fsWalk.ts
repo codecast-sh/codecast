@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { timeSyncFs } from "./slowSync.js";
 
 export interface WalkFile {
   path: string;
@@ -105,7 +106,9 @@ export function walkDirsSync(root: string, opts: WalkOptions, onDir: (files: Wal
     onDir(files);
     for (const sub of subdirs) walkDir(sub, depth);
   };
-  walkDir(root, 0);
+  // Every remaining synchronous tree walk comes through here, so this one
+  // timer names all of them when the disk is slow.
+  timeSyncFs("walkDirsSync", root, () => walkDir(root, 0));
 }
 
 /**

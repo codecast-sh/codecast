@@ -105,9 +105,45 @@ describe("transcriptDirWatcherConfig — gemini config matches the old GeminiWat
       expect(cfg.extractProjectHash!(fp)).toBe(oldGemini.extractProjectHash(fp));
     }
   });
-  test("debounce matches and no depth cap", () => {
+  test("debounce matches; the depth cap stops at <hash>/chats/<id>.json", () => {
     expect(cfg.debounceMs).toBe(oldGemini.debounceMs);
-    expect(cfg.maxDepth).toBeUndefined();
+    expect(cfg.maxDepth).toBe(3);
+  });
+});
+
+// Each watcher's dirFilter admits only directories that can hold a transcript,
+// so priming and every rescan skip the sibling trees the client keeps next to
+// its sessions.
+describe("transcriptDirWatcherConfig — dirFilter per client", () => {
+  const j = (...parts: string[]) => parts.join(path.sep);
+  test("codex enters only dated YYYY/MM/DD dirs", () => {
+    const f = transcriptDirWatcherConfig("codex").dirFilter!;
+    expect(f("2026")).toBe(true);
+    expect(f(j("2026", "02"))).toBe(true);
+    expect(f(j("2026", "02", "25"))).toBe(true);
+    expect(f("watcher-test-1772041030215")).toBe(false);
+    expect(f("node_modules")).toBe(false);
+    expect(f(j("2026", "02", "25", "deeper"))).toBe(false);
+  });
+  test("gemini enters a project hash and its chats dir only", () => {
+    const f = transcriptDirWatcherConfig("gemini").dirFilter!;
+    expect(f("abc123hash")).toBe(true);
+    expect(f(j("abc123hash", "chats"))).toBe(true);
+    expect(f(j("abc123hash", "checkpoints"))).toBe(false);
+    expect(f(j("abc123hash", "chats", "deeper"))).toBe(false);
+  });
+  test("grok enters a cwd slug and a session uuid dir only", () => {
+    const f = transcriptDirWatcherConfig("grok").dirFilter!;
+    expect(f("%2FUsers%2Fdev")).toBe(true);
+    expect(f(j("%2FUsers%2Fdev", "a7c9c0e2-1d82-4d42-b342-f59fefc7b9f5"))).toBe(true);
+    expect(f(j("%2FUsers%2Fdev", ".cwd"))).toBe(false);
+    expect(f(j("%2FUsers%2Fdev", "a7c9c0e2-1d82-4d42-b342-f59fefc7b9f5", "sub"))).toBe(false);
+    expect(transcriptDirWatcherConfig("grok").maxDepth).toBe(3);
+  });
+  test("pi needs no dirFilter: maxDepth 2 stops at the slug dirs", () => {
+    const cfg = transcriptDirWatcherConfig("pi");
+    expect(cfg.dirFilter).toBeUndefined();
+    expect(cfg.maxDepth).toBe(2);
   });
 });
 
@@ -132,6 +168,27 @@ function waitForSessionEvent(
 }
 
 describe("TranscriptDirWatcher — live behavior via the codex config", () => {
+  test("start() resolves after priming, with the pre-existing file already emitted", async () => {
+    const root = path.join(os.tmpdir(), `.codex-watcher-prime-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    const sessionId = "12345678-1234-1234-1234-123456789abc";
+    const filePath = path.join(root, "2026", "02", "25", `rollout-${sessionId}.jsonl`);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, '{"type":"response_item"}\n');
+    // A matching file under a dir the codex dirFilter refuses: never walked.
+    const cruft = path.join(root, "watcher-test-1", `rollout-${sessionId}.jsonl`);
+    fs.mkdirSync(path.dirname(cruft), { recursive: true });
+    fs.writeFileSync(cruft, '{"type":"response_item"}\n');
+
+    const events: TranscriptDirEvent[] = [];
+    const watcher = new TranscriptDirWatcher(transcriptDirWatcherConfig("codex", root));
+    watcher.on("session", (e) => events.push(e));
+    await watcher.start();
+    expect(events.map((e) => e.filePath)).toEqual([filePath]);
+    expect(events[0].sessionId).toBe(sessionId);
+    watcher.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   test("emits add and change events under nested dated session dirs, extracting the UUID", async () => {
     const root = path.join(os.tmpdir(), `.codex-watcher-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     const sessionId = "12345678-1234-1234-1234-123456789abc";

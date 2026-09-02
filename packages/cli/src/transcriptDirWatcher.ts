@@ -40,6 +40,9 @@ export interface TranscriptDirWatcherConfig {
   extractProjectHash?: (filePath: string) => string;
   /** Recursive-watch depth cap (codex used 4; gemini unbounded). */
   maxDepth?: number;
+  /** Whether the walk enters a directory, by its path relative to basePath.
+   *  Prunes sibling trees a client keeps next to its transcripts. */
+  dirFilter?: (rel: string) => boolean;
   debounceMs?: number;
 }
 
@@ -54,7 +57,9 @@ export interface TranscriptDirWatcherEvents {
  *  satisfy it, so `registerJsonlDirWatcher` can drive either. */
 export interface DirEventWatcher {
   on<K extends keyof TranscriptDirWatcherEvents>(event: K, listener: TranscriptDirWatcherEvents[K]): this;
-  start(): void;
+  /** May resolve when priming completes; a caller that only needs the watch
+   *  open ignores the value. */
+  start(): void | Promise<void>;
   stop(): void;
 }
 
@@ -72,8 +77,9 @@ export class TranscriptDirWatcher extends EventEmitter {
     this.cfg = cfg;
   }
 
-  start(): void {
-    if (this.watcher) return;
+  /** Resolves once the priming walk has emitted the pre-existing files. */
+  start(): Promise<void> {
+    if (this.watcher) return this.watcher.whenPrimed();
 
     if (!fs.existsSync(this.cfg.basePath)) {
       fs.mkdirSync(this.cfg.basePath, { recursive: true });
@@ -82,6 +88,7 @@ export class TranscriptDirWatcher extends EventEmitter {
     this.watcher = new RecursiveWatcher({
       path: this.cfg.basePath,
       filter: this.cfg.watchFilter,
+      dirFilter: this.cfg.dirFilter,
       callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
       onExisting: (files) => this.emitExistingFilesSorted(files),
       maxDepth: this.cfg.maxDepth,
@@ -91,6 +98,11 @@ export class TranscriptDirWatcher extends EventEmitter {
     this.watcher.on("error", (err: Error) => this.emit("error", err));
     this.watcher.on("ready", () => this.emit("ready"));
     this.watcher.start();
+    return this.watcher.whenPrimed();
+  }
+
+  whenPrimed(): Promise<void> {
+    return this.watcher ? this.watcher.whenPrimed() : Promise.resolve();
   }
 
   // Files the watcher's priming walk found (one walk serves both), narrowed by
@@ -239,6 +251,12 @@ export function transcriptDirWatcherConfig(
         // injection vector (the same guard as pi's filename rule).
         return GROK_SESSION_DIR_UUID_RE.test(dirname) ? dirname : null;
       },
+      // Enter a cwd dir and a session uuid dir only; `.cwd` and friends are
+      // files, and any other dir at depth 2 cannot hold a session.
+      dirFilter: (rel) => {
+        const parts = rel.split(path.sep);
+        return parts.length === 1 || (parts.length === 2 && GROK_SESSION_DIR_UUID_RE.test(parts[1]));
+      },
       maxDepth: 3,
       debounceMs: 100,
     };
@@ -261,6 +279,7 @@ export function transcriptDirWatcherConfig(
         // session_id and, unescaped, a resume-command injection vector).
         return match ? match[1] : null;
       },
+      // No dirFilter: maxDepth 2 already stops the walk at the slug dirs.
       maxDepth: 2,
       debounceMs: 100,
     };
@@ -275,6 +294,13 @@ export function transcriptDirWatcherConfig(
         const filename = path.basename(filePath, ".jsonl");
         const match = filename.match(CODEX_UUID_SUFFIX_RE);
         return match ? match[1] : filename;
+      },
+      // Rollouts live under sessions/YYYY/MM/DD. Anything else at the root
+      // (leftover `watcher-test-*` dirs, an editor's scratch dir) is skipped.
+      dirFilter: (rel) => {
+        const parts = rel.split(path.sep);
+        if (parts.length === 1) return /^\d{4}$/.test(parts[0]);
+        return parts.length <= 3 && /^\d{2}$/.test(parts[parts.length - 1]);
       },
       maxDepth: 4,
       debounceMs: 100,
@@ -293,6 +319,13 @@ export function transcriptDirWatcherConfig(
       const chatsIdx = parts.lastIndexOf("chats");
       return chatsIdx > 0 ? parts[chatsIdx - 1] : "";
     },
+    // Layout is <project-hash>/chats/<id>.json; a project dir also holds
+    // checkpoints and other state that never carry a transcript.
+    dirFilter: (rel) => {
+      const parts = rel.split(path.sep);
+      return parts.length === 1 || (parts.length === 2 && parts[1] === "chats");
+    },
+    maxDepth: 3,
     debounceMs: 200,
   };
 }

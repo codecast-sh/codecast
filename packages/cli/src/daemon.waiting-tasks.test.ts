@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { transcriptTailTurnStartTs, openBackgroundTaskIds, openBackgroundTasks, reconciledStatusWithTasks, scanOpenBackgroundTasks, declaredSettleVerdict, latestTurnStartTs, markTurnStarted, statusFlipStartsTurn, verifyOpenTasks, parseProcessTable, taskProcessNeedle, toOpenTaskReports, paneReconcileTarget, type OpenTaskInfo } from "./daemon.js";
+import { measureLoopHold } from "./test-helpers/loopHold.js";
+import { SCAN_CHUNK_BYTES, openTaskScanOffset, primeOpenTaskScan, readCompleteLinesSync, transcriptTailTurnStartTs, openBackgroundTaskIds, openBackgroundTasks, reconciledStatusWithTasks, scanOpenBackgroundTasks, declaredSettleVerdict, latestTurnStartTs, markTurnStarted, statusFlipStartsTurn, verifyOpenTasks, parseProcessTable, taskProcessNeedle, toOpenTaskReports, paneReconcileTarget, type OpenTaskInfo } from "./daemon.js";
 
 // Regression tests for the "settled turn with live background work reads as
 // needs_input" bug (session jx7e6ex, 2026-08-03). A turn that ends while a
@@ -544,4 +545,69 @@ describe("transcriptTailTurnStartTs", () => {
     // The stamp postdates the delivered input -> trusted, however old the daemon is.
     expect(declaredSettleVerdict("s1", Date.parse(T2), turnStart, { at: Date.parse(T1) + 5_000, status: "dormant" })).toBe("dormant");
   });
+});
+
+// The scan window: a line longer than one chunk grows the buffer one chunk
+// per step, never to the whole remaining file, and the async prime leaves
+// nothing for the synchronous hook path scan to read.
+describe("openBackgroundTasks window growth and primeOpenTaskScan", () => {
+  const dir = () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "open-tasks-window-"));
+    cleanups.push(() => fs.rmSync(d, { recursive: true, force: true }));
+    return d;
+  };
+  const cleanups: Array<() => void> = [];
+  afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
+  // A big tool result: one record, `bytes` long, that carries no task text.
+  const bigLine = (bytes: number) => toolResult("x".repeat(bytes));
+  // Enough short records to fill `bytes`.
+  const filler = (bytes: number) => {
+    const out: string[] = [];
+    for (let n = 0; n < bytes; ) {
+      const l = toolResult(`filler ${out.length} ` + "y".repeat(50_000));
+      out.push(l);
+      n += l.length + 1;
+    }
+    return out;
+  };
+
+  test("a 9MB single line grows the scan buffer one chunk at a time and the task after it is still found", () => {
+    const d = dir();
+    const f = path.join(d, "t.jsonl");
+    fs.writeFileSync(f, transcript(bigLine(9 * 1024 * 1024), ...filler(20 * 1024 * 1024), bgStart("after-big")) + "\n");
+    const size = fs.statSync(f).size;
+    // The scan's first window, read the way openBackgroundTasks reads it:
+    // three 4MB steps reach the 9MB line's newline, so the window holds at
+    // most 12MB. The old escape jumped to the whole 29MB file in two steps.
+    const fd = fs.openSync(f, "r");
+    try {
+      const first = readCompleteLinesSync(fd, 0, size, { step: SCAN_CHUNK_BYTES });
+      expect(first.steps).toBe(3);
+      expect(first.bytesConsumed).toBeGreaterThan(9 * 1024 * 1024);
+      expect(first.bytesConsumed).toBeLessThanOrEqual(3 * SCAN_CHUNK_BYTES);
+    } finally {
+      fs.closeSync(fd);
+    }
+    expect(openBackgroundTasks(f, SID).map((t) => t.id)).toEqual(["after-big"]);
+    expect(openTaskScanOffset(f)).toBe(size);
+  }, 60_000);
+
+  test("primeOpenTaskScan reads a fresh 30MB transcript off the loop and leaves the sync scan nothing to read", async () => {
+    const d = dir();
+    const f = path.join(d, "t.jsonl");
+    fs.writeFileSync(f, transcript(...filler(30 * 1024 * 1024), bgStart("primed-task")) + "\n");
+    const size = fs.statSync(f).size;
+    const { maxGapMs, ticks } = await measureLoopHold(() => primeOpenTaskScan(f, SID));
+    expect(ticks).toBeGreaterThan(0);
+    expect(maxGapMs).toBeLessThan(200);
+    expect(openTaskScanOffset(f)).toBe(size);
+    const openSync = spyOn(fs, "openSync");
+    try {
+      expect(openBackgroundTasks(f, SID).map((t) => t.id)).toEqual(["primed-task"]);
+      expect(openSync).not.toHaveBeenCalled();
+    } finally {
+      openSync.mockRestore();
+    }
+    expect(openTaskScanOffset(f)).toBe(size);
+  }, 60_000);
 });

@@ -4,7 +4,8 @@ import * as path from "path";
 import { randomUUID, createHash } from "node:crypto";
 import * as http from "http";
 import { Database } from "bun:sqlite";
-import { childErrorDetail, execSync, execFileSync, exec, execFile, spawn, spawnSync, setSlowSyncSpawnSink } from "./proc.js";
+import { childErrorDetail, execSync, execFileSync, exec, execFile, spawn, spawnSync } from "./proc.js";
+import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { parseProcessTable } from "./processTable.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
 import { watch as chokidarWatch } from "chokidar";
@@ -1288,7 +1289,9 @@ export function mapCodexAppServerThreadStatusToAgentStatus(status: AppServerThre
  * keeping both meant every frontmatter quirk had to be fixed twice.
  */
 export function readAvailableSkills(projectPath?: string): Array<{ name: string; description: string }> {
-  return toInvocableList(readInventory(process.env.HOME || "", projectPath));
+  // The only chokepoint for the capability scan's synchronous walk.
+  return timeSyncFs("readAvailableSkills", projectPath ?? "global", () =>
+    toInvocableList(readInventory(process.env.HOME || "", projectPath)));
 }
 
 function syncSkillsForConversation(conversationId: string, projectPath: string | undefined, syncService: SyncService): void {
@@ -6088,6 +6091,9 @@ function readFileHeadAndTail(filePath: string, headBytes: number = 8192, tailByt
 // non-session_meta line, returning just that leading block for extractCodexForkRoot. This
 // is position-independent (works on incremental syncs) and bounded by a deep-chain cap.
 function readCodexSessionMetaHead(filePath: string): string {
+  return timeSyncFs("readCodexSessionMetaHead", filePath, () => readCodexSessionMetaHeadSync(filePath));
+}
+function readCodexSessionMetaHeadSync(filePath: string): string {
   const CHUNK = 256 * 1024;
   const MAX = 16 * 1024 * 1024;
   const fd = fs.openSync(filePath, "r");
@@ -6649,7 +6655,130 @@ const SYNC_BYTES_PER_PASS = 1 * 1024 * 1024;
 // between each) before deferring to the next file-watch event / watchdog. Drains up
 // to SYNC_BYTES_PER_PASS * this per trigger — kept at 24MB, matching the old
 // 4MB x 6 — so a large idle backlog catches up just as fast, in smaller bites.
-const MAX_SYNC_CONTINUATIONS = 24;
+export const MAX_SYNC_CONTINUATIONS = 24;
+
+/**
+ * Where a read window may be cut: the index of the LAST byte to consume, or
+ * -1 to ask for a bigger window. `len` is how many bytes of `buf` are valid;
+ * `atEof` says no more bytes exist past them.
+ */
+export type PassBoundary = (buf: Buffer, len: number, atEof: boolean) => number;
+
+// A newline is one byte and never part of a multibyte sequence, so a byte cut
+// at it is charset safe and the byte count needs no re-encode.
+const newlineBoundary: PassBoundary = (buf, len) => buf.lastIndexOf(0x0a, len - 1);
+
+type ReadRequest = { buf: Buffer; offset: number; length: number; position: number };
+
+// The window algorithm both readers share: fill one window, look for a
+// boundary, and when there is none and bytes remain, grow by one more window
+// and read only the new tail. Each `yield` is one read the driver performs
+// (awaited or synchronous), so the async driver frees the loop between steps
+// and the sync driver never allocates more than one extra window at a time.
+function* completeLinesPlan(
+  position: number,
+  available: number,
+  opts: { step?: number; boundary?: PassBoundary },
+): Generator<ReadRequest, { content: string; bytesConsumed: number; steps: number }, number> {
+  const step = opts.step ?? SYNC_BYTES_PER_PASS;
+  const boundary = opts.boundary ?? newlineBoundary;
+  let buf = Buffer.alloc(Math.min(available, step));
+  let len = 0;
+  let steps = 0;
+  for (;;) {
+    const want = Math.min(buf.length, available) - len;
+    const n = want > 0 ? yield { buf, offset: len, length: want, position: position + len } : 0;
+    steps++;
+    if (n <= 0) available = len; // the file shrank under us: what we hold is all there is
+    len += n;
+    const atEof = len >= available;
+    const cut = len > 0 ? boundary(buf, len, atEof) : -1;
+    if (cut >= 0) return { content: buf.toString("utf8", 0, cut + 1), bytesConsumed: cut + 1, steps };
+    // No boundary at EOF: a line still being written. Consume nothing and let
+    // the next pass re-read it (same rule as before the window existed).
+    if (atEof) return { content: "", bytesConsumed: 0, steps };
+    const grown = Buffer.alloc(Math.min(buf.length + step, available));
+    buf.copy(grown, 0, 0, len);
+    buf = grown;
+  }
+}
+
+/**
+ * The complete lines available at `position`, read one window at a time.
+ * Replaces the old escape that, on a line longer than the window, re-read the
+ * whole remaining file in one allocation; now an oversized line costs one
+ * more window per step, with the loop free during every read.
+ */
+export async function readCompleteLines(
+  fd: fs.promises.FileHandle,
+  position: number,
+  available: number,
+  opts: { step?: number; boundary?: PassBoundary } = {},
+): Promise<{ content: string; bytesConsumed: number; steps: number }> {
+  const plan = completeLinesPlan(position, available, opts);
+  let r = plan.next(0);
+  while (!r.done) {
+    const { bytesRead } = await fd.read(r.value.buf, r.value.offset, r.value.length, r.value.position);
+    r = plan.next(bytesRead);
+  }
+  return r.value;
+}
+
+/** The synchronous twin, for the hook paths that cannot await. */
+export function readCompleteLinesSync(
+  fd: number,
+  position: number,
+  available: number,
+  opts: { step?: number; boundary?: PassBoundary } = {},
+): { content: string; bytesConsumed: number; steps: number } {
+  const plan = completeLinesPlan(position, available, opts);
+  let r = plan.next(0);
+  while (!r.done) {
+    r = plan.next(fs.readSync(fd, r.value.buf, r.value.offset, r.value.length, r.value.position));
+  }
+  return r.value;
+}
+
+/**
+ * Drain any remaining known backlog in bounded passes instead of waiting for
+ * the next file watch event or the 5 minute watchdog. The caller has already
+ * advanced its position, so each continuation is durable forward progress.
+ * The setImmediate lets queued work (heartbeats, deliveries, timers) run
+ * between passes: each pass parses one window synchronously, and chaining
+ * them back to back is what turned big backlogs into event loop freezes.
+ */
+export async function continueSyncPass(
+  lastPosition: number,
+  bytesConsumed: number,
+  size: number,
+  depth: number,
+  next: () => Promise<void>,
+): Promise<void> {
+  if (!(bytesConsumed > 0 && lastPosition + bytesConsumed < size && depth < MAX_SYNC_CONTINUATIONS)) return;
+  await new Promise((resolve) => setImmediate(resolve));
+  await next();
+}
+
+const CURSOR_ROLE_HEADER_RE = /^[ \t\r]*(user|assistant|system):[ \t\r]*$/gim;
+
+/**
+ * Cut a cursor transcript window just before its last role header, so a
+ * message whose lines straddle the window is never synced truncated:
+ * parseCursorTranscriptFile buffers lines until the next header, so a newline
+ * cut inside a message would sync the first half and drop the rest. At EOF
+ * the cut is the last newline, which is what a whole tail read did before.
+ */
+export const cursorPassBoundary: PassBoundary = (buf, len, atEof) => {
+  if (atEof) return newlineBoundary(buf, len, atEof);
+  const text = buf.toString("utf8", 0, len);
+  let headerAt = -1;
+  for (const m of text.matchAll(CURSOR_ROLE_HEADER_RE)) {
+    if (m.index !== undefined && m.index > 0) headerAt = m.index;
+  }
+  if (headerAt < 0) return -1;
+  // The byte before the header line is the newline that ends the previous one.
+  return Buffer.byteLength(text.slice(0, headerAt), "utf8") - 1;
+};
 
 export async function processSessionFile(
   filePath: string,
@@ -6725,32 +6854,14 @@ export async function processSessionFile(
     // was contended (2026-09-02). The JSON parse below stays on the loop, which
     // is what SYNC_BYTES_PER_PASS bounds.
     fd = await fs.promises.open(filePath, "r");
-    const available = stats.size - lastPosition;
-    // Read at most SYNC_BYTES_PER_PASS so a large backlog drains in bounded,
-    // convergent steps (see constant above) rather than one giant batch.
-    let readLen = Math.min(available, SYNC_BYTES_PER_PASS);
-    let buffer = Buffer.alloc(readLen);
-    await fd.read(buffer, 0, readLen, lastPosition);
-    let rawContent = buffer.toString("utf-8");
-    let lastNewline = rawContent.lastIndexOf("\n");
-    // A single JSONL entry larger than the cap (e.g. a big inlined image) has no
-    // newline within the capped window. Read the whole remaining file so we never
-    // stall forever on one oversized line.
-    if (lastNewline < 0 && readLen < available) {
-      readLen = available;
-      buffer = Buffer.alloc(readLen);
-      await fd.read(buffer, 0, readLen, lastPosition);
-      rawContent = buffer.toString("utf-8");
-      lastNewline = rawContent.lastIndexOf("\n");
-    }
+    // One SYNC_BYTES_PER_PASS window of complete lines, so a large backlog
+    // drains in bounded, convergent steps (see constant above) rather than
+    // one giant batch. A trailing partial line (a large entry still being
+    // written) is left for the next pass.
+    const { content: newContent, bytesConsumed } = await readCompleteLines(fd, lastPosition, stats.size - lastPosition);
     await fd.close();
     fd = undefined;
 
-    // Only process complete lines — a trailing partial line (no newline at end)
-    // may be a large JSONL entry (e.g. screenshot) still being written.
-    // By not advancing the position past incomplete data, we re-read it next poll.
-    const newContent = lastNewline >= 0 ? rawContent.slice(0, lastNewline + 1) : "";
-    const bytesConsumed = lastNewline >= 0 ? Buffer.byteLength(rawContent.slice(0, lastNewline + 1), "utf-8") : 0;
     if (!newContent) {
       // No complete lines yet — don't advance position
       return;
@@ -7589,36 +7700,22 @@ export async function processSessionFile(
 
     updateStateCallback();
 
-    // Drain any remaining known backlog in bounded passes instead of waiting for the
-    // next file-watch event or the 5-min watchdog. markSynced/setPosition above have
-    // already advanced the position, so each continuation is durable forward progress
-    // and the next pass picks up from the new position.
-    if (
-      bytesConsumed > 0 &&
-      lastPosition + bytesConsumed < stats.size &&
-      continuationDepth < MAX_SYNC_CONTINUATIONS
-    ) {
-      // Let queued work (heartbeats, deliveries, timers) run between passes —
-      // each pass is a synchronous read+parse, and chaining them back-to-back
-      // is what turned big backlogs into event-loop freezes.
-      await new Promise((resolve) => setImmediate(resolve));
-      await processSessionFile(
-        filePath,
-        sessionId,
-        projectPath,
-        syncService,
-        userId,
-        teamId,
-        conversationCache,
-        retryQueue,
-        pendingMessages,
-        titleCache,
-        updateStateCallback,
-        parentConversationId,
-        overrideAgentType,
-        continuationDepth + 1,
-      );
-    }
+    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processSessionFile(
+      filePath,
+      sessionId,
+      projectPath,
+      syncService,
+      userId,
+      teamId,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      titleCache,
+      updateStateCallback,
+      parentConversationId,
+      overrideAgentType,
+      continuationDepth + 1,
+    ));
   } catch (err: any) {
     if (err.code === 'EACCES' || err.code === 'EPERM') {
       log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
@@ -7793,16 +7890,21 @@ async function processCursorTranscriptFile(
   conversationCache: ConversationCache,
   retryQueue: RetryQueue,
   pendingMessages: PendingMessages,
-  updateStateCallback: () => void
+  updateStateCallback: () => void,
+  continuationDepth: number = 0,
 ): Promise<void> {
   let lastPosition = getPosition(filePath);
   let stats;
 
   try {
-    stats = fs.statSync(filePath);
+    stats = await fs.promises.stat(filePath);
   } catch (err: any) {
     if (err.code === "EACCES" || err.code === "EPERM") {
       log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
+      return;
+    }
+    if (err.code === "ENOENT") {
+      log(`Transcript ${filePath} no longer exists; nothing to sync.`);
       return;
     }
     throw err;
@@ -7818,17 +7920,14 @@ async function processCursorTranscriptFile(
     return;
   }
 
-  let fd;
+  let fd: fs.promises.FileHandle | undefined;
   try {
-    fd = fs.openSync(filePath, "r");
-    const buffer = Buffer.alloc(stats.size - lastPosition);
-    fs.readSync(fd, buffer, 0, buffer.length, lastPosition);
-    fs.closeSync(fd);
-
-    const rawContent = buffer.toString("utf-8");
-    const lastNewline = rawContent.lastIndexOf("\n");
-    const newContent = lastNewline >= 0 ? rawContent.slice(0, lastNewline + 1) : "";
-    const bytesConsumed = lastNewline >= 0 ? Buffer.byteLength(rawContent.slice(0, lastNewline + 1), "utf-8") : 0;
+    fd = await fs.promises.open(filePath, "r");
+    // Windowed like claude ingest; the boundary keeps a multi line message
+    // whole across passes (see cursorPassBoundary).
+    const { content: newContent, bytesConsumed } = await readCompleteLines(fd, lastPosition, stats.size - lastPosition, { boundary: cursorPassBoundary });
+    await fd.close();
+    fd = undefined;
     if (!newContent) return;
     const messages = parseTranscriptFor("cursor", newContent);
 
@@ -7972,7 +8071,21 @@ async function processCursorTranscriptFile(
     syncStats.sessionsActive.add(sessionId);
 
     updateStateCallback();
+
+    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processCursorTranscriptFile(
+      filePath,
+      sessionId,
+      syncService,
+      userId,
+      teamId,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      updateStateCallback,
+      continuationDepth + 1,
+    ));
   } catch (err) {
+    if (fd) await fd.close().catch(() => {});
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Error processing Cursor transcript file ${filePath}: ${errMsg}`);
   }
@@ -7988,7 +8101,8 @@ async function processCodexSession(
   retryQueue: RetryQueue,
   pendingMessages: PendingMessages,
   titleCache: TitleCache,
-  updateStateCallback: () => void
+  updateStateCallback: () => void,
+  continuationDepth: number = 0,
 ): Promise<void> {
   let lastPosition = getPosition(filePath);
   let stats;
@@ -8021,17 +8135,13 @@ async function processCodexSession(
     return;
   }
 
-  let fd;
+  let fd: fs.promises.FileHandle | undefined;
   try {
-    fd = fs.openSync(filePath, "r");
-    const buffer = Buffer.alloc(stats.size - lastPosition);
-    fs.readSync(fd, buffer, 0, buffer.length, lastPosition);
-    fs.closeSync(fd);
-
-    const rawContent = buffer.toString("utf-8");
-    const lastNewline = rawContent.lastIndexOf("\n");
-    const newContent = lastNewline >= 0 ? rawContent.slice(0, lastNewline + 1) : "";
-    const bytesConsumed = lastNewline >= 0 ? Buffer.byteLength(rawContent.slice(0, lastNewline + 1), "utf-8") : 0;
+    fd = await fs.promises.open(filePath, "r");
+    // Windowed like claude ingest: one pass per window, continuation below.
+    const { content: newContent, bytesConsumed } = await readCompleteLines(fd, lastPosition, stats.size - lastPosition);
+    await fd.close();
+    fd = undefined;
     if (!newContent) return;
     let sessionMetaHead: string;
     try {
@@ -8340,7 +8450,7 @@ async function processCodexSession(
       if (codexMetadata?.originator === "codex_exec" && newContent.includes('"task_complete"')) {
         let fullContent = newContent;
         try {
-          fullContent = fs.readFileSync(filePath, "utf-8");
+          fullContent = await fs.promises.readFile(filePath, "utf-8");
         } catch {}
         if (
           isCompletedStandaloneCodexReview(codexMetadata, fullContent) ||
@@ -8363,7 +8473,22 @@ async function processCodexSession(
     }
 
     updateStateCallback();
+
+    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processCodexSession(
+      filePath,
+      sessionId,
+      syncService,
+      userId,
+      teamId,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      titleCache,
+      updateStateCallback,
+      continuationDepth + 1,
+    ));
   } catch (err) {
+    if (fd) await fd.close().catch(() => {});
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Error processing Codex session file ${filePath}: ${errMsg}`);
   }
@@ -8387,7 +8512,7 @@ async function processGeminiSession(
   try {
     let content: string;
     try {
-      content = fs.readFileSync(filePath, "utf-8");
+      content = await fs.promises.readFile(filePath, "utf-8");
     } catch (err: any) {
       if (err.code === 'EACCES' || err.code === 'EPERM') {
         log(`Warning: Permission denied reading ${filePath}. Will retry later.`);
@@ -8887,7 +9012,7 @@ async function processTranscriptDeltaSession(
     if (client === "grok" && isGrokInternalSessionDir(filePath)) return;
     let content: string;
     try {
-      content = fs.readFileSync(filePath, "utf-8");
+      content = await fs.promises.readFile(filePath, "utf-8");
     } catch (err: any) {
       if (err.code === "EACCES" || err.code === "EPERM") {
         log(`Warning: Permission denied reading ${filePath}. Will retry later.`);
@@ -11026,7 +11151,7 @@ function closeNotifiedTasks(text: string, open: Set<string>): void {
 // bytes — same verdict, O(delta) memory. The offset only advances past complete
 // lines, so a half-written tail is re-read (not skipped) on the next call. A
 // shrink (rotation/rewrite) resets to a full scan.
-const SCAN_CHUNK_BYTES = 4 * 1024 * 1024;
+export const SCAN_CHUNK_BYTES = 4 * 1024 * 1024;
 type OpenTaskScanState = {
   offset: number;
   open: Set<string>;
@@ -11036,6 +11161,10 @@ type OpenTaskScanState = {
   sessionId?: string;
 };
 const openTaskScanCache = new Map<string, OpenTaskScanState>();
+/** How far the open task scan has read a transcript (tests and diagnostics). */
+export function openTaskScanOffset(transcriptPath: string): number | undefined {
+  return openTaskScanCache.get(transcriptPath)?.offset;
+}
 // `notBefore` is the restart fence: a task armed before it belongs to a
 // replaced agent process and is dead however open the transcript says it is
 // (see OpenTaskTimes). Callers pass the agent's process start when known.
@@ -11046,43 +11175,75 @@ export function openBackgroundTaskIds(transcriptPath: string, sessionId?: string
 // The open tasks with what the scanner knows about each (see OpenTaskInfo) —
 // the transcript's claim, fenced by process generation but NOT yet checked
 // against live processes (verifiedOpenTasks does that).
+// The scan state for a transcript, reset when the file shrank or the session
+// changed. Shared by the sync scan and the async prime so both advance the
+// same offset.
+function openTaskScanState(transcriptPath: string, size: number, sessionId?: string): OpenTaskScanState {
+  let state = openTaskScanCache.get(transcriptPath);
+  if (state && (state.offset > size || state.sessionId !== sessionId)) state = undefined;
+  if (!state) state = { offset: 0, open: new Set<string>(), openedAt: new Map<string, number>(), info: new Map(), pendingCalls: new Map(), sessionId };
+  return state;
+}
+
+function consumeOpenTaskChunk(state: OpenTaskScanState, content: string, bytesConsumed: number, sessionId?: string): void {
+  scanOpenBackgroundTasksInto(state.open, content, sessionId, state.openedAt, state.info, state.pendingCalls);
+  state.offset += bytesConsumed;
+}
+
+/**
+ * Scan a transcript's unscanned bytes for open tasks off the loop, one
+ * SCAN_CHUNK_BYTES window per step with a yield between. The heartbeat
+ * maintenance path awaits this before the synchronous scan, so the sync scan
+ * (which hook paths must keep, they cannot await) only ever covers the delta
+ * since the last prime instead of a whole transcript after a restart.
+ */
+export async function primeOpenTaskScan(transcriptPath: string, sessionId?: string): Promise<void> {
+  try {
+    const size = (await fs.promises.stat(transcriptPath)).size;
+    const state = openTaskScanState(transcriptPath, size, sessionId);
+    if (size > state.offset) {
+      const fd = await fs.promises.open(transcriptPath, "r");
+      try {
+        while (state.offset < size) {
+          const { content, bytesConsumed } = await readCompleteLines(fd, state.offset, size - state.offset, { step: SCAN_CHUNK_BYTES });
+          if (!bytesConsumed) break; // torn trailing line at EOF
+          consumeOpenTaskChunk(state, content, bytesConsumed, sessionId);
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+      } finally {
+        await fd.close().catch(() => {});
+      }
+    }
+    openTaskScanCache.set(transcriptPath, state);
+  } catch {
+    // unreadable transcript: the sync scan makes the same (empty) claim
+  }
+}
+
 export function openBackgroundTasks(transcriptPath: string, sessionId?: string, notBefore?: number): OpenTaskInfo[] {
   try {
     const size = fs.statSync(transcriptPath).size;
-    let state = openTaskScanCache.get(transcriptPath);
-    if (state && (state.offset > size || state.sessionId !== sessionId)) state = undefined;
-    if (!state) state = { offset: 0, open: new Set<string>(), openedAt: new Map<string, number>(), info: new Map(), pendingCalls: new Map(), sessionId };
+    const state = openTaskScanState(transcriptPath, size, sessionId);
     if (size > state.offset) {
       // Chunked, not one read of (size - offset): the FIRST scan of a session
       // covers the whole transcript, and at boot the daemon first-scans every
       // waiting session back to back — one-shot reads made that a ~500MB burst.
-      // A fixed window caps per-scan memory at SCAN_CHUNK_BYTES regardless of
-      // file size. Each pass consumes only complete lines ("\n" is a single
-      // byte, never inside a multi-byte UTF-8 sequence, so slicing at it is
-      // charset-safe); the partial tail bytes are re-read on the next pass.
-      const fd = fs.openSync(transcriptPath, "r");
-      try {
-        let buf = Buffer.alloc(Math.min(SCAN_CHUNK_BYTES, size - state.offset));
-        while (state.offset < size) {
-          const want = Math.min(buf.length, size - state.offset);
-          const n = fs.readSync(fd, buf, 0, want, state.offset);
-          if (n <= 0) break;
-          let lastNl = buf.lastIndexOf(0x0a, n - 1);
-          if (lastNl >= n) lastNl = -1; // lastIndexOf clamps past-the-end offsets; stale bytes beyond n are not ours
-          if (lastNl < 0) {
-            if (state.offset + n >= size) break; // torn trailing line at EOF -> defer to next call
-            // One JSONL line larger than the window (e.g. an inlined image).
-            // Grow to cover the rest of the file so we never stall on it —
-            // mirrors processSessionFile's oversized-line handling.
-            buf = Buffer.alloc(size - state.offset);
-            continue;
+      // A window caps per-scan memory at SCAN_CHUNK_BYTES regardless of file
+      // size, and a line longer than the window grows it one window at a time
+      // (readCompleteLinesSync), never to the whole remaining file. Each pass
+      // consumes only complete lines; the partial tail is re-read next call.
+      timeSyncFs("openBackgroundTasks", transcriptPath, () => {
+        const fd = fs.openSync(transcriptPath, "r");
+        try {
+          while (state.offset < size) {
+            const { content, bytesConsumed } = readCompleteLinesSync(fd, state.offset, size - state.offset, { step: SCAN_CHUNK_BYTES });
+            if (!bytesConsumed) break; // torn trailing line at EOF -> defer to next call
+            consumeOpenTaskChunk(state, content, bytesConsumed, sessionId);
           }
-          scanOpenBackgroundTasksInto(state.open, buf.toString("utf8", 0, lastNl + 1), sessionId, state.openedAt, state.info, state.pendingCalls);
-          state.offset += lastNl + 1;
+        } finally {
+          fs.closeSync(fd);
         }
-      } finally {
-        fs.closeSync(fd);
-      }
+      });
       openTaskScanCache.set(transcriptPath, state);
     }
     const infoFor = (id: string): OpenTaskInfo => state!.info.get(id) ?? { id, kind: "background" };
@@ -12915,6 +13076,9 @@ function findCodexRolloutPath(sessionId: string, opts?: { staleOk?: boolean }): 
 // non-leaf level are checked whenever their parent dir is fresh, matching the
 // old fully-recursive walk for anything recently added.
 function probeRecentCodexRollouts(sessionId: string): string | null {
+  return timeSyncFs("probeRecentCodexRollouts", sessionId, () => probeRecentCodexRolloutsSync(sessionId));
+}
+function probeRecentCodexRolloutsSync(sessionId: string): string | null {
   const since = sessionFileIndexBuiltAt - 60_000; // clock/mtime slack
   const scan = (dir: string, depth: number): string | null => {
     let mtimeMs: number;
@@ -13255,6 +13419,9 @@ function indexedSessionLookup<T>(
 // probed: those agents are reached through their parent and tolerate index
 // latency.
 function probeRecentSessionFiles(sessionId: string): SessionFileInfo | null {
+  return timeSyncFs("probeRecentSessionFiles", sessionId, () => probeRecentSessionFilesSync(sessionId));
+}
+function probeRecentSessionFilesSync(sessionId: string): SessionFileInfo | null {
   const home = process.env.HOME || "";
   const since = sessionFileIndexBuiltAt - 60_000; // clock/mtime slack
   const freshDirs = (parent: string): string[] => {
@@ -14299,7 +14466,7 @@ async function runHeartbeatMaintenance(): Promise<void> {
   const phase = tick % HEALTH_CHECK_EVERY_N_HEARTBEATS;
   const due = ids.filter((id) => heartbeatHealthCheckBucket(id, HEALTH_CHECK_EVERY_N_HEARTBEATS) === phase);
   for (const sessionId of due) {
-    try { reconcileStatusFromTranscript(sessionId, sync); } catch {}
+    try { await reconcileStatusFromTranscript(sessionId, sync); } catch {}
   }
   await runBounded(due, 5, (sessionId) => heartbeatHealthCheck(sessionId).catch(() => {}));
 
@@ -15031,7 +15198,7 @@ function readFileTailSync(filePath: string, maxBytes = 64 * 1024): string {
 // particular has no Stop-hook equivalent and its watcher-driven idle transition
 // rides a setTimeout that dies across macOS sleep, so this heartbeat-driven path
 // is its only durable latch recovery. Gemini/Cursor formats are not yet classified.
-function reconcileStatusFromTranscript(sessionId: string, syncService: SyncService): void {
+async function reconcileStatusFromTranscript(sessionId: string, syncService: SyncService): Promise<void> {
   const stored = lastSentAgentStatus.get(sessionId);
 
   // permission_blocked recovery. tmux-managed sessions are handled by the PANE
@@ -15096,6 +15263,9 @@ function reconcileStatusFromTranscript(sessionId: string, syncService: SyncServi
   // size-cached, so heartbeats on an unchanged transcript stay cheap.
   const needsTaskScan = file.agentType === "claude" &&
     (stored === "waiting" || reconciledStatus(stored, turn) === "idle");
+  // Bring the scan up to date off the loop first, so the synchronous scan
+  // inside verifiedOpenTasks finds nothing left to read.
+  if (needsTaskScan) await primeOpenTaskScan(file.path, sessionId);
   const openTasks = needsTaskScan ? verifiedOpenTasks(file.path, sessionId) : [];
   const hasOpenTasks = openTasks.length > 0;
   // The stamp read is a single small file, paid only when a settle correction
@@ -18655,6 +18825,10 @@ interface StaleCursorSession {
 }
 
 function findStaleCursorSessions(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): StaleCursorSession[] {
+  // sqlite per workspace is synchronous by nature; time it rather than hide it.
+  return timeSyncFs("findStaleCursorSessions", "cursor workspaceStorage", () => findStaleCursorSessionsSync(maxAgeMs));
+}
+function findStaleCursorSessionsSync(maxAgeMs: number): StaleCursorSession[] {
   const workspaceStoragePath = getCursorWorkspaceStoragePath();
   const staleSessions: StaleCursorSession[] = [];
   const now = Date.now();
@@ -18869,7 +19043,8 @@ export function summarizeSamplingTraces(raw: unknown, top = 5): string {
 }
 
 function startLoopFreezeProbe(): NodeJS.Timeout {
-  setSlowSyncSpawnSink((message) => log(message));
+  // One sink for both sync spawns and sync filesystem work (slowSync.ts).
+  setSlowSyncSink((message) => log(message));
   // JSC's sampling profiler runs on its own thread, so it keeps collecting JS
   // stacks even while the event loop is pinned — exactly the window nothing
   // else can observe. Draining the buffer every tick keeps it bounded; when a

@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { RecursiveWatcher } from "./recursiveWatcher.js";
+import { measureLoopHold } from "./test-helpers/loopHold.js";
 
 function tmpDir(prefix: string): string {
   return path.join(
@@ -515,4 +516,49 @@ describe("RecursiveWatcher native event cost", () => {
     expect(seen).toHaveLength(9);
     expect(seen!).toContain(path.join("proj-a", "sub", "deep.jsonl"));
   });
+});
+
+// Priming a large tree must never pin the loop: the walk is async and batched,
+// so between two readdir answers timers keep firing. 10k files is the order
+// of one machine's transcript store.
+describe("RecursiveWatcher priming a 10k file tree", () => {
+  test("holds the loop under 100ms at a time and skips node_modules", async () => {
+    const root = tmpDir("rw-10k");
+    const DIRS = 400;
+    const PER_DIR = 25;
+    for (let d = 0; d < DIRS; d++) {
+      const dir = path.join(root, `proj-${d}`);
+      fs.mkdirSync(dir, { recursive: true });
+      for (let f = 0; f < PER_DIR; f++) fs.writeFileSync(path.join(dir, `s${f}.jsonl`), "{}\n");
+    }
+    for (let d = 0; d < 40; d++) {
+      const dir = path.join(root, "node_modules", `pkg-${d}`);
+      fs.mkdirSync(dir, { recursive: true });
+      for (let f = 0; f < PER_DIR; f++) fs.writeFileSync(path.join(dir, `s${f}.jsonl`), "{}\n");
+    }
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+
+    // The walk's own findings, not `filter` calls: on macOS the native watch
+    // can replay the writes that happened just before it opened, and those
+    // events go through `filter` too.
+    let existing: string[] = [];
+    const watcher = new RecursiveWatcher({
+      path: root,
+      filter: (rel) => rel.endsWith(".jsonl"),
+      dirFilter: (rel) => !rel.split(path.sep).includes("node_modules"),
+      onExisting: (files) => { existing = files.map((f) => f.rel); },
+      callback: () => {},
+    });
+    cleanups.push(() => watcher.stop());
+    const { maxGapMs, ticks } = await measureLoopHold(async () => {
+      watcher.start();
+      await watcher.whenPrimed();
+    });
+    watcher.stop();
+
+    expect(existing.length).toBe(DIRS * PER_DIR);
+    expect(existing.some((rel) => rel.split(path.sep).includes("node_modules"))).toBe(false);
+    expect(ticks).toBeGreaterThan(0);
+    expect(maxGapMs).toBeLessThan(100);
+  }, 60_000);
 });
