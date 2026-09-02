@@ -34,3 +34,11 @@ if $CHECK; then
   exit $drift
 fi
 echo "vendored $(echo "$PACKAGES" | wc -w | tr -d ' ') packages from $SRC: $(echo $PACKAGES)"
+
+# bun materializes file: deps as COPIES under node_modules/.bun, and keeps
+# serving the copy after the mirror changes; vite then caches the old module
+# graph on top of that. Purge both and reinstall, so the next build and the
+# running dev server see the mirror that was just written.
+rm -rf "$ROOT"/node_modules/.bun/@platform+* "$ROOT"/packages/web/node_modules/.vite
+(cd "$ROOT" && bun install --silent)
+echo "re-materialized the @platform copies and cleared the vite cache"
