@@ -61,6 +61,30 @@ function teamIdFromWorkspace(ws: unknown): string | undefined {
 
 // Pure. `existing` is the row currently in the store (undefined when absent —
 // the caller only asks for a plan when it has a base or the cargo is full).
+// Project rows carry member COUNTS the server joins (task_counts by status,
+// plan_count, active_plan_count, doc_count). A cargo patch on a member cannot
+// move those, so the applier refetches the project whenever a member change
+// can change a count: a create, a delete, a project move, or a status change
+// on a task or plan. Returns the project ids whose counts may have moved (the
+// applier keeps only the ones this replica holds). Pure; unit-tested.
+export function projectCountTouched(
+  coll: string,
+  action: { op: string; patch?: Record<string, any>; unset?: string[] },
+  existing: Record<string, any> | undefined,
+): string[] {
+  if (coll !== "tasks" && coll !== "plans" && coll !== "docs") return [];
+  const out = new Set<string>();
+  const add = (pid: unknown) => { if (typeof pid === "string" && pid) out.add(pid); };
+  const prev = existing?.project_id;
+  if (action.op !== "upsert") { add(prev); return [...out]; }
+  const raw = action.patch ?? {};
+  if (!existing) { add(raw.project_id); return [...out]; }
+  if ("project_id" in raw && raw.project_id !== prev) { add(prev); add(raw.project_id); }
+  if (action.unset?.includes("project_id")) add(prev);
+  if (coll !== "docs" && "status" in raw && raw.status !== existing.status) { add(prev); add(raw.project_id ?? prev); }
+  return [...out];
+}
+
 export function planCargoApply(
   coll: CargoCollection,
   cargo: Cargo,

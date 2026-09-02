@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, syncLogScopeMetaKey } from "../store/inboxStore";
-import { planCargoApply } from "../lib/syncLogCargo";
+import { planCargoApply, projectCountTouched } from "../lib/syncLogCargo";
 import { track } from "../lib/analytics";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { onSyncWake } from "./syncWake";
@@ -199,6 +199,16 @@ async function applyEntityIds(
   return applied;
 }
 
+// Does this replica hold the entity? Sessions have three twins (the inbox
+// row, the conversation meta and the message list) and a per-view open
+// conversation can be held without an inbox row, so a delete probe must count
+// all three — pruneFeedEntities clears all three.
+function heldRow(state: any, coll: Collection, id: string): any {
+  const row = state[coll]?.[id];
+  if (row !== undefined || coll !== "sessions") return row;
+  return state.conversations?.[id] ?? state.messages?.[id];
+}
+
 type LogAction = {
   position: number;
   entity_type: string;
@@ -257,19 +267,29 @@ async function applyLogPage(
   for (const a of entityActions) latest.set(`${a.entity_type}:${a.entity_id}`, a);
   let direct = 0;
   const state = useInboxStore.getState();
+  // Held project rows whose joined member counts a change on this page can
+  // move; refetched below unless the page already carries the project itself.
+  const projectIds = new Set<string>();
   for (const a of latest.values()) {
     const coll = ENTITY_COLLECTION[a.entity_type];
     if (!coll) continue;
+    const existing = heldRow(state, coll, a.entity_id);
+    for (const pid of projectCountTouched(coll, a, existing)) {
+      if ((state as any).projects?.[pid] !== undefined) projectIds.add(pid);
+    }
     if (a.op !== "upsert") {
       // A delete for an id this replica does not hold has nothing to prune and
       // needs no authorized-absence probe (review: private rows in a team used
       // to cost every member a byIds call per edit).
-      if ((state as any)[coll]?.[a.entity_id] !== undefined) byIds.push(a);
+      if (existing !== undefined) byIds.push(a);
       continue;
     }
     if (!a.patch) { byIds.push(a); continue; }
-    const existing = (state as any)[coll]?.[a.entity_id];
     if (a.full && !existing) {
+      // A sessions row is never seeded from cargo: an inbox row must carry
+      // its triage stamps and liveness facts (the projection strips them),
+      // and a stamp-less seed would render as a blank card. byIds only.
+      if (coll === "sessions") { byIds.push(a); continue; }
       // A whole raw document with no base: lift any exclude and seed the row,
       // then refetch — a full cargo is the document minus churn/denylisted
       // fields and carries none of the enrichment joins, so the seed makes the
@@ -289,6 +309,9 @@ async function applyLogPage(
     if (!applied) { byIds.push(a); continue; }
     direct++;
     if (plan.refetch) byIds.push(a);
+  }
+  for (const pid of projectIds) {
+    if (!latest.has(`projects:${pid}`)) byIds.push({ entity_type: "projects", entity_id: pid });
   }
   state.noteSyncLogApply(direct, byIds.length);
   tallyApply(direct, byIds.length);
@@ -457,6 +480,13 @@ async function catchUp(convex: any): Promise<void> {
     const s = useInboxStore.getState();
     for (const head of heads) s.setSyncLogLag(head.scope_key, 0);
   }
+  // Every scope cursor is stamped at a captured head: from here a bootstrap
+  // floor (useBootstrapCollection) can be cut without a hole — a write that
+  // commits after the floor's query has a position above the cursor and is
+  // replayed; one before it is in the floor. An authenticated viewer always
+  // has at least their user head, so an empty list is an auth blip and the
+  // floors keep waiting for the next run.
+  if (heads.length > 0) useInboxStore.setState({ syncLogStampedAt: Date.now() } as any);
   // Heads-absence sweep (design D5 backstop): a persisted team cursor whose
   // scope getHeads no longer lists is a revoked membership whose scope_removed
   // action we never saw (e.g. retention-pruned while this client was away).

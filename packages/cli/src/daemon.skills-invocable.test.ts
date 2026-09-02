@@ -39,35 +39,35 @@ fs.writeFileSync(path.join(cmdDir, "deploy.md"), "---\ndescription: Deploy the a
 afterAll(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
 
 describe("readAvailableSkills user-invocable default", () => {
-  const byName = (projectPath?: string) =>
-    new Map(readAvailableSkills(projectPath).map((s) => [s.name, s.description]));
+  const byName = async (projectPath?: string) =>
+    new Map((await readAvailableSkills(projectPath)).map((s) => [s.name, s.description]));
 
-  test("a skill with no invocable flag surfaces by default (matches Claude Code)", () => {
-    const skills = byName(projectRoot);
+  test("a skill with no invocable flag surfaces by default (matches Claude Code)", async () => {
+    const skills = await byName(projectRoot);
     expect(skills.has("mac-remote")).toBe(true);
     expect(skills.get("mac-remote")).toBe("Connect to the remote Mac");
   });
 
-  test("a lowercase skill.md manifest is still discovered (case-insensitive)", () => {
-    expect(byName(projectRoot).has("lower-case")).toBe(true);
+  test("a lowercase skill.md manifest is still discovered (case-insensitive)", async () => {
+    expect((await byName(projectRoot)).has("lower-case")).toBe(true);
   });
 
-  test("user-invocable: false hides a skill from the menu", () => {
-    expect(byName(projectRoot).has("bg-knowledge")).toBe(false);
+  test("user-invocable: false hides a skill from the menu", async () => {
+    expect((await byName(projectRoot)).has("bg-knowledge")).toBe(false);
   });
 
-  test("legacy user_invocable: true still includes the skill", () => {
-    expect(byName(projectRoot).has("legacy-optin")).toBe(true);
+  test("legacy user_invocable: true still includes the skill", async () => {
+    expect((await byName(projectRoot)).has("legacy-optin")).toBe(true);
   });
 
-  test("project commands are listed alongside skills", () => {
-    const items = byName(projectRoot);
+  test("project commands are listed alongside skills", async () => {
+    const items = await byName(projectRoot);
     expect(items.has("deploy")).toBe(true);
     expect(items.get("deploy")).toBe("Deploy the app");
   });
 
-  test("without a project path, project-only skills are not surfaced", () => {
+  test("without a project path, project-only skills are not surfaced", async () => {
     // Global scan (~/.claude) must not see the throwaway project's skills.
-    expect(byName(undefined).has("mac-remote")).toBe(false);
+    expect((await byName(undefined)).has("mac-remote")).toBe(false);
   });
 });

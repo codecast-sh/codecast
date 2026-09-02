@@ -488,8 +488,14 @@ describe("mergeCargo (coalesce merge, E2)", () => {
     expect(applyTo(applyTo(applyTo({}, steps[0]), steps[1]), steps[2])).toEqual({ x: 3 });
   });
   test("a full cargo replaces whatever came before (including a prior partial)", () => {
+    // The accumulated unset names ride along: a reader whose base still holds
+    // `b` must learn it is gone, and a full patch cannot say so by itself.
     expect(mergeCargo({ patch: { a: 1 }, unset: ["b"], partial: true }, { patch: { c: 3 }, full: true }))
-      .toEqual({ patch: { c: 3 }, full: true });
+      .toEqual({ patch: { c: 3 }, full: true, unset: ["b"] });
+  });
+  test("a full cargo drops carried unset names its own patch re-sets (review)", () => {
+    expect(mergeCargo({ patch: { a: 1 }, unset: ["b", "d"] }, { patch: { b: 2 }, full: true }))
+      .toEqual({ patch: { b: 2 }, full: true, unset: ["d"] });
   });
   test("partial is sticky even when the next cargo carries a patch (review blocker)", () => {
     const m = mergeCargo({ partial: true }, { patch: { b: 2 } });

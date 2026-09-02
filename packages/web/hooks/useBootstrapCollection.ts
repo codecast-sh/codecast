@@ -27,8 +27,12 @@ type Opts = {
   syncOpts?: Record<string, any>;
 };
 
-// One bootstrap per (key, args) per page session, shared across mounts.
-const done = new Map<string, Promise<any[]>>();
+// One bootstrap per (key, args) per page session, shared across mounts. The
+// rows are applied to the store exactly once (`applied`): a remount after the
+// floor landed must not re-overlay a stale snapshot over log patches that
+// arrived in between.
+type Floor = { promise: Promise<any[]>; applied: boolean };
+const done = new Map<string, Floor>();
 
 export function bootstrapKey(key: string, args: unknown): string {
   return `${key}:${JSON.stringify(args)}`;
@@ -48,6 +52,10 @@ export function useBootstrapCollection(
   const convex = useConvex();
   const isSyncHost = useIsSyncHost();
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
+  // The applier stamps every scope cursor before a floor may be cut (E8 /
+  // D9): a floor queried before the stamp can miss writes that commit between
+  // its query and the heads capture.
+  const stamped = useInboxStore((s) => s.syncLogStampedAt !== null);
   const [ready, setReady] = useState(false);
   const [nonce, setNonce] = useState(0);
   const optsRef = useRef(opts);
@@ -56,24 +64,29 @@ export function useBootstrapCollection(
 
   // eslint-disable-next-line no-restricted-syntax -- one-shot bootstrap per args
   useEffect(() => {
-    if (args === "skip" || !isSyncHost || !hydrated) return;
+    if (args === "skip" || !isSyncHost || !hydrated || !stamped) return;
     const scope = optsRef.current.liveLoadingScope;
     let cancelled = false;
-    let p = done.get(argsKey);
-    if (!p) {
-      p = (async () => {
+    let floor = done.get(argsKey);
+    if (!floor) {
+      const promise = (async () => {
         const data = await convex.query(query, args);
         const rows = optsRef.current.select ? optsRef.current.select(data) : data;
         return Array.isArray(rows) ? rows : [];
       })();
-      done.set(argsKey, p);
-      p.catch(() => done.delete(argsKey)); // a failed floor retries on the next mount
+      floor = { promise, applied: false };
+      done.set(argsKey, floor);
+      promise.catch(() => { if (done.get(argsKey) === floor) done.delete(argsKey); }); // a failed floor retries on the next mount
     }
+    const f = floor;
     if (scope) useInboxStore.getState().setLiveLoading(scope, true);
-    p.then((rows) => {
+    f.promise.then((rows) => {
       if (cancelled) return;
-      const store = useInboxStore.getState();
-      if (rows.length) store.syncTable(key, rows as any, { isDelta: true, ...optsRef.current.syncOpts } as any);
+      if (!f.applied) {
+        f.applied = true;
+        const store = useInboxStore.getState();
+        if (rows.length) store.syncTable(key, rows as any, { isDelta: true, ...optsRef.current.syncOpts } as any);
+      }
       optsRef.current.onRows?.(rows);
       setReady(true);
     }).catch((e) => console.warn(`[bootstrap] ${key} floor failed`, e))
@@ -82,7 +95,7 @@ export function useBootstrapCollection(
       cancelled = true;
       if (scope) useInboxStore.getState().setLiveLoading(scope, false);
     };
-  }, [argsKey, isSyncHost, hydrated, nonce]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [argsKey, isSyncHost, hydrated, stamped, nonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refresh = () => { done.delete(argsKey); setNonce((n) => n + 1); };
   return { ready, refresh };

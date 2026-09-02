@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import * as path from "path";
 import * as fs from "fs";
 import { Database } from "bun:sqlite";
+import { timeSyncFs } from "./slowSync.js";
 
 export interface CursorSessionEvent {
   sessionId: string;
@@ -144,7 +145,13 @@ export class CursorWatcher extends EventEmitter {
     }
   }
 
+  // Runs on a timer and opens sqlite synchronously whenever a workspace DB
+  // moved, so it is the one watcher that can still hold the loop: time it.
   private pollWorkspaces(workspaceStoragePath: string): void {
+    timeSyncFs("cursorWatcher.pollWorkspaces", workspaceStoragePath, () => this.pollWorkspacesSync(workspaceStoragePath));
+  }
+
+  private pollWorkspacesSync(workspaceStoragePath: string): void {
     try {
       const workspaceDirs = fs.readdirSync(workspaceStoragePath);
       if (this.isFirstPoll) {

@@ -44,10 +44,10 @@ import * as path from "node:path";
  */
 const KNOWN_GAPS: Record<string, { flags?: string[]; verb?: boolean; why: string }> = {
   "click-at": { verb: true, why: "engine restoration pending in jx76a64's rebase" },
-  do: { flags: ["--clone", "--real", "--tab"], why: "an engine session drives one tab of its own; real/clone are bridge modes" },
+  do: { flags: ["--tab"], why: "an engine session drives one tab of its own" },
   close: { verb: true, why: "engine restoration pending in jx76a64's rebase" },
   shot: {
-    flags: ["--clone", "--jpeg", "--out", "--real", "--ref", "--tab", "--viewports"],
+    flags: ["--jpeg", "--out", "--ref", "--tab", "--viewports"],
     why: "engine's shot predates the fleet's flags; restoration pending in jx76a64's rebase",
   },
   start: {
@@ -59,7 +59,7 @@ const KNOWN_GAPS: Record<string, { flags?: string[]; verb?: boolean; why: string
     why: "engine stop closes this session's tab; --force is the built-in driver's refcount override",
   },
   viewport: {
-    flags: ["--clone", "--real", "--tab"],
+    flags: ["--tab"],
     why: "engine restoration pending in jx76a64's rebase",
   },
 };
@@ -68,16 +68,24 @@ export interface Surface {
   [verb: string]: Set<string>;
 }
 
+/** What `targetFlags(br.command(...))` (bridge/commands.ts) adds to a verb. */
+const TARGET_FLAGS = ["--real", "--clone"];
+
 /**
  * Verbs and their flags, from `br.command(...)` chains and the passthrough
  * table. A verb registered through the table takes ANY flag — it forwards its
  * whole command line — so it is recorded with an empty flag set, and empty
- * means "accepts anything" rather than "accepts nothing".
+ * means "accepts anything" rather than "accepts nothing". A chain wrapped in
+ * `targetFlags(...)` carries the two browser flags that helper registers, so
+ * dropping the wrapper from a verb reads as lost flags, the way it should.
  */
 export function readSurface(src: string): Surface {
   const out: Surface = {};
   for (const m of src.matchAll(/br\.command\("([a-z0-9-]+)[^"]*"\)((?:.|\n)*?)\.action/g)) {
     out[m[1]] = new Set([...m[2].matchAll(/\.option\("(--[a-z-]+)/g)].map((o) => o[1]));
+  }
+  for (const m of src.matchAll(/targetFlags\(br\.command\("([a-z0-9-]+)[^"]*"\)\)/g)) {
+    for (const f of TARGET_FLAGS) (out[m[1]] ??= new Set()).add(f);
   }
   for (const m of src.matchAll(/\{ verb: "([a-z0-9-]+)"/g)) {
     if (!(m[1] in out)) out[m[1]] = new Set();
@@ -182,6 +190,13 @@ describe("readSurface", () => {
     const builtin = readSurface(`br.command("shot").option("--full", "x").option("--jpeg", "y").action(() => {});`);
     const engine = readSurface(`br.command("shot").option("--full", "x").action(() => {});`);
     expect(surfaceDrift(builtin, engine).flagsLost).toEqual({ shot: ["--jpeg"] });
+  });
+
+  test("flags registered through targetFlags count as registered", () => {
+    const s = readSurface(`targetFlags(br.command("shot [path]")).option("--full", "x").action(() => {});`);
+    expect([...s.shot].sort()).toEqual(["--clone", "--full", "--real"]);
+    const builtin = readSurface(`br.command("shot").option("--real", "x").option("--clone", "y").action(() => {});`);
+    expect(surfaceDrift(builtin, s)).toEqual({ verbsLost: [], flagsLost: {} });
   });
 
   test("a verb missing from the engine entirely is drift", () => {
