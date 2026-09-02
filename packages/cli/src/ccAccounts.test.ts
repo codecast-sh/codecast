@@ -34,6 +34,7 @@ import {
   extractSetupToken,
   parseRateLimitFingerprint,
   sameAccountFingerprint,
+  attributeFingerprint,
 } from "./ccAccounts.js";
 
 const CRED = JSON.stringify({
@@ -888,5 +889,37 @@ describe("setup-token extraction + account fingerprint", () => {
     expect(sameAccountFingerprint(a, { ...a, seven_day_reset: 9 })).toBe(false);
     const unknown = { five_hour_reset: null, seven_day_reset: null, five_hour_utilization: null, seven_day_utilization: null };
     expect(sameAccountFingerprint(unknown, unknown)).toBe(false);
+  });
+});
+
+describe("attributeFingerprint (token → saved profile via usage snapshots)", () => {
+  const now = 1_788_320_000_000; // ms
+  const profiles = { a: { uuid: "u-a" }, b: { uuid: "u-b" }, c: { email: "c@x.com" } };
+  const usage = {
+    "u-a": { fetched_at: now, session: { percent: 1, resets_at: 1_788_324_000_000 }, weekly: { percent: 1, resets_at: 1_788_861_600_000 } },
+    "u-b": { fetched_at: now, session: { percent: 1, resets_at: 1_788_330_000_000 }, weekly: { percent: 1, resets_at: 1_788_900_000_000 } },
+    "c@x.com": { fetched_at: now - 86_400_000, session: { percent: 1, resets_at: 1_788_200_000_000 }, weekly: { percent: 1, resets_at: 1_788_950_000_000 } },
+  } as any;
+  const fp = (five: number | null, seven: number | null) =>
+    ({ five_hour_reset: five, seven_day_reset: seven, five_hour_utilization: null, seven_day_utilization: null });
+
+  it("names the one profile whose 7d and (open) 5h windows match, to the second", () => {
+    expect(attributeFingerprint(fp(1_788_324_000, 1_788_861_600), profiles, usage, now)).toBe("a");
+    expect(attributeFingerprint(fp(1_788_324_001, 1_788_861_600), profiles, usage, now)).toBe("a"); // ±2s
+  });
+
+  it("an open 5h window that disagrees rules the profile out even when 7d matches", () => {
+    expect(attributeFingerprint(fp(1_788_325_000, 1_788_861_600), profiles, usage, now)).toBeNull();
+  });
+
+  it("a stale snapshot (5h window already closed) attributes on the 7d reset alone", () => {
+    expect(attributeFingerprint(fp(1_788_400_000, 1_788_950_000), profiles, usage, now)).toBe("c");
+  });
+
+  it("unknown 7d reset, no snapshot, or an ambiguous match yields null", () => {
+    expect(attributeFingerprint(fp(1, null), profiles, usage, now)).toBeNull();
+    expect(attributeFingerprint(fp(1_788_324_000, 1_788_861_600), { z: { uuid: "u-z" } }, usage, now)).toBeNull();
+    const twin = { ...usage, "u-b": usage["u-a"] };
+    expect(attributeFingerprint(fp(1_788_324_000, 1_788_861_600), profiles, twin, now)).toBeNull();
   });
 });

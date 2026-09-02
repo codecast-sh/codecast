@@ -216,7 +216,8 @@ function SessionTokensToggle({ device }: { device: DeviceAccounts }) {
           ) : activeHasToken ? (
             <span>
               {withTokens} of {device.profiles.length} saved account{device.profiles.length === 1 ? "" : "s"} have a
-              token. To add one for another account, switch to it and it mints on its own.
+              token. For another account, sign into it at claude.ai and press Mint: the token files under
+              whichever saved account approved it.
             </span>
           ) : (
             <span>The current login has no token yet.</span>

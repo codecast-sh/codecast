@@ -42,6 +42,7 @@ import {
   extractSetupToken,
   fetchRateLimitFingerprint,
   sameAccountFingerprint,
+  attributeFingerprintToProfile,
   readActiveOauth,
 } from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
@@ -2258,37 +2259,58 @@ async function watchMintFlow(profile: string, email: string | undefined, gen: nu
   let lastPane = "";
   let urlHandled = false;
 
-  const finish = async (status: "confirmed" | "rejected", reason?: string): Promise<void> => {
+  // `storedFor` is the profile the token actually landed under — the active
+  // login's profile in the common case, another saved profile when the browser
+  // was signed into that account instead (see attributeFingerprint).
+  const finish = async (status: "confirmed" | "rejected", rawReason?: string, storedFor?: string): Promise<void> => {
+    // The reason renders inline on the Settings page — keep it one line.
+    const reason = rawReason?.replace(/\s+/g, " ").trim().slice(0, 200);
     await killTmuxSessionAndTree(MINT_FLOW_TMUX).catch(() => {});
     fs.rmSync(mintUrlPath(), { force: true });
-    log(`[MINT-FLOW] ${status}${reason ? `: ${reason}` : ` — token stored for "${profile}"`}`);
+    const owner = storedFor ?? profile;
+    log(`[MINT-FLOW] ${status}${reason ? `: ${reason}` : ` — token stored for "${owner}"`}`);
     // The token's metadata reaches the web on the inventory beat; push it now.
     if (status === "confirmed") sendHeartbeat().catch(() => {});
-    await syncServiceRef?.reportMintFlow(status, profile, email, reason).catch((err) => {
+    const ownerEmail = owner === profile ? email : listProfiles().find((p) => p.name === owner)?.email;
+    await syncServiceRef?.reportMintFlow(status, owner, ownerEmail, reason).catch((err) => {
       log(`[MINT-FLOW] outcome report failed: ${err instanceof Error ? err.message : String(err)}`);
     });
   };
 
   const storeMinted = async (token: string): Promise<void> => {
+    let owner: string | null = null;
     try {
       // Keep the comparison credential usable: an idle login may have lapsed.
       if ((activeCredentialExpiresAt() ?? 0) <= Date.now() + 60_000) {
         await refreshActiveCredential().catch(() => null);
       }
       const activeToken = readActiveOauth()?.accessToken;
-      if (typeof activeToken !== "string" || !activeToken) throw new Error("no usable keychain login to compare against");
-      const [mine, minted] = await Promise.all([fetchRateLimitFingerprint(activeToken), fetchRateLimitFingerprint(token)]);
-      if (!sameAccountFingerprint(mine, minted)) {
+      const [mineRes, minted] = await Promise.all([
+        typeof activeToken === "string" && activeToken
+          ? fetchRateLimitFingerprint(activeToken).then((fp) => ({ fp }), (err) => ({ err }))
+          : Promise.resolve({ err: new Error("no usable keychain login") }),
+        fetchRateLimitFingerprint(token),
+      ]);
+      if ("fp" in mineRes && sameAccountFingerprint(mineRes.fp, minted)) {
+        owner = profile;
+      } else {
+        // Not the machine's login — the browser was signed into another
+        // account. If it is one we have saved, the token is still worth
+        // keeping: file it there.
+        owner = attributeFingerprintToProfile(minted);
+        if (owner === profile) owner = null; // the direct comparison already said no
+      }
+      if (!owner) {
         return finish(
           "rejected",
-          `the browser is signed into a different Claude account than this machine's login (${email ?? "unknown"}) — sign into that account at claude.ai and try again`,
+          `the browser is signed into a Claude account that matches no saved profile (this machine's login is ${email ?? "unknown"}) — sign into a saved account at claude.ai and try again`,
         );
       }
-      writeAccountToken(profile, token);
+      writeAccountToken(owner, token);
     } catch (err) {
       return finish("rejected", `could not verify or store the token: ${err instanceof Error ? err.message : String(err)}`);
     }
-    return finish("confirmed");
+    return finish("confirmed", undefined, owner);
   };
 
   while (Date.now() < deadline) {

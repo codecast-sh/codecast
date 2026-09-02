@@ -573,6 +573,38 @@ export function sameAccountFingerprint(a: RateLimitFingerprint, b: RateLimitFing
   );
 }
 
+/** Which SAVED profile a scope-less token belongs to, judged from the usage
+ *  snapshots (each carries that account's window reset times, fetched with the
+ *  profile's own token). The 7d reset is stable for a week and must match; the
+ *  5h reset must match too while the snapshot's window is still open (a closed
+ *  window has rolled since, so its stale reset proves nothing). Exactly one
+ *  hit names the owner; none or several = unknown. This is how a token minted
+ *  while the browser was signed into a NON-active account still lands under
+ *  the right profile instead of being thrown away. */
+export function attributeFingerprint(
+  fp: RateLimitFingerprint,
+  profiles: Record<string, { uuid?: string; email?: string }>,
+  usage: Record<string, CcUsageSnapshot>,
+  now: number,
+): string | null {
+  if (fp.seven_day_reset == null) return null;
+  const near = (ms: number | undefined, s: number | null): boolean =>
+    ms != null && s != null && Math.abs(ms / 1000 - s) <= 2;
+  const hits: string[] = [];
+  for (const [name, meta] of Object.entries(profiles)) {
+    const snap = usage[meta.uuid || meta.email || ""];
+    if (!snap || !near(snap.weekly?.resets_at, fp.seven_day_reset)) continue;
+    const sessionOpen = snap.session?.resets_at != null && snap.session.resets_at > now;
+    if (sessionOpen && !near(snap.session?.resets_at, fp.five_hour_reset)) continue;
+    hits.push(name);
+  }
+  return hits.length === 1 ? hits[0] : null;
+}
+
+export function attributeFingerprintToProfile(fp: RateLimitFingerprint, now: number = Date.now()): string | null {
+  return attributeFingerprint(fp, readProfileIndex().profiles, readUsageCache().accounts, now);
+}
+
 const CC_MESSAGES_URL = process.env.CODECAST_CC_MESSAGES_URL || "https://api.anthropic.com/v1/messages";
 const CC_PROBE_MODEL = process.env.CODECAST_CC_PROBE_MODEL || "claude-haiku-4-5-20251001";
 
