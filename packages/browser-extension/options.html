@@ -28,8 +28,10 @@
   <h1>Cast Browser Bridge</h1>
   <p class="muted">
     Run <code>cast browser extension setup</code> in a terminal on this machine.
-    It opens this page with the token filled in; if it could not, paste the
-    token it prints. The token never leaves this computer.
+    It opens this page with the token filled in; if it could not, run it with
+    <code>--show-token</code> and paste what it prints. The token never leaves
+    this computer, and never crosses the wire: the extension and the host
+    prove it to each other.
   </p>
   <div id="notice" hidden></div>
   <label for="token">Token</label>
