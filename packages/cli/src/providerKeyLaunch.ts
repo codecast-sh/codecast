@@ -76,5 +76,12 @@ export function providerKeySourcePrefix(
   if (!clientUsesProviderKeys(agentType)) return "";
   const file = syncProviderKeyEnvFile(configDir);
   if (!file) return "";
+  return sourceFilePrefix(file);
+}
+
+/** The launch-line fragment that sources a 0600 env file: only the PATH is on
+ *  the command line, and a missing file is a clean no-op. Shared by every
+ *  secret-by-file injection (provider keys, per-account Claude tokens). */
+export function sourceFilePrefix(file: string): string {
   return `. ${file} 2>/dev/null || true; `;
 }
