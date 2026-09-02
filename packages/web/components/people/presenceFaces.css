@@ -90,10 +90,12 @@
   max-width: calc(100vw - 16px);
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.62);
-  backdrop-filter: blur(6px);
+  /* SOLID. Over a dark editor the old translucent plate vanished. */
+  background: #101418;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 11px;
   line-height: 1.4;
   white-space: nowrap;
   overflow: hidden;
