@@ -31,7 +31,7 @@
  * than the theft.
  */
 
-import { spawnSync } from "../proc.js";
+import { execFileAsync } from "../proc.js";
 import { frontAsnAsync, pidForAsnAsync } from "./focusGuard.js";
 import { raiseAppByPid } from "./raiseApp.js";
 import { readState } from "./instance.js";
@@ -89,10 +89,10 @@ async function loadClickAge(): Promise<(() => number) | null> {
 }
 
 /** ps read of one pid's command line; "" for a pid that is already gone. */
-function commandOfPid(pid: number): string {
+export async function commandOfPidAsync(pid: number): Promise<string> {
   try {
-    const r = spawnSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf-8", timeout: 3_000 });
-    return (r.stdout ?? "").trim();
+    const { stdout } = await execFileAsync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf-8", timeout: 3_000 });
+    return (stdout ?? "").trim();
   } catch {
     return "";
   }
@@ -127,7 +127,7 @@ export async function startFocusSentinel(log: (line: string) => void): Promise<N
       if (!pid) return;
       if (!agentByPid.has(pid)) {
         if (agentByPid.size > 256) agentByPid.clear();
-        agentByPid.set(pid, isAgentChromeCommand(commandOfPid(pid)));
+        agentByPid.set(pid, isAgentChromeCommand(await commandOfPidAsync(pid)));
       }
       if (!agentByPid.get(pid)) {
         lastHumanPid = pid;

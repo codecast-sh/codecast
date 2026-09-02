@@ -1,0 +1,101 @@
+/*
+ * The codecast brand, as the web app draws it: Solarized cream by day and deep
+ * teal by night, JetBrains Mono for everything that reads like a terminal,
+ * Fraunces for the one line that speaks. The coral of the play arrow is the
+ * only accent; every state colour is a Solarized one.
+ */
+:root {
+  color-scheme: light dark;
+  --bg: #fbf5e2;
+  --bg-alt: #eee8d5;
+  --card: #ffffff;
+  --line: color-mix(in srgb, #93a1a1 45%, transparent);
+  --text: #002b36;
+  --muted: #586e75;
+  --dim: #657b83;
+  --logo-c: #444444;
+  --coral: #e86c5d;
+  --blue: #268bd2;
+  --green: #859900;
+  --red: #dc322f;
+  --grid: color-mix(in srgb, #93a1a1 14%, transparent);
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --font-serif: "Fraunces", "Iowan Old Style", Georgia, serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #002b36;
+    --bg-alt: #073642;
+    --card: #08404e;
+    --line: color-mix(in srgb, #586e75 55%, transparent);
+    --text: #fdf6e3;
+    --muted: #93a1a1;
+    --dim: #657b83;
+    --logo-c: #93a1a1;
+    --grid: color-mix(in srgb, #586e75 22%, transparent);
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  font: 13px/1.55 var(--font-mono);
+  color: var(--text);
+  background:
+    radial-gradient(60% 45% at 50% -10%, color-mix(in srgb, var(--coral) 14%, transparent), transparent 70%),
+    linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 100% 28px,
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 28px 100%,
+    var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--blue); }
+code {
+  font-family: var(--font-mono);
+  padding: 0.05em 0.35em;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+/* The mark: the C in the theme's grey, the arrow always coral. */
+.mark { display: inline-block; vertical-align: middle; }
+.mark .c { fill: var(--logo-c); }
+.mark .arrow { fill: var(--coral); }
+.wordmark {
+  display: inline-flex; align-items: center; gap: 0.45em;
+  font-weight: 600; letter-spacing: -0.02em; color: var(--text); text-decoration: none;
+}
+.wordmark small { font-weight: 500; letter-spacing: 0; color: var(--muted); }
+
+/* Status: one dot, one sentence. The dot breathes while something is pending. */
+.dot {
+  width: 10px; height: 10px; border-radius: 50%; flex: none;
+  background: var(--dim);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--dim) 40%, transparent);
+}
+.state-ok .dot { background: var(--green); }
+.state-wait .dot { background: var(--coral); animation: breathe 1.6s ease-in-out infinite; }
+.state-bad .dot { background: var(--red); }
+.state-none .dot { background: var(--dim); }
+@keyframes breathe {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--coral) 45%, transparent); }
+  50% { box-shadow: 0 0 0 7px transparent; }
+}
+
+button, .button {
+  font: inherit; cursor: pointer; color: var(--text);
+  padding: 0.5rem 0.9rem; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--card);
+  transition: transform 120ms ease, border-color 120ms ease;
+}
+button:hover, .button:hover { border-color: var(--coral); }
+button:active { transform: translateY(1px); }
+button.primary { background: var(--text); color: var(--bg); border-color: transparent; }
+button.primary:hover { background: var(--coral); color: #fff; }
+
+input {
+  width: 100%; font: inherit; color: inherit;
+  padding: 0.55rem 0.7rem; border-radius: 8px;
+  border: 1px solid var(--line); background: color-mix(in srgb, var(--card) 70%, transparent);
+}
+input:focus { outline: none; border-color: var(--coral); box-shadow: 0 0 0 3px color-mix(in srgb, var(--coral) 22%, transparent); }
+label { display: block; font-weight: 600; margin: 1rem 0 0.3rem; color: var(--muted); font-size: 12px; }

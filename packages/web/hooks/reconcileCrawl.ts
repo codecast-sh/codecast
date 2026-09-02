@@ -59,8 +59,8 @@ export type CrawlOptions = {
    * Final overlay of the full set. `complete` is true only when the crawl
    * reached the true end (isDone / no next cursor), false when it stopped at
    * `maxPages` with more rows unfetched. Additive overlays (tasks/docs/sessions)
-   * ignore it; a consumer that PRUNES on this pass (the dismiss reconcile's
-   * CLEAR) must gate on `complete` so a truncated crawl can't drop real rows.
+   * ignore it; a consumer that PRUNES on this pass (the docs absent-prune)
+   * must gate on `complete` so a truncated crawl can't drop real rows.
    */
   onComplete: (all: any[], complete: boolean, isCurrent: () => boolean) => void | Promise<void>;
   /** Ignore the durable watermark on the first run in this page session. */
@@ -74,27 +74,8 @@ export type CrawlOptions = {
  * page session) and the persisted `backfilledAt` (durable across reloads), so a
  * relaunch inside the window serves the IDB cache instead of re-walking the table.
  *
- * `bootEager` consults ONLY the in-session mark. It exists for the "dismissed" /
- * "stashed" crawls, which are the sole channel that heals cross-device dismissal
- * state: a dismiss/kill doesn't move updated_at, so neither the live channel nor
- * the sessions crawl carries it to a client that was asleep. With the durable
- * throttle, a client reloading on a stale cache showed resurrected killed sessions
- * for up to the full 30-minute SESSIONS_RECONCILE_THROTTLE_MS — reloading, the
- * user's natural fix, could not clear them.
- *
- * This is not free, and the cost is per WINDOW LOAD, not per user: each eager pass
- * is a full 30-day index range scan of the hidden set — one for `dismissed`, one
- * for `stashed` — paged at 1000 rows. The rows are narrow ({_id, timestamp}) and
- * the scans are bounded by DISMISS_RECONCILE_WINDOW_MS rather than table size, but
- * a user who reloads often, or runs several tabs, pays two scans every time where
- * they previously paid none. We take that trade deliberately: a resurrected killed
- * session is a correctness bug the user cannot clear by any means available to
- * them, and read amplification on a windowed index is the cheaper failure.
- *
- * The in-session mark still gates repeats: the effect behind these crawls re-fires
- * on wsKey settle and every reconcileNonce tick, and once the first crawl completes
- * `st.doneAt` is set, so bootEager throttles identically from then on — the eager
- * pass happens once per page load, not on every re-render.
+ * `bootEager` consults ONLY the in-session mark: a crawl that must run once per
+ * page load regardless of the durable watermark.
  */
 export function crawlThrottledAt(
   now: number,
@@ -107,33 +88,6 @@ export function crawlThrottledAt(
   return now - lastDoneAt < throttleMs;
 }
 
-/**
- * Whether the boot-eager bypass may be armed yet.
- *
- * The eager crawl's CLEAR pass un-hides any row inside the window the server's
- * hidden set omits — so it must not run on a PRE-REPLAY view of the server. The
- * losing interleaving: the user kills a session while offline, the dispatch parks
- * in the durable outbox, and `pending`'s field lock is persisted with its original
- * timestamp. They reload more than HIDDEN_OVERRIDE_SETTLE_MS (5 min) later, so
- * lockedLocal treats the override as stale and releases it — deliberately, that
- * release is what stops an originating device pinning a row hidden forever. If the
- * eager crawl's pages are fetched before the outbox replay lands, the server hasn't
- * been told about the kill, the CLEAR pass un-hides it, and the killed session
- * climbs back into the inbox until the next crawl up to 30 minutes later.
- *
- * The durable throttle used to mask this: a reload inside 30 minutes skipped the
- * boot crawl entirely and let the outbox drain first. Boot-eager removes that
- * accident, so we reinstate the ordering on purpose — hold the bypass until the
- * durable outbox has been verified empty after replay.
- *
- * Until this returns true the caller does not launch the hidden-set crawls at all
- * — the durable throttle alone is not a safe fallback, since a client with no
- * persisted watermark has nothing to be throttled by. A stalled outbox delays
- * healing; it must never permit a pre-replay CLEAR pass.
- */
-export function bootEagerArmed(bootOutboxDrained: boolean): boolean {
-  return bootOutboxDrained;
-}
 
 /**
  * Kick off a reconcile crawl if one isn't already running / recently done for

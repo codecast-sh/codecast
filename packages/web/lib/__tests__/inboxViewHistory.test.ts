@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { sameBucketExtras, sameInboxView, withInboxView, type InboxViewSnapshot } from "../inboxViewHistory";
+import { sameFilterExtras, sameInboxView, withInboxView, type InboxViewSnapshot } from "../inboxViewHistory";
 
 const snap = (extra: Partial<InboxViewSnapshot> = {}): InboxViewSnapshot => ({
   bucket: "b1",
@@ -13,7 +13,7 @@ const snap = (extra: Partial<InboxViewSnapshot> = {}): InboxViewSnapshot => ({
 describe("sameInboxView with shift-added label terms", () => {
   it("treats a missing extras list (pre-feature entry) as empty", () => {
     expect(sameInboxView(snap(), snap({ extras: [] }))).toBe(true);
-    expect(sameBucketExtras(undefined, [])).toBe(true);
+    expect(sameFilterExtras(undefined, [])).toBe(true);
   });
 
   it("a term added, removed, flipped, or reordered is a new view", () => {

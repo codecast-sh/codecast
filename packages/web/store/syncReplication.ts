@@ -19,12 +19,13 @@
 import {
   createReplicationFollower,
   createReplicationHost,
+  extractReplicationUpdates,
   type ReplicationChannel,
   type ReplicationFollower,
   type ReplicationHost,
   type ReplicationUpdate,
 } from "@platform/engine";
-import { useInboxStore, hasSyncRegistryEntry } from "./inboxStore";
+import { useInboxStore, hasSyncRegistryEntry, syncLogScopeMetaKey } from "./inboxStore";
 import { writePatchesToIDB } from "./idbCache";
 import {
   isReplicatedCollectionKey,
@@ -58,14 +59,104 @@ function transportAvailable(): boolean {
   );
 }
 
+const SYNCLOG_META_PREFIX = syncLogScopeMetaKey("");
+
+// A follower's mut: its action's writes as the host should apply them. A
+// row the action only EDITED ships as the fields it wrote (`fields`), never
+// as the whole row — the follower's copy of every other field is a moment
+// behind the host's, and a whole-row overlay would put the host's fresher
+// server state back a step (a stash the log just delivered, for one) until
+// something re-delivers it. A row the action created or replaced outright
+// ships whole, as before. Built from the action's own patches, so the field
+// set is exact.
+export type MutUpdate = ReplicationUpdate & {
+  fields?: Record<string, Record<string, unknown>>;
+  /** The action's time on the follower: the mirrored lock's `ts`, so the write's later acknowledgement (sent after the action) matches it. */
+  ts?: number;
+};
+
+export function buildMutUpdates(patches: readonly any[], state: any): MutUpdate[] {
+  const updates: MutUpdate[] = extractReplicationUpdates(patches, state, isReplicated, isReplicatedCollectionKey);
+  const ts = Date.now();
+  const edited = new Map<string, Map<string, Record<string, unknown>>>();
+  const whole = new Map<string, Set<string>>();
+  for (const patch of patches) {
+    const path = patch.path as (string | number)[];
+    if (path.length < 2) continue;
+    const key = String(path[0]);
+    if (!isReplicated(key) || !isReplicatedCollectionKey(key)) continue;
+    const id = String(path[1]);
+    if (path.length === 2) {
+      // The row itself was set or removed: whole-row semantics for this id.
+      let w = whole.get(key);
+      if (!w) whole.set(key, (w = new Set()));
+      w.add(id);
+      continue;
+    }
+    if (path.length !== 3) continue; // a nested edit: the row ships whole
+    let rows = edited.get(key);
+    if (!rows) edited.set(key, (rows = new Map()));
+    let f = rows.get(id);
+    if (!f) rows.set(id, (f = {}));
+    const field = String(path[2]);
+    f[field] = state?.[key]?.[id]?.[field];
+  }
+  for (const u of updates) {
+    const rows = edited.get(u.key);
+    if (!rows || !u.upserts) continue;
+    const w = whole.get(u.key);
+    const fields: Record<string, Record<string, unknown>> = {};
+    const upserts: any[] = [];
+    for (const row of u.upserts) {
+      const id = String(row._id);
+      const f = rows.get(id);
+      if (f && !w?.has(id) && Object.keys(f).length > 0) fields[id] = f;
+      else upserts.push(row);
+    }
+    if (Object.keys(fields).length > 0) {
+      u.fields = fields;
+      u.ts = ts;
+    }
+    if (upserts.length > 0) u.upserts = upserts; else delete u.upserts;
+  }
+  return updates;
+}
+
+const isReplicated = (key: string) => REPLICATED_STORE_KEYS.includes(key);
+
 // Land one batch of replicated updates through the store's own sync actions,
 // so pending protection, merge policies, and the no-op bails all behave as if
 // the rows came from a live query.
-export function applyUpdatesToStore(updates: ReplicationUpdate[]): void {
+//
+// `optimistic` marks a follower's mut applied on the host: the rows are a
+// sibling window's local writes, not server truth, so a lock this window
+// already holds on them (the gesture bridge's, planted a moment earlier for
+// the same gesture) survives the merge. Without that the value echo of the
+// mut itself retires the bridge lock, and any stale push in flight (a live
+// window result, a crawl page) undoes the gesture on the host — the
+// 2026-09-02 desktop resurrection. Only held locks are carried: a follower's
+// row also ships every field it did NOT write, so a diff against this
+// window's copy would lock stale values the server never echoes.
+//
+// Authoritative rows arriving on a follower release that window's SETTLED
+// locks first (same bound as the host's heal, releaseSettledFieldLocks): a
+// lock whose echo never comes — the write was superseded elsewhere — would
+// otherwise re-assert the follower's stale value over every host row forever.
+export function applyUpdatesToStore(updates: MutUpdate[], opts?: { optimistic?: boolean }): void {
   const state = useInboxStore.getState();
   for (const u of updates) {
+    if (u.fields && opts?.optimistic) {
+      // The sibling's field writes land as the gesture bridge lands a triage
+      // gesture: the value, and a lock on it until the server echoes it.
+      useInboxStore.getState().applyReplicatedFields(u.key, u.fields, u.ts);
+    }
     if (u.hasValue) {
       if (u.value == null) continue;
+      if (u.key === "sessionsProjection") {
+        state.applyReplicatedProjection(u.value as any);
+        continue;
+      }
+
       // Twin keys: the persisted value has an in-memory Set companion the
       // ordinary sync path derives elsewhere — use their dedicated setters.
       if (u.key === "liveInboxIdList") {
@@ -93,9 +184,40 @@ export function applyUpdatesToStore(updates: ReplicationUpdate[]): void {
                   : "scalar",
             },
       );
+      if (u.key === "syncMeta") {
+        // The host's scope cursors: rows through each position have already
+        // arrived (the host tees in commit order, and it stamps the cursor
+        // after the page's rows), so every lock acked at or below it retires
+        // now — the follower's own log applier event.
+        const meta = u.value as Record<string, { cursor?: number } | undefined>;
+        for (const key in meta) {
+          if (!key.startsWith(SYNCLOG_META_PREFIX)) continue;
+          const cursor = meta[key]?.cursor;
+          if (typeof cursor === "number") useInboxStore.getState().retireAckedPending(key.slice(SYNCLOG_META_PREFIX.length), cursor);
+        }
+      }
       continue;
     }
-    if (u.upserts?.length) state.syncTable(u.key, u.upserts, { isDelta: true });
+    if (u.upserts?.length) {
+      if (opts?.optimistic) {
+        const current = useInboxStore.getState();
+        // Every lock this window holds on the sibling's rows, which the merge
+        // below would read as a value echo and retire.
+        const entries: Array<{ id: string; field: string; value: unknown; ts?: number }> = [];
+        for (const row of u.upserts) {
+          const prefix = `${u.key}:${String(row._id)}:`;
+          for (const [k, entry] of Object.entries(current.pending)) {
+            if (!k.startsWith(prefix) || (entry as any)?.type !== "field") continue;
+            entries.push({ id: String(row._id), field: k.slice(prefix.length), value: (entry as any).value, ts: (entry as any).ts });
+          }
+        }
+        current.syncTable(u.key, u.upserts, { isDelta: true });
+        if (entries.length) useInboxStore.getState().protectReplicatedWrite(u.key, entries);
+      } else {
+        state.releaseSettledFieldLocks(u.upserts.map((row: any) => String(row._id)));
+        state.syncTable(u.key, u.upserts, { isDelta: true });
+      }
+    }
     if (u.removes?.length) state._applyReplicatedRemovals(u.key, u.removes);
   }
 }
@@ -172,16 +294,20 @@ export function startSyncReplication(opts: { eligible: boolean }): () => void {
       channel,
       replicatedKeys: REPLICATED_STORE_KEYS,
       isCollectionKey: isReplicatedCollectionKey,
-      applyUpdates: applyUpdatesToStore,
+      // The host's rows: authoritative for this window (see applyUpdatesToStore).
+      applyUpdates: (updates) => applyUpdatesToStore(updates),
       onSynced: (synced) => {
         if (stopped || elected) return;
         if (synced) {
           if (soloTimer) clearTimeout(soloTimer);
           setRole("follower");
           (useInboxStore.getState() as any)._setIDBWrite(null);
-          (useInboxStore.getState() as any)._setActionTee(
-            (name: string, patches: any[], state: any) => follower?.mutTee(name, patches, state),
-          );
+          (useInboxStore.getState() as any)._setActionTee((_name: string, patches: any[], state: any) => {
+            // The engine's own mutTee ships whole rows; a field-level mut is
+            // built here so an edited row never overlays the host's copy.
+            const updates = buildMutUpdates(patches, state);
+            if (updates.length > 0) channel.post({ type: "mut", from: selfId, updates });
+          });
         } else {
           armSoloFallback();
         }
@@ -205,7 +331,8 @@ export function startSyncReplication(opts: { eligible: boolean }): () => void {
       getState: () => useInboxStore.getState(),
       replicatedKeys: REPLICATED_STORE_KEYS,
       isCollectionKey: isReplicatedCollectionKey,
-      applyUpdates: applyUpdatesToStore,
+      // A follower's mut: its optimistic rows, held under the same locks.
+      applyUpdates: (updates) => applyUpdatesToStore(updates, { optimistic: true }),
     });
     // The write-through tee: persist first, then broadcast the same patches.
     internals._setIDBWrite((patches: any[], state: any) => {
@@ -223,6 +350,12 @@ export function startSyncReplication(opts: { eligible: boolean }): () => void {
         LOCK_NAME,
         { mode: "exclusive", signal: lockAbort.signal },
         () => {
+          // A grant that lands after stop() (the abort raced it: React's dev
+          // double mount stops and restarts within one tick) must not be
+          // held — returning releases it at once. Holding it here left a dead
+          // instance as the origin's permanent lock holder, so every later
+          // window fell back to solo host and never replicated.
+          if (stopped) return;
           // Hold the lock until stop(). The holder promise is created BEFORE
           // any host work runs and never rejects: a throw inside the promise
           // executor would settle it and release the lock while this window

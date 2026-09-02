@@ -1152,7 +1152,11 @@ export default function InboxScreen() {
   );
 
   const chipMatches = useCallback((s: InboxSession) =>
-    chipMatchesSession(s, { projectFilter: activeProjectFilter, bucketFilters: activeBucketFilter ? [{ id: activeBucketFilter, exclude: false }] : undefined, bucketByConv }),
+    chipMatchesSession(s, {
+      projectFilters: activeProjectFilter ? [{ id: activeProjectFilter, path: null, exclude: false }] : undefined,
+      bucketFilters: activeBucketFilter ? [{ id: activeBucketFilter, exclude: false }] : undefined,
+      bucketByConv,
+    }),
     [activeProjectFilter, activeBucketFilter, bucketByConv]);
   const chipFilter = useCallback((items: InboxSession[]) => {
     if (!activeProjectFilter && !activeBucketFilter) return items;

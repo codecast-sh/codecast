@@ -61,7 +61,9 @@ const AGENT_STATUSES = [undefined, undefined, "working", "idle", "idle", "done",
 
 // ── Shared-module rows (facts already on the row) ───────────────────────────
 
-export function genProjectableRow(rng: Rng, epoch: number, tag: string): ProjectableInboxRow & Record<string, unknown> {
+// `leadTag` names an earlier row this one may join as an agent-team teammate
+// (spawned_by + agent_team_name — a rider of that lead's placement).
+export function genProjectableRow(rng: Rng, epoch: number, tag: string, leadTag?: string): ProjectableInboxRow & Record<string, unknown> {
   const updated_at = genUpdatedAt(rng, epoch);
   const row: ProjectableInboxRow & Record<string, unknown> = {
     _id: convexIdFor(tag),
@@ -77,6 +79,7 @@ export function genProjectableRow(rng: Rng, epoch: number, tag: string): Project
   };
   if (chance(rng, 0.04)) row.is_subagent = true;
   if (chance(rng, 0.03)) { row.parent_conversation_id = convexIdFor("parent"); row.parent_message_uuid = chance(rng, 0.5) ? "m1" : undefined; }
+  if (leadTag && chance(rng, 0.1)) { row.spawned_by_conversation_id = convexIdFor(leadTag); row.agent_team_name = "team"; }
   if (chance(rng, 0.12)) row.inbox_pinned_at = epoch - between(rng, 0, 40 * GEN_DAY);
   if (chance(rng, 0.1)) row.inbox_dismissed_at = epoch - between(rng, 0, 40 * GEN_DAY);
   if (chance(rng, 0.08)) row.inbox_stashed_at = epoch - between(rng, 0, 40 * GEN_DAY);
@@ -95,7 +98,9 @@ export function genProjectableRow(rng: Rng, epoch: number, tag: string): Project
 
 export function genProjectableRows(seed: number, count: number, epoch: number): Array<ProjectableInboxRow & Record<string, unknown>> {
   const rng = makeRng(seed);
-  return Array.from({ length: count }, (_, i) => genProjectableRow(rng, epoch, `s${seed}r${i}`));
+  return Array.from({ length: count }, (_, i) =>
+    genProjectableRow(rng, epoch, `s${seed}r${i}`, i > 0 ? `s${seed}r${between(rng, 0, i)}` : undefined),
+  );
 }
 
 // ── Server worlds (conversations + managed_sessions + decisions) ────────────
@@ -128,6 +133,8 @@ export function genWorld(seed: number, count: number, epoch: number, me: string)
       title: chance(rng, 0.03) ? "[Using: claude]" : `Session ${tag}`,
     };
     if (conv.message_count === 0) delete conv.last_message_role;
+    // An agent-team teammate of an earlier row: a rider of that lead's placement.
+    if (i > 0 && chance(rng, 0.1)) { conv.spawned_by_conversation_id = convexIdFor(`w${seed}c${between(rng, 0, i)}`); conv.agent_team_name = "team"; }
     if (chance(rng, 0.12)) conv.inbox_pinned_at = epoch - between(rng, 0, 40 * GEN_DAY);
     if (chance(rng, 0.1)) conv.inbox_dismissed_at = epoch - between(rng, 0, 40 * GEN_DAY);
     if (chance(rng, 0.08)) conv.inbox_stashed_at = epoch - between(rng, 0, 40 * GEN_DAY);
@@ -187,7 +194,11 @@ function resolveRow(row: Record<string, unknown>, epoch: number): Record<string,
       ? resolveRow(v as Record<string, unknown>, epoch)
       : resolveEpochRelative(v, epoch);
   }
-  if (typeof out._id === "string" && out._id.length !== 32) out._id = convexIdFor(out._id);
+  // Ids are written as tags: the row's own, and the parent / lead pointers
+  // that name another row of the fixture.
+  for (const k of ["_id", "parent_conversation_id", "spawned_by_conversation_id"]) {
+    if (typeof out[k] === "string" && (out[k] as string).length !== 32) out[k] = convexIdFor(out[k] as string);
+  }
   return out;
 }
 

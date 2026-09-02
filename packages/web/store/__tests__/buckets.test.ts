@@ -112,9 +112,7 @@ describe("orderSections bucket filter", () => {
       bucketByConv,
     });
     expect(bucketExcluded.map((s) => s._id)).toEqual([idB]);
-    const projectExcluded = orderSections(sessions, new Set(), "codecast", undefined, {
-      filterExclude: true,
-    });
+    const projectExcluded = orderSections(sessions, new Set(), [{ id: "codecast", path: null, exclude: true }]);
     expect(projectExcluded.map((s) => s._id)).toEqual([idB]);
   });
 
@@ -142,8 +140,9 @@ describe("chipMatchesSession exclude mode", () => {
     expect(chipMatchesSession(outBucket, { bucketFilters: [{ id: "bucket1", exclude: true }], bucketByConv })).toBe(true);
     const inProj = session(convexId("p1"), { project_path: "/x/codecast" });
     const outProj = session(convexId("p2"), { project_path: "/x/other" });
-    expect(chipMatchesSession(inProj, { projectFilter: "codecast", exclude: true, bucketByConv })).toBe(false);
-    expect(chipMatchesSession(outProj, { projectFilter: "codecast", exclude: true, bucketByConv })).toBe(true);
+    const hideCodecast = [{ id: "codecast", path: null, exclude: true }];
+    expect(chipMatchesSession(inProj, { projectFilters: hideCodecast, bucketByConv })).toBe(false);
+    expect(chipMatchesSession(outProj, { projectFilters: hideCodecast, bucketByConv })).toBe(true);
   });
 
   it("mid-create stubs pass the bucket chips in both polarities", () => {

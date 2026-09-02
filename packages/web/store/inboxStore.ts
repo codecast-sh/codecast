@@ -65,6 +65,7 @@ import {
   emptyInboxTally,
   isOrphanOrSubagent,
   rollupParentIdOf,
+  rideLeadPlacements,
   isHardBlocked,
   DEAD_AGENT_STATUSES,
   fnv1a32Update,
@@ -1276,10 +1277,13 @@ export type ClientUI = {
   // the desktop, and switchActiveDevice would simply fail on it.
   call_mic_device_id?: string;
   call_camera_device_id?: string;
-  // Whether a deliberate join turns the camera on. Stamped LWW, because this
-  // one IS about the person: somebody who joins with video joins with video
-  // wherever they are signed in.
+  // Whether a deliberate join turns the camera on, and whether it opens the
+  // microphone. Stamped LWW, because these ARE about the person: somebody who
+  // joins with video joins with video wherever they are signed in. Absent
+  // means ON for both — see lib/calls/joinPrefs — so only an explicit false
+  // is a choice.
   call_camera_on?: boolean;
+  call_mic_on?: boolean;
   // Fold the pinned thread-state panel above the composer down to its headline
   // row. Expanded by default — the panel exists to be read on arrival — and
   // left unstamped, so it stays a per-device reading preference like the other
@@ -1562,6 +1566,10 @@ function workingSetRowOf(s: InboxSession): WorkingSetRow {
     inbox_stashed_at: s.inbox_stashed_at ?? null,
     has_pending_messages: s.has_pending ?? null,
     owned_by_me: s.owned_by_me ?? null,
+    // The lead a teammate rides (rollupParentIdOf): the fold and the bucket
+    // follow it in the shared computation.
+    spawned_by_conversation_id: s.spawned_by_conversation_id ?? null,
+    agent_team_name: s.agent_team_name ?? null,
   };
 }
 
@@ -1908,15 +1916,6 @@ export function computeInboxVisible(
   _visibleVal = result;
   return result;
 }
-
-// Window the cross-device dismiss reconcile is authoritative over. Mirrors the
-// server's INBOX_DISMISSED_WINDOW_MS (the range listDismissedSessionsLite scans):
-// the server only reports dismisses within this window, so the client can only
-// infer an un-dismiss (CLEAR) for a locally-dismissed session whose timestamp
-// falls inside it — older ones may still be dismissed server-side, just out of
-// scan range. ONE source: the shared recency horizon the server scan and the
-// working-set selection both read.
-export const DISMISS_RECONCILE_WINDOW_MS = WORKING_SET_RECENCY_MS;
 
 // Ordering precedence for a session, lowest-rank-first. Computed ONCE per
 // session so the comparator is a cheap tuple compare instead of re-deriving the
@@ -2816,25 +2815,35 @@ export function placeInboxRows(
     return { bucket, work_state, below_fold: belowFold.has(s._id) };
   };
 
-  // 4. One walk: place every top-level real row; split active / set-aside.
+  // 4. Place every member — the visible rows and the folded members the tally
+  // still counts — on its own facts, then riders take their lead's bucket
+  // (the shared rideLeadPlacements; the fold rode inside computeFold). One
+  // walk over the visible rows then splits active / set-aside by the FINAL
+  // placement, so a teammate under a stashed lead is stashed with it.
   const placements = new Map<string, InboxRowPlacement>();
+  for (const s of Object.values(visibleSessions)) {
+    if (isMemberCandidate(s)) placements.set(s._id, placeRowWithOverlays(s));
+  }
+  if (membership) {
+    for (const id of membership.members) {
+      const row = placements.has(id) ? undefined : scoped[id];
+      if (row) placements.set(id, placeRowWithOverlays(row));
+    }
+  }
+  rideLeadPlacements(placements, (id) => scoped[id]);
   const activeKeyed: RankedSession[] = [];
   const dismissed: InboxSession[] = [];
   const stashed: InboxSession[] = [];
   for (const s of Object.values(visibleSessions)) {
-    let hiddenAnchor = false;
-    let p: InboxRowPlacement | null = null;
-    if (isMemberCandidate(s)) {
-      p = placeRowWithOverlays(s);
-      placements.set(s._id, p);
-      // An anchor's standing thread lives in its own space unless hard
-      // blocked — the shared `hidden` bucket, never rendered here.
-      hiddenAnchor = p.bucket === "hidden";
-    }
+    const p = placements.get(s._id) ?? null;
+    // A placed row files by its placement; a stub or child row by its own
+    // stamps. An anchor's standing thread lives in its own space unless hard
+    // blocked — the shared `hidden` bucket, never rendered here.
+    const setAside = p ? p.bucket === "dismissed" || p.bucket === "stashed" || p.bucket === "hidden" : isSessionHidden(s);
     // The rank reads the SAME verdict the section files under (rankVerdictOf).
-    if (!isSessionHidden(s) && !hiddenAnchor) activeKeyed.push({ s, rank: sessionSortRank(s, p) });
-    if (isSessionDismissed(s)) dismissed.push(s);
-    if (isSessionStashed(s)) stashed.push(s);
+    if (!setAside) activeKeyed.push({ s, rank: sessionSortRank(s, p) });
+    if (p ? p.bucket === "dismissed" : isSessionDismissed(s)) dismissed.push(s);
+    if (p ? p.bucket === "stashed" : isSessionStashed(s)) stashed.push(s);
   }
   activeKeyed.sort(compareRankedSessions);
   const sorted = activeKeyed.map((x) => x.s);
@@ -2843,14 +2852,14 @@ export function placeInboxRows(
   const allIds = new Set(sorted.map((s) => s._id));
 
   // 5. Nesting (both child kinds — see nestParentIdOf) and fork grouping.
-  // Grouping never crosses a section boundary: a subagent is never its own
-  // member and always rides its present parent, but an agent-team teammate IS
-  // a member (the shared rollupParentIdOf: it counts in its own bucket, on the
-  // server and here) and nests under its lead only while the two share a
-  // bucket. A teammate that needs input under a working lead renders flat in
-  // Needs Input — nesting it hid an actionable row and made the header count
-  // (2) disagree with the tally (12) every replica and the CLI agreed on
-  // (prod, 2026-09-01).
+  // A subagent is never its own member and always rides its present parent.
+  // An agent-team teammate is a member that RIDES its lead's bucket (the
+  // shared rideLeadPlacements), so the two share a section and the teammate
+  // nests there; the header count is the rows placed in the section, nested
+  // ones included, the number the tally and the CLI report. The one teammate
+  // that keeps its own bucket is one the viewer pinned, stashed or dismissed
+  // on its own (RIDE_KEEPS_OWN): it files where that act put it and never
+  // nests under a lead in another section.
   const subsByParent = new Map<string, InboxSession[]>();
   for (const s of sorted) {
     const nestParent = nestParentIdOf(s);
@@ -2892,14 +2901,8 @@ export function placeInboxRows(
   const tally = { shown: emptyInboxTally(), folded: emptyInboxTally() };
   if (membership) {
     for (const id of membership.members) {
-      let p = placements.get(id);
-      if (!p) {
-        const row = scoped[id];
-        if (!row) continue;
-        p = placeRowWithOverlays(row);
-        placements.set(id, p);
-      }
-      if (p.bucket === "hidden") continue;
+      const p = placements.get(id);
+      if (!p || p.bucket === "hidden") continue;
       (p.below_fold ? tally.folded : tally.shown)[p.bucket]++;
     }
   }
@@ -3090,13 +3093,12 @@ function assertPlacementParity(
 
 export function visualOrderSessions(
   placed: PlacedInbox,
-  projectFilter?: string | null,
+  projectFilters?: readonly ProjectFilterTerm[],
   opts: {
     // Active bucket chips: scope keyboard nav / advance to the focused labels,
     // mirroring the project filter (chipBucketFilters + convBucketMap).
     bucketFilters?: readonly BucketFilterTerm[];
     bucketByConv?: Record<string, string | undefined>;
-    filterExclude?: boolean;
     // Grouped-view collapse: sessions inside a collapsed status section are
     // skipped, so Ctrl+J/K only walks cards the panel actually renders.
     collapsedSections?: Record<string, boolean>;
@@ -3121,10 +3123,9 @@ export function visualOrderSessions(
       // The shared predicate (chipMatchesSession) so the walk and the render
       // can never disagree — including the mid-create stub carve-out.
       if (
-        (projectFilter || opts.bucketFilters?.length) &&
+        (projectFilters?.length || opts.bucketFilters?.length) &&
         !chipMatchesSession(s, {
-          projectFilter,
-          exclude: opts.filterExclude,
+          projectFilters,
           bucketFilters: opts.bucketFilters,
           bucketByConv: opts.bucketByConv ?? {},
         })
@@ -3429,12 +3430,11 @@ function synthesizeFavoriteRow(fav: any): InboxSession {
 // never-loaded favorite still appears. Optional project chip inherited free.
 export function selectFavoriteSessions(
   sessions: Record<string, InboxSession>,
-  projectFilter?: string | null,
+  projectFilters?: readonly ProjectFilterTerm[],
   favoritesList?: any[],
-  filterExclude?: boolean,
 ): InboxSession[] {
   const matchesProject = (s: InboxSession) =>
-    !projectFilter || (getProjectName(s.git_root, s.project_path) === projectFilter) !== !!filterExclude;
+    passesFilterTerms(projectFilters, getProjectName(s.git_root, s.project_path));
   const out: InboxSession[] = [];
   const seen = new Set<string>();
   for (const fav of favoritesList ?? []) {
@@ -3460,11 +3460,10 @@ export function selectFavoriteSessions(
 // so keyboard nav (visualOrder) walks exactly the on-screen order.
 export function favoritesVisualOrder(
   sessions: Record<string, InboxSession>,
-  projectFilter?: string | null,
+  projectFilters?: readonly ProjectFilterTerm[],
   favoritesList?: any[],
-  filterExclude?: boolean,
 ): InboxSession[] {
-  const favs = selectFavoriteSessions(sessions, projectFilter, favoritesList, filterExclude);
+  const favs = selectFavoriteSessions(sessions, projectFilters, favoritesList);
   const pinned = favs.filter((s) => s.is_pinned).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
   const rest = favs.filter((s) => !s.is_pinned);
   const { projectGroups } = groupSessionsForLabelView(rest, {}, {});
@@ -3550,34 +3549,78 @@ export function chipBucketFilters(state: {
   return [{ id: state.activeBucketFilter, exclude: !!state.chipFilterExclude }, ...(state.extraBucketFilters ?? [])];
 }
 
+// One term of the project filter: the project NAME is the id (what the chip
+// shows and what sessions match on), plus the directory the chip resolved to
+// so a focused project can seed new sessions. Same head/tail shape as labels —
+// head = (activeProjectFilter, activeProjectPath, chipFilterExclude), tail =
+// extraProjectFilters.
+export type ProjectFilterTerm = BucketFilterTerm & { path: string | null };
+
+// The full project filter as a list — the project twin of chipBucketFilters,
+// with the same head invariant (the tail is nonempty only while a head exists).
+export function chipProjectFilters(state: {
+  activeProjectFilter?: string | null;
+  activeProjectPath?: string | null;
+  chipFilterExclude?: boolean;
+  extraProjectFilters?: readonly ProjectFilterTerm[];
+}): ProjectFilterTerm[] {
+  if (!state.activeProjectFilter) return [];
+  return [
+    { id: state.activeProjectFilter, path: state.activeProjectPath ?? null, exclude: !!state.chipFilterExclude },
+    ...(state.extraProjectFilters ?? []),
+  ];
+}
+
+// One shift-click step over a (head, tail) term list — the same arithmetic for
+// both chip axes. Same id + same polarity = remove; same id + other polarity =
+// flip in place; new id = append to the tail. Removing the head promotes the
+// first tail term so the head invariant holds (extras never outlive the head).
+export function toggleFilterTerm<T extends BucketFilterTerm>(
+  head: T,
+  extras: readonly T[],
+  term: T,
+): { head: T | null; extras: T[] } {
+  if (head.id === term.id) {
+    if (head.exclude === term.exclude) {
+      const [next, ...rest] = extras;
+      return { head: next ?? null, extras: rest };
+    }
+    return { head: term, extras: [...extras] };
+  }
+  const at = extras.findIndex((t) => t.id === term.id);
+  if (at < 0) return { head, extras: [...extras, term] };
+  if (extras[at].exclude === term.exclude) return { head, extras: extras.filter((t) => t.id !== term.id) };
+  return { head, extras: extras.map((t) => (t.id === term.id ? term : t)) };
+}
+
+// Does `id` pass a polarity-carrying term list? With any include terms the id
+// must be one of them (a session has ONE label and ONE project, so includes
+// are a union); with only excludes it must miss every one. An empty list
+// passes everything. ONE predicate for labels and projects alike.
+export function passesFilterTerms(terms: readonly BucketFilterTerm[] | undefined, id: string | undefined): boolean {
+  if (!terms?.length) return true;
+  const includes = terms.filter((t) => !t.exclude);
+  return includes.length ? includes.some((t) => t.id === id) : !terms.some((t) => t.exclude && t.id === id);
+}
+
 // Does a session pass the active project/bucket chips? ONE predicate behind both
 // the panel's filterByChip and the flat-view keyboard order so a chip narrows
 // the rendered list and Ctrl+J/K identically. A mid-create stub (non-Convex id)
 // always passes the bucket chips — the session you just summoned inside a focused
-// bucket must stay reachable before its assignment syncs. With `exclude` the
-// project chip inverts: matches are hidden, everything else shows (stubs still
-// pass — an excluded label never files new sessions, see beginOptimisticSession).
-// Label terms carry their own polarity: with any include terms the session's
-// label must be one of them (a session has ONE label, so includes are a union);
-// with only excludes the session's label must not be any of them.
+// bucket must stay reachable before its assignment syncs (an excluded label
+// never files new sessions, see beginOptimisticSession). Both axes are term
+// lists with per-term polarity, judged by passesFilterTerms.
 export function chipMatchesSession(
   s: InboxSession,
-  opts: { projectFilter?: string | null; exclude?: boolean; bucketFilters?: readonly BucketFilterTerm[]; bucketByConv: Record<string, string | undefined> },
+  opts: { projectFilters?: readonly ProjectFilterTerm[]; bucketFilters?: readonly BucketFilterTerm[]; bucketByConv: Record<string, string | undefined> },
 ): boolean {
-  // Mid-create stubs get the same carve-out on both branches: the session you
+  // Mid-create stubs get the same carve-out on both axes: the session you
   // just summoned must stay reachable no matter which chip is focused — under
   // a project EXCLUDE, Ctrl+N from a focused session in that project would
   // otherwise navigate you onto a card the panel refuses to render.
-  if (opts.projectFilter && isConvexId(s._id)) {
-    const m = getProjectName(s.git_root, s.project_path) === opts.projectFilter;
-    if (opts.exclude ? m : !m) return false;
-  }
-  if (opts.bucketFilters?.length && isConvexId(s._id)) {
-    const label = opts.bucketByConv[s._id];
-    const includes = opts.bucketFilters.filter((t) => !t.exclude);
-    if (includes.length ? !includes.some((t) => t.id === label) : opts.bucketFilters.some((t) => t.exclude && t.id === label)) return false;
-  }
-  return true;
+  if (!isConvexId(s._id)) return true;
+  if (opts.projectFilters?.length && !passesFilterTerms(opts.projectFilters, getProjectName(s.git_root, s.project_path))) return false;
+  return passesFilterTerms(opts.bucketFilters, opts.bucketByConv[s._id]);
 }
 
 // Subagent/teammate rows never float at their own slot in a flat list — they
@@ -3717,13 +3760,17 @@ export function visualOrderViewSig(state: {
   activeProjectFilter?: string | null;
   activeBucketFilter?: string | null;
   chipFilterExclude?: boolean;
+  extraBucketFilters?: readonly BucketFilterTerm[];
+  extraProjectFilters?: readonly ProjectFilterTerm[];
   showFavorites?: boolean;
   teamInboxIds?: Set<string>;
 }): string {
   const ui = state.clientState.ui;
+  const terms = (list?: readonly BucketFilterTerm[]) => (list ?? []).map((t) => `${t.exclude ? "-" : "+"}${t.id}`).join(",");
   return [
     resolveInboxViewMode(ui), resolveShowOld(ui), ui?.inbox_scope ?? "mine", ui?.show_subagents ?? true,
-    state.activeProjectFilter ?? "", state.activeBucketFilter ?? "", !!state.chipFilterExclude, !!state.showFavorites, state.teamInboxIds?.size ?? 0,
+    state.activeProjectFilter ?? "", state.activeBucketFilter ?? "", !!state.chipFilterExclude,
+    terms(state.extraBucketFilters), terms(state.extraProjectFilters), !!state.showFavorites, state.teamInboxIds?.size ?? 0,
   ].join("|");
 }
 
@@ -3732,11 +3779,14 @@ export function computeVisualOrder(state: {
   sessionsWithQueuedMessages: Set<string>;
   blockedReviveRequestedAt?: Record<string, number>;
   activeProjectFilter?: string | null;
+  activeProjectPath?: string | null;
+  extraProjectFilters?: readonly ProjectFilterTerm[];
   pendingMessages: Record<string, any[]>;
   currentSessionId?: string | null;
   pendingSessionCreates: Record<string, unknown>;
   activeBucketFilter?: string | null;
   chipFilterExclude?: boolean;
+  extraBucketFilters?: readonly BucketFilterTerm[];
   bucketAssignments: Record<string, BucketAssignmentItem>;
   buckets: Record<string, BucketItem>;
   showFavorites?: boolean;
@@ -3780,7 +3830,7 @@ export function computeVisualOrder(state: {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
   // the shelf, not the active desk underneath it.
   if (state.showFavorites) {
-    const order = favoritesVisualOrder(state.sessions, state.activeProjectFilter, state.favorites, state.chipFilterExclude);
+    const order = favoritesVisualOrder(state.sessions, chipProjectFilters(state), state.favorites);
     if (!opts.yourMove) return order;
     const keep = new Set([...placed.needsInput, ...placed.done].map((s) => s._id));
     return order.filter((s) => placed.isQuestion(s) || keep.has(s._id));
@@ -3799,7 +3849,7 @@ export function computeVisualOrder(state: {
       focusedId,
       manualOrder: state.clientState.ui?.inbox_manual_order,
       freezeOrder: mode === "recent" ? state.recentFreezeOrder : null,
-      chipMatches: (s) => chipMatchesSession(s, { projectFilter: state.activeProjectFilter, exclude: state.chipFilterExclude, bucketFilters: chipBucketFilters(state), bucketByConv }),
+      chipMatches: (s) => chipMatchesSession(s, { projectFilters: chipProjectFilters(state), bucketFilters: chipBucketFilters(state), bucketByConv }),
     });
     if (!opts.yourMove) return flat;
     // A flat card still wears the bucket verdict (its badge reads from the same
@@ -3809,9 +3859,8 @@ export function computeVisualOrder(state: {
   }
   // Grouped/bucket: the placed status sections over the SAME visible set. The
   // bucket branch below splits pinned out and regroups the rest by label/project.
-  const base = visualOrderSessions(placed, state.activeProjectFilter, {
+  const base = visualOrderSessions(placed, chipProjectFilters(state), {
     bucketFilters: chipBucketFilters(state),
-    filterExclude: state.chipFilterExclude,
     bucketByConv,
     collapsedSections: mode === "grouped" ? collapsed : undefined,
     yourMove: opts.yourMove,
@@ -4053,6 +4102,20 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // with a receipt time from the monotonic clock (payload age never trusts a
   // server timestamp or the device wall clock).
   applyInboxLivenessPayload: (scopeKey: string, payload: any) => void;
+  // The host's projection slots, arriving over cross-window replication. The
+  // receipt clock is re-stamped here: performance.now() is per window, so the
+  // host's value means nothing to a follower.
+  applyReplicatedProjection: (slots: Record<string, SessionsProjectionSlot>) => void;
+  // A follower window's optimistic write, applied on the host. The host holds
+  // the same field locks the follower holds, so a stale server push cannot
+  // undo the write on the host before the server echoes it — the follower's
+  // dispatch is the one server write; the host only mirrors its intent.
+  protectReplicatedWrite: (key: string, entries: Array<{ id: string; field: string; value: unknown; ts?: number }>) => void;
+  // A follower window's field writes (its action's exact patches), applied on
+  // the host: the value lands on the row this window holds, under the same
+  // field lock the follower holds, until the server echoes it. Rows this
+  // window does not hold are skipped (the mut ships those whole).
+  applyReplicatedFields: (key: string, fields: Record<string, Record<string, unknown>>, ts?: number) => void;
   // Team-mode active set: the ids the team board is currently showing (own +
   // teammates' team-visible), fed by the listTeamInboxSessions subscription.
   // The analogue of liveInboxIds for inbox_scope "team" — the panel gates the
@@ -4251,8 +4314,6 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   markBlockedAcknowledged: (ids: string[]) => void;
   markBlockedReviveRequested: (ids: string[]) => void;
   clearBlockedReviveRequested: (ids: string[]) => void;
-  applyDismissedReconcile: (entries: { _id: string; inbox_dismissed_at: number | null }[], final: boolean) => void;
-  applyStashedReconcile: (entries: { _id: string; inbox_stashed_at: number | null }[], final: boolean) => void;
   restoreSession: (id: string) => void;
   deferSession: (id: string) => void;
   dormantSession: (id: string) => void;
@@ -4298,9 +4359,9 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // new-session popup uses it so merely opening doesn't strand a conversation on
   // Escape. `materialize()` is idempotent and returns the same `ready` promise.
   beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; reuse?: boolean; deferCreate?: boolean; create: (stubId: string) => Promise<string> }) => { stubId: string; ready: Promise<string>; materialize: () => Promise<string> };
-  // Verified ghost removal: hard-drop cached session rows the server confirmed
-  // deleted (the empty-conversation GC). Plants the exclude pending entries that
-  // authorize the IDB row delete and block crawl re-adds.
+  // Ghost removal: hard-drop cached session rows nothing will re-deliver
+  // (orphaned optimistic stubs). Plants the exclude pending entries that
+  // authorize the IDB row delete and block re-adds.
   pruneGhostSessions: (ids: string[]) => void;
   // Receiver for the cross-window gesture bridge — see gestureBridge.ts.
   applyGestureBridge: (msg: GestureMessage) => void;
@@ -4310,7 +4371,7 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   applyHealedSessions: (ids: string[], rows: InboxSession[]) => void;
   markServerDeleted: (convId: string) => void;
   // -- Sync-log write acks (docs/architecture/sync-log-migration.md D8) --
-  stampSyncAck: (patches: any, ack: Array<{ scope_key: string; position: number }>, sentAt: number) => void;
+  stampSyncAck: (patches: any, ack: Array<{ scope_key: string; position: number }>, sentAt: number, opts?: { local?: boolean }) => void;
   retireAckedPending: (scopeKey: string, upTo: number) => void;
   // Scope lifecycle (D5): purge a revoked team's rows from the workspace-scoped
   // collections and drop its log cursor.
@@ -4569,10 +4630,19 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   dropRows: (key: string, ids: string[]) => void;
 
   // -- Active project scope (non-persisted, resets on reload) --
+  // The project filter is a LIST like the label filter: this head chip plus
+  // the shift-added tail (see chipProjectFilters). Mutually exclusive with the
+  // label axis — the chip row is ONE filter.
   activeProjectPath: string | null;
   activeProjectFilter: string | null;
-  setActiveProjectFilter: (name: string | null, path?: string | null, exclude?: boolean) => void;
-  // Whether the ONE active chip (project or bucket) is in exclude mode —
+  setActiveProjectFilter: (name: string | null, path?: string | null, exclude?: boolean, extras?: ProjectFilterTerm[]) => void;
+  // Shift-added project terms beyond the head chip, each with its own polarity.
+  // Invariant: nonempty only while activeProjectFilter is set (the setters
+  // keep it), so head-only readers never see a filter they can't represent.
+  extraProjectFilters: ProjectFilterTerm[];
+  // The shift-click gesture on a project chip — the twin of toggleBucketFilterTerm.
+  toggleProjectFilterTerm: (name: string, path: string | null, exclude: boolean) => void;
+  // Whether the HEAD chip (project or bucket) is in exclude mode —
   // "everything but this" instead of "only this". Click toggles include;
   // exclude is entered only via ⌥/Alt-click or the chip's context menu.
   chipFilterExclude: boolean;
@@ -5076,12 +5146,14 @@ function snapshotInboxViewFromDraft(draft: any): InboxViewSnapshot {
   // Extras copy to plain objects: the snapshot lands in history.pushState,
   // which structured-clones — never hand it live draft proxies.
   const extras: BucketFilterTerm[] = (draft.extraBucketFilters ?? []).map((t: BucketFilterTerm) => ({ id: t.id, exclude: !!t.exclude }));
+  const projectExtras: ProjectFilterTerm[] = (draft.extraProjectFilters ?? []).map((t: ProjectFilterTerm) => ({ id: t.id, path: t.path ?? null, exclude: !!t.exclude }));
   return {
     bucket: draft.activeBucketFilter ?? null,
     project: draft.activeProjectFilter ?? null,
     projectPath: draft.activeProjectPath ?? null,
     exclude: !!draft.chipFilterExclude,
     ...(extras.length ? { extras } : {}),
+    ...(projectExtras.length ? { projectExtras } : {}),
     mode: ui.inbox_view_mode ?? (ui.inbox_flat_view ? "time" : "grouped"),
   };
 }
@@ -5133,6 +5205,9 @@ export type SyncOpts = {
   // every push. List such a field here to exclude it from the version key. Safe
   // to omit — a mistake here only costs an extra render, never a dropped update.
   ignoreFields?: string[];
+  // Non-scalar fields the identity reuse compares by content (a server-joined
+  // object that changes with no scalar on the row: projects.task_counts).
+  deepFields?: readonly string[];
   // Fields owned by a separate overlay channel (syncOverlay), not the base
   // payload. On a base sync these keep their previous (overlay-set) value rather
   // than being clobbered by the base's null — so the base list and the liveness
@@ -5197,7 +5272,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 export const STAMPED_UI_KEYS = new Set([
   "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "show_triggers", "card_bars", "inbox_show_old",
   "simple_view", "inbox_image_thumbs", "composer_suggestions", "inbox_home", "threads_include_sessions",
-  "walkie_hold_seen", "call_camera_on", "triage_bar_compact", "inbox_stale_prompt_snoozed_at",
+  "walkie_hold_seen", "call_camera_on", "call_mic_on", "triage_bar_compact", "inbox_stale_prompt_snoozed_at",
   // The sound gates and volume: a mute is a per-user preference, not a
   // per-device one — turning sounds off anywhere must silence every client,
   // localhost dev origins included.
@@ -5998,107 +6073,8 @@ function commitCurrentSession(draft: Draft, id: string) {
   syncActiveInboxTabPath(draft, id);
 }
 
-// Shared body of the dismissed/stashed reconciles. Overlays the server's
-// CURRENT hidden set (within the window) onto the never-prune cache:
-//   SET   — a cached session the server reports hidden (heals a hide made
-//           while this device was offline; the updated_at-keyed session crawl
-//           can never carry it).
-//   CLEAR — (final pass only) a session we have flagged hidden WITHIN the
-//           window that the server no longer reports = un-hidden elsewhere.
-// Both passes skip ids with a pending field override so an in-flight local
-// hide/restore on THIS device always wins (local-first). Per-page calls pass
-// final=false (SET only); the final whole-set call passes true (SET + CLEAR),
-// because CLEAR needs the complete set or a row on a later page would be
-// wrongly un-hidden.
-// HIDDEN_OVERRIDE_SETTLE_MS now lives in ./inboxOverlays (the
-// `triage_gesture` overlay's bound) and is re-exported above.
-
-function applyHiddenReconcileInDraft(
-  draft: any,
-  field: "inbox_dismissed_at" | "inbox_stashed_at",
-  entries: Array<{ _id: string } & Record<string, any>>,
-  final: boolean,
-) {
-  const server = new Map<string, number | null>();
-  for (const e of entries) server.set(e._id, e[field] ?? null);
-  // A bridge hide stamps its visible hide field with the SAME timestamp used
-  // for every coupled pending lock. Hidden rows never return through normal
-  // sessions sync, so this lightweight hidden-set row is the only production
-  // acknowledgement those pin/no-op locks can receive. Match the explicit
-  // hide acknowledgement anchor rather than lock `ts`: the acting window's
-  // auto-pending freshness clock can be sampled after its hide value. An older
-  // or otherwise stale hidden result must leave every lock intact.
-  const retireAcknowledgedHide = (id: string, ts: number) => {
-    const anchors = ["sessions", "conversations"].map((coll) => draft.pending[`${coll}:${id}:${field}`]);
-    const matches = anchors.some((entry: any) =>
-      entry?.type === "field" && entry.hideAck === ts,
-    );
-    if (!matches) return false;
-    for (const coll of ["sessions", "conversations"]) {
-      for (const coupled of ["inbox_dismissed_at", "inbox_stashed_at", "inbox_pinned_at", "is_pinned"]) {
-        const key = `${coll}:${id}:${coupled}`;
-        if (draft.pending[key]?.type === "field" && draft.pending[key].hideAck === ts) delete draft.pending[key];
-      }
-    }
-    return true;
-  };
-  // Locked = a pending field override is still inside its settle window.
-  // Stale overrides are released (deleted) so the authoritative set can land.
-  const lockedLocal = (id: string) => {
-    const keys = [`sessions:${id}:${field}`, `conversations:${id}:${field}`];
-    const entries = keys.map((k) => draft.pending[k]).filter(Boolean);
-    if (entries.length === 0) return false;
-    // An entry without a timestamp can't be dated — keep protecting it.
-    const newest = Math.max(...entries.map((e: any) => e.ts ?? Infinity));
-    if (Date.now() - newest < HIDDEN_OVERRIDE_SETTLE_MS) return true;
-    for (const k of keys) delete draft.pending[k];
-    return false;
-  };
-
-  for (const [id, ts] of server) {
-    if (ts) retireAcknowledgedHide(id, ts);
-    if (!ts || lockedLocal(id)) continue;
-    const sess = draft.sessions[id];
-    if (sess && sess[field] !== ts) sess[field] = ts;
-    const conv = draft.conversations[id];
-    if (conv && conv[field] !== ts) conv[field] = ts;
-  }
-
-  if (!final) return;
-
-  const cutoff = Date.now() - DISMISS_RECONCILE_WINDOW_MS;
-  for (const id of Object.keys(draft.sessions)) {
-    // Local-only stub ids can never be in the server's hidden set, so its
-    // silence about them carries no signal — clearing here would resurrect a
-    // hidden orphaned stub on every crawl, forever.
-    if (!isConvexId(id)) continue;
-    const sess = draft.sessions[id];
-    const at = sess[field];
-    if (!at || at < cutoff || server.has(id) || lockedLocal(id)) continue;
-    // A BLANK row leaving the server's hidden set usually means the
-    // empty-conversation GC hard-deleted it — un-hiding would resurrect
-    // a ghost "New Session" card into the active inbox. Leave it hidden;
-    // the verified ghost sweep (pruneGhostSessions) removes it, and a real
-    // remote restore re-arrives via the live channel.
-    if ((sess.message_count ?? 0) === 0 && !sess.has_pending) continue;
-    sess[field] = null;
-    const conv = draft.conversations[id];
-    if (conv) conv[field] = null;
-  }
-
-  // A direct conversation view (and markKilling) can retain metadata after its
-  // inbox row is absent. SET already updates that conversation-only twin, so a
-  // complete hidden-set pass must clear it symmetrically on a remote restore.
-  // There is no inbox card here, so the session-only blank-GC guard does not
-  // apply; clearing metadata cannot resurrect a row into the inbox.
-  for (const id of Object.keys(draft.conversations)) {
-    if (draft.sessions[id] || !isConvexId(id)) continue;
-    const conv = draft.conversations[id];
-    const at = conv[field];
-    if (!at || at < cutoff || server.has(id) || lockedLocal(id)) continue;
-    conv[field] = null;
-  }
-}
+// HIDDEN_OVERRIDE_SETTLE_MS lives in ./inboxOverlays (the `triage_gesture`
+// overlay's bound) and is re-exported above.
 
 // Shared body of stashSession/killSession: hide `id` (and its nested
 // children) out of the active buckets, advancing the current selection past the
@@ -6282,7 +6258,34 @@ function setBucketFilterHeadInDraft(draft: Draft, bucketId: string | null, exclu
   if (bucketId) {
     draft.activeProjectFilter = null;
     draft.activeProjectPath = null;
+    draft.extraProjectFilters = [];
     if (!exclude) recordVisitInDraft(draft, { kind: "view", key: `label:${bucketId}`, label: (draft.buckets as any)[bucketId]?.name });
+  }
+  commitChipFilterChange(draft, prev);
+}
+
+// Replace the project filter's head chip — the body behind
+// setActiveProjectFilter, shared with toggleProjectFilterTerm's first-term
+// branch (same reason as setBucketFilterHeadInDraft).
+function setProjectFilterHeadInDraft(draft: Draft, name: string | null, path?: string | null, exclude?: boolean, extras?: ProjectFilterTerm[]) {
+  const prev = snapshotInboxViewFromDraft(draft);
+  draft.activeProjectFilter = name;
+  draft.activeProjectPath = path ?? null;
+  // A plain/alt click REPLACES the whole filter: shift-added terms drop. The
+  // extras param exists for history restore, which re-applies a full list.
+  draft.extraProjectFilters = name && extras ? extras : [];
+  // The exclude flag belongs to whichever chip is active. Clearing THIS axis
+  // only resets it when the other axis isn't holding a filter — otherwise a
+  // stray setActiveProjectFilter(null) would flip a bucket EXCLUSION into a
+  // bucket include ("hide L" → "only L") without a click.
+  draft.chipFilterExclude = name ? !!exclude : draft.activeBucketFilter ? draft.chipFilterExclude : false;
+  // The chip row is ONE filter: picking a project clears any bucket focus,
+  // shift-added label terms included.
+  if (name) {
+    draft.activeBucketFilter = null;
+    draft.extraBucketFilters = [];
+    // An exclusion isn't a "view" you revisit — only include mode records.
+    if (!exclude) recordVisitInDraft(draft, { kind: "view", key: `project:${name}`, label: name, path: path ?? undefined });
   }
   commitChipFilterChange(draft, prev);
 }
@@ -6317,6 +6320,77 @@ function pickBridgedFields(
 // already fully computed on the draft at this point and lands synchronously
 // when the middleware commits it, so a sibling can never observe the broadcast
 // "before" this window's own state change.
+// Stamp the sync-log positions a dispatch landed at onto the pending entries
+// that dispatch created. Keys derive from the dispatched (table-grouped)
+// patches through the registry's table→storeKey mapping — the same rows the
+// engine's auto-pending derived its entries from. Guard: only entries whose
+// `ts` predates the dispatch send get the ack; a newer local write replaced
+// the entry object (auto-pending makes fresh objects), so an older write's
+// ack can never retire it. If the scope cursor already passed the position,
+// retire immediately (the ack raced the applier). Returns whether the ack was
+// well-formed (the caller announces it to sibling windows only then).
+// Enriched twins a triage gesture writes beside the raw field it dispatches
+// (hideSessionInDraft, pinSession): the twin's lock belongs to the same
+// transition and retires with the raw field's acknowledgement — it is never a
+// dispatched field itself, and a row that leaves the live window (a kill)
+// never echoes it.
+const ACK_DERIVED_TWINS: Record<string, string> = {
+  inbox_pinned_at: "is_pinned",
+  inbox_deferred_at: "is_deferred",
+  inbox_dormant_at: "is_dormant",
+};
+
+function stampSyncAckInDraft(
+  draft: any,
+  patches: any,
+  ack: Array<{ scope_key: string; position: number }>,
+  sentAt: number,
+): boolean {
+  if (!patches || typeof patches !== "object" || !Array.isArray(ack) || ack.length === 0) return false;
+  const compact = ack.map((a) => ({ s: a.scope_key, p: a.position }));
+  const stamp = (key: string) => {
+    const entry = draft.pending[key] as any;
+    if (!entry) return;
+    if (compact.some((a) => (draft.syncMeta[syncLogScopeMetaKey(a.s)]?.cursor ?? 0) >= a.p)) {
+      delete draft.pending[key];
+    } else {
+      entry.ack = compact;
+    }
+  };
+  for (const [table, byId] of Object.entries(patches)) {
+    const storeKeys = TABLE_TO_STORE_KEYS[table];
+    if (!storeKeys || !byId || typeof byId !== "object") continue;
+    for (const [docId, fields] of Object.entries(byId as Record<string, any>)) {
+      if (docId === "_" || !fields || typeof fields !== "object") continue;
+      for (const storeKey of storeKeys) {
+        for (const [field, sentValue] of Object.entries(fields as Record<string, any>)) {
+          const key = `${storeKey}:${docId}:${field}`;
+          const entry = draft.pending[key] as any;
+          if (!entry) continue;
+          // Guard by VALUE, not send-time ordering: an outbox redrive or
+          // retry invokes the binding long after the write was drafted, so a
+          // time guard lets an old write's ack stamp (and retire) the entry
+          // protecting a NEWER local write. The entry corresponds to THIS
+          // dispatch iff it still protects the dispatched value; if a newer
+          // write changed it, values differ and we skip — value-echo
+          // retirement owns that entry. Objects compare by JSON because both
+          // sides may have crossed an IDB structured-clone boundary.
+          const v = entry.value;
+          const same = v === sentValue ||
+            (v !== null && sentValue !== null &&
+             typeof v === "object" && typeof sentValue === "object" &&
+             JSON.stringify(v) === JSON.stringify(sentValue));
+          if (!same || (entry.ts ?? 0) > sentAt) continue;
+          stamp(key);
+          const twin = storeKey === "sessions" ? ACK_DERIVED_TWINS[field] : undefined;
+          if (twin) stamp(`${storeKey}:${docId}:${twin}`);
+        }
+      }
+    }
+  }
+  return true;
+}
+
 function announceHide(
   draft: any,
   mode: "stash" | "kill",
@@ -6392,12 +6466,11 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
     id: string,
     field: string,
     value: any,
-    hideAck?: number,
   ) => {
     const row = draft[coll][id];
     if (!row) return;
     if (row[field] !== value) row[field] = value;
-    draft.pending[`${coll}:${id}:${field}`] = { type: "field", value, ts: msg.ts, ...(hideAck !== undefined ? { hideAck } : {}) };
+    draft.pending[`${coll}:${id}:${field}`] = { type: "field", value, ts: msg.ts };
   };
 
   // An accepted gesture is one causal transition, even if every visible value
@@ -6413,7 +6486,6 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
       sessions?: Record<string, any>;
       conversations?: Record<string, any>;
     },
-    hideAck?: number,
   ) => {
     if (!transitionNotNewer(id, constrained, msg.ts)) return false;
     for (const coll of ["sessions", "conversations"] as const) {
@@ -6429,7 +6501,7 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
       for (const field of constrained) {
         if (!Object.prototype.hasOwnProperty.call(next, field)) next[field] = row[field];
       }
-      for (const [field, value] of Object.entries(next)) write(coll, id, field, value, hideAck);
+      for (const [field, value] of Object.entries(next)) write(coll, id, field, value);
     }
     return true;
   };
@@ -6492,7 +6564,7 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
         // Both hide modes move the row out of Pinned. Mirrors
         // hideSessionInDraft, which clears a pre-existing pin for stash too.
         sessions: { is_pinned: false },
-      }, msg.ts)) continue;
+      })) continue;
     }
     return;
   }
@@ -6510,6 +6582,11 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
         shared: { inbox_dismissed_at: null, inbox_stashed_at: null, inbox_stash_hidden: null, inbox_killed_at: null },
       });
     }
+    return;
+  }
+
+  if (msg.kind === "ack") {
+    stampSyncAckInDraft(draft, msg.patches, msg.ack, msg.sentAt);
     return;
   }
 
@@ -6631,6 +6708,44 @@ const inboxStoreConfig = (set: any, get: any) => ({
         truncated: Array.isArray(projection.truncated) ? projection.truncated : [],
         stamps,
       };
+    }
+  }),
+  applyReplicatedProjection: sync(function (this: Draft, slots: Record<string, SessionsProjectionSlot>) {
+    if (!slots || typeof slots !== "object") return;
+    const receivedAtMono = monotonicNow();
+    for (const scopeKey in slots) {
+      const slot = slots[scopeKey];
+      if (!slot || typeof slot !== "object") continue;
+      this.sessionsProjection[scopeKey] = { ...slot, receivedAtMono };
+    }
+  }),
+  applyReplicatedFields: sync(function (this: Draft, key: string, fields: Record<string, Record<string, unknown>>, ts: number = Date.now()) {
+    const rows = (this as any)[key] as Record<string, any> | undefined;
+    if (!rows) return;
+    for (const id in fields) {
+      const row = rows[id];
+      if (!row) continue;
+      for (const [field, value] of Object.entries(fields[id])) {
+        if (value === undefined) delete row[field];
+        else row[field] = value;
+        this.pending[`${key}:${id}:${field}`] = { type: "field", value, ts };
+      }
+    }
+  }),
+  protectReplicatedWrite: sync(function (this: Draft, key: string, entries: Array<{ id: string; field: string; value: unknown; ts?: number }>) {
+    const rows = (this as any)[key] as Record<string, any> | undefined;
+    if (!rows) return;
+    const now = Date.now();
+    for (const { id, field, value, ts = now } of entries) {
+      const row = rows[id];
+      if (!row) continue;
+      // Lock only a value that landed: the merge may have kept a fresher
+      // local value (an in-flight write of this window's own).
+      const held = row[field];
+      const same = held === value ||
+        (held !== null && value !== null && typeof held === "object" && typeof value === "object" && JSON.stringify(held) === JSON.stringify(value));
+      if (!same) continue;
+      this.pending[`${key}:${id}:${field}`] = { type: "field", value, ts };
     }
   }),
   // sync(): the id set is server truth (or its persisted snapshot) — persist to
@@ -6894,23 +7009,26 @@ const inboxStoreConfig = (set: any, get: any) => ({
   activeProjectPath: null,
   activeProjectFilter: null,
   chipFilterExclude: false,
-  setActiveProjectFilter: action(function (this: Draft, name: string | null, path?: string | null, exclude?: boolean) {
-    const prev = snapshotInboxViewFromDraft(this);
-    this.activeProjectFilter = name;
-    this.activeProjectPath = path ?? null;
-    // The exclude flag belongs to whichever chip is active. Clearing THIS axis
-    // only resets it when the other axis isn't holding a filter — otherwise a
-    // stray setActiveProjectFilter(null) would flip a bucket EXCLUSION into a
-    // bucket include ("hide L" → "only L") without a click.
-    this.chipFilterExclude = name ? !!exclude : this.activeBucketFilter ? this.chipFilterExclude : false;
-    // The chip row is ONE filter: picking a project clears any bucket focus,
-    // shift-added label terms included.
-    if (name) {
-      this.activeBucketFilter = null;
-      this.extraBucketFilters = [];
-      // An exclusion isn't a "view" you revisit — only include mode records.
-      if (!exclude) recordVisitInDraft(this, { kind: "view", key: `project:${name}`, label: name, path: path ?? undefined });
+  extraProjectFilters: [],
+  setActiveProjectFilter: action(function (this: Draft, name: string | null, path?: string | null, exclude?: boolean, extras?: ProjectFilterTerm[]) {
+    setProjectFilterHeadInDraft(this, name, path, exclude, extras);
+  }),
+  // Shift-click on a project chip: toggle ONE term of the project filter
+  // without disturbing the rest (toggleFilterTerm has the arithmetic).
+  toggleProjectFilterTerm: action(function (this: Draft, name: string, path: string | null, exclude: boolean) {
+    if (!this.activeProjectFilter) {
+      // First term: identical to a plain/alt click, including clearing the
+      // label axis — the sibling action's exact logic.
+      setProjectFilterHeadInDraft(this, name, path, exclude);
+      return;
     }
+    const prev = snapshotInboxViewFromDraft(this);
+    const [head] = chipProjectFilters(this);
+    const next = toggleFilterTerm(head, this.extraProjectFilters ?? [], { id: name, path, exclude });
+    this.activeProjectFilter = next.head?.id ?? null;
+    this.activeProjectPath = next.head?.path ?? null;
+    this.chipFilterExclude = next.head ? next.head.exclude : false;
+    this.extraProjectFilters = next.extras;
     commitChipFilterChange(this, prev);
   }),
 
@@ -7008,9 +7126,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     setBucketFilterHeadInDraft(this, bucketId, exclude, extras);
   }),
   // Shift-click: toggle ONE term of the label filter without disturbing the
-  // rest. Same id + same polarity = remove; same id + other polarity = flip in
-  // place; new id = append to the tail. Removing the head promotes the first
-  // tail term so the head invariant holds (extras never outlive the head).
+  // rest (toggleFilterTerm has the arithmetic).
   toggleBucketFilterTerm: action(function (this: Draft, bucketId: string, exclude: boolean) {
     if (!this.activeBucketFilter) {
       // First term: identical to a plain/alt click, including clearing the
@@ -7019,23 +7135,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
       return;
     }
     const prev = snapshotInboxViewFromDraft(this);
-    const extras: BucketFilterTerm[] = this.extraBucketFilters ?? [];
-    if (this.activeBucketFilter === bucketId) {
-      if (!!this.chipFilterExclude === exclude) {
-        // Remove the head: the first extra takes over, or the filter clears.
-        const [next, ...rest] = extras;
-        this.activeBucketFilter = next?.id ?? null;
-        this.chipFilterExclude = next ? next.exclude : false;
-        this.extraBucketFilters = rest;
-      } else {
-        this.chipFilterExclude = exclude;
-      }
-    } else {
-      const at = extras.findIndex((t) => t.id === bucketId);
-      if (at < 0) this.extraBucketFilters = [...extras, { id: bucketId, exclude }];
-      else if (extras[at].exclude === exclude) this.extraBucketFilters = extras.filter((t) => t.id !== bucketId);
-      else this.extraBucketFilters = extras.map((t) => (t.id === bucketId ? { id: bucketId, exclude } : t));
-    }
+    const [head] = chipBucketFilters(this);
+    const next = toggleFilterTerm(head, this.extraBucketFilters ?? [], { id: bucketId, exclude });
+    this.activeBucketFilter = next.head?.id ?? null;
+    this.chipFilterExclude = next.head ? next.head.exclude : false;
+    this.extraBucketFilters = next.extras;
     commitChipFilterChange(this, prev);
   }),
   inboxViewMode: () => resolveInboxViewMode(get().clientState.ui),
@@ -7215,27 +7319,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
     for (const id of ids) delete this.blockedReviveRequestedAt[id];
   }),
 
-  // Durable cross-device dismiss reconcile (the backstop the live subscription
-  // can't provide). `entries` is the server's CURRENT dismissed set within the
-  // window (conversations.listDismissedSessionsLite). A sync() — applying
-  // server truth, never re-dispatched. Mechanics in applyHiddenReconcileInDraft.
-  applyDismissedReconcile: sync(function (this: Draft, entries: { _id: string; inbox_dismissed_at: number | null }[], final: boolean) {
-    applyHiddenReconcileInDraft(this, "inbox_dismissed_at", entries, final);
-  }),
-
-  // Stashed twin of the dismiss reconcile, fed by listStashedSessionsLite.
-  applyStashedReconcile: sync(function (this: Draft, entries: { _id: string; inbox_stashed_at: number | null }[], final: boolean) {
-    applyHiddenReconcileInDraft(this, "inbox_stashed_at", entries, final);
-  }),
-
-  // Verified ghost removal — the sessions cache is never-prune, so a
-  // conversation hard-deleted server-side (cleanup.gcEmptyConversations) leaves
-  // a permanent "New Session" ghost card. Callers verify Convex ids against the
-  // server (conversations.existingConversationIds) BEFORE calling: the planted
+  // Ghost removal — the sessions cache is never-prune, so a row nothing will
+  // ever re-deliver is dropped by hand: stub ids (orphaned optimistic creates
+  // that never landed server-side, so the server cannot vouch for them; the
+  // caller's age/idleness guards are the safety there) and rows a server-side
+  // deletion left behind before the sync log carried deletes. The planted
   // excludes are sticky in delta mode, so a wrong delete would blind this
-  // client to a live session. Stub ids (orphaned optimistic creates that never
-  // landed server-side) are passed unverified — the server can't vouch for ids
-  // it never had; the caller's age/idleness guards are the safety there. The
+  // client to a live session — callers never pass a live Convex id. The
   // excludes are what authorize the IDB row delete (a bare store-shrink is
   // ignored by the diff). A sync() — never re-dispatched; excludes are planted
   // manually (only action() auto-plants).
@@ -7375,46 +7465,23 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // the entry object (auto-pending makes fresh objects), so an older write's
   // ack can never retire it. If the scope cursor already passed the position,
   // retire immediately (the ack raced the applier). sync() — local bookkeeping.
+  //
+  // The ack is also announced on the cross-window gesture bridge: sibling
+  // windows hold mirrored locks for this write (planted by the bridge's own
+  // hide/pin/fields message, or by the host from this window's replicated
+  // rows) and retire them at the same position — they have no dispatch of
+  // their own to be acknowledged. `local` marks the bridged receipt, which
+  // stamps and does not re-announce.
   stampSyncAck: sync(function (
     this: Draft,
     patches: any,
     ack: Array<{ scope_key: string; position: number }>,
     sentAt: number,
+    opts?: { local?: boolean },
   ) {
-    if (!patches || typeof patches !== "object" || !Array.isArray(ack) || ack.length === 0) return;
-    const compact = ack.map((a) => ({ s: a.scope_key, p: a.position }));
-    for (const [table, byId] of Object.entries(patches)) {
-      const storeKeys = TABLE_TO_STORE_KEYS[table];
-      if (!storeKeys || !byId || typeof byId !== "object") continue;
-      for (const [docId, fields] of Object.entries(byId as Record<string, any>)) {
-        if (docId === "_" || !fields || typeof fields !== "object") continue;
-        for (const storeKey of storeKeys) {
-          for (const [field, sentValue] of Object.entries(fields as Record<string, any>)) {
-            const key = `${storeKey}:${docId}:${field}`;
-            const entry = this.pending[key] as any;
-            if (!entry) continue;
-            // Guard by VALUE, not send-time ordering: an outbox redrive or
-            // retry invokes the binding long after the write was drafted, so a
-            // time guard lets an old write's ack stamp (and retire) the entry
-            // protecting a NEWER local write. The entry corresponds to THIS
-            // dispatch iff it still protects the dispatched value; if a newer
-            // write changed it, values differ and we skip — value-echo
-            // retirement owns that entry. Objects compare by JSON because both
-            // sides may have crossed an IDB structured-clone boundary.
-            const v = entry.value;
-            const same = v === sentValue ||
-              (v !== null && sentValue !== null &&
-               typeof v === "object" && typeof sentValue === "object" &&
-               JSON.stringify(v) === JSON.stringify(sentValue));
-            if (!same || (entry.ts ?? 0) > sentAt) continue;
-            if (compact.some((a) => (this.syncMeta[syncLogScopeMetaKey(a.s)]?.cursor ?? 0) >= a.p)) {
-              delete this.pending[key];
-            } else {
-              entry.ack = compact;
-            }
-          }
-        }
-      }
+    if (!stampSyncAckInDraft(this, patches, ack, sentAt)) return;
+    if (!opts?.local) {
+      broadcastGesture({ kind: "ack", patches, ack, sentAt, ts: Date.now() }, bridgeUserId(this));
     }
   }),
 
@@ -7515,6 +7582,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   clearCrawlMetaForScope: sync(function (this: Draft, scopeKey: string) {
     const teamId = scopeKey.startsWith("team:") ? scopeKey.slice(5) : null;
     const personal = scopeKey.startsWith("user:");
+    // The sessions floor is keyed by the principal (inboxCrawlWsKey), so the
+    // personal scope's resync recuts it — with the warm-cache probe that
+    // carries what left the inbox scan while the log had a hole.
+    if (personal) delete this.syncMeta[`sessions:v2:inbox:${scopeKey.slice(5)}`];
     for (const key of Object.keys(this.syncMeta)) {
       const m = /^(tasks|docs):v2:(.*)$/.exec(key);
       if (!m) continue;
@@ -8325,10 +8396,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
     let { table, pending } = applySyncTable(
       field, incoming, base.pending, prevCollection,
-      (config.isDelta || config.ignoreFields || config.preserveFields || config.pruneAbsentScope)
+      (config.isDelta || config.ignoreFields || config.deepFields || config.preserveFields || config.pruneAbsentScope)
         ? {
             isDelta: config.isDelta,
             ignoreFields: config.ignoreFields,
+            deepFields: config.deepFields as string[] | undefined,
             preserveFields: config.preserveFields,
             pruneAbsentScope: config.pruneAbsentScope,
           }
@@ -10373,6 +10445,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.activeBucketFilter = want.bucket;
     // Layouts capture the head chip only — a shift-built list doesn't ride.
     this.extraBucketFilters = [];
+    this.extraProjectFilters = [];
     this.activeProjectFilter = want.project;
     this.activeProjectPath = want.projectPath;
     this.chipFilterExclude = want.exclude;

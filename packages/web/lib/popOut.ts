@@ -1,4 +1,4 @@
-import { bridge, isDesktop } from "./desktop";
+import { bridge, isDesktopShell } from "./desktop";
 
 /**
  * Popping a surface out into a window of its own, on whatever build is running.
@@ -22,6 +22,13 @@ import { bridge, isDesktop } from "./desktop";
  * Inside the desktop app with neither verb, the ladder stops and says so. A
  * silent degrade into a browser popup is worse than nothing: it looks like the
  * feature is broken rather than like the app is old.
+ *
+ * Which is why "am I in the app" is `isDesktopShell()` — the user agent — and
+ * NOT the bridge. On 1.1.100 the preload threw before exposing the bridge, so
+ * every rung was missing AND the app looked like a browser: the ladder ran off
+ * its end into window.open, Electron handed that to shell.openExternal, and the
+ * roster opened as a Chrome tab. The rung that reports the truth is the one the
+ * broken build cannot erase.
  */
 export type PopOutOutcome =
   /** The shell opened (or focused) its own window for this route. */
@@ -75,7 +82,7 @@ export async function popOutWindow(
   return popOutVia(route, {
     shellOpen,
     detach: bridge("detachTab"),
-    desktop: isDesktop(),
+    desktop: isDesktopShell(),
     // A NAMED popup, so a second click raises the window the first one opened
     // instead of stacking another.
     openPopup: () => {

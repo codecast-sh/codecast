@@ -208,7 +208,7 @@ export function buildLaunchArgs(input: LaunchArgsInput): LaunchArgsResult {
 /** Per-session model/effort, appended AFTER config/default flags so the
  *  per-session choice wins (both CLIs take the last occurrence). Shared by
  *  TUI launch and print mode. */
-function appendModelEffortFlags(
+export function appendModelEffortFlags(
   args: string[],
   input: { agentType: AgentClientId; modelAlias?: string; requestedEffort?: string },
 ): void {

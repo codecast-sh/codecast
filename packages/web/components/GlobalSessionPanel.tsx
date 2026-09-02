@@ -20,7 +20,7 @@ import { threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } fro
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, chipBucketFilters, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { sessionsWakeSig, resolveShowOld, showsBlockedBadge } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
@@ -3355,6 +3355,7 @@ function SessionListPanelImpl({
     s => s.activeBucketFilter,
     s => s.chipFilterExclude,
     s => s.extraBucketFilters,
+    s => s.extraProjectFilters,
     s => s.buckets,
     s => s.bucketAssignments,
     s => s.collapsedSections,
@@ -3527,9 +3528,9 @@ function SessionListPanelImpl({
   const filterByChip = useCallback(
     (items: InboxSession[]) =>
       items.filter((sess) =>
-        chipMatchesSession(sess, { projectFilter: s.activeProjectFilter, exclude: s.chipFilterExclude, bucketFilters: chipBucketFilters(s), bucketByConv }),
+        chipMatchesSession(sess, { projectFilters: chipProjectFilters(s), bucketFilters: chipBucketFilters(s), bucketByConv }),
       ),
-    [s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, bucketByConv],
+    [s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv],
   );
 
   // The Stashed / Killed buckets' open state is ephemeral and CLOSED by
@@ -3583,15 +3584,13 @@ function SessionListPanelImpl({
     () => [...statusQuestions, ...filteredNeedsInput, ...filteredDone, ...filteredDormant],
     [statusQuestions, filteredNeedsInput, filteredDone, filteredDormant],
   );
-  // Schedule rows honor the project chip like session cards do.
+  // Schedule rows honor the project chips like session cards do.
   const scheduleRowsView = useMemo(
     () =>
       s.activeProjectFilter
-        ? schedulePartition.rows.filter(
-            (r) => (getProjectName(undefined, r.task.project_path) === s.activeProjectFilter) !== s.chipFilterExclude,
-          )
+        ? schedulePartition.rows.filter((r) => passesFilterTerms(chipProjectFilters(s), getProjectName(undefined, r.task.project_path)))
         : schedulePartition.rows,
-    [schedulePartition.rows, s.activeProjectFilter, s.chipFilterExclude],
+    [schedulePartition.rows, s.activeProjectFilter, s.chipFilterExclude, s.extraProjectFilters],
   );
   // A schedule row opens the conversation behind it — the loop's home session
   // or the newest run; the dismissed-peek path handles folded runs.
@@ -3906,9 +3905,9 @@ function SessionListPanelImpl({
         manualOrder,
         freezeOrder: viewMode === "recent" ? recentFreezeOrder : null,
         chipMatches: (sess) =>
-          chipMatchesSession(sess, { projectFilter: s.activeProjectFilter, exclude: s.chipFilterExclude, bucketFilters: chipBucketFilters(s), bucketByConv }),
+          chipMatchesSession(sess, { projectFilters: chipProjectFilters(s), bucketFilters: chipBucketFilters(s), bucketByConv }),
       }),
-    [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, bucketByConv],
+    [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv],
   );
   const totalSubagentCount = useMemo(() => {
     let count = 0;
@@ -3981,14 +3980,15 @@ function SessionListPanelImpl({
   );
   const favoriteGroups = useMemo(() => {
     if (!favoritesView) return null;
-    const scoped = s.activeProjectFilter
-      ? allFavorites.filter((x) => (getProjectName(x.git_root, x.project_path) === s.activeProjectFilter) !== s.chipFilterExclude)
+    const projectFilters = chipProjectFilters(s);
+    const scoped = projectFilters.length
+      ? allFavorites.filter((x) => passesFilterTerms(projectFilters, getProjectName(x.git_root, x.project_path)))
       : allFavorites;
     const pinned = scoped.filter((x) => x.is_pinned).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
     const rest = scoped.filter((x) => !x.is_pinned);
     const { projectGroups } = groupSessionsForLabelView(rest, {}, {});
     return { pinned, projectGroups, count: scoped.length };
-  }, [favoritesView, allFavorites, s.activeProjectFilter, s.chipFilterExclude]);
+  }, [favoritesView, allFavorites, s.activeProjectFilter, s.chipFilterExclude, s.extraProjectFilters]);
   const favChipCounts = useMemo(
     () => (favoritesView ? computeChipCounts(allFavorites, bucketByConv) : null),
     [favoritesView, allFavorites, bucketByConv],
