@@ -353,7 +353,6 @@ const CODECAST_PLATFORM_CONFIG: PlatformConfig = {
   legacyReceiptActions: LEGACY_RECEIPT_ACTIONS,
   outboxCoalesceKeys: OUTBOX_COALESCE_KEYS,
   transformReplayPatches: stripStalePointerFromReplay,
-  hideAckFields: new Set(["inbox_dismissed_at", "inbox_stashed_at"]),
   viewGuard: VIEW_GUARD,
   receiptContinuations: RECEIPT_CONTINUATIONS,
   storageWatchdogHint:

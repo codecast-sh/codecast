@@ -1,25 +1,11 @@
-import { DISMISS_RECONCILE_WINDOW_MS, InboxSession, isConvexId } from "../store/inboxStore";
+import { InboxSession, isConvexId } from "../store/inboxStore";
 
-// GHOST SWEEP policy — the sessions cache is never-prune, so a conversation
-// hard-deleted server-side would leave a permanent ghost card. The sweep
-// collects cached blank rows (empty, our own, no local pending state) and
-// VERIFIES against the server which still exist; only confirmed-gone ids are
-// pruned (the planted excludes are sticky, so a wrong local delete would blind
-// the client to a live session — verify-then-prune makes that impossible).
+// STUB SWEEP policy — the sessions cache is never-prune, and an optimistic
+// create that never landed server-side (a stub id) exists in this client's
+// cache alone: no server channel can ever remove it, so this sweep does.
+// Server-side deletions are not its job: a hard delete is a sync-log delete
+// action, applied on authorized absence by the log applier.
 
-// Verify-then-prune only drops confirmed-gone ids, so sweeping young blank rows
-// is safe at any age — this floor just avoids re-verifying the blank a summon
-// only just minted. It used to sit above the GC's 24h grace (back then deletion
-// could ONLY happen after it); now dismissing a blank reaps it
-// (dispatch.applyPatches → cleanup.reapEmptyConversation) and the hard-delete
-// can land at ANY age: immediately when the pre-warm's agent is already dead,
-// or deferred behind the agent kill + next GC pass when it was live. While the
-// dismissed row still exists, the dismiss reconcile carries its state to other
-// clients; once hard-deleted there is NO sync channel (absent from the live
-// set, gone from by_user_dismissed) — this sweep is the only healer for their
-// cached copies, so it must ask while rows are young or ghosts ride the
-// never-prune cache (and IDB) across reloads.
-export const GHOST_SWEEP_MIN_AGE_MS = 15 * 60 * 1000;
 // Orphaned stubs only need to outlive the create/outbox-replay handoff (seconds
 // in practice); past this they can never become sessions — pure local cruft.
 export const STUB_SWEEP_MIN_AGE_MS = 2 * 60 * 60 * 1000;
@@ -29,10 +15,7 @@ export const STUB_SWEEP_MIN_AGE_MS = 2 * 60 * 60 * 1000;
 // has been given up nothing else will ever resolve it.
 export const STUB_HEAL_MIN_AGE_MS = 60 * 1000;
 
-// Pure candidate selection, exported for tests. Stubs (optimistic ids whose
-// create never landed) exist only in this client's cache — there is nothing to
-// verify, so they're directly prunable. Convex-id blanks are only candidates
-// for the server existence check.
+// Pure candidate selection, exported for tests.
 export function collectGhostSweepCandidates(
   store: {
     sessions: Record<string, InboxSession>;
@@ -42,7 +25,7 @@ export function collectGhostSweepCandidates(
     currentUser?: { _id?: { toString(): string } } | null;
   },
   now: number = Date.now(),
-): { stubs: string[]; candidates: string[]; strandedStubs: string[] } {
+): { stubs: string[]; strandedStubs: string[] } {
   const me = store.currentUser?._id?.toString?.();
   const mine = (s: InboxSession) => !s.user_id || !!(me && s.user_id.toString() === me);
   const blankAndIdle = (s: InboxSession, cutoff: number) =>
@@ -66,13 +49,6 @@ export function collectGhostSweepCandidates(
   const stubs = all
     .filter((s) => !isConvexId(s._id) && blankAndIdle(s, now - STUB_SWEEP_MIN_AGE_MS))
     .map((s) => s._id);
-  // Real rows keep the pin exemption: pin means "never auto-clean", and a
-  // pinned conversation deleted server-side still resolves via tombstone
-  // forwarding, so leaving its card is safe.
-  const candidates = all
-    .filter((s) => isConvexId(s._id) && !s.is_pinned && blankAndIdle(s, now - GHOST_SWEEP_MIN_AGE_MS))
-    .map((s) => s._id)
-    .slice(0, 200);
   // A stub (no server conversation) that holds a queued/failed user message and
   // has NO create in flight: its create was given up, so the message can never
   // deliver and the blank-prune above skips it (non-empty) — a permanent stuck
@@ -98,42 +74,5 @@ export function collectGhostSweepCandidates(
       && (s.started_at ?? s.updated_at ?? 0) < (now - STUB_HEAL_MIN_AGE_MS))
     .map((s) => s._id)
     .slice(0, 20);
-  return { stubs, candidates, strandedStubs };
-}
-
-// RESURRECTION SUSPECTS — the dismiss/stash reconcile's final CLEAR pass reads
-// "hidden locally but absent from the server's hidden set" as "restored on
-// another device" and un-hides the row. For a conversation hard-deleted
-// server-side that absence means GONE, not restored: the blank-row guard in the
-// clear pass doesn't cover deleted rows WITH messages, dispatch.applyPatches
-// silently drops hide patches on a missing doc (so the user's dismiss can never
-// persist), and the blank-only sweep above never collects them — every dismiss
-// resurrects ~5min later, forever (ct-37110). Before applying a complete
-// reconcile, the caller runs this would-be-cleared set through the same
-// existence verify; confirmed-gone ids are pruned instead of restored.
-//
-// Own rows only: existingConversationIds vouches solely for the caller's
-// conversations, so a teammate's live session would read as "gone" and a prune
-// here would blind this client to it (the sticky exclude outlives the mistake).
-export function collectHiddenResurrectionSuspects(
-  store: {
-    sessions: Record<string, InboxSession>;
-    currentUser?: { _id?: { toString(): string } } | null;
-  },
-  field: "inbox_dismissed_at" | "inbox_stashed_at",
-  serverHiddenIds: ReadonlySet<string>,
-  now: number = Date.now(),
-): string[] {
-  const me = store.currentUser?._id?.toString?.();
-  const cutoff = now - DISMISS_RECONCILE_WINDOW_MS;
-  return Object.values(store.sessions)
-    .filter((s) => {
-      const at = s[field];
-      return isConvexId(s._id)
-        && !!at && at >= cutoff
-        && !serverHiddenIds.has(s._id)
-        && (!s.user_id || !!(me && s.user_id.toString() === me));
-    })
-    .map((s) => s._id)
-    .slice(0, 200);
+  return { stubs, strandedStubs };
 }

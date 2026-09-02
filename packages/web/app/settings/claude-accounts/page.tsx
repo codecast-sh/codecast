@@ -209,7 +209,9 @@ function SessionTokensToggle({ device }: { device: DeviceAccounts }) {
         <div className="flex flex-wrap items-center gap-2 px-4 pb-3 pl-[42px] text-[11px] text-sol-text-dim sm:px-5 sm:pl-[46px]">
           {pending ? (
             <span className="text-sol-yellow">
-              Minting for {flow?.email ?? flow?.profile ?? "the current login"}… approve the Claude sign-in in your browser.
+              Minting for {flow?.email ?? flow?.profile ?? "the current login"}. A claude.ai tab is open in your
+              browser: it must be signed in as that account, then approve. The tab stops at the account picker when
+              it is not, and the mint times out after 5 minutes.
             </span>
           ) : rejected && !activeHasToken ? (
             <span className="text-sol-red">Mint failed: {flow?.reason ?? "unknown reason"}</span>

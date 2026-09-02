@@ -112,7 +112,7 @@ Each round:
 ### 8. Verify and ship
 
 ```bash
-cast plan verify pl-xxxx --all   # runs typecheck + tests + lint
+cast plan verify pl-xxxx --all   # runs the repo's typecheck, test and lint scripts; exit 1 on failure
 cast plan done pl-xxxx           # mark plan complete
 ```
 

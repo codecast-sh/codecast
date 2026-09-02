@@ -2,6 +2,8 @@
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
 import { registerWorkspaceCommand } from "./workspace/cli.js";
+import { detectJsPackageManager } from "./workspace/detect.js";
+import { repoRootFor } from "./gitPlane.js";
 import { scrubAgentEnv } from "./agentEnv.js";
 import { registerRemoteCommand } from "./remote/cli.js";
 import { registerPublishCommand } from "./publish.js";
@@ -13,6 +15,7 @@ import { registerSwitchCommand } from "./switchCommand.js";
 import { buildTaskStartBody } from "./taskClaim.js";
 import { chatSendOrigin, sessionIdFromEnv } from "./sessionIdentity.js";
 import { registerBrowserCommand } from "./browser/cli.js";
+import { registerAppCommand } from "./app/cli.js";
 import { registerExecCommand } from "./execCommand.js";
 import open from "open";
 import * as fs from "fs";
@@ -60,7 +63,7 @@ import {
   WorkspaceUnresolved,
   type Workspace,
 } from "./resolveWorkspace.js";
-import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, writeAccountToken, removeAccountToken, accountTokenInfo } from "./ccAccounts.js";
+import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, writeAccountToken, removeAccountToken, accountTokenInfo, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
@@ -2900,6 +2903,7 @@ registerImageCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerStateCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerSwitchCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId });
+registerAppCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerExecCommand(program);
 
 program
@@ -2932,6 +2936,7 @@ program
     "Examples:\n" +
     "  cast send jx7c6zk \"can you take the auth half?\"\n" +
     "  cast send jx7c6zk \"done\" --from jx7abcd\n" +
+    "  cast send jx7c6zk --raw \"/model opus\"   # slash command, no wrapper: switches that session's model\n" +
     "  cast send jx7c6zk - <<'EOF'\n" +
     "  Multi-line briefing with headings and code blocks,\n" +
     "  delivered exactly as written.\n" +
@@ -2940,6 +2945,7 @@ program
   .argument("<session_id>", "Target session short ID (e.g. jx7c6zk)")
   .argument("<text>", "Message text; '-' reads it from stdin (heredoc-friendly for multi-line markdown)")
   .option("--from <id>", "Override sender session (default: detect current session)")
+  .option("--raw", "Deliver the text exactly as typed, without the session-message wrapper — for the agent's own slash commands (/model opus, /effort high). Own sessions only.")
   .action(async (sessionId: string, text: string, options: any) => {
     const body = expandStdinPromptArgs([text ?? ""])[0];
     if (!body.trim()) {
@@ -2951,6 +2957,7 @@ program
       to: sessionId,
       from,
       body,
+      ...(options.raw ? { raw: true } : {}),
     });
     const fromNote =
       result.from_short_id && result.from_short_id !== "unknown"
@@ -4447,6 +4454,56 @@ program
   .description("Show the active Claude account's usage-limit windows (5h session, 7d) and what a limit hit means for sessions here")
   .option("--json", "machine-readable report")
   .action(runUsageCommand);
+
+accountsCmd
+  .command("verify")
+  .description(
+    "Check what each saved profile REALLY holds\n\n" +
+    "The index records the account a profile was saved AS; this asks each stored\n" +
+    "credential which account it belongs to. They diverge when a switch leaves a\n" +
+    "stale identity in ~/.claude.json — one login then gets re-saved under other\n" +
+    "profiles' names. --fix drops duplicate copies and relabels the rest."
+  )
+  .option("--fix", "repair what it finds (drop duplicate credentials, relabel mislabeled profiles)")
+  .option("--json", "machine-readable report")
+  .action(async (options: any) => {
+    let rows: ProfileAudit[];
+    try {
+      rows = options.fix ? await repairProfileIdentities() : await auditProfileIdentities();
+    } catch (err) {
+      console.error(err instanceof CcAccountError ? err.message : String(err));
+      process.exit(1);
+      return;
+    }
+    if (options.json) {
+      console.log(JSON.stringify(rows, null, 2));
+      return;
+    }
+    if (rows.length === 0) {
+      console.log(`${c.dim}No saved profiles.${c.reset}`);
+      return;
+    }
+    for (const r of rows) {
+      const mark =
+        r.verdict === "ok" ? `${c.green}✓${c.reset}` :
+        r.verdict === "unverifiable" ? `${c.dim}?${c.reset}` : `${c.red}✗${c.reset}`;
+      const detail =
+        r.verdict === "ok" ? `${c.dim}${r.actual_email ?? ""}${c.reset}` :
+        r.verdict === "unverifiable" ? `${c.dim}${r.reason ?? "could not verify"}${c.reset}` :
+        `${c.yellow}holds ${r.actual_email ?? r.actual_uuid ?? "another account"}${c.reset}` +
+          (r.verdict === "duplicate" ? `${c.dim} (already saved under its own name)${c.reset}` : "");
+      const repaired = r.repair ? ` ${c.dim}→ ${r.repair}${c.reset}` : "";
+      console.log(`${mark} ${c.cyan}${r.name.padEnd(16)}${c.reset} ${detail}${repaired}`);
+    }
+    const bad = rows.filter((r) => r.verdict === "mislabeled" || r.verdict === "duplicate");
+    if (bad.length > 0 && !options.fix) {
+      console.log(`\n${c.dim}Repair with:${c.reset} cast accounts verify --fix`);
+      console.log(`${c.dim}Then log into each emptied account once (claude /login) and:${c.reset} cast accounts save <name>`);
+    } else if (bad.some((r) => r.repair === "dropped-credential")) {
+      console.log(`\n${c.dim}Emptied profiles need one login each:${c.reset} claude /login ${c.dim}then${c.reset} cast accounts save <name>`);
+    }
+    await publishAccountsInventory();
+  });
 
 accountsCmd
   .command("usage")
@@ -12307,6 +12364,7 @@ trigger
   .option("--mode <mode>", "Agent mode: apply (default, can act) or propose (read-only). Prefer --safe.")
   .option("--project <path>", "Project path for agent cwd")
   .option("--agent <type>", "Agent type: claude (default) or codex", "claude")
+  .option("--model <model>", "Model for spawned runs (claude: fable, opus, sonnet, haiku; codex: a model id). Default: the agent's saved default. Ignored by runs that inject into a session.")
   .option("--max-runtime <duration>", "Max runtime (default: 10m)")
   .option("--for <session>", "Bind the trigger to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.")
   .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. Runs stay associated: each one links back to this trigger at the top of its conversation.")
@@ -12454,6 +12512,7 @@ trigger
           target_conversation_id,
           project_path: options.project || getRealCwd(),
           agent_type: options.agent,
+          model: options.model,
           // Bind the task to this machine: only the creating device's
           // scheduler claims it (see TaskScheduler.canServeTask).
           created_device_id: deviceId(),
@@ -12497,6 +12556,7 @@ trigger
   .description("List triggers")
   .option("-s, --status <status>", "Filter by status (scheduled, running, completed, failed, paused)")
   .option("-a, --all", "Show all statuses including completed")
+  .option("--json", "Machine-readable output (full trigger rows)")
   .action(async (options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -12531,6 +12591,11 @@ trigger
         ? tasks
         : tasks.filter((t: any) => !["completed", "failed"].includes(t.status));
 
+      if (options.json) {
+        console.log(JSON.stringify(filtered, null, 2));
+        return;
+      }
+
       if (filtered.length === 0) {
         console.log(fmt.muted("No active triggers. Use --all to see completed ones."));
         return;
@@ -12558,7 +12623,12 @@ trigger
 
         // Prefer the haiku-distilled name/gist (display_title/display_summary,
         // generated server-side) — the stored title is usually prompt.slice(0,60).
-        console.log(`  ${c.cyan}${shortId}${c.reset}  ${statusStr}  ${t.display_title?.trim() || t.title}  ${scheduleInfo}`);
+        // Where a run goes: into its bound session (that session's model), or a
+        // fresh agent on the pinned model (or the agent's saved default).
+        const runsIn = t.originating_conversation_id
+          ? "inline"
+          : `${t.agent_type || "claude"}/${t.model || "default"}`;
+        console.log(`  ${c.cyan}${shortId}${c.reset}  ${statusStr}  ${t.display_title?.trim() || t.title}  ${scheduleInfo}  ${fmt.muted(runsIn)}`);
         if (t.display_summary) {
           console.log(`           ${fmt.muted(t.display_summary.slice(0, 100))}`);
         }
@@ -12673,6 +12743,7 @@ trigger
   .option("--mode <mode>", "Agent mode: apply (can act) or propose (read-only). Prefer --safe.")
   .option("--project <path>", "Project path for agent cwd")
   .option("--agent <type>", "Agent type: claude or codex")
+  .option("--model <model>", "Model for spawned runs (claude: fable, opus, sonnet, haiku; codex: a model id); 'default' clears the pin")
   .option("--max-runtime <duration>", "Max runtime (e.g., 10m)")
   .action(async (id, options) => {
     const config = readConfig();
@@ -12729,6 +12800,7 @@ trigger
     else if (options.mode !== undefined) body.mode = options.mode;
     if (options.project !== undefined) body.project_path = options.project;
     if (options.agent !== undefined) body.agent_type = options.agent;
+    if (options.model !== undefined) body.model = options.model;
     if (options.maxRuntime !== undefined) {
       const ms = parseDuration(options.maxRuntime);
       if (!ms) {
@@ -12739,7 +12811,7 @@ trigger
     }
 
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to update. Pass at least one of --prompt/--title/--in/--every/--on/--safe/--mode/--project/--agent/--max-runtime.");
+      console.error("Nothing to update. Pass at least one of --prompt/--title/--in/--every/--on/--safe/--mode/--project/--agent/--model/--max-runtime.");
       process.exit(1);
     }
 
@@ -16138,59 +16210,63 @@ plan
 
 plan
   .command("verify")
-  .description("Run verification checks on completed tasks")
+  .description("Run the repo's own typecheck, test and lint scripts; exit 1 on any failure")
   .argument("<plan_id>", "Plan short ID")
-  .option("--typecheck", "Run TypeScript type checking")
-  .option("--test", "Run test suite")
-  .option("--lint", "Run linter")
-  .option("--all", "Run all verification checks")
+  .option("--typecheck", "Run the typecheck script")
+  .option("--test", "Run the test script")
+  .option("--lint", "Run the lint script")
+  .option("--all", "Run all three")
   .action(async (planId: string, options: any) => {
     const plan = await cliPost("/cli/plans/get", { short_id: planId });
     if (!plan) { console.error("Plan not found"); process.exit(1); }
 
-    const cwd = getRealCwd();
-    const checks: { name: string; cmd: string; args: string[] }[] = [];
-
-    if (options.all || options.typecheck) {
-      checks.push({ name: "typecheck", cmd: "npx", args: ["tsc", "--noEmit"] });
+    const cwd = (await repoRootFor(getRealCwd())) ?? getRealCwd();
+    const pm = detectJsPackageManager(cwd);
+    if (!pm) {
+      console.error(`No package.json at ${cwd}; nothing to verify`);
+      process.exit(1);
     }
-    if (options.all || options.test) {
-      checks.push({ name: "test", cmd: "npm", args: ["test", "--if-present"] });
-    }
-    if (options.all || options.lint) {
-      checks.push({ name: "lint", cmd: "npx", args: ["eslint", ".", "--max-warnings=0"] });
-    }
+    let scripts: Record<string, string> = {};
+    try {
+      scripts = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf-8")).scripts ?? {};
+    } catch {}
 
-    if (checks.length === 0) {
-      checks.push({ name: "typecheck", cmd: "npx", args: ["tsc", "--noEmit"] });
-    }
+    const wanted = ["typecheck", "test", "lint"].filter((name) =>
+      options.all || options[name] || (!options.typecheck && !options.test && !options.lint && name === "typecheck"),
+    );
 
-    console.log(`\n  ${c.bold}Verifying plan ${planId}${c.reset}\n`);
+    console.log(`\n  ${c.bold}Verifying plan ${planId}${c.reset} ${fmt.muted(`(${pm.name} run …, in ${cwd})`)}\n`);
 
-    let passed = 0, failed = 0;
-    for (const check of checks) {
-      process.stdout.write(`  ${c.dim}${check.name}...${c.reset} `);
-      const result = spawnSync(check.cmd, check.args, {
-        encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], cwd, timeout: 120_000,
+    let passed = 0, failed = 0, skipped = 0;
+    for (const name of wanted) {
+      process.stdout.write(`  ${c.dim}${name}...${c.reset} `);
+      if (!scripts[name]) {
+        console.log(`${c.yellow}skip${c.reset} ${fmt.muted(`no "${name}" script in package.json`)}`);
+        skipped++;
+        continue;
+      }
+      const result = spawnSync(pm.name, ["run", name], {
+        encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], cwd, timeout: 600_000,
       });
       if (result.status === 0) {
         console.log(`${c.green}pass${c.reset}`);
         passed++;
       } else {
         console.log(`${c.red}fail${c.reset}`);
-        const output = (result.stderr || result.stdout || "").trim();
-        if (output) console.log(fmt.muted(`    ${output.split("\n").slice(0, 5).join("\n    ")}`));
+        const output = (result.stderr || result.stdout || result.error?.message || "").trim();
+        if (output) console.log(fmt.muted(`    ${output.split("\n").slice(-12).join("\n    ")}`));
         failed++;
       }
     }
 
-    console.log(`\n  ${passed} passed, ${failed} failed`);
+    console.log(`\n  ${passed} passed, ${failed} failed, ${skipped} skipped`);
     try {
       await cliPost("/cli/plans/log", {
         short_id: planId,
-        entry: `Verification: ${passed} passed, ${failed} failed (${checks.map((ch: any) => ch.name).join(", ")})`,
+        entry: `Verification: ${passed} passed, ${failed} failed, ${skipped} skipped (${wanted.join(", ")})`,
       });
     } catch {}
+    if (failed > 0) process.exit(1);
   });
 
 plan

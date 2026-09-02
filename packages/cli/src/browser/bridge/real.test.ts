@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  bridgeEndpointIfConfigured, engineBrowserFor, isRealMode, ownedRealTab, pruneRealTabs, realTabOwnership, rememberRealTab,
+  bridgeEndpointIfConfigured, engineBrowserFor, explicitTarget, extensionReady, isRealMode, ownedRealTab, pruneRealTabs, realModeHint, realTabOwnership, rememberRealTab,
   resolveRealTarget, setStickyTarget, splitTargetFlags, stickyTarget,
 } from "./real.js";
 import * as http from "node:http";
@@ -64,6 +64,42 @@ describe("sticky target", () => {
     setStickyTarget(null, "real");
     expect(isRealMode({}, null)).toBe(true);
     expect(isRealMode({}, "session:a")).toBe(false);
+  });
+
+  test("the human's Chrome is the default while the extension is connected, and the choice settles per session", () => {
+    // A live host (this process stands in for it) holding the extension.
+    writeBridgeState({ port: 41999, token: "t".repeat(64), hostPid: process.pid, extensionConnected: true, extensionSeenAt: Date.now() });
+    expect(extensionReady()).toBe(true);
+    expect(explicitTarget("session:a")).toBeNull();
+    expect(stickyTarget("session:a")).toBe("real");
+    expect(isRealMode({}, "session:a")).toBe(true);
+    // Settled: the extension going away does not move a session that already chose.
+    expect(explicitTarget("session:a")).toBe("real");
+    writeBridgeState({ port: 41999, token: "t".repeat(64), hostPid: process.pid, extensionConnected: false, extensionSeenAt: Date.now() });
+    expect(extensionReady()).toBe(false);
+    expect(isRealMode({}, "session:a")).toBe(true);
+    expect(isRealMode({}, "session:b")).toBe(false);
+    expect(explicitTarget("session:b")).toBe("clone");
+  });
+
+  test("a dead host never makes the real Chrome the default", () => {
+    writeBridgeState({ port: 41999, token: "t".repeat(64), hostPid: 2 ** 22 + 12345, extensionConnected: true, extensionSeenAt: Date.now() });
+    expect(extensionReady()).toBe(false);
+    expect(stickyTarget("session:a")).toBe("clone");
+  });
+
+  test("the sign-in hint names the step that fits the bridge's state", () => {
+    expect(realModeHint("session:a")).toContain("cast browser extension setup");
+    writeBridgeState({ port: 41999, token: "t".repeat(64), hostPid: 2 ** 22 + 12345, extensionConnected: false, extensionSeenAt: Date.now() });
+    expect(realModeHint("session:a")).toContain("not connected right now");
+    // A session that settled on the clone before the extension came is told the way over.
+    setStickyTarget("session:a", "clone");
+    writeBridgeState({ port: 41999, token: "t".repeat(64), hostPid: process.pid, extensionConnected: true, extensionSeenAt: Date.now() });
+    expect(realModeHint("session:a")).toContain("cast browser target real");
+    // A fresh session defaults to the real Chrome, so it needs no hint; neither does one that chose it.
+    expect(realModeHint("session:b")).toBeNull();
+    setStickyTarget("session:a", "real");
+    expect(realModeHint("session:a")).toBeNull();
   });
 });
 

@@ -3,7 +3,7 @@ import type http from "http";
 import type { Duplex } from "stream";
 import { WebSocketServer, WebSocket } from "ws";
 import { TmuxControlClient, shellSafe, type ControlClientMode } from "./controlClient.js";
-import { tmuxRun, hasTmux } from "../tmux.js";
+import { tmuxRunAsync, hasTmux } from "../tmux.js";
 import { isManagedTmuxName } from "../resumeCommand.js";
 
 export const TERM_SESSION_PREFIX = "cast-term-";
@@ -49,29 +49,25 @@ export interface TerminalSessionInfo {
   attached: number;
 }
 
-/** List the panel's own tmux sessions (cast-term-*). */
-export function listTerminalSessions(): TerminalSessionInfo[] {
-  // NB: separators must be printable — tmux sanitizes control chars (tabs
-  // included) to "_" in format output. Fixed-width fields come first; the
-  // path goes LAST and is re-joined, since it's the one field that may itself
-  // contain the separator.
-  const r = tmuxRun([
-    "list-sessions",
-    "-F",
-    "#{session_name}|#{session_created}|#{session_attached}|#{session_path}",
-  ]);
-  if (r.status !== 0) return [];
+// NB: separators must be printable: tmux sanitizes control chars (tabs
+// included) to "_" in format output. Fixed width fields come first; the path
+// goes LAST and is re-joined, since it is the one field that may itself
+// contain the separator. pane_current_command expands through the session's
+// active pane, so one list call carries it and no per session query is needed.
+const SESSION_LIST_FORMAT = "#{session_name}|#{session_created}|#{session_attached}|#{pane_current_command}|#{session_path}";
+
+/** Parse `tmux list-sessions -F SESSION_LIST_FORMAT` output: the panel's own
+ *  sessions (cast-term-*), oldest first. */
+export function parseTerminalSessionRows(stdout: string): TerminalSessionInfo[] {
   const out: TerminalSessionInfo[] = [];
-  for (const line of r.stdout.split("\n")) {
-    const [name, created, attached, ...pathParts] = line.split("|");
-    const path = pathParts.join("|");
+  for (const line of stdout.split("\n")) {
+    if (!line.trim()) continue;
+    const [name, created, attached, command, ...pathParts] = line.split("|");
     if (!name || !name.startsWith(TERM_SESSION_PREFIX)) continue;
-    // Pane command comes from a second query to keep the first one cheap.
-    const cmd = tmuxRun(["display-message", "-p", "-t", name, "-F", "#{pane_current_command}"]);
     out.push({
       name,
-      path: path ?? "",
-      command: cmd.status === 0 ? cmd.stdout.trim() : "",
+      path: pathParts.join("|"),
+      command: (command ?? "").trim(),
       created: (parseInt(created ?? "", 10) || 0) * 1000,
       attached: parseInt(attached ?? "", 10) || 0,
     });
@@ -79,37 +75,54 @@ export function listTerminalSessions(): TerminalSessionInfo[] {
   return out.sort((a, b) => a.created - b.created);
 }
 
-export function killTerminalSession(name: string): boolean {
+/** List the panel's own tmux sessions (cast-term-*). One tmux call, off the loop. */
+export async function listTerminalSessions(): Promise<TerminalSessionInfo[]> {
+  const r = await tmuxRunAsync(["list-sessions", "-F", SESSION_LIST_FORMAT]);
+  if (r.status !== 0) return [];
+  return parseTerminalSessionRows(r.stdout);
+}
+
+export async function killTerminalSession(name: string): Promise<boolean> {
   if (!name.startsWith(TERM_SESSION_PREFIX)) return false;
   try {
     shellSafe(name);
   } catch {
     return false;
   }
-  return tmuxRun(["kill-session", "-t", name]).status === 0;
+  return (await tmuxRunAsync(["kill-session", "-t", name])).status === 0;
 }
 
 // Panel terminals outlive their tabs by design (close = detach), so without a
-// reaper every "+" ever clicked accumulates as a live tmux session forever —
+// reaper every "+" ever clicked accumulates as a live tmux session forever,
 // and the panel restores all of them on open. Reap sessions nobody is attached
-// to once they've been idle past the TTL; an attached client or recent
+// to once they have been idle past the TTL; an attached client or recent
 // activity always keeps a session alive. Callers: daemon boot + periodic.
 const REAP_IDLE_MS = 3 * 24 * 60 * 60 * 1000;
+const REAP_LIST_FORMAT = "#{session_name}|#{session_attached}|#{session_activity}";
 
-export function reapStaleTerminalSessions(log?: (msg: string) => void): number {
-  const r = tmuxRun(["list-sessions", "-F", "#{session_name}|#{session_attached}|#{session_activity}"]);
-  if (r.status !== 0) return 0;
-  const now = Date.now();
-  let reaped = 0;
-  for (const line of r.stdout.split("\n")) {
+/** The panel sessions `tmux list-sessions -F REAP_LIST_FORMAT` output says are
+ *  detached and idle past the TTL, with their idle time. */
+export function staleTerminalSessions(stdout: string, now: number): Array<{ name: string; idleMs: number }> {
+  const out: Array<{ name: string; idleMs: number }> = [];
+  for (const line of stdout.split("\n")) {
     const [name, attached, activity] = line.split("|");
     if (!name || !name.startsWith(TERM_SESSION_PREFIX)) continue;
     if ((parseInt(attached ?? "", 10) || 0) > 0) continue;
     const lastActivity = (parseInt(activity ?? "", 10) || 0) * 1000;
     if (now - lastActivity < REAP_IDLE_MS) continue;
-    if (killTerminalSession(name)) {
+    out.push({ name, idleMs: now - lastActivity });
+  }
+  return out;
+}
+
+export async function reapStaleTerminalSessions(log?: (msg: string) => void): Promise<number> {
+  const r = await tmuxRunAsync(["list-sessions", "-F", REAP_LIST_FORMAT]);
+  if (r.status !== 0) return 0;
+  let reaped = 0;
+  for (const { name, idleMs } of staleTerminalSessions(r.stdout, Date.now())) {
+    if (await killTerminalSession(name)) {
       reaped++;
-      log?.(`[TERM] Reaped idle terminal session ${name} (idle ${Math.round((now - lastActivity) / 3_600_000)}h)`);
+      log?.(`[TERM] Reaped idle terminal session ${name} (idle ${Math.round(idleMs / 3_600_000)}h)`);
     }
   }
   return reaped;
@@ -213,17 +226,35 @@ export function handleTerminalHttp(
     return true;
   }
 
+  // The tmux routes answer off the loop. The request listener stays
+  // synchronous (the same shape handleVaultHttp uses on this server); a route
+  // that throws before its headers went out answers 500 instead of hanging.
+  const dispatch = (route: () => Promise<void>): void => {
+    void route().catch((err) => {
+      opts.log(`[TERM] ${req.method} ${url} failed: ${(err as Error)?.message ?? err}`);
+      if (!res.headersSent) {
+        res.writeHead(500, headers);
+        res.end(JSON.stringify({ error: "server error" }));
+      } else res.end();
+    });
+  };
+
   if (req.method === "GET" && url.startsWith("/term/sessions")) {
-    res.writeHead(200, headers);
-    res.end(JSON.stringify({ sessions: listTerminalSessions(), tmux: hasTmux() }));
+    dispatch(async () => {
+      const sessions = await listTerminalSessions();
+      res.writeHead(200, headers);
+      res.end(JSON.stringify({ sessions, tmux: hasTmux() }));
+    });
     return true;
   }
 
   if (req.method === "POST" && url.startsWith("/term/kill")) {
     const name = new URL(url, "http://localhost").searchParams.get("name") ?? "";
-    const ok = killTerminalSession(name);
-    res.writeHead(ok ? 200 : 400, headers);
-    res.end(JSON.stringify({ ok }));
+    dispatch(async () => {
+      const ok = await killTerminalSession(name);
+      res.writeHead(ok ? 200 : 400, headers);
+      res.end(JSON.stringify({ ok }));
+    });
     return true;
   }
 
@@ -298,7 +329,7 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, live: Set<
   const helloTimeout = setTimeout(() => fail("hello timeout"), 10_000);
   helloTimeout.unref?.();
 
-  ws.once("message", (raw, isBinary) => {
+  ws.once("message", async (raw, isBinary) => {
     clearTimeout(helloTimeout);
     if (isBinary) return fail("expected hello");
     let hello: HelloMessage;
@@ -325,7 +356,8 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, live: Set<
       if (!name.startsWith(TERM_SESSION_PREFIX)) return fail("bad session name");
       const cwd = typeof hello.cwd === "string" && hello.cwd.startsWith("/") ? hello.cwd : undefined;
       // Fresh vs reattach decides the seeding strategy (see controlClient).
-      const fresh = tmuxRun(["has-session", "-t", name]).status !== 0;
+      const fresh = (await tmuxRunAsync(["has-session", "-t", name])).status !== 0;
+      if (closed) return;
       mode = { kind: "create", sessionName: name, cwd, fresh };
     } else if (hello.mode === "attach") {
       const target = hello.target ?? "";
@@ -333,7 +365,10 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, live: Set<
       // manages, or the panel's own terminals. Never arbitrary tmux sessions.
       if (!/^[a-zA-Z0-9_.:-]+$/.test(target)) return fail("bad target");
       if (!isManagedTmuxName(target) && !target.startsWith(TERM_SESSION_PREFIX)) return fail("target not allowed");
-      if (tmuxRun(["has-session", "-t", target]).status !== 0) return fail("session not found");
+      const exists = (await tmuxRunAsync(["has-session", "-t", target])).status === 0;
+      // The socket may have gone away during the probe.
+      if (closed) return;
+      if (!exists) return fail("session not found");
       mode = { kind: "attach", target, readOnly: !hello.interactive };
     } else {
       return fail("bad mode");

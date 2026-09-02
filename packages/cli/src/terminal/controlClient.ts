@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "../proc.js";
 import { ControlModeParser, toSendKeysHex, type ControlEvent } from "./controlProtocol.js";
-import { tmuxRun } from "../tmux.js";
+import { tmuxRun, tmuxRunAsync } from "../tmux.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const COMMAND_TIMEOUT_MS = 5000;
@@ -384,7 +384,7 @@ export class TmuxControlClient {
       child.once("exit", () => {
         clearTimeout(fallback);
         if (this.child === child) this.child = null;
-        this.verifyRestore();
+        void this.verifyRestore();
       });
     }
   }
@@ -411,7 +411,7 @@ export class TmuxControlClient {
         }
       } catch {}
     }
-    this.verifyRestore();
+    this.verifyRestoreSync();
     this.destroyChild();
   }
 
@@ -421,18 +421,43 @@ export class TmuxControlClient {
    * the window and repair it from outside if needed: resize-window flips the
    * window to manual sizing, so the option is unset again right after and a
    * later real client still gets to impose its size.
+   *
+   * The check is one probe and the repairs its answer calls for, as data, so
+   * the async path (a panel detach, on the daemon's loop) and the sync path
+   * (daemon shutdown, which cannot wait for a promise) share one policy.
    */
-  private verifyRestore(): void {
-    if (!this.restoreSize || this.mode.kind !== "attach") return;
+  private restoreProbe(): { target: string; args: string[] } | null {
+    if (!this.restoreSize || this.mode.kind !== "attach") return null;
     const target = this.mode.target;
-    const [w, h] = this.restoreSize.split("x");
+    return { target, args: ["display-message", "-p", "-t", target, "#{window_width}x#{window_height}|#{session_attached}"] };
+  }
+
+  private restoreRepairs(target: string, probeOut: string): string[][] {
+    const [size, attached] = probeOut.trim().split("|");
+    // Another client is attached: the window is theirs to size.
+    if (!size || size === this.restoreSize || parseInt(attached ?? "0", 10) > 0) return [];
+    const [w, h] = this.restoreSize!.split("x");
+    return [
+      ["resize-window", "-t", target, "-x", w!, "-y", h!],
+      ["set-option", "-w", "-t", target, "-u", "window-size"],
+    ];
+  }
+
+  private async verifyRestore(): Promise<void> {
+    const probe = this.restoreProbe();
+    if (!probe) return;
     try {
-      const now = tmuxRun(["display-message", "-p", "-t", target, "#{window_width}x#{window_height}|#{session_attached}"]).stdout.trim();
-      const [size, attached] = now.split("|");
-      // Another client is attached: the window is theirs to size.
-      if (!size || size === this.restoreSize || parseInt(attached ?? "0", 10) > 0) return;
-      tmuxRun(["resize-window", "-t", target, "-x", w!, "-y", h!]);
-      tmuxRun(["set-option", "-w", "-t", target, "-u", "window-size"]);
+      const now = (await tmuxRunAsync(probe.args)).stdout;
+      for (const args of this.restoreRepairs(probe.target, now)) await tmuxRunAsync(args);
+    } catch {}
+  }
+
+  private verifyRestoreSync(): void {
+    const probe = this.restoreProbe();
+    if (!probe) return;
+    try {
+      const now = tmuxRun(probe.args).stdout;
+      for (const args of this.restoreRepairs(probe.target, now)) tmuxRun(args);
     } catch {}
   }
 

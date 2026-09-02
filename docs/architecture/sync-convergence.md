@@ -63,11 +63,19 @@ client:
 
 ### C1 Facts and channels
 
-**Replication channels deliver the working set and keep it current.** Unchanged
-machinery: the live window query (`listInboxSessions`) delivers row bodies; the sync log
-delivers semantic transitions per scope with ordered positions; the completeness crawl
-and the dismissed and stashed reconciles remain the floor and the subtractive healers
-for hide state; `getInboxSessionsByIds` hydrates named ids.
+**Replication channels deliver the working set and keep it current.** The live window
+query (`listInboxSessions`) delivers row bodies; the sync log delivers every semantic
+transition per scope with ordered positions — hides, restores, pins, renames and hard
+deletes included — and is the only healer for hide state; the completeness floor
+(`listInboxSessionsPaginated`) is cut once per cold or resynced cache and stamps
+`backfilledAt`; `getInboxSessionsByIds` hydrates named ids. There is no crawl on a
+timer and no subtractive reconcile: the dismissed and stashed reconcile crawls, whose
+clear pass read a stale hidden set as a restore, were removed (ct-47927, 2026-09-02).
+The one bounded reconcile left runs only when the log had a hole (retention passed the
+cursor, or no cursor existed): the recut floor cannot carry what left the inbox scan
+while the client was away, so the cached rows it did not return are re-read by id
+through the same authorized byIds path the log applier uses — returned rows land with
+their stamps, omitted ids are gone or foreign and prune.
 
 **The liveness overlay is the fact writer.** `sessionsLiveness` (and its team twin)
 carries FACTS, never verdicts, for every row the scan shows: `agent_status`, `is_idle`,
@@ -177,7 +185,7 @@ APIs, no BigInt) imported by Convex, the web store, mobile, and the daemon. It e
   the fold differently are diverged, and the digest must say so. A property test
   asserts a fold flip with unchanged buckets changes the digest.
 - `computeBucketStale`: the time flip stamp (C2).
-- `INBOX_PROJECTION_VERSION = 2`, carried as `v` in every projection envelope. Golden
+- `INBOX_PROJECTION_VERSION = 3`, carried as `v` in every projection envelope. Golden
   fixtures (input rows to expected buckets, fold, and digest) are pinned in the shared
   package tests, and a second assertion ties the fixture hash to the version constant:
   a behavior change fails the fixtures, and updating the fixtures without bumping the
@@ -245,7 +253,7 @@ today's transport behavior: with show old off it omits rows under the fold cut, 
 deployed bundles keep receiving today's payload and today's rendered set, and the live
 channel does not grow by hundreds of enriched row bodies. This is safe because
 membership never depends on the payload: the replica already holds fold row bodies (the
-cache never prunes and the completeness crawl is the floor), the overlay keeps their
+cache never prunes and the completeness floor was cut), the overlay keeps their
 facts fresh at about thirty bytes per row, and a replica that lacks one heals it by id
 (C7). Bodies for show old browsing come from `listInboxSessionsPaginated` on demand.
 
@@ -312,8 +320,8 @@ while the server and the CLI kept them working.
 
 **Feeder parity.** `useSyncCore(profile)` owns the full feeder mount set: sync log
 applier, live window, liveness overlay, team feeders (mounted per scope), recovery
-probes, completeness crawl, dismissed and stashed reconciles, session decisions, client
-state, current user, buckets. Web `DashboardLayout` and mobile `StoreSyncBridge` both
+probes, the completeness floor, the stub sweep, session decisions, client state,
+current user, buckets. Web `DashboardLayout` and mobile `StoreSyncBridge` both
 mount it; a guard asserts every registered feeder is in the profile. The recovery poll
 calls the live window with the SAME args as the subscription, so a stalled subscription
 cannot flap the store between two payload shapes. Mobile pauses the set on AppState
@@ -323,12 +331,15 @@ never re-ticks on iOS today.
 **Recovery discipline.** Every subscription pairs with an error handler and a
 controller backed probe; no feeder adds a bespoke interval beyond the ones named here.
 
-**Grouping never crosses a section boundary.** A subagent is never its own member and
-rides its present parent. An agent team teammate is a member (it counts in its own
-bucket, on the server and on every replica) and nests under its lead only while the two
-share a bucket; otherwise it renders flat in its own section. A section header count is
-therefore the count of rows placed in that bucket, which is what the tally and the CLI
-report.
+**A team files as one group.** A subagent is never its own member and rides its
+present parent. An agent team teammate is a member (it holds a seat, it lists, and its
+own `work_state` is what an orchestrator watches to see a worker finish) but it never
+stands alone: while its lead is a member too, the teammate takes the lead's bucket
+(`rideLeadPlacements`) and the lead's fold (inside `computeFold`), on the server, in
+the CLI stamping and on every replica, so the team nests under the lead card wherever
+the lead files and a section header count is the rows placed in that bucket, nested
+ones included. A teammate the viewer pinned, stashed or dismissed on its own keeps that
+place; a teammate whose lead is absent keeps its own placement and renders flat.
 
 ### C6 The compare
 
@@ -353,9 +364,15 @@ diff does all three.
    held in production and the compare stayed dark. A steady state apply is not catch
    up, because the overlay re-executes on the same server change and re-stamps; the
    gate only needs to outlast the pair of pushes one change produces.
-5. The replica is complete for the scope: the completeness crawl has stamped
+5. The replica is complete for the scope: the completeness floor has stamped
    `backfilledAt`. A cold device compares nothing until it can honestly claim the set.
 6. Scope is covered (personal scope; team scope is out, C4).
+
+**A killed row never asks.** Kill is triage: nobody can answer a torn down session's
+prompt or pending decide, so the shared placement ignores an ask on a killed row (a killed
+pinned row files under Pinned). The rule lives in the shared module so the server stamp and
+the replica cannot disagree on it; the replica's asking derivation and the web decision
+queue skip killed rows for the same reason.
 
 **A capped window excuses membership only.** When a window overflowed its cap on either
 side, a row that only that window admits may be missing on one side and selected on the
@@ -462,9 +479,9 @@ metric fires when `loadCache` disables the cache so that noise is measurable.
   is derived on both sides from replicated inputs.
 - No client cache pruning (standing decision). The cache beyond the working set backs
   search and reopening; the selection keeps it out of every count.
-- No CRDTs, no vector clocks. Single writer per fact, per scope ordered positions, and
-  subtractive reconciles give convergence; the work is making inputs replicated data
-  and the computation shared.
+- No CRDTs, no vector clocks. Single writer per fact and per scope ordered positions
+  give convergence; the work is making inputs replicated data and the computation
+  shared.
 - No team scope compare yet. The replica cannot evaluate team visibility inputs; the
   heartbeat counts the scope as uncovered rather than pretending.
 - No change to workspace or access semantics.

@@ -27,20 +27,20 @@ const state = (tabs: Record<string, string>, active: string | null = null): Inst
 });
 
 describe("ownerCandidates", () => {
-  test("session uuid yields session: and env: keys", () => {
-    expect(ownerCandidates({ session_uuid: "abc-123" }, () => null)).toEqual([
+  test("session uuid yields session: and env: keys", async () => {
+    expect(await ownerCandidates({ session_uuid: "abc-123" }, async () => null)).toEqual([
       "session:abc-123",
       "env:abc-123",
     ]);
   });
 
-  test("tmux session resolves to a pane key", () => {
-    expect(ownerCandidates({ tmux_session: "cc-agent-1" }, () => "%7")).toEqual(["pane:%7"]);
+  test("tmux session resolves to a pane key", async () => {
+    expect(await ownerCandidates({ tmux_session: "cc-agent-1" }, async () => "%7")).toEqual(["pane:%7"]);
   });
 
-  test("hostile tmux names never reach the pane lookup", () => {
+  test("hostile tmux names never reach the pane lookup", async () => {
     let asked = false;
-    ownerCandidates({ tmux_session: "x; rm -rf /" }, () => ((asked = true), "%1"));
+    await ownerCandidates({ tmux_session: "x; rm -rf /" }, async () => ((asked = true), "%1"));
     expect(asked).toBe(false);
   });
 });
@@ -119,7 +119,7 @@ beforeAll(async () => {
     connect: async () => cdp as unknown as CdpConnection,
     listTargets: async () => targets,
   };
-  deps = { engine: cdpWatchEngine(cdpDeps), paneIdFor: () => null };
+  deps = { engine: cdpWatchEngine(cdpDeps), paneIdFor: async () => null };
   server = http.createServer((_req, res) => {
     res.writeHead(404);
     res.end();
@@ -242,7 +242,7 @@ describe("watch socket", () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const slowDeps: WatchServerDeps = {
-      paneIdFor: () => null,
+      paneIdFor: async () => null,
       engine: cdpWatchEngine({
         ...cdpDeps,
         connect: async () => {
@@ -329,7 +329,7 @@ describe("polling engine", () => {
       res.writeHead(404);
       res.end();
     });
-    const h = attachWatchServer(srv, { token: TOKEN, log: () => {} }, { engine, paneIdFor: () => null });
+    const h = attachWatchServer(srv, { token: TOKEN, log: () => {} }, { engine, paneIdFor: async () => null });
     await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
     const p = (srv.address() as AddressInfo).port;
     try {
@@ -396,7 +396,7 @@ describe("engine adapter", () => {
       res.writeHead(404);
       res.end();
     });
-    const h = attachWatchServer(srv, { token: TOKEN, log: () => {} }, { engine, paneIdFor: () => null });
+    const h = attachWatchServer(srv, { token: TOKEN, log: () => {} }, { engine, paneIdFor: async () => null });
     await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
     const p = (srv.address() as AddressInfo).port;
     try {
