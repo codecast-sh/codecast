@@ -100,6 +100,17 @@ describe("getRecentUserInputs", () => {
     expect(texts.some((t) => t.startsWith("Adversarially"))).toBe(false);
   });
 
+  test("skips a slash command's expanded body along with its wrapper", async () => {
+    const conv = { _id: "c1", _creationTime: 100, user_id: "u1", updated_at: 900 };
+    const messages = [
+      { _id: "w", conversation_id: "c1", role: "user", content: "<command-message>commit</command-message>\n<command-name>/commit</command-name>", timestamp: 200 },
+      { _id: "x", conversation_id: "c1", role: "user", content: "## Task\n\nAnalyze ALL uncommitted changes and create topical commits.", timestamp: 201 },
+      { _id: "t", conversation_id: "c1", role: "user", content: "also bump the desktop version", timestamp: 300 },
+    ];
+    const texts = (await collect([conv], messages)).map((r) => r.text);
+    expect(texts).toEqual(["also bump the desktop version"]);
+  });
+
   test("isMachineDrivenConversation covers every agent-authored session shape", () => {
     expect(isMachineDrivenConversation({})).toBe(false);
     expect(isMachineDrivenConversation({ forked_from: "x" } as any)).toBe(false);

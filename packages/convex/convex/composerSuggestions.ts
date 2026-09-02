@@ -168,14 +168,24 @@ export const getRecentUserInputs = internalQuery({
       const opening = await typed().order("asc").take(OPENING_ROWS);
       const newest = await typed().order("desc").take(NEWEST_ROWS);
       const seen = new Set<string>();
-      for (const m of [...opening, ...newest]) {
-        if (seen.has(m._id)) continue;
-        seen.add(m._id);
+      const rows = [...opening, ...newest]
+        .filter((m) => (seen.has(m._id) ? false : (seen.add(m._id), true)))
+        .sort((a, b) => a.timestamp - b.timestamp);
+      // A slash command lands as two user rows: the `<command-message>`
+      // wrapper, then the command's expanded .md body (nothing the user
+      // typed, but no flag marks it). The wrapper is dropped as markup
+      // below; the row that follows it is the expansion.
+      let afterCommand = false;
+      for (const m of rows) {
+        const text = (m.content || "").trim();
+        const isCommand = /^<command-(?:message|name)>/.test(text);
+        const isExpansion = afterCommand;
+        afterCommand = isCommand;
+        if (isExpansion) continue;
         // A fork copies its parent's history with the original timestamps,
         // so rows older than the fork itself are the parent's — read once,
         // from the parent.
         if (conv.forked_from && m.timestamp < conv._creationTime) continue;
-        const text = (m.content || "").trim();
         if (!text || m.tool_results?.length || m.is_encrypted) continue;
         // The cap only excludes pasted walls (logs, transcripts). A long
         // typed directive — the multi-sentence "polish this to perfection"
@@ -526,7 +536,7 @@ patterns — generalized habits:
 - "count": how many distinct messages express this habit.
 
 prompts — reusable directives:
-- "text": the FULL text of a standing instruction the developer sends repeatedly across sessions in the same or nearly the same words — how to work: the quality bar, the process, how to iterate, validate, plan, verify. The test is portability: the prompt would make sense sent into an unrelated project. A message that names a particular feature, file, metric, or question is a request, not a reusable prompt, however many times it was sent. Quote it in full, in the developer's own wording; when it arrives appended to a task, quote only the standing part; pick the most complete instance when wordings differ slightly. Do not shorten or paraphrase it.
+- "text": the FULL text of a standing instruction the developer sends repeatedly across sessions in the same or nearly the same words — how to work: the quality bar, the process, how to iterate, validate, plan, verify. Two tests, both required. Portability: the prompt would make sense sent into an unrelated project; a message that names a particular feature, file, metric, or question is a request, not a reusable prompt, and repetition does not make it one. Authorship: it reads as something the developer typed, not a template or generated body. Quote it in full, in the developer's own wording; when it arrives appended to a task, quote only the standing part; pick the most complete instance when wordings differ slightly. Do not shorten or paraphrase it.
 - "count": how many distinct messages contain this prompt or a near-identical version.
 
 Rules:
