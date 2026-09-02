@@ -25,7 +25,8 @@ import { browserHome } from "../profile.js";
 import { armRecorder } from "../observe.js";
 import { isRealSession, type EngineOptions } from "../engine.js";
 import {
-  bridgeEndpoint, bridgeStatus, bridgeWsUrl, ensureBridgeHost, proveBridgeHost, readBridgeState, type BridgeState, type ProvenBridge,
+  bridgeEndpoint, bridgeWsUrl, ensureBridgeHost, proveBridgeHost, readBridgeState, waitForExtension, type BridgeState,
+  type ProvenBridge,
 } from "./host.js";
 
 // ---------------------------------------------------------------------------
@@ -169,6 +170,10 @@ export function realTabOwnership(sessionKey: string | null): { mine?: string; ot
 // Reaching the real browser
 // ---------------------------------------------------------------------------
 
+/** How long a host this process just started may wait for the extension to
+ *  reconnect before it is declared absent. */
+export const EXTENSION_RECONNECT_GRACE_MS = 8_000;
+
 /**
  * A ready bridge: host up and the extension on the other end. Failing here,
  * with the setup instructions, beats failing on the first verb with less
@@ -177,12 +182,16 @@ export function realTabOwnership(sessionKey: string | null): { mine?: string; ot
 export async function requireRealBridge(): Promise<ProvenBridge> {
   requireBridgeConfigured();
   const state = await ensureBridgeHost();
-  const status = await bridgeStatus(state);
+  // A host that just came up has no extension yet: the extension finds it
+  // within seconds on its own (host.ts waitForExtension), so the first real
+  // command after a host restart waits instead of failing with the
+  // instructions for a machine that was never paired.
+  const status = await waitForExtension(state, state.started ? EXTENSION_RECONNECT_GRACE_MS : 0);
   if (!status.extensionConnected) {
     throw new Error(
       "the cast bridge extension is not connected to this machine's bridge host.\n" +
-        "  In Chrome: check the extension is loaded (chrome://extensions) and that its options\n" +
-        "  hold the current token and port — `cast browser extension setup` prints both.",
+        "  In Chrome: check the extension is loaded (chrome://extensions), then run\n" +
+        "  `cast browser extension setup`; it hands the extension the current token and port.",
     );
   }
   return state;

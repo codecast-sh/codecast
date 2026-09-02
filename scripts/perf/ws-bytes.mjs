@@ -32,6 +32,20 @@ const send = (method, params) => new Promise((res) => {
 const queryNames = new Map(); // queryId -> udfPath
 const byQuery = new Map();    // udfPath -> { bytes, frames }
 let total = 0, frames = 0;
+// A Transition above the socket's frame size ships as TransitionChunk parts
+// (transitionId, partNumber, totalParts, chunk); the query attribution below
+// needs the reassembled message, so buffer the parts and account the whole
+// once the last one lands. The raw bytes still count per frame.
+const chunks = new Map(); // transitionId -> { parts: string[], seen: number }
+function attribute(m) {
+  if (m.type !== "Transition") return;
+  for (const mod of m.modifications ?? []) {
+    const name = queryNames.get(mod.queryId) ?? `query#${mod.queryId}`;
+    const size = JSON.stringify(mod).length;
+    const e = byQuery.get(name) ?? { bytes: 0, frames: 0 };
+    e.bytes += size; e.frames += 1; byQuery.set(name, e);
+  }
+}
 ws.addEventListener("message", (ev) => {
   const d = JSON.parse(ev.data);
   if (d.method === "Network.webSocketFrameSent") {
@@ -45,14 +59,18 @@ ws.addEventListener("message", (ev) => {
     total += raw.length; frames++;
     try {
       const m = JSON.parse(raw);
-      if (m.type === "Transition") {
-        for (const mod of m.modifications ?? []) {
-          const name = queryNames.get(mod.queryId) ?? `query#${mod.queryId}`;
-          const size = JSON.stringify(mod).length;
-          const e = byQuery.get(name) ?? { bytes: 0, frames: 0 };
-          e.bytes += size; e.frames += 1; byQuery.set(name, e);
+      if (m.type === "TransitionChunk") {
+        const c = chunks.get(m.transitionId) ?? { parts: new Array(m.totalParts).fill(null), seen: 0 };
+        if (c.parts[m.partNumber] === null) c.seen++;
+        c.parts[m.partNumber] = m.chunk;
+        chunks.set(m.transitionId, c);
+        if (c.seen === m.totalParts) {
+          chunks.delete(m.transitionId);
+          try { attribute(JSON.parse(c.parts.join(""))); } catch {}
         }
+        return;
       }
+      attribute(m);
     } catch {}
   }
 });

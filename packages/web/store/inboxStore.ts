@@ -5133,6 +5133,9 @@ export type SyncOpts = {
   // every push. List such a field here to exclude it from the version key. Safe
   // to omit — a mistake here only costs an extra render, never a dropped update.
   ignoreFields?: string[];
+  // Non-scalar fields the identity reuse compares by content (a server-joined
+  // object that changes with no scalar on the row: projects.task_counts).
+  deepFields?: readonly string[];
   // Fields owned by a separate overlay channel (syncOverlay), not the base
   // payload. On a base sync these keep their previous (overlay-set) value rather
   // than being clobbered by the base's null — so the base list and the liveness
@@ -8325,10 +8328,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
     let { table, pending } = applySyncTable(
       field, incoming, base.pending, prevCollection,
-      (config.isDelta || config.ignoreFields || config.preserveFields || config.pruneAbsentScope)
+      (config.isDelta || config.ignoreFields || config.deepFields || config.preserveFields || config.pruneAbsentScope)
         ? {
             isDelta: config.isDelta,
             ignoreFields: config.ignoreFields,
+            deepFields: config.deepFields as string[] | undefined,
             preserveFields: config.preserveFields,
             pruneAbsentScope: config.pruneAbsentScope,
           }

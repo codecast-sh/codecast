@@ -16,7 +16,7 @@ import { fmt, icons } from "../../colors.js";
 import { spawn } from "../../proc.js";
 import {
   bridgeStatePath, bridgeStatus, bridgeWsUrl, ensureBridgeConfig, ensureBridgeHost, isHostAlive, probeHost, readBridgeState,
-  rotateBridgeToken, runBridgeHost, stopBridgeHost,
+  rotateBridgeToken, runBridgeHost, stopBridgeHost, waitForExtension, type BridgeHostStatus,
 } from "./host.js";
 import { bridgePairingUrl } from "./protocol.js";
 import { setStickyTarget, stickyTarget } from "./real.js";
@@ -63,14 +63,22 @@ export interface BridgeCommandDeps {
 export function targetFlags(cmd: Command): Command {
   return cmd
     .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)");
+    .option("--clone", "Act on the agent browser (overrides `target real`)");
 }
+
+/** One line for a connected extension, the same wherever it is reported. */
+function connectedLine(s: BridgeHostStatus): string {
+  return `${OK} extension connected${s.extensionVersion ? ` (v${s.extensionVersion}, protocol ${s.extensionProtocol})` : ""}`;
+}
+
+/** How long `setup` waits for the extension after handing Chrome the pairing URL. */
+const PAIRING_WAIT_MS = 10_000;
 
 export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): void {
   const { me } = deps;
 
   br.command("target [mode]")
-    .description("Which browser the verbs act on: clone (the managed copy, default) or real (the human's own Chrome through the extension; a session acts only on tabs it opened)")
+    .description("Which browser the verbs act on: clone (the agent browser, default) or real (the human's own Chrome through the extension; a session acts only on tabs it opened)")
     .action(async (mode?: string) => {
       if (!mode) {
         const cur = stickyTarget(me());
@@ -80,7 +88,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       }
       if (mode !== "real" && mode !== "clone") die(`unknown target '${mode}'`, "use `real` or `clone`");
       setStickyTarget(me(), mode);
-      console.log(`${OK} verbs now act on the ${mode === "real" ? "real Chrome (extension bridge)" : "managed clone"}${me() ? " for this session" : ""}`);
+      console.log(`${OK} verbs now act on the ${mode === "real" ? "real Chrome (extension bridge)" : "agent browser"}${me() ? " for this session" : ""}`);
       if (mode === "real" && !readBridgeState()?.token) {
         console.log(`${WARN} the bridge is not set up yet — run \`cast browser extension setup\``);
       }
@@ -95,9 +103,9 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
   // tell a bridge token from any other hex; the pairing URL carries it too.
   ext
     .command("setup")
-    .description("Start the bridge host and open the extension's options in Chrome with the token filled in")
+    .description("Start the bridge host and hand the extension its token: opens the extension's options in Chrome with the token filled in")
     .option("--json", "Machine-readable output (does not open Chrome)")
-    .option("--show-token", "Print the token and the pairing URL, for pasting into the extension by hand")
+    .option("--show-token", "Print the token and the pairing URL, for entering into the extension by hand")
     .action(async (o: { json?: boolean; showToken?: boolean }) => {
       ensureBridgeConfig();
       let state;
@@ -113,34 +121,42 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
         return;
       }
       // The extension has a fixed ID, so its options page has a fixed URL:
-      // opened with the token in the fragment, the page saves it and connects.
-      // Chrome shows an error page at that URL until the extension is loaded,
-      // so the install steps stay on screen as the fallback.
-      const opened = openInChrome(url);
+      // opened with the token in the fragment, the page saves it and
+      // connects. Nothing here can see whether Chrome showed that page or an
+      // error (the extension is not loaded yet), so the host is asked: the
+      // extension connecting is the one proof the pairing worked, and only
+      // when it does not arrive do the install steps belong on screen.
       console.log(`${OK} bridge host listening on 127.0.0.1:${state.port}`);
+      const opened = openInChrome(url);
       if (opened) {
-        console.log(`${OK} handed the pairing to Chrome: the extension's options open with the token filled in and it connects on its own`);
+        console.log(fmt.muted("  handed the pairing to Chrome, waiting for the extension to connect…"));
+        const status = await waitForExtension(state, PAIRING_WAIT_MS);
+        if (status.extensionConnected) {
+          console.log(connectedLine(status));
+          return;
+        }
+        console.log(`${WARN} the extension did not connect within ${PAIRING_WAIT_MS / 1000}s`);
       }
       console.log("");
       console.log(opened
-        ? "  If Chrome showed an error page instead, install the extension (one time):"
+        ? "  If Chrome showed an error page instead of the extension's options, install it (one time):"
         : "  Install the extension (one time):");
       console.log(`    1. Open ${fmt.highlight("chrome://extensions")} in your real Chrome, turn on Developer mode`);
       console.log(`    2. ${fmt.highlight("Load unpacked")} → select the repo's ${fmt.highlight("packages/browser-extension")} directory`);
       if (o.showToken) {
         console.log(`    3. ${opened ? "Run this command again, or open" : "Open"} this URL in that Chrome:`);
         console.log(`         ${fmt.highlight(url)}`);
-        console.log(`       or open the extension's ${fmt.highlight("options")} and paste:`);
+        console.log(`       or open the extension's ${fmt.highlight("options")} and enter:`);
         console.log(`         token  ${fmt.highlight(state.token)}`);
         console.log(`         port   ${fmt.highlight(String(state.port))}`);
       } else {
         console.log(`    3. ${opened ? "Run this command again" : "Run this command with --show-token for the pairing URL"}`);
-        console.log(`       ${fmt.muted(`the token lives in ${bridgeStatePath()}; --show-token prints it for a paste by hand`)}`);
+        console.log(`       ${fmt.muted(`the token lives in ${bridgeStatePath()}; --show-token prints it for entering by hand`)}`);
       }
       console.log(`    4. Check with ${fmt.highlight("cast browser extension status")}`);
       console.log("");
       console.log(fmt.muted("  The token grants full control of that Chrome to local processes that hold it."));
-      console.log(fmt.muted("  Revoke any time with `cast browser extension revoke`."));
+      console.log(fmt.muted("  Revoke any time with `cast browser extension revoke`; it rotates the token."));
     });
 
   ext
@@ -166,16 +182,16 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       }
       console.log(`${OK} host up on 127.0.0.1:${state.port}`);
       if (s.extensionConnected) {
-        console.log(`${OK} extension connected${s.extensionVersion ? ` (v${s.extensionVersion}, protocol ${s.extensionProtocol})` : ""}`);
+        console.log(connectedLine(s));
       } else {
-        console.log(`${WARN} extension not connected — open its options in Chrome and check token/port`);
+        console.log(`${WARN} extension not connected — run \`cast browser extension setup\`; it hands the extension the current token`);
       }
       console.log(fmt.muted(`  CDP endpoint for any engine: ${bridgeWsUrl(proven).replace(proven.token, "<token>")} (token in ${bridgeStatePath()})`));
     });
 
   ext
     .command("revoke")
-    .description("Rotate the token and disconnect the extension; nothing drives the real Chrome until setup runs again")
+    .description("Rotate the token and disconnect the extension; nothing drives the real Chrome until setup hands it the new token")
     .action(async () => {
       const next = rotateBridgeToken();
       const stopped = stopBridgeHost();

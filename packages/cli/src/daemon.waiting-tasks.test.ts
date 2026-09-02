@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { transcriptTailTurnStartTs, openBackgroundTaskIds, openBackgroundTasks, reconciledStatusWithTasks, scanOpenBackgroundTasks, declaredSettleVerdict, latestTurnStartTs, markTurnStarted, statusFlipStartsTurn, verifyOpenTasks, parseProcessTable, taskProcessNeedle, toOpenTaskReports, paneReconcileTarget, type OpenTaskInfo } from "./daemon.js";
+import { measureLoopHold } from "./test-helpers/loopHold.js";
+import { SCAN_CHUNK_BYTES, openTaskScanIsCold, openTaskScanOffset, primeOpenTaskScan, readCompleteLinesSync, reconcileStatusFromTranscript, registerManagedStartedSession, resetSessionFileIndexForTests, transcriptTailTurnStartTs, openBackgroundTaskIds, openBackgroundTasks, reconciledStatusWithTasks, scanOpenBackgroundTasks, declaredSettleVerdict, latestTurnStartTs, markTurnStarted, statusFlipStartsTurn, verifyOpenTasks, parseProcessTable, taskProcessNeedle, toOpenTaskReports, paneReconcileTarget, type OpenTaskInfo } from "./daemon.js";
 
 // Regression tests for the "settled turn with live background work reads as
 // needs_input" bug (session jx7e6ex, 2026-08-03). A turn that ends while a
@@ -543,5 +544,168 @@ describe("transcriptTailTurnStartTs", () => {
     const turnStart = transcriptTailTurnStartTs(tail, "s1")!;
     // The stamp postdates the delivered input -> trusted, however old the daemon is.
     expect(declaredSettleVerdict("s1", Date.parse(T2), turnStart, { at: Date.parse(T1) + 5_000, status: "dormant" })).toBe("dormant");
+  });
+});
+
+// The scan window: a line longer than one chunk grows the buffer one chunk
+// per step, never to the whole remaining file, and the async prime leaves
+// nothing for the synchronous hook path scan to read.
+describe("openBackgroundTasks window growth and primeOpenTaskScan", () => {
+  const dir = () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "open-tasks-window-"));
+    cleanups.push(() => fs.rmSync(d, { recursive: true, force: true }));
+    return d;
+  };
+  const cleanups: Array<() => void> = [];
+  afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
+  // A big tool result: one record, `bytes` long, that carries no task text.
+  const bigLine = (bytes: number) => toolResult("x".repeat(bytes));
+  // Enough short records to fill `bytes`.
+  const filler = (bytes: number) => {
+    const out: string[] = [];
+    for (let n = 0; n < bytes; ) {
+      const l = toolResult(`filler ${out.length} ` + "y".repeat(50_000));
+      out.push(l);
+      n += l.length + 1;
+    }
+    return out;
+  };
+
+  test("a 9MB single line grows the scan buffer one chunk at a time and the task after it is still found", () => {
+    const d = dir();
+    const f = path.join(d, "t.jsonl");
+    fs.writeFileSync(f, transcript(bigLine(9 * 1024 * 1024), ...filler(20 * 1024 * 1024), bgStart("after-big")) + "\n");
+    const size = fs.statSync(f).size;
+    // The scan's first window, read the way openBackgroundTasks reads it:
+    // windows of 4, 8 and 16MB reach the 9MB line's newline, so the window
+    // holds at most 16MB. The old escape jumped to the whole 29MB file.
+    const fd = fs.openSync(f, "r");
+    try {
+      const first = readCompleteLinesSync(fd, 0, size, { step: SCAN_CHUNK_BYTES });
+      expect(first.steps).toBe(3);
+      expect(first.bytesConsumed).toBeGreaterThan(9 * 1024 * 1024);
+      expect(first.bytesConsumed).toBeLessThanOrEqual(4 * SCAN_CHUNK_BYTES);
+    } finally {
+      fs.closeSync(fd);
+    }
+    expect(openBackgroundTasks(f, SID).map((t) => t.id)).toEqual(["after-big"]);
+    expect(openTaskScanOffset(f)).toBe(size);
+  }, 60_000);
+
+  test("primeOpenTaskScan reads a fresh 30MB transcript off the loop and leaves the sync scan nothing to read", async () => {
+    const d = dir();
+    const f = path.join(d, "t.jsonl");
+    fs.writeFileSync(f, transcript(...filler(30 * 1024 * 1024), bgStart("primed-task")) + "\n");
+    const size = fs.statSync(f).size;
+    const { maxGapMs, ticks } = await measureLoopHold(() => primeOpenTaskScan(f, SID));
+    expect(ticks).toBeGreaterThan(0);
+    expect(maxGapMs).toBeLessThan(200);
+    expect(openTaskScanOffset(f)).toBe(size);
+    // With the file unreadable, a sync scan that still had bytes to read would
+    // fail and claim no tasks; the primed answer survives because it reads nothing.
+    fs.chmodSync(f, 0o000);
+    cleanups.push(() => fs.chmodSync(f, 0o644));
+    expect(openBackgroundTasks(f, SID).map((t) => t.id)).toEqual(["primed-task"]);
+    expect(openTaskScanOffset(f)).toBe(size);
+  }, 60_000);
+
+  // The semaphore bounds the reads, not the stat: a transcript the scan has
+  // already covered answers at once, however many whole transcript primes
+  // are queued ahead of it (the recovered session scan queues the fleet).
+  test("a primed transcript does not wait behind the fleet's reads for a prime slot", async () => {
+    const d = dir();
+    const primed = path.join(d, "primed.jsonl");
+    fs.writeFileSync(primed, transcript(...filler(64 * 1024), bgStart("early")) + "\n");
+    await primeOpenTaskScan(primed, SID);
+    expect(openTaskScanOffset(primed)).toBe(fs.statSync(primed).size);
+    // Five whole transcript primes: four take every slot, the fifth queues.
+    const big = Array.from({ length: 5 }, (_, i) => {
+      const f = path.join(d, `big-${i}.jsonl`);
+      fs.writeFileSync(f, transcript(...filler(9 * 1024 * 1024)) + "\n");
+      return primeOpenTaskScan(f, `${SID.slice(0, -1)}${i}`).then(() => "big");
+    });
+    const cheap = primeOpenTaskScan(primed, SID).then(() => "cheap");
+    expect(await Promise.race([cheap, ...big])).toBe("cheap");
+    await Promise.all(big);
+    expect(openBackgroundTasks(primed, SID).map((t) => t.id)).toEqual(["early"]);
+  }, 60_000);
+
+  // The prime awaits each read; a Stop hook landing meanwhile runs the sync
+  // scan on the same state. The chunk in flight must then be dropped, or its
+  // lines replay after later ones (a task closed later reopens) and the
+  // offset lands past EOF (the next sync scan reads that as a shrink and
+  // rescans the whole transcript on the loop).
+  test("a sync scan landing while the prime has a read in flight never replays a chunk", async () => {
+    const d = dir();
+    // Proof the interleave happened at all: the sync scan must land before
+    // the prime finished in at least one round, or the test proves nothing.
+    let interleaved = 0;
+    for (const delayMs of [0, 4, 16, 40]) {
+      const f = path.join(d, `t-${delayMs}.jsonl`);
+      fs.writeFileSync(f, transcript(...filler(1024 * 1024)) + "\n");
+      openBackgroundTasks(f, SID);
+      fs.appendFileSync(f, transcript(
+        ...filler(8 * 1024 * 1024), bgStart("closed-later"),
+        ...filler(8 * 1024 * 1024), notification("closed-later", "completed"),
+        ...filler(8 * 1024 * 1024), bgStart("still-open"),
+      ) + "\n");
+      const size = fs.statSync(f).size;
+      const prime = primeOpenTaskScan(f, SID);
+      await new Promise((r) => setTimeout(r, delayMs));
+      if ((openTaskScanOffset(f) ?? 0) < size) interleaved++;
+      openBackgroundTasks(f, SID);
+      await prime;
+      expect(openTaskScanOffset(f)).toBe(size);
+      expect(openBackgroundTasks(f, SID).map((t) => t.id)).toEqual(["still-open"]);
+      expect(openTaskScanOffset(f)).toBe(size);
+    }
+    expect(interleaved).toBeGreaterThan(0);
+  }, 120_000);
+
+  // The fleet is tmux managed, and those sessions take the pane verdict, not
+  // the transcript one. They still get the prime on the maintenance
+  // reconcile, so the pane path's and the Stop hook's sync scan is a delta.
+  test("a tmux managed claude session is primed by the maintenance reconcile", async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "open-tasks-managed-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+    resetSessionFileIndexForTests();
+    cleanups.push(() => {
+      process.env.HOME = prevHome;
+      resetSessionFileIndexForTests();
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    });
+    const sid = "bbbbbbbb-0000-4000-8000-000000000002";
+    const projectDir = path.join(tmpHome, ".claude", "projects", "-Users-x-proj");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const f = path.join(projectDir, `${sid}.jsonl`);
+    fs.writeFileSync(f, transcript(...filler(9 * 1024 * 1024), bgStart("managed-task", sid)) + "\n");
+    const size = fs.statSync(f).size;
+    registerManagedStartedSession("conv-managed", sid, "cc-managed-test");
+    expect(openTaskScanOffset(f)).toBeUndefined();
+    const { maxGapMs } = await measureLoopHold(() => reconcileStatusFromTranscript(sid, {} as any));
+    expect(maxGapMs).toBeLessThan(200);
+    expect(openTaskScanOffset(f)).toBe(size);
+    expect(openBackgroundTasks(f, sid).map((t) => t.id)).toEqual(["managed-task"]);
+  }, 60_000);
+});
+
+// The idle settle in handleStatusData defers to an async prime only when the
+// sync scan would read more than one window; this predicate is that test.
+describe("openTaskScanIsCold", () => {
+  test("cold until primed, cold again past a window of growth, never for a missing file", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-scan-cold-"));
+    const p = path.join(dir, `${SID}.jsonl`);
+    try {
+      fs.writeFileSync(p, bgStart("t1") + "\n");
+      expect(openTaskScanIsCold(p)).toBe(true);
+      await primeOpenTaskScan(p, SID);
+      expect(openTaskScanIsCold(p)).toBe(false);
+      fs.appendFileSync(p, "x".repeat(SCAN_CHUNK_BYTES + 1) + "\n");
+      expect(openTaskScanIsCold(p)).toBe(true);
+      expect(openTaskScanIsCold(path.join(dir, "missing.jsonl"))).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -2,7 +2,11 @@ import { describe, test, expect, afterEach } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { RecursiveWatcher } from "./recursiveWatcher.js";
+import { watch as chokidarWatch } from "chokidar";
+import { RecursiveWatcher, chokidarIgnored } from "./recursiveWatcher.js";
+import { watchDirFilter } from "./sessionWatcher.js";
+import { transcriptDirWatcherConfig } from "./transcriptDirWatcher.js";
+import { measureLoopHold } from "./test-helpers/loopHold.js";
 
 function tmpDir(prefix: string): string {
   return path.join(
@@ -515,4 +519,112 @@ describe("RecursiveWatcher native event cost", () => {
     expect(seen).toHaveLength(9);
     expect(seen!).toContain(path.join("proj-a", "sub", "deep.jsonl"));
   });
+});
+
+// Priming a large tree must never pin the loop: the walk is async and batched,
+// so between two readdir answers timers keep firing. 10k files is the order
+// of one machine's transcript store.
+describe("RecursiveWatcher priming a 10k file tree", () => {
+  test("holds the loop under 100ms at a time and skips node_modules", async () => {
+    const root = tmpDir("rw-10k");
+    const DIRS = 400;
+    const PER_DIR = 25;
+    for (let d = 0; d < DIRS; d++) {
+      const dir = path.join(root, `proj-${d}`);
+      fs.mkdirSync(dir, { recursive: true });
+      for (let f = 0; f < PER_DIR; f++) fs.writeFileSync(path.join(dir, `s${f}.jsonl`), "{}\n");
+    }
+    for (let d = 0; d < 40; d++) {
+      const dir = path.join(root, "node_modules", `pkg-${d}`);
+      fs.mkdirSync(dir, { recursive: true });
+      for (let f = 0; f < PER_DIR; f++) fs.writeFileSync(path.join(dir, `s${f}.jsonl`), "{}\n");
+    }
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+
+    // The walk's own findings, not `filter` calls: on macOS the native watch
+    // can replay the writes that happened just before it opened, and those
+    // events go through `filter` too.
+    let existing: string[] = [];
+    const watcher = new RecursiveWatcher({
+      path: root,
+      filter: (rel) => rel.endsWith(".jsonl"),
+      dirFilter: (rel) => !rel.split(path.sep).includes("node_modules"),
+      onExisting: (files) => { existing = files.map((f) => f.rel); },
+      callback: () => {},
+    });
+    cleanups.push(() => watcher.stop());
+    const { maxGapMs, ticks } = await measureLoopHold(async () => {
+      watcher.start();
+      await watcher.whenPrimed();
+    });
+    watcher.stop();
+
+    expect(existing.length).toBe(DIRS * PER_DIR);
+    expect(existing.some((rel) => rel.split(path.sep).includes("node_modules"))).toBe(false);
+    expect(ticks).toBeGreaterThan(0);
+    expect(maxGapMs).toBeLessThan(100);
+  }, 60_000);
+});
+
+// chokidar (the Linux path) asks `ignored` about files too, and before it has
+// a stat. A dirFilter answers for directories only, so a file must be judged
+// by the directory it sits in or every transcript is refused and the watcher
+// only ever sees directory events.
+describe("chokidarIgnored", () => {
+  const UUID = "12345678-1234-1234-1234-123456789abc";
+  const dirStats = { isDirectory: () => true } as fs.Stats;
+
+  test("judges a file by its parent and a directory by itself", () => {
+    const ignored = chokidarIgnored("/root", watchDirFilter);
+    expect(ignored(`/root/slug/${UUID}.jsonl`)).toBe(false);
+    expect(ignored(`/root/slug/${UUID}/subagents/agent-1.jsonl`)).toBe(false);
+    expect(ignored(`/root/slug/${UUID}/tool-results`, dirStats)).toBe(true);
+    expect(ignored(`/root/slug/${UUID}/tool-results/out.txt`)).toBe(true);
+    // Without a stat a directory is judged by its parent; chokidar asks again
+    // with the stat before it descends, and that is the ask that prunes it.
+    expect(ignored(`/root/slug/${UUID}/tool-results`)).toBe(false);
+    expect(ignored("/root")).toBe(false);
+    expect(ignored("/elsewhere/x")).toBe(false);
+  });
+
+  // The production layouts, driven through a real chokidar watcher: every
+  // transcript add event must arrive, and nothing from a pruned subtree.
+  const layouts: Array<{ name: string; dirFilter: (rel: string) => boolean; depth: number; files: string[]; pruned: string }> = [
+    { name: "claude", dirFilter: watchDirFilter, depth: 6, files: [`slug/${UUID}.jsonl`, `slug/${UUID}/subagents/agent-1.jsonl`], pruned: `slug/${UUID}/tool-results/out.txt` },
+    { name: "codex", dirFilter: transcriptDirWatcherConfig("codex").dirFilter!, depth: transcriptDirWatcherConfig("codex").maxDepth!, files: ["2026/02/25/rollout-x.jsonl"], pruned: "scratch/rollout-y.jsonl" },
+    { name: "gemini", dirFilter: transcriptDirWatcherConfig("gemini").dirFilter!, depth: transcriptDirWatcherConfig("gemini").maxDepth!, files: ["hash/chats/session-1.json"], pruned: "hash/checkpoints/c.json" },
+    { name: "grok", dirFilter: transcriptDirWatcherConfig("grok").dirFilter!, depth: transcriptDirWatcherConfig("grok").maxDepth!, files: [`slug/${UUID}/turn.json`], pruned: "slug/.cwd/x.json" },
+  ];
+
+  test("every production watcher's transcript files reach chokidar's add event", async () => {
+    // One watcher at a time: on macOS, several chokidar roots armed in the
+    // same tick share one bun fs.watch pool and only one of them gets events.
+    for (const { name, dirFilter, depth, files, pruned } of layouts) {
+      const root = tmpDir(`rw-chok-${name}`);
+      fs.mkdirSync(root, { recursive: true });
+      cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+      const seen: string[] = [];
+      const w = chokidarWatch(root, {
+        persistent: true,
+        ignoreInitial: true,
+        depth,
+        ignored: chokidarIgnored(root, dirFilter),
+        awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 50 },
+      });
+      cleanups.push(() => { void w.close(); });
+      w.on("add", (p) => seen.push(path.relative(root, p)));
+      await new Promise<void>((r) => w.once("ready", () => r()));
+      // ready fires before the root's own fs.watch is armed; give it a beat.
+      await new Promise((r) => setTimeout(r, 300));
+      for (const rel of [...files, pruned]) {
+        fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+        fs.writeFileSync(path.join(root, rel), "{}\n");
+      }
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline && files.some((f) => !seen.includes(f))) await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 300));
+      await w.close();
+      expect({ name, seen: seen.sort() }).toEqual({ name, seen: [...files].sort() });
+    }
+  }, 60_000);
 });

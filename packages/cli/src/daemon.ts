@@ -4,7 +4,9 @@ import * as path from "path";
 import { randomUUID, createHash } from "node:crypto";
 import * as http from "http";
 import { Database } from "bun:sqlite";
-import { childErrorDetail, execSync, execFileSync, exec, execFile, spawn, spawnSync, setSlowSyncSpawnSink } from "./proc.js";
+import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, spawn, spawnSync } from "./proc.js";
+import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
+import { countingSemaphore } from "./semaphore.js";
 import { parseProcessTable } from "./processTable.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
 import { watch as chokidarWatch } from "chokidar";
@@ -16,7 +18,7 @@ import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilit
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, stableHostname } from "./remote/device.js";
 import { readInputIdleMs } from "./inputIdle.js";
-import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredential, type RemoteHost } from "./remote/session-move.js";
+import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, type RemoteHost } from "./remote/session-move.js";
 import { listCloudRemoteHosts, sshReachable } from "./browser/cloudHost.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
@@ -45,6 +47,7 @@ import {
   sameAccountFingerprint,
   attributeFingerprintToProfile,
   readActiveOauth,
+  createMtimeGatedCache,
 } from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
 import { buildDisclaimShellPrefix } from "./disclaim.js";
@@ -103,7 +106,7 @@ import {
   type ProcessOwnership,
   type ProcessSessionClaim,
 } from "./sessionProcessMatcher.js";
-import { parseSessionFile, parseTranscriptFor, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractGeminiProjectHash, extractPiCwd, extractGrokCwd, isGrokInternalSession, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
+import { parseSessionFile, parseTranscriptFor, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractGeminiProjectHash, extractPiCwd, extractGrokCwd, isGrokInternalSession, extractTeamInfo, detectCliFlags, isCursorRoleHeaderLine, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
@@ -115,13 +118,12 @@ import { SyncService, AuthExpiredError, type ConversationLifecycle, type CreateC
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, type RetryOperation } from "./retryQueue.js";
 import { InvalidateSync, type InvalidateSyncOptions } from "./invalidateSync.js";
-import { promisify } from "util";
 import { detectPermissionPrompt } from "./permissionDetector.js";
 import { handlePermissionRequest } from "./permissionHandler.js";
 import { getVersion, performUpdate, ensureCastAlias } from "./update.js";
 import { ensureMessagingForMemory } from "./snippets.js";
 import { shouldAutoEnableLimitsGuidance } from "./limitsGuidance.js";
-import { readInventory, toInvocableList } from "./capabilities/inventory.js";
+import { readInventoryAsync, toInvocableList } from "./capabilities/inventory.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import {
   isTranscriptFileInSyncScope,
@@ -153,7 +155,7 @@ import { handleBrowserFocusHttp } from "./browser/focusHttp.js";
 import { startFocusSentinel } from "./browser/focusSentinel.js";
 import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOptions } from "./vault/vaultServer.js";
 import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
-import { enumerateProjectRoots, enumerateAgentHomeDirs, MAX_PROJECT_ROOTS } from "./projectRoots.js";
+import { enumerateProjectRoots, enumerateAgentHomeDirs, MAX_PROJECT_ROOTS, PROJECT_PARENT_DIRS, AGENT_HOME_DIRS } from "./projectRoots.js";
 import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
@@ -225,7 +227,6 @@ const execAsync = (cmd: string, opts?: any): Promise<{ stdout: string; stderr: s
   });
 };
 
-const _execFileAsync = promisify(execFile);
 
 // Drop inherited Claude session markers before SAFE_ENV is captured (see agentEnv.ts).
 scrubAgentEnv(process.env);
@@ -1287,24 +1288,44 @@ export function mapCodexAppServerThreadStatusToAgentStatus(status: AppServerThre
  * verified byte-identical against it on a real machine before the repoint, and
  * keeping both meant every frontmatter quirk had to be fixed twice.
  */
-export function readAvailableSkills(projectPath?: string): Array<{ name: string; description: string }> {
-  return toInvocableList(readInventory(process.env.HOME || "", projectPath));
+//
+// Async, one scan per project per window. The scan walks the whole capability
+// tree and held the loop up to 1.8s per project when it ran synchronously
+// (2026-09-02); session discovery asks for the same project once per
+// conversation and the boot sweep asks for every project on disk, so callers
+// inside a window share one in flight promise.
+type InvocableSkill = { name: string; description: string };
+const SKILLS_SCAN_TTL_MS = 5 * 60_000;
+const skillsScanMemo = new Map<string, { at: number; value: Promise<InvocableSkill[]> }>();
+export function readAvailableSkills(projectPath?: string): Promise<InvocableSkill[]> {
+  const key = projectPath ?? "";
+  const memo = skillsScanMemo.get(key);
+  if (memo && Date.now() - memo.at < SKILLS_SCAN_TTL_MS) return memo.value;
+  const value = readInventoryAsync(process.env.HOME || "", projectPath).then(toInvocableList);
+  skillsScanMemo.set(key, { at: Date.now(), value });
+  value.catch(() => skillsScanMemo.delete(key));
+  return value;
+}
+export function resetSkillsScanMemoForTests(): void {
+  skillsScanMemo.clear();
 }
 
 function syncSkillsForConversation(conversationId: string, projectPath: string | undefined, syncService: SyncService): void {
   if (skillsSyncedConversations.has(conversationId)) return;
   skillsSyncedConversations.add(conversationId);
-  const allSkills = readAvailableSkills(projectPath);
-  if (allSkills.length === 0) return;
-  syncService.setAvailableSkills(conversationId, JSON.stringify(allSkills)).catch(logConvexFailure);
-  if (projectPath) {
-    const globalSkills = readAvailableSkills();
-    const globalNames = new Set(globalSkills.map(s => s.name));
-    const projectOnly = allSkills.filter(s => !globalNames.has(s.name));
-    if (projectOnly.length > 0) {
-      syncService.setAvailableSkills(undefined, JSON.stringify(projectOnly), projectPath).catch(logConvexFailure);
+  void (async () => {
+    const allSkills = await readAvailableSkills(projectPath);
+    if (allSkills.length === 0) return;
+    syncService.setAvailableSkills(conversationId, JSON.stringify(allSkills)).catch(logConvexFailure);
+    if (projectPath) {
+      const globalSkills = await readAvailableSkills();
+      const globalNames = new Set(globalSkills.map(s => s.name));
+      const projectOnly = allSkills.filter(s => !globalNames.has(s.name));
+      if (projectOnly.length > 0) {
+        syncService.setAvailableSkills(undefined, JSON.stringify(projectOnly), projectPath).catch(logConvexFailure);
+      }
     }
-  }
+  })().catch((err) => log(`Skills sync failed for ${conversationId}: ${err instanceof Error ? err.message : String(err)}`));
 }
 
 // Idle/needs-input notifications are NOT sent from here: the server owns them
@@ -1811,28 +1832,46 @@ function logLifecycle(event: string, details?: string): void {
 // The kernel's phys_footprint is the honest number but isn't reachable from JS;
 // `footprint` is (slow, ~seconds), so we only shell out to it when RSS crosses
 // the warn threshold — turning a would-be false alarm into a real measurement.
-function readPhysFootprintMb(): number | null {
+export function parseFootprintMb(out: string): number | null {
+  const m = out.match(/phys_footprint:\s+([\d.]+)\s*([KMG])B/);
+  if (!m) return null;
+  const v = parseFloat(m[1]);
+  return Math.round(m[2] === "G" ? v * 1024 : m[2] === "K" ? v / 1024 : v);
+}
+async function readPhysFootprintMb(): Promise<number | null> {
   if (process.platform !== "darwin") return null;
   try {
-    const out = execSync(`footprint ${process.pid} 2>/dev/null`, { timeout: 15_000 }).toString();
-    const m = out.match(/phys_footprint:\s+([\d.]+)\s*([KMG])B/);
-    if (!m) return null;
-    const v = parseFloat(m[1]);
-    return Math.round(m[2] === "G" ? v * 1024 : m[2] === "K" ? v / 1024 : v);
+    const { stdout } = await _execFileAsync("footprint", [String(process.pid)], { timeout: 15_000 });
+    return parseFootprintMb(stdout);
   } catch {
     return null;
   }
 }
 
-function getSystemMetrics(): { rss_mb: number; heap_mb: number; heap_total_mb: number; ext_mb: number; uptime_min: number; fds: number; cpu_user_ms: number; cpu_system_ms: number } {
+// Async: the fd count and its lsof fallback run on the 5 minute health tick,
+// and a sync lsof under load held the loop for its whole 5s budget. The two
+// primitives are injectable so the lsof branch (never taken where /dev/fd
+// exists) is testable.
+export type SystemMetricsIO = {
+  readdir: (dir: string) => Promise<string[]>;
+  execFile: (cmd: string, args: string[], opts: { timeout: number; maxBuffer: number }) => Promise<{ stdout: string }>;
+};
+const defaultSystemMetricsIO: SystemMetricsIO = {
+  readdir: (dir) => fs.promises.readdir(dir),
+  execFile: (cmd, args, opts) => _execFileAsync(cmd, args, opts),
+};
+export async function getSystemMetrics(io: SystemMetricsIO = defaultSystemMetricsIO): Promise<{ rss_mb: number; heap_mb: number; heap_total_mb: number; ext_mb: number; uptime_min: number; fds: number; cpu_user_ms: number; cpu_system_ms: number }> {
   const mem = process.memoryUsage();
   const cpu = process.cpuUsage();
   let fds = 0;
   try {
-    fds = fs.readdirSync(`/dev/fd`).length;
+    fds = (await io.readdir(`/dev/fd`)).length;
   } catch {
     try {
-      fds = parseInt(execSync("lsof -p " + process.pid + " 2>/dev/null | wc -l", { timeout: 5000 }).toString().trim(), 10) || 0;
+      // The full listing, not a count: node's default 1MB buffer overflows
+      // near 10k open files, which is the case the fd warning exists for.
+      const { stdout } = await io.execFile("lsof", ["-p", String(process.pid)], { timeout: 5000, maxBuffer: 16 * 1024 * 1024 });
+      fds = stdout.split("\n").filter(Boolean).length;
     } catch {}
   }
   return {
@@ -1852,11 +1891,11 @@ function getSystemMetrics(): { rss_mb: number; heap_mb: number; heap_total_mb: n
 const FD_WARN_THRESHOLD = 5000;
 const RSS_WARN_THRESHOLD_MB = 1500;
 
-function logHealthSummary(): void {
+async function logHealthSummary(): Promise<void> {
   const now = Date.now();
   const periodMinutes = Math.round((now - syncStats.lastReportTime) / 60000);
   const sessionsCount = syncStats.sessionsActive.size;
-  const metrics = getSystemMetrics();
+  const metrics = await getSystemMetrics();
 
   const metricStr = `rss=${metrics.rss_mb}MB heap=${metrics.heap_mb}/${metrics.heap_total_mb}MB ext=${metrics.ext_mb}MB fds=${metrics.fds} cpu=${metrics.cpu_user_ms}+${metrics.cpu_system_ms}ms uptime=${metrics.uptime_min}min`;
   const syncStr = `${syncStats.messagesSynced}msgs ${syncStats.conversationsCreated}convos ${sessionsCount}sessions ${syncStats.errors}errs`;
@@ -1883,7 +1922,7 @@ function logHealthSummary(): void {
     // RSS over the line is a prompt to MEASURE, not a verdict (see
     // readPhysFootprintMb). Only warn on the real footprint; if we can't
     // read it, fall back to the RSS warning so the signal is never silently lost.
-    const footprintMb = readPhysFootprintMb();
+    const footprintMb = await readPhysFootprintMb();
     if (footprintMb === null) {
       const msg = `HIGH MEMORY: ${metrics.rss_mb}MB RSS (threshold: ${RSS_WARN_THRESHOLD_MB}MB; footprint unavailable)`;
       logWarn(msg);
@@ -1984,7 +2023,7 @@ async function pollDaemonCommands(): Promise<void> {
 // roots and projects nested below them, so monorepo-style layouts such as
 // ~/dev/union/union-mobile remain available in the recent-project picker.
 // Bounded scan: only directories that actually exist on this host.
-function computeLocalProjectRoots(): string[] {
+function computeLocalProjectRootsNow(): string[] {
   const roots = new Set<string>([...enumerateProjectRoots(), ...enumerateAgentHomeDirs()]);
   // Also include any project_paths we've actually started a session in — covers
   // non-conventional locations the user has used recently.
@@ -1996,6 +2035,25 @@ function computeLocalProjectRoots(): string[] {
     }
   }
   return Array.from(roots).slice(0, MAX_PROJECT_ROOTS);
+}
+// The heartbeat asks every 30s. A readdir of six parents plus a stat per
+// started session each beat was one of the sync hogs on the loop; a new
+// project under a conventional parent bumps that parent's mtime, so a dozen
+// directory stats answer the common beat, and the TTL covers a path that only
+// a started session names.
+const localProjectRootsCache = createMtimeGatedCache<string[]>(
+  () => {
+    const home = process.env.HOME || "";
+    return [...PROJECT_PARENT_DIRS, ...AGENT_HOME_DIRS].map((d) => path.join(home, d));
+  },
+  computeLocalProjectRootsNow,
+  { ttlMs: 5 * 60_000 },
+);
+export function computeLocalProjectRoots(): string[] {
+  return localProjectRootsCache.get();
+}
+export function invalidateLocalProjectRoots(): void {
+  localProjectRootsCache.invalidate();
 }
 
 // Sync-backlog fields published on every heartbeat so the web can show a
@@ -2066,7 +2124,7 @@ async function pushCredentialToRemoteHosts(
   remoteCredPushInFlight = true;
   try {
     if (opts.onlyIfChanged) {
-      const gate = readPushableCredential();
+      const gate = await readPushableCredentialAsync();
       const hash = gate.cred ? createHash("sha256").update(gate.cred).digest("hex") : null;
       if (hash !== null && hash === lastPushedCredHash) return; // in step — the common case
     }
@@ -2282,7 +2340,7 @@ async function watchMintFlow(profile: string, email: string | undefined, gen: nu
     let owner: string | null = null;
     try {
       // Keep the comparison credential usable: an idle login may have lapsed.
-      if ((activeCredentialExpiresAt() ?? 0) <= Date.now() + 60_000) {
+      if (((await activeCredentialExpiresAt()) ?? 0) <= Date.now() + 60_000) {
         await refreshActiveCredential().catch(() => null);
       }
       const activeToken = readActiveOauth()?.accessToken;
@@ -2483,7 +2541,7 @@ async function watchLoginFlow(baselineHash: string | null, requestedEmail: strin
     await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
     // Fold the fresh login into its saved profile + the web's inventory now,
     // not on the next beat.
-    try { resnapshotIfActiveFresher(); } catch {}
+    await resnapshotIfActiveFresher().catch(() => {});
     sendHeartbeat().catch(() => {});
     // Remote Macs ride the push rail: a CHANGED blob push triggers the
     // remote auth-blocked revive on its own.
@@ -2553,7 +2611,7 @@ async function maintainActiveCcToken(reason: string): Promise<void> {
   if (isRemoteDevice() || ccTokenMaintInFlight) return;
   ccTokenMaintInFlight = true;
   try {
-    const expiresAt = activeCredentialExpiresAt();
+    const expiresAt = await activeCredentialExpiresAt();
     if (expiresAt != null && expiresAt - Date.now() < CC_TOKEN_REFRESH_THRESHOLD_MS) {
       const res = await refreshActiveCredential();
       if (res.refreshed) {
@@ -2568,7 +2626,7 @@ async function maintainActiveCcToken(reason: string): Promise<void> {
     }
     // Propagate a fresher active credential (a manual /login OR the refresh
     // above) into its saved profile. Cheap no-op when already in step.
-    const updated = resnapshotIfActiveFresher();
+    const updated = await resnapshotIfActiveFresher();
     if (updated) log(`[CC-AUTH] Re-snapshotted profile "${updated}" from fresher active login`);
   } catch (err) {
     log(`[CC-AUTH] Token maintenance failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
@@ -5061,10 +5119,18 @@ async function executeRemoteCommand(
         const AGENT_CONFIG_BASENAMES = new Set([
           "CLAUDE.md", "AGENTS.md", ".mcp.json", "settings.json", "settings.local.json", "config.toml",
         ]);
-        const underTrackedProject =
+        const underTrackedProject = (): boolean =>
           AGENT_CONFIG_BASENAMES.has(path.basename(realTarget)) &&
           computeLocalProjectRoots().some((root) => realTarget.startsWith(root + path.sep));
-        if (!underOwnConfig && !underTrackedProject) {
+        // The roots are cached for the heartbeat. A project only a session
+        // started in the last few minutes names is not in that cache yet, so
+        // a miss recomputes once before it is refused.
+        let allowed = underOwnConfig || underTrackedProject();
+        if (!allowed) {
+          invalidateLocalProjectRoots();
+          allowed = underTrackedProject();
+        }
+        if (!allowed) {
           error = "Path not allowed";
           break;
         }
@@ -6088,43 +6154,88 @@ function readFileHeadAndTail(filePath: string, headBytes: number = 8192, tailByt
 // non-session_meta line, returning just that leading block for extractCodexForkRoot. This
 // is position-independent (works on incremental syncs) and bounded by a deep-chain cap.
 function readCodexSessionMetaHead(filePath: string): string {
-  const CHUNK = 256 * 1024;
-  const MAX = 16 * 1024 * 1024;
+  return timeSyncFs("readCodexSessionMetaHead", filePath, () => readCodexSessionMetaHeadSync(filePath));
+}
+const CODEX_META_HEAD_CHUNK = 256 * 1024;
+const CODEX_META_HEAD_MAX = 16 * 1024 * 1024;
+/** Where the leading session_meta block ends: the index just past its last
+ *  line, or -1 while no complete non meta line exists yet. */
+export function sessionMetaHeadCut(acc: string): number {
+  let cut = 0;
+  let nl = acc.indexOf("\n");
+  while (nl >= 0) {
+    const line = acc.slice(cut, nl);
+    if (line.trim() && !line.includes('"type":"session_meta"')) return cut;
+    cut = nl + 1;
+    nl = acc.indexOf("\n", cut);
+  }
+  return -1;
+}
+function readCodexSessionMetaHeadSync(filePath: string): string {
   const fd = fs.openSync(filePath, "r");
   try {
     let acc = "";
     let offset = 0;
-    while (offset < MAX) {
-      const buf = Buffer.alloc(CHUNK);
-      const bytesRead = fs.readSync(fd, buf, 0, CHUNK, offset);
+    while (offset < CODEX_META_HEAD_MAX) {
+      const buf = Buffer.alloc(CODEX_META_HEAD_CHUNK);
+      const bytesRead = fs.readSync(fd, buf, 0, CODEX_META_HEAD_CHUNK, offset);
       if (bytesRead === 0) break;
       acc += buf.subarray(0, bytesRead).toString("utf-8");
       offset += bytesRead;
-      // Find where the leading session_meta block ends (first complete non-meta line).
-      let cut = 0;
-      let nl = acc.indexOf("\n");
-      let hitBoundary = false;
-      while (nl >= 0) {
-        const line = acc.slice(cut, nl);
-        if (line.trim() && !line.includes('"type":"session_meta"')) {
-          hitBoundary = true;
-          break;
-        }
-        cut = nl + 1;
-        nl = acc.indexOf("\n", cut);
-      }
-      if (hitBoundary) return acc.slice(0, cut);
-      if (bytesRead < CHUNK) break; // EOF: whole file is session_meta (or empty)
+      const cut = sessionMetaHeadCut(acc);
+      if (cut >= 0) return acc.slice(0, cut);
+      if (bytesRead < CODEX_META_HEAD_CHUNK) break; // EOF: whole file is session_meta (or empty)
     }
     return acc;
   } finally {
     fs.closeSync(fd);
   }
 }
+/** The same head for the metrics tick, read one window at a time off the
+ *  loop. Same cap on bytes read; a torn trailing line is left out, which the
+ *  metadata parse would have rejected anyway. */
+export async function readCodexSessionMetaHeadAsync(filePath: string): Promise<string> {
+  const size = (await fs.promises.stat(filePath)).size;
+  const limit = Math.min(size, CODEX_META_HEAD_MAX);
+  let acc = "";
+  let offset = 0;
+  while (offset < limit) {
+    const { content, bytesConsumed } = await readIngestWindow(filePath, offset, limit - offset, { step: CODEX_META_HEAD_CHUNK });
+    if (bytesConsumed === 0) break;
+    acc += content;
+    offset += bytesConsumed;
+    const cut = sessionMetaHeadCut(acc);
+    if (cut >= 0) return acc.slice(0, cut);
+  }
+  return acc;
+}
 
 // The leading session_meta block is immutable once written, so a rollout file's fork root
 // never changes — cache it per path to avoid re-reading ~200KB on every incremental sync.
 const codexForkRootCache = new Map<string, string | undefined>();
+// The session metadata comes from the same immutable block, so it is cached
+// once it decodes. An undecided read (the record still being written) is not
+// cached, or a partial file would answer "no metadata" forever. Throws when
+// the file is unreadable, like the head read it wraps.
+const codexSessionMetaCache = new Map<string, NonNullable<ReturnType<typeof extractCodexSessionMetadata>>>();
+function rememberCodexMeta(filePath: string, head: string): ReturnType<typeof extractCodexSessionMetadata> {
+  const meta = extractCodexSessionMetadata(head);
+  if (meta) codexSessionMetaCache.set(filePath, meta);
+  return meta;
+}
+function codexSessionMetadataFor(filePath: string): ReturnType<typeof extractCodexSessionMetadata> {
+  return codexSessionMetaCache.get(filePath) ?? rememberCodexMeta(filePath, readCodexSessionMetaHead(filePath));
+}
+/** Fill the metadata cache for a rollout off the loop, so the sync lookup
+ *  the metrics tick makes next answers from the cache. */
+async function primeCodexSessionMetadata(filePath: string): Promise<void> {
+  if (codexSessionMetaCache.has(filePath)) return;
+  try {
+    rememberCodexMeta(filePath, await readCodexSessionMetaHeadAsync(filePath));
+  } catch {
+    // unreadable this pass; the sync lookup reports unknown
+  }
+}
 function resolveCodexForkRoot(filePath: string): string | undefined {
   if (codexForkRootCache.has(filePath)) return codexForkRootCache.get(filePath);
   let root: string | undefined;
@@ -6193,7 +6304,7 @@ export function sessionProcessOwnership(sessionId: string, opts?: { staleOk?: bo
 
   let meta: ReturnType<typeof extractCodexSessionMetadata>;
   try {
-    meta = extractCodexSessionMetadata(readCodexSessionMetaHead(rolloutPath));
+    meta = codexSessionMetadataFor(rolloutPath);
   } catch {
     return "unknown"; // unreadable this pass
   }
@@ -6223,6 +6334,29 @@ function sessionBorrowsProcess(sessionId: string): boolean {
   if (ownership === "unknown") borrowsUnknownUntil.set(sessionId, Date.now() + BORROWS_UNKNOWN_MEMO_MS);
   else borrowsUnknownUntil.delete(sessionId);
   return ownership === "borrowed";
+}
+
+/**
+ * The borrowers among `sessionIds`, for the metrics tick. Everything the sync
+ * verdict would read from disk is loaded first, off the loop: the session
+ * file index (a cold index rebuilt synchronously, 6s at boot under load) and
+ * the codex metadata head of every undecided rollout. The verdict itself
+ * then answers from memory. A rollout whose head did not decode is memoized
+ * as undecided here, so the sync path never re-reads it on the tick.
+ */
+export async function classifySharedPidSessions(sessionIds: string[]): Promise<Set<string>> {
+  await ensureSessionFileIndex();
+  const now = Date.now();
+  const undecided = sessionIds.filter(
+    (id) => !sessionOwnershipCache.has(id) && !((borrowsUnknownUntil.get(id) ?? 0) > now),
+  );
+  await runBounded(undecided, 4, async (id) => {
+    const rollout = findCodexRolloutPath(id, { staleOk: true });
+    if (!rollout) return;
+    await primeCodexSessionMetadata(rollout);
+    if (!codexSessionMetaCache.has(rollout)) borrowsUnknownUntil.set(id, Date.now() + BORROWS_UNKNOWN_MEMO_MS);
+  }, "Ownership prime");
+  return new Set(sessionIds.filter(sessionBorrowsProcess));
 }
 
 // ── Agent-team "spawned by" linking ──────────────────────────────────────────
@@ -6649,7 +6783,199 @@ const SYNC_BYTES_PER_PASS = 1 * 1024 * 1024;
 // between each) before deferring to the next file-watch event / watchdog. Drains up
 // to SYNC_BYTES_PER_PASS * this per trigger — kept at 24MB, matching the old
 // 4MB x 6 — so a large idle backlog catches up just as fast, in smaller bites.
-const MAX_SYNC_CONTINUATIONS = 24;
+export const MAX_SYNC_CONTINUATIONS = 24;
+
+/**
+ * Where a read window may be cut: the index of the LAST byte to consume, or
+ * -1 to ask for a bigger window. `len` is how many bytes of `buf` are valid;
+ * `atEof` says no more bytes exist past them; `from` is the first byte an
+ * earlier step of the same window did not already search (bytes before it
+ * hold no boundary, so a step costs only the tail it read).
+ */
+export type PassBoundary = (buf: Buffer, len: number, atEof: boolean, from?: number) => number;
+
+// A newline is one byte and never part of a multibyte sequence, so a byte cut
+// at it is charset safe and the byte count needs no re-encode.
+const newlineBoundary: PassBoundary = (buf, len, _atEof, from = 0) => {
+  const i = buf.subarray(from, len).lastIndexOf(0x0a);
+  return i < 0 ? -1 : from + i;
+};
+
+type ReadRequest = { buf: Buffer; offset: number; length: number; position: number };
+
+export type ReadWindowOpts = { step?: number; boundary?: PassBoundary; buffer?: Buffer };
+
+// The window algorithm both readers share: fill one window, look for a
+// boundary, and when there is none and bytes remain, grow the window and
+// read only the new tail. Growth doubles (capped at what exists) so an
+// oversized line costs under twice its size in copying and a logarithmic
+// number of steps; the boundary search covers only the new tail. Each
+// `yield` is one read the driver performs (awaited or synchronous), so the
+// async driver frees the loop between steps.
+function* completeLinesPlan(
+  position: number,
+  available: number,
+  opts: ReadWindowOpts,
+): Generator<ReadRequest, { content: string; bytesConsumed: number; steps: number }, number> {
+  const step = opts.step ?? SYNC_BYTES_PER_PASS;
+  const boundary = opts.boundary ?? newlineBoundary;
+  // allocUnsafe: every byte read below `len` is written by a read first.
+  let buf = opts.buffer ?? Buffer.allocUnsafe(Math.min(available, step));
+  let len = 0;
+  let steps = 0;
+  for (;;) {
+    const from = len;
+    const want = Math.min(buf.length, available) - len;
+    const n = want > 0 ? yield { buf, offset: len, length: want, position: position + len } : 0;
+    steps++;
+    if (n <= 0) available = len; // the file shrank under us: what we hold is all there is
+    len += n;
+    const atEof = len >= available;
+    const cut = len > 0 ? boundary(buf, len, atEof, from) : -1;
+    if (cut >= 0) return { content: buf.toString("utf8", 0, cut + 1), bytesConsumed: cut + 1, steps };
+    // No boundary at EOF: a line still being written. Consume nothing and let
+    // the next pass re-read it (same rule as before the window existed).
+    if (atEof) return { content: "", bytesConsumed: 0, steps };
+    const grown = Buffer.allocUnsafe(Math.min(Math.max(buf.length * 2, step), available));
+    buf.copy(grown, 0, 0, len);
+    buf = grown;
+  }
+}
+
+/**
+ * The complete lines available at `position`, read one window at a time.
+ * Replaces the old escape that, on a line longer than the window, re-read the
+ * whole remaining file in one allocation; now an oversized line costs one
+ * more window per step, with the loop free during every read.
+ */
+export async function readCompleteLines(
+  fd: fs.promises.FileHandle,
+  position: number,
+  available: number,
+  opts: ReadWindowOpts = {},
+): Promise<{ content: string; bytesConsumed: number; steps: number }> {
+  const plan = completeLinesPlan(position, available, opts);
+  let r = plan.next(0);
+  while (!r.done) {
+    const { bytesRead } = await fd.read(r.value.buf, r.value.offset, r.value.length, r.value.position);
+    r = plan.next(bytesRead);
+  }
+  return r.value;
+}
+
+/** The synchronous twin, for the hook paths that cannot await. */
+export function readCompleteLinesSync(
+  fd: number,
+  position: number,
+  available: number,
+  opts: ReadWindowOpts = {},
+): { content: string; bytesConsumed: number; steps: number } {
+  const plan = completeLinesPlan(position, available, opts);
+  let r = plan.next(0);
+  while (!r.done) {
+    r = plan.next(fs.readSync(fd, r.value.buf, r.value.offset, r.value.length, r.value.position));
+  }
+  return r.value;
+}
+
+/**
+ * Drain any remaining known backlog in bounded passes instead of waiting for
+ * the next file watch event or the 5 minute watchdog. The caller has already
+ * advanced its position, so each continuation is durable forward progress.
+ * The setImmediate lets queued work (heartbeats, deliveries, timers) run
+ * between passes: each pass parses one window synchronously, and chaining
+ * them back to back is what turned big backlogs into event loop freezes.
+ */
+export async function continueSyncPass(
+  lastPosition: number,
+  bytesConsumed: number,
+  size: number,
+  depth: number,
+  next: () => Promise<void>,
+): Promise<void> {
+  if (!(bytesConsumed > 0 && lastPosition + bytesConsumed < size && depth < MAX_SYNC_CONTINUATIONS)) return;
+  await new Promise((resolve) => setImmediate(resolve));
+  await next();
+}
+
+/**
+ * The stat every ingest pass starts with. Null means this pass has nothing
+ * to do: the file is unreadable for now (logged; the next watch event
+ * retries) or gone (logged, so the InvalidateSync backoff completes instead
+ * of throwing ENOENT forever, which turned a deleted transcript into a
+ * permanent retry loop). A shrink is a rotation and resets to the start.
+ */
+async function ingestStat(filePath: string, lastPosition: number): Promise<{ size: number; lastPosition: number } | null> {
+  let size: number;
+  try {
+    size = (await fs.promises.stat(filePath)).size;
+  } catch (err: any) {
+    if (err.code === "EACCES" || err.code === "EPERM") {
+      log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
+      return null;
+    }
+    if (err.code === "ENOENT") {
+      log(`Transcript ${filePath} no longer exists; nothing to sync.`);
+      return null;
+    }
+    throw err;
+  }
+  if (size < lastPosition) {
+    log(`File rotation detected for ${filePath}: size=${size} < position=${lastPosition}. Resetting to start.`);
+    setPosition(filePath, 0);
+    lastPosition = 0;
+  }
+  return { size, lastPosition };
+}
+
+/**
+ * One window of complete lines from `position`, on a handle held only for
+ * the read. The read is async: a 1MB window still blocked the loop 8s when
+ * the disk was contended (2026-09-02). The parse the caller does next stays
+ * on the loop, which is what SYNC_BYTES_PER_PASS bounds.
+ */
+async function readIngestWindow(
+  filePath: string,
+  position: number,
+  available: number,
+  opts?: { step?: number; boundary?: PassBoundary },
+): Promise<{ content: string; bytesConsumed: number; steps: number }> {
+  const fd = await fs.promises.open(filePath, "r");
+  try {
+    return await readCompleteLines(fd, position, available, opts);
+  } finally {
+    await fd.close().catch(() => {});
+  }
+}
+
+/**
+ * Cut a cursor transcript window just before its last role header, so a
+ * message whose lines straddle the window is never synced truncated:
+ * parseCursorTranscriptFile buffers lines until the next header, so a newline
+ * cut inside a message would sync the first half and drop the rest. At EOF
+ * the cut is the last newline, which is what a whole tail read did before.
+ */
+export const cursorPassBoundary: PassBoundary = (buf, len, atEof, from = 0) => {
+  // At EOF the whole window is consumed, so this is the one full search.
+  if (atEof) return newlineBoundary(buf, len, atEof, 0);
+  const end = newlineBoundary(buf, len, atEof, from);
+  if (end < 0) return -1; // the tail added no complete line, so no new header
+  // Only a line the window holds whole can be a header: past the last
+  // newline, "user:" may be the start of a content line still to come. The
+  // header rule is the parser's own, so the cut and the parse agree. Lines
+  // whole before `from` were judged by an earlier step, so decode from the
+  // line that straddles it.
+  const lineStart = from > 0 ? buf.lastIndexOf(0x0a, from - 1) + 1 : 0;
+  const lines = buf.toString("utf8", lineStart, end).split("\n");
+  let headerAt = -1;
+  let bytes = lineStart;
+  for (const l of lines) {
+    if (bytes > 0 && isCursorRoleHeaderLine(l)) headerAt = bytes;
+    bytes += Buffer.byteLength(l, "utf8") + 1;
+  }
+  // The byte before the header line is the newline that ends the previous one.
+  return headerAt < 0 ? -1 : headerAt - 1;
+};
 
 export async function processSessionFile(
   filePath: string,
@@ -6668,33 +6994,9 @@ export async function processSessionFile(
   continuationDepth: number = 0,
 ): Promise<void> {
   const isSubagent = filePath.split(path.sep).includes("subagents");
-    let lastPosition = getPosition(filePath);
-  let stats;
-
-  try {
-    stats = await fs.promises.stat(filePath);
-  } catch (err: any) {
-    if (err.code === 'EACCES' || err.code === 'EPERM') {
-      log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
-      return;
-    }
-    if (err.code === 'ENOENT') {
-      // Transcript deleted out from under us (fork-artifact cleanup, transcript
-      // cleanup, or a manual rm). There is nothing left to sync — return so the
-      // InvalidateSync backoff COMPLETES instead of throwing ENOENT forever, which
-      // turned a deleted file into a permanent ~2/sec retry+log loop.
-      log(`Transcript ${filePath} no longer exists; nothing to sync.`);
-      return;
-    }
-    throw err;
-  }
-
-  
-  if (stats.size < lastPosition) {
-    log(`File rotation detected for ${filePath}: size=${stats.size} < position=${lastPosition}. Resetting to start.`);
-    setPosition(filePath, 0);
-    lastPosition = 0;
-  }
+  const stats = await ingestStat(filePath, getPosition(filePath));
+  if (!stats) return;
+  const lastPosition = stats.lastPosition;
 
   if (stats.size <= lastPosition) {
     // Nothing new to read, but the watchdog uses sync-ledger.json (NOT
@@ -6719,38 +7021,13 @@ export async function processSessionFile(
     return;
   }
 
-  let fd: fs.promises.FileHandle | undefined;
   try {
-    // The read is async: a 1MB window still blocked the loop 8s when the disk
-    // was contended (2026-09-02). The JSON parse below stays on the loop, which
-    // is what SYNC_BYTES_PER_PASS bounds.
-    fd = await fs.promises.open(filePath, "r");
-    const available = stats.size - lastPosition;
-    // Read at most SYNC_BYTES_PER_PASS so a large backlog drains in bounded,
-    // convergent steps (see constant above) rather than one giant batch.
-    let readLen = Math.min(available, SYNC_BYTES_PER_PASS);
-    let buffer = Buffer.alloc(readLen);
-    await fd.read(buffer, 0, readLen, lastPosition);
-    let rawContent = buffer.toString("utf-8");
-    let lastNewline = rawContent.lastIndexOf("\n");
-    // A single JSONL entry larger than the cap (e.g. a big inlined image) has no
-    // newline within the capped window. Read the whole remaining file so we never
-    // stall forever on one oversized line.
-    if (lastNewline < 0 && readLen < available) {
-      readLen = available;
-      buffer = Buffer.alloc(readLen);
-      await fd.read(buffer, 0, readLen, lastPosition);
-      rawContent = buffer.toString("utf-8");
-      lastNewline = rawContent.lastIndexOf("\n");
-    }
-    await fd.close();
-    fd = undefined;
+    // One SYNC_BYTES_PER_PASS window of complete lines, so a large backlog
+    // drains in bounded, convergent steps (see constant above) rather than
+    // one giant batch. A trailing partial line (a large entry still being
+    // written) is left for the next pass.
+    const { content: newContent, bytesConsumed } = await readIngestWindow(filePath, lastPosition, stats.size - lastPosition);
 
-    // Only process complete lines — a trailing partial line (no newline at end)
-    // may be a large JSONL entry (e.g. screenshot) still being written.
-    // By not advancing the position past incomplete data, we re-read it next poll.
-    const newContent = lastNewline >= 0 ? rawContent.slice(0, lastNewline + 1) : "";
-    const bytesConsumed = lastNewline >= 0 ? Buffer.byteLength(rawContent.slice(0, lastNewline + 1), "utf-8") : 0;
     if (!newContent) {
       // No complete lines yet — don't advance position
       return;
@@ -7553,7 +7830,7 @@ export async function processSessionFile(
             const capturedSize = stats.size;
             if (capturedSize !== lastIdleNotifiedSize.get(sessionId)) {
               lastIdleNotifiedSize.set(sessionId, capturedSize);
-              sendAgentStatus(syncService, conversationId, sessionId, resolveTurnEndStatus(sessionId, filePath));
+              sendAgentStatus(syncService, conversationId, sessionId, resolveTurnEndStatus(sessionId, { path: filePath, agentType: "claude" }));
             }
           } else {
             sendAgentStatus(syncService, conversationId, sessionId, "working");
@@ -7564,7 +7841,7 @@ export async function processSessionFile(
               lastIdleNotifiedSize.set(sessionId, capturedSize);
               idleTimers.set(sessionId, setTimeout(() => {
                 idleTimers.delete(sessionId);
-                sendAgentStatus(syncService, capturedConvId, sessionId, resolveTurnEndStatus(sessionId, filePath));
+                sendAgentStatus(syncService, capturedConvId, sessionId, resolveTurnEndStatus(sessionId, { path: filePath, agentType: "claude" }));
               }, IDLE_DEBOUNCE_MS));
             }
           }
@@ -7589,36 +7866,22 @@ export async function processSessionFile(
 
     updateStateCallback();
 
-    // Drain any remaining known backlog in bounded passes instead of waiting for the
-    // next file-watch event or the 5-min watchdog. markSynced/setPosition above have
-    // already advanced the position, so each continuation is durable forward progress
-    // and the next pass picks up from the new position.
-    if (
-      bytesConsumed > 0 &&
-      lastPosition + bytesConsumed < stats.size &&
-      continuationDepth < MAX_SYNC_CONTINUATIONS
-    ) {
-      // Let queued work (heartbeats, deliveries, timers) run between passes —
-      // each pass is a synchronous read+parse, and chaining them back-to-back
-      // is what turned big backlogs into event-loop freezes.
-      await new Promise((resolve) => setImmediate(resolve));
-      await processSessionFile(
-        filePath,
-        sessionId,
-        projectPath,
-        syncService,
-        userId,
-        teamId,
-        conversationCache,
-        retryQueue,
-        pendingMessages,
-        titleCache,
-        updateStateCallback,
-        parentConversationId,
-        overrideAgentType,
-        continuationDepth + 1,
-      );
-    }
+    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processSessionFile(
+      filePath,
+      sessionId,
+      projectPath,
+      syncService,
+      userId,
+      teamId,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      titleCache,
+      updateStateCallback,
+      parentConversationId,
+      overrideAgentType,
+      continuationDepth + 1,
+    ));
   } catch (err: any) {
     if (err.code === 'EACCES' || err.code === 'EPERM') {
       log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
@@ -7793,42 +8056,17 @@ async function processCursorTranscriptFile(
   conversationCache: ConversationCache,
   retryQueue: RetryQueue,
   pendingMessages: PendingMessages,
-  updateStateCallback: () => void
+  updateStateCallback: () => void,
+  continuationDepth: number = 0,
 ): Promise<void> {
-  let lastPosition = getPosition(filePath);
-  let stats;
+  const stats = await ingestStat(filePath, getPosition(filePath));
+  if (!stats || stats.size <= stats.lastPosition) return;
+  const lastPosition = stats.lastPosition;
 
   try {
-    stats = fs.statSync(filePath);
-  } catch (err: any) {
-    if (err.code === "EACCES" || err.code === "EPERM") {
-      log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
-      return;
-    }
-    throw err;
-  }
-
-  if (stats.size < lastPosition) {
-    log(`File rotation detected for ${filePath}: size=${stats.size} < position=${lastPosition}. Resetting to start.`);
-    setPosition(filePath, 0);
-    lastPosition = 0;
-  }
-
-  if (stats.size <= lastPosition) {
-    return;
-  }
-
-  let fd;
-  try {
-    fd = fs.openSync(filePath, "r");
-    const buffer = Buffer.alloc(stats.size - lastPosition);
-    fs.readSync(fd, buffer, 0, buffer.length, lastPosition);
-    fs.closeSync(fd);
-
-    const rawContent = buffer.toString("utf-8");
-    const lastNewline = rawContent.lastIndexOf("\n");
-    const newContent = lastNewline >= 0 ? rawContent.slice(0, lastNewline + 1) : "";
-    const bytesConsumed = lastNewline >= 0 ? Buffer.byteLength(rawContent.slice(0, lastNewline + 1), "utf-8") : 0;
+    // Windowed like claude ingest; the boundary keeps a multi line message
+    // whole across passes (see cursorPassBoundary).
+    const { content: newContent, bytesConsumed } = await readIngestWindow(filePath, lastPosition, stats.size - lastPosition, { boundary: cursorPassBoundary });
     if (!newContent) return;
     const messages = parseTranscriptFor("cursor", newContent);
 
@@ -7972,6 +8210,19 @@ async function processCursorTranscriptFile(
     syncStats.sessionsActive.add(sessionId);
 
     updateStateCallback();
+
+    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processCursorTranscriptFile(
+      filePath,
+      sessionId,
+      syncService,
+      userId,
+      teamId,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      updateStateCallback,
+      continuationDepth + 1,
+    ));
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Error processing Cursor transcript file ${filePath}: ${errMsg}`);
@@ -7988,50 +8239,16 @@ async function processCodexSession(
   retryQueue: RetryQueue,
   pendingMessages: PendingMessages,
   titleCache: TitleCache,
-  updateStateCallback: () => void
+  updateStateCallback: () => void,
+  continuationDepth: number = 0,
 ): Promise<void> {
-  let lastPosition = getPosition(filePath);
-  let stats;
+  const stats = await ingestStat(filePath, getPosition(filePath));
+  if (!stats || stats.size <= stats.lastPosition) return;
+  const lastPosition = stats.lastPosition;
 
   try {
-    stats = await fs.promises.stat(filePath);
-  } catch (err: any) {
-    if (err.code === 'EACCES' || err.code === 'EPERM') {
-      log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
-      return;
-    }
-    if (err.code === 'ENOENT') {
-      // Transcript deleted out from under us (fork-artifact cleanup, transcript
-      // cleanup, or a manual rm). There is nothing left to sync — return so the
-      // InvalidateSync backoff COMPLETES instead of throwing ENOENT forever, which
-      // turned a deleted file into a permanent ~2/sec retry+log loop.
-      log(`Transcript ${filePath} no longer exists; nothing to sync.`);
-      return;
-    }
-    throw err;
-  }
-
-  if (stats.size < lastPosition) {
-    log(`File rotation detected for ${filePath}: size=${stats.size} < position=${lastPosition}. Resetting to start.`);
-    setPosition(filePath, 0);
-    lastPosition = 0;
-  }
-
-  if (stats.size <= lastPosition) {
-    return;
-  }
-
-  let fd;
-  try {
-    fd = fs.openSync(filePath, "r");
-    const buffer = Buffer.alloc(stats.size - lastPosition);
-    fs.readSync(fd, buffer, 0, buffer.length, lastPosition);
-    fs.closeSync(fd);
-
-    const rawContent = buffer.toString("utf-8");
-    const lastNewline = rawContent.lastIndexOf("\n");
-    const newContent = lastNewline >= 0 ? rawContent.slice(0, lastNewline + 1) : "";
-    const bytesConsumed = lastNewline >= 0 ? Buffer.byteLength(rawContent.slice(0, lastNewline + 1), "utf-8") : 0;
+    // Windowed like claude ingest: one pass per window, continuation below.
+    const { content: newContent, bytesConsumed } = await readIngestWindow(filePath, lastPosition, stats.size - lastPosition);
     if (!newContent) return;
     let sessionMetaHead: string;
     try {
@@ -8049,7 +8266,7 @@ async function processCodexSession(
       log(`Skipping app-server-managed Codex transcript ${sessionId}`);
       return;
     }
-    const codexMetadata = extractCodexSessionMetadata(readCodexSessionMetaHead(filePath));
+    const codexMetadata = codexSessionMetadataFor(filePath);
     const nativeParentSessionId = codexMetadata?.parentThreadId;
     const messages = parseTranscriptFor("codex", newContent);
 
@@ -8340,7 +8557,7 @@ async function processCodexSession(
       if (codexMetadata?.originator === "codex_exec" && newContent.includes('"task_complete"')) {
         let fullContent = newContent;
         try {
-          fullContent = fs.readFileSync(filePath, "utf-8");
+          fullContent = await fs.promises.readFile(filePath, "utf-8");
         } catch {}
         if (
           isCompletedStandaloneCodexReview(codexMetadata, fullContent) ||
@@ -8363,6 +8580,20 @@ async function processCodexSession(
     }
 
     updateStateCallback();
+
+    await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processCodexSession(
+      filePath,
+      sessionId,
+      syncService,
+      userId,
+      teamId,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      titleCache,
+      updateStateCallback,
+      continuationDepth + 1,
+    ));
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Error processing Codex session file ${filePath}: ${errMsg}`);
@@ -8387,7 +8618,7 @@ async function processGeminiSession(
   try {
     let content: string;
     try {
-      content = fs.readFileSync(filePath, "utf-8");
+      content = await fs.promises.readFile(filePath, "utf-8");
     } catch (err: any) {
       if (err.code === 'EACCES' || err.code === 'EPERM') {
         log(`Warning: Permission denied reading ${filePath}. Will retry later.`);
@@ -8752,7 +8983,7 @@ async function processOpencodeSession(
     // fires the idle flip that routes the session into needs-input when its turn ends.
     if (conversationId && !appServerConversations.has(conversationId)) {
       const turn = classifyOpencodeTranscriptTail(assembled);
-      sendAgentStatus(syncService, conversationId, sessionId, turn === "idle" ? resolveTurnEndStatus(sessionId) : "working");
+      sendAgentStatus(syncService, conversationId, sessionId, turn === "idle" ? resolveTurnEndStatus(sessionId, null) : "working");
     }
 
     syncStats.messagesSynced += toSync.length;
@@ -8887,7 +9118,7 @@ async function processTranscriptDeltaSession(
     if (client === "grok" && isGrokInternalSessionDir(filePath)) return;
     let content: string;
     try {
-      content = fs.readFileSync(filePath, "utf-8");
+      content = await fs.promises.readFile(filePath, "utf-8");
     } catch (err: any) {
       if (err.code === "EACCES" || err.code === "EPERM") {
         log(`Warning: Permission denied reading ${filePath}. Will retry later.`);
@@ -9093,7 +9324,7 @@ async function processTranscriptDeltaSession(
       // stamps stopReason on the last assistant message, which changes its
       // messageSyncSig and re-opens the delta.
       const turn = classifyTranscriptTailFor(client)?.(content) ?? "unknown";
-      sendAgentStatus(syncService, conversationId, sessionId, turn === "idle" ? resolveTurnEndStatus(sessionId) : "working");
+      sendAgentStatus(syncService, conversationId, sessionId, turn === "idle" ? resolveTurnEndStatus(sessionId, { path: filePath, agentType: client }) : "working");
     }
 
     updateStateCallback();
@@ -10307,6 +10538,14 @@ async function checkForInteractivePrompt(
 
   await new Promise(resolve => setTimeout(resolve, delayMs));
 
+  // The pane verdict below may run the synchronous open task scan (a settle
+  // goes through resolveTurnEndStatus). Prime it off the loop first, and
+  // before the capture so the pane snapshot is fresh after the yield. After a
+  // restart this is the read that would otherwise cover the whole transcript
+  // on the loop, once per recovered session, inside the boot scan.
+  const file = findSessionFile(sessionId, { staleOk: true });
+  if (file?.agentType === "claude") await primeOpenTaskScan(file.path, sessionId);
+
   try {
     // -200 (vs the old -50): a long reasoning block above the menu must stay in the
     // capture so extractAssistantProseAbovePrompt can recover the full prose. The menu
@@ -11026,7 +11265,7 @@ function closeNotifiedTasks(text: string, open: Set<string>): void {
 // bytes — same verdict, O(delta) memory. The offset only advances past complete
 // lines, so a half-written tail is re-read (not skipped) on the next call. A
 // shrink (rotation/rewrite) resets to a full scan.
-const SCAN_CHUNK_BYTES = 4 * 1024 * 1024;
+export const SCAN_CHUNK_BYTES = 4 * 1024 * 1024;
 type OpenTaskScanState = {
   offset: number;
   open: Set<string>;
@@ -11036,6 +11275,23 @@ type OpenTaskScanState = {
   sessionId?: string;
 };
 const openTaskScanCache = new Map<string, OpenTaskScanState>();
+/** How far the open task scan has read a transcript (tests and diagnostics). */
+export function openTaskScanOffset(transcriptPath: string): number | undefined {
+  return openTaskScanCache.get(transcriptPath)?.offset;
+}
+/** Would a synchronous open task scan of this transcript read more than one
+ *  window right now? True for a never scanned transcript. A missing file is
+ *  not cold: the sync scan makes its empty claim at once. */
+export function openTaskScanIsCold(transcriptPath: string): boolean {
+  let size: number;
+  try {
+    size = fs.statSync(transcriptPath).size;
+  } catch {
+    return false;
+  }
+  const offset = openTaskScanOffset(transcriptPath);
+  return offset === undefined || size - offset > SCAN_CHUNK_BYTES;
+}
 // `notBefore` is the restart fence: a task armed before it belongs to a
 // replaced agent process and is dead however open the transcript says it is
 // (see OpenTaskTimes). Callers pass the agent's process start when known.
@@ -11046,43 +11302,96 @@ export function openBackgroundTaskIds(transcriptPath: string, sessionId?: string
 // The open tasks with what the scanner knows about each (see OpenTaskInfo) —
 // the transcript's claim, fenced by process generation but NOT yet checked
 // against live processes (verifiedOpenTasks does that).
+// The scan state for a transcript, reset when the file shrank or the session
+// changed. Shared by the sync scan and the async prime so both advance the
+// same offset.
+function openTaskScanState(transcriptPath: string, size: number, sessionId?: string): OpenTaskScanState {
+  let state = openTaskScanCache.get(transcriptPath);
+  if (state && (state.offset > size || state.sessionId !== sessionId)) state = undefined;
+  if (!state) state = { offset: 0, open: new Set<string>(), openedAt: new Map<string, number>(), info: new Map(), pendingCalls: new Map(), sessionId };
+  return state;
+}
+
+function consumeOpenTaskChunk(state: OpenTaskScanState, content: string, bytesConsumed: number): void {
+  scanOpenBackgroundTasksInto(state.open, content, state.sessionId, state.openedAt, state.info, state.pendingCalls);
+  state.offset += bytesConsumed;
+}
+
+/**
+ * Scan a transcript's unscanned bytes for open tasks off the loop, one
+ * SCAN_CHUNK_BYTES window per step with a yield between. The heartbeat
+ * maintenance path awaits this before the synchronous scan, so the sync scan
+ * (which hook paths must keep, they cannot await) only ever covers the delta
+ * since the last prime instead of a whole transcript after a restart.
+ */
+// At most this many transcripts prime at once: each chunk in flight is one
+// SCAN_CHUNK_BYTES buffer plus its decoded string, and the warm restart scan
+// asks for every recovered session in one tick.
+const openTaskPrimeSlots = countingSemaphore(4);
+export async function primeOpenTaskScan(transcriptPath: string, sessionId?: string, opts?: { front?: boolean }): Promise<void> {
+  try {
+    const size = (await fs.promises.stat(transcriptPath)).size;
+    const state = openTaskScanState(transcriptPath, size, sessionId);
+    // Cached before the first read, so a synchronous scan that lands while a
+    // read is in flight shares this state instead of building its own.
+    openTaskScanCache.set(transcriptPath, state);
+    // The slot is only for the read. A primed transcript (one stat of work)
+    // must not queue behind the fleet's whole transcript reads: after a
+    // restart every recovered session is queued at once, and the prompt
+    // checks and question card path await a prime before they capture.
+    if (state.offset >= size) return;
+    await openTaskPrimeSlots.run(() => primeOpenTaskScanNow(transcriptPath, state, size), opts);
+  } catch {
+    // unreadable transcript: the sync scan makes the same (empty) claim
+  }
+}
+async function primeOpenTaskScanNow(transcriptPath: string, state: OpenTaskScanState, size: number): Promise<void> {
+  try {
+    while (state.offset < size) {
+      const at = state.offset;
+      const { content, bytesConsumed } = await readIngestWindow(transcriptPath, at, size - at, { step: SCAN_CHUNK_BYTES });
+      // A hook path scanned synchronously during the read: it replaced the
+      // state or moved the offset past this chunk, so the chunk is already
+      // covered. Applying it again replayed its lines after later ones (a
+      // task closed later came back open) and left the offset past EOF,
+      // which the next sync scan read as a shrink and rescanned in full.
+      if (openTaskScanCache.get(transcriptPath) !== state) return;
+      if (state.offset !== at) continue;
+      if (!bytesConsumed) break; // torn trailing line at EOF
+      consumeOpenTaskChunk(state, content, bytesConsumed);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  } catch {
+    // unreadable transcript: the sync scan makes the same (empty) claim
+  }
+}
+
 export function openBackgroundTasks(transcriptPath: string, sessionId?: string, notBefore?: number): OpenTaskInfo[] {
   try {
     const size = fs.statSync(transcriptPath).size;
-    let state = openTaskScanCache.get(transcriptPath);
-    if (state && (state.offset > size || state.sessionId !== sessionId)) state = undefined;
-    if (!state) state = { offset: 0, open: new Set<string>(), openedAt: new Map<string, number>(), info: new Map(), pendingCalls: new Map(), sessionId };
+    const state = openTaskScanState(transcriptPath, size, sessionId);
     if (size > state.offset) {
       // Chunked, not one read of (size - offset): the FIRST scan of a session
       // covers the whole transcript, and at boot the daemon first-scans every
       // waiting session back to back — one-shot reads made that a ~500MB burst.
-      // A fixed window caps per-scan memory at SCAN_CHUNK_BYTES regardless of
-      // file size. Each pass consumes only complete lines ("\n" is a single
-      // byte, never inside a multi-byte UTF-8 sequence, so slicing at it is
-      // charset-safe); the partial tail bytes are re-read on the next pass.
-      const fd = fs.openSync(transcriptPath, "r");
-      try {
-        let buf = Buffer.alloc(Math.min(SCAN_CHUNK_BYTES, size - state.offset));
-        while (state.offset < size) {
-          const want = Math.min(buf.length, size - state.offset);
-          const n = fs.readSync(fd, buf, 0, want, state.offset);
-          if (n <= 0) break;
-          let lastNl = buf.lastIndexOf(0x0a, n - 1);
-          if (lastNl >= n) lastNl = -1; // lastIndexOf clamps past-the-end offsets; stale bytes beyond n are not ours
-          if (lastNl < 0) {
-            if (state.offset + n >= size) break; // torn trailing line at EOF -> defer to next call
-            // One JSONL line larger than the window (e.g. an inlined image).
-            // Grow to cover the rest of the file so we never stall on it —
-            // mirrors processSessionFile's oversized-line handling.
-            buf = Buffer.alloc(size - state.offset);
-            continue;
+      // A window caps per-scan memory at SCAN_CHUNK_BYTES regardless of file
+      // size, and a line longer than the window grows it one window at a time
+      // (readCompleteLinesSync), never to the whole remaining file. Each pass
+      // consumes only complete lines; the partial tail is re-read next call.
+      timeSyncFs("openBackgroundTasks", transcriptPath, () => {
+        const fd = fs.openSync(transcriptPath, "r");
+        // One buffer for every window of this scan, not one per window.
+        const buffer = Buffer.allocUnsafe(Math.min(SCAN_CHUNK_BYTES, size - state.offset));
+        try {
+          while (state.offset < size) {
+            const { content, bytesConsumed } = readCompleteLinesSync(fd, state.offset, size - state.offset, { step: SCAN_CHUNK_BYTES, buffer });
+            if (!bytesConsumed) break; // torn trailing line at EOF -> defer to next call
+            consumeOpenTaskChunk(state, content, bytesConsumed);
           }
-          scanOpenBackgroundTasksInto(state.open, buf.toString("utf8", 0, lastNl + 1), sessionId, state.openedAt, state.info, state.pendingCalls);
-          state.offset += lastNl + 1;
+        } finally {
+          fs.closeSync(fd);
         }
-      } finally {
-        fs.closeSync(fd);
-      }
+      });
       openTaskScanCache.set(transcriptPath, state);
     }
     const infoFor = (id: string): OpenTaskInfo => state!.info.get(id) ?? { id, kind: "background" };
@@ -11242,10 +11551,17 @@ export function declaredSettleVerdict(
 // tasks in a scannable form); plain "idle" otherwise. An interrupted turn
 // always settles idle: the user took control (ESC), so the ball is theirs even
 // if an open task (e.g. a dev server) is still running or a stamp was written.
-function resolveTurnEndStatus(sessionId: string, transcriptPath?: string): SettleVerdict {
-  const file = transcriptPath
-    ? { path: transcriptPath, agentType: "claude" as const }
-    : findSessionFile(sessionId);
+//
+// `transcript` is the session's file when the caller already knows it (a Stop
+// hook's transcript_path, the ingest pass's own file), or null for a client
+// with no Claude transcript to read. Left out, it comes from the session file
+// index with staleOk: the settle runs on every hook idle, every transcript
+// driven turn end and every pane reconcile, and the default tier's per miss
+// probe stats every project dir on the loop for each fileless session (6 to
+// 9s freezes, 2026-09-02). A transcript younger than the index reaches the
+// next reconcile; the verdict only degrades to "idle" until then.
+export function resolveTurnEndStatus(sessionId: string, transcript?: SessionFileInfo | null): SettleVerdict {
+  const file = transcript === undefined ? findSessionFile(sessionId, { staleOk: true }) : transcript;
   const claude = !!file && file.agentType === "claude";
   let tail: string | null = null;
   if (claude) {
@@ -12915,6 +13231,9 @@ function findCodexRolloutPath(sessionId: string, opts?: { staleOk?: boolean }): 
 // non-leaf level are checked whenever their parent dir is fresh, matching the
 // old fully-recursive walk for anything recently added.
 function probeRecentCodexRollouts(sessionId: string): string | null {
+  return timeSyncFs("probeRecentCodexRollouts", sessionId, () => probeRecentCodexRolloutsSync(sessionId));
+}
+function probeRecentCodexRolloutsSync(sessionId: string): string | null {
   const since = sessionFileIndexBuiltAt - 60_000; // clock/mtime slack
   const scan = (dir: string, depth: number): string | null => {
     let mtimeMs: number;
@@ -13200,6 +13519,18 @@ export function refreshSessionFileIndex(): Promise<void> {
   return sessionFileIndexRefresh;
 }
 
+/** Resolves once an index for the current HOME exists. Awaiting this before a
+ *  lookup is what keeps the lookup's cold rebuild off the loop. */
+export function ensureSessionFileIndex(): Promise<void> {
+  if (sessionFileIndex && sessionFileIndexHome === (process.env.HOME || "")) return Promise.resolve();
+  return refreshSessionFileIndex();
+}
+
+/** Test seam: when the index was last built (0 while none exists). */
+export function sessionFileIndexBuiltAtForTests(): number {
+  return sessionFileIndexBuiltAt;
+}
+
 // The shared freshness policy for both index maps: stat-validated hits, one
 // throttled rebuild for an unseen miss, misses confirmed by a fresh walk
 // remembered until the next rebuild. See the block comment above.
@@ -13255,6 +13586,9 @@ function indexedSessionLookup<T>(
 // probed: those agents are reached through their parent and tolerate index
 // latency.
 function probeRecentSessionFiles(sessionId: string): SessionFileInfo | null {
+  return timeSyncFs("probeRecentSessionFiles", sessionId, () => probeRecentSessionFilesSync(sessionId));
+}
+function probeRecentSessionFilesSync(sessionId: string): SessionFileInfo | null {
   const home = process.env.HOME || "";
   const since = sessionFileIndexBuiltAt - 60_000; // clock/mtime slack
   const freshDirs = (parent: string): string[] => {
@@ -14199,9 +14533,21 @@ function ensureHeartbeatFlushLoop(): void {
 
 // Run an async op over items with bounded concurrency (a small worker pool), so
 // a fleet-wide pass doesn't fire N tmux/network calls at once.
-async function runBounded<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
+// One item's failure is logged and the pool moves on: a fleet pass must not
+// stop at its first bad session.
+async function runBounded<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>, label = "bounded worker"): Promise<void> {
   let idx = 0;
-  const worker = async () => { while (idx < items.length) await fn(items[idx++]); };
+  const describe = (item: T): string => (typeof item === "string" ? item : JSON.stringify(item)?.slice(0, 200) ?? String(item));
+  const worker = async () => {
+    while (idx < items.length) {
+      const item = items[idx++];
+      try {
+        await fn(item);
+      } catch (err) {
+        log(`${label} failed for ${describe(item)}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  };
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
 }
 
@@ -14298,9 +14644,9 @@ async function runHeartbeatMaintenance(): Promise<void> {
   // tmux has vanished.
   const phase = tick % HEALTH_CHECK_EVERY_N_HEARTBEATS;
   const due = ids.filter((id) => heartbeatHealthCheckBucket(id, HEALTH_CHECK_EVERY_N_HEARTBEATS) === phase);
-  for (const sessionId of due) {
-    try { reconcileStatusFromTranscript(sessionId, sync); } catch {}
-  }
+  // Bounded, not serial: each reconcile may await a transcript prime after a
+  // restart, and the health checks below wait for all of them.
+  await runBounded(due, 4, (sessionId) => reconcileStatusFromTranscript(sessionId, sync).catch(() => {}));
   await runBounded(due, 5, (sessionId) => heartbeatHealthCheck(sessionId).catch(() => {}));
 
   // Conservative reap of long-idle orphan terminals — gentle (capped per pass)
@@ -15031,7 +15377,7 @@ function readFileTailSync(filePath: string, maxBytes = 64 * 1024): string {
 // particular has no Stop-hook equivalent and its watcher-driven idle transition
 // rides a setTimeout that dies across macOS sleep, so this heartbeat-driven path
 // is its only durable latch recovery. Gemini/Cursor formats are not yet classified.
-function reconcileStatusFromTranscript(sessionId: string, syncService: SyncService): void {
+export async function reconcileStatusFromTranscript(sessionId: string, syncService: SyncService): Promise<void> {
   const stored = lastSentAgentStatus.get(sessionId);
 
   // permission_blocked recovery. tmux-managed sessions are handled by the PANE
@@ -15069,18 +15415,31 @@ function reconcileStatusFromTranscript(sessionId: string, syncService: SyncServi
   }
 
   // tmux-managed sessions are reconciled from the live pane (the authoritative
-  // busy/idle signal) by reconcileStatusFromPane. Skip the transcript path for
-  // them: a turn cut off mid-tool reads "active" forever, so the transcript would
-  // flip a pane-confirmed idle back to "working" every cycle. The transcript path
-  // remains the reconcile for bare-terminal sessions, which have no pane.
-  if (resumeSessionCache.has(sessionId)) return;
-  // Cheap in-memory gate first: skip the file read entirely unless the stored
+  // busy/idle signal) by reconcileStatusFromPane. Skip the transcript verdict
+  // for them: a turn cut off mid-tool reads "active" forever, so the transcript
+  // would flip a pane-confirmed idle back to "working" every cycle. The
+  // transcript path remains the reconcile for bare-terminal sessions, which
+  // have no pane. Both kinds get the open task prime below.
+  const paneManaged = resumeSessionCache.has(sessionId);
+  // Cheap in-memory gate first: skip the file lookup entirely unless the stored
   // status is one we'd ever correct.
-  if (!(stored === "working" || stored === "thinking" || stored === "idle" || stored === "connected" || stored === "waiting" || stored === "dormant" || stored === "done")) {
+  if (!paneManaged && !(stored === "working" || stored === "thinking" || stored === "idle" || stored === "connected" || stored === "waiting" || stored === "dormant" || stored === "done")) {
     return;
   }
   const file = findSessionFile(sessionId, { staleOk: true });
   if (!file) return;
+  // Bring the open task scan up to date off the loop before any verdict. The
+  // pane reconcile, the Stop hook and verifiedOpenTasks below all run the
+  // synchronous scan, and after a restart that scan covers the whole
+  // transcript on the loop unless a prime got there first. The scan is
+  // caches its offset, so on an unchanged transcript this is one stat.
+  if (file.agentType === "claude") await primeOpenTaskScan(file.path, sessionId);
+  if (paneManaged) return;
+  // The prime yielded. A hook that landed meanwhile already moved the status,
+  // and a verdict built on the stored value above would publish over it; the
+  // next tick reconciles from fresh inputs. The tail is read after the yield
+  // for the same reason.
+  if (lastSentAgentStatus.get(sessionId) !== stored) return;
   let turn: TranscriptTurnState;
   try {
     const tail = readFileTailSync(file.path);
@@ -15090,10 +15449,10 @@ function reconcileStatusFromTranscript(sessionId: string, syncService: SyncServi
   } catch {
     return; // can't read the transcript -> defer, never guess
   }
-  // Only pay the whole-file open-task scan when the verdict depends on it: a
-  // correction landing on idle (might really be waiting), or a stored waiting
-  // (might have drained back to idle / woken to working). The scan is
-  // size-cached, so heartbeats on an unchanged transcript stay cheap.
+  // Only verify open tasks against live processes when the verdict depends
+  // on it: a correction landing on idle (might really be waiting), or a stored
+  // waiting (might have drained back to idle / woken to working). The scan
+  // behind it is primed above, so it costs only the delta.
   const needsTaskScan = file.agentType === "claude" &&
     (stored === "waiting" || reconciledStatus(stored, turn) === "idle");
   const openTasks = needsTaskScan ? verifiedOpenTasks(file.path, sessionId) : [];
@@ -15738,17 +16097,15 @@ async function collectResourceSnapshot(): Promise<void> {
   if (process.platform !== "darwin") return;
   if (sessionProcessCache.size === 0) return;
 
-  const sessionPids = new Map<string, number>();
   // Sessions whose cached pid is borrowed rather than owned (a Codex subagent
   // thread shares its parent's process): they must not be credited with a subtree
   // that isn't theirs, or the parent's usage lands in the fleet total once per
   // child. Fails OPEN — an undecided session keeps reporting, since the cost is a
   // transiently double-counted tree rather than a lost liveness signal.
-  const sharedPidSessions = new Set<string>();
-  for (const [sessionId, info] of sessionProcessCache) {
-    sessionPids.set(sessionId, info.pid);
-    if (sessionBorrowsProcess(sessionId)) sharedPidSessions.add(sessionId);
-  }
+  const sharedPidSessions = await classifySharedPidSessions([...sessionProcessCache.keys()]);
+  // Read after the await: the cache moves while the classification runs.
+  const sessionPids = new Map<string, number>();
+  for (const [sessionId, info] of sessionProcessCache) sessionPids.set(sessionId, info.pid);
 
   try {
     const resources = await collectSessionResources(sessionPids, sharedPidSessions);
@@ -15800,34 +16157,26 @@ async function collectResourceSnapshot(): Promise<void> {
     let metricsReported = 0;
     let metricsSkipped = 0;
     if (syncServiceRef) {
-      const entries = [...resources.entries()];
       const METRICS_CONCURRENCY = 4;
-      let idx = 0;
-      const worker = async () => {
-        while (idx < entries.length) {
-          const [sessionId, r] = entries[idx++];
-          const agentPid = sessionProcessCache.get(sessionId)?.pid;
-          const status = lastSentAgentStatus.get(sessionId);
-          // Skip flat, idle, recently-reported sessions: this is what keeps the
-          // per-tick write burst proportional to ACTIVE sessions rather than the
-          // whole fleet, leaving socket headroom for message sync.
-          // Hold the previously reported start across ps's one-second
-          // resolution, so only a real restart changes the value we send.
-          const agentStartedAt = stableAgentStartedAt(r.agentStartedAt, lastReportedMetrics.get(sessionId)?.agentStartedAt);
-          if (!shouldReportMetrics({ cur: { cpu: r.cpu, memory: r.memory, pidCount: r.pidCount, agentPid, agentStartedAt }, prev: lastReportedMetrics.get(sessionId), status, now })) {
-            metricsSkipped++;
-            continue;
-          }
-          metricsReported++;
-          lastReportedMetrics.set(sessionId, { cpu: r.cpu, memory: r.memory, pidCount: r.pidCount, agentPid, agentStartedAt, at: now });
-          await syncServiceRef!.reportSessionMetrics(
-            sessionId, r.cpu, r.memory, r.pidCount, agentPid, sessionAwakeIdleMs.get(sessionId) ?? 0, agentStartedAt,
-          ).catch(() => {});
+      await runBounded([...resources.entries()], METRICS_CONCURRENCY, async ([sessionId, r]) => {
+        const agentPid = sessionProcessCache.get(sessionId)?.pid;
+        const status = lastSentAgentStatus.get(sessionId);
+        // Skip flat, idle, recently-reported sessions: this is what keeps the
+        // per-tick write burst proportional to ACTIVE sessions rather than the
+        // whole fleet, leaving socket headroom for message sync.
+        // Hold the previously reported start across ps's one-second
+        // resolution, so only a real restart changes the value we send.
+        const agentStartedAt = stableAgentStartedAt(r.agentStartedAt, lastReportedMetrics.get(sessionId)?.agentStartedAt);
+        if (!shouldReportMetrics({ cur: { cpu: r.cpu, memory: r.memory, pidCount: r.pidCount, agentPid, agentStartedAt }, prev: lastReportedMetrics.get(sessionId), status, now })) {
+          metricsSkipped++;
+          return;
         }
-      };
-      await Promise.all(
-        Array.from({ length: Math.min(METRICS_CONCURRENCY, entries.length) }, worker),
-      );
+        metricsReported++;
+        lastReportedMetrics.set(sessionId, { cpu: r.cpu, memory: r.memory, pidCount: r.pidCount, agentPid, agentStartedAt, at: now });
+        await syncServiceRef!.reportSessionMetrics(
+          sessionId, r.cpu, r.memory, r.pidCount, agentPid, sessionAwakeIdleMs.get(sessionId) ?? 0, agentStartedAt,
+        ).catch(() => {});
+      }, "Metrics worker");
     }
 
     if (resources.size > 0) {
@@ -17735,26 +18084,17 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
   // (status + both diffs, 8 subprocesses) per FILE starved the event loop for
   // minutes on a large ~/.claude/projects — the watchdog then killed the daemon
   // mid-boot as "wedged". One cheap subprocess per unique project path instead.
+  // Async: git on a contended disk answered in 2s at boot (2026-09-02), and
+  // this runs before the hook server listens.
   const repoRootCache = new Map<string, string | undefined>();
-  const resolveRepoRoot = (projectPath: string): string | undefined => {
+  const gitOut = (cmd: string, cwd: string): Promise<string | undefined> =>
+    execAsync(`git ${cmd}`, { cwd }).then(({ stdout }) => stdout.trim() || undefined, () => undefined);
+  const resolveRepoRoot = async (projectPath: string): Promise<string | undefined> => {
     if (repoRootCache.has(projectPath)) return repoRootCache.get(projectPath);
-    let root: string | undefined;
-    try {
-      const commonDir = execSync("git rev-parse --path-format=absolute --git-common-dir", {
-        cwd: projectPath,
-        encoding: "utf-8",
-        stdio: ["pipe", "pipe", "ignore"],
-      }).trim();
-      root = commonDir.endsWith("/.git")
-        ? commonDir.slice(0, -5)
-        : execSync("git rev-parse --show-toplevel", {
-            cwd: projectPath,
-            encoding: "utf-8",
-            stdio: ["pipe", "pipe", "ignore"],
-          }).trim() || undefined;
-    } catch {
-      root = undefined;
-    }
+    const commonDir = await gitOut("rev-parse --path-format=absolute --git-common-dir", projectPath);
+    const root = commonDir?.endsWith("/.git")
+      ? commonDir.slice(0, -5)
+      : await gitOut("rev-parse --show-toplevel", projectPath);
     repoRootCache.set(projectPath, root);
     return root;
   };
@@ -17788,7 +18128,7 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
         const projectPath = resolveTranscriptProjectPath(filePath, dir);
         if (!projectPath) continue;
 
-        const result = await syncService.updateProjectPath(sessionId, projectPath, resolveRepoRoot(projectPath));
+        const result = await syncService.updateProjectPath(sessionId, projectPath, await resolveRepoRoot(projectPath));
         if (result?.updated) {
           repaired++;
           log(`Repaired path for ${sessionId.slice(0, 8)}: ${projectPath}`);
@@ -18027,6 +18367,21 @@ function readLaunchdDaemonJob(): { loaded: boolean; pid: number | null } {
   }
 }
 
+// The same question for the timers. The sync read above stays for the
+// restart and lock paths, which cannot await.
+async function readLaunchdDaemonJobAsync(): Promise<{ loaded: boolean; pid: number | null }> {
+  if (platform !== "darwin" || !process.getuid) return { loaded: false, pid: null };
+  try {
+    const { stdout } = await _execFileAsync("launchctl", ["print", `gui/${process.getuid()}/${DAEMON_LAUNCHD_LABEL}`], {
+      encoding: "utf-8",
+      timeout: 5000,
+    });
+    return { loaded: true, pid: parseLaunchdPrintPid(stdout || "") };
+  } catch {
+    return { loaded: false, pid: null };
+  }
+}
+
 // "Managed by launchd" must mean "launchd's supervised instance IS this process".
 // The old env probe (XPC_SERVICE_NAME) survives into every {...process.env} child,
 // so a self-spawned replacement believed launchd owned it: its restarts went
@@ -18035,6 +18390,9 @@ function readLaunchdDaemonJob(): { loaded: boolean; pid: number | null } {
 // watchdog kickstarted the "dead" job every cycle. Ask launchd, not the env.
 function isManagedByLaunchd(): boolean {
   return readLaunchdDaemonJob().pid === process.pid;
+}
+async function isManagedByLaunchdAsync(): Promise<boolean> {
+  return (await readLaunchdDaemonJobAsync()).pid === process.pid;
 }
 
 // Mutual supervision: the launchd watchdog revives the daemon, and the daemon
@@ -18104,41 +18462,60 @@ function migrateDaemonPlistToStableLauncher(): void {
   }
 }
 
+/** What the supervision tick should do, from what it observed. Pure so the
+ *  branches are testable without launchd. */
+export function watchdogSupervisionAction(input: { loaded: boolean; plistExists: boolean; heartbeat: string | null; now: number }): "bootstrap" | "plist_missing" | "kickstart" | "none" {
+  if (!input.loaded) return input.plistExists ? "bootstrap" : "plist_missing";
+  // Loaded. A stale heartbeat means the loop is wedged or dead.
+  return watchdogHeartbeatStale(input.heartbeat, input.now) ? "kickstart" : "none";
+}
+
 let lastWatchdogEnsureAt = 0;
-function ensureWatchdogSupervised(force = false): void {
-  if (platform !== "darwin" || !process.getuid || !isManagedByLaunchd()) return;
+let watchdogEnsureInFlight = false;
+// Async: three launchctl calls on the health tick held the loop for their
+// whole round trip. The throttle stamp is taken before the first await, and
+// the in flight flag keeps the boot call and the tick from overlapping.
+async function ensureWatchdogSupervised(force = false): Promise<void> {
+  if (platform !== "darwin" || !process.getuid) return;
   const now = Date.now();
   if (!force && now - lastWatchdogEnsureAt < 4 * 60 * 1000) return;
+  if (watchdogEnsureInFlight) return;
   lastWatchdogEnsureAt = now;
-  migrateDaemonPlistToStableLauncher();
+  watchdogEnsureInFlight = true;
   try {
+    if (!(await isManagedByLaunchdAsync())) return;
+    migrateDaemonPlistToStableLauncher();
     const uid = process.getuid();
     const domain = `gui/${uid}`;
     const label = "sh.codecast.watchdog";
-    const loaded =
-      spawnSync("launchctl", ["print", `${domain}/${label}`], { stdio: "ignore" }).status === 0;
-    if (!loaded) {
-      const plistPath = `${process.env.HOME}/Library/LaunchAgents/${label}.plist`;
-      if (!fs.existsSync(plistPath)) {
-        log(`Watchdog plist missing (${plistPath}) — run 'cast setup' to restore supervision`);
+    const launchctl = (args: string[]): Promise<boolean> =>
+      _execFileAsync("launchctl", args, { timeout: 10_000 }).then(() => true, () => false);
+    const plistPath = `${process.env.HOME}/Library/LaunchAgents/${label}.plist`;
+    const loaded = await launchctl(["print", `${domain}/${label}`]);
+    const heartbeat = loaded
+      ? await fs.promises.readFile(path.join(CONFIG_DIR, WATCHDOG_HEARTBEAT_FILENAME), "utf-8").catch(() => null)
+      : null;
+    const action = watchdogSupervisionAction({ loaded, plistExists: fs.existsSync(plistPath), heartbeat, now });
+    switch (action) {
+      case "plist_missing":
+        log(`Watchdog plist missing (${plistPath}): run 'cast setup' to restore supervision`);
         return;
-      }
-      log("Watchdog launchd job not loaded — bootstrapping it");
-      spawnSync("launchctl", ["bootstrap", domain, plistPath], { stdio: "ignore" });
-      spawnSync("launchctl", ["kickstart", `${domain}/${label}`], { stdio: "ignore" });
-      return;
-    }
-    // Loaded — but is the loop actually running? Stale heartbeat ⇒ wedged/dead loop.
-    let heartbeat: string | null = null;
-    try {
-      heartbeat = fs.readFileSync(path.join(CONFIG_DIR, WATCHDOG_HEARTBEAT_FILENAME), "utf-8");
-    } catch { heartbeat = null; }
-    if (watchdogHeartbeatStale(heartbeat, now)) {
-      log("Watchdog loaded but heartbeat stale — kickstarting the wedged loop");
-      spawnSync("launchctl", ["kickstart", "-k", `${domain}/${label}`], { stdio: "ignore" });
+      case "bootstrap":
+        log("Watchdog launchd job not loaded: bootstrapping it");
+        await launchctl(["bootstrap", domain, plistPath]);
+        await launchctl(["kickstart", `${domain}/${label}`]);
+        return;
+      case "kickstart":
+        log("Watchdog loaded but heartbeat stale: kickstarting the wedged loop");
+        await launchctl(["kickstart", "-k", `${domain}/${label}`]);
+        return;
+      case "none":
+        return;
     }
   } catch (err) {
     log(`ensureWatchdogSupervised failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    watchdogEnsureInFlight = false;
   }
 }
 
@@ -18654,47 +19031,45 @@ interface StaleCursorSession {
   mtimeMs: number;
 }
 
-function findStaleCursorSessions(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): StaleCursorSession[] {
+// The last sweep's row count per db, keyed on the newest of the db and its
+// wal mtime: a write lands in the wal first and the db's own mtime only moves
+// on checkpoint (the same rule cursorWatcher uses). The sqlite open is the
+// one sync step here, so it runs only for a db that changed since last time;
+// the position compare still runs every sweep, so a failed sync is retried.
+const cursorStaleSweepSeen = new Map<string, { mtimeMs: number; maxRowId: number }>();
+export async function findStaleCursorSessions(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<StaleCursorSession[]> {
   const workspaceStoragePath = getCursorWorkspaceStoragePath();
-  const staleSessions: StaleCursorSession[] = [];
+  if (!workspaceStoragePath) return [];
   const now = Date.now();
+  const newestByDb = new Map<string, number>();
+  await walkFiles(
+    workspaceStoragePath,
+    { maxDepth: 2, fileFilter: (rel) => /state\.vscdb(-wal)?$/.test(rel) },
+    (f) => {
+      const dbPath = f.path.endsWith("-wal") ? f.path.slice(0, -"-wal".length) : f.path;
+      newestByDb.set(dbPath, Math.max(newestByDb.get(dbPath) ?? 0, f.stat.mtimeMs));
+    },
+  );
 
-  if (!workspaceStoragePath) {
-    return staleSessions;
-  }
-
-  let workspaceDirs: string[];
-  try {
-    workspaceDirs = fs.readdirSync(workspaceStoragePath);
-  } catch {
-    return staleSessions;
-  }
-
-  for (const workspaceHash of workspaceDirs) {
-    const dbPath = path.join(workspaceStoragePath, workspaceHash, "state.vscdb");
-    if (!fs.existsSync(dbPath)) {
-      continue;
-    }
-
+  const staleSessions: StaleCursorSession[] = [];
+  for (const [dbPath, mtimeMs] of newestByDb) {
+    if (now - mtimeMs > maxAgeMs) continue;
     try {
-      const stat = fs.statSync(dbPath);
-      const fileAge = now - stat.mtimeMs;
-      if (fileAge > maxAgeMs) continue;
-
-      const maxRowId = getCursorMaxRowId(dbPath);
-      if (maxRowId <= 0) continue;
-
-      const lastRowId = getPosition(dbPath);
-      if (maxRowId <= lastRowId) continue;
+      let seen = cursorStaleSweepSeen.get(dbPath);
+      if (!seen || seen.mtimeMs !== mtimeMs) {
+        seen = { mtimeMs, maxRowId: timeSyncFs("getCursorMaxRowId", dbPath, () => getCursorMaxRowId(dbPath)) };
+        cursorStaleSweepSeen.set(dbPath, seen);
+      }
+      if (seen.maxRowId <= 0) continue;
+      if (seen.maxRowId <= getPosition(dbPath)) continue;
 
       const workspaceStorageDir = path.dirname(dbPath);
-      const workspacePath = getCursorWorkspaceFolderPath(workspaceStorageDir) || workspaceHash;
-
+      const workspaceHash = path.basename(workspaceStorageDir);
       staleSessions.push({
         sessionId: workspaceHash,
-        workspacePath,
+        workspacePath: getCursorWorkspaceFolderPath(workspaceStorageDir) || workspaceHash,
         dbPath,
-        mtimeMs: stat.mtimeMs,
+        mtimeMs,
       });
     } catch {
       continue;
@@ -18869,7 +19244,8 @@ export function summarizeSamplingTraces(raw: unknown, top = 5): string {
 }
 
 function startLoopFreezeProbe(): NodeJS.Timeout {
-  setSlowSyncSpawnSink((message) => log(message));
+  // One sink for both sync spawns and sync filesystem work (slowSync.ts).
+  setSlowSyncSink((message) => log(message));
   // JSC's sampling profiler runs on its own thread, so it keeps collecting JS
   // stacks even while the event loop is pinned — exactly the window nothing
   // else can observe. Draining the buffer every tick keeps it bounded; when a
@@ -19091,33 +19467,60 @@ function startReconciliation(
 // tick, after stale status files are reaped, so just-completed sessions are excluded.
 const WARM_POOL_RECENCY_WINDOW_MS = 15 * 60 * 1000;
 
+/**
+ * Every hook status record on disk, read off the loop. The watchdog's stale
+ * sweep, the warm pool and the hourly cleanup all iterate this directory; a
+ * sync readdir plus a read per file held the loop once per pass with a few
+ * hundred live sessions. A corrupt record reports `data: null`; a file that
+ * vanished between the listing and the read is skipped. `dir` is a parameter
+ * because AGENT_STATUS_DIR is fixed from HOME at import, so tests pass a temp dir.
+ */
+export async function readAgentStatusFiles(dir = AGENT_STATUS_DIR): Promise<Array<{ sessionId: string; filePath: string; mtimeMs: number; data: HookStatusData | null }>> {
+  let names: string[];
+  try {
+    names = (await fs.promises.readdir(dir)).filter((f) => f.endsWith(".json"));
+  } catch {
+    return [];
+  }
+  const out: Array<{ sessionId: string; filePath: string; mtimeMs: number; data: HookStatusData | null }> = [];
+  await runBounded(names, 16, async (name) => {
+    const filePath = path.join(dir, name);
+    let mtimeMs: number;
+    let raw: string;
+    try {
+      mtimeMs = (await fs.promises.stat(filePath)).mtimeMs;
+      raw = await fs.promises.readFile(filePath, "utf-8");
+    } catch {
+      return;
+    }
+    let data: HookStatusData | null = null;
+    try {
+      data = JSON.parse(raw) as HookStatusData;
+    } catch {
+      data = null;
+    }
+    out.push({ sessionId: path.basename(name, ".json"), filePath, mtimeMs, data });
+  }, "Agent status read");
+  return out;
+}
+
 async function prewarmRecentlyActiveSessions(deps: WatchdogDependencies): Promise<void> {
   const cap = deps.config.warm_pool_size ?? 0;
   if (cap <= 0) return;
   if (!hasTmux()) return;
 
   const now = Date.now();
-  let files: string[];
-  try {
-    if (!fs.existsSync(AGENT_STATUS_DIR)) return;
-    files = fs.readdirSync(AGENT_STATUS_DIR).filter(f => f.endsWith(".json"));
-  } catch { return; }
-
   // Cheap prefilter (status + recency + has conversation) so the expensive aliveness
   // probe runs on a handful of sessions, not all of them.
   const prefiltered: Array<{ sessionId: string; convId: string; status: string; tsMs: number }> = [];
-  for (const file of files) {
-    const sessionId = file.replace(".json", "");
-    try {
-      const data = JSON.parse(fs.readFileSync(path.join(AGENT_STATUS_DIR, file), "utf-8")) as HookStatusData;
-      if (!data.ts) continue;
-      const tsMs = data.ts * 1000;
-      if (now - tsMs > WARM_POOL_RECENCY_WINDOW_MS) continue;
-      if (!WARM_POOL_ACTIVE_STATUSES.has(data.status)) continue;
-      const convId = deps.conversationCache[sessionId];
-      if (!convId) continue;
-      prefiltered.push({ sessionId, convId, status: data.status, tsMs });
-    } catch {}
+  for (const { sessionId, data } of await readAgentStatusFiles()) {
+    if (!data?.ts) continue;
+    const tsMs = data.ts * 1000;
+    if (now - tsMs > WARM_POOL_RECENCY_WINDOW_MS) continue;
+    if (!WARM_POOL_ACTIVE_STATUSES.has(data.status)) continue;
+    const convId = deps.conversationCache[sessionId];
+    if (!convId) continue;
+    prefiltered.push({ sessionId, convId, status: data.status, tsMs });
   }
   if (prefiltered.length === 0) return;
 
@@ -19243,35 +19646,27 @@ function startWatchdog(
 
     // Mark stale agent-status files as completed (session ended without SessionEnd hook)
     try {
-      const statusDir = AGENT_STATUS_DIR;
-      if (fs.existsSync(statusDir)) {
-        const IDLE_STALE_MS = 10 * 60 * 1000;
-        const ACTIVE_STALE_MS = 30 * 60 * 1000;
-        for (const file of fs.readdirSync(statusDir)) {
-          if (!file.endsWith(".json")) continue;
-          const sessionId = file.replace(".json", "");
-          const filePath = path.join(statusDir, file);
-          try {
-            const raw = fs.readFileSync(filePath, "utf-8");
-            const data = JSON.parse(raw) as HookStatusData;
-            if (!data.ts) continue;
-            const ageMs = now - data.ts * 1000;
-            // Cheap time gate first, so we only pay for a process lookup on
-            // sessions that are actually stale by time.
-            const threshold = (data.status === "idle" || data.status === "stopped") ? IDLE_STALE_MS : ACTIVE_STALE_MS;
-            if (ageMs < threshold) continue;
-            const convId = deps.conversationCache[sessionId];
-            if (!convId) { try { fs.unlinkSync(filePath); } catch {} continue; }
-            // Stale by time — but is the agent actually gone, or just idling for
-            // the user? Only reap when no live process remains (see predicate).
-            const liveProcess = await findSessionProcess(sessionId, detectSessionAgentType(sessionId)).catch(() => null);
-            if (!shouldMarkSessionCompleted({ status: data.status, ageMs, hasLiveAgentProcess: !!liveProcess, idleStaleMs: IDLE_STALE_MS, activeStaleMs: ACTIVE_STALE_MS })) continue;
-            log(`Watchdog: stale ${data.status} session ${sessionId.slice(0, 8)} (${Math.round(ageMs / 60000)}min, no live process), marking completed`);
-            deps.syncService.markSessionCompleted(convId).catch(logConvexFailure);
-            sendAgentStatus(deps.syncService, convId, sessionId, "stopped");
-            try { fs.unlinkSync(filePath); } catch {}
-          } catch {}
-        }
+      const IDLE_STALE_MS = 10 * 60 * 1000;
+      const ACTIVE_STALE_MS = 30 * 60 * 1000;
+      for (const { sessionId, filePath, data } of await readAgentStatusFiles()) {
+        try {
+          if (!data?.ts) continue;
+          const ageMs = now - data.ts * 1000;
+          // Cheap time gate first, so we only pay for a process lookup on
+          // sessions that are actually stale by time.
+          const threshold = (data.status === "idle" || data.status === "stopped") ? IDLE_STALE_MS : ACTIVE_STALE_MS;
+          if (ageMs < threshold) continue;
+          const convId = deps.conversationCache[sessionId];
+          if (!convId) { await fs.promises.unlink(filePath).catch(() => {}); continue; }
+          // Stale by time — but is the agent actually gone, or just idling for
+          // the user? Only reap when no live process remains (see predicate).
+          const liveProcess = await findSessionProcess(sessionId, detectSessionAgentType(sessionId)).catch(() => null);
+          if (!shouldMarkSessionCompleted({ status: data.status, ageMs, hasLiveAgentProcess: !!liveProcess, idleStaleMs: IDLE_STALE_MS, activeStaleMs: ACTIVE_STALE_MS })) continue;
+          log(`Watchdog: stale ${data.status} session ${sessionId.slice(0, 8)} (${Math.round(ageMs / 60000)}min, no live process), marking completed`);
+          deps.syncService.markSessionCompleted(convId).catch(logConvexFailure);
+          sendAgentStatus(deps.syncService, convId, sessionId, "stopped");
+          await fs.promises.unlink(filePath).catch(() => {});
+        } catch {}
       }
     } catch {}
 
@@ -19307,25 +19702,9 @@ function startWatchdog(
     const WATCHDOG_CONCURRENCY = 20;
     const WATCHDOG_MAX_STALE_PER_TYPE = 200;
 
-    async function runConcurrent<T>(items: T[], fn: (item: T) => Promise<void>, concurrency: number): Promise<void> {
-      let i = 0;
-      const next = async (): Promise<void> => {
-        while (i < items.length) {
-          const idx = i++;
-          try {
-            await fn(items[idx]);
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            log(`Watchdog worker failed for item ${JSON.stringify(items[idx])}: ${errMsg}`);
-          }
-        }
-      };
-      await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => next()));
-    }
-
     const staleClaudeFiles = (await findStaleSessionFiles()).slice(0, WATCHDOG_MAX_STALE_PER_TYPE);
     const staleCodexFiles = (await findStaleCodexSessionFiles()).slice(0, WATCHDOG_MAX_STALE_PER_TYPE);
-    const staleCursorSessions = findStaleCursorSessions().slice(0, WATCHDOG_MAX_STALE_PER_TYPE);
+    const staleCursorSessions = (await findStaleCursorSessions()).slice(0, WATCHDOG_MAX_STALE_PER_TYPE);
     const staleCursorTranscriptFiles = (await findStaleCursorTranscriptFiles()).slice(0, WATCHDOG_MAX_STALE_PER_TYPE);
     const totalStale =
       staleClaudeFiles.length +
@@ -19342,7 +19721,7 @@ function startWatchdog(
     const currentRestarts = state?.watchdogRestarts || 0;
     saveDaemonState({ watchdogRestarts: currentRestarts + 1 });
 
-    await runConcurrent(staleClaudeFiles, async (filePath) => {
+    await runBounded(staleClaudeFiles, WATCHDOG_CONCURRENCY, async (filePath) => {
       const parts = filePath.split(path.sep);
       const sessionId = resolveSessionId(filePath);
       const projectDirName = parts[parts.length - 2];
@@ -19371,9 +19750,9 @@ function startWatchdog(
         deps.titleCache,
         deps.updateState
       );
-    }, WATCHDOG_CONCURRENCY);
+    }, "Watchdog worker");
 
-    await runConcurrent(staleCodexFiles, async (filePath) => {
+    await runBounded(staleCodexFiles, WATCHDOG_CONCURRENCY, async (filePath) => {
       const filename = path.basename(filePath, ".jsonl");
       const match = filename.match(
         /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
@@ -19394,9 +19773,9 @@ function startWatchdog(
         deps.titleCache,
         deps.updateState
       );
-    }, WATCHDOG_CONCURRENCY);
+    }, "Watchdog worker");
 
-    await runConcurrent(staleCursorSessions, async (cursorSession) => {
+    await runBounded(staleCursorSessions, WATCHDOG_CONCURRENCY, async (cursorSession) => {
       if (deps.config.excluded_paths && isPathExcluded(cursorSession.workspacePath, deps.config.excluded_paths)) {
         return;
       }
@@ -19419,9 +19798,9 @@ function startWatchdog(
         deps.pendingMessages,
         deps.updateState
       );
-    }, WATCHDOG_CONCURRENCY);
+    }, "Watchdog worker");
 
-    await runConcurrent(staleCursorTranscriptFiles, async (filePath) => {
+    await runBounded(staleCursorTranscriptFiles, WATCHDOG_CONCURRENCY, async (filePath) => {
       const sessionId = path.basename(filePath, ".txt");
       const workspacePath = findWorkspacePathForCursorConversation(sessionId);
 
@@ -19450,7 +19829,7 @@ function startWatchdog(
         deps.pendingMessages,
         deps.updateState
       );
-    }, WATCHDOG_CONCURRENCY);
+    }, "Watchdog worker");
 
     log(`Watchdog: Sync completed for ${totalStale} files`);
     } catch (err) {
@@ -19641,7 +20020,7 @@ async function main(): Promise<void> {
 
   // Guarantee our supervisor exists. If an upgrade/login race left the watchdog
   // booted out, restore it now so the daemon is never left without a backstop.
-  ensureWatchdogSupervised(true);
+  void ensureWatchdogSupervised(true);
 
   // Start heartbeat immediately so the daemon doesn't appear "blocked" during slow init
   const eventLoopMonitorInterval = startEventLoopMonitor();
@@ -19702,10 +20081,10 @@ async function main(): Promise<void> {
   }, LOG_FLUSH_INTERVAL_MS);
 
   setInterval(() => {
-    logHealthSummary();
+    logHealthSummary().catch(() => {});
     sendHeartbeat().catch(() => {});
     checkDiskVersionMismatch();
-    ensureWatchdogSupervised();
+    ensureWatchdogSupervised().catch(() => {});
   }, HEALTH_REPORT_INTERVAL_MS);
 
   setInterval(() => {
@@ -19900,9 +20279,12 @@ async function main(): Promise<void> {
     }
   }
 
-  // Sync skills to user profile on startup (global + per-project)
+  // Sync skills to user profile on startup (global + per-project). Every
+  // read here is async: the sweep stats a path per segment of every project
+  // dir name, which is thousands of stats on a machine with hundreds of
+  // projects, and it runs on the same loop the hook server answers from.
   {
-    const globalSkills = readAvailableSkills();
+    const globalSkills = await readAvailableSkills();
     if (globalSkills.length > 0) {
       const skillsJson = JSON.stringify(globalSkills);
       log(`Startup: syncing ${globalSkills.length} global skills to user profile`);
@@ -19912,7 +20294,8 @@ async function main(): Promise<void> {
     }
     const globalNames = new Set(globalSkills.map(s => s.name));
     const projectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-    const decodeProjectPath = (dirName: string): string | null => {
+    const isDir = (p: string): Promise<boolean> => fs.promises.stat(p).then((st) => st.isDirectory(), () => false);
+    const decodeProjectPath = async (dirName: string): Promise<string | null> => {
       const segments = dirName.replace(/^-/, "").split("-");
       let resolved = "";
       let i = 0;
@@ -19922,24 +20305,22 @@ async function main(): Promise<void> {
         while (true) {
           const testPath = resolved + "/" + candidate;
           if (i >= segments.length) { resolved = testPath; break; }
-          try {
-            if (fs.statSync(testPath).isDirectory()) { resolved = testPath; break; }
-          } catch {}
+          if (await isDir(testPath)) { resolved = testPath; break; }
           candidate += "-" + segments[i];
           i++;
         }
       }
-      return fs.existsSync(resolved) ? resolved : null;
+      return (await isDir(resolved)) ? resolved : null;
     };
     try {
-      const entries = fs.readdirSync(projectsDir);
+      const entries = await fs.promises.readdir(projectsDir);
       for (const entry of entries) {
-        const projectPath = decodeProjectPath(entry);
+        const projectPath = await decodeProjectPath(entry);
         if (!projectPath) continue;
-        const hasCommands = fs.existsSync(path.join(projectPath, ".claude", "commands"));
-        const hasSkills = fs.existsSync(path.join(projectPath, ".claude", "skills"));
+        const hasCommands = await isDir(path.join(projectPath, ".claude", "commands"));
+        const hasSkills = await isDir(path.join(projectPath, ".claude", "skills"));
         if (!hasCommands && !hasSkills) continue;
-        const allSkills = readAvailableSkills(projectPath);
+        const allSkills = await readAvailableSkills(projectPath);
         const projectOnly = allSkills.filter(s => !globalNames.has(s.name));
         if (projectOnly.length > 0) {
           log(`Startup: syncing ${projectOnly.length} project skills for ${path.basename(projectPath)}`);
@@ -20358,7 +20739,7 @@ async function main(): Promise<void> {
     }
   } catch {}
 
-  function handleStatusData(sessionId: string, data: HookStatusData, filePath?: string) {
+  function handleStatusData(sessionId: string, data: HookStatusData, filePath?: string, opts?: { primed?: boolean }) {
     try {
       if (!data.status || !data.ts) return;
 
@@ -20368,6 +20749,38 @@ async function main(): Promise<void> {
       const prev = lastHookStatus.get(sessionId);
       if (prev && prev.ts > data.ts) return;
       if (prev && prev.ts === data.ts && prev.status === data.status) return;
+
+      // The hook record carries transcript_path only on a permission prompt,
+      // so the transcript comes from the session file index (a map lookup;
+      // staleOk keeps a miss from walking on the hook path).
+      const claudeTranscript = (): string | undefined => {
+        const file = findSessionFile(sessionId, { staleOk: true });
+        return file?.agentType === "claude" ? file.path : undefined;
+      };
+      // A live hook (no filePath) primes at the front of the queue: after a
+      // restart the boot replay queues every cold transcript, and a Stop
+      // hook's settle must not wait behind the fleet while lastHookStatus
+      // still says working.
+      const primeOpts = { front: !filePath };
+
+      // The idle settle below scans the transcript for open background tasks
+      // synchronously. For a claude transcript nobody primed yet (a Stop hook
+      // landing right after a restart) that scan read the whole file on the
+      // loop, 1.4s seen at boot. Prime it off the loop first and re-enter
+      // once; the ts guards above drop this idle if a newer status landed
+      // meanwhile, and the persist keeps the on disk record equal to what
+      // lastHookStatus holds.
+      if (data.status === "idle" && !opts?.primed) {
+        const transcript = claudeTranscript();
+        if (transcript && openTaskScanIsCold(transcript)) {
+          const settle = data;
+          void primeOpenTaskScan(transcript, sessionId, primeOpts).finally(() => {
+            handleStatusData(sessionId, settle, filePath, { primed: true });
+            if (!filePath) persistHookStatus(sessionId, settle);
+          });
+          return;
+        }
+      }
 
       // In bypassPermissions mode, Claude Code still emits permission_prompt
       // Notification events for tools it auto-approves. Those notifications do
@@ -20403,12 +20816,22 @@ async function main(): Promise<void> {
       // when the task ends, so the ball is not in the user's court and the
       // session must not route into needs-input.
       if (data.status === "idle") {
-        const settled = resolveTurnEndStatus(sessionId, data.transcript_path);
+        const settled = resolveTurnEndStatus(
+          sessionId,
+          data.transcript_path ? { path: data.transcript_path, agentType: "claude" } : undefined,
+        );
         if (settled !== "idle") data = { ...data, status: settled };
       }
 
       const statusChanged = !prev || prev.status !== data.status;
       const modeChanged = data.permission_mode && (!prev || prev.permission_mode !== data.permission_mode);
+      // Keep the open task scan offset at the turn's edge while the agent
+      // works (one stat when warm; the read runs under the prime semaphore),
+      // so the Stop hook's sync scan covers only the turn's delta.
+      if (statusChanged && data.status !== "idle") {
+        const transcript = claudeTranscript();
+        if (transcript) void primeOpenTaskScan(transcript, sessionId, primeOpts);
+      }
       // Notification events don't carry permission_mode; preserve the last
       // observed mode so subsequent bypass-mode suppression stays correct.
       if (!data.permission_mode && prev?.permission_mode) {
@@ -20579,17 +21002,21 @@ async function main(): Promise<void> {
     } catch {}
   }
 
-  // HTTP hook server -- instant push path (file watcher above is the fallback)
-  hookServer = startHookServer((sessionId, data) => {
-    handleStatusData(sessionId, data);
+  // Persist the normalized record (with inherited permission_mode) so a
+  // daemon restart can correctly classify cached permission_blocked events
+  // from sessions running in bypassPermissions mode.
+  function persistHookStatus(sessionId: string, data: HookStatusData): void {
     try {
       fs.mkdirSync(AGENT_STATUS_DIR, { recursive: true });
-      // Persist the normalized record (with inherited permission_mode) so a
-      // daemon restart can correctly classify cached permission_blocked events
-      // from sessions running in bypassPermissions mode.
       const persistData = lastHookStatus.get(sessionId) || data;
       fs.writeFileSync(path.join(AGENT_STATUS_DIR, `${sessionId}.json`), JSON.stringify(persistData));
     } catch {}
+  }
+
+  // HTTP hook server -- instant push path (file watcher above is the fallback)
+  hookServer = startHookServer((sessionId, data) => {
+    handleStatusData(sessionId, data);
+    persistHookStatus(sessionId, data);
 
     // Piggyback message sync onto hook events — fs.watch can miss events on macOS,
     // so use the reliable hook path to also trigger a transcript re-read.
@@ -20652,20 +21079,15 @@ async function main(): Promise<void> {
 
   // Clean up stale agent-status files every 30 minutes
   const statusCleanupInterval = setInterval(() => {
-    try {
-      const files = fs.readdirSync(AGENT_STATUS_DIR);
+    (async () => {
       const cutoff = Date.now() - 60 * 60 * 1000;
-      for (const file of files) {
-        const fp = path.join(AGENT_STATUS_DIR, file);
-        const stat = fs.statSync(fp);
-        if (stat.mtimeMs < cutoff) {
-          fs.unlinkSync(fp);
-          const sid = path.basename(file, ".json");
-          lastHookStatus.delete(sid);
-          bypassPermissionsCleaned.delete(sid);
-        }
+      for (const f of await readAgentStatusFiles()) {
+        if (f.mtimeMs >= cutoff) continue;
+        await fs.promises.unlink(f.filePath).catch(() => {});
+        lastHookStatus.delete(f.sessionId);
+        bypassPermissionsCleaned.delete(f.sessionId);
       }
-    } catch {}
+    })().catch(() => {});
   }, 30 * 60 * 1000);
 
   const CLAUDE_PLANS_DIR = path.join(process.env.HOME || "", ".claude", "plans");
@@ -21195,7 +21617,7 @@ async function main(): Promise<void> {
       if (status === "completed") {
         markAppServerConversationResumable(entry.conversationId, threadId);
       }
-      sendAgentStatus(syncService, entry.conversationId, threadId, status === "completed" ? resolveTurnEndStatus(threadId) : "working");
+      sendAgentStatus(syncService, entry.conversationId, threadId, status === "completed" ? resolveTurnEndStatus(threadId, null) : "working");
     } finally {
       clearAppServerTurnProgress(turnId);
     }
