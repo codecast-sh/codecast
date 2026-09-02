@@ -113,6 +113,11 @@
   color: var(--sol-text-muted);
 }
 
+/* The monogram exists only in the narrow strip (below). */
+.ch-chan-mono {
+  display: none;
+}
+
 .ch-chan-name {
   flex: 1 1 auto;
   min-width: 0;
@@ -1169,25 +1174,139 @@ div.ch-reaction-tip {
   .ch-chan {
     justify-content: center;
     gap: 0;
-    padding: 5px 0;
+    padding: 4px 0;
     position: relative;
   }
 
-  /* The count would not fit beside a 12px glyph, so it rides the corner. */
+  /* A channel is its monogram here, not a hash: a column of hashes says
+   * "channels", a column of lettered tiles says WHICH. The hue is the one the
+   * name gets everywhere (lib/avatarInitials), so a channel's tile matches
+   * its colour in every other surface. A DM keeps its face, which already is
+   * a monogram. */
+  .ch-chan-hash:has(.lucide-hash),
+  .ch-chan-hash:has(.lucide-lock) {
+    display: none;
+  }
+
+  .ch-chan-mono {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    line-height: 1;
+    color: #fff;
+    opacity: 0.72;
+    transition: opacity 110ms ease, box-shadow 110ms ease;
+  }
+
+  .ch-chan-unread .ch-chan-mono,
+  .ch-chan:hover .ch-chan-mono {
+    opacity: 1;
+  }
+
+  .ch-chan-active .ch-chan-mono {
+    opacity: 1;
+    box-shadow: 0 0 0 2px var(--sol-bg), 0 0 0 3.5px var(--sol-blue);
+  }
+
+  .ch-chan-muted .ch-chan-mono {
+    opacity: 0.4;
+  }
+
+  .ch-chan-mono-lock {
+    position: absolute;
+    right: -4px;
+    bottom: -4px;
+    width: 12px;
+    height: 12px;
+    padding: 2px;
+    border-radius: 50%;
+    background: var(--sol-bg);
+    color: var(--sol-text-muted);
+  }
+
+  /* A DM's face grows to the tile's size so the two columns read as one. */
+  .ch-chan-hash .cc-cmt-avatar {
+    width: 24px !important;
+    height: 24px !important;
+    font-size: 10px !important;
+  }
+
+  /* A live room has no space for the chip; the tile wears a violet ring and
+   * the tooltip says the word. */
+  .ch-chan-occ {
+    display: none;
+  }
+
+  .ch-chan-live .ch-chan-mono,
+  .ch-chan-live .ch-chan-hash .cc-cmt-avatar {
+    box-shadow: 0 0 0 2px var(--sol-bg), 0 0 0 3.5px var(--sol-violet);
+  }
+
+  /* The count would not fit beside the tile, so it rides the corner. */
   .ch-chan-badge {
     position: absolute;
-    top: 0;
-    right: 1px;
+    top: 1px;
+    right: 2px;
     min-width: 13px;
     height: 13px;
     font-size: 8.5px;
     line-height: 13px;
+    box-shadow: 0 0 0 1.5px var(--sol-bg);
+  }
+
+  .ch-chan-dot {
+    position: absolute;
+    top: 4px;
+    right: 5px;
   }
 
   .ch-chan-muted svg[aria-label="Muted"] {
     display: none;
   }
 }
+
+/* ── Rail tooltip ─────────────────────────────────────────────────────────────
+ *
+ * The row's voice when the pointer rests on it: name, topic, one state. In the
+ * narrow strip this is the only place the name appears at all. */
+
+.ch-rail-tip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 240px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: var(--sol-card);
+  color: var(--sol-text);
+  border: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent);
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.1);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.ch-rail-tip-title {
+  font-weight: 600;
+}
+
+.ch-rail-tip-detail {
+  color: var(--sol-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ch-rail-tip-state {
+  font-size: 10.5px;
+  color: var(--sol-text-dim);
+}
+
 
 @container ch-shell (max-width: 860px) {
   .ch-thread {

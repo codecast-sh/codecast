@@ -18,6 +18,7 @@ import {
   isFoldExempt,
   isWorkingSetWindow,
   rollupParentIdOf,
+  rideLeadPlacements,
   inWorkingSet,
   inboxEpoch,
   isHardBlocked,
@@ -26,7 +27,9 @@ import {
   projectInbox,
   selectWorkingSet,
   shouldShowInInbox,
+  type InboxBucket,
   type InboxPlacementInput,
+  type RollupRow,
   type WorkingSetRow,
 } from "./inboxProjection";
 
@@ -400,6 +403,24 @@ describe("projectInbox", () => {
     expect(p.set_digest).toBe(digestProjection(p.entries));
   });
 
+  test("a teammate rides its lead's bucket and fold; the tally counts it there", () => {
+    const p = projectInbox(
+      [
+        ...rows(),
+        // Under the cut on its own age, shown under a fresh lead.
+        row("mate", { is_idle: true, updated_at: EPOCH - 21 * HOUR, spawned_by_conversation_id: "working", agent_team_name: "team" }),
+        // Fresh on its own, folded with a lead under the cut.
+        row("mate_of_folded", { is_idle: true, updated_at: EPOCH - HOUR, spawned_by_conversation_id: "folded", agent_team_name: "team" }),
+      ],
+      EPOCH,
+    );
+    expect(p.placements.get("mate")).toMatchObject({ bucket: "working", work_state: "needs_input", below_fold: false });
+    expect(p.placements.get("mate_of_folded")).toMatchObject({ bucket: "needs_input", below_fold: true });
+    expect(p.tally.shown.working).toBe(2);
+    expect(p.tally.folded.needs_input).toBe(2);
+    expect(p.set_digest).toBe(digestProjection(p.entries));
+  });
+
   test("deterministic: same rows and epoch give identical output; showOld never changes it", () => {
     const a = projectInbox(rows(), EPOCH);
     const b = projectInbox([...rows()].reverse(), EPOCH);
@@ -443,9 +464,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 2", () => {
+  test("the caps are the single source and the version is 3", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, owned: 200 });
-    expect(INBOX_PROJECTION_VERSION).toBe(2);
+    expect(INBOX_PROJECTION_VERSION).toBe(3);
   });
 });
 
@@ -470,6 +491,62 @@ describe("rollupParentIdOf — the one child → parent rule", () => {
     expect(rollupParentIdOf({ spawned_by_conversation_id: "lead", agent_team_name: "team" })).toBe("lead");
     expect(rollupParentIdOf({ spawned_by_conversation_id: "lead" })).toBeNull();
     expect(rollupParentIdOf({})).toBeNull();
+  });
+});
+
+describe("rideLeadPlacements — a teammate rides its present lead", () => {
+  const rowsById: Record<string, RollupRow> = {
+    lead: {},
+    mate: { spawned_by_conversation_id: "lead", agent_team_name: "team" },
+    mate_of_mate: { spawned_by_conversation_id: "mate", agent_team_name: "team" },
+    lead_absent: { spawned_by_conversation_id: "nobody", agent_team_name: "team" },
+    handoff: { parent_conversation_id: "lead", parent_message_uuid: "plan-handoff" },
+    a: { spawned_by_conversation_id: "b", agent_team_name: "team" },
+    b: { spawned_by_conversation_id: "a", agent_team_name: "team" },
+  };
+  const placementsOf = (buckets: Record<string, InboxBucket>) =>
+    new Map(Object.entries(buckets).map(([id, bucket]) => [id, { bucket, stamp: id }]));
+
+  test("the bucket follows the lead through a chain; a plan handoff and a parentless teammate keep their own", () => {
+    const p = placementsOf({ lead: "working", mate: "done", mate_of_mate: "needs_input", lead_absent: "needs_input", handoff: "done" });
+    rideLeadPlacements(p, (id) => rowsById[id]);
+    expect(p.get("mate")!.bucket).toBe("working");
+    expect(p.get("mate_of_mate")!.bucket).toBe("working");
+    expect(p.get("lead_absent")!.bucket).toBe("needs_input");
+    expect(p.get("handoff")!.bucket).toBe("done");
+    // Only the bucket rides unless the caller copies more.
+    expect(p.get("mate")!.stamp).toBe("mate");
+  });
+
+  test("a pinned, stashed or dismissed teammate keeps its place and becomes the root its own riders take; a cycle rides nowhere", () => {
+    const p = placementsOf({ lead: "working", mate: "stashed", mate_of_mate: "done", a: "done", b: "needs_input" });
+    rideLeadPlacements(p, (id) => rowsById[id]);
+    expect(p.get("mate")!.bucket).toBe("stashed");
+    expect(p.get("mate_of_mate")!.bucket).toBe("stashed");
+    expect(p.get("a")!.bucket).toBe("done");
+    expect(p.get("b")!.bucket).toBe("needs_input");
+    for (const own of ["pinned", "dismissed"] as const) {
+      const q = placementsOf({ lead: "working", mate: own });
+      rideLeadPlacements(q, (id) => rowsById[id]);
+      expect(q.get("mate")!.bucket).toBe(own);
+    }
+  });
+
+  test("copy carries more of the lead's stamp, read after the lead settled", () => {
+    const p = placementsOf({ mate_of_mate: "done", mate: "done", lead: "working" });
+    rideLeadPlacements(p, (id) => rowsById[id], (rider, lead) => { rider.stamp = lead.stamp; });
+    expect(p.get("mate")!.stamp).toBe("lead");
+    expect(p.get("mate_of_mate")!.stamp).toBe("lead");
+  });
+
+  test("input order never matters", () => {
+    const ids = ["lead", "mate", "mate_of_mate", "lead_absent", "handoff"];
+    const expectFrom = (order: string[]) => {
+      const p = new Map(order.map((id) => [id, { bucket: (id === "lead" ? "working" : "done") as InboxBucket }]));
+      rideLeadPlacements(p, (id) => rowsById[id]);
+      return Object.fromEntries([...p].map(([id, v]) => [id, v.bucket]).sort());
+    };
+    expect(expectFrom([...ids].reverse())).toEqual(expectFrom(ids));
   });
 });
 

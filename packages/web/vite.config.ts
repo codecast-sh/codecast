@@ -4,9 +4,13 @@ import { sentryVitePlugin } from "@sentry/vite-plugin";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
 import { storeHmrPlugin } from "./plugins/storeHmr";
+import { hookRefreshPlugin } from "./plugins/hookRefresh";
 
 export default defineConfig({
   plugins: [
+    // Before react(): gives hooks in plain .ts files a Fast Refresh signature,
+    // so editing their hook list remounts consumers instead of crashing them.
+    hookRefreshPlugin(),
     react(),
     // Lets an edit to a store action hot-swap instead of reloading the whole app.
     storeHmrPlugin(),

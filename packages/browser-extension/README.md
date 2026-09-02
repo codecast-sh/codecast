@@ -1,4 +1,4 @@
-# Cast Browser Bridge
+# Codecast browser bridge
 
 Drive tabs in your **real** Chrome from `cast browser`: your logins, your
 session, no profile clone. The cloned browser stays the default for
@@ -21,15 +21,17 @@ work the same way against the real Chrome. Only the transport differs.
 2. In a terminal: `cast browser extension setup`. It starts the bridge host
    on this machine and, on macOS, opens the extension's options page in
    Chrome with the token and port already filled in. The page saves them,
-   clears them from the address bar, and connects. Its status line changes
-   to `connected`.
-3. Check from the terminal: `cast browser extension status` prints two green
-   lines, one for the host and one for the extension.
+   clears them from the address bar, and connects. The command waits up to
+   ten seconds for that connection and prints one line when it arrives:
+   `extension connected`. Only when it does not arrive does the command print
+   the install steps.
+3. Check any time with `cast browser extension status`: two green lines, one
+   for the host and one for the extension.
 
 If step 2 did not open the page (another OS, Chrome was not found, or macOS
 asked whether the terminal may control Chrome and you said no), run
 `cast browser extension setup --show-token`. It prints the pairing URL to
-open by hand, plus the token and port to paste into **Details, Extension
+open by hand, plus the token and port to enter under **Details, Extension
 options** followed by **Save & connect**. Without `--show-token` the command
 never prints the token: these commands run inside agent sessions whose output
 syncs off the machine. `--json` follows the same rule (`--json --show-token`
@@ -97,10 +99,18 @@ Rules the CLI enforces in real mode:
 
 ## What you see while a session drives a tab
 
-- **A blue Chrome tab group** named `cast <session>` (the first seven
-  characters of the session id). Every tab the session opens joins it. The
-  group's title gains cycling dots while a command runs and a checkmark for
-  three seconds after. The group disappears with its last tab.
+- **A coloured Chrome tab group** named `cast <session>` (the first seven
+  characters of the session id; a session known only by its tmux pane is
+  named `cast pane <n>`). The colour is chosen from the session id, so two
+  agents in the same Chrome get different colours and the same agent gets the
+  same colour on every run. Every tab the session opens joins the group. The
+  extension remembers which groups it created and touches only those: a
+  group you made yourself is never renamed, animated or adopted by a session.
+  While a session works the title shows cycling dots; CDP calls that arrive
+  within 600 ms of each other count as one span, the dots start once a span
+  has run for 300 ms, and a checkmark follows for three seconds when the span
+  ends. The frames have a fixed width so the tab strip does not shift. The
+  group disappears with its last tab.
 - **A thin border** around the driven page, in the group's colour. It takes
   no clicks, and the extension hides it for every screenshot, so captures
   show the page alone. The extension injects it through the debugger
@@ -109,12 +119,12 @@ Rules the CLI enforces in real mode:
   id: the page cannot reach the script, cannot watch for the moment before a
   screenshot, and cannot write a stylesheet rule against the element in
   advance. (The DOM is shared, so a hostile page can still remove the
-  element; Chrome's infobar, the badge and the tab group are not the page's
-  to touch.) It goes away when the session detaches. If you cancel the
-  debugger yourself, the border stays on that page until the next
-  navigation.
-- **A red `CAST` badge** on the extension icon for the driven tab.
-- **Chrome's own infobar:** *"Cast Browser Bridge" started debugging this
+  element; Chrome's infobar and the tab group are not the page's to touch.)
+  It goes away when the session detaches. The extension also refreshes a
+  heartbeat in the page every three seconds, and the border hides itself
+  when eight seconds pass with none, so cancelling the debugger yourself, or
+  a crashed host, cannot leave the frame behind.
+- **Chrome's own infobar:** *"Codecast" started debugging this
   browser*. Chrome shows it for as long as any tab is attached. **Cancel**
   detaches at once; the extension notices and lets the tab go. An extension
   cannot suppress this infobar. The only ways around it are to launch Chrome
@@ -134,7 +144,7 @@ Rules the CLI enforces in real mode:
   `HMAC(token, "ext:" + nonce)`, the host answers `HMAC(token, nonce)`, and
   the extension executes nothing until that answer checks out. A host that
   cannot answer is treated like a bad token: the socket closes and the retry
-  alarm stays quiet until you re-pair. The CLI does the same before it ever
+  alarm stays quiet until setup hands it a token again. The CLI does the same before it ever
   presents the token: `/healthz?nonce=` must return
   `HMAC(token, "healthz:" + nonce)`, and every function that builds a token
   carrying URL takes a proven host, so the compiler refuses a path that
@@ -175,7 +185,8 @@ specific to the browser. The loopback WebSocket is one moving part that
 serves both sides, and the open socket keeps the MV3 service worker alive
 (Chrome 116 and later). The host pings every 20 seconds, and a
 `chrome.alarms` tick every 30 seconds reconnects if the worker was ever
-torn down.
+torn down. When the socket drops while the worker is awake it retries after
+one, two and five seconds first, so a host restart is not a 30 second gap.
 
 ## Smoke harness
 
@@ -187,12 +198,13 @@ SMOKE_KEEP=1 bun packages/browser-extension/smoke.mjs                          #
 ```
 
 It launches a **separate** Chrome with a scratch profile (your running
-browser is never touched), loads this extension unpacked, seeds the token
-into the extension's storage over a temporary CDP port (the one step a human
-does in the options page), and prints PASS or FAIL per check. First the
-handshake against the real extension: a squatter that answers like a host
-but cannot prove the token gets no op executed, and the real host turns away
-an extension paired with a wrong token. Then four parts:
+browser is never touched), loads this extension unpacked, checks that Chrome
+gave it the ID the CLI expects, pairs it the way `setup` does (opens the
+pairing URL over a temporary CDP port and asserts the fragment was read and
+cleared), and prints PASS or FAIL per check. First the handshake against the
+real extension: a squatter that answers like a host but cannot prove the
+token gets no op executed, and the real host turns away an extension paired
+with a wrong token. Then four parts:
 
 1. The built in driver: every verb (open, snapshot, find, click, type,
    press, eval, shot, tabs) through `cast browser --real`.
@@ -206,8 +218,10 @@ an extension paired with a wrong token. Then four parts:
 4. The product path: `cast browser target real`, then the plain verbs (open,
    snapshot, click, shot, tabs, stop) on the engine driver, with the CLI's
    state isolated from the machine's. It asserts the tab landed in one group
-   named for the session, the overlay is in the DOM but not in the
-   screenshot, and `stop` closes the tab.
+   named for the session, a second tab from `open --new-tab` joins the same
+   group, the overlay is in the DOM but not in the screenshot, the reaper
+   closes the tab of a session that ended, and `stop` closes the session's
+   own tab.
 
 It needs an unbranded build (Chrome for Testing or Chromium; branded Chrome
 137 and later ignores `--load-extension`). It finds one in the puppeteer or

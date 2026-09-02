@@ -191,7 +191,8 @@ export interface ReapReport {
 export interface ReapOptions {
   /** Ignore the throttle stamp. */
   force?: boolean;
-  /** Never touch this session (the caller's own). */
+  /** Never touch this session (the caller's own), in either mode: the key
+   *  and its real/clone twin are both kept. */
   keep?: string | null;
   now?: number;
   idleMs?: number;
@@ -235,41 +236,44 @@ async function engineOptionsFor(key: string): Promise<(EngineOptions & { session
   }
 }
 
-/** Close a tab by target id, over CDP. Best effort. */
-export function closeTargetLater(targetId: string, endpoint: CdpEndpoint | null): void {
+/**
+ * Close a tab by target id, over CDP. Best effort, bounded by short timeouts,
+ * and awaited by its callers: a reap that runs right before `process.exit`
+ * (the `open` passthrough) would otherwise drop the close on the floor.
+ */
+export async function closeTargetLater(targetId: string, endpoint: CdpEndpoint | null): Promise<void> {
   if (!endpoint) return;
-  void CdpConnection.fromPort(endpoint, 3_000)
-    .then(async (conn) => {
-      try {
-        await conn.send("Target.closeTarget", { targetId }, undefined, 3_000);
-      } finally {
-        conn.close();
-      }
-    })
-    .catch(() => {
-      /* the browser or the tab is already gone */
-    });
+  try {
+    const conn = await CdpConnection.fromPort(endpoint, 3_000);
+    try {
+      await conn.send("Target.closeTarget", { targetId }, undefined, 3_000);
+    } finally {
+      conn.close();
+    }
+  } catch {
+    /* the browser or the tab is already gone */
+  }
 }
 
 /**
  * Close one session's tab in the shared browser and detach its daemon. `close`
  * on an attached daemon only disconnects, so the tab is closed explicitly first
  * — through the daemon when it is alive (it knows its tab), by target id when
- * it is not.
+ * it is not. `binary` is the engine to drive the daemon with; null means no
+ * engine, so the tab is closed by target id alone (tests inject that).
  */
-export async function closeSessionTab(key: string): Promise<boolean> {
+export async function closeSessionTab(key: string, binary: string | null = findEngine()): Promise<boolean> {
   const target = sessionTargetId(key);
-  const binary = findEngine();
   const browser = await engineOptionsFor(key);
   let ok = false;
   if (binary && browser) {
     const env = { ...process.env, AGENT_BROWSER_SESSION: key };
     const closedTab = runEngine(["tab", "close"], { ...browser, timeoutMs: 15_000 });
-    if (closedTab.status !== 0 && target) closeTargetLater(target, await sessionEndpoint(key));
+    if (closedTab.status !== 0 && target) await closeTargetLater(target, await sessionEndpoint(key));
     const res = spawnSync(binary, ["close"], { encoding: "utf-8", timeout: 20_000, stdio: ["ignore", "pipe", "pipe"], env });
     ok = res.status === 0;
   } else if (target) {
-    closeTargetLater(target, await sessionEndpoint(key));
+    await closeTargetLater(target, await sessionEndpoint(key));
   }
   return ok;
 }
@@ -325,7 +329,10 @@ export async function reapEngineOrphans(opts: ReapOptions = {}): Promise<ReapRep
 
   const gone = new Set<string>();
   for (const s of sessions) {
-    if (s.key === keep) continue;
+    // The caller's own session, in BOTH modes: its real and clone twins are
+    // one agent under two keys (engine.ts), and `stop` in one mode must not
+    // reap the tab the same agent holds in the other.
+    if (keep && baseSessionKey(s.key) === baseSessionKey(keep)) continue;
     const owner = ownerState(s.key, live);
     const idle = now - s.lastSeen > idleMs;
     const doomed = owner === "dead" || (owner === "unknown" && idle);
@@ -344,7 +351,7 @@ export async function reapEngineOrphans(opts: ReapOptions = {}): Promise<ReapRep
     } else {
       // The daemon died but its tab may still be open in the shared browser.
       const target = sessionTargetId(s.key, stateDir);
-      if (target) closeTargetLater(target, await sessionEndpoint(s.key));
+      if (target) await closeTargetLater(target, await sessionEndpoint(s.key));
     }
     gone.add(s.key);
   }

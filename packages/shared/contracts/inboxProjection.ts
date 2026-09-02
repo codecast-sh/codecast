@@ -59,7 +59,9 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // deploy skew window becomes silence plus a metric, never a heal storm (C6).
 // v2: digest over (id, bucket, below_fold) triples; the shared working-set
 // selection and fold; `as_of` removed from the envelope.
-export const INBOX_PROJECTION_VERSION = 2 as const;
+// v3: an agent-team teammate rides its present lead's bucket and fold
+// (rideLeadPlacements), so the team files as one group everywhere.
+export const INBOX_PROJECTION_VERSION = 3 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -396,15 +398,91 @@ export function isOrphanOrSubagent(conv: InboxRowIdentity): boolean {
 //   - an agent-team teammate (spawned_by + agent_team_name, no parent pointer)
 //     is its own member AND rolls up to its lead: the lead card is where the
 //     team's asks surface.
-export function rollupParentIdOf(row: InboxRowIdentity & {
+export interface RollupRow extends InboxRowIdentity {
   spawned_by_conversation_id?: unknown;
   agent_team_name?: string | null;
-}): string | null {
+}
+
+export function rollupParentIdOf(row: RollupRow): string | null {
   if (row.parent_conversation_id) {
     return isOrphanOrSubagent(row) ? String(row.parent_conversation_id) : null;
   }
   if (row.agent_team_name && row.spawned_by_conversation_id) return String(row.spawned_by_conversation_id);
   return null;
+}
+
+// ── Riding the lead ─────────────────────────────────────────────────────────
+//
+// A member whose state rolls up to another member (rollupParentIdOf: an
+// agent-team teammate under its lead) never stands alone in the inbox. It
+// stays a member — it holds its seat, it lists, and its own verdict is what an
+// orchestrator watches to see a worker finish — but it takes its lead's BUCKET
+// and FOLD, so the team files as one group under the lead card on every
+// replica and on the server, and a section's count is the rows nested inside
+// it. The lead is who acts on a teammate; a finished worker under a working
+// lead is the lead's to collect, not a card for the human to answer.
+//
+// Riding stops at a deliberate act on the row itself: a teammate the viewer
+// pinned, stashed or dismissed on its own keeps that place (RIDE_KEEPS_OWN),
+// and a fold-exempt row (a pin, a stash, queued work) never folds through its
+// lead. Chains ride to their root; a cycle rides nowhere. A rider whose lead is
+// not present keeps its own placement and renders where it stands.
+//
+// `settleRiders` is the one traversal: it visits every rider after its lead
+// has settled, so a caller reads the lead's FINAL state. Callers hand it the
+// rows to decide presence and the ride step to apply.
+export function settleRiders(
+  ids: Iterable<string>,
+  rowOf: (id: string) => RollupRow | undefined,
+  ride: (riderId: string, leadId: string) => void,
+  keepsOwn: (id: string) => boolean = () => false,
+): void {
+  const settled = new Set<string>();
+  // Settles `id` and everything above it; false when the chain above closes
+  // on itself, in which case nothing on it rides.
+  const settle = (id: string, trail: Set<string>): boolean => {
+    if (settled.has(id)) return true;
+    if (trail.has(id)) return false;
+    const row = rowOf(id);
+    const leadId = row && !keepsOwn(id) ? rollupParentIdOf(row) : null;
+    if (leadId && leadId !== id && rowOf(leadId)) {
+      trail.add(id);
+      const acyclic = settle(leadId, trail);
+      trail.delete(id);
+      if (!acyclic) return false;
+      ride(id, leadId);
+    }
+    settled.add(id);
+    return true;
+  };
+  for (const id of ids) settle(id, new Set());
+}
+
+export const RIDE_KEEPS_OWN: ReadonlySet<InboxBucket> = new Set<InboxBucket>(["dismissed", "stashed", "pinned"]);
+
+// The bucket ride over an id → placement map, in place: a rider takes its
+// present lead's bucket. The fold rides inside computeFold (the one fold
+// computation every channel reads), never by copying a flag — an exempt rider
+// must stay above the fold whatever its lead does. Shared by projectInbox, the
+// server overlay, the CLI stamping and the web chokepoint, so a teammate can
+// never nest on one side and float on another. `copy` lets a caller carry more
+// of the lead's stamp (the server's time-flip fields) with the bucket.
+export function rideLeadPlacements<P extends { bucket: InboxBucket }>(
+  placements: Map<string, P>,
+  rowOf: (id: string) => RollupRow | undefined,
+  copy: (rider: P, lead: P) => void = () => {},
+): void {
+  settleRiders(
+    placements.keys(),
+    (id) => (placements.has(id) ? rowOf(id) : undefined),
+    (riderId, leadId) => {
+      const rider = placements.get(riderId)!;
+      const lead = placements.get(leadId)!;
+      rider.bucket = lead.bucket;
+      copy(rider, lead);
+    },
+    (id) => RIDE_KEEPS_OWN.has(placements.get(id)!.bucket),
+  );
 }
 
 export interface InboxVisibilityRow extends InboxRowIdentity {
@@ -494,7 +572,7 @@ export const INBOX_FOLD_GAP_MS = 12 * 60 * 60 * 1000;
 
 // The row fields membership and fold read. Facts (updated_at) ride the
 // overlay, so the selection input is fresh for every covered row.
-export interface WorkingSetRow extends InboxVisibilityRow {
+export interface WorkingSetRow extends InboxVisibilityRow, RollupRow {
   _id: string | { toString(): string };
   updated_at: number;
   inbox_dismissed_at?: number | null;
@@ -574,7 +652,7 @@ export function selectWorkingSet<Row extends WorkingSetRow>(
 // stash STAMP (the same stamps placement reads — a dismissed row sits in the
 // dismissed bucket whether or not its stamp still holds a window seat), or an
 // owner seat. ONE rule for the shared fold and the server's per-row flag
-// (convex isBelowInboxFold); a parallel predicate keyed on window membership
+// (convex belowFoldFor); a parallel predicate keyed on window membership
 // instead of the stamp diverged exactly at the 30-day stamp horizon (found by
 // the generated-world property test, 2026-09-01).
 export function isFoldExempt(row: WorkingSetRow): boolean {
@@ -586,7 +664,7 @@ export function isFoldExempt(row: WorkingSetRow): boolean {
 // work (has_pending_messages) is about to move so it never folds either, and
 // everything else folds when its activity is under the cut. A cutoff of 0
 // means no fold. The shared loop below and the server's per-row flag
-// (convex isBelowInboxFold) both call this, so the two cannot diverge.
+// (convex belowFoldFor) both call this, so the two cannot diverge.
 export function isBelowFoldAt(row: WorkingSetRow, cutoff: number): boolean {
   if (cutoff <= 0) return false;
   if (isFoldExempt(row)) return false;
@@ -622,6 +700,20 @@ export function computeFold(
   for (const c of candidates) {
     if (isBelowFoldAt(c.row, cutoff)) belowFold.add(c.id);
   }
+  // A candidate folds with its present lead (see settleRiders): a finished
+  // teammate older than the cut stays visible under a lead above it, and one
+  // fresher than the cut folds away with a lead below it. Exempt rows are not
+  // candidates and never fold, so a rider under a pinned lead stays shown.
+  const candidateIds = new Set(candidates.map((c) => c.id));
+  settleRiders(
+    candidateIds,
+    (id) => members.get(id)?.row,
+    (riderId, leadId) => {
+      if (belowFold.has(leadId)) belowFold.add(riderId);
+      else belowFold.delete(riderId);
+    },
+    (id) => !candidateIds.has(id),
+  );
   return { belowFold, cutoff };
 }
 
@@ -731,12 +823,15 @@ export function projectInbox<Row extends ProjectableInboxRow>(
   const tally = { shown: emptyInboxTally(), folded: emptyInboxTally() };
   for (const [id, m] of members) {
     const asking = overlays?.asking?.(id) ?? false;
-    const placement = placeProjectableRow(m.row as ProjectableInboxRow, asking, epoch);
-    const below_fold = belowFold.has(id);
-    entries.push([id, placement.bucket, below_fold]);
-    placements.set(id, { ...placement, below_fold });
+    placements.set(id, { ...placeProjectableRow(m.row as ProjectableInboxRow, asking, epoch), below_fold: belowFold.has(id) });
     windows.set(id, m.windows);
-    if (placement.bucket !== "hidden") (below_fold ? tally.folded : tally.shown)[placement.bucket]++;
+  }
+  // Every member placed on its own facts first, then riders take their lead's
+  // place (rideLeadPlacements); the entries and the tally read the final map.
+  rideLeadPlacements(placements, (id) => members.get(id)?.row);
+  for (const [id, p] of placements) {
+    entries.push([id, p.bucket, p.below_fold]);
+    if (p.bucket !== "hidden") (p.below_fold ? tally.folded : tally.shown)[p.bucket]++;
   }
   return { entries, placements, tally, set_digest: digestProjection(entries), truncated, windows };
 }
