@@ -104,6 +104,13 @@ export type FaceKey = {
   holding: boolean;
   /** Their voice is coming out of this machine right now. */
   talking: boolean;
+  /** A BURST IS NOT A HUDDLE. `in_huddle` is true for ANY live seat, so the
+   *  violet huddle chip used to light for three seconds of somebody's voice
+   *  and read the same as an hour in a call. While a burst is live with this
+   *  face the chip stands down and the rings say what is happening instead;
+   *  the moment somebody steps in on purpose it is a call again and the chip
+   *  comes back. Every surface that draws a face reads this one answer. */
+  burst: boolean;
   /** Why Talk cannot start, in the words a button says; null when it can. */
   blocked: string | null;
   /** The DM room this face's actions open into. */
@@ -164,6 +171,14 @@ export function useFaceKey({
   const txRef = useWalkieLevelVar<HTMLSpanElement>(sending);
   const rxRef = useWalkieLevelVar<HTMLSpanElement>(talking, memberId);
 
+  // A burst is this face's voice (either direction) in a room nobody has
+  // stepped into. `joinedRoom` is what the engine sets the instant a burst
+  // becomes a call, so the chip returns on that edge with no timer. The
+  // subscription is its own line: a hook buried in an expression is one edit
+  // away from landing behind a condition.
+  const { joinedRoom } = useWalkieFaces();
+  const burst = (sending || talking) && joinedRoom !== roomKey;
+
   const blocked = callsEnabled ? ptt.reason : "Calls are not on for this team";
 
   // THE ROOM, EARLY. The timer is a ref rather than state: nothing on screen
@@ -187,7 +202,7 @@ export function useFaceKey({
     },
   };
 
-  return { state, sending, holding: ptt.holding, talking, blocked, roomKey, ptt, txRef, rxRef, warmProps };
+  return { state, sending, holding: ptt.holding, talking, burst, blocked, roomKey, ptt, txRef, rxRef, warmProps };
 }
 
 /**

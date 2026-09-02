@@ -262,6 +262,7 @@ export function WallFaceButton({
           badgeSize={px >= 44 ? "md" : "sm"}
           title=""
           className="people-face-av"
+          showHuddle={!key.burst}
         />
         {unread > 0 && (
           <span
