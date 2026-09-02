@@ -63,6 +63,7 @@ export function TeamBarFace({
     memberId: id,
     callsEnabled: callsEnabled && !isSelf,
     talking,
+    joinedRoom: faces.joinedRoom,
   });
   const joined = useRecentJoin(key.roomKey, faces.joinedRoom);
   // A click opens the three actions under the face; Escape, a second click or
