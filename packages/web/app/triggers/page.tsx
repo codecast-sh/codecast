@@ -199,16 +199,10 @@ function HorizonRail({ tasks, now }: { tasks: any[]; now: number }) {
   if (points.length === 0) return null;
 
   return (
-    <div className="border-t border-sol-border/40 px-5 pt-3.5 pb-2 select-none">
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-[10px] font-medium uppercase tracking-widest text-sol-text-dim">±24 hours</span>
-        <span className="text-[10px] text-sol-text-dim flex items-center gap-3">
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-sol-violet/60 inline-block" /> past runs</span>
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-sol-violet inline-block" /> recurring</span>
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-sol-cyan inline-block" /> one-time</span>
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-sol-violet/30 inline-block" /> later runs</span>
-        </span>
-      </div>
+    // Flat on the page: the baseline is the only line, the ends land on the
+    // column edges, and the row chips (violet loops, cyan one-shots) already
+    // teach the colors, so there is no legend and no box.
+    <div className="mt-2 select-none">
       <div className="relative h-12">
         {/* baseline — the past half sits dimmer */}
         <div className="absolute left-0 right-1/2 top-1/2 h-px bg-sol-border/60" />
@@ -331,9 +325,11 @@ function LastResultCard({ task, failed, runSession }: { task: any; failed: boole
   const { headline, detail } = splitResultSummary(text);
   const Icon = failed ? XCircle : CheckCircle2;
   return (
-    <div className={`mt-3 rounded-md overflow-hidden ${failed ? "bg-sol-red/[0.06]" : "bg-sol-bg-alt/60"}`}>
-      <div className={`flex items-center gap-2 px-3 py-1.5 border-b ${
-        failed ? "border-sol-red/20" : "border-sol-border/40"
+    // Bleeds to the row's edges between hairlines, the way the prompt view
+    // below it does — a labeled block, not a box within the row.
+    <div className={`mt-3 -mx-4 border-y ${failed ? "bg-sol-red/[0.06] border-sol-red/20" : "bg-sol-bg-alt/40 border-sol-border/30"}`}>
+      <div className={`flex items-center gap-2 px-4 py-1.5 border-b ${
+        failed ? "border-sol-red/20" : "border-sol-border/30"
       }`}>
         <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${failed ? "text-sol-red" : "text-emerald-400"}`} />
         <span className={`text-[10px] uppercase tracking-widest ${failed ? "text-sol-red" : "text-sol-text-dim"}`}>
@@ -352,7 +348,7 @@ function LastResultCard({ task, failed, runSession }: { task: any; failed: boole
           </Link>
         )}
       </div>
-      <div className="px-3 py-2.5">
+      <div className="px-4 py-2.5">
         <div className={`text-xs leading-relaxed font-medium ${failed ? "text-sol-red" : "text-sol-text"}`}>
           {headline}
         </div>
@@ -504,14 +500,27 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
   const detailBtn =
     "inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text rounded-md bg-sol-bg-alt/70 hover:bg-sol-bg-highlight px-2 py-1 transition-colors";
 
+  // A divided list, not a stack of cards: rows share hairlines, hover is a
+  // flat wash, and a 2px bar on the column edge carries state — green
+  // running, red failed, cyan up next, yellow paused — the same colors the
+  // rail and the indicator use.
+  const edge =
+    task.status === "running"
+      ? "border-l-emerald-400"
+      : task.status === "failed" || isTriggerFailing(task)
+        ? "border-l-sol-red"
+        : task.status === "paused"
+          ? "border-l-sol-yellow"
+          : isNext
+            ? "border-l-sol-cyan"
+            : "border-l-transparent";
+
   return (
     <div
       ref={rowRef}
-      className={`group rounded-lg border bg-sol-card hover:bg-sol-card-hover transition-[background-color,border-color,transform,box-shadow] duration-150 cursor-pointer hover:-translate-y-px hover:shadow-md hover:shadow-black/20 ${
-        task.status === "failed" ? "border-sol-red/30" : "border-sol-border/70"
-      } ${task.status === "running" ? "border-emerald-400/40" : ""} ${
-        isNext ? "ring-1 ring-inset ring-sol-cyan/30" : ""
-      }`}
+      className={`group border-b border-sol-border/40 border-l-2 ${edge} ${
+        expanded ? "bg-sol-bg-alt/25" : "hover:bg-sol-card-hover"
+      } transition-colors duration-150 cursor-pointer`}
       onClick={() => setExpanded((v) => !v)}
       onContextMenu={(e) =>
         ctxMenu.open(e, {
@@ -633,7 +642,7 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
 
         {/* Hover toolbar floats over the top-right corner instead of living
             in-flow — invisible buttons were reserving ~130px of every row. */}
-        <div className="absolute right-2 top-2 z-10 flex items-center gap-0.5 rounded-lg border border-sol-border bg-sol-card-hover px-1 py-0.5 shadow-md shadow-black/20 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity">
+        <div className="absolute right-2 top-2 z-10 flex items-center gap-0.5 rounded-md bg-sol-bg-highlight px-1 py-0.5 shadow-sm shadow-black/20 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity">
           <ShortcutTooltip label="Open trigger page" hint="full detail + run history">
             <Link
               href={`/triggers/${task.short_id ?? task._id}`}
@@ -725,7 +734,7 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
       )}
 
       {expanded && !formMode && (
-        <div className="px-4 pb-3 pt-1 border-t border-sol-border/50 bg-sol-bg/30 rounded-b-lg cursor-auto animate-fadeSlideIn" onClick={(e) => e.stopPropagation()}>
+        <div className="px-4 pb-3 pt-1 border-t border-sol-border/40 cursor-auto animate-fadeSlideIn" onClick={(e) => e.stopPropagation()}>
           {/* The run list below is the richer path (every run, trigger-linked);
               this button only covers a schedule whose runs can't be enumerated
               (e.g. an encrypted home conversation) but whose last run is known.
@@ -770,7 +779,7 @@ function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNex
           {task.context_summary && (
             <>
               <div className="text-[10px] uppercase tracking-widest text-sol-text-dim mt-4 mb-1">Context</div>
-              <div className="text-xs text-sol-text-muted whitespace-pre-wrap bg-sol-bg-alt rounded-md p-3">
+              <div className="text-xs text-sol-text-muted whitespace-pre-wrap bg-sol-bg-alt/40 border-y border-sol-border/30 -mx-4 px-4 py-3">
                 {task.context_summary}
               </div>
             </>
@@ -1005,7 +1014,9 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
     }`;
 
   return (
-    <div className={embedded ? "pt-1" : "rounded-xl border border-sol-cyan/30 bg-sol-card p-4 mb-6"}>
+    // Standalone: a band between hairlines on the page, the inputs its only
+    // fills. Embedded: sits under the row's own divider.
+    <div className={embedded ? "pt-1" : "border-y border-sol-border/40 py-4 mb-6"}>
       {isEdit && (
         <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-sol-cyan mb-2">
           <Pencil className="w-3 h-3" /> Editing trigger
@@ -1130,7 +1141,7 @@ function Section({ title, count, subtitle, children, defaultOpen = true }: {
           <span className="text-sol-text-dim/60 normal-case tracking-normal font-normal ml-1">· {subtitle}</span>
         )}
       </button>
-      {open && <div className="flex flex-col gap-2">{children}</div>}
+      {open && <div className="flex flex-col border-t border-sol-border/40">{children}</div>}
     </div>
   );
 }
@@ -1174,86 +1185,73 @@ function computeStats(all: any[], now: number): SchedStats {
   return { active, recurring, oneTime, totalRuns, failing, nextRunAt, running };
 }
 
-function StatCell({ value, label, accent = "text-sol-text", title, onClick, active }: {
-  value: React.ReactNode;
-  label: string;
-  accent?: string;
-  title?: string;
-  onClick?: () => void;
-  active?: boolean;
-}) {
-  const inner = (
-    <>
-      <span className={`text-xl font-semibold leading-none tabular-nums ${accent}`}>{value}</span>
-      <span className="text-[10px] uppercase tracking-widest text-sol-text-dim">{label}</span>
-    </>
-  );
-  const cell = onClick ? (
-    <button
-      onClick={onClick}
-      className={`flex flex-col gap-0.5 text-left rounded-md -mx-1.5 px-1.5 py-0.5 transition-colors ${
-        active ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-highlight/60"
-      }`}
-    >
-      {inner}
-    </button>
-  ) : (
-    <div className="flex flex-col gap-0.5">{inner}</div>
-  );
-  if (!title) return cell;
-  return <ShortcutTooltip label={title}>{cell}</ShortcutTooltip>;
-}
-
-function StatStrip({ stats, now, typeFilter, onToggleType, onShowFailing, failingFilter }: {
+// The overview is one sentence under the title, not a strip of tiles: every
+// number here is also said by a section header, a filter pill or a row label,
+// so it earns only a line. The clickable parts are the same toggles the filter
+// pills drive (type, failing); the rest is plain text.
+function OverviewLine({ stats, now, filters, update }: {
   stats: SchedStats;
   now: number;
-  typeFilter?: string;
-  onToggleType?: (type: "recurring" | "once") => void;
-  onShowFailing?: () => void;
-  failingFilter?: boolean;
+  filters: Filters;
+  update: (patch: Partial<Filters>) => void;
 }) {
-  const nextLabel =
-    stats.running > 0
-      ? "now"
-      : stats.nextRunAt
-        ? fmtDuration(Math.max(stats.nextRunAt - now, 0))
-        : "—";
-  const nextAccent = stats.running > 0 ? "text-emerald-400" : stats.nextRunAt ? "text-sol-cyan" : "text-sol-text-dim";
+  const sep = <span className="text-sol-text-dim/60">·</span>;
+  const num = "tabular-nums font-medium text-sol-text";
+  const toggle = (on: boolean, accent: string) =>
+    `inline-flex items-center gap-1 rounded px-1 -mx-1 transition-colors ${
+      on ? `${accent} bg-sol-bg-highlight` : "hover:text-sol-text"
+    }`;
   return (
-    <div className="flex flex-wrap items-center gap-x-7 gap-y-3 px-5 py-4">
-      <StatCell value={stats.active} label="active" />
-      <StatCell
-        value={stats.recurring}
-        label="recurring"
-        accent={stats.recurring > 0 ? "text-sol-violet" : "text-sol-text-dim"}
-        title="Standing triggers that fire on an interval — click to filter"
-        onClick={() => onToggleType?.("recurring")}
-        active={typeFilter === "recurring"}
-      />
-      <StatCell
-        value={stats.oneTime}
-        label="one-time"
-        accent={stats.oneTime > 0 ? "text-sol-cyan" : "text-sol-text-dim"}
-        title="Triggers that fire once and finish — click to filter"
-        onClick={() => onToggleType?.("once")}
-        active={typeFilter === "once"}
-      />
-      <StatCell value={nextLabel} label={stats.running > 0 ? "running" : "next run"} accent={nextAccent} />
-      <StatCell value={stats.totalRuns} label="total runs" title="Agent runs fired across all triggers" />
-      <StatCell
-        value={
-          stats.failing > 0 ? (
-            <span className="inline-flex items-center gap-1"><AlertTriangle className="w-4 h-4" />{stats.failing}</span>
-          ) : (
-            <span className="inline-flex items-center gap-1"><CheckCircle2 className="w-4 h-4" />ok</span>
-          )
-        }
-        label={stats.failing > 0 ? "failing" : "healthy"}
-        accent={stats.failing > 0 ? "text-sol-red" : "text-emerald-400"}
-        title={stats.failing > 0 ? "Triggers whose last run failed — click to filter" : undefined}
-        onClick={stats.failing > 0 ? onShowFailing : undefined}
-        active={failingFilter}
-      />
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-sol-text-muted">
+      <span><span className={num}>{stats.active}</span> active</span>
+      {sep}
+      <ShortcutTooltip label="Standing triggers that fire on an interval — click to filter">
+        <button
+          onClick={() => update({ type: filters.type === "recurring" ? "all" : "recurring" })}
+          className={toggle(filters.type === "recurring", "text-sol-violet")}
+        >
+          <span className={num}>{stats.recurring}</span> recurring
+        </button>
+      </ShortcutTooltip>
+      {sep}
+      <ShortcutTooltip label="Triggers that fire once and finish — click to filter">
+        <button
+          onClick={() => update({ type: filters.type === "once" ? "all" : "once" })}
+          className={toggle(filters.type === "once", "text-sol-cyan")}
+        >
+          <span className={num}>{stats.oneTime}</span> one-time
+        </button>
+      </ShortcutTooltip>
+      {stats.running > 0 ? (
+        <>
+          {sep}
+          <span className="text-emerald-400">
+            <span className="tabular-nums font-medium">{stats.running}</span> running now
+          </span>
+        </>
+      ) : stats.nextRunAt ? (
+        <>
+          {sep}
+          <span className="text-sol-cyan">next in <span className="tabular-nums font-medium">{fmtDuration(Math.max(stats.nextRunAt - now, 0))}</span></span>
+        </>
+      ) : null}
+      {sep}
+      {stats.failing > 0 ? (
+        <ShortcutTooltip label="Triggers whose last run failed — click to filter">
+          <button
+            onClick={() => update({ failing: !filters.failing })}
+            className={toggle(filters.failing, "text-sol-red")}
+          >
+            <AlertTriangle className="w-3 h-3 text-sol-red" />
+            <span className={`${num} text-sol-red`}>{stats.failing}</span>
+            <span className="text-sol-red">failed last run</span>
+          </button>
+        </ShortcutTooltip>
+      ) : (
+        <span className="inline-flex items-center gap-1 text-emerald-400">
+          <CheckCircle2 className="w-3 h-3" /> healthy
+        </span>
+      )}
     </div>
   );
 }
@@ -1266,14 +1264,15 @@ function AttentionBanner({ tasks }: { tasks: any[] }) {
   const openRun = useOpenLatestRun();
   if (tasks.length === 0) return null;
   const plural = tasks.length === 1;
+  // The count already sits in the overview line; this band carries the names.
+  // Grounded: a left bar on the column edge and a tint, no rounded island.
   return (
-    <div className="flex items-start gap-2.5 rounded-xl bg-sol-red/[0.08] px-4 py-3 mb-5">
-      <AlertTriangle className="w-4 h-4 text-sol-red flex-shrink-0 mt-0.5" />
+    <div className="flex items-start gap-2.5 border-l-2 border-sol-red bg-sol-red/[0.06] pl-3 pr-3 py-2 mt-3">
       <div className="min-w-0 text-xs flex-1">
         <span className="text-sol-red font-medium">
-          {tasks.length} trigger{plural ? "" : "s"} failed on {plural ? "its" : "their"} last run
+          Failed on {plural ? "its" : "their"} last run
         </span>
-        <div className="mt-1 flex flex-col items-start gap-0.5">
+        <div className="mt-0.5 flex flex-col items-start gap-0.5">
           {tasks.slice(0, 3).map((t) => (
             <button
               key={t._id}
@@ -1350,9 +1349,10 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
 }) {
   const active = filtersActive(filters);
   return (
-    <div className="sticky top-0 z-20 -mx-1 px-1 py-2 mb-3 bg-sol-bg/85 backdrop-blur">
-      {/* Two deliberate rows: search owns the first, every filter control sits
-          on the second — no ragged wrap of orphaned controls. */}
+    // Sticky with a hairline floor that ends on the column edges like every
+    // other rule on the page. Two deliberate rows: search owns the first,
+    // every filter control sits on the second.
+    <div className="sticky top-0 z-20 py-2.5 mb-2 bg-sol-bg/85 backdrop-blur border-b border-sol-border/40">
       <div className="flex flex-col gap-2">
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-sol-text-dim pointer-events-none" />
@@ -1387,7 +1387,7 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
             <button
               key={key}
               onClick={() => update({ type: filters.type === key ? "all" : key })}
-              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
+              className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
                 filters.type === key
                   ? on
                   : "bg-sol-bg-alt text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight"
@@ -1457,8 +1457,8 @@ function RowList({ tasks, now, grouped, nextId, ctxMenu }: { tasks: any[]; now: 
   return (
     <>
       {groupByProjectPath(tasks).map(([proj, rows]) => (
-        <div key={proj} className="flex flex-col gap-2">
-          <div className="flex items-center gap-1.5 text-[11px] text-sol-text-dim pt-1.5 pl-0.5">
+        <div key={proj} className="flex flex-col">
+          <div className="flex items-center gap-1.5 text-[11px] text-sol-text-dim py-1.5 px-3 bg-sol-bg-alt/30 border-b border-sol-border/40">
             <Folder className="w-3 h-3" />
             {proj.startsWith("—") ? proj : projectName(proj)}
             <span className="font-mono text-sol-text-dim/60">{rows.length}</span>
@@ -1509,12 +1509,13 @@ function HistoryBody({ tasks, now, grouped, ctxMenu }: { tasks: any[]; now: numb
 
   const shown = failuresOnly ? tasks.filter((t) => t.status === "failed") : tasks;
   const visible = shown.slice(0, limit);
-  const subheaderCls = "flex items-center gap-1.5 text-[11px] text-sol-text-dim pt-1.5 pl-0.5";
+  // Group bands match the project subheaders: a tinted strip on a hairline.
+  const subheaderCls = "flex items-center gap-1.5 text-[11px] text-sol-text-dim py-1.5 px-3 bg-sol-bg-alt/30 border-b border-sol-border/40";
 
   return (
-    <div className="flex flex-col gap-2">
-      {/* success / failure proportion */}
-      <div className="rounded-lg bg-sol-bg-alt/50 px-3 py-2.5">
+    <div className="flex flex-col">
+      {/* success / failure proportion — a text line and a thin bar, no box */}
+      <div className="px-3 py-2.5 border-b border-sol-border/40">
         <div className="flex items-center justify-between text-[11px] mb-1.5">
           <span className="text-sol-text-dim">
             <span className="text-emerald-400">{succeeded} succeeded</span>
@@ -1529,7 +1530,7 @@ function HistoryBody({ tasks, now, grouped, ctxMenu }: { tasks: any[]; now: numb
       </div>
 
       {failed > 0 && (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-border/40">
           <button
             onClick={() => setFailuresOnly((v) => !v)}
             className={`inline-flex items-center gap-1 text-[11px] rounded-md px-2 py-1 transition-colors ${
@@ -1544,10 +1545,10 @@ function HistoryBody({ tasks, now, grouped, ctxMenu }: { tasks: any[]; now: numb
       )}
 
       {shown.length === 0 ? (
-        <p className="text-[11px] text-sol-text-dim py-3 pl-0.5">No failures — every finished run succeeded.</p>
+        <p className="text-[11px] text-sol-text-dim py-3 px-3">No failures — every finished run succeeded.</p>
       ) : grouped ? (
         groupByProjectPath(visible).map(([proj, rows]) => (
-          <div key={proj} className="flex flex-col gap-2">
+          <div key={proj} className="flex flex-col">
             <div className={subheaderCls}>
               <Folder className="w-3 h-3" />
               {proj.startsWith("—") ? proj : projectName(proj)}
@@ -1558,7 +1559,7 @@ function HistoryBody({ tasks, now, grouped, ctxMenu }: { tasks: any[]; now: numb
         ))
       ) : (
         groupByDay(visible, now).map(([label, rows]) => (
-          <div key={label} className="flex flex-col gap-2">
+          <div key={label} className="flex flex-col">
             <div className={subheaderCls}>{label}<span className="font-mono text-sol-text-dim/60">{rows.length}</span></div>
             {rows.map((t) => <TaskRow key={t._id} task={t} now={now} ctxMenu={ctxMenu} />)}
           </div>
@@ -1568,7 +1569,7 @@ function HistoryBody({ tasks, now, grouped, ctxMenu }: { tasks: any[]; now: numb
       {shown.length > limit && (
         <button
           onClick={() => setLimit((l) => l + HISTORY_PAGE)}
-          className="self-start text-[11px] text-sol-cyan hover:underline underline-offset-2 mt-1 pl-0.5"
+          className="self-start text-[11px] text-sol-cyan hover:underline underline-offset-2 mt-2 px-3"
         >
           show {Math.min(HISTORY_PAGE, shown.length - limit)} more · {shown.length - limit} hidden
         </button>
@@ -1708,25 +1709,19 @@ function TriggersContent() {
           </div>
         ) : (
           <>
-            {/* One overview surface: the health numbers head the card, the
-                ±24h rail is its body — a hairline divider between them, no
-                second box. The rail plots all filtered tasks, not just active:
-                finished one-times and paused loops still own dots on the past
-                half. */}
+            {/* The overview sits on the page, not in a box: one line of
+                numbers under the title, the ±24h rail beneath it, the failed
+                names if any — everything on the title's left edge. The sticky
+                filter bar's hairline closes it. The rail plots all filtered
+                tasks, not just active: finished one-times and paused loops
+                still own dots on the past half. */}
             {hasTasks && (
-              <div className="reveal rounded-xl border border-sol-border bg-sol-card mb-5">
-                <StatStrip
-                  stats={stats}
-                  now={now}
-                  typeFilter={filters.type}
-                  onToggleType={(type) => update({ type: filters.type === type ? "all" : type })}
-                  onShowFailing={() => update({ failing: !filters.failing })}
-                  failingFilter={filters.failing}
-                />
+              <div className="reveal mb-4">
+                <OverviewLine stats={stats} now={now} filters={filters} update={update} />
                 <HorizonRail tasks={filtered} now={now} />
+                <AttentionBanner tasks={failingActive} />
               </div>
             )}
-            {hasTasks && <AttentionBanner tasks={failingActive} />}
             <FilterBar
               filters={filters}
               update={update}
@@ -1742,7 +1737,9 @@ function TriggersContent() {
               <FilteredEmpty onClear={() => update(EMPTY_FILTERS)} />
             ) : (
               <div className="reveal reveal-2">
-                <Section title="Active" count={active.length} subtitle={activeSubtitle}>
+                {/* The overview line already says the split; repeat it here
+                    only when a filter makes the section's split differ. */}
+                <Section title="Active" count={active.length} subtitle={filtersActive(filters) ? activeSubtitle : undefined}>
                   <RowList tasks={active} now={now} grouped={grouped} nextId={nextId} ctxMenu={ctxMenu} />
                 </Section>
                 <Section title="Paused" count={paused.length}>
