@@ -3,10 +3,12 @@ import { AvatarImg } from "../../lib/avatarCache";
 import { PresenceBadge } from "./PresenceBadge";
 import {
   memberDisplayName,
+  memberInHuddle,
   memberPresenceVisual,
   presenceAvatarClass,
   presenceLabel,
 } from "./memberPresence";
+import { useWalkieBurstRoom } from "./useFaceKey";
 
 /**
  * One teammate's face: the avatar, faded to match their presence, with the
@@ -42,7 +44,12 @@ export function MemberFace({
   const name = memberDisplayName(member);
   const avatar = member?.image || member?.github_avatar_url;
   const initial = (member?.name || member?.email || "?").charAt(0).toUpperCase();
-  const inHuddle = showHuddle && !!(member?.in_huddle || member?.in_room_key);
+  // A SEAT IS NOT A HUDDLE. A walkie burst seats everyone who hears it and
+  // holds that seat for half a minute afterwards, so a face wearing the chip
+  // off `in_huddle` alone kept claiming a call that had already stopped. The
+  // rule is shared (memberInHuddle) and the room comes from the walkie itself.
+  const burstRoom = useWalkieBurstRoom();
+  const inHuddle = showHuddle && memberInHuddle(member, burstRoom);
   const badge = badgeSize ?? (size >= 36 ? "md" : "sm");
   return (
     <span className={`relative block shrink-0 ${className}`} style={{ width: size, height: size }}>

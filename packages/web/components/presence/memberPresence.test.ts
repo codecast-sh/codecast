@@ -4,6 +4,7 @@ import {
   groupMembersByBand,
   presenceBand,
   memberFleetSummary,
+  memberInHuddle,
   memberPresenceVisual,
   presenceActivityLine,
   presenceAvatarClass,
@@ -309,5 +310,44 @@ describe("roster bands", () => {
 
   it("survives a roster with holes", () => {
     expect(groupMembersByBand([null as any, undefined as any])).toEqual([]);
+  });
+});
+
+// The founder's "this huddle indicator sticks around when I'm not in a call".
+//
+// A walkie burst seats everyone who hears it, and the seat is deliberately
+// held for half a minute after the key comes up so a reply lands in the same
+// room. `in_huddle` is true for that whole window with nobody in a call, so
+// the chip lit for three seconds of somebody's voice and stayed lit long after
+// the voice stopped.
+describe("memberInHuddle", () => {
+  const seated = (room: string) => ({ in_huddle: true, in_room_key: room });
+
+  it("wears the chip for an ordinary huddle seat", () => {
+    expect(memberInHuddle(seated("dm:a:b"), null)).toBe(true);
+    expect(memberInHuddle(seated("dm:a:b"), "dm:c:d")).toBe(true);
+  });
+
+  it("does NOT wear it for a seat the walkie is holding as a burst", () => {
+    // The seat exists — the person is audible — but a voice message is not a
+    // conversation, and the chip is what claims one.
+    expect(memberInHuddle(seated("dm:a:b"), "dm:a:b")).toBe(false);
+  });
+
+  it("wears it again the moment the burst becomes a call", () => {
+    // `walkieHoldsRoom` goes false on the upgrade, so the caller passes null
+    // and the same seat reads as the huddle it now is.
+    expect(memberInHuddle(seated("dm:a:b"), null)).toBe(true);
+  });
+
+  it("is false with no seat at all, whatever the walkie is doing", () => {
+    expect(memberInHuddle({}, "dm:a:b")).toBe(false);
+    expect(memberInHuddle(null, "dm:a:b")).toBe(false);
+  });
+
+  it("still reads a seat carried by in_huddle alone", () => {
+    // The roster reports in_room_key only when the viewer may see the room;
+    // in_huddle survives that redaction, and a chip is all it drives.
+    expect(memberInHuddle({ in_huddle: true }, "dm:a:b")).toBe(true);
   });
 });
