@@ -20,26 +20,34 @@
     border: 1px solid #8886; border-radius: 4px; background: transparent; color: inherit;
   }
   #status { margin-top: 1.25rem; padding: 0.6rem; border-radius: 4px; background: #8881; }
-  #notice { margin-top: 1rem; padding: 0.6rem; border-radius: 4px; background: #2e7d3222; }
-  .ok { color: #2e7d32; } .bad { color: #c62828; } .muted { opacity: 0.65; }
+  #status.ok { color: #2e7d32; background: #2e7d3222; }
+  #status.bad { color: #c62828; background: #c6282822; }
+  .muted { opacity: 0.75; }
+  details { margin-top: 1.5rem; }
+  summary { cursor: pointer; }
 </style>
 </head>
 <body>
   <h1>Cast Browser Bridge</h1>
   <p class="muted">
     Run <code>cast browser extension setup</code> in a terminal on this machine.
-    It opens this page with the token filled in; if it could not, run it with
-    <code>--show-token</code> and paste what it prints. The token never leaves
-    this computer, and never crosses the wire: the extension and the host
-    prove it to each other.
+    It opens this page with the token filled in and this extension connects on
+    its own. The token never leaves this computer, and never crosses the wire:
+    the extension and the host prove it to each other.
   </p>
-  <div id="notice" hidden></div>
-  <label for="token">Token</label>
-  <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="64 hex characters">
-  <label for="port">Port</label>
-  <input id="port" type="number" placeholder="41729">
-  <button id="save">Save &amp; connect</button>
-  <div id="status">checking…</div>
+  <div id="status" class="muted">Checking.</div>
+  <details>
+    <summary>Pair by hand</summary>
+    <p class="muted">
+      If that page did not open, run <code>cast browser extension setup --show-token</code>
+      and enter what it prints here.
+    </p>
+    <label for="token">Token</label>
+    <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="64 hex characters">
+    <label for="port">Port</label>
+    <input id="port" type="number" placeholder="41729">
+    <button id="save">Save &amp; connect</button>
+  </details>
 </body>
 <script src="options.js"></script>
 </html>

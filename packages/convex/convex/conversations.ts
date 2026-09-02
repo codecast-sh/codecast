@@ -17,6 +17,7 @@ import {
   computeFold,
   isBelowFoldAt,
   rollupParentIdOf,
+  rideLeadPlacements,
   selectWorkingSet,
   WORKING_SET_RECENCY_MS,
   BLOCKED_BANNER_KINDS,
@@ -6143,7 +6144,7 @@ export const listFavoriteSessions = query({
     for (const conv of favorites) {
       if (!shouldShowInInbox(conv)) continue;
       // clusterCutoff 0: favorites are deliberately kept — never gap-hide them.
-      const { row } = await enrichInboxSessionRow(ctx, conv, maps, now, 0);
+      const { row } = await enrichInboxSessionRow(ctx, conv, maps, now, false);
       results.push(row);
     }
 
@@ -7840,20 +7841,6 @@ function stripInboxLiveness(row: any, fastFieldsToo = false): void {
   if (fastFieldsToo) for (const f of INBOX_FAST_FIELDS) row[f] = null;
 }
 
-// The cluster cut as a per-row FOLD flag (sync-convergence C2): a row under the
-// cut is a projection member with `below_fold: true`, rendered only behind the
-// show-old toggle. Pure over the doc and the cutoff so the base list, the
-// liveness overlay and the CLI agree byte for byte. `clusterCutoff` 0 disables
-// the fold (deliberately filed rows, the completeness crawl).
-export function isBelowInboxFold(
-  conv: { updated_at: number; has_pending_messages?: boolean | null; inbox_pinned_at?: number | null; inbox_dismissed_at?: number | null; inbox_stashed_at?: number | null },
-  clusterCutoff: number,
-): boolean {
-  // The shared per-row rule (computeFold's loop body), so the per-row flag can
-  // never disagree with the cut it was computed from.
-  return isBelowFoldAt(conv as any, clusterCutoff);
-}
-
 // Enrich one conversation into the inbox session row, including the AskUserQuestion
 // scrape, idle/grace classification, and plan/task/workflow context. `clusterCutoff`
 // of 0 disables the stale-cluster hide (the crawl passes 0 — completeness wins).
@@ -7887,7 +7874,9 @@ async function enrichInboxSessionRow(
   conv: any,
   maps: InboxSessionMaps,
   now: number,
-  clusterCutoff: number,
+  // The row's fold flag (belowFoldFor over the caller's scan; false on the
+  // paths that never fold — favorites, the completeness crawl, byIds).
+  hidden: boolean,
   skip?: InboxEnrichSkip,
   getDoc: (id: any) => Promise<any> = (id) => ctx.db.get(id),
 ): Promise<{ row: any; subagentChildren: any[]; dismissed: boolean; stashed: boolean; hidden: boolean }> {
@@ -7919,7 +7908,6 @@ async function enrichInboxSessionRow(
   const pinned = !!conv.inbox_pinned_at;
   const dismissed = !!conv.inbox_dismissed_at;
   const stashed = !!conv.inbox_stashed_at;
-  const hidden = isBelowInboxFold(conv, clusterCutoff);
 
   // Stop trusting a frozen "active" status once the conversation has gone quiet
   // past the trust TTL — otherwise a daemon re-asserting a stale "working" over
@@ -8349,6 +8337,10 @@ export async function scanInboxConversations(
   // caller's own cruft.
   deliberateIds: Set<string>;
   clusterCutoff: number;
+  // The shared selection's members and its fold set (computeFold, riders
+  // included): a member's fold flag is read from here, never from the cut.
+  selectionIds: ReadonlySet<string>;
+  belowFold: ReadonlySet<string>;
   // Conversations in this user's owner set — drives the owned_by_me flag during
   // enrichment without a per-row session_owners lookup.
   ownedByMeIds: Set<string>;
@@ -8596,9 +8588,26 @@ export async function scanInboxConversations(
   }
   const selection = selectWorkingSet(selectionInput, now);
   for (const kind of selection.truncated) truncated.add(kind);
-  const { cutoff: clusterCutoff } = computeFold(selection.members);
+  const { cutoff: clusterCutoff, belowFold } = computeFold(selection.members);
 
-  return { conversations, maps, deliberateIds, clusterCutoff, ownedByMeIds, myOwnerRowById, truncated, pinnedOverflowIds };
+  return {
+    conversations, maps, deliberateIds, clusterCutoff, selectionIds: new Set(selection.members.keys()), belowFold,
+    ownedByMeIds, myOwnerRowById, truncated, pinnedOverflowIds,
+  };
+}
+
+// The per-row fold flag over a scan: a selection member reads the shared fold
+// set (so a teammate folds with its lead — computeFold's ride), and a row
+// outside the selection (a team row, a filed extra, an assigned session) reads
+// the per-row cut, 0 for the deliberate ones. Pure over the doc and the scan
+// so the base list, the liveness overlay and the CLI agree byte for byte.
+export function belowFoldFor(
+  scan: { selectionIds: ReadonlySet<string>; belowFold: ReadonlySet<string>; deliberateIds: ReadonlySet<string>; ownedByMeIds: ReadonlySet<string>; clusterCutoff: number },
+  conv: { _id: { toString(): string } | string; updated_at: number; has_pending_messages?: boolean | null; inbox_pinned_at?: number | null; inbox_dismissed_at?: number | null; inbox_stashed_at?: number | null },
+): boolean {
+  const cid = conv._id.toString();
+  if (scan.selectionIds.has(cid)) return scan.belowFold.has(cid);
+  return isBelowFoldAt(conv as any, scan.deliberateIds.has(cid) || scan.ownedByMeIds.has(cid) ? 0 : scan.clusterCutoff);
 }
 
 // `truncated` as the payload carries it: the fixed alphabet's order, so two
@@ -8647,12 +8656,12 @@ export async function computeInboxSessions(
   // liveness threshold compare against the minute, so two executions inside
   // one minute over the same data are byte identical (sync-convergence C2).
   const now = inboxEpoch(Date.now());
-  const { conversations, maps, deliberateIds, clusterCutoff, ownedByMeIds, myOwnerRowById, truncated, pinnedOverflowIds } =
-    await scanInboxConversations(ctx, userId, now, {
-      includeLiveness,
-      extraConvIds: opts.extraConvIds,
-      teamScope: opts.teamScope,
-    });
+  const scan = await scanInboxConversations(ctx, userId, now, {
+    includeLiveness,
+    extraConvIds: opts.extraConvIds,
+    teamScope: opts.teamScope,
+  });
+  const { conversations, maps, ownedByMeIds, myOwnerRowById, truncated, pinnedOverflowIds } = scan;
 
   let hiddenCount = 0;
   const results: any[] = [];
@@ -8684,14 +8693,13 @@ export async function computeInboxSessions(
     // with explicit ids still lists it as needs input. Owned rows are a
     // deliberate window in the shared selection (C4), so they are fold-exempt
     // for the same reason.
-    const cutoff = deliberateIds.has(conv._id.toString()) || ownedByMeIds.has(conv._id.toString()) ? 0 : clusterCutoff;
     // Pinned rows past the newest INBOX_PINNED_CHILDREN_SCAN skip the children
     // scan unless the caller asked for everything: children are never counted,
     // and the scan was the read that hit the system-operation limit.
     const rowSkip = !opts.show_all && pinnedOverflowIds.has(conv._id.toString())
       ? { ...(enrichSkip ?? {}), children: true }
       : enrichSkip;
-    const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, cutoff, rowSkip, getDoc);
+    const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, belowFoldFor(scan, conv), rowSkip, getDoc);
     if ((dismissed || stashed) && !row.implementation_session) {
       const impl = implHandoffByParent.get(conv._id.toString());
       if (impl) row.implementation_session = { _id: impl._id.toString(), title: impl.title };
@@ -8751,6 +8759,11 @@ export async function computeInboxSessions(
       r.row.asking = asking;
       r.row.below_fold = r.hidden;
     }
+    // A teammate rides its lead's bucket here too (the shared
+    // rideLeadPlacements), so `cast sessions` files the team where the
+    // overlay and the web do.
+    const byId = new Map(enrichedRows.map((r) => [r.conv._id.toString(), r]));
+    rideLeadPlacements(new Map(enrichedRows.map((r) => [r.conv._id.toString(), r.row as { bucket: InboxBucket }])), (id) => byId.get(id)?.conv);
   }
   for (const r of enrichedRows) {
     if (r.hidden) {
@@ -9317,10 +9330,8 @@ export async function computeSessionsLiveness(
   // The epoch is the payload's ONLY clock: no raw Date.now() may reach the
   // result, so two executions inside one minute are byte identical (C2).
   const now = inboxEpoch(Date.now());
-  const { conversations, maps, deliberateIds, clusterCutoff, ownedByMeIds, truncated } = await scanInboxConversations(ctx, userId, now, {
-    includeLiveness: true,
-    teamScope,
-  });
+  const scan = await scanInboxConversations(ctx, userId, now, { includeLiveness: true, teamScope });
+  const { conversations, maps, truncated } = scan;
   // Decisions FIRST: a parent already asking through a pending `cast decide`
   // never spends child message probes (see buildAskingParents), and a child
   // holding one joins the pool so its parent is lifted.
@@ -9383,19 +9394,29 @@ export async function computeSessionsLiveness(
       { deadlines: rowTimeDeadlines(conv, maps, cid, childrenByParent.get(cid) ?? []), placeAt, current: placement.bucket },
       now,
     );
-    const below_fold = isBelowInboxFold(conv, deliberateIds.has(cid) || ownedByMeIds.has(cid) ? 0 : clusterCutoff);
     liveness[cid] = {
       ...lv,
       bucket: placement.bucket,
       work_state: placement.work_state,
       asking,
-      below_fold,
+      below_fold: belowFoldFor(scan, conv),
       bucket_stale_at: stale.bucket_stale_at,
       stale_bucket: stale.stale_bucket,
     };
-    if (placement.bucket !== "hidden") (below_fold ? tally.folded : tally.shown)[placement.bucket]++;
-    entries.push([cid, placement.bucket, below_fold]);
   });
+  // Every shown row stamped on its own facts; then a teammate rides its
+  // lead's bucket and time flip (the shared rideLeadPlacements — the fold rode
+  // inside computeFold). The tally and the digest read the FINAL stamps.
+  const convById = new Map(shownConvs.map((conv) => [conv._id.toString(), conv]));
+  const stamped = new Map(shownConvs.map((conv) => [conv._id.toString(), liveness[conv._id.toString()] as InboxOverlayRow & { bucket: InboxBucket; below_fold: boolean }]));
+  rideLeadPlacements(stamped, (id) => convById.get(id), (rider, lead) => {
+    rider.bucket_stale_at = lead.bucket_stale_at;
+    rider.stale_bucket = lead.stale_bucket;
+  });
+  for (const [cid, row] of stamped) {
+    if (row.bucket !== "hidden") (row.below_fold ? tally.folded : tally.shown)[row.bucket]++;
+    entries.push([cid, row.bucket, row.below_fold]);
+  }
 
   // FACT-ONLY child rows (no bucket key): the live children the pool probes —
   // a non-idle trusted status with content — of shown parents, so a replica
@@ -9849,7 +9870,7 @@ export async function collectInboxSessionsPaginated(
   for (const conv of result.page) {
     if (conv.inbox_dismissed_at || conv.inbox_stashed_at) continue; // dismissed/stashed: own accumulation path
     if (!shouldShowInInbox(conv)) continue;
-    const { row, subagentChildren } = await enrichInboxSessionRow(ctx, conv, maps, now, 0, { auq: true }, getDoc);
+    const { row, subagentChildren } = await enrichInboxSessionRow(ctx, conv, maps, now, false, { auq: true }, getDoc);
     stripInboxLiveness(row);
     rows.push(row);
     for (const child of subagentChildren) {
@@ -10023,7 +10044,7 @@ export async function collectInboxSessionsByIds(ctx: any, userId: Id<"users">, i
     const owned = conv.user_id.toString() !== userId.toString();
     if (owned && !(await isSessionOwner(ctx, conv._id, userId))) continue;
     if (conv.status !== "active" && conv.status !== "completed") continue;
-    const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, 0, { auq: true });
+    const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, false, { auq: true });
     if (owned) row.owned_by_me = true;
     stripInboxLiveness(row);
     sessions.push(row);

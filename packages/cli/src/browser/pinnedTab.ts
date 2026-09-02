@@ -28,6 +28,7 @@ import { CdpConnection, cdpHttpUrl, type CdpEndpoint } from "./cdp.js";
 import { baseSessionKey, engineSession, engineStateDir, isRealSession } from "./engine.js";
 import { readState } from "./instance.js";
 import { bridgeEndpointIfConfigured } from "./bridge/real.js";
+import type { BridgeGroup, BridgeGroupColor } from "./bridge/protocol.js";
 import { isPidAlive } from "../workspace/chrome.js";
 
 /** The engine daemon for this session, if one is alive. */
@@ -71,11 +72,38 @@ async function targetAlive(endpoint: CdpEndpoint, targetId: string): Promise<boo
 
 /**
  * The Chrome tab group a real-mode session's tabs sit in, named so the human
- * can tell whose it is at a glance: `cast ` plus the start of the session id.
+ * can tell whose it is at a glance: `cast ` plus the short id of the session
+ * (its first seven characters, the same prefix codecast prints for it), from
+ * the codecast session id when the CLI resolved one and from the harness id
+ * otherwise (owner.ts ownerKey, flattened by engine.ts engineSessionKey). A
+ * tmux pane, the last fallback, is named as a pane: a bare pane number would
+ * read as a session id that exists nowhere.
  */
 export function sessionTabGroupTitle(session: string): string {
-  const id = baseSessionKey(session).replace(/^(?:env|session)-/, "");
-  return `cast ${id.slice(0, 7)}`;
+  const key = baseSessionKey(session);
+  const m = /^(session|env|pane)-(.+)$/.exec(key);
+  if (!m) return `cast ${key}`;
+  if (m[1] === "pane") return `cast pane ${m[2].replace(/^-+/, "")}`;
+  return `cast ${m[2].slice(0, 7)}`;
+}
+
+/** Chrome's group colours minus grey, which reads as "no colour". */
+const GROUP_COLORS: BridgeGroupColor[] = ["blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"];
+
+/**
+ * The group's colour, from a stable hash of the session key with no mode on
+ * it, so two agents driving the same Chrome are told apart by colour before
+ * anyone reads a title, and a session gets the same colour on every run.
+ */
+export function sessionTabGroupColor(session: string): BridgeGroupColor {
+  let h = 0;
+  for (const ch of baseSessionKey(session)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return GROUP_COLORS[h % GROUP_COLORS.length];
+}
+
+/** The group a session's real-mode tabs sit in: title and colour, one place. */
+export function sessionTabGroup(session: string): BridgeGroup {
+  return { title: sessionTabGroupTitle(session), color: sessionTabGroupColor(session) };
 }
 
 /** The browser a session's pinned tab lives in, and how to create it there. */
@@ -99,7 +127,7 @@ export async function pinnedTabBrowser(session: string): Promise<PinnedTabBrowse
     if (!endpoint) return null;
     return {
       endpoint,
-      create: { url: "about:blank", background: true, castGroup: { title: sessionTabGroupTitle(session), color: "blue" } },
+      create: { url: "about:blank", background: true, castGroup: sessionTabGroup(session) },
     };
   }
   const state = readState();

@@ -9,7 +9,7 @@ async function save(token, port) {
 
 /**
  * `cast browser extension setup` opens this page as
- * options.html#token=T&port=P so nothing has to be pasted. A fragment never
+ * options.html#token=T&port=P so nothing has to be typed. A fragment never
  * leaves the browser, and it is cleared from the address bar as soon as it
  * is read so the token does not linger in history or a screenshot.
  */
@@ -19,9 +19,9 @@ async function pairFromFragment() {
   if (!token) return false;
   const port = parseInt(frag.get("port") || "", 10) || DEFAULT_PORT;
   history.replaceState(null, "", location.pathname);
+  // Shown until the worker reports; refreshStatus then owns the line.
+  show("muted", `Paired from the terminal on port ${port}. Connecting.`);
   await save(token, port);
-  $("notice").textContent = `Paired from the terminal on port ${port}. Connecting.`;
-  $("notice").hidden = false;
   return true;
 }
 
@@ -31,15 +31,40 @@ async function load() {
   $("port").value = (bridge && bridge.port) || DEFAULT_PORT;
 }
 
+function show(cls, text) {
+  const el = $("status");
+  el.className = cls;
+  el.textContent = text;
+}
+
+/**
+ * One status line, in words a person can act on. The worker's state names
+ * are internal; each becomes a sentence that says what is true and, when
+ * something is needed, the one command that provides it.
+ */
+function describe(s, port) {
+  const driving = s.attached && s.attached.length ? ` Driving ${s.attached.length} tab${s.attached.length === 1 ? "" : "s"}.` : "";
+  switch (s.state) {
+    case "connected":
+      return ["ok", `Paired and connected to cast on port ${port}. You can close this tab.${driving}`];
+    case "connecting":
+    case "disconnected":
+      return ["muted", `Paired. Waiting for the bridge host on port ${port}; it starts with the next \`cast browser\` command in real mode.`];
+    case "bad-token":
+      return ["bad", "The host rejected this token. Run `cast browser extension setup` again; it hands this page the current token."];
+    default:
+      return ["muted", "No pairing yet. Run `cast browser extension setup` in a terminal on this machine."];
+  }
+}
+
 async function refreshStatus() {
   try {
     const s = await chrome.runtime.sendMessage({ op: "status" });
     if (!s) throw new Error("no status");
-    const cls = s.state === "connected" ? "ok" : s.state === "bad-token" ? "bad" : "muted";
-    const driven = s.attached && s.attached.length ? ` — driving ${s.attached.length} tab(s)` : "";
-    $("status").innerHTML = `<span class="${cls}">${s.state}</span> ${s.detail || ""}${driven}`;
+    const port = parseInt($("port").value, 10) || DEFAULT_PORT;
+    show(...describe(s, port));
   } catch {
-    $("status").textContent = "service worker not responding — reload the extension";
+    show("bad", "The extension's service worker is not answering. Reload the extension from chrome://extensions.");
   }
 }
 
@@ -47,6 +72,5 @@ $("save").addEventListener("click", () => {
   save($("token").value.trim(), parseInt($("port").value, 10) || DEFAULT_PORT);
 });
 
-pairFromFragment().then(load);
-refreshStatus();
+pairFromFragment().then(load).then(refreshStatus);
 setInterval(refreshStatus, 2000);

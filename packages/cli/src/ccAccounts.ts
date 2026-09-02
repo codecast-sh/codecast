@@ -19,11 +19,11 @@
 //     their token in memory, so blocked sessions must be killed + resumed to
 //     adopt the new account (the daemon's switch_account command does this).
 
-import { execFileSync } from "./proc.js";
+import { execFileSync, keychainReadAsync } from "./proc.js";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { readLocalCredential } from "./remote/session-move.js";
+import { readLocalCredential, readLocalCredentialAsync } from "./remote/session-move.js";
 import { readProfileIndexFile } from "./readForUpdate.js";
 import { atomicWriteFile } from "./atomicWrite.js";
 import { renderProviderEnvFile, sourceFilePrefix } from "./providerKeyLaunch.js";
@@ -189,11 +189,22 @@ export function readActiveCredential(): string | null {
   // CC_ACCOUNTS_FORCE_FILE) would write the file while reads still probed the
   // keychain — the source of the sandbox reading the machine's real login.
   if (useFileStore()) {
-    const f = path.join(homeDir(), ".claude", ".credentials.json");
+    const f = activeCredentialFile();
     if (!fs.existsSync(f)) return null;
     return fs.readFileSync(f, "utf-8");
   }
   return readLocalCredential();
+}
+
+/** The same read for the daemon's timers, with the keychain call off the loop. */
+export async function readActiveCredentialAsync(): Promise<string | null> {
+  if (useFileStore()) return fs.promises.readFile(activeCredentialFile(), "utf-8").catch(() => null);
+  return readLocalCredentialAsync();
+}
+
+/** Where CC keeps the active login when the store is a file (Linux, sandboxed tests). */
+function activeCredentialFile(): string {
+  return path.join(homeDir(), ".claude", ".credentials.json");
 }
 
 /** The keychain item's account attribute ("acct"). CC created the item, so
@@ -214,7 +225,7 @@ export function writeActiveCredential(credentialJson: string): void {
     // 0600 is stated, not defaulted: the shared helper keeps whatever mode the
     // file already has, so an existing world-readable credential file would
     // stay world-readable. This is an OAuth token — narrow it on every write.
-    atomicWriteFile(path.join(homeDir(), ".claude", ".credentials.json"), credentialJson, {
+    atomicWriteFile(activeCredentialFile(), credentialJson, {
       mode: 0o600,
     });
     return;
@@ -313,24 +324,33 @@ export function patchOauthAccount(oauthAccount: Record<string, any>): void {
 
 function readProfileSecret(name: string): string | null {
   if (useFileStore()) {
-    const f = path.join(profileFileDir(), `${name}.json`);
+    const f = profileSecretFile(name);
     if (!fs.existsSync(f)) return null;
     return fs.readFileSync(f, "utf-8");
   }
   try {
-    return execFileSync(
-      "security",
-      ["find-generic-password", "-s", `${PROFILE_KEYCHAIN_PREFIX}${name}`, "-w"],
-      { encoding: "utf-8" },
-    ).trim();
+    return execFileSync("security", profileSecretArgs(name), { encoding: "utf-8" }).trim();
   } catch {
     return null;
   }
 }
 
+/** The same read for the daemon's timers, with the keychain call off the loop. */
+async function readProfileSecretAsync(name: string): Promise<string | null> {
+  if (useFileStore()) return fs.promises.readFile(profileSecretFile(name), "utf-8").catch(() => null);
+  return keychainReadAsync(profileSecretArgs(name)).catch(() => null);
+}
+
+function profileSecretArgs(name: string): string[] {
+  return ["find-generic-password", "-s", `${PROFILE_KEYCHAIN_PREFIX}${name}`, "-w"];
+}
+function profileSecretFile(name: string): string {
+  return path.join(profileFileDir(), `${name}.json`);
+}
+
 function deleteProfileSecret(name: string): void {
   if (useFileStore()) {
-    fs.rmSync(path.join(profileFileDir(), `${name}.json`), { force: true });
+    fs.rmSync(profileSecretFile(name), { force: true });
     return;
   }
   try {
@@ -348,7 +368,7 @@ function writeProfileSecret(name: string, content: string): void {
   if (useFileStore()) {
     // Same reason as writeActiveCredential: a saved profile holds the same
     // token, so the mode is stated rather than inherited from the old file.
-    atomicWriteFile(path.join(profileFileDir(), `${name}.json`), content, { mode: 0o600 });
+    atomicWriteFile(profileSecretFile(name), content, { mode: 0o600 });
     return;
   }
   execFileSync("security", [
@@ -729,7 +749,14 @@ const CC_OAUTH_TOKEN_URL =
 /** The parsed `claudeAiOauth` block of the active credential (null for API-key
  * logins, missing/corrupt credentials). */
 export function readActiveOauth(): Record<string, any> | null {
-  const raw = readActiveCredential();
+  return oauthOf(readActiveCredential());
+}
+
+export async function readActiveOauthAsync(): Promise<Record<string, any> | null> {
+  return oauthOf(await readActiveCredentialAsync());
+}
+
+function oauthOf(raw: string | null): Record<string, any> | null {
   if (!raw) return null;
   try {
     return JSON.parse(raw)?.claudeAiOauth ?? null;
@@ -738,9 +765,11 @@ export function readActiveOauth(): Record<string, any> | null {
   }
 }
 
-/** Epoch-ms expiry of the active access token, or null if unknown. */
-export function activeCredentialExpiresAt(): number | null {
-  const exp = readActiveOauth()?.expiresAt;
+/** Epoch-ms expiry of the active access token, or null if unknown. Async
+ * because every caller is a daemon timer or a login flow, and the read behind
+ * it is a keychain call. */
+export async function activeCredentialExpiresAt(): Promise<number | null> {
+  const exp = (await readActiveOauthAsync())?.expiresAt;
   return typeof exp === "number" ? exp : null;
 }
 
@@ -765,7 +794,7 @@ export async function refreshActiveCredential(
 ): Promise<RefreshResult> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const now = opts.now ?? Date.now();
-  const raw = readActiveCredential();
+  const raw = await readActiveCredentialAsync();
   if (!raw) return { refreshed: false, reason: "no active credential" };
   let cred: any;
   try {
@@ -836,10 +865,10 @@ export async function refreshActiveCredential(
  * updated profile name, or null when there's nothing to do (no login, not saved
  * yet — first-time saves are `autoSaveActiveProfile`'s job — or already fresh).
  */
-export function resnapshotIfActiveFresher(): string | null {
+export async function resnapshotIfActiveFresher(): Promise<string | null> {
   const active = activeAccountSummary();
   if (!active?.uuid && !active?.email) return null;
-  const activeExpiry = activeCredentialExpiresAt() ?? 0;
+  const activeExpiry = (await activeCredentialExpiresAt()) ?? 0;
   const index = readProfileIndex();
   const match = Object.entries(index.profiles).find(
     ([, meta]) =>
@@ -847,7 +876,7 @@ export function resnapshotIfActiveFresher(): string | null {
   );
   if (!match) return null;
   const [name] = match;
-  const raw = readProfileSecret(name);
+  const raw = await readProfileSecretAsync(name);
   let storedExpiry = 0;
   if (raw) {
     try {
@@ -991,7 +1020,9 @@ export async function refreshUsageSnapshots(
   const jobs = new Map<string, { label: string; token: string }>();
   const active = activeAccountSummary();
   const activeKey = active?.uuid || active?.email;
-  const activeCred = readActiveCredential();
+  // Keychain reads go async: this runs on a daemon timer, and a busy keychain
+  // answered `security` in 2 to 3s (7 calls in one day's log, 2026-09-02).
+  const activeCred = await readActiveCredentialAsync();
   if (activeKey && activeCred && credentialHealth(activeCred, now).pushable) {
     try {
       const token = JSON.parse(activeCred)?.claudeAiOauth?.accessToken;
@@ -1005,7 +1036,7 @@ export async function refreshUsageSnapshots(
     if (!key) continue;
     knownKeys.add(key);
     if (jobs.has(key)) continue; // active covers it with the freshest token
-    const raw = readProfileSecret(name);
+    const raw = await readProfileSecretAsync(name);
     if (!raw) continue;
     let profile: CcProfile;
     try {
@@ -1069,11 +1100,14 @@ export interface AccountsHeartbeatPayload {
 // shows up on the very next heartbeat instead of after a blind expiry window.
 // The compute result — including a failed/null one — is memoized against the
 // same mtimes, so a broken source file isn't re-parsed every call.
+// `ttlMs` adds a time bound for a payload whose sources the mtimes cannot
+// fully name (the daemon's project roots also come from started sessions).
 export function createMtimeGatedCache<T>(
   paths: () => string[],
   compute: () => T,
+  opts?: { ttlMs?: number },
 ): { get(): T; invalidate(): void } {
-  let cached: { value: T; mtimes: number[] } | null = null;
+  let cached: { value: T; mtimes: number[]; at: number } | null = null;
   const mtimeOf = (p: string): number => {
     try {
       return fs.statSync(p).mtimeMs;
@@ -1083,12 +1117,14 @@ export function createMtimeGatedCache<T>(
   };
   return {
     get() {
+      const now = Date.now();
       const mtimes = paths().map(mtimeOf);
-      if (cached && cached.mtimes.every((m, i) => m === mtimes[i])) {
+      const fresh = opts?.ttlMs === undefined || (cached !== null && now - cached.at < opts.ttlMs);
+      if (cached && fresh && cached.mtimes.every((m, i) => m === mtimes[i])) {
         return cached.value;
       }
       const value = compute();
-      cached = { value, mtimes };
+      cached = { value, mtimes, at: now };
       return value;
     },
     invalidate() {
