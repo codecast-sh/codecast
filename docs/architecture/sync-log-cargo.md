@@ -185,7 +185,8 @@ is the client side kill switch.
 
 **`SYNC_LOG_DISABLED` is different (review).** With emission off, writes reach documents
 but no coalesced row, so after re enabling both the rows' cargo and every client's base
-lie. Ops must run `syncLogPrune:markResyncAll` once after re enabling: it sets every scope's
+lie. Ops must run `packages/convex/run.sh syncLogPrune:markResyncAll` once after re enabling
+(the wrapper does deploy.sh's env dance; a bare `npx convex run` targets the local dev backend): it sets every scope's
 floor to its head, so every client takes the D7 resync path (drop cursor, full cold
 backfill) instead of trusting its base.
 
