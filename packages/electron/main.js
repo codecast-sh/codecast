@@ -2280,11 +2280,10 @@ ipcMain.handle("show-notification", (_e, payload) => {
 
 // OS-level permissions (notifications, microphone, camera, screen) read from
 // the OS itself — see osPermissions.js. Unpackaged dev runs register with
-// macOS under Electron's own bundle id, so query that one there.
+// macOS under Electron's own bundle id, so System Settings opens that one.
 const osPermissions = createOsPermissions({
   electron: { systemPreferences, desktopCapturer, shell },
   bundleId: app.isPackaged ? "sh.codecast.desktop" : "com.github.Electron",
-  showNotification: (title, body) => showNativeNotification(title, body),
 });
 ipcMain.handle("get-os-permissions", () => osPermissions.getAll());
 ipcMain.handle("request-os-permission", (_e, kind) => osPermissions.request(String(kind)));
