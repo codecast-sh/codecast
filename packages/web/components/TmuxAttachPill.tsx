@@ -20,9 +20,11 @@
  *   your machine, no ssh_host    → tmux attach -t '<pane>'   (+ a nudge to set one)
  *   someone else's machine       → the machine's name, not copyable at all
  *
- * The last case is the point: `tmux attach` for a pane on another host is not a
- * command that can ever work, and handing it over as if it could is what made
- * this pill actively misleading.
+ * "Your machine" includes an agent box: a machine whose daemon signs in as a
+ * bot account on your team, running a session you own (devices.ts decides,
+ * server-side). The last case is the point: `tmux attach` for a pane on
+ * another host is not a command that can ever work, and handing it over as if
+ * it could is what made this pill actively misleading.
  *
  * What the SPLIT can show follows the same three cases, because a pane can only
  * be relayed by the daemon that owns it. Your own machines work either way — a
@@ -31,7 +33,7 @@
  * pane is theirs alone.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
@@ -39,11 +41,43 @@ import { Copy } from "lucide-react";
 import { copyToClipboard } from "../lib/utils";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { DeviceDot, deviceDisplayName } from "./DeviceBadge";
-import { attachCommand, type SessionMachine } from "./tmuxAttach";
+import { attachCopy, type SessionMachine } from "./tmuxAttach";
 import {
   isConversationTerminalOpen,
   toggleConversationTerminal,
 } from "../lib/terminal/conversationTerminalState";
+
+/**
+ * The machine a pane lives on, and the copy gesture for it. One hook so every
+ * surface that offers "copy the attach command" — the header pill and the
+ * simple-view menu — copies the same command and explains it the same way.
+ */
+export function useAttachCopy(tmuxSession: string | null | undefined, conversationKey: string | undefined) {
+  // useQueryNoThrow, not useQuery: this lookup only ENRICHES the pill (it names
+  // the machine and shapes the copy command). Without it the pill still renders
+  // something honest. A plain useQuery re-throws during render, and this exact
+  // query taking the whole conversation header down is why the rule exists.
+  const machine = useQueryNoThrow(
+    api.devices.getConversationMachine,
+    tmuxSession && conversationKey ? { conversation_id: conversationKey as any } : "skip",
+  ).data as SessionMachine | null | undefined;
+  const copy = tmuxSession ? attachCopy(tmuxSession, machine) : null;
+  const command = copy?.command ?? null;
+  const message = copy?.message ?? "";
+  const copyAttach = useCallback(() => {
+    if (!message) return;
+    // Nothing to copy is still an answer: say where the pane is and how to
+    // bring it here, rather than swallowing the click.
+    if (!command) {
+      toast.info(message);
+      return;
+    }
+    copyToClipboard(command)
+      .then(() => toast.success(message))
+      .catch(() => toast.error("Failed to copy"));
+  }, [command, message]);
+  return { machine, attach: command, copyAttach };
+}
 
 export function TmuxAttachPill({
   tmuxSession,
@@ -59,14 +93,7 @@ export function TmuxAttachPill({
   const prev = useRef<string | null | undefined>(undefined);
   const [anim, setAnim] = useState<"tmux-pill-in" | "tmux-pill-change" | null>(null);
 
-  // useQueryNoThrow, not useQuery: this lookup only ENRICHES the pill (it names
-  // the machine and shapes the copy command). Without it the pill still renders
-  // something honest. A plain useQuery re-throws during render, and this exact
-  // query taking the whole conversation header down is why the rule exists.
-  const machine = useQueryNoThrow(
-    api.devices.getConversationMachine,
-    tmuxSession && conversationKey ? { conversation_id: conversationKey as any } : "skip",
-  ).data as SessionMachine | null | undefined;
+  const { machine, attach, copyAttach } = useAttachCopy(tmuxSession, conversationKey);
 
   useEffect(() => {
     const p = prev.current;
@@ -78,7 +105,6 @@ export function TmuxAttachPill({
 
   if (!tmuxSession) return null;
 
-  const attach = attachCommand(tmuxSession, machine);
   const machineName = machine ? deviceDisplayName(machine as any) : null;
   const foreign = !!machine && !machine.is_mine;
 
@@ -90,15 +116,8 @@ export function TmuxAttachPill({
     : attach && machine?.ssh_host
       ? `Copy ${attach}`
       : attach && machine
-        ? `Copy ${attach} — set an SSH host for ${machineName} in Settings → Devices to get a remote-ready command`
+        ? `Copy ${attach} — valid in a shell on ${machineName}; set an SSH host for it in Settings → Devices to get a remote-ready command`
         : `Copy ${attach}`;
-
-  const copyAttach = () => {
-    if (!attach) return;
-    copyToClipboard(attach)
-      .then(() => toast.success(machine?.ssh_host ? "ssh + tmux attach copied" : "tmux attach copied"))
-      .catch(() => toast.error("Failed to copy"));
-  };
   // Attachability is NOT is_connected: that flag is a liveness heuristic
   // (agent heartbeat + 10-minute recency) that goes false on any quiet
   // session while its tmux pane is still perfectly alive. If we know a pane

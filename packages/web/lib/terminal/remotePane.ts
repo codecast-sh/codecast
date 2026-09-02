@@ -27,6 +27,10 @@ export interface RemotePaneSource {
   convex: ConvexReactClient;
   deviceId: string;
   target: string;
+  /** The conversation the pane belongs to. Required to watch a pane on an
+   *  agent box (a bot account's daemon); the relay authorizes the viewer as
+   *  that session's owner. Own devices need nothing. */
+  conversationId?: string;
 }
 
 export interface RemotePaneFrame {
@@ -74,7 +78,11 @@ export function connectRemotePane(
   src: RemotePaneSource,
   handlers: RemotePaneHandlers,
 ): RemotePaneConnection {
-  const args = { device_id: src.deviceId, target: src.target };
+  const args = {
+    device_id: src.deviceId,
+    target: src.target,
+    ...(src.conversationId ? { conversation_id: src.conversationId as any } : {}),
+  };
   let stopped = false;
   let interactive = false;
 
@@ -85,7 +93,7 @@ export function connectRemotePane(
       // The relay only streams your own machines. Anything else is a state the
       // user can act on (sign in as the right account, register the device),
       // so say it rather than spinning on "connecting".
-      if (res && res.ok === false) handlers.onError("this machine isn't registered to your account");
+      if (res && res.ok === false) handlers.onError("this machine isn't registered to your account, and no session you own runs there");
     } catch (err) {
       handlers.onError(err instanceof Error ? err.message : "could not reach the relay");
     }
