@@ -3,10 +3,35 @@ import react from "@vitejs/plugin-react";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
+import { execSync } from "node:child_process";
 import { storeHmrPlugin } from "./plugins/storeHmr";
+import { hookRefreshPlugin } from "./plugins/hookRefresh";
 
-export default defineConfig({
+/**
+ * Build identity for drivers (window.__CODECAST_BUILD). Railway exposes the
+ * commit it built; a local checkout answers git; a tarball with neither says
+ * so instead of guessing.
+ */
+function buildIdentity(mode: string) {
+  let sha = process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || "";
+  if (!sha) {
+    try {
+      sha = execSync("git rev-parse HEAD", { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+      sha = "unknown";
+    }
+  }
+  return { sha, builtAt: new Date().toISOString(), mode };
+}
+
+export default defineConfig(({ mode }) => ({
+  define: {
+    __CODECAST_BUILD__: JSON.stringify(buildIdentity(mode)),
+  },
   plugins: [
+    // Before react(): gives hooks in plain .ts files a Fast Refresh signature,
+    // so editing their hook list remounts consumers instead of crashing them.
+    hookRefreshPlugin(),
     react(),
     // Lets an edit to a store action hot-swap instead of reloading the whole app.
     storeHmrPlugin(),
@@ -233,4 +258,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

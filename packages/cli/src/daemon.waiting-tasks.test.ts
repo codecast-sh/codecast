@@ -2,7 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { transcriptTailTurnStartTs, openBackgroundTaskIds, openBackgroundTasks, reconciledStatusWithTasks, scanOpenBackgroundTasks, declaredSettleVerdict, latestTurnStartTs, markTurnStarted, statusFlipStartsTurn, verifyOpenTasks, parseProcessTable, taskProcessNeedle, toOpenTaskReports, paneReconcileTarget, type OpenTaskInfo } from "./daemon.js";
+import { measureLoopHold } from "./test-helpers/loopHold.js";
+import { blockAt, functionBlock } from "./test-helpers/sourceRegion.js";
+import { SCAN_CHUNK_BYTES, readFileTailAsync, readFileTailSync, extractPendingToolUseFromTail, extractPendingToolUseFromTranscriptAsync, resolveTurnEndStatus, openTaskScanOffset, primeOpenTaskScan, readCompleteLinesSync, reconcileStatusFromTranscript, registerManagedStartedSession, resetSessionFileIndexForTests, transcriptTailTurnStartTs, openBackgroundTaskIds, openBackgroundTasks, reconciledStatusWithTasks, scanOpenBackgroundTasks, declaredSettleVerdict, latestTurnStartTs, markTurnStarted, statusFlipStartsTurn, verifyOpenTasks, parseProcessTable, taskProcessNeedle, toOpenTaskReports, paneReconcileTarget, type OpenTaskInfo } from "./daemon.js";
 
 // Regression tests for the "settled turn with live background work reads as
 // needs_input" bug (session jx7e6ex, 2026-08-03). A turn that ends while a
@@ -543,5 +545,275 @@ describe("transcriptTailTurnStartTs", () => {
     const turnStart = transcriptTailTurnStartTs(tail, "s1")!;
     // The stamp postdates the delivered input -> trusted, however old the daemon is.
     expect(declaredSettleVerdict("s1", Date.parse(T2), turnStart, { at: Date.parse(T1) + 5_000, status: "dormant" })).toBe("dormant");
+  });
+});
+
+// The scan window: a line longer than one chunk grows the buffer one chunk
+// per step, never to the whole remaining file, and the async prime leaves
+// nothing for the synchronous hook path scan to read.
+describe("openBackgroundTasks window growth and primeOpenTaskScan", () => {
+  const dir = () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "open-tasks-window-"));
+    cleanups.push(() => fs.rmSync(d, { recursive: true, force: true }));
+    return d;
+  };
+  const cleanups: Array<() => void> = [];
+  afterEach(() => { while (cleanups.length) cleanups.pop()!(); });
+  // A big tool result: one record, `bytes` long, that carries no task text.
+  const bigLine = (bytes: number) => toolResult("x".repeat(bytes));
+  // Enough short records to fill `bytes`.
+  const filler = (bytes: number) => {
+    const out: string[] = [];
+    for (let n = 0; n < bytes; ) {
+      const l = toolResult(`filler ${out.length} ` + "y".repeat(50_000));
+      out.push(l);
+      n += l.length + 1;
+    }
+    return out;
+  };
+
+  test("a 9MB single line grows the scan buffer one chunk at a time and the task after it is still found", () => {
+    const d = dir();
+    const f = path.join(d, "t.jsonl");
+    fs.writeFileSync(f, transcript(bigLine(9 * 1024 * 1024), ...filler(20 * 1024 * 1024), bgStart("after-big")) + "\n");
+    const size = fs.statSync(f).size;
+    // The scan's first window, read the way openBackgroundTasks reads it:
+    // windows of 4, 8 and 16MB reach the 9MB line's newline, so the window
+    // holds at most 16MB. The old escape jumped to the whole 29MB file.
+    const fd = fs.openSync(f, "r");
+    try {
+      const first = readCompleteLinesSync(fd, 0, size, { step: SCAN_CHUNK_BYTES });
+      expect(first.steps).toBe(3);
+      expect(first.bytesConsumed).toBeGreaterThan(9 * 1024 * 1024);
+      expect(first.bytesConsumed).toBeLessThanOrEqual(4 * SCAN_CHUNK_BYTES);
+    } finally {
+      fs.closeSync(fd);
+    }
+    expect(openBackgroundTasks(f, SID).map((t) => t.id)).toEqual(["after-big"]);
+    expect(openTaskScanOffset(f)).toBe(size);
+  }, 60_000);
+
+  test("primeOpenTaskScan reads a fresh 30MB transcript off the loop and leaves the sync scan nothing to read", async () => {
+    const d = dir();
+    const f = path.join(d, "t.jsonl");
+    fs.writeFileSync(f, transcript(...filler(30 * 1024 * 1024), bgStart("primed-task")) + "\n");
+    const size = fs.statSync(f).size;
+    const { maxGapMs, ticks } = await measureLoopHold(() => primeOpenTaskScan(f, SID));
+    expect(ticks).toBeGreaterThan(0);
+    expect(maxGapMs).toBeLessThan(200);
+    expect(openTaskScanOffset(f)).toBe(size);
+    // With the file unreadable, a sync scan that still had bytes to read would
+    // fail and claim no tasks; the primed answer survives because it reads nothing.
+    fs.chmodSync(f, 0o000);
+    cleanups.push(() => fs.chmodSync(f, 0o644));
+    expect(openBackgroundTasks(f, SID).map((t) => t.id)).toEqual(["primed-task"]);
+    expect(openTaskScanOffset(f)).toBe(size);
+  }, 60_000);
+
+  // The semaphore bounds the reads, not the stat: a transcript the scan has
+  // already covered answers at once, however many whole transcript primes
+  // are queued ahead of it (the recovered session scan queues the fleet).
+  test("a primed transcript does not wait behind the fleet's reads for a prime slot", async () => {
+    const d = dir();
+    const primed = path.join(d, "primed.jsonl");
+    fs.writeFileSync(primed, transcript(...filler(64 * 1024), bgStart("early")) + "\n");
+    await primeOpenTaskScan(primed, SID);
+    expect(openTaskScanOffset(primed)).toBe(fs.statSync(primed).size);
+    // Five whole transcript primes: four take every slot, the fifth queues.
+    const big = Array.from({ length: 5 }, (_, i) => {
+      const f = path.join(d, `big-${i}.jsonl`);
+      fs.writeFileSync(f, transcript(...filler(9 * 1024 * 1024)) + "\n");
+      return primeOpenTaskScan(f, `${SID.slice(0, -1)}${i}`).then(() => "big");
+    });
+    const cheap = primeOpenTaskScan(primed, SID).then(() => "cheap");
+    expect(await Promise.race([cheap, ...big])).toBe("cheap");
+    await Promise.all(big);
+    expect(openBackgroundTasks(primed, SID).map((t) => t.id)).toEqual(["early"]);
+  }, 60_000);
+
+  // The prime awaits each read; a Stop hook landing meanwhile runs the sync
+  // scan on the same state. The chunk in flight must then be dropped, or its
+  // lines replay after later ones (a task closed later reopens) and the
+  // offset lands past EOF (the next sync scan reads that as a shrink and
+  // rescans the whole transcript on the loop).
+  test("a sync scan landing while the prime has a read in flight never replays a chunk", async () => {
+    const d = dir();
+    // Proof the interleave happened at all: the sync scan must land before
+    // the prime finished in at least one round, or the test proves nothing.
+    let interleaved = 0;
+    for (const delayMs of [0, 4, 16, 40]) {
+      const f = path.join(d, `t-${delayMs}.jsonl`);
+      fs.writeFileSync(f, transcript(...filler(1024 * 1024)) + "\n");
+      openBackgroundTasks(f, SID);
+      fs.appendFileSync(f, transcript(
+        ...filler(8 * 1024 * 1024), bgStart("closed-later"),
+        ...filler(8 * 1024 * 1024), notification("closed-later", "completed"),
+        ...filler(8 * 1024 * 1024), bgStart("still-open"),
+      ) + "\n");
+      const size = fs.statSync(f).size;
+      const prime = primeOpenTaskScan(f, SID);
+      await new Promise((r) => setTimeout(r, delayMs));
+      if ((openTaskScanOffset(f) ?? 0) < size) interleaved++;
+      openBackgroundTasks(f, SID);
+      await prime;
+      expect(openTaskScanOffset(f)).toBe(size);
+      expect(openBackgroundTasks(f, SID).map((t) => t.id)).toEqual(["still-open"]);
+      expect(openTaskScanOffset(f)).toBe(size);
+    }
+    expect(interleaved).toBeGreaterThan(0);
+  }, 120_000);
+
+  // The fleet is tmux managed, and those sessions take the pane verdict, not
+  // the transcript one. They still get the prime on the maintenance
+  // reconcile, so the pane path's and the Stop hook's sync scan is a delta.
+  test("a tmux managed claude session is primed by the maintenance reconcile", async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "open-tasks-managed-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+    resetSessionFileIndexForTests();
+    cleanups.push(() => {
+      process.env.HOME = prevHome;
+      resetSessionFileIndexForTests();
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    });
+    const sid = "bbbbbbbb-0000-4000-8000-000000000002";
+    const projectDir = path.join(tmpHome, ".claude", "projects", "-Users-x-proj");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const f = path.join(projectDir, `${sid}.jsonl`);
+    fs.writeFileSync(f, transcript(...filler(9 * 1024 * 1024), bgStart("managed-task", sid)) + "\n");
+    const size = fs.statSync(f).size;
+    registerManagedStartedSession("conv-managed", sid, "cc-managed-test");
+    expect(openTaskScanOffset(f)).toBeUndefined();
+    const { maxGapMs } = await measureLoopHold(() => reconcileStatusFromTranscript(sid, {} as any));
+    expect(maxGapMs).toBeLessThan(200);
+    expect(openTaskScanOffset(f)).toBe(size);
+    expect(openBackgroundTasks(f, sid).map((t) => t.id)).toEqual(["managed-task"]);
+  }, 60_000);
+});
+
+// The hook's idle settle runs on the daemon's loop, so handleStatusData
+// primes the open task scan and reads the transcript tail off the loop first,
+// then re-enters with `{ primed: true, tail }`; resolveTurnEndStatus takes
+// that tail instead of reading 64KB itself.
+describe("hook idle settle: the tail read off the loop is the one the settle uses", () => {
+  test("a known tail replaces the sync read; an interrupted tail settles idle over open work", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-settle-tail-"));
+    const p = path.join(dir, `${SID}.jsonl`);
+    try {
+      fs.writeFileSync(p, bgStart("t1") + "\n");
+      const file = { path: p, agentType: "claude" as const };
+      // Open work in the file, no tail given: the settle reads the file and parks the turn.
+      expect(resolveTurnEndStatus(SID, file)).toBe("waiting");
+      // The same file with a tail the caller read: the tail decides.
+      expect(resolveTurnEndStatus(SID, file, "")).toBe("waiting");
+      const interrupted = line({ type: "user", sessionId: SID, message: { role: "user", content: "[Request interrupted by user]" } });
+      expect(resolveTurnEndStatus(SID, file, interrupted)).toBe("idle");
+      // A failed read (null) is not a reason to read again.
+      expect(resolveTurnEndStatus(SID, { path: path.join(dir, "missing.jsonl"), agentType: "claude" }, null)).toBe("idle");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("handleStatusData hands the async tail to the settle and never reads it on the loop", () => {
+    const src = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "daemon.ts"), "utf8");
+    const body = functionBlock(src, "handleStatusData", { from: src.indexOf("async function main(") }).text;
+    expect(body.length).toBeGreaterThan(5000);
+    expect(body).toContain("readFileTailAsync(transcript)");
+    expect(body).toContain("{ primed: true, tail }");
+    expect(body).toContain("opts?.tail,");
+    expect(body).not.toContain("readFileTailSync");
+    // A newer status that lands during the hop wins: the ts guards run
+    // before the primed re-entry reaches the settle.
+    expect(body.indexOf("prev.ts > data.ts")).toBeLessThan(body.indexOf("primed: true"));
+  });
+});
+
+// The hook path reads transcript tails and writes status files off the loop.
+// The async readers must return exactly what the sync twins return, and the
+// status persist must chain so two writes for one session land in order.
+describe("hook path off the loop: async readers and the persist chain", () => {
+  test("readFileTailAsync returns the same bytes as readFileTailSync at every size", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-tail-async-"));
+    try {
+      const cases: Array<[string, string]> = [
+        ["empty", ""],
+        ["small", "héllo\nwörld\n"],
+        ["exact", "x".repeat(64 * 1024)],
+        ["large", `${"ü".repeat(40_000)}\n${"y".repeat(70_000)}\n`],
+      ];
+      for (const [name, content] of cases) {
+        const p = path.join(dir, `${name}.jsonl`);
+        fs.writeFileSync(p, content);
+        expect(await readFileTailAsync(p), name).toBe(readFileTailSync(p));
+        expect(await readFileTailAsync(p, 100), `${name} 100 bytes`).toBe(readFileTailSync(p, 100));
+      }
+      expect((await readFileTailAsync(path.join(dir, "large.jsonl"))).length).toBeLessThanOrEqual(64 * 1024);
+      await expect(readFileTailAsync(path.join(dir, "missing.jsonl"))).rejects.toThrow();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the async pending tool extractor matches the tail extractor and answers null for a missing file", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-pending-tool-"));
+    try {
+      const p = path.join(dir, `${SID}.jsonl`);
+      fs.writeFileSync(
+        p,
+        transcript(
+          line({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "tu1", name: "Bash", input: { command: "rm -rf build" } }] } }),
+        ) + "\n",
+      );
+      const viaAsync = await extractPendingToolUseFromTranscriptAsync(p);
+      expect(viaAsync).toEqual(extractPendingToolUseFromTail(readFileTailSync(p, 32768)));
+      expect(viaAsync?.tool_name).toBe("Bash");
+      expect(viaAsync?.arguments_preview).toBe("rm -rf build");
+      expect(await extractPendingToolUseFromTranscriptAsync(path.join(dir, "missing.jsonl"))).toBeNull();
+      expect(await extractPendingToolUseFromTranscriptAsync("")).toBeNull();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("persistHookStatus writes through one ordered promise chain, and the boot replay reads the status dir async", () => {
+    const src = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "daemon.ts"), "utf8");
+    const main = src.indexOf("async function main(");
+    const persist = functionBlock(src, "persistHookStatus", { from: main }).text;
+    expect(persist).toContain("persistChain = persistChain");
+    expect(persist).toContain("fs.promises.writeFile(");
+    expect(persist).not.toContain("writeFileSync");
+    const statusFile = functionBlock(src, "handleStatusFile", { from: main }).text;
+    expect(statusFile).toContain("fs.promises.readFile(");
+    expect(statusFile).not.toContain("readFileSync");
+    // The replay of on disk status files at boot goes through the shared
+    // async reader, not a readdirSync loop.
+    const replay = src.slice(main, src.indexOf("function claudeTranscriptFor", main));
+    expect(replay).toContain("readAgentStatusFiles().then(");
+    expect(replay).not.toContain("readdirSync(AGENT_STATUS_DIR)");
+  });
+
+  test("the hook callback persists once per status: the idle hop's re-entry persists, the callback skips", () => {
+    const src = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "daemon.ts"), "utf8");
+    const main = src.indexOf("async function main(");
+    const handle = functionBlock(src, "handleStatusData", { from: main }).text;
+    // The hop reports the deferral, after scheduling its own persist.
+    const hop = handle.indexOf("persistHookStatus(sessionId, settle)");
+    expect(hop).toBeGreaterThan(0);
+    expect(handle.indexOf("return true;")).toBeGreaterThan(hop);
+    const callback = blockAt(src, src.indexOf("hookServer = startHookServer(", main)).text;
+    expect(callback).toContain("const deferred = handleStatusData(sessionId, data);");
+    expect(callback).toContain("if (!deferred) persistHookStatus(sessionId, data);");
+  });
+
+  test("a permission record is created only if the session still says permission_blocked after the tail read", () => {
+    const src = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "daemon.ts"), "utf8");
+    const handle = functionBlock(src, "handleStatusData", { from: src.indexOf("async function main(") }).text;
+    const read = handle.indexOf("extractPendingToolUseFromTranscriptAsync(transcriptPath");
+    const gate = handle.indexOf('lastHookStatus.get(sessionId)?.status !== "permission_blocked"');
+    const create = handle.indexOf("Creating permission record");
+    expect(read).toBeGreaterThan(0);
+    expect(gate).toBeGreaterThan(read);
+    expect(create).toBeGreaterThan(gate);
   });
 });

@@ -2882,7 +2882,7 @@ describe("inboxStore.beginOptimisticSession", () => {
 });
 
 // Verified ghost removal — the never-prune sessions cache asks the server which
-// blank rows still exist (existingConversationIds) and hard-drops the
+// blank rows are gone (nothing will re-deliver them) and hard-drops the
 // confirmed-gone ones. These pin the store half: rows removed everywhere +
 // exclude pendings planted (the durable delete contract), with the local-state
 // guards that keep an in-use row safe.
@@ -3457,110 +3457,6 @@ describe("resolveAssigneeInfo", () => {
   });
 });
 
-// Durable cross-device dismiss: a dismiss/un-dismiss made on another device must
-// converge here even though it arrived via the lightweight by_user_dismissed
-// reconcile (NOT the live subscription, NOT the updated_at-keyed crawl). These pin
-// applyDismissedReconcile, the client half of that backstop. Regression for
-// "I dismiss on one device but it's still there on another."
-describe("applyDismissedReconcile — durable cross-device dismiss", () => {
-  // Real server sessions have 32-char Convex ids; the reconcile's CLEAR pass
-  // deliberately ignores anything shorter (local-only stubs).
-  const A = "a".repeat(32);
-  beforeEach(() => {
-    useInboxStore.setState({ sessions: {}, conversations: {}, pending: {} } as any);
-  });
-  const seed = (id: string, extra: Partial<InboxSession> = {}) =>
-    useInboxStore.getState().syncTable("sessions", [{ ...baseSession, _id: id, session_id: id, ...extra }]);
-
-  it("SETS dismiss on a cached active session the server reports dismissed", () => {
-    seed(A); // active in cache (the stale state on the offline device)
-    expect(isSessionDismissed(useInboxStore.getState().sessions[A])).toBe(false);
-    useInboxStore.getState().applyDismissedReconcile([{ _id: A, inbox_dismissed_at: 5000 }], true);
-    const s = useInboxStore.getState();
-    expect(s.sessions[A].inbox_dismissed_at).toBe(5000);
-    expect((s.conversations[A] as any).inbox_dismissed_at).toBe(5000);
-  });
-
-  it("CLEARS dismiss (final pass) on a cached dismissed session the server no longer reports — un-dismissed elsewhere", () => {
-    seed(A, { inbox_dismissed_at: Date.now() - 1000, message_count: 3 });
-    expect(isSessionDismissed(useInboxStore.getState().sessions[A])).toBe(true);
-    useInboxStore.getState().applyDismissedReconcile([], true); // server's dismissed set is empty
-    expect(useInboxStore.getState().sessions[A].inbox_dismissed_at).toBeNull();
-  });
-
-  it("CLEARS a conversation-only dismiss only on the final pass", () => {
-    const at = Date.now() - 1_000;
-    useInboxStore.setState({
-      sessions: {},
-      conversations: { [A]: { _id: A, inbox_dismissed_at: at } },
-      pending: {},
-    } as any);
-
-    useInboxStore.getState().applyDismissedReconcile([], false);
-    expect((useInboxStore.getState().conversations[A] as any).inbox_dismissed_at).toBe(at);
-
-    useInboxStore.getState().applyDismissedReconcile([], true);
-    expect((useInboxStore.getState().conversations[A] as any).inbox_dismissed_at).toBeNull();
-  });
-
-  it("never CLEARs a dismissed BLANK session — its absence usually means the empty-conversation GC deleted it", () => {
-    // A dismissed 0-message row leaving the server's dismissed set is (almost
-    // always) cleanup.gcEmptyConversations hard-deleting it. Un-dismissing
-    // would resurrect a ghost "New Session" card into the active inbox — the
-    // exact "cruft keeps coming back" loop. It stays dismissed; the verified
-    // ghost sweep removes it for real.
-    seed(A, { inbox_dismissed_at: Date.now() - 1000, message_count: 0 });
-    useInboxStore.getState().applyDismissedReconcile([], true);
-    expect(isSessionDismissed(useInboxStore.getState().sessions[A])).toBe(true);
-  });
-
-  it("does NOT clear a dismissed session older than the reconcile window (out of server scan range)", () => {
-    const old = Date.now() - 40 * 24 * 60 * 60 * 1000;
-    seed(A, { inbox_dismissed_at: old });
-    useInboxStore.getState().applyDismissedReconcile([], true);
-    expect(useInboxStore.getState().sessions[A].inbox_dismissed_at).toBe(old);
-  });
-
-  it("a per-page (non-final) pass SETs but never CLEARs — CLEAR needs the whole set", () => {
-    seed(A, { inbox_dismissed_at: Date.now() - 1000 });
-    useInboxStore.getState().applyDismissedReconcile([], false);
-    expect(isSessionDismissed(useInboxStore.getState().sessions[A])).toBe(true);
-  });
-
-  it("respects a pending local override — an in-flight local unstash is NOT re-dismissed", () => {
-    seed(A); // locally active (just un-dismissed, dispatch in flight)
-    useInboxStore.setState((s: any) => ({
-      pending: { ...s.pending, [`sessions:${A}:inbox_dismissed_at`]: { type: "field", value: null } },
-    }));
-    // Server still reports it dismissed (hasn't caught up) — local-first must win.
-    useInboxStore.getState().applyDismissedReconcile([{ _id: A, inbox_dismissed_at: 5000 }], true);
-    expect(isSessionDismissed(useInboxStore.getState().sessions[A])).toBe(false);
-  });
-
-  it("respects a pending local override when clearing — an in-flight local dismiss is NOT un-dismissed", () => {
-    const now = Date.now();
-    seed(A, { inbox_dismissed_at: now }); // locally dismissed, dispatch in flight
-    useInboxStore.setState((s: any) => ({
-      pending: { ...s.pending, [`sessions:${A}:inbox_dismissed_at`]: { type: "field", value: now } },
-    }));
-    // Server hasn't caught up (empty set) — must not clear the optimistic dismiss.
-    useInboxStore.getState().applyDismissedReconcile([], true);
-    expect(isSessionDismissed(useInboxStore.getState().sessions[A])).toBe(true);
-  });
-
-  it("never CLEARs a dismissed local-only stub — the server can't vouch for ids it never had", () => {
-    // Regression: an orphaned optimistic stub (create failed) was dismissed, the
-    // pending lock was later clobbered by another window sharing the IDB, and
-    // every final reconcile pass resurrected it ("I keep dismissing this convo
-    // and it reappears"). Stub ids must be invisible to the CLEAR pass.
-    const stub = "s7fhu67z04khex0okvujt"; // Math.random().toString(36) shape, never 32 chars
-    seed(stub, { inbox_dismissed_at: Date.now() - 1000 });
-    // No pending lock — the clobbered-lock worst case.
-    useInboxStore.setState({ pending: {} } as any);
-    useInboxStore.getState().applyDismissedReconcile([], true);
-    expect(isSessionDismissed(useInboxStore.getState().sessions[stub])).toBe(true);
-  });
-});
 
 describe("hiding a local-only stub — stash/dismiss mean delete", () => {
   // A stub from beginOptimisticSession whose server create failed can never be
@@ -3652,54 +3548,6 @@ describe("killSessions — bulk kill from the Stashed bucket", () => {
   });
 });
 
-describe("applyStashedReconcile — cross-device stash propagation", () => {
-  const realId = "a1".repeat(16);
-
-  beforeEach(() => {
-    useInboxStore.setState({
-      sessions: {
-        [realId]: { ...baseSession, _id: realId, session_id: realId, message_count: 4 },
-      },
-      conversations: { [realId]: { _id: realId } as any },
-      pending: {},
-    } as any);
-  });
-
-  it("SET overlays a remote stash onto the cached row", () => {
-    const ts = Date.now() - 5_000;
-    useInboxStore.getState().applyStashedReconcile([{ _id: realId, inbox_stashed_at: ts }], false);
-    expect(useInboxStore.getState().sessions[realId].inbox_stashed_at).toBe(ts);
-  });
-
-  it("CLEAR (final pass) un-stashes a row the server no longer reports", () => {
-    useInboxStore.setState({
-      sessions: {
-        [realId]: { ...baseSession, _id: realId, session_id: realId, message_count: 4, inbox_stashed_at: Date.now() - 5_000 },
-      },
-    } as any);
-    useInboxStore.getState().applyStashedReconcile([], true);
-    expect(useInboxStore.getState().sessions[realId].inbox_stashed_at ?? null).toBeNull();
-  });
-
-  it("CLEAR (final pass) un-stashes a conversation-only cached row", () => {
-    useInboxStore.setState({
-      sessions: {},
-      conversations: { [realId]: { _id: realId, inbox_stashed_at: Date.now() - 5_000 } },
-      pending: {},
-    } as any);
-
-    useInboxStore.getState().applyStashedReconcile([], true);
-    expect((useInboxStore.getState().conversations[realId] as any).inbox_stashed_at).toBeNull();
-  });
-
-  it("a pending local override blocks the SET (local-first)", () => {
-    useInboxStore.setState({
-      pending: { [`sessions:${realId}:inbox_stashed_at`]: { type: "field", ts: Date.now() } },
-    } as any);
-    useInboxStore.getState().applyStashedReconcile([{ _id: realId, inbox_stashed_at: Date.now() }], false);
-    expect(useInboxStore.getState().sessions[realId].inbox_stashed_at ?? null).toBeNull();
-  });
-});
 
 import { computePlanProgress, mergeLiveTasks, deriveDocDisplayTitle } from "../../lib/liveEntities";
 
@@ -4081,55 +3929,6 @@ describe("inboxStore fork stub lifecycle", () => {
   });
 });
 
-describe("hidden-reconcile stale override release (ct-36973)", () => {
-  // A dismiss plants a pending field override that normally clears when the
-  // server echoes the same value. But dismissed rows leave the live channel,
-  // so a hide overturned ELSEWHERE (other device / server-side restore) never
-  // produces a matching echo — the override pinned the row hidden forever.
-  // Past the settle window the reconcile's authoritative set must win.
-  const ID = "jx70000000000000000000000000abcd";
-  const seed = (overrideAgeMs: number, dismissedAt = Date.now() - 60_000) => {
-    useInboxStore.setState({
-      sessions: { [ID]: { _id: ID, session_id: "s1", inbox_dismissed_at: dismissedAt, message_count: 5 } as any },
-      conversations: { [ID]: { _id: ID, inbox_dismissed_at: dismissedAt } as any },
-      pending: {
-        [`sessions:${ID}:inbox_dismissed_at`]: { type: "field", value: dismissedAt, ts: Date.now() - overrideAgeMs },
-      } as any,
-    });
-  };
-
-  it("fresh override still wins — an in-flight local dismiss is protected", () => {
-    seed(5_000);
-    const seededAt = (useInboxStore.getState().sessions[ID] as any).inbox_dismissed_at;
-    useInboxStore.getState().applyDismissedReconcile([], true);
-    const s = useInboxStore.getState();
-    expect((s.sessions[ID] as any).inbox_dismissed_at).toBe(seededAt);
-    expect(s.pending[`sessions:${ID}:inbox_dismissed_at`]).toBeDefined();
-  });
-
-  it("stale override releases: server's authoritative un-hide lands and the lock is deleted", () => {
-    seed(10 * 60 * 1000);
-    useInboxStore.getState().applyDismissedReconcile([], true);
-    const s = useInboxStore.getState();
-    expect((s.sessions[ID] as any).inbox_dismissed_at).toBeNull();
-    expect((s.conversations[ID] as any).inbox_dismissed_at).toBeNull();
-    expect(s.pending[`sessions:${ID}:inbox_dismissed_at`]).toBeUndefined();
-  });
-
-  it("stale override also releases for the SET direction (remote re-dismiss lands)", () => {
-    useInboxStore.setState({
-      sessions: { [ID]: { _id: ID, session_id: "s1", inbox_dismissed_at: null, message_count: 5 } as any },
-      conversations: { [ID]: { _id: ID, inbox_dismissed_at: null } as any },
-      pending: {
-        [`sessions:${ID}:inbox_dismissed_at`]: { type: "field", value: null, ts: Date.now() - 10 * 60 * 1000 },
-      } as any,
-    });
-    useInboxStore.getState().applyDismissedReconcile([{ _id: ID, inbox_dismissed_at: 2222 } as any], false);
-    const s = useInboxStore.getState();
-    expect((s.sessions[ID] as any).inbox_dismissed_at).toBe(2222);
-    expect(s.pending[`sessions:${ID}:inbox_dismissed_at`]).toBeUndefined();
-  });
-});
 
 describe("dismiss/kill advances in the ACTIVE view order, like j/k", () => {
   // Three waiting-for-input sessions whose grouped order and time order

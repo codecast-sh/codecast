@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { ChevronRight, Headphones, LayoutGrid, List, MessageSquare, PictureInPicture2, Pin, Volume2, VolumeX } from "lucide-react";
+import { ChevronRight, Headphones, LayoutGrid, List, MessageSquare, PictureInPicture2, Pin, Settings2, Volume2, VolumeX } from "lucide-react";
 import { PeopleStrip } from "./PeopleStrip";
 import { PeopleLegend } from "./PeopleLegend";
 import { TeamPulseLine } from "./TeamPulseLine";
@@ -24,6 +24,7 @@ import { useDesktopWindowRole } from "../../hooks/useDesktopWindowRole";
 import { dmRoomKey } from "@codecast/shared/contracts";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { CallDock } from "../calls/CallDock";
+import { CallSettingsSheet } from "../calls/CallSettings";
 import { ElsewhereCallPill } from "../calls/ElsewhereCallPill";
 import { LiveNowRail } from "../calls/LiveNow";
 import { WalkiePttButton } from "../calls/WalkiePtt";
@@ -74,6 +75,7 @@ export function PeoplePanel() {
   // row of faces; narrowed, the header folds to a line; at its default size it
   // is the full buddy list. Nothing here is a setting — see peopleDensity.ts.
   const rootRef = useRef<HTMLElement | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const density = usePeopleDensity(rootRef);
   // THE ONE ROSTER READ. Every shape draws from this object — a second call
   // site is a second full set of store subscriptions and timers in a window
@@ -98,11 +100,11 @@ export function PeoplePanel() {
       </h1>
       {density === "strip" ? (
         <ErrorBoundary name="People strip" level="inline" fallback={null}>
-          <PeopleStrip callsEnabled={callsEnabled} data={data} pulse={pulse} pin={<><FacesOverlayButton /><PinButton /></>} />
+          <PeopleStrip callsEnabled={callsEnabled} data={data} pulse={pulse} pin={<><CallSettingsButton onClick={() => setSettingsOpen(true)} /><FacesOverlayButton /><PinButton /></>} />
         </ErrorBoundary>
       ) : (
         <>
-          <PanelHeader density={density} me={data.me} pulse={pulse} />
+          <PanelHeader density={density} me={data.me} pulse={pulse} onOpenSettings={() => setSettingsOpen(true)} />
           <div className="people-scroll min-h-0 flex-1 overflow-y-auto">
             {callsEnabled && (
               <ErrorBoundary name="Live now" level="inline" fallback={null}>
@@ -126,6 +128,7 @@ export function PeoplePanel() {
       <ErrorBoundary name="Call window" level="inline" fallback={null}>
         <CallDock />
       </ErrorBoundary>
+      {settingsOpen && <CallSettingsSheet onClose={() => setSettingsOpen(false)} />}
     </main>
   );
 }
@@ -138,12 +141,14 @@ function PanelHeader({
   density,
   me,
   pulse,
+  onOpenSettings,
 }: {
   density: PeopleDensity;
   /** Your roster row (or the user doc until it lands) — resolved once by
    *  usePeopleRoster, never looked up here. */
   me: any;
   pulse: TeamPulse;
+  onOpenSettings: () => void;
 }) {
   const callsEnabled = useCallsAvailable();
   const status = (me?.status ?? "available") as (typeof STATUSES)[number];
@@ -180,6 +185,7 @@ function PanelHeader({
             {status}
           </button>
           <ViewSwitch compact />
+          <CallSettingsButton onClick={onOpenSettings} />
           <FacesOverlayButton />
           <PinButton />
         </div>
@@ -219,6 +225,7 @@ function PanelHeader({
         </div>
         <div className="flex items-center gap-1.5">
           <ViewSwitch />
+          <CallSettingsButton onClick={onOpenSettings} />
           <FacesOverlayButton />
           <PinButton />
         </div>
@@ -398,6 +405,23 @@ function WalkieDoorToggle({ compact = false }: { compact?: boolean }) {
  * see-through click-through window is the shell's to make, so on an older
  * build or in a browser the button simply is not there.
  */
+/** The gear that opens the call settings sheet over the roster. Always there,
+ *  on every density and in a browser too: the settings it opens (join
+ *  defaults, devices, the walkie door, sounds) are not the desktop's. */
+function CallSettingsButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Call settings — camera, mic, devices, walkie, sounds"
+      aria-label="Call settings"
+      className="rounded p-1 text-sol-text-dim transition-colors hover:text-sol-text"
+    >
+      <Settings2 className="h-3.5 w-3.5" />
+    </button>
+  );
+}
+
 function FacesOverlayButton() {
   const open = useDesktopWindowRole().facesOverlay;
   if (!canOpenFacesOverlay()) return null;

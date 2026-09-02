@@ -16,8 +16,8 @@ export type SyncCoreProfile = "web" | "mobile";
 //   useSyncInboxSessions   the live window (useLiveInboxSessions inside it),
 //                          the sessionsLiveness overlay, the recovery probes
 //                          (SAME args as the subscriptions), client state,
-//                          current user, bookmarks, the completeness crawl,
-//                          the dismissed/stashed reconciles, the ghost sweep
+//                          current user, bookmarks, the completeness floor
+//                          (once per cold or resynced cache), the stub sweep
 //   useSyncTeamInboxSessions  the team feeders, mounted per scope (they
 //                          subscribe only while inbox_scope is "team")
 //   useSyncChangeFeed      the sync-log applier (per-scope catch-up cursors)
