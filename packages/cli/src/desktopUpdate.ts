@@ -12,6 +12,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { compareVersions, isBelowMinimum } from "@platform/cli-kit/update";
 import { execFileSync, spawnSync } from "./proc.js";
 import { isDevMode } from "./update.js";
 
@@ -56,19 +57,6 @@ function writeState(state: DesktopUpdateState): void {
   } catch {}
 }
 
-// Semver-ish numeric compare (matches daemon.compareVersions).
-function compareVersions(a: string, b: string): number {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const na = pa[i] || 0;
-    const nb = pb[i] || 0;
-    if (na > nb) return 1;
-    if (na < nb) return -1;
-  }
-  return 0;
-}
-
 // Whether to apply the update even while the app is running (quit + swap +
 // relaunch) instead of deferring. A manual `--force` always does; otherwise only
 // when the installed app is below the server-pinned floor (min_desktop_version)
@@ -97,7 +85,7 @@ export function shouldApplyWhileRunning(
   opts: { force?: boolean; minVersion?: string | null },
 ): boolean {
   if (opts.force === true) return true;
-  return !!opts.minVersion && compareVersions(installed, opts.minVersion) < 0;
+  return isBelowMinimum(installed, opts.minVersion);
 }
 
 function plistVersion(plistPath: string): string | null {

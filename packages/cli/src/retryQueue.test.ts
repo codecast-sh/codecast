@@ -968,6 +968,48 @@ describe("RetryQueue", () => {
     q.stop();
   });
 
+  it("uses the built-in delays when the caller sets none", async () => {
+    // Regression: the wrapper handed the package a config object with an
+    // explicit `undefined` for every tunable the caller omitted, which erased
+    // the package's defaults. nextRetryAt became NaN, so the op was never due
+    // and the queue silently stopped draining.
+    const q = new RetryQueue({ onLog: () => {} });
+    let ran = 0;
+    q.setExecutor(async () => { ran++; return true; });
+    q.add("addMessage", { content: "test" });
+    expect(q.getPendingOperations()[0].nextRetryAt).toBeGreaterThan(Date.now());
+    await until(() => ran === 1 && q.getQueueSize() === 0, 5_000);
+    q.stop();
+  });
+
+  it("rewrites the persisted file when a load-time dedupe shrinks an op in place", () => {
+    // The op COUNT is unchanged here — only the messages inside the single op
+    // shrink — so the rewrite has to be driven by the heal itself.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rq-dedupe-"));
+    const persistPath = path.join(dir, "retry-queue.json");
+    try {
+      fs.writeFileSync(persistPath, JSON.stringify([{
+        id: "addMessages-1",
+        type: "addMessages",
+        params: { conversationId: "hot", messages: [{ messageUuid: "a" }, { messageUuid: "a" }, { messageUuid: "b" }] },
+        attempts: 0,
+        nextRetryAt: Date.now(),
+        createdAt: Date.now(),
+      }]));
+
+      const loaded = new RetryQueue({ persistPath, onLog: () => {} });
+      const uuids = (loaded.getPendingOperations()[0].params.messages as Array<{ messageUuid: string }>).map((m) => m.messageUuid);
+      expect(uuids).toEqual(["a", "b"]);
+
+      const onDisk = JSON.parse(fs.readFileSync(persistPath, "utf-8"));
+      expect(onDisk).toHaveLength(1);
+      expect(onDisk[0].params.messages).toHaveLength(2);
+      loaded.stop();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("fires onEnqueue when an op is added so the status snapshot refreshes on accumulation", () => {
     // Regression: `cast status` reads a persisted snapshot that was refreshed only
     // on sync success / drain. During the accumulation phase (before any retry
