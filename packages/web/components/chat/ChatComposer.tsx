@@ -1,9 +1,8 @@
 import { memo, useCallback, useRef, useState } from "react";
-import { ImagePlus, X } from "lucide-react";
+import { ImagePlus } from "lucide-react";
 import { WalkiePttButton } from "../calls/WalkiePtt";
 import { MessageInput } from "../ConversationView";
 import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
-import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useTypingMembers, useTypingReporter } from "../../hooks/useChatTyping";
 import { TypingIndicator } from "./TypingIndicator";
 import { pendingImageUploads } from "../../lib/draftImages";
@@ -35,33 +34,6 @@ import "./chat.css";
 // the shared component — and the matching indicator sits in the foot row, so
 // both halves of the feature live at the one point that knows the scope
 // (channel vs thread).
-
-/**
- * The one time the key explains itself.
- *
- * Everything else about push to talk is discoverable by pressing: the ring
- * lights, the words appear, the burst lands. The one thing a press cannot teach
- * is that it must be HELD — a click does nothing, and a person who clicks once
- * and gets nothing concludes the button is broken and never returns to it.
- *
- * So the first DM composer that offers the key says it, beside the key, with
- * the chord for the same gesture; and then never again on any of this person's
- * devices. It retires on the X, on a click anywhere in the callout, and on the
- * first real press of the key — three ways out, because a callout you cannot
- * get rid of is worse than one you never saw.
- */
-function WalkieHoldCoach({ onDismiss }: { onDismiss: () => void }) {
-  return (
-    <span className="walkie-coach" role="note" onClick={onDismiss}>
-      <span className="walkie-coach-arrow" aria-hidden="true" />
-      <span>Hold the key to talk. Let go and it sends.</span>
-      <MenuKeyCaps action="chat.pushToTalk" className="inline-flex items-center gap-[2px]" />
-      <button type="button" className="walkie-coach-x" aria-label="Got it" onClick={onDismiss}>
-        <X className="w-3 h-3" />
-      </button>
-    </span>
-  );
-}
 
 export function chatDraftKey(channelId: string, threadRootId?: string): string {
   return threadRootId ? `chat:${channelId}:${threadRootId}` : `chat:${channelId}`;
@@ -107,21 +79,6 @@ export const ChatComposer = memo(function ChatComposer({
   const resolveChannelId = useCallback(() => channelId, [channelId]);
   // A burst is a line in the conversation, and a thread is somewhere else.
   const offerWalkie = !!walkieRoomKey && !threadRootId;
-  // One scalar out of the prefs bag, so the composer re-renders when the
-  // callout retires and at no other time.
-  const prefs = useTrackedStore([
-    (s) => s.clientState.ui?.walkie_hold_seen,
-    (s) => s.clientStateInitialized,
-  ]);
-  // Not before the bag has loaded: a callout that flashes on every boot and
-  // then vanishes is the same annoyance as one that never retires.
-  const coachHold =
-    offerWalkie && prefs.clientStateInitialized && !prefs.clientState.ui?.walkie_hold_seen;
-  const retireCoach = useCallback(() => {
-    const st = useInboxStore.getState();
-    if (st.clientState.ui?.walkie_hold_seen) return;
-    st.updateClientUI({ walkie_hold_seen: true });
-  }, []);
   const typing = useTypingReporter(channelId, threadRootId);
   const typists = useTypingMembers(channelId, threadRootId);
   const ownDropRef = useRef<((files: File[]) => void) | null>(null);
@@ -192,7 +149,6 @@ export const ChatComposer = memo(function ChatComposer({
                 it, because pressing IS learning it. */}
             <span
               className="walkie-seat"
-              onPointerDown={coachHold ? retireCoach : undefined}
             >
               {/* The SMALL key, deliberately.
                   It used to be the composer's 40px control, sized as if the
@@ -207,9 +163,9 @@ export const ChatComposer = memo(function ChatComposer({
                 roomKey={walkieRoomKey}
                 resolveChannelId={resolveChannelId}
                 size="sm"
-                title="Hold to talk — they hear you now, and the words land here"
+                label="Talk"
+                title="Talk to them — they see your face and hear you; click again to stop"
               />
-              {coachHold && <WalkieHoldCoach onDismiss={retireCoach} />}
             </span>
             {/* The chord for the same gesture, ON the control rather than in
                 the hint row at the far right of the composer, which is where it
@@ -217,7 +173,7 @@ export const ChatComposer = memo(function ChatComposer({
                 A hand already on the keyboard should never have to find the
                 mouse to say one sentence. */}
             <span className="walkie-chord">
-              <span className="walkie-chord-word">hold</span>
+              <span className="walkie-chord-word">toggle</span>
               <MenuKeyCaps
                 action="chat.pushToTalk"
                 className="inline-flex items-center gap-[2px]"

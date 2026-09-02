@@ -1,36 +1,22 @@
 // The walkie's React layer, and no components — so the surfaces that DO render
 // one stay Fast Refresh boundaries.
 //
-// The heart of it is the hold-to-talk gesture, which every surface shares.
-//
-// Three do — the DM composer's mic, a teammate's hover card, the receiver
-// banner's reply — plus the keyboard, and all four are the same hold: press,
-// talk, release. So the gesture lives here once and each surface supplies only
+// The heart of it is the talk TOGGLE, which every surface shares: click to
+// start talking, click again to stop. The DM composer's key, a face's Talk
+// button, the receiver card's answer, the keyboard chord — all four are the
+// same toggle, so the gesture lives here once and each surface supplies only
 // what it looks like and which room it opens.
 //
-// RELEASING IS THE HARD PART. A push-to-talk button that misses its release
-// leaves a mic open in someone else's room, which is the worst failure this
-// feature has. So every way a press can end is a release: the pointer coming
-// up, the pointer leaving the button, the browser cancelling the gesture, the
-// key coming up, the window losing focus with a finger still down, and the
-// surface unmounting under the hand. The engine's endBurst is idempotent, so a
-// release arriving twice costs nothing and one arriving late still lands the
-// burst.
-import {
-  useCallback,
-  useRef,
-  useSyncExternalStore,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent,
-  type PointerEvent,
-} from "react";
+// A talk is one way. The person talking is seen and heard; they hear nobody
+// back until the listener joins on purpose. Nothing here ends a talk behind the
+// person's back — not a blur, not a surface unmounting — because the person
+// chose to talk and only they (or the engine's own cap) say when it stops.
+import { useCallback, useSyncExternalStore, type MouseEvent } from "react";
 import { toast } from "sonner";
 import {
-  WALKIE_LOCK_MS,
   endBurst,
   getWalkieLevel,
   getWalkieStatus,
-  lockBurstLive,
   startBurst,
   subscribeWalkie,
   subscribeWalkieLevel,
@@ -46,8 +32,6 @@ import { PRESENCE_BUCKET_MS } from "@codecast/convex/convex/presenceState";
 import { describeRoom } from "../lib/calls/roomLabels";
 import { memberDisplayName } from "../lib/liveEntities";
 import { useShortcutAction, useShortcutContext } from "../shortcuts";
-import { useEventListener } from "./useEventListener";
-import { useMountEffect } from "./useMountEffect";
 import { useNowWhen } from "./useCoarseNow";
 import { usePagePresence } from "./usePagePresence";
 
@@ -259,14 +243,14 @@ export function walkieKeyName(
 ): string {
   if (opts.reason) return opts.reason;
   if (state === "dropped") return "Nobody is hearing this — still recording";
-  if (state === "opening") return "Opening the mic — do not talk yet";
+  if (state === "opening") return "Opening the mic — one moment";
   if (state === "live") {
     return opts.live
-      ? "Live — they hear you now, keep holding to stay on"
-      : "Recording — they get it when you let go";
+      ? "Talking — they hear you now. Click to stop"
+      : "Talking — they get it as a message. Click to stop";
   }
-  if (state === "locked") return "You are live, hands free — End stops it";
-  return opts.label ?? opts.title ?? "Hold to talk";
+  if (state === "locked") return "You are on the line, hands free — End hangs up";
+  return opts.label ?? opts.title ?? "Talk";
 }
 
 /**
@@ -314,10 +298,6 @@ export function useWalkieKeySig(roomKey: string | undefined): string {
 export function usePushToTalk(
   roomKey: string | undefined,
   resolveChannelId: () => string | null,
-  /** Who is on the other end, for the lock's "You joined Jordan" sentence —
-   *  resolved at lock time, never at render. A surface that cannot name them
-   *  still locks the same way. */
-  resolveName?: () => string | null,
 ): PushToTalk {
   // ONE ROOM'S WORTH OF THE ENGINE, and never the whole snapshot.
   //
@@ -348,52 +328,22 @@ export function usePushToTalk(
     (st: any) => !!st.callConfig?.enabled,
     (st: any) => st.clientState?.ui?.active_team_id ?? "",
   ]);
-  const held = useRef(false);
-  // The fill. Armed at the press, disarmed by any release — so a hold that
-  // outlives it is the one gesture that locks, and everything shorter keeps
-  // its old meaning (tap, burst). A ref, because nothing on screen changes at
-  // arm time: the ring animates in CSS off the same WALKIE_LOCK_MS.
-  const fill = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const disarmFill = () => {
-    if (fill.current) clearTimeout(fill.current);
-    fill.current = null;
-  };
-
+  // A TOGGLE, NOT A HOLD. Click starts the talk, click stops it. Nothing on
+  // this side is timed and nothing releases behind the person's back: the
+  // window blurring, the surface unmounting (a face menu closing under the
+  // pointer) — none of that is the person saying "stop". The engine's own cap
+  // is the backstop, and the red button on the card is the door.
   const release = useCallback(() => {
-    // Always disarmed, even for a hand that never held here: a blur mid-fill
-    // must not let the latch fire into an unfocused window.
-    disarmFill();
-    if (!held.current) return;
-    held.current = false;
+    if (getWalkieStatus().sending?.roomKey !== roomKey) return;
     void endBurst();
-  }, []);
+  }, [roomKey]);
 
-  const nameRef = useRef(resolveName);
-  nameRef.current = resolveName;
   const press = useCallback(() => {
-    if (held.current || walkieBlockedReason(roomKey)) return;
+    if (getWalkieStatus().sending || walkieBlockedReason(roomKey)) return;
     const channelId = resolveChannelId();
     if (!channelId || !roomKey) return;
-    held.current = true;
     void startBurst(channelId, roomKey);
-    disarmFill();
-    fill.current = setTimeout(() => {
-      fill.current = null;
-      // THE LATCH. The engine re-checks that this burst is still the one the
-      // fill was timing (shouldLockBurst), so a cap or a blur that landed it
-      // mid-tick locks nothing. The hand can let go from here: release finds
-      // no burst and does nothing.
-      void lockBurstLive({ name: nameRef.current?.() ?? null });
-    }, WALKIE_LOCK_MS);
   }, [roomKey, resolveChannelId]);
-
-  // A hold that survives the window losing focus is a mic left open in someone
-  // else's room: the pointerup or keyup that was going to end it happens
-  // somewhere else entirely and is never delivered here.
-  useEventListener("blur", release);
-  // And the last resort: the surface going away mid-hold — a channel switch, a
-  // hover card closing under the pointer — must not leave the mic open either.
-  useMountEffect(() => () => release());
 
   const holding = !!status.sending && status.sending.roomKey === roomKey;
   // Whether the mic is live is TWO questions, and the second one only the call
@@ -430,30 +380,17 @@ export function usePushToTalk(
 }
 
 /**
- * The keyboard half, mounted by whatever surface has a DM open.
- *
- * Split across two mechanisms on purpose. The PRESS is a registered shortcut,
- * so the binding is listed in the help panel, is guarded against modals and
- * keyboard owners like every other binding, and is rebindable when bindings
- * become rebindable. The RELEASE is a plain keyup, because the dispatcher has
- * no keyup channel at all — its handlers take no event, so a hold cannot be
- * expressed as a binding. Ctrl+Tab's switcher splits the same way for the same
- * reason.
- *
- * Auto-repeat needs no guard here: a held key re-dispatches the press several
- * times a second, and `press` is already a no-op while this surface holds.
+ * The keyboard half, mounted by whatever surface has a DM open: one chord that
+ * starts the talk and, pressed again, stops it. A registered shortcut, so it
+ * is listed in the help panel and guarded against modals like every binding.
  *
  * ON SCREEN, NOT MERELY MOUNTED. The tab shell keeps a chat page mounted behind
- * whatever tab is in front, and the shortcut dispatcher's contexts are one
- * global set with no idea which pane a reader is looking at — so a binding
- * armed by a hidden page is armed for the whole app. For a shortcut that opens
- * a live mic into a DM, that is the feature's worst failure reached from the
- * other side: not a hold that fails to release, but a burst the person never
- * meant to start, into a conversation they are not even looking at. Presence is
- * read HERE rather than taken from the caller, so no surface can arm the key by
- * forgetting to ask. The chat page learned this same lesson for its toasts.
+ * whatever tab is in front, and a binding armed by a hidden page would start a
+ * talk into a conversation the person is not even looking at. Presence is
+ * read HERE rather than taken from the caller, so no surface can arm it by
+ * forgetting to ask.
  */
-export function useHoldToTalk(
+export function useTalkShortcut(
   roomKey: string | undefined,
   resolveChannelId: () => string | null,
   enabled: boolean,
@@ -466,22 +403,11 @@ export function useHoldToTalk(
     "chat.pushToTalk",
     useCallback(() => {
       if (!armed) return false;
-      ptt.press();
+      // The chord TOGGLES: once to talk, once to stop.
+      if (ptt.holding) ptt.release();
+      else ptt.press();
     }, [armed, ptt]),
   );
-  // Any part of the chord coming up ends the hold. Watching only the space bar
-  // would keep the mic open when the hand lifts off Ctrl first, which is how
-  // people actually let go of a chord.
-  //
-  // Never gated on `armed`, unlike the press. Arming is a question about whether
-  // to START; releasing has to work whatever the world did since — a tab that
-  // went to the background mid-hold takes the arming away, and a release that
-  // went with it would leave exactly the open mic all of this exists to prevent.
-  useEventListener("keyup", (e: KeyboardEvent) => {
-    if (e.key === " " || e.key === "Control" || e.key === "Shift" || e.key === "Meta" || e.key === "Alt") {
-      ptt.release();
-    }
-  });
   return ptt;
 }
 
@@ -541,60 +467,22 @@ export function useWalkieLevelVar<T extends HTMLElement>(active: boolean, identi
  * Auto-repeat needs no guard beyond the one `press` already has, but `e.repeat`
  * says the intent plainly.
  */
-const HOLD_KEYS = new Set([" ", "Spacebar", "Enter"]);
-
-/** Whether a key event is the keyboard's version of a thumb on the key.
- *  Exported so a surface that WRAPS these handlers — the people wall, whose
- *  face is both a hold and a click — asks the same question rather than
- *  keeping its own copy of the set and drifting from it. */
-export function isWalkieHoldKey(key: string): boolean {
-  return HOLD_KEYS.has(key);
-}
-
-export function pttHoldProps(ptt: PushToTalk) {
+/**
+ * What a talk key spreads onto its element: ONE click toggles the talk, and a
+ * pointer arriving warms the microphone so the first word is not paid for by
+ * the device. It CANNOT prompt — the engine only proceeds where permission is
+ * already granted — so nobody is asked for a microphone by moving a mouse.
+ */
+export function talkToggleProps(ptt: PushToTalk) {
   return {
-    // A pointer arriving on a push-to-talk key means "might talk". Opening the
-    // microphone now takes the device acquisition out of the press, so the first
-    // burst of a session is as instant as the second. It CANNOT prompt — the
-    // engine only proceeds where permission is already granted — so nobody is
-    // ever asked for a microphone by moving a mouse.
-    //
-    // Deliberately the KEY and not the conversation. Warming whenever a DM is
-    // open would turn the browser's recording indicator on for reading a
-    // message, which is a real thing to do to somebody for a burst they may
-    // never speak. Pointing at the mic is the first gesture that says otherwise.
-    // A keyboard-only hold therefore pays for getUserMedia at press time — tens
-    // of milliseconds on an already-granted device, against the seconds the room
-    // join used to cost.
     onPointerEnter: () => void warmMic(),
-    // The keyboard's version of a pointer arriving. Tabbing onto a
-    // push-to-talk key is as deliberate as pointing at one, and it was the
-    // gap: the pointer path paid for the device before the press and the
-    // keyboard path paid for it inside the press, so a keyboard-only hold
-    // was reliably the slowest way to start a burst. Same engine call, same
-    // guarantee — `warmMic` returns unless permission is already granted, so
-    // no Tab key can raise a microphone prompt.
     onFocus: () => void warmMic(),
-    onPointerDown: (e: PointerEvent) => {
-      // Left button only, and never the gesture that opens a context menu.
-      if (e.button !== 0) return;
+    onClick: (e: MouseEvent) => {
       e.preventDefault();
-      ptt.press();
+      e.stopPropagation();
+      if (ptt.holding) ptt.release();
+      else ptt.press();
     },
-    onPointerUp: ptt.release,
-    onPointerLeave: ptt.release,
-    onPointerCancel: ptt.release,
-    onKeyDown: (e: ReactKeyboardEvent) => {
-      if (!HOLD_KEYS.has(e.key) || e.repeat) return;
-      // Space would scroll the page out from under the person mid-sentence.
-      e.preventDefault();
-      ptt.press();
-    },
-    onKeyUp: (e: ReactKeyboardEvent) => {
-      if (!HOLD_KEYS.has(e.key)) return;
-      ptt.release();
-    },
-    onClick: (e: MouseEvent) => e.preventDefault(),
   };
 }
 
@@ -826,13 +714,15 @@ export function walkieStageWords(input: {
   name: string;
 }): WalkieStageWords {
   const { sending, incoming, locked, muted, dropped, micDenied, name } = input;
-  const holdHint = "Release to send · keep holding to lock in and go hands free";
+  const stopHint = "Click STOP when you are done.";
   if (sending) {
-    if (dropped) return { stage: "dropped", badge: "NOT HEARD", hint: `Still recording. ${name} gets it as a message.` };
-    if (!sending.live) return { stage: "opening", badge: "OPENING MIC", hint: "Keep holding. Do not talk yet." };
-    if (incoming) return { stage: "both", badge: "BOTH TALKING", hint: holdHint };
-    if (sending.heardLive) return { stage: "live", badge: "LIVE", hint: `${name} hears you now. ${holdHint}` };
-    return { stage: "recording", badge: "RECORDING", hint: `${name} gets it when you let go. ${holdHint}` };
+    if (dropped) return { stage: "dropped", badge: "NOT HEARD", hint: `Still recording. ${name} gets it as a message. ${stopHint}` };
+    if (!sending.live) return { stage: "opening", badge: "OPENING MIC", hint: "One moment. Do not talk yet." };
+    if (incoming) return { stage: "both", badge: "BOTH TALKING", hint: stopHint };
+    if (sending.heardLive) {
+      return { stage: "live", badge: "TALKING", hint: `${name} sees you and hears you. You will not hear them until they JOIN. ${stopHint}` };
+    }
+    return { stage: "recording", badge: "RECORDING", hint: `Opening the line to ${name}. If they are away they get this as a message. ${stopHint}` };
   }
   if (locked) {
     return muted
@@ -844,10 +734,10 @@ export function walkieStageWords(input: {
     return {
       stage: "incoming",
       badge: "INCOMING",
-      hint: `${name} is talking to you. HOLD their face to reply · JOIN LIVE to talk hands free · SNOOZE to stop bursts for an hour.`,
+      hint: `${name} is talking to you. You hear them; they cannot hear you. TALK to answer · JOIN LIVE to talk back and forth · SNOOZE to stop bursts for an hour.`,
     };
   }
-  return { stage: "open", badge: "LINE OPEN", hint: `Still open with ${name} for a moment. Hold a face to talk.` };
+  return { stage: "open", badge: "THEY STOPPED", hint: `${name} just talked to you. TALK to answer, or JOIN LIVE to talk back and forth.` };
 }
 
 export type WalkieStrip = WalkieStageWords & {
@@ -995,6 +885,25 @@ function stripHeadline(input: {
   return `Still open with ${name}`;
 }
 
+/**
+ * THE OTHER PERSON LEFT A TWO-PERSON ROOM. A DM room with one seat in it is a
+ * call with nobody on the other end: the card saying "they hear everything you
+ * say" would be a lie, and the founder's rule is that a huddle you leave goes
+ * away — on BOTH sides. True only once the other side was actually seen in the
+ * room (`sawOther`), so a seat still waiting for them to arrive is not ended
+ * by its own patience.
+ */
+export function dmRoomEmptied(input: {
+  roomKey: string | null;
+  seats: { user_id?: unknown }[];
+  me: string;
+  sawOther: boolean;
+}): boolean {
+  const { roomKey, seats, me, sawOther } = input;
+  if (!roomKey || !roomKey.startsWith("dm:") || !sawOther) return false;
+  return !seats.some((r) => String(r?.user_id ?? "") !== me);
+}
+
 /** The four things the call dock can be. */
 export type DockSurface = "none" | "walkie" | "stage" | "dock";
 
@@ -1022,7 +931,15 @@ export function callDockSurface(
     video?: boolean;
   },
 ): DockSurface {
-  if (walkieHoldsRoom(status, call.roomKey)) return "walkie";
+  if (walkieHoldsRoom(status, call.roomKey)) {
+    // MY OWN seat, lingering after my talk ended, is not a card: the person
+    // said Stop and the card going with it is what Stop means. The room stays
+    // open a moment so an answer can arrive fast. A LISTENER's linger still
+    // draws — their card carries Talk and Join live, which is the whole point
+    // of keeping the seat.
+    if (!status.sending && !status.incoming && status.liveRoom?.mode === "burst") return "none";
+    return "walkie";
+  }
   if (call.phase === "idle") return "none";
   // A voice room this client stepped into FROM THE WALKIE keeps the walkie's
   // own shape — faces and an End, not a video card for a conversation with no
