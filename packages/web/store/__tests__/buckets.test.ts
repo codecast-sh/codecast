@@ -380,6 +380,19 @@ describe("toggleBucketFilterTerm (shift-click filter list)", () => {
     expect(filters()).toEqual([{ id: "b2", exclude: false }]);
   });
 
+  it("history restore: setActiveBucketFilter with extras re-applies a full list at once", () => {
+    const store = useInboxStore.getState();
+    store.setActiveBucketFilter("b2", true, [{ id: "b3", exclude: false }, { id: "b4", exclude: true }]);
+    expect(filters()).toEqual([
+      { id: "b2", exclude: true },
+      { id: "b3", exclude: false },
+      { id: "b4", exclude: true },
+    ]);
+    // Extras never survive a cleared head.
+    store.setActiveBucketFilter(null, false, [{ id: "b3", exclude: false }]);
+    expect(useInboxStore.getState().extraBucketFilters).toEqual([]);
+  });
+
   it("picking a project clears the whole label list", () => {
     const store = useInboxStore.getState();
     store.toggleBucketFilterTerm("b1", false);
