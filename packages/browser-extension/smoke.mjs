@@ -430,18 +430,21 @@ async function bridgeExtras(bridgePort, token, ext, cdpPort, pageUrl) {
 
 /**
  * The CLI's state, isolated from this machine's: CODECAST_DIR holds the
- * bridge config, the sticky target and the reaper's registry; AGENT_BROWSER_HOME
- * holds the engine daemon's per session files. The engine itself lives under
+ * bridge config, the sticky target and the reaper's registry; AGENT_BROWSER_SOCKET_DIR
+ * holds the engine daemon's per session files (the engine's own name for that
+ * directory, which cast follows in engineStateDir). The engine itself lives under
  * the real CODECAST_DIR, so it is named explicitly. The session id is fixed
  * and every other id a harness could leak (an agent's own session, the tmux
  * pane) is dropped, so the engine session key, and with it the tab group's
  * name, is the same on every run.
  */
 const CLI_SESSION_ID = "smoke-cli";
-const engineHome = path.join(work, "agent-browser");
+// Short on purpose: the engine's daemon socket lives here and macOS caps a
+// Unix socket path at 103 bytes, which the temp dir above already exceeds.
+const engineHome = fs.mkdtempSync("/tmp/cbs-");
 
 function cliEnv(engineBinary) {
-  const e = { ...env, CAST_SESSION_ID: CLI_SESSION_ID, AGENT_BROWSER_HOME: engineHome, CAST_BROWSER_ENGINE: engineBinary };
+  const e = { ...env, CAST_SESSION_ID: CLI_SESSION_ID, AGENT_BROWSER_SOCKET_DIR: engineHome, CAST_BROWSER_ENGINE: engineBinary };
   for (const k of ["CAST_BROWSER_LEGACY", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "CODECAST_SESSION_ID", "CLAUDE_CODE_BRIDGE_SESSION_ID", "TMUX_PANE"]) {
     delete e[k];
   }
@@ -730,9 +733,10 @@ async function cleanup() {
     }
   } catch {}
   if (process.env.SMOKE_KEEP) {
-    console.log(`SMOKE_KEEP set — leaving ${work} in place`);
+    console.log(`SMOKE_KEEP set — leaving ${work} and ${engineHome} in place`);
     return;
   }
+  fs.rmSync(engineHome, { recursive: true, force: true });
   // Chrome keeps writing its profile for a moment after SIGTERM; racing it
   // makes rm report half-deleted directories.
   for (let i = 0; i < 3; i++) {

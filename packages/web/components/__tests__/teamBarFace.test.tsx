@@ -285,13 +285,26 @@ describe("the bar wakes on what it draws", () => {
 
   test("and holds still through the engine's own bookkeeping", () => {
     const quiet = walkieFacesSig(status());
-    // A room being held open after a burst, the recognizer going down, a reply
-    // becoming possible, an error clearing: engine churn that changes no pixel
-    // of a face, on a surface mounted for the life of the app.
-    expect(walkieFacesSig(status(inRoom("burst")))).toBe(quiet);
-    expect(walkieFacesSig(status(inRoom("listen")))).toBe(quiet);
+    // The recognizer going down, a reply becoming possible, an error clearing:
+    // engine churn that changes no pixel of a face, on a surface mounted for
+    // the life of the app.
     expect(walkieFacesSig(status({ asr: "unavailable" }))).toBe(quiet);
     expect(walkieFacesSig(status({ canReply: true }))).toBe(quiet);
     expect(walkieFacesSig(status({ error: "that burst did not send" }))).toBe(quiet);
+  });
+
+  test("a room held as a burst DOES move it, because the chip depends on it", () => {
+    // A seat is not a huddle: a burst seats everyone who hears it and holds
+    // that seat for half a minute afterwards, so the violet chip has to stand
+    // down for exactly the rooms the walkie is holding (memberInHuddle). That
+    // makes the room a fact a face draws, not bookkeeping — a signature that
+    // held still here would leave the chip lit until something else forced a
+    // render, which is the bug it exists to prevent.
+    const quiet = walkieFacesSig(status());
+    expect(walkieFacesSig(status(inRoom("burst")))).not.toBe(quiet);
+    expect(walkieFacesSig(status(inRoom("listen")))).not.toBe(quiet);
+    // And it is the ROOM, not churn: the same room reported twice is one
+    // signature, so a heartbeat inside a held room still wakes nobody.
+    expect(walkieFacesSig(status(inRoom("burst")))).toBe(walkieFacesSig(status(inRoom("burst"))));
   });
 });

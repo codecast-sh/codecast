@@ -66,7 +66,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
   const { me } = deps;
 
   br.command("target [mode]")
-    .description("Default browser for verbs: clone (managed copy) or real (your Chrome via the extension)")
+    .description("Which browser the verbs act on: clone (the managed copy, default) or real (the human's own Chrome through the extension; a session acts only on tabs it opened)")
     .action(async (mode?: string) => {
       if (!mode) {
         const cur = stickyTarget(me());
@@ -84,11 +84,11 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
 
   const ext = br
     .command("extension")
-    .description("The bridge into your real Chrome: setup, status, revoke");
+    .description("The bridge into the human's real Chrome: setup pairs the extension once, status, revoke");
 
   ext
     .command("setup")
-    .description("Start the bridge host and hand the token to the extension in your Chrome")
+    .description("Start the bridge host and open the extension's options in Chrome with the token filled in (prints it as the fallback)")
     .option("--json", "Machine-readable output (does not open Chrome)")
     .action(async (o: { json?: boolean }) => {
       ensureBridgeConfig();
@@ -159,7 +159,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
 
   ext
     .command("revoke")
-    .description("Rotate the token and disconnect the extension — nothing can drive the real Chrome until the new token is pasted")
+    .description("Rotate the token and disconnect the extension; nothing drives the real Chrome until setup runs again")
     .action(async () => {
       const next = rotateBridgeToken();
       const stopped = stopBridgeHost();

@@ -200,9 +200,21 @@ export function isRealSession(session: string): boolean {
 // session was tried first: each launch is a new Chrome window that takes
 // focus on macOS, and copies of the profile piled up in the tmp dir.
 
-/** Where the engine keeps its per-session daemon files (pid, socket, target). */
-export function engineStateDir(): string {
-  return process.env.AGENT_BROWSER_HOME ?? path.join(os.homedir(), ".agent-browser");
+/**
+ * Where the engine keeps its per-session daemon files (pid, socket, target).
+ *
+ * This must resolve exactly as the engine's own `get_socket_dir` does
+ * (connection.rs): `AGENT_BROWSER_SOCKET_DIR` when set and non-empty, else
+ * `$XDG_RUNTIME_DIR/agent-browser` when that is set and non-empty, else
+ * `~/.agent-browser`. cast writes a session's tab binding into this directory
+ * before the daemon's first attach (pinnedTab.ts) and reads it back to reap
+ * (engineReap.ts); a directory the daemon does not read means it never adopts
+ * the pinned tab and opens a second one instead.
+ */
+export function engineStateDir(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.AGENT_BROWSER_SOCKET_DIR) return env.AGENT_BROWSER_SOCKET_DIR;
+  if (env.XDG_RUNTIME_DIR) return path.join(env.XDG_RUNTIME_DIR, "agent-browser");
+  return path.join(os.homedir(), ".agent-browser");
 }
 
 /** The debugging port of the managed browser, or null when none is recorded. */

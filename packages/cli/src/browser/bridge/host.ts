@@ -39,9 +39,15 @@
  * read, an upgrade carrying an http(s) Origin is refused before the token is
  * even checked (pages always send one; the extension sends chrome-extension://
  * and the CLI none), and the HTTP face rejects any Host other than loopback,
- * which is what defeats DNS rebinding. Against other local users: the token.
- * A group is a grouping hint and nothing more: it grants no access to the
- * tabs already in it, and every tab still needs its own attach.
+ * which is what defeats DNS rebinding. Against other local users: the token,
+ * and the fact that it never crosses the wire in the clear on the extension
+ * face. Any local account can bind this port while no host is running (after
+ * a reboot, a crash, `extension revoke`), so nothing trusts a server for
+ * answering: the extension and the host prove the token to each other with
+ * HMACs over fresh nonces (protocol.ts bridgeProof), and the CLI demands the
+ * same proof from /healthz before it presents the token anywhere. A group is
+ * a grouping hint and nothing more: it grants no access to the tabs already
+ * in it, and every tab still needs its own attach.
  */
 
 import * as fs from "node:fs";
@@ -55,8 +61,8 @@ import { isPidAlive } from "../../workspace/chrome.js";
 import { browserHome } from "../profile.js";
 import type { CdpEndpoint } from "../cdp.js";
 import {
-  BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, CLOSE_BAD_TOKEN, tabIdOfTarget, targetIdOfTab,
-  type BridgeGroup, type BridgeReply, type BridgeTab,
+  BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, bridgeProof, CLOSE_BAD_TOKEN, isNonce, randomNonce, secretMatches, tabIdOfTarget,
+  targetIdOfTab, type BridgeGroup, type BridgeReply, type BridgeTab,
 } from "./protocol.js";
 
 // ---------------------------------------------------------------------------
@@ -115,35 +121,75 @@ export function rotateBridgeToken(): BridgeState {
   return next;
 }
 
+/**
+ * A bridge config whose host has just proved it holds the token (probeHost).
+ * Everything that presents the token to the port takes this type, so the
+ * compiler makes "verify before you present" impossible to skip: a squatter
+ * on the port never sees the token, only a nonce it cannot answer.
+ */
+export type ProvenBridge = BridgeState & { readonly proven: true };
+
 /** The CDP HTTP face of the bridge, for listTargets/CdpConnection.fromPort. */
-export function bridgeEndpoint(state: BridgeState): CdpEndpoint {
+export function bridgeEndpoint(state: ProvenBridge): CdpEndpoint {
   return { port: state.port, token: state.token };
 }
 
-/** The browser-level CDP socket, for any client that takes a URL (agent-browser --cdp). */
-export function bridgeWsUrl(state: BridgeState): string {
+/** The browser-level CDP socket, for any client that takes a URL (agent-browser's cdp option). */
+export function bridgeWsUrl(state: ProvenBridge): string {
   return `ws://127.0.0.1:${state.port}/devtools/browser/${state.token}`;
 }
 
-/** Is a bridge host answering on this port? Cheap HTTP probe, no token needed. */
-export async function isHostAlive(port: number, timeoutMs = 1200): Promise<boolean> {
+export type HostProbe = "alive" | "impostor" | "down";
+
+/**
+ * What answers on the bridge port: a host that proved it holds our token, a
+ * server that answers like one but cannot prove it, or nothing. No token
+ * leaves this process: the host is challenged with a nonce and must return
+ * HMAC(token, "healthz:" + nonce).
+ */
+export async function probeHost(state: Pick<BridgeState, "port" | "token">, timeoutMs = 1200): Promise<HostProbe> {
+  const nonce = randomNonce();
+  let body: string;
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(timeoutMs) });
-    return res.ok && (await res.text()).startsWith("cast-bridge");
+    const res = await fetch(`http://127.0.0.1:${state.port}/healthz?nonce=${nonce}`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return "down";
+    body = await res.text();
   } catch {
-    return false;
+    return "down";
   }
+  if (!body.startsWith("cast-bridge")) return "down";
+  const proof = /\bproof=([0-9a-f]{64})\b/.exec(body)?.[1];
+  return secretMatches(bridgeProof(state.token, "healthz", nonce), proof) ? "alive" : "impostor";
+}
+
+/** Is OUR bridge host answering on this port? */
+export async function isHostAlive(state: Pick<BridgeState, "port" | "token">, timeoutMs = 1200): Promise<boolean> {
+  return (await probeHost(state, timeoutMs)) === "alive";
+}
+
+/** The config as a proven host, or the reason the port cannot be trusted. */
+export async function proveBridgeHost(state: BridgeState, timeoutMs = 1200): Promise<ProvenBridge> {
+  const probe = await probeHost(state, timeoutMs);
+  if (probe === "alive") return { ...state, proven: true };
+  throw new Error(
+    probe === "impostor"
+      ? `something on 127.0.0.1:${state.port} answers like a bridge host but cannot prove it holds the token — ` +
+          `stop it, or set CAST_BRIDGE_PORT to move the bridge`
+      : `no bridge host is answering on 127.0.0.1:${state.port}`,
+  );
 }
 
 /**
  * Make sure a host is running, starting one detached if not. Mirrors the
  * managed browser's auto-start: callers should not have to know the host is a
- * separate process. isHostAlive's body check guards against an unrelated
- * server that happens to sit on the port.
+ * separate process. An impostor on the port is named rather than raced: a
+ * host we start could not bind anyway.
  */
-export async function ensureBridgeHost(): Promise<BridgeState> {
+export async function ensureBridgeHost(): Promise<ProvenBridge> {
   const state = ensureBridgeConfig();
-  if (await isHostAlive(state.port)) return state;
+  const probe = await probeHost(state);
+  if (probe === "alive") return { ...state, proven: true };
+  if (probe === "impostor") return proveBridgeHost(state);
 
   // Respawn ourselves. Under bun/node the entry script must be repeated;
   // in the compiled binary process.execPath IS the cast binary.
@@ -155,7 +201,7 @@ export async function ensureBridgeHost(): Promise<BridgeState> {
 
   const deadline = Date.now() + 6000;
   while (Date.now() < deadline) {
-    if (await isHostAlive(state.port, 500)) return readBridgeState() ?? state;
+    if (await isHostAlive(state, 500)) return { ...(readBridgeState() ?? state), proven: true };
     await sleep(150);
   }
   throw new Error(
@@ -176,7 +222,7 @@ export function stopBridgeHost(): boolean {
 }
 
 /** Ask a running host whether the extension is connected. */
-export async function bridgeStatus(state: BridgeState): Promise<{
+export async function bridgeStatus(state: ProvenBridge): Promise<{
   extensionConnected: boolean;
   extensionVersion?: string;
   extensionProtocol?: number;
@@ -215,12 +261,8 @@ interface PendingExt {
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 
-function tokenMatches(expected: string, got: string | null | undefined): boolean {
-  if (!got) return false;
-  const a = Buffer.from(expected);
-  const b = Buffer.from(got);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
+/** How long a fresh extension socket may stay silent before its hello is due. */
+const HELLO_TIMEOUT_MS = 5_000;
 
 /** `castGroup` as a client may send it; anything else is treated as absent. */
 function parseGroup(raw: unknown): BridgeGroup | null {
@@ -347,9 +389,6 @@ export function startBridgeHost(opts: { port: number; token: string }): Promise<
       return;
     }
     switch (msg.op) {
-      case "hello":
-        extMeta = { version: msg.version, protocol: msg.protocol, userAgent: msg.userAgent };
-        return;
       case "pong":
         return;
       case "event": {
@@ -529,15 +568,18 @@ export function startBridgeHost(opts: { port: number; token: string }): Promise<
 
   const httpServer = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    // /healthz is the only unauthenticated route, and it says nothing but our name.
+    // /healthz is the only unauthenticated route. It says our name, and to a
+    // caller that sends a nonce it proves we hold the token (probeHost); the
+    // proof grants nothing, it only lets the CLI tell us from a squatter.
     if (url.pathname === "/healthz") {
+      const nonce = url.searchParams.get("nonce");
       res.writeHead(200, { "content-type": "text/plain" });
-      res.end(`cast-bridge protocol=${BRIDGE_PROTOCOL}`);
+      res.end(`cast-bridge protocol=${BRIDGE_PROTOCOL}${isNonce(nonce) ? ` proof=${bridgeProof(token, "healthz", nonce)}` : ""}`);
       return;
     }
     // Reject DNS rebinding: a page at evil.example resolving to 127.0.0.1
     // arrives with Host: evil.example and would otherwise read these bodies.
-    if (!isLoopbackHost(req.headers.host) || !tokenMatches(token, url.searchParams.get("token"))) {
+    if (!isLoopbackHost(req.headers.host) || !secretMatches(token, url.searchParams.get("token"))) {
       res.writeHead(403, { "content-type": "text/plain" });
       res.end("forbidden\n");
       return;
@@ -591,6 +633,45 @@ export function startBridgeHost(opts: { port: number; token: string }): Promise<
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 * 1024, perMessageDeflate: false });
 
+  /**
+   * The extension face. The socket carries no token: the first message must
+   * be a hello with a nonce and HMAC(token, "ext:" + nonce), answered with
+   * HMAC(token, nonce) so the extension can tell us from a squatter too. Only
+   * a proven socket becomes THE extension; until then it can neither replace
+   * the current one nor drive anything.
+   */
+  const adoptExtension = (ws: WebSocket): void => {
+    const hello = setTimeout(() => ws.close(CLOSE_BAD_TOKEN, "no hello"), HELLO_TIMEOUT_MS);
+    ws.on("error", () => {});
+    ws.once("message", (raw) => {
+      clearTimeout(hello);
+      let msg: any;
+      try {
+        msg = JSON.parse(String(raw));
+      } catch {
+        msg = null;
+      }
+      if (msg?.op !== "hello" || !isNonce(msg.nonce) || !secretMatches(bridgeProof(token, "ext", msg.nonce), msg.auth)) {
+        ws.close(CLOSE_BAD_TOKEN, "bad token");
+        return;
+      }
+      // One extension at a time; a newer connection wins so a reloaded
+      // extension does not have to wait out a dead socket's timeout.
+      if (ext && ext !== ws) ext.close(1000, "replaced by a newer extension connection");
+      ext = ws;
+      extMeta = { version: msg.version, protocol: msg.protocol, userAgent: msg.userAgent };
+      ws.on("message", (raw) => onExtMessage(String(raw)));
+      ws.on("close", () => {
+        if (ext !== ws) return;
+        ext = null;
+        for (const [, p] of extPending) p.reject(new Error("the extension disconnected mid-command — check the cast bridge extension in Chrome"));
+        extPending.clear();
+        failAllClients("the extension disconnected");
+      });
+      sendJson(ws, { op: "welcome", proof: bridgeProof(token, "host", msg.nonce), protocol: BRIDGE_PROTOCOL });
+    });
+  };
+
   httpServer.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const origin = req.headers.origin;
@@ -602,28 +683,18 @@ export function startBridgeHost(opts: { port: number; token: string }): Promise<
     // A web page always sends an http(s) Origin on WebSocket upgrades. Nothing
     // legitimate here does. Refusing before the token check means a probing
     // page learns nothing, not even whether a stolen token would have worked.
+    // CDP clients present the token in the URL (they are our own processes,
+    // which verified the host first); the extension proves it in its hello.
     const pageOrigin = typeof origin === "string" && /^https?:/i.test(origin);
-    if (!role || pageOrigin || !isLoopbackHost(req.headers.host) || !tokenMatches(token, presented)) {
+    const authed = role === "ext" || secretMatches(token, presented);
+    if (!role || pageOrigin || !isLoopbackHost(req.headers.host) || !authed) {
       wss.handleUpgrade(req, socket, head, (ws) => ws.close(CLOSE_BAD_TOKEN, "bad token"));
       return;
     }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
       if (role === "ext") {
-        // One extension at a time; a newer connection wins so a reloaded
-        // extension does not have to wait out a dead socket's timeout.
-        if (ext && ext !== ws) ext.close(1000, "replaced by a newer extension connection");
-        ext = ws;
-        extMeta = {};
-        ws.on("message", (raw) => onExtMessage(String(raw)));
-        ws.on("close", () => {
-          if (ext !== ws) return;
-          ext = null;
-          for (const [, p] of extPending) p.reject(new Error("the extension disconnected mid-command — check the cast bridge extension in Chrome"));
-          extPending.clear();
-          failAllClients("the extension disconnected");
-        });
-        ws.on("error", () => {});
+        adoptExtension(ws);
         return;
       }
 
@@ -674,7 +745,7 @@ export function startBridgeHost(opts: { port: number; token: string }): Promise<
 /** The `cast browser bridge-host` entry: run until told to stop. */
 export async function runBridgeHost(): Promise<void> {
   const state = ensureBridgeConfig();
-  if (await isHostAlive(state.port)) {
+  if (await isHostAlive(state)) {
     console.error(`a bridge host is already answering on 127.0.0.1:${state.port}`);
     process.exit(0);
   }
