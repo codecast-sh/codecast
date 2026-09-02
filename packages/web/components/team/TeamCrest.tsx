@@ -13,11 +13,18 @@ interface TeamCrestProps {
   icon?: string | null;
   color?: string | null;
   size?: TeamCrestSize;
+  /**
+   * How much color the tile carries. "soft" is right beside other chrome
+   * (switcher, sidebar, settings rows). "strong" is for the crest that is
+   * the subject of its surface, where a pale tile reads as a placeholder
+   * rather than the team's emblem.
+   */
+  tone?: "soft" | "strong";
   className?: string;
 }
 
 /** The team icon on a tinted tile. One crest for the switcher, sidebar, settings and create flow. */
-export function TeamCrest({ icon, color, size = "md", className }: TeamCrestProps) {
+export function TeamCrest({ icon, color, size = "md", tone = "soft", className }: TeamCrestProps) {
   const s = SIZE_CLASSES[size];
   const bg = color && color in colorBgClassMap ? colorBgClassMap[color as TeamColorName] : "bg-sol-base01";
   // The tile itself never remounts: a color change re-tints through the
@@ -32,7 +39,13 @@ export function TeamCrest({ icon, color, size = "md", className }: TeamCrestProp
         className,
       )}
     >
-      <div className={cn("absolute inset-0 opacity-20 transition-colors duration-300", bg)} />
+      <div
+        className={cn(
+          "absolute inset-0 transition-colors duration-300",
+          tone === "strong" ? "opacity-30" : "opacity-20",
+          bg,
+        )}
+      />
       <span
         key={icon}
         className="relative flex motion-safe:animate-in motion-safe:zoom-in-90 motion-safe:fade-in motion-safe:duration-200"

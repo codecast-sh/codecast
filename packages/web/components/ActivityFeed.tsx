@@ -18,7 +18,10 @@ import { feedCoverMetaKey, newestTs, oldestTs, planFeedCatchup, walkStep, FEED_C
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { FolderGit2 } from "lucide-react";
+import type { CSSProperties } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
+// The team-tinted card and accent text used by the share nudge below.
+import "./team/teamFlow.css";
 
 // Activity feed. Two sources, one rendering (FeedBody):
 //   • personal mode → a VIEW over store.sessions (the liberal delta cache that the
@@ -578,7 +581,19 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
       )}
 
       {displayConvs.length === 0 && !hasMore ? (
-        <EmptyState title="No sessions" description={actorFilter || projectFilter ? "No sessions match this filter." : "No sessions in this window."} />
+        <EmptyState
+          title={source === "team" ? "No team sessions yet" : "No sessions"}
+          description={
+            actorFilter || projectFilter
+              ? "No sessions match this filter."
+              : source === "team"
+                // A brand new team lands here. "No sessions in this window"
+                // reads as a bug on a feed that has never had one; say what
+                // fills it instead, in the same words the create flow used.
+                ? "Sessions from the workspaces this team shares land here."
+                : "No sessions in this window."
+          }
+        />
       ) : (
         <div ref={animate ? flipContainerRef : undefined} className={compact ? "space-y-2" : "space-y-3"}>
           {days.map(({ date, convs }) => (
@@ -635,20 +650,27 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
 // absence is felt. One click lands in the guided setup (visibility + repos).
 function TeamShareNudge({ teamId }: { teamId: string }) {
   const router = useRouter();
+  // The card belongs to one team, so it wears that team's color instead of a
+  // fixed cyan. A user who just picked a color in the create flow lands here
+  // and finds the same color waiting. Cyan stays the fallback.
+  const color = useInboxStore(
+    (s) => (s.teams || []).find((t: any) => String(t._id) === String(teamId))?.icon_color,
+  ) as string | undefined;
   return (
     <button
       type="button"
       onClick={() => router.push(`/settings/team/join?teamId=${teamId}&setup=1`)}
-      className="w-full flex items-center gap-3 rounded-lg border border-sol-cyan/30 bg-sol-cyan/5 hover:bg-sol-cyan/10 px-4 py-3 text-left transition-colors"
+      style={color ? ({ "--tf-acc": `var(--sol-${color})` } as CSSProperties) : undefined}
+      className="tf-accent-card w-full flex items-center gap-3 rounded-lg border px-4 py-3 text-left outline-none"
     >
-      <FolderGit2 className="h-4 w-4 shrink-0 text-sol-cyan" />
+      <FolderGit2 className="tf-accent-text h-4 w-4 shrink-0" />
       <span className="flex-1 min-w-0">
         <span className="block text-sm font-medium text-sol-text">Share your workspaces with the team</span>
         <span className="block text-xs text-sol-text-muted">
           Your sessions stay off this feed until you share the repos you work in.
         </span>
       </span>
-      <span className="shrink-0 text-sm font-medium text-sol-cyan">Set up sharing &rarr;</span>
+      <span className="tf-accent-text shrink-0 text-sm font-medium">Set up sharing &rarr;</span>
     </button>
   );
 }

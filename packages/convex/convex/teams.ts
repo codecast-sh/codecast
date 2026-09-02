@@ -117,6 +117,10 @@ export const getUserTeams = query({
           role: m.role,
           joined_at: m.joined_at,
           visibility: m.visibility || "summary",
+          // The client's own create key, echoed back. A create whose dispatch
+          // was parked (no binding at click time) resolves its stub against
+          // this instead of being declared failed.
+          client_key: team.client_key,
         };
       })
     );

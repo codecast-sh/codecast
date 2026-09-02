@@ -9,6 +9,7 @@ import { Input } from "../../../../components/ui/input";
 import { Label } from "../../../../components/ui/label";
 import { TEAM_ICONS, TEAM_COLORS } from "../../../../components/TeamIcon";
 import { TeamFlowShell, type TeamFlowStep } from "../../../../components/team/TeamFlowShell";
+import { TeamCrest } from "../../../../components/team/TeamCrest";
 import { TeamIdentityPicker, type TeamIdentity } from "../../../../components/team/TeamIdentityPicker";
 import { VisibilityPicker, type TeamVisibility } from "../../../../components/team/VisibilityPicker";
 import { WorkspaceSharePicker } from "../../../../components/team/WorkspaceSharePicker";
@@ -218,9 +219,11 @@ export default function CreateTeamPage() {
     adoptPathIntoActiveTab(TEAM_FEED_PATH);
     router.push(TEAM_FEED_PATH);
     // The new team's feed starts empty, so close the flow with a word of
-    // arrival: the name confirms which team is now active.
+    // arrival. The crest travels with it: the thing the user just built is
+    // what greets them on the other side, not a stock success check.
     const teamName = applied.current?.name || trimmed;
-    toast.success(`${teamName} is ready`, {
+    toast(`${teamName} is ready`, {
+      icon: <TeamCrest icon={identity.icon} color={identity.color} size="md" tone="strong" />,
       description: "This is its feed. Sessions from shared workspaces land here.",
     });
   };

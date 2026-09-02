@@ -149,7 +149,8 @@ export function TeamFlowShell({
     <div className="tf-root flex flex-col sm:flex-row gap-6 sm:gap-10" style={style}>
       <aside className="sm:w-40 shrink-0 tf-reveal" style={{ "--tf-i": 0 } as CSSProperties}>
         <div className="flex sm:flex-col items-center sm:items-start gap-3 sm:gap-2 mb-4 sm:mb-6">
-          <TeamCrest icon={crest.icon} color={crest.color} size="lg" className="tf-crest" />
+          {/* The subject of the whole surface, so it takes the fuller tile. */}
+          <TeamCrest icon={crest.icon} color={crest.color} size="lg" tone="strong" className="tf-crest" />
           <div className="min-w-0">
             <div className="tf-eyebrow text-[11px] uppercase tracking-wider">{eyebrow}</div>
             {/* No aria-live: on step 1 this mirrors the name field on every

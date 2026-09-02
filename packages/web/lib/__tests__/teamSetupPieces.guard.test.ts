@@ -30,6 +30,22 @@ describe("team setup pieces are defined once", () => {
     ]);
   });
 
+  // The client resolves a parked create (no dispatch binding at click time)
+  // by matching the echoed team against the client_key it sent. That match is
+  // the only thing standing between a durable create and a bogus "could not
+  // create the team", so the projection must keep echoing the field.
+  test("getUserTeams echoes client_key back to the client", () => {
+    const teams = readFileSync(
+      join(root, "..", "convex", "convex", "teams.ts"),
+      "utf8",
+    );
+    const projection = teams.slice(
+      teams.indexOf("export const getUserTeams = query"),
+      teams.indexOf("export const getUserTeamsV2"),
+    );
+    expect(projection).toContain("client_key: team.client_key");
+  });
+
   test("the join flow composes the shared pieces", () => {
     const page = readFileSync(join(root, "app", "settings", "team", "join", "page.tsx"), "utf8");
     expect(page).toContain('from "../../../../components/team/VisibilityPicker"');
