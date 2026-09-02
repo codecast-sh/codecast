@@ -8,7 +8,11 @@
 // frame counts over the window, so a fat-query retirement can be measured
 // before/after instead of asserted.
 //
-//   node scripts/perf/ws-bytes.mjs --port 62066 --url local.codecast.sh --seconds 60
+//   node scripts/perf/ws-bytes.mjs --port 62066 --url local.codecast.sh --seconds 60 --reload 1
+//
+// --reload 1 reloads the page after attaching so every subscription's Add
+// frame (and therefore its name) is seen; without it, queries subscribed before
+// the meter attached show as query#<id>.
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => a.startsWith("--") ? [a.slice(2), all[i + 1]] : []).filter(Boolean));
 const PORT = args.port ?? "9222";
 const URL_MATCH = args.url ?? "codecast";
@@ -53,7 +57,8 @@ ws.addEventListener("message", (ev) => {
   }
 });
 await send("Network.enable", {});
-console.log(`measuring ${SECONDS}s on ${page.url}`);
+if (args.reload === "1") { await send("Page.enable", {}); await send("Page.reload", {}); }
+console.log(`measuring ${SECONDS}s on ${page.url}${args.reload === "1" ? " (after reload)" : ""}`);
 await new Promise((r) => setTimeout(r, SECONDS * 1000));
 const rows = [...byQuery.entries()].sort((a, b) => b[1].bytes - a[1].bytes);
 console.log(`\ntotal ${total} bytes in ${frames} frames (${(total / SECONDS).toFixed(0)} B/s)`);

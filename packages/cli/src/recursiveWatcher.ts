@@ -13,7 +13,7 @@ const supportsRecursiveWatch = process.platform === "darwin" || process.platform
 // lag by this much; the per-file probe is what carries live latency. One walk
 // of ~/.claude/projects (3.6k dirs, 18k files) costs ~80ms of pool-thread time
 // warm, so this cadence is a few percent of one core while sessions stream.
-export const DEFAULT_RESCAN_INTERVAL_MS = 2_000;
+const DEFAULT_RESCAN_INTERVAL_MS = 2_000;
 
 export class RecursiveWatcher extends EventEmitter {
   private fsWatcher: fs.FSWatcher | null = null;
