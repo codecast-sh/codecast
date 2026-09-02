@@ -19,11 +19,11 @@
 //     their token in memory, so blocked sessions must be killed + resumed to
 //     adopt the new account (the daemon's switch_account command does this).
 
-import { execFileSync } from "./proc.js";
+import { execFileAsync, execFileSync } from "./proc.js";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { readLocalCredential } from "./remote/session-move.js";
+import { readLocalCredential, readLocalCredentialAsync } from "./remote/session-move.js";
 import { readProfileIndexFile } from "./readForUpdate.js";
 import { atomicWriteFile } from "./atomicWrite.js";
 import { renderProviderEnvFile, sourceFilePrefix } from "./providerKeyLaunch.js";
@@ -196,6 +196,18 @@ export function readActiveCredential(): string | null {
   return readLocalCredential();
 }
 
+/** The same read for the daemon's timers, with the keychain call off the loop. */
+export async function readActiveCredentialAsync(): Promise<string | null> {
+  if (useFileStore()) {
+    try {
+      return await fs.promises.readFile(path.join(homeDir(), ".claude", ".credentials.json"), "utf-8");
+    } catch {
+      return null;
+    }
+  }
+  return readLocalCredentialAsync();
+}
+
 /** The keychain item's account attribute ("acct"). CC created the item, so
  * match whatever it used; fall back to the unix username (observed value). */
 function keychainAcct(): string {
@@ -318,14 +330,30 @@ function readProfileSecret(name: string): string | null {
     return fs.readFileSync(f, "utf-8");
   }
   try {
-    return execFileSync(
-      "security",
-      ["find-generic-password", "-s", `${PROFILE_KEYCHAIN_PREFIX}${name}`, "-w"],
-      { encoding: "utf-8" },
-    ).trim();
+    return execFileSync("security", profileSecretArgs(name), { encoding: "utf-8" }).trim();
   } catch {
     return null;
   }
+}
+
+async function readProfileSecretAsync(name: string): Promise<string | null> {
+  if (useFileStore()) {
+    try {
+      return await fs.promises.readFile(path.join(profileFileDir(), `${name}.json`), "utf-8");
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const { stdout } = await execFileAsync("security", profileSecretArgs(name), { encoding: "utf-8" });
+    return stdout.trim();
+  } catch {
+    return null;
+  }
+}
+
+function profileSecretArgs(name: string): string[] {
+  return ["find-generic-password", "-s", `${PROFILE_KEYCHAIN_PREFIX}${name}`, "-w"];
 }
 
 function deleteProfileSecret(name: string): void {
@@ -729,7 +757,14 @@ const CC_OAUTH_TOKEN_URL =
 /** The parsed `claudeAiOauth` block of the active credential (null for API-key
  * logins, missing/corrupt credentials). */
 export function readActiveOauth(): Record<string, any> | null {
-  const raw = readActiveCredential();
+  return oauthOf(readActiveCredential());
+}
+
+export async function readActiveOauthAsync(): Promise<Record<string, any> | null> {
+  return oauthOf(await readActiveCredentialAsync());
+}
+
+function oauthOf(raw: string | null): Record<string, any> | null {
   if (!raw) return null;
   try {
     return JSON.parse(raw)?.claudeAiOauth ?? null;
@@ -738,9 +773,11 @@ export function readActiveOauth(): Record<string, any> | null {
   }
 }
 
-/** Epoch-ms expiry of the active access token, or null if unknown. */
-export function activeCredentialExpiresAt(): number | null {
-  const exp = readActiveOauth()?.expiresAt;
+/** Epoch-ms expiry of the active access token, or null if unknown. Async
+ * because every caller is a daemon timer or a login flow, and the read behind
+ * it is a keychain call. */
+export async function activeCredentialExpiresAt(): Promise<number | null> {
+  const exp = (await readActiveOauthAsync())?.expiresAt;
   return typeof exp === "number" ? exp : null;
 }
 
@@ -765,7 +802,7 @@ export async function refreshActiveCredential(
 ): Promise<RefreshResult> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const now = opts.now ?? Date.now();
-  const raw = readActiveCredential();
+  const raw = await readActiveCredentialAsync();
   if (!raw) return { refreshed: false, reason: "no active credential" };
   let cred: any;
   try {
@@ -836,10 +873,10 @@ export async function refreshActiveCredential(
  * updated profile name, or null when there's nothing to do (no login, not saved
  * yet — first-time saves are `autoSaveActiveProfile`'s job — or already fresh).
  */
-export function resnapshotIfActiveFresher(): string | null {
+export async function resnapshotIfActiveFresher(): Promise<string | null> {
   const active = activeAccountSummary();
   if (!active?.uuid && !active?.email) return null;
-  const activeExpiry = activeCredentialExpiresAt() ?? 0;
+  const activeExpiry = (await activeCredentialExpiresAt()) ?? 0;
   const index = readProfileIndex();
   const match = Object.entries(index.profiles).find(
     ([, meta]) =>
@@ -847,7 +884,7 @@ export function resnapshotIfActiveFresher(): string | null {
   );
   if (!match) return null;
   const [name] = match;
-  const raw = readProfileSecret(name);
+  const raw = await readProfileSecretAsync(name);
   let storedExpiry = 0;
   if (raw) {
     try {
@@ -1069,11 +1106,14 @@ export interface AccountsHeartbeatPayload {
 // shows up on the very next heartbeat instead of after a blind expiry window.
 // The compute result — including a failed/null one — is memoized against the
 // same mtimes, so a broken source file isn't re-parsed every call.
+// `ttlMs` adds a time bound for a payload whose sources the mtimes cannot
+// fully name (the daemon's project roots also come from started sessions).
 export function createMtimeGatedCache<T>(
   paths: () => string[],
   compute: () => T,
+  opts?: { ttlMs?: number },
 ): { get(): T; invalidate(): void } {
-  let cached: { value: T; mtimes: number[] } | null = null;
+  let cached: { value: T; mtimes: number[]; at: number } | null = null;
   const mtimeOf = (p: string): number => {
     try {
       return fs.statSync(p).mtimeMs;
@@ -1083,12 +1123,14 @@ export function createMtimeGatedCache<T>(
   };
   return {
     get() {
+      const now = Date.now();
       const mtimes = paths().map(mtimeOf);
-      if (cached && cached.mtimes.every((m, i) => m === mtimes[i])) {
+      const fresh = opts?.ttlMs === undefined || (cached !== null && now - cached.at < opts.ttlMs);
+      if (cached && fresh && cached.mtimes.every((m, i) => m === mtimes[i])) {
         return cached.value;
       }
       const value = compute();
-      cached = { value, mtimes };
+      cached = { value, mtimes, at: now };
       return value;
     },
     invalidate() {

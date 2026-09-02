@@ -15,6 +15,7 @@ import {
   WATCHDOG_AWAKE_GAP_MS,
   WATCHDOG_HEARTBEAT_STALE_MS,
 } from "./supervision.js";
+import { watchdogSupervisionAction } from "./daemon.js";
 
 // Regression: a routine daemon redeploy that landed right before the Mac slept left
 // the daemon dead for 3.5h. The watchdog was a launchd StartInterval one-shot, which
@@ -261,3 +262,27 @@ function buildLegacyStartIntervalPlist(): string {
 </dict>
 </plist>`;
 }
+
+// The supervision tick is async now; its decision is pure so the branches are
+// checked without launchd.
+describe("watchdogSupervisionAction", () => {
+  const now = 1_800_000_000_000;
+  // The stamp is the epoch ms the watchdog loop last wrote, as a bare integer.
+  const fresh = String(now - 10_000);
+  const stale = String(now - WATCHDOG_HEARTBEAT_STALE_MS - 60_000);
+
+  test("not loaded with a plist bootstraps; without one it can only ask for cast setup", () => {
+    expect(watchdogSupervisionAction({ loaded: false, plistExists: true, heartbeat: null, now })).toBe("bootstrap");
+    expect(watchdogSupervisionAction({ loaded: false, plistExists: false, heartbeat: null, now })).toBe("plist_missing");
+  });
+
+  test("loaded with a fresh heartbeat needs nothing", () => {
+    expect(watchdogHeartbeatStale(fresh, now)).toBe(false);
+    expect(watchdogSupervisionAction({ loaded: true, plistExists: true, heartbeat: fresh, now })).toBe("none");
+  });
+
+  test("loaded with a stale or missing heartbeat kickstarts the loop", () => {
+    expect(watchdogSupervisionAction({ loaded: true, plistExists: true, heartbeat: stale, now })).toBe("kickstart");
+    expect(watchdogSupervisionAction({ loaded: true, plistExists: true, heartbeat: null, now })).toBe("kickstart");
+  });
+});

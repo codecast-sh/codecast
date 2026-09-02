@@ -19,7 +19,7 @@
  *     refreshToken, but copy a FRESH credential at move time.
  */
 
-import { execFileSync, execSync, spawn } from "../proc.js";
+import { execFileAsync, execFileSync, execSync, spawn } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -430,6 +430,29 @@ export function readLocalCredential(): string | null {
   }
 }
 
+/**
+ * The same read for the daemon's timers: the keychain call runs off the loop.
+ * A `security` call takes tens of milliseconds on an idle machine and seconds
+ * on a loaded one, and the credential tick asks every minute.
+ */
+export async function readLocalCredentialAsync(): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      "security",
+      ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+      { encoding: "utf-8" },
+    );
+    return stdout.trim();
+  } catch {
+    const f = path.join(process.env.HOME || os.homedir(), ".claude", ".credentials.json");
+    try {
+      return await fs.promises.readFile(f, "utf-8");
+    } catch {
+      return null;
+    }
+  }
+}
+
 /** ssh argv that writes stdin to the remote's credential file (0600 via umask). */
 function credentialPushArgs(host: RemoteHost): string[] {
   return [...sshBase(host), `${host.user}@${host.address}`, "umask 077; mkdir -p ~/.claude; cat > ~/.claude/.credentials.json"];
@@ -454,7 +477,14 @@ export interface CredentialPushOutcome {
  * the active store.
  */
 export function readPushableCredential(): { cred: string | null; reason?: string } {
-  const cred = readLocalCredential();
+  return gatePushableCredential(readLocalCredential());
+}
+
+export async function readPushableCredentialAsync(): Promise<{ cred: string | null; reason?: string }> {
+  return gatePushableCredential(await readLocalCredentialAsync());
+}
+
+function gatePushableCredential(cred: string | null): { cred: string | null; reason?: string } {
   const health = credentialHealth(cred);
   if (!health.pushable) return { cred: null, reason: health.reason ?? "no credential" };
   return { cred: cred! };
@@ -478,7 +508,7 @@ export function copyCredentialToRemote(host: RemoteHost): CredentialPushOutcome 
  * wedged ssh can't leak.
  */
 export async function copyCredentialToRemoteAsync(host: RemoteHost): Promise<CredentialPushOutcome> {
-  const gate = readPushableCredential();
+  const gate = await readPushableCredentialAsync();
   if (!gate.cred) return { pushed: false, reason: gate.reason };
   const cred = gate.cred;
   await new Promise<void>((resolve, reject) => {

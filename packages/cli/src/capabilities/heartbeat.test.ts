@@ -4,6 +4,7 @@ import * as os from "os";
 import * as path from "path";
 import {
   collectCapabilityInventory,
+  ensureCapabilityInventoryFresh,
   markCapabilityPayloadSent,
   pendingCapabilityPayload,
   resetCapabilityHeartbeatState,
@@ -63,5 +64,21 @@ describe("ride gating", () => {
     markCapabilityPayloadSent(collected.hash);
     // With the same hash marked sent and the floor not yet due, nothing rides.
     expect(pendingCapabilityPayload()).toBeUndefined();
+  });
+});
+
+// The daemon's beat kicks the scan and reads the result on a LATER beat. The
+// scan is async now (one directory read per loop turn), so the payload lands
+// after a few turns, with the hash the sync scan computes for the same tree.
+describe("background collection", () => {
+  test("ensureCapabilityInventoryFresh lands the async scan as the pending payload", async () => {
+    const home = fakeHome();
+    ensureCapabilityInventoryFresh(home);
+    expect(pendingCapabilityPayload()).toBeUndefined();
+    const deadline = Date.now() + 5000;
+    while (!pendingCapabilityPayload() && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(pendingCapabilityPayload()?.hash).toBe(collectCapabilityInventory(home).hash);
   });
 });
