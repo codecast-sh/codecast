@@ -13,11 +13,13 @@ import {
   emitScopeAction,
   emitSyncActions,
   isChurnOnlyPatch,
+  revokeStaleScope,
+  scopesForChange,
   syncLogDisabled,
   type ActionExtra,
   type SyncAckCollector,
 } from "./syncLog";
-import { accessStampFor, type AccessStamp } from "./lib/access";
+import { accessStampFor, computeWorkspaceKeyDb, type AccessStamp } from "./lib/access";
 
 // One memoized POST-WRITE document read per tracked write. The sync log reads
 // it for three things (sync-log-cargo): the access-derived fan-out scopes, the
@@ -187,6 +189,16 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
       if (TRACKED_TABLES.has(table as any)) {
         const scope = scopeFromDoc(doc);
         await emitChange(rawDb, table as ChangeEntity, String(id), "upsert", scope, null);
+        // Stamp the stored ACCESS key at the one chokepoint every tracked insert
+        // passes through (review): raw insert sites (doc/project/template task
+        // creates) still mint rows without `workspace`, and every such row would
+        // otherwise pay a linked-conversation read on each later write and a
+        // membership query per list row, forever.
+        if (table !== "conversations" && doc?.user_id && !(typeof doc.workspace === "string" && doc.workspace)) {
+          const key = await computeWorkspaceKeyDb({ db: rawDb }, { _id: id, ...doc });
+          await rawDb.patch(id, { workspace: key });
+          doc = { ...doc, workspace: key };
+        }
         if (!syncLogDisabled()) {
           const full = { _id: id, ...doc };
           const extra = syncExtra(rawDb, table, postWriteDoc(rawDb, id, full), buildCargo(table, doc, { full: true }));
@@ -235,10 +247,15 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
           const extra = syncExtra(rawDb, table, postWriteDoc(rawDb, id), buildCargo(table, fields, { full: false }));
           const stamp = await extra.access!();
           if (stamp) {
+            const syncScope = syncScopeFromStamp(stamp);
             await emitSyncActions(
               rawDb, collector, table, entityId, "upsert",
-              syncScopeFromStamp(stamp), preScope, extra,
+              syncScope, preScope, extra,
             );
+            // Routing-era row in the change_log's team scope? Flip it (review).
+            if (existing?.team_id) {
+              await revokeStaleScope(rawDb, collector, table, entityId, `team:${String(existing.team_id)}`, scopesForChange(table, syncScope));
+            }
           }
         }
       }
