@@ -4,10 +4,14 @@ import { describe, it, expect, beforeEach, mock } from "bun:test";
 // mocked before the module under test is loaded.
 type Calls = Record<string, unknown[][]>;
 const sentryCalls: Calls = {};
+// One log across both backends, so a test can assert the order calls landed in
+// and not just that each one landed.
+const order: string[] = [];
 const record =
   (calls: Calls, name: string) =>
   (...args: unknown[]) => {
     (calls[name] ??= []).push(args);
+    order.push(`${calls === sentryCalls ? "sentry" : "posthog"}.${name}`);
   };
 const last = (calls: Calls, name: string) => (calls[name] ?? []).at(-1);
 const count = (calls: Calls, name: string) => (calls[name] ?? []).length;
@@ -38,6 +42,7 @@ mock.module("@sentry/react-native", () => ({
 mock.module("posthog-react-native", () => ({ default: PostHogMock }));
 
 const native = await import("./native");
+const { PRE_INIT_BUFFER_LIMIT } = await import("./index");
 
 const base = {
   posthogKey: "phc_x",
@@ -48,8 +53,10 @@ const base = {
 };
 
 beforeEach(() => {
+  native._resetForTests();
   PostHogMock.instances.length = 0;
   for (const k of Object.keys(sentryCalls)) delete sentryCalls[k];
+  order.length = 0;
 });
 
 const client = () => PostHogMock.instances.at(-1)!;
@@ -127,5 +134,68 @@ describe("identity and events (native)", () => {
   it("wrapRoot wraps through Sentry.wrap", () => {
     const Root = { name: "Root" };
     expect(native.wrapRoot(Root)).toEqual({ wrapped: Root } as any);
+  });
+});
+
+// The same gap the web entry had, and worse here: the header tells apps to call
+// initAnalytics after first mount, so an app that identifies from a stored
+// session routinely gets there first. Held and replayed rather than dropped.
+describe("calls made before init (native)", () => {
+  it("replays a held identify into both backends once init runs", () => {
+    native.identifyUser("users:abc123", { plan: "pro" });
+    expect(count(sentryCalls, "setUser")).toBe(0);
+    expect(PostHogMock.instances.length).toBe(0);
+
+    native.initAnalytics(base);
+
+    expect(last(sentryCalls, "setUser")).toEqual([{ id: "users:abc123", plan: "pro" }]);
+    expect(last(client().calls, "identify")).toEqual(["users:abc123", { plan: "pro" }]);
+  });
+
+  it("replays held calls in the order they were made", () => {
+    native.track("boot_started");
+    native.identifyUser("users:abc123");
+    native.trackScreen("/inbox");
+
+    native.initAnalytics(base);
+
+    expect(order.slice(order.indexOf("posthog.register") + 1)).toEqual([
+      "posthog.capture",
+      "sentry.setUser",
+      "posthog.identify",
+      "posthog.screen",
+    ]);
+  });
+
+  it("holds a reset in the same queue, so a sign out is not reordered behind the identify it cancels", () => {
+    native.identifyUser("users:abc123");
+    native.resetUser();
+
+    native.initAnalytics(base);
+
+    expect(last(sentryCalls, "setUser")).toEqual([null]);
+    expect(count(client().calls, "reset")).toBe(1);
+  });
+
+  it("passes calls made after init straight through, with nothing held", () => {
+    native.initAnalytics(base);
+    native.track("session_opened", { from: "inbox" });
+    expect(count(client().calls, "capture")).toBe(1);
+  });
+
+  it("drops the oldest held call at the cap, and throws nothing", () => {
+    const total = PRE_INIT_BUFFER_LIMIT + 10;
+    for (let i = 0; i < total; i++) native.track(`e${i}`);
+    native.identifyUser("users:latest");
+
+    native.initAnalytics(base);
+
+    // The identify is the newest call, so it is the one that must survive.
+    expect(last(client().calls, "identify")).toEqual(["users:latest", undefined]);
+    // One slot went to the identify, so the last cap-minus-one events remain.
+    const events = (client().calls.capture ?? []).map((args) => args[0]);
+    expect(events.length).toBe(PRE_INIT_BUFFER_LIMIT - 1);
+    expect(events[0]).toBe(`e${total - (PRE_INIT_BUFFER_LIMIT - 1)}`);
+    expect(events.at(-1)).toBe(`e${total - 1}`);
   });
 });

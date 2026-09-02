@@ -5,10 +5,22 @@
 
 import * as Sentry from "@sentry/react";
 import posthog from "posthog-js";
-import { resolveConfig, superProperties, type AnalyticsConfig, type ResolvedAnalyticsConfig } from "./index";
+import {
+  createPreInitBuffer,
+  resolveConfig,
+  superProperties,
+  type AnalyticsConfig,
+  type ResolvedAnalyticsConfig,
+} from "./index";
 
 let config: ResolvedAnalyticsConfig | null = null;
 let initialized = false;
+
+// Apps call identify and track from wherever the data arrives, which is not
+// always after boot has initialized analytics. Those calls are held here and
+// replayed in order once init runs, so a user id raised by a slow query still
+// reaches Sentry and PostHog.
+const preInit = createPreInitBuffer();
 
 export function initAnalytics(input: AnalyticsConfig) {
   if (initialized) return;
@@ -57,10 +69,18 @@ export function initAnalytics(input: AnalyticsConfig) {
     // is what keeps local dev traffic filterable out of product metrics.
     posthog.register(superProperties(config));
   }
+
+  // Last: both SDKs are up and the super properties are registered, so a held
+  // call lands exactly as it would have if the app had called it here.
+  preInit.flush();
 }
 
 /** distinct_id convention: pass the app's own user id (codecast: Convex users._id). */
 export function identifyUser(userId: string, traits?: Record<string, unknown>) {
+  if (!initialized) {
+    preInit.add(() => identifyUser(userId, traits));
+    return;
+  }
   if (config?.sentryDsn) {
     Sentry.setUser({ id: userId, ...traits });
   }
@@ -70,6 +90,12 @@ export function identifyUser(userId: string, traits?: Record<string, unknown>) {
 }
 
 export function resetUser() {
+  // Held too, and in the same queue: a sign out before init must not be
+  // reordered behind the identify it cancels.
+  if (!initialized) {
+    preInit.add(() => resetUser());
+    return;
+  }
   if (config?.sentryDsn) {
     Sentry.setUser(null);
   }
@@ -79,6 +105,10 @@ export function resetUser() {
 }
 
 export function track(event: string, properties?: Record<string, unknown>) {
+  if (!initialized) {
+    preInit.add(() => track(event, properties));
+    return;
+  }
   if (config?.posthogKey) {
     posthog.capture(event, properties);
   }
@@ -177,6 +207,7 @@ export function setupErrorToasts(options: ErrorToastOptions) {
 export function _resetForTests() {
   config = null;
   initialized = false;
+  preInit.clear();
   _seenGlobalErrors.clear();
 }
 

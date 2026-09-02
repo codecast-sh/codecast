@@ -292,6 +292,55 @@ export function applySyncTable<T extends { _id: string }>(
  * Apply pending protection to a single-record sync (e.g. syncRecord).
  * Returns the protected record and updated pending state.
  */
+/**
+ * Pending protection for a PARTIAL patch (a merge patch that names only the
+ * fields it changes, plus `unset` for removed ones). Unlike applySyncRecord,
+ * which treats a missing key as the server's value, this visits ONLY the locks
+ * for fields the patch or unset names: a lock on a field the patch omits is
+ * re-asserted untouched (a local clear is recorded as a lock with value
+ * undefined, and `undefined === undefined` would otherwise retire it before the
+ * clear has landed). A field in `unset` is the server saying "absent": it
+ * echoes an undefined-valued lock (and a null-valued one for optionalClear
+ * fields), retiring it; otherwise the lock wins and the unset is dropped.
+ */
+export function applySyncPatch(
+  tableName: string,
+  id: string,
+  patch: Record<string, any>,
+  unset: readonly string[],
+  pending: Record<string, PendingEntry>,
+  optionalClearFields?: ReadonlySet<string>,
+): { fields: Record<string, any>; unset: string[]; pending: Record<string, PendingEntry> } {
+  const newPending = { ...pending };
+  const excludeKey = `${tableName}:${id}`;
+  if (newPending[excludeKey]?.type === "exclude") {
+    return { fields: patch, unset: [...unset], pending: newPending };
+  }
+  const fields: Record<string, any> = { ...patch };
+  const keptUnset: string[] = [];
+  const prefix = `${tableName}:${id}:`;
+  const consider = (field: string, incoming: unknown, isUnset: boolean): boolean => {
+    const key = prefix + field;
+    const entry = newPending[key];
+    if (!entry || entry.type !== "field") return true;
+    if (fieldEchoesPending(field, incoming, entry.value, optionalClearFields)) {
+      delete newPending[key];
+      return true;
+    }
+    // Lock wins: the local value stays, the server's write for this field is
+    // ignored until it echoes.
+    if (isUnset) return false;
+    fields[field] = entry.value;
+    return true;
+  };
+  for (const field of Object.keys(patch)) consider(field, patch[field], false);
+  for (const field of unset) {
+    if (field in fields) continue;
+    if (consider(field, undefined, true)) keptUnset.push(field);
+  }
+  return { fields, unset: keptUnset, pending: newPending };
+}
+
 export function applySyncRecord(
   tableName: string,
   id: string,

@@ -39,7 +39,7 @@ export {
   type GroupPatchesContext,
 } from "./middleware";
 
-export { applySyncTable, applySyncRecord } from "./syncProtocol";
+export { applySyncTable, applySyncRecord, applySyncPatch } from "./syncProtocol";
 export { createSyncEngine, applyMerge, rekeyPending, type SyncEngine } from "./syncEngine";
 
 export { deriveRegistryMaps, type RegistryMaps } from "./registry";

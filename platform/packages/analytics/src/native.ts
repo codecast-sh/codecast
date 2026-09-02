@@ -9,7 +9,13 @@
 // native module is absent; telemetry resumes once users get a build that
 // bundles them.
 
-import { resolveConfig, superProperties, type AnalyticsConfig, type ResolvedAnalyticsConfig } from "./index";
+import {
+  createPreInitBuffer,
+  resolveConfig,
+  superProperties,
+  type AnalyticsConfig,
+  type ResolvedAnalyticsConfig,
+} from "./index";
 
 let Sentry: typeof import("@sentry/react-native") | null = null;
 try {
@@ -30,6 +36,13 @@ try {
 }
 
 let config: ResolvedAnalyticsConfig | null = null;
+
+// The header says to call initAnalytics after first mount, so an app that
+// identifies a user from a stored session can easily get there first. Those
+// calls are held and replayed in order once init runs, instead of being lost.
+// `config` is the signal: it is set before anything else in initAnalytics and
+// never cleared outside the test hook.
+const preInit = createPreInitBuffer();
 
 export let posthog: InstanceType<PostHogCtorT> | null = null;
 
@@ -87,30 +100,53 @@ export function initAnalytics(input: NativeAnalyticsConfig) {
       posthog = null;
     }
   }
+
+  // Last: both SDKs are up and the super properties are registered, so a held
+  // call lands exactly as it would have if the app had called it here.
+  preInit.flush();
 }
 
 /** distinct_id convention: pass the app's own user id (codecast: Convex users._id). */
 export function identifyUser(userId: string, traits?: Record<string, string | number | boolean | null>) {
-  if (config?.sentryDsn && Sentry) {
+  if (!config) {
+    preInit.add(() => identifyUser(userId, traits));
+    return;
+  }
+  if (config.sentryDsn && Sentry) {
     Sentry.setUser({ id: userId, ...traits });
   }
   posthog?.identify(userId, traits ?? undefined);
 }
 
 export function resetUser() {
-  if (config?.sentryDsn && Sentry) {
+  // Held too, and in the same queue: a sign out before init must not be
+  // reordered behind the identify it cancels.
+  if (!config) {
+    preInit.add(() => resetUser());
+    return;
+  }
+  if (config.sentryDsn && Sentry) {
     Sentry.setUser(null);
   }
   posthog?.reset();
 }
 
 export function track(event: string, properties?: Record<string, string | number | boolean>) {
+  if (!config) {
+    preInit.add(() => track(event, properties));
+    return;
+  }
   posthog?.capture(event, properties);
 }
 
 // Screen views. posthog-react-native has no router integration of its own, so
 // the root layout feeds it every expo-router pathname change.
 export function trackScreen(name: string, properties?: Record<string, string | number | boolean>) {
+  // The first screens render before init on this surface, so hold these too.
+  if (!config) {
+    preInit.add(() => trackScreen(name, properties));
+    return;
+  }
   posthog?.screen(name, properties);
 }
 
@@ -129,6 +165,13 @@ export function wrapRoot<T>(Component: T): T {
   } catch {
     return Component;
   }
+}
+
+/** Test hook: forget config and the held calls so init can run from scratch. */
+export function _resetForTests() {
+  config = null;
+  posthog = null;
+  preInit.clear();
 }
 
 export { Sentry };

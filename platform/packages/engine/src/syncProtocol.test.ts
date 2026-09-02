@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { applySyncRecord, applySyncTable } from "./syncProtocol";
+import { applySyncRecord, applySyncTable, applySyncPatch } from "./syncProtocol";
 import type { PendingEntry } from "./types";
 
 // The sync protocol is where local-first either holds or breaks: an optimistic
@@ -260,7 +260,7 @@ describe("identity reuse", () => {
   });
 
   it("takes the incoming row when a field crosses between null and an object", () => {
-    const prev: Record<string, Row> = { user: { _id: "user", scope_type: "user", anchor: null } };
+    const prev: Record<string, any> = { user: { _id: "user", scope_type: "user", anchor: null } };
     const { table } = applySyncTable<any>(
       "anchorSpaces",
       [{ _id: "user", scope_type: "user", anchor: { _id: "x1", name: "Anchor" } }],
@@ -317,5 +317,50 @@ describe("applySyncRecord", () => {
     const pending: Record<string, PendingEntry> = { "items:a": { type: "exclude" } };
     const { record } = applySyncRecord("items", "a", { _id: "a", title: "server" }, pending);
     expect(record.title).toBe("server");
+  });
+});
+
+// ── applySyncPatch: partial-patch pending protection (sync-log cargo) ─────────
+// The rule this pins: a PARTIAL patch visits ONLY the locks for fields it names
+// (patch or unset). applySyncRecord treats a missing key as the server's value,
+// so a lock recorded for a local CLEAR (value undefined) would echo against the
+// omitted key and retire before the clear ever landed.
+describe("applySyncPatch", () => {
+  const T = "tasks";
+  it("a lock on a field the patch omits survives untouched", () => {
+    const pending = { [`${T}:t1:assignee`]: { type: "field" as const, value: undefined, ts: 1 } };
+    const r = applySyncPatch(T, "t1", { title: "new" }, [], pending);
+    expect(r.pending[`${T}:t1:assignee`]).toBeDefined();
+    expect(r.fields).toEqual({ title: "new" });
+  });
+  it("a named field's lock wins until its value echoes", () => {
+    const pending = { [`${T}:t1:status`]: { type: "field" as const, value: "done", ts: 1 } };
+    let r = applySyncPatch(T, "t1", { status: "open" }, [], pending);
+    expect(r.fields.status).toBe("done");
+    expect(r.pending[`${T}:t1:status`]).toBeDefined();
+    r = applySyncPatch(T, "t1", { status: "done" }, [], pending);
+    expect(r.pending[`${T}:t1:status`]).toBeUndefined();
+  });
+  it("unset echoes an undefined-valued lock and retires it; a locked value blocks the unset", () => {
+    const pending = {
+      [`${T}:t1:assignee`]: { type: "field" as const, value: undefined, ts: 1 },
+      [`${T}:t1:label`]: { type: "field" as const, value: "keep", ts: 1 },
+    };
+    const r = applySyncPatch(T, "t1", {}, ["assignee", "label"], pending);
+    expect(r.pending[`${T}:t1:assignee`]).toBeUndefined();
+    expect(r.unset).toEqual(["assignee"]);
+    expect(r.pending[`${T}:t1:label`]).toBeDefined();
+  });
+  it("unset of an optional-clear field echoes a null-valued lock", () => {
+    const pending = { [`${T}:t1:inbox_pinned_at`]: { type: "field" as const, value: null, ts: 1 } };
+    const r = applySyncPatch(T, "t1", {}, ["inbox_pinned_at"], pending, new Set(["inbox_pinned_at"]));
+    expect(r.pending[`${T}:t1:inbox_pinned_at`]).toBeUndefined();
+    expect(r.unset).toEqual(["inbox_pinned_at"]);
+  });
+  it("an exclude on the row passes the patch through untouched", () => {
+    const pending = { [`${T}:t1`]: { type: "exclude" as const, ts: 1 } };
+    const r = applySyncPatch(T, "t1", { title: "x" }, ["y"], pending);
+    expect(r.fields).toEqual({ title: "x" });
+    expect(r.unset).toEqual(["y"]);
   });
 });

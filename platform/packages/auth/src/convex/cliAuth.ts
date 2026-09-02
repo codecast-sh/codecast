@@ -98,29 +98,44 @@ export async function sweepExpiredCliAuthRequests(
   return expired.length;
 }
 
-export type CliAuthFunctionsParams = {
-  mutation: any;
-  internalMutation: any;
-  query: any;
+export type CliAuthDefinitionParams = {
   tables?: Partial<AuthTables>;
   /** How long a deposit stays claimable. Default 10 minutes. */
   ttlMs?: number;
 };
 
+export type CliAuthFunctionsParams = CliAuthDefinitionParams & {
+  mutation: any;
+  internalMutation: any;
+  query: any;
+};
+
 /**
- * Build the relay's Convex functions. The app exports them from its cliAuth.ts:
+ * The relay as plain Convex definitions, grouped by the builder each one needs.
+ * This is the form to use. The app calls its own builders:
  *
- *   export const { deposit, claim, pendingDeposit, claimForDesktop, sweepExpired } =
- *     makeCliAuthFunctions({ mutation, internalMutation, query });
+ *   const defs = createCliAuthDefinitions();
+ *   export const deposit = mutation(defs.mutations.deposit);
+ *   export const pendingDeposit = query(defs.queries.pendingDeposit);
+ *   export const claim = internalMutation(defs.internalMutations.claim);
  *
  * and hands `internal.cliAuth.claimForDesktop` to `desktopRelayProvider`.
+ *
+ * Convex's builder is generic over its own args validator, so handing it
+ * through an injected function loses that inference: the built functions fall
+ * back to `any`, `ApiFromModules` then drops the whole module, and
+ * `api.cliAuth.*` stops existing for callers. Calling the builder at the app
+ * keeps it. Same reason as `createDispatchDefinition` in engine-convex.
+ *
+ * The grouping names the visibility each function must be registered at.
+ * `claim`, `claimForDesktop` and `sweepExpired` hand out or destroy live
+ * credentials on nothing but a nonce, so they are internal by design.
  */
-export function makeCliAuthFunctions(params: CliAuthFunctionsParams) {
+export function createCliAuthDefinitions(params: CliAuthDefinitionParams = {}) {
   const tables = resolveTables(params.tables);
   const ttlMs = params.ttlMs ?? CLI_AUTH_TTL_MS;
-  const { mutation, internalMutation, query } = params;
 
-  const deposit = mutation({
+  const deposit = {
     args: {
       nonce: v.string(),
       token: v.string(),
@@ -168,20 +183,20 @@ export function makeCliAuthFunctions(params: CliAuthFunctionsParams) {
         created_at: Date.now(),
       });
     },
-  });
+  };
 
-  const claim = internalMutation({
+  const claim = {
     args: { nonce: v.string() },
     handler: async (ctx: any, args: { nonce: string }) =>
       claimCliAuthRequest(ctx, args.nonce, Date.now(), ttlMs, tables),
-  });
+  };
 
   // Live "has the browser deposited yet?" signal for the desktop sign-in flow.
   // The desktop login page subscribes to this while the user completes auth in
   // their system browser, then redeems via the desktop-relay auth provider the
   // moment it flips true. Unauthenticated by design: it returns only a boolean,
   // keyed by the caller's own high entropy one time nonce.
-  const pendingDeposit = query({
+  const pendingDeposit = {
     args: { nonce: v.string() },
     handler: async (ctx: any, args: { nonce: string }) => {
       const nonceHash = await hashToken(args.nonce);
@@ -191,18 +206,46 @@ export function makeCliAuthFunctions(params: CliAuthFunctionsParams) {
         .first();
       return !!row && Date.now() - row.created_at <= ttlMs;
     },
-  });
+  };
 
-  const claimForDesktop = internalMutation({
+  const claimForDesktop = {
     args: { nonce: v.string() },
     handler: async (ctx: any, args: { nonce: string }) =>
       claimDesktopAuthExchange(ctx, args.nonce, Date.now(), ttlMs, tables),
-  });
+  };
 
-  const sweepExpired = internalMutation({
+  const sweepExpired = {
     args: {},
     handler: async (ctx: any) => sweepExpiredCliAuthRequests(ctx, Date.now(), ttlMs, tables),
-  });
+  };
 
-  return { deposit, claim, pendingDeposit, claimForDesktop, sweepExpired };
+  return {
+    mutations: { deposit },
+    queries: { pendingDeposit },
+    internalMutations: { claim, claimForDesktop, sweepExpired },
+  };
+}
+
+/**
+ * The older form: this package calls the app's builders for it.
+ *
+ * Everything it returns is `any`, because the builders arrive as parameters and
+ * Convex's inference does not survive the trip. An app on this form must state
+ * the wire contract of each export by hand, or `api.cliAuth.*` will not exist.
+ * Prefer `createCliAuthDefinitions` above.
+ *
+ *   export const { deposit, claim, pendingDeposit, claimForDesktop, sweepExpired } =
+ *     makeCliAuthFunctions({ mutation, internalMutation, query });
+ */
+export function makeCliAuthFunctions(params: CliAuthFunctionsParams) {
+  const { mutation, internalMutation, query } = params;
+  const defs = createCliAuthDefinitions(params);
+
+  return {
+    deposit: mutation(defs.mutations.deposit),
+    claim: internalMutation(defs.internalMutations.claim),
+    pendingDeposit: query(defs.queries.pendingDeposit),
+    claimForDesktop: internalMutation(defs.internalMutations.claimForDesktop),
+    sweepExpired: internalMutation(defs.internalMutations.sweepExpired),
+  };
 }

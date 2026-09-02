@@ -61,6 +61,60 @@ export function resolveConfig(config: AnalyticsConfig): ResolvedAnalyticsConfig 
   return { ...config, posthogHost: host.replace(/\/+$/, ""), posthogKey: config.posthogKey || undefined, sentryDsn: config.sentryDsn || undefined };
 }
 
+/**
+ * How many calls the entry points hold while they wait for initAnalytics.
+ *
+ * A consumer that never initializes must not grow the buffer without limit, so
+ * the count is capped. Fifty is far more than a boot window produces and small
+ * enough to hold forever. At the cap the OLDEST call is dropped, never the
+ * newest: the latest identify carries the identity that is true now, and the
+ * latest events are the ones closest to whatever the app is doing.
+ */
+export const PRE_INIT_BUFFER_LIMIT = 50;
+
+export interface PreInitBuffer {
+  /** Hold a call until init runs. */
+  add(call: () => void): void;
+  /** Replay every held call in the order it was made, then stop holding. */
+  flush(): void;
+  /** Forget everything held. Used by the test reset hooks. */
+  clear(): void;
+}
+
+/**
+ * Identify and track calls made before init used to be silent no-ops, so a
+ * crash during a slow boot reached Sentry with no user attached. The entry
+ * points hold those calls here instead and replay them once init has both SDKs
+ * up.
+ */
+export function createPreInitBuffer(limit: number = PRE_INIT_BUFFER_LIMIT): PreInitBuffer {
+  let calls: Array<() => void> = [];
+  return {
+    add(call) {
+      if (calls.length >= limit) calls.shift();
+      calls.push(call);
+    },
+    flush() {
+      // Take the queue first: a replayed call runs the real code path now, and
+      // that path must not be able to append to the list being walked.
+      const queued = calls;
+      calls = [];
+      for (const call of queued) {
+        // One backend refusing a held call must not break the init that
+        // replays it, nor stop the calls behind it.
+        try {
+          call();
+        } catch {
+          // the SDK rejected this one; the rest still run
+        }
+      }
+    },
+    clear() {
+      calls = [];
+    },
+  };
+}
+
 /** Super properties registered on every PostHog event. */
 export function superProperties(config: ResolvedAnalyticsConfig): Record<string, string> {
   const props: Record<string, string> = { platform: config.platform, environment: config.environment };
