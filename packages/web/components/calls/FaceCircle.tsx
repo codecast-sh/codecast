@@ -1,8 +1,5 @@
-import { useRef } from "react";
 import { Maximize2, Mic, MicOff, PhoneOff, User, Users, X } from "lucide-react";
-import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { useFaceCrop } from "./useFaceCrop";
-import { useAvatarFaceCrop } from "./useAvatarFaceCrop";
+import { useCircleFace } from "../../hooks/useCircleFace";
 import { AvatarImg } from "../../lib/avatarCache";
 import { firstName } from "./speakers";
 import type { FacePerson, FacesMode } from "../../lib/calls/faceCrop";
@@ -106,25 +103,12 @@ export function FaceCircle({
   onPointerDown: (e: React.PointerEvent) => void;
   onPointerUp: (e: React.PointerEvent) => void;
 }) {
-  const hostRef = useRef<HTMLDivElement | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const track = tile?.track;
-
-  useWatchEffect(() => {
-    const el = videoRef.current;
-    if (!el || !track) return;
-    track.attach(el);
-    return () => {
-      track.detach(el);
-    };
-  }, [track]);
-
-  // A circle nobody can see does not need a face tracked in it. The hook also
-  // writes `data-tracking` on the circle — "face" while the detector is holding
-  // one, "center" otherwise — so the picture says which of the two it is.
-  useFaceCrop({ hostRef, videoRef, active: !!track && shown, diameter, mirror: !!tile?.isLocal });
-  // Camera off: the same centring, once, on the picture that stands in.
-  useAvatarFaceCrop({ hostRef, src: person.image, active: !track && shown, diameter });
+  const { hostRef, videoRef, track } = useCircleFace({
+    tile,
+    image: person.image,
+    diameter,
+    active: shown,
+  });
 
   return (
     // The slot is the circle's square and nothing more, so a row of them still
@@ -145,29 +129,13 @@ export function FaceCircle({
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
       >
-        {track ? (
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            style={{ width: diameter, height: diameter }}
-          />
-        ) : (
-          // Camera off. Their picture fills the circle — the same shape a face
-          // would have, so a row of faces does not go ragged when somebody turns
-          // their camera off mid-call.
-          <AvatarImg
-            src={person.image}
-            alt=""
-            className="face-avatar-img"
-            fallback={
-              <span className="face-avatar-fallback" style={{ fontSize: Math.max(12, diameter / 2.6) }}>
-                {(person.name || "?").charAt(0).toUpperCase()}
-              </span>
-            }
-          />
-        )}
+        <CircleFace
+          videoRef={videoRef}
+          track={track}
+          image={person.image}
+          name={person.name}
+          diameter={diameter}
+        />
         {person.muted && (
           <span className="face-mute">
             <MicOff className="h-3 w-3" />
@@ -179,5 +147,43 @@ export function FaceCircle({
           room for it at the moment the pointer arrives. */}
       <span className="face-name">{firstName(person.name)}</span>
     </div>
+  );
+}
+
+
+/** The contents of that circle. Paired with `useCircleFace`, which owns the
+ *  refs it needs and the cropping behind both branches. */
+export function CircleFace({
+  videoRef,
+  track,
+  image,
+  name,
+  diameter,
+}: {
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  track: ParticipantTile["track"] | undefined;
+  image?: string;
+  name?: string;
+  diameter: number;
+}) {
+  if (track) {
+    return (
+      <video ref={videoRef} autoPlay playsInline muted style={{ width: diameter, height: diameter }} />
+    );
+  }
+  // Camera off. Their picture fills the circle — the same shape a face would
+  // have, so a row of faces does not go ragged when somebody turns their
+  // camera off mid-call.
+  return (
+    <AvatarImg
+      src={image}
+      alt=""
+      className="face-avatar-img"
+      fallback={
+        <span className="face-avatar-fallback" style={{ fontSize: Math.max(12, diameter / 2.6) }}>
+          {(name || "?").charAt(0).toUpperCase()}
+        </span>
+      }
+    />
   );
 }
