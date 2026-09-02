@@ -6,6 +6,7 @@
 import {
   applySyncTable as engineApplySyncTable,
   applySyncRecord as engineApplySyncRecord,
+  applySyncPatch as engineApplySyncPatch,
   type PendingEntry,
 } from "@platform/engine";
 
@@ -58,4 +59,15 @@ export function applySyncRecord(
   pending: Record<string, PendingEntry>,
 ): { record: Record<string, any>; pending: Record<string, PendingEntry> } {
   return engineApplySyncRecord(tableName, id, incoming, pending, OPTIONAL_INBOX_TIMESTAMPS);
+}
+
+/** Partial-patch pending protection (sync-log cargo); same optional-clear rule. */
+export function applySyncPatch(
+  tableName: string,
+  id: string,
+  patch: Record<string, any>,
+  unset: readonly string[],
+  pending: Record<string, PendingEntry>,
+): { fields: Record<string, any>; unset: string[]; pending: Record<string, PendingEntry> } {
+  return engineApplySyncPatch(tableName, id, patch, unset, pending, OPTIONAL_INBOX_TIMESTAMPS);
 }
