@@ -47,13 +47,16 @@ export function isSystemMessage(content: string): boolean {
   return SYSTEM_MESSAGE_PREFIXES.some(prefix => content.startsWith(prefix));
 }
 
-// Claude Code writes its terminal status lines into the transcript as system
-// entries with subtype "informational": Remote Control connect/disconnect,
-// usage-limit auto-continue countdowns, "Unknown command" typo hints. They
-// address the person sitting at the terminal, not the conversation — every
-// renderer (web thread, mobile thread) hides the whole subtype.
-export function isHiddenSystemSubtype(subtype?: string | null): boolean {
-  return subtype === "informational";
+// Claude Code writes terminal status lines into the transcript as system
+// entries with subtype "informational". Most of them are worth keeping (a
+// usage-limit pause explains a gap in the timeline), but the Remote Control
+// connection notices ("Remote Control disconnected — …", "Remote Control not
+// started here · …") only tell the person at the terminal which slash command
+// to run next. Every renderer (web thread, mobile thread) hides those.
+const REMOTE_CONTROL_NOTICE_RE = /^Remote Control (?:disconnected|not started here)\b/;
+
+export function isHiddenSystemNotice(content: string | null | undefined, subtype?: string | null): boolean {
+  return subtype === "informational" && !!content && REMOTE_CONTROL_NOTICE_RE.test(content.trim());
 }
 
 /** Synthetic truncation notice the CLI injects into imported sessions for the

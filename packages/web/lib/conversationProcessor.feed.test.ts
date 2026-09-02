@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { classifyFeedMessage, isNoiseUserMessage, isHiddenSystemSubtype, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, cleanTitle } from "./conversationProcessor";
+import { classifyFeedMessage, isNoiseUserMessage, isHiddenSystemNotice, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, cleanTitle } from "./conversationProcessor";
 
 // Regression: the message feed was dumping raw <task-notification> XML and other
 // structured/machine messages as cards. classifyFeedMessage is the single shared
@@ -121,18 +121,24 @@ describe("backgroundAgentStoppedName", () => {
   });
 });
 
-// Claude Code writes terminal status lines (Remote Control disconnects,
-// usage-limit auto-continue countdowns, typo hints) into the transcript as
-// system/"informational" entries. They address the person at the terminal,
-// not the conversation, so every renderer hides the subtype.
-describe("isHiddenSystemSubtype — terminal status lines are hidden", () => {
-  test("informational is hidden", () => {
-    expect(isHiddenSystemSubtype("informational")).toBe(true);
+// Claude Code writes terminal status lines into the transcript as
+// system/"informational" entries. Only the Remote Control connection notices
+// are hidden; the rest (usage-limit pauses, typo hints) still render.
+describe("isHiddenSystemNotice — Remote Control notices are hidden", () => {
+  test("Remote Control disconnected / not started here", () => {
+    expect(isHiddenSystemNotice("Remote Control disconnected — signed-in claude.ai account or organization changed on this machine — run /remote-control to start a session", "informational")).toBe(true);
+    expect(isHiddenSystemNotice("Remote Control disconnected — OAuth token unavailable — run /login", "informational")).toBe(true);
+    expect(isHiddenSystemNotice("Remote Control not started here · another Claude Code on this machine (started 5m ago) owns it", "informational")).toBe(true);
   });
 
-  test("rendered subtypes stay visible", () => {
-    for (const s of ["compact_boundary", "plan", "commit", "local_command", "stop_hook_summary", undefined]) {
-      expect(isHiddenSystemSubtype(s)).toBe(false);
-    }
+  test("other informational lines stay visible", () => {
+    expect(isHiddenSystemNotice("Usage limit reached · continuing automatically at 5:50pm · esc or type to cancel", "informational")).toBe(false);
+    expect(isHiddenSystemNotice("Automatic continue cancelled · /rate-limit-options to re-arm", "informational")).toBe(false);
+    expect(isHiddenSystemNotice("Unknown command: /loginq. Did you mean /login?", "informational")).toBe(false);
+  });
+
+  test("the text alone is not enough — a user typing it is not a notice", () => {
+    expect(isHiddenSystemNotice("Remote Control disconnected", undefined)).toBe(false);
+    expect(isHiddenSystemNotice("Remote Control disconnected", "local_command")).toBe(false);
   });
 });
