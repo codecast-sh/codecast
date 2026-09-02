@@ -98,15 +98,11 @@ EXPO_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
 EOF
 ```
 
-### Optional: `packages/electron/.env.local`
+### Optional: desktop app against your local web
 
-Only if working on the desktop app:
+The desktop app reads no `.env` file. Pass the origin on the command line; `bun run dev` in `packages/electron` already does (`CODECAST_URL=https://local.codecast.sh electron .`). The origin must be https: the http one redirects and lands on a different localStorage origin.
 
-```bash
-cat > packages/electron/.env.local << 'EOF'
-CODECAST_URL=http://local.codecast.sh
-EOF
-```
+A from-source run (`electron .`) also opens a Chrome DevTools Protocol port on `127.0.0.1:9333` so `cast app` and the perf harness can drive it. Set `CODECAST_CDP_PORT` to move it, or to open one on a packaged build.
 
 ## 4. Set Up Local Domains
 
@@ -193,20 +189,15 @@ The CLI config lives at `~/.codecast/config.json`:
 
 ## 8. Testing
 
-### E2E tests
+### Unit and integration tests
 
-Add test credentials to `packages/web/.env.local`:
+Every package runs `bun test`. `bun run test` at the root fans out through turbo. CI runs the web, convex, and cli suites plus the cli messaging e2e (real tmux) on every push to `main`.
 
-```bash
-TEST_USER_EMAIL=<get-from-team-lead>
-TEST_USER_PASSWORD=<get-from-team-lead>
-```
+### End-to-end proof
 
-Then:
+`cast doctor` proves the sync loop live: transcript to server, server to daemon to tmux inject, echo back. Exit code 0 means the whole loop works.
 
-```bash
-./scripts/run-e2e-suite.sh
-```
+`cast app` drives the running web or desktop app the way a user does, on top of `cast browser`. `cast app doctor` tells you which origin, bundle, and account you are about to drive; `cast app sweep` walks every surface and reports the ones that fail to render.
 
 ### Convex test scripts
 
@@ -338,7 +329,6 @@ CONVEX_CLOUD_URL       # alias for CONVEX_CLOUD_ORIGIN
 | `./scripts/deploy.sh` | Bump version, build, and deploy CLI binaries |
 | `./scripts/deploy-all.sh` | Full deployment (Convex + web + CLI) |
 | `./scripts/backup-convex.sh` | Backup Convex data (set `BACKUP_DIR`, `RETENTION_DAYS` to override defaults) |
-| `./scripts/run-e2e-suite.sh` | Run E2E test suite |
 
 ## Troubleshooting
 

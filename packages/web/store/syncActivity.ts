@@ -67,3 +67,15 @@ export function __resetSyncActivityForTests(): void {
   _inflight.crawl = 0;
   _inflight.poll = 0;
 }
+
+// Read-only view for drivers (`cast app wait-settle`, the dev console). Always
+// on, like `__syncReplication`: a driver against a production build has no
+// store handle, and this is the one signal that says catch-up is quiet.
+if (typeof window !== "undefined") {
+  (window as any).__syncActivity = {
+    inflight: () => ({ ..._inflight, total: syncInflightCount() }),
+    applySeq: () => _applySeq,
+    lastApplyMono: () => _lastApplyMono,
+    now: monotonicNow,
+  };
+}

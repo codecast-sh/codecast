@@ -26,7 +26,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { mutateOnUnload } from "../keepaliveMutation";
 import { memberDisplayName } from "../liveEntities";
 import { startScribe, stopScribe } from "./transcription";
-import { micConstraints, readJoinPrefs, rememberCamera, rememberDevice } from "./joinPrefs";
+import { micConstraints, readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
 import { bindPrewarmAudio, bindPrewarmConvex, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
 import { CALL_HEARTBEAT_MS, humanizeConvexError } from "@codecast/shared/contracts";
 import { hasCallPanel, isCallPanelWindow, isElectron } from "../desktop";
@@ -405,7 +405,8 @@ export async function openMicForJoin(
  * therefore has to come last.
  */
 async function applyDeliberateJoin(roomKey: string, opts: JoinOpts): Promise<void> {
-  await setMuted(false);
+  // The prefs are APPLIED here, not chosen, so they are not re-remembered.
+  await setMuted(!readJoinPrefs().micOn, { remember: false });
   await controlJoin(roomKey, opts).catch(() => {});
   if (readJoinPrefs().cameraOn && !useInboxStore.getState().call.camera) {
     await setCamera(true);
@@ -436,7 +437,9 @@ export async function joinCall(roomKey: string, opts?: JoinOpts): Promise<void> 
     return;
   }
   deliberateRoomKey = opts?.intent === "deliberate" ? roomKey : null;
-  if (opts?.intent === "deliberate") setCall({ muted: false });
+  // A deliberate join starts the way the person's last call ended: mic on
+  // unless they muted once and never unmuted (lib/calls/joinPrefs).
+  if (opts?.intent === "deliberate") setCall({ muted: !readJoinPrefs().micOn });
   if (room) teardownMedia();
   const gen = ++callGen;
   // Abandon this continuation if a newer join/leave superseded it; disconnect
@@ -789,8 +792,16 @@ export async function takeOverCall(opts: {
   }
 }
 
-export async function setMuted(muted: boolean): Promise<void> {
+/**
+ * `remember: false` changes the microphone WITHOUT changing what the person
+ * chose for calls — the walkie opening a burst, a snooze closing a listen, a
+ * join applying the remembered choice. Everything else is a person pressing
+ * Mute or Unmute, and the NEXT deliberate join starts the way this one ended,
+ * exactly as `setCamera` does for the camera.
+ */
+export async function setMuted(muted: boolean, opts?: { remember?: boolean }): Promise<void> {
   setCall({ muted });
+  if (opts?.remember !== false) rememberMic(!muted);
   if (room) {
     try {
       await room.localParticipant.setMicrophoneEnabled(!muted);
@@ -941,11 +952,37 @@ export function __attachAudioForTest(track: RemoteTrack, participantId: string):
   attachAudio(track, participantId);
 }
 
-export async function listDevices(kind: MediaDeviceKind): Promise<MediaDeviceInfo[]> {
+/**
+ * `prompt: false` lists without asking the browser for permission. LiveKit's
+ * default asks, which is right inside a call (the device is already open) and
+ * wrong in a settings panel, where opening the page must never raise a
+ * permission dialog. Without permission Chrome still lists the devices, only
+ * without names — DeviceRows offers the one-time grant that names them.
+ */
+export async function listDevices(kind: MediaDeviceKind, opts?: { prompt?: boolean }): Promise<MediaDeviceInfo[]> {
   try {
-    return await Room.getLocalDevices(kind);
+    return await Room.getLocalDevices(kind, opts?.prompt !== false);
   } catch {
     return [];
+  }
+}
+
+/** Ask once for the microphone and camera so `enumerateDevices` can name them,
+ *  then release both at once. Nothing is published and nothing stays open. */
+export async function grantDeviceNames(): Promise<boolean> {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    for (const t of stream.getTracks()) t.stop();
+    return true;
+  } catch {
+    // Video may be the only refusal (no camera); audio alone still names the mics.
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      for (const t of stream.getTracks()) t.stop();
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -953,12 +990,15 @@ export async function switchDevice(
   kind: "audioinput" | "audiooutput" | "videoinput",
   deviceId: string,
 ): Promise<void> {
+  // Chosen once, applied from now on. This is the write half of "devices
+  // remembered" — the read half is the Room's capture defaults above. It is
+  // written BEFORE the switch and whether or not a call is live, because the
+  // call settings panel offers the same picker with no room to switch: the
+  // choice is the person's either way, and the next join reads it.
+  if (kind !== "audiooutput") rememberDevice(kind, deviceId);
   if (!room) return;
   try {
     await room.switchActiveDevice(kind, deviceId);
-    // Chosen once, applied from now on. This is the write half of "devices
-    // remembered" — the read half is the Room's capture defaults above.
-    if (kind !== "audiooutput") rememberDevice(kind, deviceId);
   } catch {}
 }
 
@@ -977,7 +1017,7 @@ export async function startHuddle(opts: {
   anchorTitle?: string;
 }): Promise<void> {
   if (!convex) return;
-  setCall({ phase: "ringing_out" as const, roomKey: opts.roomKey, error: null, errorFix: null, muted: false });
+  setCall({ phase: "ringing_out" as const, roomKey: opts.roomKey, error: null, errorFix: null, muted: !readJoinPrefs().micOn });
   try {
     await joinCall(opts.roomKey, { intent: "deliberate" });
     if (useInboxStore.getState().call.phase !== "connected") return;

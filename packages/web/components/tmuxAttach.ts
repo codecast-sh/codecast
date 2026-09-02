@@ -37,9 +37,19 @@ export type SessionMachine = {
  * `-t` is load-bearing: ssh allocates a TTY only when asked, and tmux without
  * one exits immediately with "open terminal failed: not a terminal".
  *
+ * The PATH prefix is load-bearing too. `ssh host "cmd"` runs cmd in a
+ * NON-login, non-interactive shell, which reads neither .zprofile nor .zshrc —
+ * so on a stock Mac, where tmux comes from Homebrew, the bare form dies with
+ * "command not found: tmux" (the team's Mac mini did exactly that). Naming the
+ * four standard install locations up front makes the command work on macOS
+ * (Apple silicon and Intel Homebrew) and Linux alike, without depending on
+ * how the remote account's shell happens to be initialised.
+ *
  * ssh_host is pre-validated server-side against an allowlist (sanitizeSshHost
  * in convex/devices.ts), so it cannot close a quote or chain a command here.
  */
+export const REMOTE_TMUX_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+
 export function attachCommand(
   tmuxSession: string,
   machine: SessionMachine | null | undefined,
@@ -50,7 +60,7 @@ export function attachCommand(
   if (!machine) return local;
   if (!machine.is_mine) return null;
   if (!machine.ssh_host) return local;
-  return `ssh ${machine.ssh_host} -t "${local}"`;
+  return `ssh ${machine.ssh_host} -t "PATH=${REMOTE_TMUX_PATH} ${local}"`;
 }
 
 /**

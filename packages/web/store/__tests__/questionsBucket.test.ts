@@ -95,26 +95,45 @@ describe("the questions bucket", () => {
     expect(placed.needsInput).toEqual([]);
   });
 
-  it("grouping never crosses a section: a teammate nests under its lead only in the lead's bucket", () => {
-    // Prod, 2026-09-01: seven teammates (spawned_by + agent_team_name, their
-    // own members per rollupParentIdOf) sat in needs_input on the server and
-    // in the tally, but the panel nested them under working / pinned leads
-    // and rendered "Needs Input (2)" against a tally of 12.
+  it("a team files as one group: a teammate rides its lead's bucket whatever its own verdict", () => {
+    // Prod, 2026-09-02: six finished teammates of a working lead rendered as
+    // loose ↳ cards in Done. A teammate is a member with its own verdict
+    // (what the CLI watches to see a worker finish), but it never stands
+    // alone: it takes its present lead's bucket (the shared
+    // rideLeadPlacements), nests there, and the header count includes it —
+    // on the server, the CLI, mobile and here alike.
     const lead = row("lead1", { agent_status: "working", is_idle: false });
     const mateDone = row("mate1", { spawned_by_conversation_id: "lead1", agent_team_name: "team", agent_status: "stopped" });
     const mateWorking = row("mate2", { spawned_by_conversation_id: "lead1", agent_team_name: "team", agent_status: "working", is_idle: false });
-    const placed = place([lead, mateDone, mateWorking]);
-    expect(placed.placements.get("mate1")?.bucket).toBe("needs_input");
-    expect(ids(placed.needsInput)).toEqual(["mate1"]);
-    expect(placed.tally.shown.needs_input).toBe(1);
-    expect(ids(placed.working).sort()).toEqual(["lead1"]);
-    // The working teammate shares the lead's bucket and nests as before.
-    expect(ids(placed.subsByParent.get("lead1") ?? [])).toEqual(["mate2"]);
-    expect(placed.tally.shown.working).toBe(2);
-    // The header number counts the nested member in its section: the flat
-    // array holds one card, the count says two, like the tally and the CLI.
-    expect(placed.counts.working).toBe(2);
+    const matePinned = row("mate3", { spawned_by_conversation_id: "lead1", agent_team_name: "team", is_pinned: true, inbox_pinned_at: T0 });
+    const mateLeadAbsent = row("mate4", { spawned_by_conversation_id: "gone", agent_team_name: "team" });
+    const placed = place([lead, mateDone, mateWorking, matePinned, mateLeadAbsent]);
+    expect(placed.placements.get("mate1")).toMatchObject({ bucket: "working", work_state: "needs_input" });
+    expect(placed.placements.get("mate2")?.bucket).toBe("working");
+    expect(ids(placed.working)).toEqual(["lead1"]);
+    expect(ids(placed.subsByParent.get("lead1") ?? []).sort()).toEqual(["mate1", "mate2"]);
+    expect(placed.tally.shown.working).toBe(3);
+    // The header number counts the nested members in their section: the flat
+    // array holds one card, the count says three, like the tally and the CLI.
+    expect(placed.counts.working).toBe(3);
+    // A pin is the viewer's act on the row: it keeps that place, flat in
+    // Pinned, never nested under a lead in another section.
+    expect(placed.placements.get("mate3")?.bucket).toBe("pinned");
+    expect(ids(placed.pinned)).toEqual(["mate3"]);
+    expect(placed.subsByParent.has("mate3")).toBe(false);
+    // A teammate whose lead is absent keeps its own placement and renders flat.
+    expect(ids(placed.needsInput)).toEqual(["mate4"]);
     expect(placed.counts.needsInput).toBe(1);
+  });
+
+  it("a teammate rides a stashed lead out of the active sections and into the stashed bucket with it", () => {
+    const lead = row("lead1", { inbox_stashed_at: T0 });
+    const mate = row("mate1", { spawned_by_conversation_id: "lead1", agent_team_name: "team" });
+    const placed = place([lead, mate]);
+    expect(placed.placements.get("mate1")?.bucket).toBe("stashed");
+    expect(placed.needsInput).toEqual([]);
+    expect(ids(placed.stashed).sort()).toEqual(["lead1", "mate1"]);
+    expect(placed.tally.shown.stashed).toBe(2);
   });
 
   it("a killed child's question lifts nothing", () => {

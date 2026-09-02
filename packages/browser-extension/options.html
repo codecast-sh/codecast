@@ -1,45 +1,153 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Cast Browser Bridge</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>codecast · browser bridge</title>
+<link rel="icon" href="icons/icon-32.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="brand.css">
 <style>
-  :root { color-scheme: light dark; }
-  body {
-    font: 13px/1.5 ui-monospace, "JetBrains Mono", Menlo, monospace;
-    max-width: 560px; margin: 2rem auto; padding: 0 1rem;
+  main { max-width: 640px; margin: 0 auto; padding: 3.5rem 1.5rem 4rem; }
+  header { display: flex; align-items: center; justify-content: space-between; }
+  header .wordmark { font-size: 17px; }
+  header .version { color: var(--dim); font-size: 11px; }
+
+  h1 {
+    font-family: var(--font-serif); font-weight: 400; font-variation-settings: "opsz" 72;
+    font-size: 36px; line-height: 1.12; letter-spacing: -0.015em;
+    margin: 2.4rem 0 0.7rem;
   }
-  h1 { font-size: 15px; }
-  label { display: block; margin-top: 1rem; font-weight: 600; }
-  input {
-    width: 100%; box-sizing: border-box; margin-top: 0.25rem; padding: 0.45rem;
-    font: inherit; border: 1px solid #8884; border-radius: 4px; background: transparent; color: inherit;
+  .lede { color: var(--muted); margin: 0 0 1.8rem; max-width: 52ch; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 1.1rem 1.25rem;
+    box-shadow: 0 1px 0 color-mix(in srgb, var(--text) 4%, transparent), 0 18px 40px -28px color-mix(in srgb, var(--text) 35%, transparent);
   }
-  button {
-    margin-top: 1.25rem; padding: 0.45rem 1rem; font: inherit; cursor: pointer;
-    border: 1px solid #8886; border-radius: 4px; background: transparent; color: inherit;
-  }
-  #status { margin-top: 1.25rem; padding: 0.6rem; border-radius: 4px; background: #8881; }
-  #notice { margin-top: 1rem; padding: 0.6rem; border-radius: 4px; background: #2e7d3222; }
-  .ok { color: #2e7d32; } .bad { color: #c62828; } .muted { opacity: 0.65; }
+  #status { display: flex; gap: 0.9rem; align-items: flex-start; }
+  #status .dot { margin-top: 0.45em; }
+  #status b { display: block; font-size: 14px; margin-bottom: 0.15rem; }
+  #status p { margin: 0; color: var(--muted); }
+  #status .actions { margin-left: auto; display: flex; gap: 0.5rem; flex: none; }
+  #tabs { list-style: none; margin: 0.9rem 0 0; padding: 0.9rem 0 0; border-top: 1px solid var(--line); display: grid; gap: 0.45rem; }
+  #tabs:empty { display: none; }
+  #tabs li { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+  #tabs .group { flex: none; font-size: 11px; padding: 0.1em 0.55em; border-radius: 999px; color: #fff; background: var(--blue); }
+  #tabs .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+
+  h2 { font-size: 11px; font-weight: 600; letter-spacing: 0.02em; color: var(--dim); margin: 2.4rem 0 0.8rem; }
+  .signals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.8rem; }
+  .signal { min-width: 0; padding: 0.9rem; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--card) 55%, transparent); }
+  .signal .demo { height: 58px; display: flex; align-items: center; justify-content: center; margin-bottom: 0.7rem; }
+  .signal b { display: block; font-size: 12px; margin-bottom: 0.2rem; }
+  .signal span { color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+
+  /* A Chrome tab group chip with the working dots cycling. */
+  .chip { white-space: nowrap; font-size: 11px; color: #fff; background: var(--blue); border-radius: 6px; padding: 0.25em 0.6em; }
+  .chip i { display: inline-block; width: 1.4em; text-align: left; font-style: normal; }
+  .chip i::after { content: ""; animation: dots 1.2s steps(3, end) infinite; }
+  @keyframes dots { 0% { content: "."; } 33% { content: ".."; } 66% { content: "..."; } }
+  /* A page with the coral frame the isolated world draws. */
+  .frame { width: 74px; height: 46px; border-radius: 4px; background: var(--bg-alt); border: 3px solid var(--blue); position: relative; }
+  .frame::before { content: ""; position: absolute; inset: 8px 10px auto; height: 4px; border-radius: 2px; background: var(--line); }
+  .frame::after { content: ""; position: absolute; inset: 18px 10px 10px; border-radius: 2px; background: color-mix(in srgb, var(--line) 50%, transparent); }
+  /* Chrome's own infobar, drawn small. */
+  .bar { font-size: 9.5px; line-height: 1.35; color: var(--text); background: var(--bg-alt); border: 1px solid var(--line); border-radius: 4px; padding: 0.35em 0.6em; text-align: center; max-width: 100%; }
+  .bar::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--coral); margin-right: 0.5em; vertical-align: -1px; }
+
+  details { margin-top: 2.4rem; }
+  summary { cursor: pointer; color: var(--muted); font-weight: 500; list-style: none; display: inline-flex; align-items: center; gap: 0.4em; }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: "▸"; color: var(--coral); transition: transform 150ms ease; }
+  details[open] summary::before { transform: rotate(90deg); }
+  details .card { margin-top: 0.8rem; }
+  details p { color: var(--muted); margin: 0 0 0.4rem; }
+  #save { margin-top: 1rem; }
+
+  footer { margin-top: 2.6rem; color: var(--dim); font-size: 11.5px; line-height: 1.6; max-width: 56ch; }
+
+  /* One orchestrated reveal, then still. */
+  .in { opacity: 0; transform: translateY(8px); animation: rise 520ms cubic-bezier(.2,.7,.2,1) forwards; }
+  .in:nth-child(2) { animation-delay: 60ms; } .in:nth-child(3) { animation-delay: 120ms; }
+  .in:nth-child(4) { animation-delay: 180ms; } .in:nth-child(5) { animation-delay: 240ms; }
+  .in:nth-child(6) { animation-delay: 300ms; } .in:nth-child(7) { animation-delay: 360ms; }
+  @keyframes rise { to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .in { animation: none; opacity: 1; transform: none; } .chip i::after, .dot { animation: none; } }
+  @media (max-width: 560px) { .signals { grid-template-columns: 1fr; } h1 { font-size: 30px; } }
 </style>
 </head>
 <body>
-  <h1>Cast Browser Bridge</h1>
-  <p class="muted">
-    Run <code>cast browser extension setup</code> in a terminal on this machine.
-    It opens this page with the token filled in; if it could not, run it with
-    <code>--show-token</code> and paste what it prints. The token never leaves
-    this computer, and never crosses the wire: the extension and the host
-    prove it to each other.
+<main>
+  <header class="in">
+    <a class="wordmark" href="https://codecast.sh" target="_blank" rel="noopener">
+      <svg class="mark" width="26" height="20" viewBox="290 340 440 340" aria-hidden="true">
+        <path class="c" d="M484.642334,414.398438 C441.085785,414.100739 407.961426,431.836365 389.038177,470.938019 C359.991791,530.957275 397.919464,599.922302 462.212036,610.452393 C488.377197,614.737732 512.859131,609.315125 534.993835,594.283020 C536.985901,592.930176 538.769653,590.998291 541.395325,590.790649 C542.830750,592.057068 542.358704,593.648865 542.360229,595.064209 C542.383118,615.894470 542.245728,636.725830 542.454224,657.553894 C542.495239,661.645569 540.944946,663.478516 537.347595,664.804260 C457.310547,694.300720 365.884827,658.371399 330.527679,577.853210 C318.822357,551.196838 314.364532,523.336731 317.783875,494.457825 C326.474518,421.058838 381.311096,368.253448 444.614929,354.822266 C476.047852,348.153107 507.120667,349.994629 537.405273,361.541992 C541.135986,362.964569 542.456543,364.823730 542.420715,368.821503 C542.237122,389.316772 542.366028,409.814758 542.335571,430.311707 C542.333191,431.888306 542.886780,433.635895 541.039673,435.579559 C524.470764,423.311615 505.857056,415.935822 484.642334,414.398438z"/>
+        <path class="arrow" d="M595.160889,540.159180 C602.995361,532.661072 610.436890,525.255066 618.219727,518.227051 C621.594788,515.179443 621.862915,513.288818 618.369263,510.015167 C605.976135,498.402374 593.950073,486.398682 581.638672,474.697052 C578.746277,471.947968 577.631470,469.026062 577.653381,465.050171 C577.786804,440.902161 577.692810,416.752869 577.674988,392.604004 C577.673828,390.969238 577.674927,389.334503 577.674927,387.822937 C580.475952,386.927032 581.524963,388.753571 582.754211,389.949341 C611.163818,417.584045 639.573853,445.218567 667.919434,472.919006 C680.901062,485.605255 693.661133,498.519287 706.712463,511.132599 C709.948914,514.260376 709.647461,516.128052 706.514099,519.115662 C674.820679,549.334167 643.279907,579.712769 611.649353,609.997375 C601.908936,619.323242 592.027832,628.502197 582.202148,637.738831 C581.252808,638.631287 580.419067,639.758240 578.788452,639.713379 C577.032288,638.391235 577.739929,636.409241 577.736206,634.708374 C577.682861,610.393066 577.748169,586.077332 577.625610,561.762512 C577.608215,558.319458 578.534119,555.799866 581.153076,553.487549 C585.892944,549.302612 590.338135,544.783875 595.160889,540.159180z"/>
+      </svg>
+      codecast <small>browser bridge</small>
+    </a>
+    <span class="version" id="version"></span>
+  </header>
+
+  <h1 class="in">Let your agents work in this Chrome.</h1>
+  <p class="lede in">
+    A session that needs your real logins opens its own tab here, in a tab group
+    named after it. Everything else stays in the agent browser.
   </p>
-  <div id="notice" hidden></div>
-  <label for="token">Token</label>
-  <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="64 hex characters">
-  <label for="port">Port</label>
-  <input id="port" type="number" placeholder="41729">
-  <button id="save">Save &amp; connect</button>
-  <div id="status">checking…</div>
-</body>
+
+  <section class="card in" id="status" aria-live="polite">
+    <span class="dot"></span>
+    <div>
+      <b data-title>Checking</b>
+      <p data-text></p>
+      <ul id="tabs"></ul>
+    </div>
+    <div class="actions"><button id="reconnect" type="button" hidden>Reconnect</button></div>
+  </section>
+
+  <section class="in">
+    <h2>What you will see while a session drives a tab</h2>
+    <div class="signals">
+      <div class="signal">
+        <div class="demo"><span class="chip">cast jx76pfw<i></i></span></div>
+        <b>A tab group per session</b>
+        <span>Its title shows dots while a command runs and a check when it lands.</span>
+      </div>
+      <div class="signal">
+        <div class="demo"><div class="frame"></div></div>
+        <b>A thin frame on the page</b>
+        <span>In the group's colour, hidden from every screenshot the agent takes.</span>
+      </div>
+      <div class="signal">
+        <div class="demo"><span class="bar">"Codecast" started debugging<br>this browser</span></div>
+        <b>Chrome's own notice</b>
+        <span>Chrome shows this for any extension that drives a tab. Cancel there and the agent lets go.</span>
+      </div>
+    </div>
+  </section>
+
+  <details class="in">
+    <summary>Pair by hand</summary>
+    <div class="card">
+      <p>If setup could not open this page, run <code>cast browser extension setup --show-token</code> and enter what it prints.</p>
+      <label for="token">Token</label>
+      <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="64 hex characters">
+      <label for="port">Port</label>
+      <input id="port" type="number" placeholder="41729">
+      <button id="save" class="primary" type="button">Save and connect</button>
+    </div>
+  </details>
+
+  <footer class="in">
+    The token never leaves this computer and never crosses the wire in the clear:
+    the extension and the bridge host prove it to each other. An agent acts only
+    on tabs it opened. Revoke everything with <code>cast browser extension revoke</code>.
+  </footer>
+</main>
+<script src="status.js"></script>
 <script src="options.js"></script>
+</body>
 </html>

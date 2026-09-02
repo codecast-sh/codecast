@@ -8,3 +8,6 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+/** Build identity stamped by vite.config.ts (`define`); read on window.__CODECAST_BUILD. */
+declare const __CODECAST_BUILD__: { sha: string; builtAt: string; mode: string };

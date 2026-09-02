@@ -96,4 +96,9 @@ describe("signInLandingNote", () => {
   test("is silent off a sign-in page", () => {
     expect(signInLandingNote("https://github.com/ashot", google)).toBeNull();
   });
+  test("carries the real Chrome hint when the session is on the clone", () => {
+    const note = signInLandingNote("https://github.com/login", google, "your real Chrome holds this login: pair the extension")!;
+    expect(note).toContain("Or your real Chrome holds this login");
+    expect(signInLandingNote("https://github.com/login", google, null)).not.toContain("Or ");
+  });
 });
