@@ -1,10 +1,10 @@
-// A FACE IS A KEY YOU HOLD.
+// A FACE IS A BUTTON WITH THREE ACTIONS UNDER IT.
 //
-// The people wall proved the gesture: the whole circle is the push-to-talk key,
-// a release under WALL_TAP_MS is a click that opens the DM instead, and the two
-// rings on the face say which direction a voice is going. The avatar bar in the
-// shell is the same face doing the same job, so the gesture lives here once and
-// each surface supplies only its shape.
+// Click a face and it offers Talk, Ring and Message, written on buttons; the
+// two rings on the face say which direction a voice is going. The people
+// wall, the avatar bar in the shell and the floating faces are the same face
+// doing the same job, so what a face knows lives here once and each surface
+// supplies only its shape.
 //
 // No components in this file, so the surfaces that DO render one stay Fast
 // Refresh boundaries — the same split hooks/useWalkie keeps.
@@ -172,11 +172,16 @@ export function useFaceKey({
   memberId,
   callsEnabled,
   talking,
+  joinedRoom,
 }: {
   viewerId: string;
   memberId: string;
   callsEnabled: boolean;
   talking: boolean;
+  /** The room somebody stepped into on purpose, from the same walkie facts
+   *  the caller took `talking` from. A caller with no such read leaves it
+   *  out and the hook asks the engine itself. */
+  joinedRoom?: string;
 }): FaceKey {
   const roomKey = dmRoomKey(viewerId, memberId);
   const ptt = usePushToTalk(
@@ -202,8 +207,9 @@ export function useFaceKey({
   // becomes a call, so the chip returns on that edge with no timer. The
   // subscription is its own line: a hook buried in an expression is one edit
   // away from landing behind a condition.
-  const { joinedRoom } = useWalkieFaces();
-  const burst = (sending || talking) && joinedRoom !== roomKey;
+  const live = useWalkieFaces();
+  const joined = joinedRoom ?? live.joinedRoom;
+  const burst = (sending || talking) && joined !== roomKey;
 
   const blocked = callsEnabled ? ptt.reason : "Calls are not on for this team";
 
