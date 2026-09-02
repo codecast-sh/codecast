@@ -39,6 +39,8 @@ import { DaemonStatusChip } from "./DaemonStatusChip";
 import { AccountUsageChip } from "./AccountUsageChip";
 import { AnchorChip, AnchorPanel } from "./anchor/AnchorPanel";
 import { useSyncAnchors } from "../hooks/useSyncAnchors";
+import { useIsSyncHost, useSyncReplication } from "../hooks/useSyncRole";
+import { useEnsureDispatch } from "../hooks/useEnsureDispatch";
 import { SyncStatusChip } from "./SyncStatusChip";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
@@ -206,7 +208,12 @@ export function DashboardLayout(props: DashboardLayoutProps) {
 // inline <ErrorBoundary> that wraps this in DashboardLayoutInner — degrading to
 // "this data didn't prefetch" instead of taking down the entire dashboard.
 // None of these power the core shell/conversation view; they warm stores.
-function DashboardSyncEffects() {
+// The global feeder set — everything that subscribes workspace-wide server
+// data into the store. Mounted only while this window is the sync host (or its
+// own solo host); a follower window receives the same slice over replication
+// instead (store/syncReplication.ts), so mounting these there would only
+// duplicate every subscription.
+function HostFeeders() {
   // The tasks delta cursor machine: its empty deltas re-rendered the whole
   // layout when it lived in DashboardLayoutInner.
   usePrefetch();
@@ -226,10 +233,24 @@ function DashboardSyncEffects() {
   // The Threads badge: one scalar, every workspace, not chat-gated — comment
   // and task threads exist whether or not the team has chat on.
   useThreadUnreadSync();
-  useChatToasts();
   // The anchors collection feeds the header chip, the slide-over, the inbox's
   // anchor marks and chat's DM naming — one subscription for the whole shell.
   useSyncAnchors();
+  return null;
+}
+
+function DashboardSyncEffects() {
+  // Cross-window replication: elect a sync host, follow one, or run solo.
+  // Everything below the feeder gate still runs in every window — toasts,
+  // calls and badges READ the store, which replication keeps fed.
+  useSyncReplication(true);
+  // Dispatch wiring is NOT a feeder: a follower still sends its own writes to
+  // the server (replication only mirrors state). Ungated, in every window —
+  // without this a follower's actions would park in the outbox until the
+  // window happened to be promoted.
+  useEnsureDispatch();
+  const isSyncHost = useIsSyncHost();
+  useChatToasts();
   useChatTitleBadge();
   // Huddles: config/ring/occupancy sync + the incoming-ring pipeline, both
   // app-wide for the same reason as chat toasts — a ring must reach someone
@@ -242,7 +263,7 @@ function DashboardSyncEffects() {
   // The recorder's Convex client. The record button and the pill live on
   // different pages, so neither of them can be what binds the engine.
   useRecorderSync();
-  return null;
+  return isSyncHost ? <HostFeeders /> : null;
 }
 
 // Unread mentions in the browser tab title.
