@@ -9,7 +9,7 @@ import { parseProcessTable } from "./processTable.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
-import { walkFiles } from "./fsWalk.js";
+import { walkFiles, walkDirs, walkDirsSync, type WalkEntry, type WalkFile, type WalkOptions } from "./fsWalk.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
 import { reconcileClaudeSettingsModel } from "./claudeDefaultModel.js";
 import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, recordConvergenceSignals } from "./capabilities/heartbeat.js";
@@ -13036,6 +13036,11 @@ const codexRolloutKnownMisses = new Set<string>();
 // an index carried across that swap would answer from the wrong tree.
 let sessionFileIndexHome = "";
 
+// Ids that missed and are waiting for a fresh build to confirm or refute
+// them: id -> the build time they first missed against. Survives installs on
+// purpose (it is what turns a pending miss into a confirmed one).
+const sessionFilePendingMisses = new Map<string, number>();
+
 /** Test hook: forget the index so the next lookup re-walks. */
 export function resetSessionFileIndexForTests(): void {
   sessionFileIndex = null;
@@ -13043,6 +13048,12 @@ export function resetSessionFileIndexForTests(): void {
   sessionFileIndexBuiltAt = 0;
   sessionFileKnownMisses.clear();
   codexRolloutKnownMisses.clear();
+  sessionFilePendingMisses.clear();
+}
+
+/** Test hook: make the index look `ms` old so the miss path treats it as stale. */
+export function ageSessionFileIndexForTests(ms: number): void {
+  sessionFileIndexBuiltAt -= ms;
 }
 
 function indexSessionFile(
@@ -13060,147 +13071,133 @@ function indexSessionFile(
 // (`<ISO-ts>_<uuid>.jsonl`) filename — the session id both stores key by.
 const TRAILING_UUID_JSONL_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 
-function buildSessionFileIndex(): { index: Map<string, SessionFileInfo>; codexRollouts: Map<string, string> } {
-  const index = new Map<string, SessionFileInfo>();
-  const codexRollouts = new Map<string, string>();
-  const home = process.env.HOME || "";
-
-  // Claude: mirror claudeTranscriptCandidates — per project dir, top-level
-  // <sessionId>.jsonl first, then each session subdir's own files, its
-  // subagents/, and subagents/workflows/<run>/ files.
-  const claudeProjectsDir = path.join(home, ".claude", "projects");
-  try {
-    for (const dir of fs.readdirSync(claudeProjectsDir, { withFileTypes: true })) {
-      if (!dir.isDirectory()) continue;
-      const dirPath = path.join(claudeProjectsDir, dir.name);
-      let subDirs: string[];
-      try {
-        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-        for (const e of entries) {
-          if (e.isFile() && e.name.endsWith(".jsonl")) {
-            indexSessionFile(index, e.name.slice(0, -6), path.join(dirPath, e.name), "claude");
-          }
-        }
-        subDirs = entries.filter(e => e.isDirectory()).map(e => e.name);
-      } catch { continue; }
-      for (const subDir of subDirs) {
-        const parentDir = path.join(dirPath, subDir);
-        try {
-          for (const e of fs.readdirSync(parentDir, { withFileTypes: true })) {
-            if (e.isFile() && e.name.endsWith(".jsonl")) {
-              indexSessionFile(index, e.name.slice(0, -6), path.join(parentDir, e.name), "claude");
-            }
-          }
-        } catch { continue; }
-        const subagentsDir = path.join(parentDir, "subagents");
-        try {
-          for (const e of fs.readdirSync(subagentsDir, { withFileTypes: true })) {
-            if (e.isFile() && e.name.endsWith(".jsonl")) {
-              indexSessionFile(index, e.name.slice(0, -6), path.join(subagentsDir, e.name), "claude");
-            }
-          }
-        } catch { continue; }
-        const workflowsDir = path.join(subagentsDir, "workflows");
-        try {
-          for (const wfRun of fs.readdirSync(workflowsDir, { withFileTypes: true })) {
-            if (!wfRun.isDirectory()) continue;
-            const runDir = path.join(workflowsDir, wfRun.name);
-            for (const e of fs.readdirSync(runDir, { withFileTypes: true })) {
-              if (e.isFile() && e.name.endsWith(".jsonl")) {
-                indexSessionFile(index, e.name.slice(0, -6), path.join(runDir, e.name), "claude");
-              }
-            }
-          }
-        } catch {}
-      }
-    }
-  } catch {}
-
-  // Codex: ~/.codex/sessions/YYYY/MM/DD/<name>-<ts>-<sessionId>.jsonl,
-  // recursive like the old findCodexRolloutPath walk. Fills the codex-only map
-  // too (first wins, matching the old walk's first-found-in-recursion answer).
-  const codexSessionsDir = path.join(home, ".codex", "sessions");
-  const walkCodex = (dir: string): void => {
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walkCodex(fullPath);
-      } else if (entry.isFile()) {
-        const m = TRAILING_UUID_JSONL_RE.exec(entry.name);
-        if (m) {
-          indexSessionFile(index, m[1], fullPath, "codex");
-          if (!codexRollouts.has(m[1])) codexRollouts.set(m[1], fullPath);
-        }
-      }
-    }
-  };
-  walkCodex(codexSessionsDir);
-
-  // Gemini: ~/.gemini/tmp/<hash>/chats/<sessionId>.json
-  const geminiTmpDir = path.join(home, ".gemini", "tmp");
-  try {
-    for (const dir of fs.readdirSync(geminiTmpDir, { withFileTypes: true })) {
-      if (!dir.isDirectory()) continue;
-      const chatsDir = path.join(geminiTmpDir, dir.name, "chats");
-      try {
-        for (const e of fs.readdirSync(chatsDir, { withFileTypes: true })) {
-          if (e.isFile() && e.name.endsWith(".json")) {
-            indexSessionFile(index, e.name.slice(0, -5), path.join(chatsDir, e.name), "gemini");
-          }
-        }
-      } catch {}
-    }
-  } catch {}
-
-  // pi: ~/.pi/agent/sessions/<cwd-slug>/<ISO-ts>_<sessionId>.jsonl — the id is
-  // the filename's trailing uuid.
-  const piSessionsDir = path.join(home, ".pi", "agent", "sessions");
-  try {
-    for (const slugDir of fs.readdirSync(piSessionsDir, { withFileTypes: true })) {
-      if (!slugDir.isDirectory()) continue;
-      const dirPath = path.join(piSessionsDir, slugDir.name);
-      try {
-        for (const e of fs.readdirSync(dirPath, { withFileTypes: true })) {
-          if (!e.isFile()) continue;
-          const m = TRAILING_UUID_JSONL_RE.exec(e.name);
-          if (m) indexSessionFile(index, m[1], path.join(dirPath, e.name), "pi");
-        }
-      } catch {}
-    }
-  } catch {}
-
-  // grok: ~/.grok/sessions/<url-encoded-cwd>/<sessionId>/updates.jsonl — the
-  // session DIRECTORY is named by the id.
-  const grokSessionsDir = path.join(home, ".grok", "sessions");
-  try {
-    for (const slugDir of fs.readdirSync(grokSessionsDir, { withFileTypes: true })) {
-      if (!slugDir.isDirectory()) continue;
-      const dirPath = path.join(grokSessionsDir, slugDir.name);
-      try {
-        for (const sessionDir of fs.readdirSync(dirPath, { withFileTypes: true })) {
-          if (!sessionDir.isDirectory()) continue;
-          const updatesPath = path.join(dirPath, sessionDir.name, "updates.jsonl");
-          if (fs.existsSync(updatesPath)) {
-            indexSessionFile(index, sessionDir.name, updatesPath, "grok");
-          }
-        }
-      } catch {}
-    }
-  } catch {}
-
-  return { index, codexRollouts };
+// One transcript store per client: where it lives, how deep to look, and how
+// a file's path names its session. Both index builders below walk exactly
+// these, so the sync cold build and the async refresh cannot drift apart.
+// Enumeration order per store mirrors the old per-call probe order (a
+// directory's own files before its subdirectories, so a top-level
+// <sessionId>.jsonl wins over a nested twin), and stores are merged
+// claude-first.
+type IndexStore = {
+  root: string;
+  agentType: AgentClientId;
+  walk: WalkOptions;
+  idOf: (f: WalkEntry) => string | null;
+};
+const segs = (rel: string) => rel.split(path.sep);
+function sessionFileIndexStores(home: string): IndexStore[] {
+  return [
+    // Claude: <project>/<id>.jsonl, <project>/<session>/<id>.jsonl, its
+    // subagents/, and subagents/workflows/<run>/ — never tool-results etc.
+    {
+      root: path.join(home, ".claude", "projects"),
+      agentType: "claude",
+      walk: {
+        maxDepth: 6,
+        dirFilter: (rel) => {
+          const d = segs(rel);
+          return d.length <= 2 || (d.length === 3 && d[2] === "subagents") || (d.length === 4 && d[3] === "workflows") || d.length === 5;
+        },
+        fileFilter: (rel) => rel.endsWith(".jsonl") && segs(rel).length !== 5,
+      },
+      idOf: (f) => f.name.slice(0, -6),
+    },
+    // Codex: ~/.codex/sessions/YYYY/MM/DD/<name>-<ts>-<sessionId>.jsonl, recursive.
+    {
+      root: path.join(home, ".codex", "sessions"),
+      agentType: "codex",
+      walk: {},
+      idOf: (f) => TRAILING_UUID_JSONL_RE.exec(f.name)?.[1] ?? null,
+    },
+    // Gemini: ~/.gemini/tmp/<hash>/chats/<sessionId>.json
+    {
+      root: path.join(home, ".gemini", "tmp"),
+      agentType: "gemini",
+      walk: { maxDepth: 3, dirFilter: (rel) => { const d = segs(rel); return d.length === 1 || d[1] === "chats"; }, fileFilter: (rel) => rel.endsWith(".json") && segs(rel).length === 3 },
+      idOf: (f) => f.name.slice(0, -5),
+    },
+    // pi: ~/.pi/agent/sessions/<cwd-slug>/<ISO-ts>_<sessionId>.jsonl
+    {
+      root: path.join(home, ".pi", "agent", "sessions"),
+      agentType: "pi",
+      walk: { maxDepth: 2, fileFilter: (rel) => segs(rel).length === 2 },
+      idOf: (f) => TRAILING_UUID_JSONL_RE.exec(f.name)?.[1] ?? null,
+    },
+    // grok: ~/.grok/sessions/<url-encoded-cwd>/<sessionId>/updates.jsonl — the
+    // session DIRECTORY is named by the id.
+    {
+      root: path.join(home, ".grok", "sessions"),
+      agentType: "grok",
+      walk: { maxDepth: 3, fileFilter: (rel) => segs(rel).length === 3 && path.basename(rel) === "updates.jsonl" },
+      idOf: (f) => segs(f.rel)[1],
+    },
+  ];
 }
 
-function rebuildSessionFileIndex(): void {
-  sessionFileIndexHome = process.env.HOME || "";
-  const built = buildSessionFileIndex();
+type SessionFileIndexBuild = { index: Map<string, SessionFileInfo>; codexRollouts: Map<string, string> };
+function recordIndexFiles(build: SessionFileIndexBuild, store: IndexStore, files: WalkEntry[]): void {
+  for (const f of files) {
+    const id = store.idOf(f);
+    if (!id) continue;
+    indexSessionFile(build.index, id, f.path, store.agentType);
+    // The codex store's own view: first found wins, as the old recursive walk did.
+    if (store.agentType === "codex" && !build.codexRollouts.has(id)) build.codexRollouts.set(id, f.path);
+  }
+}
+
+// Synchronous: for a lookup that cannot wait (no index yet, or HOME changed
+// under a test). readdir only, ~4ms warm; never the periodic path.
+function buildSessionFileIndex(home: string): SessionFileIndexBuild {
+  const build: SessionFileIndexBuild = { index: new Map(), codexRollouts: new Map() };
+  for (const store of sessionFileIndexStores(home)) {
+    walkDirsSync(store.root, store.walk, (files) => recordIndexFiles(build, store, files));
+  }
+  return build;
+}
+
+async function buildSessionFileIndexAsync(home: string): Promise<SessionFileIndexBuild> {
+  const build: SessionFileIndexBuild = { index: new Map(), codexRollouts: new Map() };
+  for (const store of sessionFileIndexStores(home)) {
+    await walkDirs(store.root, store.walk, (files) => recordIndexFiles(build, store, files));
+  }
+  return build;
+}
+
+function installSessionFileIndex(home: string, built: SessionFileIndexBuild): void {
+  sessionFileIndexHome = home;
   sessionFileIndex = built.index;
   codexRolloutIndex = built.codexRollouts;
   sessionFileIndexBuiltAt = Date.now();
   sessionFileKnownMisses.clear();
   codexRolloutKnownMisses.clear();
+}
+
+function rebuildSessionFileIndex(): void {
+  const home = process.env.HOME || "";
+  installSessionFileIndex(home, buildSessionFileIndex(home));
+}
+
+// The periodic path. The cold sync build blocked the loop 6s at boot under
+// load (LOOP-FREEZE 2026-09-02, collectResourceSnapshot → sessionBorrowsProcess
+// → this walk) and again every TTL; the same walk on the libuv pool costs the
+// loop nothing, and lookups keep answering from the previous map meanwhile
+// (hits are stat-validated, so a stale map is never wrong, only incomplete).
+// One refresh in flight at a time; the boot path kicks the first one so the
+// first lookup rarely has to build cold.
+let sessionFileIndexRefresh: Promise<void> | null = null;
+export function refreshSessionFileIndex(): Promise<void> {
+  if (sessionFileIndexRefresh) return sessionFileIndexRefresh;
+  const home = process.env.HOME || "";
+  sessionFileIndexRefresh = buildSessionFileIndexAsync(home)
+    .then((built) => {
+      // A sync build that ran meanwhile (HOME swap, cold lookup) is at least as
+      // fresh as this one only if it is newer than our start; simpler and safe:
+      // install unless HOME moved under us.
+      if ((process.env.HOME || "") === home) installSessionFileIndex(home, built);
+    })
+    .catch(() => {})
+    .finally(() => { sessionFileIndexRefresh = null; });
+  return sessionFileIndexRefresh;
 }
 
 // The shared freshness policy for both index maps: stat-validated hits, one
@@ -13213,13 +13210,11 @@ function indexedSessionLookup<T>(
   sessionId: string,
 ): T | null {
   let rebuiltThisCall = false;
-  if (
-    !getMap() ||
-    sessionFileIndexHome !== (process.env.HOME || "") ||
-    Date.now() - sessionFileIndexBuiltAt > SESSION_FILE_INDEX_TTL_MS
-  ) {
+  if (!getMap() || sessionFileIndexHome !== (process.env.HOME || "")) {
     rebuildSessionFileIndex();
     rebuiltThisCall = true;
+  } else if (Date.now() - sessionFileIndexBuiltAt > SESSION_FILE_INDEX_TTL_MS) {
+    void refreshSessionFileIndex(); // serve the current map; the fresh one lands async
   }
   let hit = getMap()!.get(sessionId);
   if (hit !== undefined && !fs.existsSync(pathOf(hit))) {
@@ -13227,18 +13222,23 @@ function indexedSessionLookup<T>(
     hit = undefined;
   }
   if (hit === undefined && !knownMisses.has(sessionId)) {
-    if (rebuiltThisCall) {
-      // Confirmed absent by the walk this call just did.
+    const missKey = `${getMap() === codexRolloutIndex ? "codex:" : "all:"}${sessionId}`;
+    const firstMissedAgainst = sessionFilePendingMisses.get(missKey);
+    if (rebuiltThisCall || (firstMissedAgainst !== undefined && firstMissedAgainst < sessionFileIndexBuiltAt)) {
+      // Confirmed absent: by the walk this call just did, or by a build that
+      // landed after the id first missed. Remembered until the next build.
       knownMisses.add(sessionId);
-    } else if (Date.now() - sessionFileIndexBuiltAt > SESSION_FILE_INDEX_MISS_REBUILD_MS) {
-      // An UNSEEN id missing from a stale index: the file may have been created
-      // since the last walk (a fresh session, a repair write). One rebuild per
-      // window. Only a miss CONFIRMED by a fresh walk is remembered — a query
-      // inside the throttle window stays unmarked so it retries next call.
-      rebuildSessionFileIndex();
-      const rebuilt = getMap()!.get(sessionId);
-      if (rebuilt !== undefined && fs.existsSync(pathOf(rebuilt))) hit = rebuilt;
-      else knownMisses.add(sessionId);
+      sessionFilePendingMisses.delete(missKey);
+    } else {
+      // An UNSEEN id missing from the index: the file may have been created
+      // since the last walk (a fresh session, a repair write). Ask for a fresh
+      // build OFF the loop — one per window — and answer null meanwhile; the
+      // caller retries and the next call answers from the fresh map. The old
+      // sync rebuild here, cleared of its known misses by every install, walked
+      // the whole tree every 2s for as long as any session had no transcript:
+      // 9 freezes of up to 47s in 8 minutes on a busy disk (2026-09-02).
+      if (firstMissedAgainst === undefined) sessionFilePendingMisses.set(missKey, sessionFileIndexBuiltAt);
+      if (Date.now() - sessionFileIndexBuiltAt > SESSION_FILE_INDEX_MISS_REBUILD_MS) void refreshSessionFileIndex();
     }
   }
   return hit ?? null;
