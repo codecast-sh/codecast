@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { walkFiles } from "./fsWalk.js";
 import { extractCwd, parseSessionFile } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { setPosition } from "./positionTracker.js";
@@ -137,35 +138,20 @@ export async function performReconciliation(
   const maxAgeMs = 7 * 24 * 60 * 60 * 1000; // 7 days
   const now = Date.now();
 
-  const scanDir = (dir: string) => {
-    try {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          scanDir(fullPath);
-        } else if (entry.name.endsWith(".jsonl") && !entry.name.startsWith("agent-")) {
-          // Skip subagent files for now, focus on main sessions. More
-          // importantly, honor the exact same selected/excluded scope as the
-          // sync loop: an out-of-scope transcript is correctly absent from the
-          // backend and must never be "repaired" into a zombie ledger entry.
-          if (!isTranscriptFileInSyncScope(fullPath, config)) continue;
-          try {
-            const stats = fs.statSync(fullPath);
-            if (now - stats.mtimeMs < maxAgeMs) {
-              recentFiles.push({ path: fullPath, mtime: stats.mtimeMs });
-            }
-          } catch {
-            // skip
-          }
-        }
-      }
-    } catch {
-      // skip
-    }
-  };
-
-  scanDir(claudeProjectsDir);
+  // Skip subagent files for now, focus on main sessions. More importantly,
+  // honor the exact same selected/excluded scope as the sync loop: an
+  // out-of-scope transcript is correctly absent from the backend and must never
+  // be "repaired" into a zombie ledger entry. Async walk: the tree holds tens of
+  // thousands of files, and a sync scan pinned the loop for the whole read.
+  await walkFiles(
+    claudeProjectsDir,
+    { fileFilter: (rel) => { const name = path.basename(rel); return name.endsWith(".jsonl") && !name.startsWith("agent-"); } },
+    (f) => {
+      if (now - f.stat.mtimeMs >= maxAgeMs) return;
+      if (!isTranscriptFileInSyncScope(f.path, config)) return;
+      recentFiles.push({ path: f.path, mtime: f.stat.mtimeMs });
+    },
+  );
 
   // Sort by most recently modified
   recentFiles.sort((a, b) => b.mtime - a.mtime);

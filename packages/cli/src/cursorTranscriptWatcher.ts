@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import * as path from "path";
 import * as fs from "fs";
 import { RecursiveWatcher } from "./recursiveWatcher.js";
+import type { WalkFile } from "./fsWalk.js";
 
 export interface CursorTranscriptEvent {
   sessionId: string;
@@ -46,12 +47,11 @@ export class CursorTranscriptWatcher extends EventEmitter {
       return;
     }
 
-    this.emitExistingFilesSorted();
-
     this.watcher = new RecursiveWatcher({
       path: this.historyPath,
       filter: (rel) => rel.endsWith(".txt") && rel.includes(`agent-transcripts${path.sep}`) || rel.includes("agent-transcripts/"),
       callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
+      onExisting: (files) => this.emitExistingFilesSorted(files),
       debounceMs: 100,
     });
 
@@ -60,38 +60,12 @@ export class CursorTranscriptWatcher extends EventEmitter {
     this.watcher.start();
   }
 
-  private emitExistingFilesSorted(): void {
-    const files: { path: string; mtime: number }[] = [];
-
-    const scanDir = (dir: string): void => {
-      let entries: fs.Dirent[];
-      try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          scanDir(fullPath);
-        } else if (entry.isFile() && entry.name.endsWith(".txt")) {
-          if (!fullPath.includes(`${path.sep}agent-transcripts${path.sep}`)) {
-            continue;
-          }
-          try {
-            const stat = fs.statSync(fullPath);
-            files.push({ path: fullPath, mtime: stat.mtimeMs });
-          } catch {
-            continue;
-          }
-        }
-      }
-    };
-
-    scanDir(this.historyPath);
-    files.sort((a, b) => b.mtime - a.mtime);
-
-    for (const file of files) {
+  // Files the watcher's priming walk found (one walk serves both), newest first.
+  private emitExistingFilesSorted(files: WalkFile[]): void {
+    const matched = files.filter((f) =>
+      f.path.endsWith(".txt") && f.path.includes(`${path.sep}agent-transcripts${path.sep}`));
+    matched.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+    for (const file of matched) {
       this.handleFileEvent(file.path, "add");
     }
   }

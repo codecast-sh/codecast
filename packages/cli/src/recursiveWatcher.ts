@@ -2,26 +2,46 @@ import { EventEmitter } from "events";
 import * as fs from "fs";
 import * as path from "path";
 import { watch as chokidarWatch, type FSWatcher as ChokidarWatcher } from "chokidar";
+import { walkFiles, type WalkFile } from "./fsWalk.js";
 
 type WatcherCallback = (filePath: string, eventType: "add" | "change") => void;
 
 const supportsRecursiveWatch = process.platform === "darwin" || process.platform === "win32";
 
+// Floor between two safety-net rescans of the tree (native path). The rescan
+// exists only to catch files whose change bun's coalescing dropped, so it may
+// lag by this much; the per-file probe is what carries live latency. One walk
+// of ~/.claude/projects (3.6k dirs, 18k files) costs ~80ms of pool-thread time
+// warm, so this cadence is a few percent of one core while sessions stream.
+export const DEFAULT_RESCAN_INTERVAL_MS = 2_000;
+
 export class RecursiveWatcher extends EventEmitter {
   private fsWatcher: fs.FSWatcher | null = null;
   private chokidarWatcher: ChokidarWatcher | null = null;
-  // Per-directory rescan timers (native fs.watch path). Keyed by the directory a
-  // change was seen under, so a burst under one dir coalesces into one rescan.
-  private scanTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  // Last-seen mtimeMs per filter-matching file, so a rescan emits only files that
-  // are new or actually changed — not every file it walks past.
+  // Per-file probe timers (native path): a burst of appends to one transcript
+  // coalesces into a single stat.
+  private probeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private rescanTimer: ReturnType<typeof setTimeout> | null = null;
+  private rescanRunning = false;
+  private rescanRequested = false;
+  private lastRescanEndedAt = 0;
+  // Last-seen mtimeMs per filter-matching file, so a probe or rescan emits only
+  // files that are new or actually changed — not every file it walks past.
   private knownMtime = new Map<string, number>();
+  // Bumped by every stop(): async work still in flight from the previous
+  // start() checks it and drops its results instead of writing into a fresh
+  // watcher's state.
+  private generation = 0;
+  private primed: Promise<void> = Promise.resolve();
+  private isPrimed = false;
   private watchPath: string;
   private filter: (relativePath: string) => boolean;
   private dirFilter: (relativeDirPath: string) => boolean;
   private callback: WatcherCallback;
+  private onExisting: ((files: WalkFile[]) => void) | null;
   private maxDepth: number;
   private debounceMs: number;
+  private rescanIntervalMs: number;
 
   constructor(opts: {
     path: string;
@@ -30,23 +50,33 @@ export class RecursiveWatcher extends EventEmitter {
      * Whether to descend into a directory. `filter` only ever sees FILES, so
      * without this the walk recurses through every directory under the root and
      * merely discards what it finds — on a code repository that means walking
-     * node_modules on priming and again on every debounced rescan, forever.
+     * node_modules on priming and again on every rescan, forever.
      *
      * Defaults to descending everywhere, so callers that don't set it behave
      * exactly as before.
      */
     dirFilter?: (relativeDirPath: string) => boolean;
     callback: WatcherCallback;
+    /**
+     * Receives every filter-matching file the priming walk found, with stats.
+     * Callers that used to walk the tree themselves on start (to emit recent
+     * files, sorted) can take them from this one walk instead of running a
+     * second one over the same tens of thousands of files. Native path only.
+     */
+    onExisting?: (files: WalkFile[]) => void;
     maxDepth?: number;
     debounceMs?: number;
+    rescanIntervalMs?: number;
   }) {
     super();
     this.watchPath = opts.path;
     this.filter = opts.filter;
     this.dirFilter = opts.dirFilter ?? (() => true);
     this.callback = opts.callback;
+    this.onExisting = opts.onExisting ?? null;
     this.maxDepth = opts.maxDepth ?? Infinity;
     this.debounceMs = opts.debounceMs ?? 100;
+    this.rescanIntervalMs = opts.rescanIntervalMs ?? DEFAULT_RESCAN_INTERVAL_MS;
   }
 
   start(): void {
@@ -63,94 +93,172 @@ export class RecursiveWatcher extends EventEmitter {
     }
   }
 
-  private startFsWatch(): void {
-    // Prime known mtimes so pre-existing files don't flood as "add" on the first
-    // event, and so a later append to one of them reads as "change" (mirrors
-    // chokidar's ignoreInitial).
-    this.walk(this.watchPath, false);
+  /** Resolves once the priming walk has recorded every existing file (native
+   *  path); immediately on the chokidar path. */
+  whenPrimed(): Promise<void> {
+    return this.primed;
+  }
 
+  // Every ancestor of `relDir` must pass dirFilter — the native watch cannot be
+  // pruned, so events from rejected subtrees still arrive and must be ignored
+  // the same way the walk ignores them. Mirrors chokidar's `ignored` below.
+  private isDirAllowed(relDir: string): boolean {
+    if (!relDir || relDir === ".") return true;
+    let prefix = "";
+    for (const seg of relDir.split(path.sep)) {
+      prefix = prefix ? `${prefix}${path.sep}${seg}` : seg;
+      if (!this.dirFilter(prefix)) return false;
+    }
+    return true;
+  }
+
+  private startFsWatch(): void {
+    const gen = ++this.generation;
+    this.isPrimed = false;
+
+    // Open the watch BEFORE priming, so nothing written during the walk is
+    // missed; the probe path below is correct for an unprimed file (it emits).
     this.fsWatcher = fs.watch(this.watchPath, { recursive: true }, (_eventType, filename) => {
-      // Bun's fs.watch coalesces a same-tick burst of filesystem events into a
-      // SINGLE callback carrying only the first event's filename (verified on bun
-      // 1.3.14/macOS: four synchronous writes surfaced one callback). So one
-      // callback does NOT mean one changed file. Treat it as "something under here
-      // changed" and rescan the affected directory subtree, emitting files whose
-      // mtime advanced. This also recovers files in subdirectories the coalesced
-      // event dropped — the reason nested-file detection was failing.
-      let scanDir = this.watchPath;
-      if (filename) {
-        const target = path.join(this.watchPath, filename);
-        let isDir = false;
-        try { isDir = fs.statSync(target).isDirectory(); } catch { /* deleted/renamed */ }
-        // File event (the hot path — a session appending to its transcript):
-        // rescan just its directory, so ongoing writes stay cheap. Directory
-        // event (a new subdir appearing — infrequent): a coalesced burst may have
-        // created sibling directories too, and bun surfaces only the first, so
-        // rescan the whole tree to catch them all.
-        scanDir = isDir ? this.watchPath : path.dirname(target);
-      }
-      this.scheduleScan(scanDir);
+      this.onNativeEvent(filename == null ? null : String(filename));
     });
 
     this.fsWatcher.on("error", (err: Error) => {
       this.emit("error", err);
     });
 
-    this.emit("ready");
+    // Prime known mtimes so pre-existing files don't flood as "add" on the first
+    // rescan, and so a later append to one of them reads as "change" (mirrors
+    // chokidar's ignoreInitial). Async: the tree can hold tens of thousands of
+    // files, and this also runs on every wake-from-sleep restart.
+    const existing: WalkFile[] = [];
+    this.primed = this.walkTree(gen, false, this.onExisting ? (f) => existing.push(f) : undefined)
+      .then(() => {
+        if (gen !== this.generation) return;
+        this.isPrimed = true;
+        // Priming IS a walk: pace the first rescan from it.
+        this.lastRescanEndedAt = Date.now();
+        this.onExisting?.(existing);
+        this.emit("ready");
+      });
   }
 
-  // Debounce a rescan of `dir`, coalescing a burst of events under it into one
-  // walk. Keyed by directory so activity in unrelated subtrees doesn't reset each
-  // other's timers.
-  private scheduleScan(dir: string): void {
-    // The OS-level recursive watch can't be pruned, so events still arrive from
-    // directories we don't care about. They must NOT simply be dropped: bun
-    // coalesces a same-tick burst into one callback carrying only the FIRST
-    // filename, so an ignored path can be standing in for a change we do want.
-    // Fall back to the root walk — which dirFilter now prunes — instead of
-    // scanning a directory whose contents we would discard anyway.
-    const rel = path.relative(this.watchPath, dir);
-    if (rel && !this.dirFilter(rel)) dir = this.watchPath;
-    const existing = this.scanTimers.get(dir);
+  // One native event. Bun's fs.watch coalesces a same-tick burst of filesystem
+  // events into a SINGLE callback carrying only the first event's filename
+  // (verified on bun 1.3.14/macOS: four synchronous writes surfaced one
+  // callback). So the named file gets a direct probe — one stat, the hot path
+  // for a session appending to its transcript — and every event also requests
+  // a throttled rescan of the whole tree, which is what recovers the siblings
+  // the coalescing dropped, wherever in the tree they sit.
+  //
+  // Before this the rescan was the ONLY path, ran 100ms after every event, and
+  // walked the named file's entire subtree synchronously. Under ~/.claude/
+  // projects that is one project's 1700 directories per append, per session —
+  // several full walks a second on the main thread, and a 42s freeze whenever
+  // the disk was busy.
+  private onNativeEvent(filename: string | null): void {
+    if (filename) {
+      const full = path.join(this.watchPath, filename);
+      const rel = path.relative(this.watchPath, full);
+      const depth = rel.split(path.sep).length;
+      if (depth <= this.maxDepth && this.filter(rel) && this.isDirAllowed(path.dirname(rel))) {
+        this.scheduleProbe(full);
+      } else {
+        // A directory appearing (a new project or session subdir) is rare and
+        // structural: whatever landed inside it in the same burst has no event
+        // of its own, so don't make it wait out the throttle.
+        const gen = this.generation;
+        fs.promises.stat(full)
+          .then((st) => { if (gen === this.generation && st.isDirectory()) this.requestRescan(true); })
+          .catch(() => {});
+      }
+    }
+    this.requestRescan();
+  }
+
+  private scheduleProbe(full: string): void {
+    const existing = this.probeTimers.get(full);
     if (existing) clearTimeout(existing);
-    this.scanTimers.set(dir, setTimeout(() => {
-      this.scanTimers.delete(dir);
-      this.walk(dir, true);
+    const gen = this.generation;
+    this.probeTimers.set(full, setTimeout(() => {
+      this.probeTimers.delete(full);
+      void this.probe(gen, full);
     }, this.debounceMs));
   }
 
-  // Walk `dir` down to maxDepth, recording each filter-matching file's mtime.
-  // With emit=true, fire the callback for any file that is new or whose mtime
-  // advanced since the last walk; emit=false only records state (start priming).
-  // Depth is measured in path segments relative to watchPath, matching the
-  // original `filename.split(sep).length > maxDepth` semantics.
-  private walk(dir: string, emit: boolean): void {
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      const rel = path.relative(this.watchPath, full);
-      const depth = rel.split(path.sep).length;
-      if (entry.isDirectory()) {
-        if (!this.dirFilter(rel)) continue;
-        // Descend only while a file one level deeper would still be within
-        // maxDepth (a file in a dir at depth D sits at depth D+1).
-        if (depth < this.maxDepth) this.walk(full, emit);
-      } else if (entry.isFile()) {
-        if (depth > this.maxDepth) continue;
-        if (!this.filter(rel)) continue;
-        let mtime: number;
-        try { mtime = fs.statSync(full).mtimeMs; } catch { continue; }
-        const prev = this.knownMtime.get(full);
-        this.knownMtime.set(full, mtime);
-        if (emit && (prev === undefined || mtime > prev)) {
-          this.callback(full, prev === undefined ? "add" : "change");
-        }
-      }
+  private async probe(gen: number, full: string): Promise<void> {
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.stat(full);
+    } catch {
+      return; // deleted before the probe ran
     }
+    if (gen !== this.generation || !stat.isFile()) return;
+    // While priming is still walking, the walk may stat this file AFTER the
+    // write that raised the event and record the new mtime first; the event is
+    // the only evidence of that change, so an unprimed probe always emits.
+    this.noteMtime(full, stat.mtimeMs, true, !this.isPrimed);
+  }
+
+  private noteMtime(full: string, mtime: number, emit: boolean, force = false): void {
+    const prev = this.knownMtime.get(full);
+    if (prev !== undefined && mtime <= prev && !force) return;
+    if (prev === undefined || mtime > prev) this.knownMtime.set(full, mtime);
+    if (emit) this.callback(full, prev === undefined ? "add" : "change");
+  }
+
+  // At most one tree walk in flight, and at most one per rescanIntervalMs
+  // after the previous one ENDED — so a walk that is slow because the disk is
+  // busy paces the next one instead of stacking behind it.
+  private requestRescan(urgent = false): void {
+    if (this.rescanRunning) {
+      this.rescanRequested = true;
+      return;
+    }
+    const wait = urgent
+      ? this.debounceMs
+      : Math.max(this.debounceMs, this.lastRescanEndedAt + this.rescanIntervalMs - Date.now());
+    if (this.rescanTimer) {
+      if (!urgent) return;
+      clearTimeout(this.rescanTimer); // pull a throttled walk forward
+    }
+    this.rescanTimer = setTimeout(() => {
+      this.rescanTimer = null;
+      void this.runRescan();
+    }, wait);
+  }
+
+  private async runRescan(): Promise<void> {
+    const gen = this.generation;
+    this.rescanRunning = true;
+    this.rescanRequested = false;
+    try {
+      await this.primed;
+      if (gen === this.generation) await this.walkTree(gen, true);
+    } finally {
+      this.rescanRunning = false;
+      this.lastRescanEndedAt = Date.now();
+    }
+    if (this.rescanRequested && gen === this.generation) this.requestRescan();
+  }
+
+  // Walk the tree, recording each filter-matching file's mtime. With emit=true,
+  // fire the callback for any file that is new or whose mtime advanced since it
+  // was last seen; emit=false only records state (priming).
+  private async walkTree(gen: number, emit: boolean, collect?: (f: WalkFile) => void): Promise<void> {
+    await walkFiles(
+      this.watchPath,
+      { maxDepth: this.maxDepth, dirFilter: this.dirFilter, fileFilter: this.filter },
+      (f) => {
+        if (gen !== this.generation) return;
+        collect?.(f);
+        this.noteMtime(f.path, f.stat.mtimeMs, emit);
+      },
+    );
   }
 
   private startChokidar(): void {
+    this.isPrimed = true;
+    this.primed = Promise.resolve();
     this.chokidarWatcher = chokidarWatch(this.watchPath, {
       persistent: true,
       ignoreInitial: true,
@@ -160,12 +268,7 @@ export class RecursiveWatcher extends EventEmitter {
       ignored: (target: string) => {
         const rel = path.relative(this.watchPath, target);
         if (!rel || rel.startsWith("..")) return false;
-        let prefix = "";
-        for (const seg of rel.split(path.sep)) {
-          prefix = prefix ? `${prefix}${path.sep}${seg}` : seg;
-          if (!this.dirFilter(prefix)) return true;
-        }
-        return false;
+        return !this.isDirAllowed(rel);
       },
       awaitWriteFinish: {
         stabilityThreshold: this.debounceMs,
@@ -193,6 +296,7 @@ export class RecursiveWatcher extends EventEmitter {
   }
 
   stop(): void {
+    this.generation++;
     if (this.fsWatcher) {
       this.fsWatcher.close();
       this.fsWatcher = null;
@@ -201,11 +305,17 @@ export class RecursiveWatcher extends EventEmitter {
       this.chokidarWatcher.close();
       this.chokidarWatcher = null;
     }
-    for (const timer of this.scanTimers.values()) {
+    for (const timer of this.probeTimers.values()) {
       clearTimeout(timer);
     }
-    this.scanTimers.clear();
+    this.probeTimers.clear();
+    if (this.rescanTimer) {
+      clearTimeout(this.rescanTimer);
+      this.rescanTimer = null;
+    }
+    this.rescanRequested = false;
     this.knownMtime.clear();
+    this.isPrimed = false;
   }
 
   async restart(): Promise<void> {
