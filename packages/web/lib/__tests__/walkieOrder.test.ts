@@ -469,6 +469,15 @@ describe("walkie: releasing before the room ever answered", () => {
 // which happen after the burst is cleared — measured in the browser at 861ms
 // with a ten second recording: a floating call window, or the full stage,
 // appearing by itself a beat after the person stopped talking.
+//
+// ONE SURFACE IS ALLOWED TO BE NOTHING. Since talk became click-to-start and
+// click-to-stop (Sep 1), the sender's OWN seat lingering after their talk ended
+// draws no card at all — Stop means the card goes — while the room stays open a
+// moment so an answer arrives fast. That quiet seat is `liveRoom` in burst mode
+// with nobody sending and nobody incoming, and `callDockSurface` answers "none"
+// for it on purpose. It is the opposite of the defect above: the ordinary dock
+// did not take the room, nothing did. So the watcher accepts exactly that shape
+// and still fails on "dock" or "stage" over a room the walkie holds.
 
 describe("walkie: who is holding the room after the key comes up", () => {
   /** The room answering, exactly as the real joinCall leaves the call plane. */
@@ -501,7 +510,10 @@ describe("walkie: who is holding the room after the key comes up", () => {
       // catch a live room whose mode had drifted.
       const held = s.liveRoom?.key === call.roomKey && s.liveRoom.mode !== "call";
       const surface = callDockSurface(s, { roomKey: call.roomKey, phase: call.phase }, { expanded: false });
-      if (!held || surface !== "walkie") {
+      // My own seat, quiet after Stop: no card is the design, not a lapse.
+      const quietOwnSeat =
+        surface === "none" && !s.sending && !s.incoming && s.liveRoom?.mode === "burst";
+      if (!held || (surface !== "walkie" && !quietOwnSeat)) {
         lapses.push(
           JSON.stringify({
             sending: !!s.sending,
@@ -1101,17 +1113,21 @@ describe("walkie: the join and the away tick", () => {
 
 // ── a receiver with no microphone ──────────────────────────────────────────
 //
-// Auto-listen joins unmuted, which is the bargain: hearing somebody means they
-// can hear you. On a browser where the person refused the microphone that
-// bargain used to cost them the whole feature. The join opened the device, the
-// device threw, and the join's own error path tore the room down and freed the
-// seat — while `incoming` stayed exactly where it was, so the strip went on
-// saying "Sam is talking" over a silence with no room behind it. The person who
-// most needed to be told what was happening was told the one thing that was
-// false.
+// A WALKIE IS ONE WAY (founder, Sep 1): the person talking is seen and heard,
+// and hears nobody back until the listener steps in on purpose. So a listen is
+// a seat that subscribes and publishes nothing — the microphone is not asked
+// for at all, and the one moment it opens is Join live, which is a deliberate
+// join. That replaces the earlier bargain (Aug 26: every join unmuted, hearing
+// somebody meant they could hear you), and it also closes the failure that
+// bargain had: on a browser where the person refused the microphone, the
+// auto-listen's join opened the device, the device threw, and the join's own
+// error path tore the room down and freed the seat while `incoming` stayed
+// put, so the strip said "Sam is talking" over a silence with no room behind
+// it. Now there is no device in a listen to refuse.
 //
-// The rule now is that the microphone is the part of a join allowed to fail.
-// What is left is a seat that subscribes and publishes nothing.
+// What these pin: a listen never touches the microphone, never claims one, and
+// never reports one missing; a denied microphone is reported exactly when a
+// person presses Join live and is owed the sentence.
 describe("walkie: a receiver with no microphone still hears", () => {
   const ROOM = "dm:denied:seat";
   const burstRow = () => ({
@@ -1126,10 +1142,13 @@ describe("walkie: a receiver with no microphone still hears", () => {
   /** A browser where the person said no. The rejection carries the DOMException
    *  NAME, which is the only thing that tells "you said no" apart from "there
    *  is no such device". */
+  let deviceAsks = 0;
   function refuseTheMicrophone() {
     micOnJoin = true;
     permissionState = "denied";
+    deviceAsks = 0;
     (globalThis as any).navigator.mediaDevices.getUserMedia = async () => {
+      deviceAsks++;
       throw Object.assign(new Error("Permission denied"), { name: "NotAllowedError" });
     };
   }
@@ -1153,15 +1172,17 @@ describe("walkie: a receiver with no microphone still hears", () => {
   test("the room stays up: subscribe-only, nothing published, still hearing Sam", async () => {
     refuseTheMicrophone();
     walkie.observeWalkie({ bursts: [burstRow()], doorOpen: true });
-    // The seat is asked for as a LISTEN, which is what makes the microphone
-    // optional rather than required.
+    // The seat is asked for as a LISTEN, which is what keeps the microphone
+    // out of it entirely.
     expect(joinCalls.at(-1)?.roomKey).toBe(ROOM);
     expect(joinCalls.at(-1)?.intent).toBe("listen");
     await seatTaken();
     S().setCallState({ roomKey: ROOM, phase: "connected" });
 
-    // The device refused and the seat survived it.
-    expect(S().call.micDenied).toBe(true);
+    // The device was never asked, so a refusal it would have given is not a
+    // fact about this seat: muted, and nothing to report.
+    expect(deviceAsks).toBe(0);
+    expect(S().call.micDenied).toBe(false);
     expect(S().call.muted).toBe(true);
     // THE ROOM IS STILL THERE. Nothing hung up, nothing was handed back, and
     // the burst is still playing — which is the entire point of the seat.
@@ -1179,12 +1200,14 @@ describe("walkie: a receiver with no microphone still hears", () => {
     S().setCallState({ roomKey: ROOM, phase: "connected" });
 
     const strip = walkieStripState(walkie.getWalkieStatus(), S(), { name: "Sam", now: clock });
-    expect(strip.headline).toBe("You can hear Sam — your mic is off (permission denied)");
-    expect(strip.micDenied).toBe(true);
+    // A listen is Sam talking and nothing about MY microphone: it was not
+    // asked for, so "permission denied" is not a true thing to say either.
+    expect(strip.headline).toBe("Sam is talking");
+    expect(strip.micDenied).toBe(false);
     expect(strip.rx).toBe(true);
     // "Your mic is open — Sam can hear you" over a microphone that never opened
     // is the worst sentence this surface could say, and it is the one the old
-    // hot-listen line would have said.
+    // two-way listen would have said.
     expect(strip.hotMic).toBe(false);
   });
 
@@ -1211,27 +1234,49 @@ describe("walkie: a receiver with no microphone still hears", () => {
     ).toBe(false);
   });
 
-  test("and opens it, and says so, when the device answers", async () => {
-    // The other half of the same rule, and the founder's bargain: hearing
-    // somebody means they can hear you. A rule that only ever said "muted"
-    // would pass every test above and ship a walkie nobody can answer.
+  test("a working microphone stays shut on a listen; Join live is what opens it", async () => {
+    // The other half of the same rule. A listen with a perfectly good device
+    // still publishes nothing — the walkie is one way until the listener steps
+    // in. And a rule that only ever said "muted" would ship a walkie nobody
+    // can answer, so the seam that DOES open the microphone is pinned too: a
+    // deliberate join, which is what Join live issues.
     micOnJoin = true;
     walkie.observeWalkie({ bursts: [burstRow()], doorOpen: true });
     await seatTaken();
     S().setCallState({ roomKey: ROOM, phase: "connected" });
-    expect(S().call.muted).toBe(false);
+    expect(S().call.muted).toBe(true);
     expect(S().call.micDenied).toBe(false);
     const strip = walkieStripState(walkie.getWalkieStatus(), S(), { name: "Sam", now: clock });
-    expect(strip.hotMic).toBe(true);
+    expect(strip.hotMic).toBe(false);
     expect(strip.headline).toBe("Sam is talking");
+
+    // The rule at its seam, against the real call manager: a listen never
+    // reaches the participant; a deliberate join publishes.
+    const asked: boolean[] = [];
+    const participant = { setMicrophoneEnabled: async (on: boolean) => void asked.push(on) };
+    await realCallManager.openMicForJoin(participant, { intent: "listen" });
+    expect(asked).toEqual([]);
+    expect(S().call.muted).toBe(true);
+    S().setCallState({ muted: false });
+    await realCallManager.openMicForJoin(participant, { intent: "deliberate" });
+    expect(asked).toEqual([true]);
+    expect(S().call.muted).toBe(false);
+
+    // And Join live is the gesture that issues that deliberate join.
+    await walkie.joinWalkieLive(ROOM, { name: "Sam" });
+    expect(joinCalls.at(-1)).toMatchObject({ roomKey: ROOM, intent: "deliberate" });
   });
 
-  test("the fix arrives in the words that name it, through the toast the walkie already has", async () => {
+  test("a refused microphone is not mentioned on a listen — nothing was asked", async () => {
+    // The toast the walkie has for a denied device belongs to a person who
+    // tried to talk. A burst playing perfectly well is not that; raising the
+    // toast here would be the surface inventing a problem nobody has.
     refuseTheMicrophone();
     walkie.observeWalkie({ bursts: [burstRow()], doorOpen: true });
     await seatTaken();
-    // Not "Microphone unavailable": the person can act on this one.
-    expect(walkie.getWalkieStatus().error).toContain("site settings");
+    expect(deviceAsks).toBe(0);
+    expect(walkie.getWalkieStatus().error).toBeNull();
+    expect(S().call.error).toBeNull();
   });
 
   test("a background listen writes no call error; a person who pressed Join live is told", async () => {
@@ -1247,7 +1292,9 @@ describe("walkie: a receiver with no microphone still hears", () => {
 
     S().setCallState({ error: null, micDenied: false, muted: true });
     await realCallManager.openMicForJoin(refusing, { intent: "listen" });
-    expect(S().call.micDenied).toBe(true);
+    // A listen never reached the device, so there is no denial to record.
+    expect(S().call.micDenied).toBe(false);
+    expect(S().call.muted).toBe(true);
     expect(S().call.error).toBeNull();
 
     S().setCallState({ error: null, micDenied: false, muted: false });
