@@ -12,7 +12,7 @@ import {
   _resetChildAuqProbeCacheForTests,
 } from "@codecast/convex/convex/conversations";
 import { makeFakeDb } from "@codecast/convex/convex/testDb";
-import { INBOX_PROJECTION_VERSION, inboxEpoch, projectInbox, type ProjectableInboxRow } from "@codecast/shared/contracts";
+import { INBOX_PROJECTION_VERSION, inboxEpoch, projectInbox, shouldShowInInbox, type ProjectableInboxRow } from "@codecast/shared/contracts";
 import { GEN_DAY, GEN_HOUR, GEN_MIN, convexIdFor, genWorld, makeRng, type GenWorld } from "@codecast/shared/contracts/__fixtures__/inboxProjectionGen";
 import {
   useInboxStore,
@@ -547,8 +547,11 @@ function newConversation(tag: string, over: Record<string, any> = {}): Record<st
 
 type ServerEvent = (server: SimServer, rng: () => number, step: number) => void;
 
+// A gesture lands on a row the person can see: the server never lists a row
+// shouldShowInInbox drops (a completed blank, a noise title), so a replica
+// cannot pin, stash or kill one either.
 const memberIds = (server: SimServer, rng: () => number): string | null => {
-  const ids = server.conversations.filter((c) => !c.is_subagent && !c.inbox_killed_at).map((c) => c._id);
+  const ids = server.conversations.filter((c) => !c.is_subagent && !c.inbox_killed_at && shouldShowInInbox(c)).map((c) => c._id);
   return ids.length ? ids[Math.floor(rng() * ids.length)] : null;
 };
 

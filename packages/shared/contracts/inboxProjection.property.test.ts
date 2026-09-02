@@ -10,6 +10,7 @@ import {
   isFoldExempt,
   placeProjectableRow,
   projectInbox,
+  rollupParentIdOf,
   selectWorkingSet,
   type InboxBucket,
   type ProjectableInboxRow,
@@ -133,8 +134,33 @@ describe("the fold", () => {
       expect(recentOnly.some((m) => m.row.updated_at === cutoff)).toBe(true);
       const above = recentOnly.filter((m) => m.row.updated_at > cutoff).map((m) => m.row.updated_at).sort((a, b) => a - b);
       expect(above[0] - cutoff).toBeGreaterThan(12 * GEN_HOUR);
-      for (const id of belowFold) expect(members.get(id)!.row.updated_at).toBeLessThan(cutoff);
+      // A folded row is under the cut on its own, or a rider whose present
+      // lead folded (computeFold's ride): a fresh teammate folds with an old
+      // lead, and an old teammate stays shown under a fresh one.
+      for (const id of belowFold) {
+        const row = members.get(id)!.row;
+        const lead = rollupParentIdOf(row);
+        if (lead && members.has(lead)) expect(belowFold.has(lead)).toBe(true);
+        else expect(row.updated_at).toBeLessThan(cutoff);
+      }
     }
+  });
+
+  it("a rider folds with its present lead and never on its own age; exempt riders never fold", () => {
+    let riders = 0;
+    for (const seed of SEEDS) {
+      const rows = genProjectableRows(seed, 100, EPOCH);
+      const { members } = selectWorkingSet(rows, EPOCH);
+      const { belowFold } = computeFold(members);
+      for (const [id, m] of members) {
+        const lead = rollupParentIdOf(m.row);
+        if (!lead || !members.has(lead)) continue;
+        riders++;
+        if (isFoldExempt(m.row) || m.row.has_pending_messages) expect(belowFold.has(id)).toBe(false);
+        else expect(belowFold.has(id)).toBe(belowFold.has(lead));
+      }
+    }
+    expect(riders).toBeGreaterThan(0);
   });
 });
 

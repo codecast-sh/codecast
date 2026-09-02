@@ -22,10 +22,16 @@
 
 import { CdpConnection, CdpError, CdpTimeout } from "./cdp.js";
 import { readState } from "./instance.js";
-import { engineTabs } from "./engine.js";
+import { engineTabs, type EngineOptions } from "./engine.js";
+
+/** This session and the browser it drives (cliEngine.ts ctx). A bare
+ *  session string is never accepted: runEngine would then guess the browser
+ *  from the managed state file, and for a real session that guess makes the
+ *  daemon rebind the session to the wrong Chrome. */
+export type PageCtx = EngineOptions & { session: string };
 
 /** This session's tab and a browser socket, or a human-readable refusal. */
-async function connectToTab(session: string): Promise<
+async function connectToTab(o: PageCtx): Promise<
   { conn: CdpConnection; sessionId: string; url: string } | { error: string; hint?: string }
 > {
   const state = readState();
@@ -35,7 +41,7 @@ async function connectToTab(session: string): Promise<
   let tab = null as { targetId: string; url?: string } | null | undefined;
   for (let attempt = 0; attempt < 2 && !tab?.targetId; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, 500));
-    const tabs = engineTabs({ session });
+    const tabs = engineTabs(o);
     tab = tabs.find((t) => t.active) ?? tabs[0];
   }
   if (!tab?.targetId) {
@@ -81,10 +87,10 @@ export function renderEvalValue(result: { type?: string; value?: unknown; descri
  */
 export async function evalInPage(
   script: string,
-  session: string,
+  o: PageCtx,
   timeoutMs = 15_000,
 ): Promise<EvalOutcome> {
-  const at = await connectToTab(session);
+  const at = await connectToTab(o);
   if ("error" in at) return { ok: false, output: at.error, hint: at.hint };
   const { conn, sessionId } = at;
   try {
@@ -153,10 +159,10 @@ export function toCdpPermissions(names: string[]): string[] {
  */
 export async function grantPermissions(
   names: string[],
-  session: string,
+  o: PageCtx,
   opts: { origin?: string; reset?: boolean } = {},
 ): Promise<{ ok: boolean; output: string; hint?: string }> {
-  const at = await connectToTab(session);
+  const at = await connectToTab(o);
   if ("error" in at) return { ok: false, output: at.error, hint: at.hint };
   const { conn, url } = at;
   try {

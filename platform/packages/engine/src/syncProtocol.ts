@@ -63,12 +63,18 @@ function fieldEchoesPending(
 // This replaced an updated_at-only check, which silently dropped changes to any
 // field the server derives independently of updated_at — pinning a row in the
 // wrong place until an unrelated edit bumped updated_at.
-function scalarFieldsEqual(a: any, b: any, ignoreFields?: Set<string>): boolean {
+function scalarFieldsEqual(a: any, b: any, ignoreFields?: Set<string>, deepFields?: Set<string>): boolean {
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
   for (const k of keys) {
     if (ignoreFields?.has(k)) continue;
     const av = a[k];
     const bv = b[k];
+    if (deepFields?.has(k)) {
+      // A joined/derived object the server recomputes without touching any
+      // scalar on the row: compare by content, or the change is swallowed.
+      if (av !== bv && JSON.stringify(av) !== JSON.stringify(bv)) return false;
+      continue;
+    }
     // null is a scalar for our purposes; only non-null objects/arrays are skipped.
     const aScalar = av === null || typeof av !== "object";
     const bScalar = bv === null || typeof bv !== "object";
@@ -90,6 +96,7 @@ export function applySyncTable<T extends { _id: string }>(
   opts?: {
     isDelta?: boolean;
     ignoreFields?: string[];
+    deepFields?: string[];
     preserveFields?: string[];
     pruneAbsentScope?: (record: T) => boolean;
     optionalClearFields?: ReadonlySet<string>;
@@ -111,6 +118,7 @@ export function applySyncTable<T extends { _id: string }>(
   const prefix = `${tableName}:`;
   const isDelta = !!opts?.isDelta;
   const ignoreFields = opts?.ignoreFields ? new Set(opts.ignoreFields) : undefined;
+  const deepFields = opts?.deepFields ? new Set(opts.deepFields) : undefined;
   const preserveFields = opts?.preserveFields;
   const pruneAbsentScope = opts?.pruneAbsentScope;
   const optionalClearFields = opts?.optionalClearFields;
@@ -216,7 +224,7 @@ export function applySyncTable<T extends { _id: string }>(
             }
           }
           table[id] =
-            preservedEqual && scalarFieldsEqual(prevRecord, merged, ignoreFields)
+            preservedEqual && scalarFieldsEqual(prevRecord, merged, ignoreFields, deepFields)
               ? prevRecord
               : merged;
         } else {
@@ -232,7 +240,7 @@ export function applySyncTable<T extends { _id: string }>(
           table[id] =
             merged === incomingRecord &&
             prevRecord &&
-            scalarFieldsEqual(prevRecord, incomingRecord, ignoreFields)
+            scalarFieldsEqual(prevRecord, incomingRecord, ignoreFields, deepFields)
               ? prevRecord
               : merged;
         }

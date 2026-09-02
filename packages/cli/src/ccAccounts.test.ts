@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { readLocalCredentialAsync } from "./remote/session-move.js";
 import {
   buildProfile,
   parseProfile,
@@ -15,6 +16,8 @@ import {
   refreshActiveCredential,
   resnapshotIfActiveFresher,
   activeCredentialExpiresAt,
+  readActiveCredential,
+  readActiveCredentialAsync,
   credentialHealth,
   saveProfile,
   useProfile,
@@ -224,6 +227,20 @@ describe("createMtimeGatedCache", () => {
     cache.invalidate();
     expect(cache.get()).toBe("fresh");
     expect(calls).toBe(3);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("with a ttl, recomputes after the window even when no mtime moved", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mtime-cache-ttl-"));
+    const file = path.join(dir, "a.json");
+    fs.writeFileSync(file, "{}");
+    let calls = 0;
+    const cache = createMtimeGatedCache<number>(() => [file], () => ++calls, { ttlMs: 50 });
+    expect(cache.get()).toBe(1);
+    expect(cache.get()).toBe(1);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(cache.get()).toBe(2);
+    expect(cache.get()).toBe(2);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -548,8 +565,8 @@ describe("refreshActiveCredential (sandboxed $HOME, injected fetch)", () => {
     expect(res.reason).toContain("no refresh token");
   });
 
-  it("reads the active token's expiry", () => {
-    expect(activeCredentialExpiresAt()).toBe(1781228581738);
+  it("reads the active token's expiry", async () => {
+    expect(await activeCredentialExpiresAt()).toBe(1781228581738);
   });
 });
 
@@ -584,12 +601,12 @@ describe("resnapshotIfActiveFresher (sandboxed $HOME)", () => {
     invalidateAccountsCache();
   });
 
-  it("re-snapshots the covering profile when the live login is fresher", () => {
+  it("re-snapshots the covering profile when the live login is fresher", async () => {
     writeActive(1000);
     saveProfile("footage"); // stored snapshot: expiresAt 1000
     // A manual /login (or a proactive refresh) bumps the live expiry forward.
     writeActive(9_999_999);
-    const updated = resnapshotIfActiveFresher();
+    const updated = await resnapshotIfActiveFresher();
     expect(updated).toBe("footage");
     const meta = listProfiles().find((p) => p.name === "footage");
     // The re-saved profile now carries the fresher token (assert via the secret).
@@ -600,17 +617,29 @@ describe("resnapshotIfActiveFresher (sandboxed $HOME)", () => {
     expect(meta).toBeDefined();
   });
 
-  it("no-ops when the stored profile is already as fresh", () => {
+  it("no-ops when the stored profile is already as fresh", async () => {
     writeActive(5000);
     saveProfile("footage");
-    expect(resnapshotIfActiveFresher()).toBeNull(); // active == stored
+    expect(await resnapshotIfActiveFresher()).toBeNull(); // active == stored
     writeActive(4000); // live copy is OLDER — still no-op
-    expect(resnapshotIfActiveFresher()).toBeNull();
+    expect(await resnapshotIfActiveFresher()).toBeNull();
   });
 
-  it("no-ops when no saved profile covers the active login", () => {
+  it("no-ops when no saved profile covers the active login", async () => {
     writeActive(1000); // nothing saved yet
-    expect(resnapshotIfActiveFresher()).toBeNull();
+    expect(await resnapshotIfActiveFresher()).toBeNull();
+  });
+
+  // The daemon's timers read the credential off the loop; the async read must
+  // answer from the same store as the sync one, file store and file fallback alike.
+  it("readActiveCredentialAsync and readLocalCredentialAsync match their sync twins", async () => {
+    writeActive(1234);
+    expect(await readActiveCredentialAsync()).toBe(readActiveCredential());
+    // PATH names no real directory, so the keychain call fails and the read
+    // falls back to the file. (Not compared with the sync read: bun's sync
+    // spawn resolves `security` regardless of PATH, so on a Mac the sync
+    // read answers from the real keychain here.)
+    expect(await readLocalCredentialAsync()).toContain('"expiresAt":1234');
   });
 });
 

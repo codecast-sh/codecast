@@ -104,6 +104,11 @@ export function SessionDaemonChip({ conversationId }: { conversationId?: string 
   // be pinned on this session's machine.
   if (!mounted || appOffline || !remoteName) return null;
   if (!isDegradedDaemonHealth(health)) return null;
+  // A remote host sleeps when idle and wakes on demand, so a quiet or stale
+  // heartbeat is its normal parked state, not a fault (the fleet verdict
+  // excludes remotes for the same reason). Only trouble on a RUNNING remote —
+  // a fresh restart, load, or a sync backlog — is worth pinning on the session.
+  if (health.kind === "quiet" || health.kind === "offline") return null;
 
   const view = describeDaemonHealth(health);
   if (!view) return null;

@@ -11,7 +11,7 @@
 
 import * as crypto from "crypto";
 import * as os from "os";
-import { readInventory, type Inventory } from "./inventory.js";
+import { readInventory, readInventoryAsync, type Inventory } from "./inventory.js";
 
 export interface CapabilityHeartbeatPayload {
   hash: string;
@@ -34,8 +34,17 @@ let inFlight = false;
 
 /** Scan now, synchronously. Exported for tests and `cast doctor`. */
 export function collectCapabilityInventory(home = os.homedir(), projectPath?: string): CapabilityHeartbeatPayload {
+  return payloadFrom(readInventory(home, projectPath), Date.now());
+}
+
+/** The daemon's scan: yields between directory reads, so the heartbeat's
+ *  background collection never holds the loop for the whole tree. */
+export async function collectCapabilityInventoryAsync(home = os.homedir(), projectPath?: string): Promise<CapabilityHeartbeatPayload> {
   const started = Date.now();
-  const inv = readInventory(home, projectPath);
+  return payloadFrom(await readInventoryAsync(home, projectPath), started);
+}
+
+function payloadFrom(inv: Inventory, started: number): CapabilityHeartbeatPayload {
   const hash = crypto
     .createHash("sha1")
     .update(JSON.stringify({ items: inv.items, marketplaces: inv.marketplaces }))
@@ -52,12 +61,12 @@ export function collectCapabilityInventory(home = os.homedir(), projectPath?: st
 
 /** Kick a background rescan when stale. Called per beat; the result rides the
  *  NEXT beat. Never awaited — presence must not wait on a disk scan. */
-export function ensureCapabilityInventoryFresh(): void {
+export function ensureCapabilityInventoryFresh(home?: string): void {
   if (inFlight || Date.now() - lastCollectedAt < REFRESH_MS) return;
   inFlight = true;
-  void Promise.resolve()
-    .then(() => {
-      cached = collectCapabilityInventory();
+  void collectCapabilityInventoryAsync(home)
+    .then((payload) => {
+      cached = payload;
       lastCollectedAt = Date.now();
     })
     .catch(() => {
