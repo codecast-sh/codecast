@@ -21,6 +21,7 @@ export type KeyContext =
   | "categoryPicker"
   | "timePicker"
   | "memories"
+  | "settings"
   | "sweep"
   | "search"
   | "welcome";

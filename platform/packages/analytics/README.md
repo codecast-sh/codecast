@@ -49,6 +49,22 @@ pageviews are captured on history changes; `platform`, `environment` and
 degrades to no-ops when the native module is absent, so an OTA update can
 never crash a binary built before the SDKs were added.
 
+## Calls made before init
+
+`identifyUser`, `resetUser`, `track` and native `trackScreen` are safe to call
+before `initAnalytics`. Both entry points hold such a call and replay it, in
+the order it was made, at the end of init — after both SDKs are up and the
+super properties are registered. Apps do not have to order boot against the
+query that produces the user id: an identify that loses the race still reaches
+Sentry and PostHog, so a crash during a slow boot has a user attached.
+
+At most `PRE_INIT_BUFFER_LIMIT` (50) calls are held, so a consumer that never
+initializes cannot grow the buffer without limit. At the cap the oldest held
+call is dropped, never the newest — the latest identify carries the identity
+that is true now. A held call that throws is swallowed: one backend refusing
+must not break boot, and the calls behind it still run. `captureError` is not
+held; Sentry owns pre-init error capture itself.
+
 The server entry has no React or browser imports and takes an injected
 `fetch`:
 

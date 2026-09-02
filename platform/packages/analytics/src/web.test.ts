@@ -5,10 +5,14 @@ import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
 type Calls = Record<string, unknown[][]>;
 const phCalls: Calls = {};
 const sentryCalls: Calls = {};
+// One log across both backends, so a test can assert the order calls landed in
+// and not just that each one landed.
+const order: string[] = [];
 const record =
   (calls: Calls, name: string) =>
   (...args: unknown[]) => {
     (calls[name] ??= []).push(args);
+    order.push(`${calls === phCalls ? "posthog" : "sentry"}.${name}`);
   };
 const last = (calls: Calls, name: string) => (calls[name] ?? []).at(-1);
 const count = (calls: Calls, name: string) => (calls[name] ?? []).length;
@@ -31,6 +35,7 @@ mock.module("@sentry/react", () => ({
 }));
 
 const web = await import("./web");
+const { PRE_INIT_BUFFER_LIMIT } = await import("./index");
 
 const base = {
   posthogKey: "phc_x",
@@ -43,6 +48,7 @@ const base = {
 beforeEach(() => {
   web._resetForTests();
   for (const c of [phCalls, sentryCalls]) for (const k of Object.keys(c)) delete c[k];
+  order.length = 0;
 });
 
 describe("initAnalytics (web)", () => {
@@ -125,6 +131,107 @@ describe("identity and events (web)", () => {
     const err = new Error("boom");
     web.captureError(err, { where: "test" });
     expect(last(sentryCalls, "captureException")).toEqual([err, { extra: { where: "test" } }]);
+  });
+});
+
+// Boot defers initAnalytics to an idle callback while identify waits on a user
+// query, so init usually wins the race. When it does not, the old code dropped
+// the identify without a sound and the next crash reached Sentry with no user
+// attached. These calls are held and replayed instead.
+describe("calls made before init (web)", () => {
+  it("replays a held identify into both backends once init runs", () => {
+    web.identifyUser("users:abc123", { email: "a@b.c" });
+    expect(count(sentryCalls, "setUser")).toBe(0);
+    expect(count(phCalls, "identify")).toBe(0);
+
+    web.initAnalytics(base);
+
+    expect(last(sentryCalls, "setUser")).toEqual([{ id: "users:abc123", email: "a@b.c" }]);
+    expect(last(phCalls, "identify")).toEqual(["users:abc123", { email: "a@b.c" }]);
+  });
+
+  it("replays held calls in the order they were made", () => {
+    web.track("boot_started");
+    web.identifyUser("users:abc123");
+    web.track("workspace_opened", { id: "w1" });
+
+    web.initAnalytics(base);
+
+    expect(order.slice(order.indexOf("posthog.register") + 1)).toEqual([
+      "posthog.capture",
+      "sentry.setUser",
+      "posthog.identify",
+      "posthog.capture",
+    ]);
+    expect((phCalls.capture ?? []).map((args) => args[0])).toEqual([
+      "boot_started",
+      "workspace_opened",
+    ]);
+  });
+
+  it("holds a reset in the same queue, so a sign out is not reordered behind the identify it cancels", () => {
+    web.identifyUser("users:abc123");
+    web.resetUser();
+
+    web.initAnalytics(base);
+
+    expect(last(sentryCalls, "setUser")).toEqual([null]);
+    expect(count(phCalls, "reset")).toBe(1);
+  });
+
+  it("replays a held track after the super properties are registered", () => {
+    // The held capture must carry platform, environment and app just like a
+    // call made after boot, so replaying it before register would mislabel it.
+    web.track("boot_started");
+    web.initAnalytics(base);
+    expect(order.indexOf("posthog.register")).toBeLessThan(order.indexOf("posthog.capture"));
+  });
+
+  it("passes calls made after init straight through, with nothing held", () => {
+    web.initAnalytics(base);
+    web.track("session_created", { kind: "fork" });
+    web.identifyUser("users:abc123");
+    expect(count(phCalls, "capture")).toBe(1);
+    expect(count(phCalls, "identify")).toBe(1);
+
+    // A second init is ignored, so it must not replay anything a second time.
+    web.initAnalytics(base);
+    expect(count(phCalls, "capture")).toBe(1);
+    expect(count(phCalls, "identify")).toBe(1);
+  });
+
+  it("drops the oldest held call at the cap, and throws nothing", () => {
+    const total = PRE_INIT_BUFFER_LIMIT + 10;
+    for (let i = 0; i < total; i++) web.track(`e${i}`);
+    web.identifyUser("users:latest");
+
+    web.initAnalytics(base);
+
+    // The identify is the newest call, so it is the one that must survive.
+    expect(last(phCalls, "identify")).toEqual(["users:latest", undefined]);
+    // One slot went to the identify, so the last cap-minus-one events remain.
+    const events = (phCalls.capture ?? []).map((args) => args[0]);
+    expect(events.length).toBe(PRE_INIT_BUFFER_LIMIT - 1);
+    expect(events[0]).toBe(`e${total - (PRE_INIT_BUFFER_LIMIT - 1)}`);
+    expect(events.at(-1)).toBe(`e${total - 1}`);
+  });
+
+  it("keeps replaying the rest when one held call throws", () => {
+    // A backend refusing one held call must not break the boot that replays it,
+    // nor swallow the calls queued behind it.
+    const ph = web.posthog as unknown as Record<string, unknown>;
+    const realIdentify = ph.identify;
+    ph.identify = () => {
+      throw new Error("posthog refused");
+    };
+    try {
+      web.identifyUser("users:abc123");
+      web.track("survives");
+      expect(() => web.initAnalytics(base)).not.toThrow();
+      expect(last(phCalls, "capture")).toEqual(["survives", undefined]);
+    } finally {
+      ph.identify = realIdentify;
+    }
   });
 });
 

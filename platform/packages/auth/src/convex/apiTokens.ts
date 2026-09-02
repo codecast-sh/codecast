@@ -2,8 +2,9 @@
 //
 // A token is 32 random bytes as hex, returned once. Only its sha256 hex is
 // stored. The pure helpers below take a `{ db }` ctx and are what the tests
-// drive; `makeApiTokenFunctions` wraps them into the app's Convex function
-// builders so the app exports them from its own apiTokens.ts.
+// drive; `createApiTokenDefinitions` wraps them into `{ args, handler }`
+// definitions the app hands to its own Convex builders and exports from its own
+// apiTokens.ts.
 import { v } from "convex/values";
 import type { GenericId } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -163,12 +164,16 @@ export type ApiTokenEvent =
   | { name: "cli_authed"; userId: string; method: "browser" | "setup_token" }
   | { name: "setup_token_generated"; userId: string };
 
-export type ApiTokenFunctionsParams = {
-  /** The app's Convex function builders. Pass the wrapped ones if the app has them. */
-  mutation: any;
-  query: any;
-  internalMutation: any;
-  internalQuery: any;
+/** One row of `listTokens`. The plaintext token is never part of it. */
+export type ApiTokenSummary = {
+  _id: GenericId<string>;
+  name: string;
+  created_at: number;
+  last_used_at: number;
+  expires_at?: number;
+};
+
+export type ApiTokenDefinitionParams<Extras extends Record<string, unknown> = Record<string, unknown>> = {
   tables?: Partial<AuthTables>;
   /**
    * Funnel hook: called after a token mint or a setup token exchange. Codecast
@@ -178,25 +183,51 @@ export type ApiTokenFunctionsParams = {
   onEvent?: (ctx: any, event: ApiTokenEvent) => Promise<void>;
   /**
    * Extra fields returned from `exchangeSetupToken` alongside auth_token and
-   * user_id. Codecast adds `team_id` from the user row and `convex_url`.
+   * user_id. Codecast adds `team_id` from the user row and `convex_url`. The
+   * fields it returns are part of the exchange return type, so the app keeps
+   * its own typing on them.
    */
-  exchangeExtras?: (ctx: any, userId: GenericId<"users">) => Promise<Record<string, unknown>>;
+  exchangeExtras?: (ctx: any, userId: GenericId<"users">) => Promise<Extras>;
 };
 
-/**
- * Build the public and internal Convex functions around the pure helpers. The
- * app exports the result from its own apiTokens.ts:
- *
- *   export const { createToken, createSetupToken, listTokens, revokeToken,
- *     renameToken, exchangeSetupToken, deviceBindingAllows } = makeApiTokenFunctions({...});
- */
-export function makeApiTokenFunctions(params: ApiTokenFunctionsParams) {
-  const tables = resolveTables(params.tables);
-  const { mutation, query, internalMutation, internalQuery } = params;
-  const onEvent = params.onEvent ?? (async () => {});
-  const exchangeExtras = params.exchangeExtras ?? (async () => ({}));
+export type ApiTokenFunctionsParams<Extras extends Record<string, unknown> = Record<string, unknown>> =
+  ApiTokenDefinitionParams<Extras> & {
+    /** The app's Convex function builders. Pass the wrapped ones if the app has them. */
+    mutation: any;
+    query: any;
+    internalMutation: any;
+    internalQuery: any;
+  };
 
-  const createToken = mutation({
+/**
+ * The token functions as plain Convex definitions, grouped by the builder each
+ * one needs. This is the form to use. The app calls its own builders:
+ *
+ *   const defs = createApiTokenDefinitions({ onEvent, exchangeExtras });
+ *   export const createToken = mutation(defs.mutations.createToken);
+ *   export const listTokens = query(defs.queries.listTokens);
+ *   export const exchangeSetupToken = internalMutation(defs.internalMutations.exchangeSetupToken);
+ *   export const deviceBindingAllows = internalQuery(defs.internalQueries.deviceBindingAllows);
+ *
+ * Convex's builder is generic over its own args validator, so handing it
+ * through an injected function loses that inference: every built function falls
+ * back to `any`, `ApiFromModules` then drops the whole module, and
+ * `api.apiTokens.*` stops existing for callers. Calling the builder at the app
+ * keeps it. Same reason as `createDispatchDefinition` in engine-convex.
+ *
+ * The grouping is not decoration. It names the visibility each function must be
+ * registered at, and one of those is a security boundary: wire callable,
+ * `deviceBindingAllows` would answer "is this token real, and which machine is
+ * it tied to?" for anyone who reaches the deployment.
+ */
+export function createApiTokenDefinitions<Extras extends Record<string, unknown> = Record<string, unknown>>(
+  params: ApiTokenDefinitionParams<Extras> = {},
+) {
+  const tables = resolveTables(params.tables);
+  const onEvent = params.onEvent ?? (async () => {});
+  const exchangeExtras = params.exchangeExtras ?? (async () => ({}) as Extras);
+
+  const createToken = {
     args: {
       name: v.string(),
     },
@@ -224,9 +255,9 @@ export function makeApiTokenFunctions(params: ApiTokenFunctionsParams) {
 
       return { token, userId };
     },
-  });
+  };
 
-  const createSetupToken = mutation({
+  const createSetupToken = {
     args: {},
     handler: async (ctx: any) => {
       const userId = await getAuthUserId(ctx);
@@ -252,16 +283,16 @@ export function makeApiTokenFunctions(params: ApiTokenFunctionsParams) {
 
       return { token, expiresAt };
     },
-  });
+  };
 
   // No `createTokenForUser` and no public `verifyToken` live here, on purpose.
   // The first minted a token for any supplied user id without authenticating
   // anyone; the second was a bearer credential oracle. Every real path goes
   // through the authenticated mutations above or `verifyApiToken` in process.
 
-  const listTokens = query({
+  const listTokens = {
     args: {},
-    handler: async (ctx: any) => {
+    handler: async (ctx: any): Promise<ApiTokenSummary[]> => {
       const userId = await getAuthUserId(ctx);
       if (!userId) {
         return [];
@@ -280,9 +311,9 @@ export function makeApiTokenFunctions(params: ApiTokenFunctionsParams) {
         expires_at: t.expires_at,
       }));
     },
-  });
+  };
 
-  const revokeToken = mutation({
+  const revokeToken = {
     args: {
       token_id: v.id(tables.apiTokens),
     },
@@ -299,9 +330,9 @@ export function makeApiTokenFunctions(params: ApiTokenFunctionsParams) {
 
       await ctx.db.delete(args.token_id);
     },
-  });
+  };
 
-  const renameToken = mutation({
+  const renameToken = {
     args: {
       token_id: v.id(tables.apiTokens),
       name: v.string(),
@@ -319,13 +350,16 @@ export function makeApiTokenFunctions(params: ApiTokenFunctionsParams) {
 
       await ctx.db.patch(args.token_id, { name: args.name });
     },
-  });
+  };
 
-  const exchangeSetupToken = internalMutation({
+  const exchangeSetupToken = {
     args: {
       setupToken: v.string(),
     },
-    handler: async (ctx: any, args: { setupToken: string }) => {
+    handler: async (
+      ctx: any,
+      args: { setupToken: string },
+    ): Promise<({ auth_token: string; user_id: GenericId<"users"> } & Extras) | null> => {
       const exchanged = await exchangeSetupTokenFor(ctx, args.setupToken, tables);
       if (!exchanged) return null;
 
@@ -338,24 +372,49 @@ export function makeApiTokenFunctions(params: ApiTokenFunctionsParams) {
 
       return { ...exchanged, ...(await exchangeExtras(ctx, exchanged.user_id)) };
     },
-  });
+  };
 
-  const deviceBindingAllowsQuery = internalQuery({
+  const deviceBindingAllowsQuery = {
     args: {
       api_token: v.string(),
       device_id: v.optional(v.string()),
     },
     handler: async (ctx: any, args: { api_token: string; device_id?: string }): Promise<boolean> =>
       deviceBindingAllows(ctx, args, tables),
-  });
+  };
 
   return {
-    createToken,
-    createSetupToken,
-    listTokens,
-    revokeToken,
-    renameToken,
-    exchangeSetupToken,
-    deviceBindingAllows: deviceBindingAllowsQuery,
+    mutations: { createToken, createSetupToken, revokeToken, renameToken },
+    queries: { listTokens },
+    internalMutations: { exchangeSetupToken },
+    internalQueries: { deviceBindingAllows: deviceBindingAllowsQuery },
+  };
+}
+
+/**
+ * The older form: this package calls the app's builders for it.
+ *
+ * Everything it returns is `any`, because the builders arrive as parameters and
+ * Convex's inference does not survive the trip. An app on this form must state
+ * the wire contract of each export by hand, or `api.apiTokens.*` will not
+ * exist. Prefer `createApiTokenDefinitions` above.
+ *
+ *   export const { createToken, createSetupToken, listTokens, revokeToken,
+ *     renameToken, exchangeSetupToken, deviceBindingAllows } = makeApiTokenFunctions({...});
+ */
+export function makeApiTokenFunctions<Extras extends Record<string, unknown> = Record<string, unknown>>(
+  params: ApiTokenFunctionsParams<Extras>,
+) {
+  const { mutation, query, internalMutation, internalQuery } = params;
+  const defs = createApiTokenDefinitions<Extras>(params);
+
+  return {
+    createToken: mutation(defs.mutations.createToken),
+    createSetupToken: mutation(defs.mutations.createSetupToken),
+    listTokens: query(defs.queries.listTokens),
+    revokeToken: mutation(defs.mutations.revokeToken),
+    renameToken: mutation(defs.mutations.renameToken),
+    exchangeSetupToken: internalMutation(defs.internalMutations.exchangeSetupToken),
+    deviceBindingAllows: internalQuery(defs.internalQueries.deviceBindingAllows),
   };
 }
