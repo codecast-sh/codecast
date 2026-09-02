@@ -13,6 +13,7 @@ import {
   type RoutableDevice,
 } from "./deviceRouting";
 import { normalizeProjectPath } from "./projectPaths";
+import { activeTokenProfile } from "./ccAccountsShared";
 import { bucketTs } from "./presenceState";
 import { checkConversationAccess, isTeamAdmin, isTeamMember } from "./privacy";
 import { isSessionOwner } from "./sessionOwners";
