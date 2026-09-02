@@ -1,3 +1,4 @@
+import { withInboxView } from "../../lib/inboxViewHistory";
 import { useState, useCallback, useEffect, useRef, memo, useMemo, useDeferredValue } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
@@ -550,7 +551,7 @@ export function QueuePageClient() {
       // session (pushing would stack a duplicate entry per select).
       const shownId = urlSessionId(window.location.pathname, window.location.search);
       const switchingSessions = !!shownId && shownId !== targetId;
-      window.history[switchingSessions ? "pushState" : "replaceState"]({ inboxId: targetId }, "", targetPath);
+      window.history[switchingSessions ? "pushState" : "replaceState"](withInboxView({ inboxId: targetId }), "", targetPath);
     }
   }, [currentSession?._id, viewingDismissedId, isActiveTab]);
 

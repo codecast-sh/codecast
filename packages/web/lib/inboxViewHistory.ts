@@ -59,6 +59,16 @@ export function sameInboxView(a: InboxViewSnapshot, b: InboxViewSnapshot): boole
 // snapshot. Both spreads preserve the other tags (inboxId, tabNav) so session
 // and tab reconciliation keep working across these entries. URL is unchanged —
 // the view settings are panel state, not a route.
+// A session navigation writes its own `{ inboxId }` state. Carry the current
+// entry's view tag onto it: the view did not change, so landing back on (or
+// forward to) that entry must restore the same chips. Without this, a focus
+// move caused by a chip change erases the tag from the entry it just pushed,
+// and Forward then shows the old view under the new URL.
+export function withInboxView<T extends object>(state: T): T & { inboxView?: InboxViewSnapshot } {
+  const view = typeof window !== "undefined" ? (window.history?.state as { inboxView?: InboxViewSnapshot } | null)?.inboxView : undefined;
+  return view ? { ...state, inboxView: view } : state;
+}
+
 export function pushInboxViewHistory(prev: InboxViewSnapshot, next: InboxViewSnapshot) {
   // React Native has a `window` global but no History API — this is browser
   // back/forward integration only, so it's a no-op anywhere else (the mobile
