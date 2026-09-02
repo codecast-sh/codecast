@@ -188,7 +188,6 @@ export const SuggestionPills = memo(forwardRef<SuggestionPillsHandle, {
   // once a pill is selected, which is the moment they apply.
   return (
     <div className="flex items-center gap-1.5 min-w-0 pb-1.5">
-      <Sparkles className="w-3 h-3 text-sol-violet/60 shrink-0" />
       {suggestions.map((text, i) => (
         <span
           key={text}
@@ -211,6 +210,10 @@ export const SuggestionPills = memo(forwardRef<SuggestionPillsHandle, {
               selIdx === i ? "text-sol-text" : "text-sol-text-muted group-hover:text-sol-text"
             }`}
           >
+            {/* The sparkle rides inside the first pill, so the row's left
+                edge lines up with the composer's instead of a stray glyph
+                hanging in the gutter. */}
+            {i === 0 && <Sparkles className="w-3 h-3 text-sol-violet/70 shrink-0" />}
             <span className="truncate">{text}</span>
           </button>
           <button
