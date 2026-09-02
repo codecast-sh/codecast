@@ -1,5 +1,19 @@
-import * as Sentry from "@sentry/react";
-import posthog from "posthog-js";
+// Codecast's analytics surface. The PostHog and Sentry wiring itself was
+// extracted into @platform/analytics/web, so what lives here is codecast's own
+// configuration (its Vite env values, its platform label) plus the error
+// reporting layered on top of it: cause chain reading (./errorCause) and the
+// one error toast (./errorToast). Every consumer keeps importing from here.
+import {
+  captureError,
+  claimErrorKey,
+  identifyUser,
+  initAnalytics as initPlatformAnalytics,
+  posthog,
+  resetUser,
+  Sentry,
+  setupErrorToasts as setupPlatformErrorToasts,
+  track,
+} from "@platform/analytics/web";
 import { describeError, errorChain, errorSummary, rootError } from "./errorCause";
 import { showErrorToast } from "./errorToast";
 
@@ -10,10 +24,6 @@ import { showErrorToast } from "./errorToast";
 // mobile never RUNS this file (analytics.native.ts is the Metro-resolved twin —
 // Hermes cannot even parse `import.meta`).
 const META_ENV = (import.meta as any).env ?? {};
-const SENTRY_DSN = META_ENV.VITE_SENTRY_DSN;
-const POSTHOG_KEY = META_ENV.VITE_POSTHOG_KEY;
-const POSTHOG_HOST = META_ENV.VITE_POSTHOG_HOST || "https://us.i.posthog.com";
-const IS_DEV = META_ENV.DEV;
 
 export type AnalyticsPlatform = "desktop" | "web" | "mobile";
 
@@ -26,92 +36,22 @@ export function getPlatform(): AnalyticsPlatform {
     : "web";
 }
 
-let initialized = false;
-
+// Codecast's configuration. The package holds the behavior these values drive:
+// Sentry off in development, traces at 1.0 there and 0.2 in production, no
+// session recording or dead click capture (they cost typing latency), SPA
+// pageviews on history changes, and platform/environment/app on every event as
+// super properties. Dev and prod share one PostHog project, so the environment
+// property is what keeps local traffic out of product metrics.
 export function initAnalytics() {
-  if (initialized) return;
-  initialized = true;
-
-  const platform = getPlatform();
-
-  if (SENTRY_DSN) {
-    Sentry.init({
-      dsn: SENTRY_DSN,
-      environment: IS_DEV ? "development" : "production",
-      enabled: !IS_DEV,
-      tracesSampleRate: IS_DEV ? 1.0 : 0.2,
-      // No replayIntegration: even with replaysSessionSampleRate 0, the
-      // on-error mode keeps an rrweb recorder buffering EVERY DOM mutation so
-      // the last seconds exist when an error fires. This app mutates the DOM
-      // continuously (heartbeats, streaming transcripts), and the recorder
-      // showed up directly in keystroke CPU profiles. Error stacks + breadcrumbs
-      // remain; only the video-replay-on-error goes.
-      integrations: [
-        Sentry.browserTracingIntegration(),
-      ],
-      initialScope: {
-        tags: { platform },
-      },
-    });
-  }
-
-  if (POSTHOG_KEY) {
-    posthog.init(POSTHOG_KEY, {
-      api_host: POSTHOG_HOST,
-      autocapture: true,
-      // "history_change" also fires $pageview on SPA navigations (pushState/
-      // popstate) — plain `true` only captures the initial load, which misses
-      // nearly all movement in a single-page app.
-      capture_pageview: "history_change",
-      capture_pageleave: true,
-      persistence: "localStorage",
-      // Session recording is disabled everywhere, not just dev: rrweb
-      // serializes every DOM mutation, and this UI mutates several times a
-      // second at idle (liveness dots, streaming messages). The recorder was a
-      // top self-time frame in keystroke CPU profiles — measurable typing lag
-      // for every user, on all the time. Dead-click detection rides the same
-      // per-interaction instrumentation. Product EVENTS (pageviews, captures,
-      // autocapture clicks) all stay.
-      disable_session_recording: true,
-      capture_dead_clicks: false,
-    });
-    // Dev and prod share one PostHog project; the environment super property
-    // is what keeps local-dev traffic filterable out of product metrics.
-    posthog.register({ platform, environment: IS_DEV ? "development" : "production" });
-  }
+  initPlatformAnalytics({
+    posthogKey: META_ENV.VITE_POSTHOG_KEY,
+    posthogHost: META_ENV.VITE_POSTHOG_HOST,
+    sentryDsn: META_ENV.VITE_SENTRY_DSN,
+    environment: META_ENV.DEV ? "development" : "production",
+    platform: getPlatform(),
+    appName: "codecast",
+  });
 }
-
-export function identifyUser(userId: string, traits?: Record<string, unknown>) {
-  if (SENTRY_DSN) {
-    Sentry.setUser({ id: userId, ...traits });
-  }
-  if (POSTHOG_KEY) {
-    posthog.identify(userId, traits);
-  }
-}
-
-export function resetUser() {
-  if (SENTRY_DSN) {
-    Sentry.setUser(null);
-  }
-  if (POSTHOG_KEY) {
-    posthog.reset();
-  }
-}
-
-export function track(event: string, properties?: Record<string, unknown>) {
-  if (POSTHOG_KEY) {
-    posthog.capture(event, properties);
-  }
-}
-
-export function captureError(error: Error, context?: Record<string, unknown>) {
-  if (SENTRY_DSN) {
-    Sentry.captureException(error, { extra: context });
-  }
-}
-
-const _seenGlobalErrors = new Set<string>();
 
 // Known-benign errors thrown from third-party internals that don't affect the
 // app — surfacing them as "Uncaught" toasts (and Sentry events) is pure noise.
@@ -142,21 +82,15 @@ function isIgnoredError(message: string | undefined): boolean {
   return !!message && IGNORED_ERROR_PATTERNS.some((re) => re.test(message));
 }
 
-// One report per distinct error per 30s, shared by every reporting path, so a
-// tearing race that re-throws on every heartbeat doesn't stack toasts.
-function claimErrorKey(key: string): boolean {
-  if (_seenGlobalErrors.has(key)) return false;
-  _seenGlobalErrors.add(key);
-  setTimeout(() => _seenGlobalErrors.delete(key), 30_000);
-  return true;
-}
-
 // A render that threw and that React then re-ran successfully. Nothing is
 // visibly broken — React recovered — but a component did throw, so it is a real
 // bug and stays reportable. Wired into createRoot in src/boot.tsx: React's own
 // default rethrows its code-only wrapper at window.onerror, which is how this
 // arrived as an unreadable "Uncaught: Minified React error #520" with the
 // failure that actually happened stripped off.
+//
+// claimErrorKey is the package's dedupe, shared with the window listeners
+// below, so one failure arriving on both paths still reports once per 30s.
 export function reportRecoverableRenderError(
   error: unknown,
   info?: { componentStack?: string | null }
@@ -178,32 +112,17 @@ export function reportRecoverableRenderError(
   showErrorToast(`Recovered render error: ${key}`, trace);
 }
 
+// The window "error" and "unhandledrejection" listeners are the package's; the
+// three readers below are what make them name the real failure instead of the
+// wrapper React or app code threw it inside of.
 export function setupErrorToasts() {
-  window.addEventListener("error", (e) => {
-    const key = e.error ? errorSummary(e.error) : e.message;
-    if (isIgnoredError(key)) {
-      // Suppress the browser's default "Uncaught" console logging too.
-      e.preventDefault();
-      return;
-    }
-    if (!e.error) return;
-    if (!claimErrorKey(key)) return;
-
-    captureError(rootError(e.error), { source: "window.onerror" });
-    showErrorToast(`Uncaught: ${key}`, describeError(e.error));
-  });
-
-  window.addEventListener("unhandledrejection", (e) => {
-    const key = errorSummary(e.reason);
-    if (isIgnoredError(key)) {
-      e.preventDefault();
-      return;
-    }
-    if (!claimErrorKey(key)) return;
-
-    captureError(rootError(e.reason), { source: "unhandledrejection" });
-    showErrorToast(`Unhandled rejection: ${key}`, describeError(e.reason));
+  setupPlatformErrorToasts({
+    showErrorToast,
+    ignoredErrorPatterns: IGNORED_ERROR_PATTERNS,
+    summarize: errorSummary,
+    describe: describeError,
+    toError: rootError,
   });
 }
 
-export { Sentry, posthog };
+export { captureError, identifyUser, posthog, resetUser, Sentry, track };

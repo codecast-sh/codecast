@@ -1,123 +1,44 @@
-// Sentry and PostHog are NATIVE modules. An OTA ships JS only and can land on a
-// binary built before these deps were added (the 1.0.2 App Store build predates
-// them — they were added 2026-03), where a static `import` resolves the native
-// module at module-eval and throws "Cannot find native module" — crashing the app
-// on every launch before expo-updates can mark it launched, so it auto-rolls back.
-// So require them lazily and degrade to no-ops when the native module is absent;
-// telemetry resumes once users get a build that bundles them. Mirrors the guarded
-// expo-sqlite / expo-clipboard requires elsewhere in the app.
-
-let Sentry: typeof import("@sentry/react-native") | null = null;
-try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  Sentry = require("@sentry/react-native");
-} catch {
-  Sentry = null;
-}
-
-type PostHogCtorT = typeof import("posthog-react-native").default;
-let PostHogCtor: PostHogCtorT | null = null;
-try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const m = require("posthog-react-native");
-  PostHogCtor = (m && (m.default ?? m)) || null;
-} catch {
-  PostHogCtor = null;
-}
-
-const SENTRY_DSN = process.env.EXPO_PUBLIC_SENTRY_DSN;
-const POSTHOG_KEY = process.env.EXPO_PUBLIC_POSTHOG_KEY;
-const POSTHOG_HOST = process.env.EXPO_PUBLIC_POSTHOG_HOST || "https://us.i.posthog.com";
-const IS_DEV = __DEV__;
-
-export let posthog: InstanceType<PostHogCtorT> | null = null;
+// Codecast's mobile analytics surface. The PostHog and Sentry wiring was
+// extracted into @platform/analytics/native; codecast's Expo env values and its
+// "mobile" platform label are what stay here. Every consumer (app/_layout.tsx)
+// keeps importing from this module.
+//
+// The package keeps the lazy requires this file was built around: Sentry and
+// PostHog are NATIVE modules, and an OTA ships JS only, so it can land on a
+// binary built before those deps existed (the 1.0.2 App Store build predates
+// them). A static import would resolve the native module at module eval and
+// throw "Cannot find native module", crashing the app on every launch before
+// expo-updates can mark it launched — which auto-rolls the update back. Absent
+// native modules degrade to no-ops instead; telemetry resumes once users get a
+// build that bundles them.
+import { initAnalytics as initPlatformAnalytics } from "@platform/analytics/native";
 
 export function initAnalytics() {
-  if (SENTRY_DSN && Sentry) {
-    try {
-      Sentry.init({
-        dsn: SENTRY_DSN,
-        environment: IS_DEV ? "development" : "production",
-        enabled: !IS_DEV,
-        tracesSampleRate: IS_DEV ? 1.0 : 0.2,
-        initialScope: {
-          tags: { platform: "mobile" },
-        },
-      });
-    } catch {
-      // native module absent or init failed — analytics stay off this launch
-    }
-  }
-
-  if (POSTHOG_KEY && PostHogCtor) {
-    try {
-      posthog = new PostHogCtor(POSTHOG_KEY, {
-        host: POSTHOG_HOST,
-        disabled: IS_DEV,
-        // Application Opened / Backgrounded / Updated events.
-        captureAppLifecycleEvents: true,
-        // Needs the posthog-react-native-session-replay NATIVE module, so it
-        // only takes effect on binaries built with it (2026-08+). The SDK
-        // try/catch-guards its own require, so an OTA landing on an older
-        // binary degrades to no replay instead of the crash-and-rollback
-        // this file's header warns about.
-        enableSessionReplay: true,
-        sessionReplayConfig: {
-          // Text inputs can hold prompts and pasted secrets; images are the
-          // conversation content itself, so masking them would blank replays.
-          maskAllTextInputs: true,
-          maskAllImages: false,
-          captureLog: true,
-          captureNetworkTelemetry: true,
-        },
-      });
-      posthog.register({ platform: "mobile" });
-    } catch {
-      posthog = null;
-    }
-  }
+  initPlatformAnalytics({
+    posthogKey: process.env.EXPO_PUBLIC_POSTHOG_KEY,
+    posthogHost: process.env.EXPO_PUBLIC_POSTHOG_HOST,
+    sentryDsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
+    environment: __DEV__ ? "development" : "production",
+    platform: "mobile",
+    appName: "codecast",
+    // Needs the posthog-react-native-session-replay NATIVE module, so it only
+    // takes effect on binaries built with it (2026-08+). The SDK guards its own
+    // require, so an OTA landing on an older binary degrades to no replay
+    // instead of the crash-and-rollback this header warns about.
+    enableSessionReplay: true,
+  });
 }
 
-export function identifyUser(userId: string, traits?: Record<string, string | number | boolean | null>) {
-  if (SENTRY_DSN && Sentry) {
-    Sentry.setUser({ id: userId, ...traits });
-  }
-  posthog?.identify(userId, traits ?? undefined);
-}
-
-export function resetUser() {
-  if (SENTRY_DSN && Sentry) {
-    Sentry.setUser(null);
-  }
-  posthog?.reset();
-}
-
-export function track(event: string, properties?: Record<string, string | number | boolean>) {
-  posthog?.capture(event, properties);
-}
-
-// Screen views. posthog-react-native has no router integration of its own, so
-// the root layout feeds it every expo-router pathname change.
-export function trackScreen(name: string, properties?: Record<string, string | number | boolean>) {
-  posthog?.screen(name, properties);
-}
-
-export function captureError(error: Error, context?: Record<string, unknown>) {
-  if (SENTRY_DSN && Sentry) {
-    Sentry.captureException(error, { extra: context });
-  }
-}
-
-// Wrap the root component with Sentry's error boundary / instrumentation when the
-// native module is present; otherwise return it unchanged so an OTA can't crash a
-// binary that lacks Sentry. Replaces a bare `Sentry.wrap(RootLayout)` at module
-// eval — which was the launch crash on the pre-Sentry 1.0.2 store binary.
-export function wrapRoot<T>(Component: T): T {
-  try {
-    return Sentry && typeof Sentry.wrap === "function" ? (Sentry.wrap(Component as any) as T) : Component;
-  } catch {
-    return Component;
-  }
-}
-
-export { Sentry };
+// posthog is a live binding: the package assigns it inside initAnalytics, and
+// `export ... from` keeps re-exported bindings live, so a consumer reading it
+// after init sees the client rather than null.
+export {
+  captureError,
+  identifyUser,
+  posthog,
+  resetUser,
+  Sentry,
+  track,
+  trackScreen,
+  wrapRoot,
+} from "@platform/analytics/native";
