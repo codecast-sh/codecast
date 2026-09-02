@@ -53,6 +53,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { timeSyncFs } from "../slowSync.js";
 import { AGENT_CLIENTS, observedScopeRank, SNIPPET_CATALOG} from "@codecast/shared/contracts";
 import type { AgentClientId } from "@codecast/shared/contracts";
 
@@ -877,24 +878,68 @@ function readSharedAgentSkills(home: string, sink: UnreadablePath[]): { items: I
  * directory to a project.
  */
 export function readInventory(home: string, projectPath?: string): Inventory {
+  // Timed here rather than at a caller: the daemon's skills lookup and the
+  // heartbeat's capability inventory both walk through this one function.
+  return timeSyncFs("readInventory", projectPath ?? "global", () => {
+    const scan = inventorySteps(home, projectPath);
+    for (const step of scan.steps) step.run();
+    return scan.finish();
+  });
+}
+
+/**
+ * The same scan for the daemon's heartbeat: one directory read per turn of
+ * the loop, so a machine with hundreds of skills never holds the loop for the
+ * whole tree. Same steps, same order, same output as readInventory.
+ */
+export async function readInventoryAsync(home: string, projectPath?: string): Promise<Inventory> {
+  const scan = inventorySteps(home, projectPath);
+  for (const step of scan.steps) {
+    timeSyncFs("readInventory step", step.label, step.run);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  return scan.finish();
+}
+
+interface InventoryStep {
+  label: string;
+  run: () => void;
+}
+
+/**
+ * The scan as a list of steps over shared accumulators. Each step is one
+ * directory or file read; the drivers above decide whether to yield between
+ * them. The order is the output order, so both drivers produce byte identical
+ * inventories.
+ */
+function inventorySteps(home: string, projectPath?: string): { steps: InventoryStep[]; finish(): Inventory } {
   const unreadable: UnreadablePath[] = [];
   const items: InventoryItem[] = [];
-  const marketplaces: MarketplaceRef[] = [...readKnownMarketplaces(home, unreadable)];
-
+  const marketplaces: MarketplaceRef[] = [];
   // The shared skills directory is read before any client dir so a client's
   // symlink into it can attach to the item it points at. Items are NOT pushed
-  // here: a linked one enters at its first link's position, and the rest are
+  // there: a linked one enters at its first link's position, and the rest are
   // appended after the scan — see `SharedSkills.unplaced`.
-  const sharedSkills = readSharedAgentSkills(home, unreadable);
+  let sharedSkills: ReturnType<typeof readSharedAgentSkills> | undefined;
+  const shared = () => sharedSkills!.shared;
+  const steps: InventoryStep[] = [
+    { label: "known marketplaces", run: () => { marketplaces.push(...readKnownMarketplaces(home, unreadable)); } },
+    { label: "shared agent skills", run: () => { sharedSkills = readSharedAgentSkills(home, unreadable); } },
+  ];
 
   for (const { scope, skills, commands, agents, settings } of claudeScopePlans(home, projectPath)) {
-    if (skills) items.push(...readSkillsIn(skills, scope, "claude", unreadable, sharedSkills.shared));
-    if (commands) items.push(...readMarkdownDir(commands, "command", scope, "claude", unreadable));
-    if (agents) items.push(...readMarkdownDir(agents, "subagent", scope, "claude", unreadable));
+    if (skills) steps.push({ label: skills, run: () => { items.push(...readSkillsIn(skills, scope, "claude", unreadable, shared())); } });
+    if (commands) steps.push({ label: commands, run: () => { items.push(...readMarkdownDir(commands, "command", scope, "claude", unreadable)); } });
+    if (agents) steps.push({ label: agents, run: () => { items.push(...readMarkdownDir(agents, "subagent", scope, "claude", unreadable)); } });
     if (settings) {
-      const plugins = readPluginsFromSettings(settings, scope, unreadable);
-      items.push(...plugins.items);
-      marketplaces.push(...plugins.marketplaces);
+      steps.push({
+        label: settings,
+        run: () => {
+          const plugins = readPluginsFromSettings(settings, scope, unreadable);
+          items.push(...plugins.items);
+          marketplaces.push(...plugins.marketplaces);
+        },
+      });
     }
   }
 
@@ -902,86 +947,98 @@ export function readInventory(home: string, projectPath?: string): Inventory {
   // scope in the repo's own .mcp.json (paths from the descriptor's mcpConfig).
   const claudeMcp = AGENT_CLIENTS.claude.agentFileTargets?.mcpConfig;
   if (claudeMcp) {
-    items.push(...readMcpFrom(fromHomeTemplate(home, claudeMcp.user), "user", "claude", unreadable));
+    const userMcp = fromHomeTemplate(home, claudeMcp.user);
+    steps.push({ label: userMcp, run: () => { items.push(...readMcpFrom(userMcp, "user", "claude", unreadable)); } });
     if (projectPath && claudeMcp.project) {
-      items.push(...readMcpFrom(path.join(projectPath, claudeMcp.project), "project", "claude", unreadable));
+      const projectMcp = path.join(projectPath, claudeMcp.project);
+      steps.push({ label: projectMcp, run: () => { items.push(...readMcpFrom(projectMcp, "project", "claude", unreadable)); } });
     }
   }
 
   // Shared skills nothing linked to: still this machine's capabilities, they
   // just were not installed into any client dir.
-  items.push(...sharedSkills.items.filter((i) => sharedSkills.shared.unplaced.has(i)));
+  steps.push({ label: "unplaced shared skills", run: () => { items.push(...sharedSkills!.items.filter((i) => shared().unplaced.has(i))); } });
 
   // The other clients on this machine, one tag each, so a single machine row
   // spans all of them — each read from its own descriptor's slots.
-  items.push(...readClientItems("codex", home, projectPath, unreadable, sharedSkills.shared));
-  items.push(...readClientItems("cursor", home, projectPath, unreadable, sharedSkills.shared));
+  steps.push({ label: "codex", run: () => { items.push(...readClientItems("codex", home, projectPath, unreadable, shared())); } });
+  steps.push({ label: "cursor", run: () => { items.push(...readClientItems("cursor", home, projectPath, unreadable, shared())); } });
 
   // Pins are per install, not per declaration — fold them onto plugin rows.
-  const pins = readInstalledPluginPins(home, unreadable);
-  const declared = new Set<string>();
-  for (const item of items) {
-    if (item.kind !== "plugin") continue;
-    declared.add(item.name);
-    const pin = pins[item.name];
-    item.installed = pin !== undefined;
-    if (!pin) continue;
-    item.meta = {
-      ...item.meta,
-      ...(pin.version ? { version: pin.version } : {}),
-      ...(pin.sha ? { sha: pin.sha } : {}),
-    };
-  }
+  steps.push({
+    label: "installed plugin pins",
+    run: () => {
+      const pins = readInstalledPluginPins(home, unreadable);
+      const declared = new Set<string>();
+      for (const item of items) {
+        if (item.kind !== "plugin") continue;
+        declared.add(item.name);
+        const pin = pins[item.name];
+        item.installed = pin !== undefined;
+        if (!pin) continue;
+        item.meta = {
+          ...item.meta,
+          ...(pin.version ? { version: pin.version } : {}),
+          ...(pin.sha ? { sha: pin.sha } : {}),
+        };
+      }
 
-  // Downloaded but declared nowhere. Claude Code lists these too, and the
-  // library needs them: "installed, not switched on" is a different offer to
-  // the user than "not installed", and it costs nothing to turn on.
-  //
-  // A project-scoped install belongs to the project it was made for. Claude
-  // Code lists such a plugin whatever directory you run it from; codecast must
-  // not, because showing another checkout's plugin as available here would be a
-  // lie about this project's capabilities.
-  const pluginRegistry = path.join(home, ".claude", "plugins", "installed_plugins.json");
-  for (const [id, pin] of Object.entries(pins)) {
-    if (declared.has(id)) continue;
-    if (pin.projectPath && pin.projectPath !== projectPath) continue;
-    const [name, marketplace] = id.split("@");
-    items.push({
-      kind: "plugin",
-      name: id,
-      scope: pin.scope,
-      enabled: false,
-      installed: true,
-      source: pluginRegistry,
-      client: "claude",
-      meta: {
-        plugin: name ?? id,
-        ...(marketplace ? { marketplace } : {}),
-        ...(pin.version ? { version: pin.version } : {}),
-        ...(pin.sha ? { sha: pin.sha } : {}),
-        ...(pin.projectPath ? { projectPath: pin.projectPath } : {}),
-      },
-    });
-  }
-
-  const seen = new Set<string>();
-  return {
-    items,
-    unreadable,
-    marketplaces: marketplaces.filter((m) => {
-      // Scope belongs in the key: the same marketplace registered at two scopes
-      // is two registrations, and only an exact repeat is a duplicate. NOT
-      // `fleetRowKey`, which drops scope and lowercases on purpose — that one
-      // answers "the same thing across machines", the opposite question.
+      // Downloaded but declared nowhere. Claude Code lists these too, and the
+      // library needs them: "installed, not switched on" is a different offer to
+      // the user than "not installed", and it costs nothing to turn on.
       //
-      // NUL separates because no name or scope can contain it. Written as an
-      // escape and not the byte itself: a literal NUL makes this file binary to
-      // rg and grep, which then drop it from every search without saying so.
-      const key = `${m.name}\u0000${m.scope}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }),
+      // A project-scoped install belongs to the project it was made for. Claude
+      // Code lists such a plugin whatever directory you run it from; codecast must
+      // not, because showing another checkout's plugin as available here would be a
+      // lie about this project's capabilities.
+      const pluginRegistry = path.join(home, ".claude", "plugins", "installed_plugins.json");
+      for (const [id, pin] of Object.entries(pins)) {
+        if (declared.has(id)) continue;
+        if (pin.projectPath && pin.projectPath !== projectPath) continue;
+        const [name, marketplace] = id.split("@");
+        items.push({
+          kind: "plugin",
+          name: id,
+          scope: pin.scope,
+          enabled: false,
+          installed: true,
+          source: pluginRegistry,
+          client: "claude",
+          meta: {
+            plugin: name ?? id,
+            ...(marketplace ? { marketplace } : {}),
+            ...(pin.version ? { version: pin.version } : {}),
+            ...(pin.sha ? { sha: pin.sha } : {}),
+            ...(pin.projectPath ? { projectPath: pin.projectPath } : {}),
+          },
+        });
+      }
+    },
+  });
+
+  return {
+    steps,
+    finish() {
+      const seen = new Set<string>();
+      return {
+        items,
+        unreadable,
+        marketplaces: marketplaces.filter((m) => {
+          // Scope belongs in the key: the same marketplace registered at two scopes
+          // is two registrations, and only an exact repeat is a duplicate. NOT
+          // `fleetRowKey`, which drops scope and lowercases on purpose — that one
+          // answers "the same thing across machines", the opposite question.
+          //
+          // NUL separates because no name or scope can contain it. Written as an
+          // escape and not the byte itself: a literal NUL makes this file binary to
+          // rg and grep, which then drop it from every search without saying so.
+          const key = `${m.name}\u0000${m.scope}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }),
+      };
+    },
   };
 }
 

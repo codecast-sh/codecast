@@ -1,9 +1,22 @@
 // The mic button. The gesture it carries lives in hooks/useWalkie; this is only
 // what the talk toggle looks like, so the composer, a hover card and the receiver banner
 // can each dress the same press differently.
-import { Mic } from "lucide-react";
-import { talkToggleProps, usePushToTalk, useWalkieLevelVar, walkieKeyName, walkieKeyState } from "../../hooks/useWalkie";
+import { useRef } from "react";
+import { Headphones, Mic } from "lucide-react";
+import {
+  talkToggleProps,
+  usePushToTalk,
+  useWalkieLevelVar,
+  walkieJoinReason,
+  walkieKeyName,
+  walkieKeyState,
+} from "../../hooks/useWalkie";
+import { startHuddle } from "../../lib/calls/callManager";
+import { ContextMenu, CtxItem, useContextMenu } from "../ui/context-menu";
 import "./walkie.css";
+
+/** A long press is a right click for a finger; this is how long it takes. */
+const LONG_PRESS_MS = 500;
 
 export function WalkiePttButton({
   roomKey,
@@ -25,8 +38,23 @@ export function WalkiePttButton({
   /** How big the key is: 28px where it is one of several row actions, 40px in
    *  a composer, 52px where it IS the control — the strip. */
   size?: "sm" | "md" | "lg";
+  /** Ring lives UNDER the key, never beside it. Present, a right click or a
+   *  long press on the key opens one menu whose one item rings these people
+   *  and starts a huddle in the same room: a ring is a talk that skips the
+   *  one-way stage, so it is the key's escalation, not a second control. */
+  ring?: { toUserIds: string[]; anchorTitle?: string };
 }) {
   const ptt = usePushToTalk(roomKey, resolveChannelId);
+  const ringMenu = useContextMenu<void>();
+  // A long press ends in a click, and the click would toggle the talk the
+  // press was meant to avoid — so the press marks the click as spent.
+  const longPress = useRef<{ timer: ReturnType<typeof setTimeout> | null; spent: boolean }>({ timer: null, spent: false });
+  const cancelLongPress = () => {
+    if (longPress.current.timer) clearTimeout(longPress.current.timer);
+    longPress.current.timer = null;
+  };
+  const openRing = (e: { clientX: number; clientY: number; target: EventTarget | null; preventDefault(): void; stopPropagation(): void; shiftKey?: boolean }) =>
+    ringMenu.open(e as React.MouseEvent, undefined, { force: true });
   // What a screen reader is told lives in walkieKeyName, beside the state
   // machine it mirrors — the two answer the same question for two senses and
   // must never disagree.
@@ -59,7 +87,12 @@ export function WalkiePttButton({
   // other surface is not paying for a subscription it never shows.
   const ref = useWalkieLevelVar<HTMLButtonElement>(state === "live");
   const name = walkieKeyName(state, { reason: ptt.reason, live: ptt.live, label, title });
+  const toggle = talkToggleProps(ptt);
+  const ringReason = ring ? walkieJoinReason(roomKey) : null;
+  const ringWord = ring && ring.toUserIds.length > 1 ? "Ring everyone" : "Ring them";
+  const idleTitle = title ?? "Talk — click to start, click again to stop";
   return (
+    <>
     <button
       ref={ref}
       type="button"
@@ -73,8 +106,35 @@ export function WalkiePttButton({
       data-walkie-state={state}
       aria-label={name}
       aria-pressed={ptt.holding}
-      title={ptt.reason ?? (state === "idle" ? (title ?? "Talk — click to start, click again to stop") : name)}
-      {...talkToggleProps(ptt)}
+      title={ptt.reason ?? (state === "idle" ? (ring ? `${idleTitle}. Right click to ring` : idleTitle) : name)}
+      {...toggle}
+      onClick={(e) => {
+        if (longPress.current.spent) {
+          longPress.current.spent = false;
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+        toggle.onClick(e);
+      }}
+      onContextMenu={ring ? (e) => openRing(e) : undefined}
+      onPointerDown={
+        ring
+          ? (e) => {
+              if (e.button !== 0) return;
+              cancelLongPress();
+              const at = { clientX: e.clientX, clientY: e.clientY, target: e.target };
+              longPress.current.timer = setTimeout(() => {
+                longPress.current.timer = null;
+                longPress.current.spent = true;
+                openRing({ ...at, preventDefault() {}, stopPropagation() {} });
+              }, LONG_PRESS_MS);
+            }
+          : undefined
+      }
+      onPointerUp={ring ? cancelLongPress : undefined}
+      onPointerLeave={ring ? cancelLongPress : undefined}
+      onPointerCancel={ring ? cancelLongPress : undefined}
     >
       <span className="walkie-key-ring" aria-hidden="true" />
       <Mic className="walkie-key-glyph" />
@@ -103,6 +163,21 @@ export function WalkiePttButton({
         </span>
       )}
     </button>
+    {ring && (
+      <ContextMenu state={ringMenu}>
+        {() => (
+          <CtxItem
+            icon={Headphones}
+            disabled={!!ringReason || ring.toUserIds.length === 0}
+            title={ringReason ?? undefined}
+            onSelect={() => void startHuddle({ roomKey: roomKey!, toUserIds: ring.toUserIds, anchorTitle: ring.anchorTitle })}
+          >
+            {ringReason ? `${ringWord} — ${ringReason.toLowerCase()}` : `${ringWord} and start a huddle`}
+          </CtxItem>
+        )}
+      </ContextMenu>
+    )}
+    </>
   );
 }
 

@@ -37,7 +37,7 @@ const api = _chatApi as any;
 import { Lock, BellOff, Bell, Plus, AlertTriangle, RotateCw, Search, SquarePen } from "lucide-react";
 import { ChannelMembersButton, DmHeadline } from "../../components/chat/ChannelPeople";
 import { WalkiePttButton } from "../../components/calls/WalkiePtt";
-import { HuddleButton } from "../../components/calls/OccupancyChip";
+import { HuddleButton, OccupancyChip } from "../../components/calls/OccupancyChip";
 import { chatViewRoomKey } from "../../lib/chatViews";
 import { NewMessageModal } from "../../components/chat/NewMessageModal";
 import { ChatSearch } from "../../components/chat/ChatSearch";
@@ -483,30 +483,35 @@ export default function ChatPage() {
               {activeChannel && (activeChannel.kind === "dm" || activeChannel.isPrivate) && (
                 <ChannelMembersButton channel={activeChannel} />
               )}
-              {/* The key gets a seat in the header, beside the huddle button.
-                  It used to be reachable only from the composer, so a DM read
-                  from the top of the room had no visible way to talk back —
-                  and the key IS the product. Rendered only where a burst has
-                  somewhere to land (a DM, calls on); every other reason it
-                  cannot be held is the key's own honest disabled state. */}
-              {walkieRoomKey && (
-                <WalkiePttButton
-                  roomKey={walkieRoomKey}
-                  resolveChannelId={resolveWalkieChannel}
-                  size="sm"
-                  label="Talk"
-                  className="shrink-0"
-                  title="Talk to them — they see your face and hear you; click again to stop"
-                />
+              {/* ONE voice control per room. A DM gets the key — it used to
+                  be reachable only from the composer, so a DM read from the
+                  top of the room had no visible way to talk back, and the key
+                  IS the product. Ring sits under the key (right click, long
+                  press) rather than beside it: a ring is a talk that skips
+                  the one-way stage, and two buttons on the same room read as
+                  two products. A channel has no walkie, so its one control is
+                  the huddle button — an open door the rail chip and the "in a
+                  huddle" strip tell the team about. Either kind wears the
+                  occupancy chip once the room is live; that is a state of the
+                  room, not a second control. */}
+              {walkieRoomKey && activeChannel && (
+                <>
+                  <WalkiePttButton
+                    roomKey={walkieRoomKey}
+                    resolveChannelId={resolveWalkieChannel}
+                    size="sm"
+                    label="Talk"
+                    className="shrink-0"
+                    title="Talk to them — they see your face and hear you; click again to stop"
+                    ring={{ toUserIds: activeChannel.dmMemberIds ?? [] }}
+                  />
+                  <OccupancyChip roomKey={walkieRoomKey} className="shrink-0" />
+                </>
               )}
-              {/* Every room can huddle. A DM or group thread rings its people
-                  the moment it opens; a channel is an open door — the rail
-                  chip and the "in a huddle" strip tell the team it's live. */}
-              {activeChannel && (
+              {activeChannel && activeChannel.kind !== "dm" && (
                 <HuddleButton
                   roomKey={chatViewRoomKey(activeChannel, viewerId, teamMembers)}
-                  ring={activeChannel.kind === "dm" ? activeChannel.dmMemberIds : undefined}
-                  anchorTitle={activeChannel.kind === "dm" ? undefined : `#${activeChannel.name}`}
+                  anchorTitle={`#${activeChannel.name}`}
                   className="shrink-0"
                 />
               )}
