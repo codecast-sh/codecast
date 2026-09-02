@@ -25,11 +25,11 @@ import type { Wall, WallFace, WallTier } from "./peopleWallLayout";
  * people are drawn only when the everyone toggle asks for them.
  */
 export const OVERLAY_FACE_PX: Record<WallTier, number> = {
-  loud: 56,
-  here: 44,
-  idle: 34,
-  away: 28,
-  gone: 24,
+  loud: 72,
+  here: 60,
+  idle: 46,
+  away: 38,
+  gone: 32,
 };
 
 /** The most circles the overlay will float. Thirteenth teammate onward folds

@@ -295,15 +295,15 @@ describe("the circle tiers", () => {
 });
 
 describe("facesWindowSize", () => {
-  it("is the circles' bounds plus 8px, and nothing else", () => {
-    // The whole point of the exact bounds: no chrome row waiting under the
-    // faces, no padding kept back for a state the window is not in.
+  it("is the circles' bounds plus 8px — never narrower than the chrome, never taller", () => {
+    // No chrome row waiting under the faces. The WIDTH holds the chrome at
+    // rest so nothing slides on hover; the extra glass is click-through.
     expect(facesWindowSize("speaker", 1)).toEqual({
-      width: TIER_DIAMETER.speaker + FACES_PADDING * 2,
+      width: Math.max(TIER_DIAMETER.speaker, CHROME_WIDTH) + FACES_PADDING * 2,
       height: TIER_DIAMETER.speaker + FACES_PADDING * 2,
     });
     expect(facesWindowSize("everyone", 3)).toEqual({
-      width: 3 * TIER_DIAMETER.row + 2 * FACE_GAP + FACES_PADDING * 2,
+      width: Math.max(3 * TIER_DIAMETER.row + 2 * FACE_GAP, CHROME_WIDTH) + FACES_PADDING * 2,
       height: TIER_DIAMETER.row + FACES_PADDING * 2,
     });
   });
@@ -312,11 +312,11 @@ describe("facesWindowSize", () => {
     expect(facesWindowSize("speaker", 5)).toEqual(facesWindowSize("speaker", 1));
   });
 
-  it("grows by a circle and a gap per person in everyone mode", () => {
-    const one = facesWindowSize("everyone", 1);
-    const two = facesWindowSize("everyone", 2);
-    expect(two.width - one.width).toBe(TIER_DIAMETER.row + FACE_GAP);
-    expect(two.height).toBe(one.height);
+  it("grows by a circle and a gap per person in everyone mode, once past the chrome", () => {
+    const five = facesWindowSize("everyone", 5);
+    const six = facesWindowSize("everyone", 6);
+    expect(six.width - five.width).toBe(TIER_DIAMETER.row + FACE_GAP);
+    expect(six.height).toBe(five.height);
   });
 
   it("never collapses to nothing when the room is empty", () => {
@@ -324,9 +324,9 @@ describe("facesWindowSize", () => {
   });
 
   it("shrinks the circles, and the window with them, at the mini tier", () => {
-    const mini = facesWindowSize("everyone", 3, { tier: "mini" });
+    const mini = facesWindowSize("everyone", 8, { tier: "mini" });
     expect(mini.height).toBe(TIER_DIAMETER.mini + FACES_PADDING * 2);
-    expect(mini.width).toBeLessThan(facesWindowSize("everyone", 3).width);
+    expect(mini.width).toBeLessThan(facesWindowSize("everyone", 8).width);
   });
 
   it("grows downward on hover, to hold the name and the controls", () => {
@@ -340,10 +340,13 @@ describe("facesWindowSize", () => {
     expect(hovered.width).toBe(Math.max(idle.width, CHROME_WIDTH + FACES_PADDING * 2));
   });
 
-  it("widens too, but only where the chrome would be clipped", () => {
-    // One 96px face is narrower than four 28px buttons, so hovering it has to
-    // make room sideways as well.
+  it("is always as wide as the chrome, so nothing slides on hover", () => {
+    // One 96px face is narrower than the labeled chrome. Widening on hover
+    // moved the circle out from under the pointer — the flicker — so the
+    // width is the chrome's at rest too; the extra glass is click-through.
+    const idle = facesWindowSize("speaker", 1);
     const hovered = facesWindowSize("speaker", 1, { hovered: true });
+    expect(idle.width).toBe(CHROME_WIDTH + FACES_PADDING * 2);
     expect(hovered.width).toBe(CHROME_WIDTH + FACES_PADDING * 2);
     expect(hovered.height).toBe(TIER_DIAMETER.speaker + HOVER_ROWS + FACES_PADDING * 2);
   });
