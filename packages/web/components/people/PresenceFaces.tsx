@@ -16,7 +16,7 @@
 // names, activity, controls — appears only under the pointer and vanishes
 // with it. It also does not ring, toast, or answer anything: it is a glance,
 // and the people window and the main window stay the phone.
-import { memo, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { GripVertical, PanelTop, Users, X } from "lucide-react";
 import {
   closeFacesWindow,
@@ -31,6 +31,11 @@ import { useAvatarFaceCrop } from "../calls/useAvatarFaceCrop";
 import { MemberFace } from "../presence/MemberFace";
 import { memberDisplayName } from "../presence/memberPresence";
 import { WallFaceButton } from "./PeopleWall";
+import { FaceActions } from "../presence/FaceActions";
+import { useFaceKey } from "../presence/useFaceKey";
+import { useEventListener } from "../../hooks/useEventListener";
+import { useInboxStore } from "../../store/inboxStore";
+import { navigateMainWindow } from "../../lib/desktop";
 import { usePeopleRoster, type PeopleRosterData } from "./usePeopleRoster";
 import { useWall } from "./usePeopleWall";
 import { useDescribeSlot } from "./useDescribeSlot";
@@ -72,9 +77,23 @@ export function PresenceFaces() {
     return sizes;
   }, [shown, overflow]);
 
+  // The face whose actions are in the slot. A second click on it, Escape, or
+  // a click on the glass puts the slot back to words.
+  const [active, setActive] = useState<WallFace<any> | null>(null);
+  const activate = useCallback(
+    (face: WallFace<any>) => setActive((cur) => (cur?.id === face.id ? null : face)),
+    [],
+  );
+  useEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Escape") setActive(null);
+  });
+
   const { rootRef, hovered, startDrag, endDrag } = useFloatingCircles({
-    sizeFor: (hover) => overlayWindowSize(px, { hovered: hover }),
-    shapeSig: `${px.join(",")}|${overflow}`,
+    // While a face's actions are in the slot the window stays at its hover
+    // size whether or not the pointer is over a circle — the buttons must not
+    // be cut off by a window shrinking under them.
+    sizeFor: (hover) => overlayWindowSize(px, { hovered: hover || !!active, actions: !!active }),
+    shapeSig: `${px.join(",")}|${overflow}|${active?.id ?? ""}`,
     bridge: FACES_WINDOW_BRIDGE,
   });
 
@@ -85,7 +104,7 @@ export function PresenceFaces() {
   return (
     <div
       ref={rootRef}
-      className={`dark faces-window presence-faces${hovered ? " faces-window--hover" : ""}`}
+      className={`dark faces-window presence-faces${hovered || active ? " faces-window--hover" : ""}`}
       data-holding={data.sendingRoomKey ? "1" : undefined}
     >
       <div className="presence-row">
@@ -116,6 +135,7 @@ export function PresenceFaces() {
               data={data}
               callsEnabled={callsEnabled}
               onDescribe={onDescribe}
+              onActivate={activate}
             />
           ))
         )}
@@ -134,23 +154,29 @@ export function PresenceFaces() {
         )}
       </div>
 
-      {/* The slot: the hovered face's name and activity line (or its refusal
-          reason), in the band the window grows on hover. */}
-      {desc ? (
-        <div className="presence-desc" data-refused={desc.refused ? "1" : undefined} aria-hidden="true">
+      {/* The slot, in the band the window grows on hover. A CLICKED face puts
+          its three actions here — Talk, Ring, Message — under its name; a
+          face merely pointed at shows its name and activity; nothing pointed
+          at shows the one line of instructions. */}
+      {active ? (
+        <div className="presence-desc presence-desc-actions" data-chrome-hit>
+          <span className="presence-desc-row">
+            <span className="presence-desc-name">{memberDisplayName(active.member)}</span>
+          </span>
+          <ActiveFaceActions face={active} data={data} callsEnabled={callsEnabled} onDone={() => setActive(null)} />
+        </div>
+      ) : desc ? (
+        <div className="presence-desc" aria-hidden="true">
           <span className="presence-desc-row">
             <span className="presence-desc-name">{desc.name}</span>
             <span className={`presence-desc-line ${desc.tone}`}>{desc.text}</span>
           </span>
-          {!desc.refused && (
-            <span className="presence-desc-gesture">HOLD to talk · TAP to message</span>
-          )}
+          <span className="presence-desc-gesture">CLICK for Talk · Ring · Message</span>
         </div>
       ) : (
-        hovered &&
-        callsEnabled && (
+        hovered && (
           <div className="presence-desc presence-desc-legend" aria-hidden="true">
-            <span className="presence-desc-gesture">HOLD a face to talk · TAP to message</span>
+            <span className="presence-desc-gesture">CLICK a face for Talk · Ring · Message</span>
           </div>
         )
       )}
@@ -216,19 +242,59 @@ const OverlayFace = memo(function OverlayFace({
   data,
   callsEnabled,
   onDescribe,
+  onActivate,
 }: {
   face: WallFace<any>;
   data: PeopleRosterData;
   callsEnabled: boolean;
   onDescribe: Parameters<typeof WallFaceButton>[0]["onDescribe"];
+  onActivate: (face: WallFace<any>) => void;
 }) {
   const src = face.member?.image || face.member?.github_avatar_url;
   return (
     <OverlaySeat px={face.px} src={src}>
-      <WallFaceButton face={face} data={data} callsEnabled={callsEnabled} onDescribe={onDescribe} />
+      <WallFaceButton
+        face={face}
+        data={data}
+        callsEnabled={callsEnabled}
+        onDescribe={onDescribe}
+        onActivate={onActivate}
+      />
     </OverlaySeat>
   );
 });
+
+/** The clicked face's three actions, in the slot. Its own component so the
+ *  face key hook (rings, room, blocked reason) mounts only while a face is
+ *  active — one hook, not one per circle plus one. */
+function ActiveFaceActions({
+  face,
+  data,
+  callsEnabled,
+  onDone,
+}: {
+  face: WallFace<any>;
+  data: PeopleRosterData;
+  callsEnabled: boolean;
+  onDone: () => void;
+}) {
+  const key = useFaceKey({ viewerId: data.viewerId, memberId: face.id, callsEnabled, talking: data.talkingId === face.id });
+  return (
+    <FaceActions
+      ptt={key.ptt}
+      blocked={key.blocked}
+      roomKey={key.roomKey}
+      ringIds={[face.id]}
+      onMessage={() => {
+        onDone();
+        const channelId = useInboxStore.getState().openDmChannel([face.id]);
+        const path = `/chat/${channelId}`;
+        if (!navigateMainWindow(path)) window.location.href = path;
+      }}
+      size="sm"
+    />
+  );
+}
 
 function OverlaySeat({
   px,
