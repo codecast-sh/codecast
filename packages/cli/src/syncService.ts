@@ -536,6 +536,26 @@ export class SyncService {
   // Report the browser sign-in flow's outcome (start_login command). Confirmed
   // also makes the server kick off the auth-blocked revive; the returned count
   // is how many sessions it queued.
+  // Setup-token mint flow status (the web's reactive channel, mirrors
+  // completeLoginFlow). "pending" is stamped by the daemon itself for
+  // auto-mints; web-requested mints arrive already pending.
+  async reportMintFlow(
+    status: "pending" | "confirmed" | "rejected",
+    profile: string,
+    email?: string,
+    reason?: string,
+  ): Promise<void> {
+    await this.throttle();
+    await this.mutate("accountSwitch:reportMintFlow" as any, {
+      api_token: this.apiToken,
+      device_id: deviceId(),
+      status,
+      profile,
+      ...(email ? { email } : {}),
+      ...(reason ? { reason } : {}),
+    });
+  }
+
   async completeLoginFlow(
     status: "confirmed" | "rejected",
     email?: string,
@@ -1586,7 +1606,7 @@ export class SyncService {
     }
   }
 
-  async getProjectInfo(conversationId: string): Promise<{ project_path: string | null; git_root: string | null; git_remote_url: string | null; effort: string | null; execution_protocol_state: string | null } | null> {
+  async getProjectInfo(conversationId: string): Promise<{ project_path: string | null; git_root: string | null; git_remote_url: string | null; effort: string | null; cc_account: string | null; execution_protocol_state: string | null } | null> {
     try {
       return await this.guarded(async () => {
         const result = await this.client.query("conversations:getProjectInfo" as any, {
@@ -1599,6 +1619,7 @@ export class SyncService {
           git_root: result.git_root ?? null,
           git_remote_url: result.git_remote_url ?? null,
           effort: result.effort ?? null,
+          cc_account: result.cc_account ?? null,
           execution_protocol_state: result.execution_protocol_state ?? null,
         };
       });

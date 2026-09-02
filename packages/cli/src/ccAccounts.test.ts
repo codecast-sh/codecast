@@ -25,6 +25,12 @@ import {
   readUsageCache,
   CcAccountError,
   createMtimeGatedCache,
+  writeAccountToken,
+  removeAccountToken,
+  accountTokenInfo,
+  accountSourcePrefix,
+  accountTokenFilePath,
+  SETUP_TOKEN_LIFETIME_MS,
 } from "./ccAccounts.js";
 
 const CRED = JSON.stringify({
@@ -776,5 +782,67 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
     expect(byName.a.usage?.session?.percent).toBe(28);
     expect(byName.b.usage?.session?.percent).toBe(90);
     expect(byName.c.usage).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-account setup-token (launch-time env file)
+// ---------------------------------------------------------------------------
+
+describe("account setup-token file", () => {
+  let home: string;
+  const savedHome = process.env.HOME;
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-token-test-"));
+    process.env.HOME = home;
+  });
+  afterEach(() => {
+    process.env.HOME = savedHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  const TOKEN = "sk-ant-oat01-" + "x".repeat(60);
+
+  it("stores the token as a 0600 export file under ~/.codecast and reports its lifetime", () => {
+    const file = writeAccountToken("union", TOKEN);
+    expect(file).toBe(path.join(home, ".codecast", "cc-account-union.env"));
+    expect((fs.statSync(file).mode & 0o777).toString(8)).toBe("600");
+    expect(fs.readFileSync(file, "utf-8")).toBe(`export CLAUDE_CODE_OAUTH_TOKEN='${TOKEN}'\n`);
+    const info = accountTokenInfo("union")!;
+    expect(info.file).toBe(file);
+    expect(info.expires_at - info.stored_at).toBe(SETUP_TOKEN_LIFETIME_MS);
+  });
+
+  it("rejects anything that is not a setup-token (keychain access tokens, API keys, blanks)", () => {
+    for (const bad of ["", "sk-ant-api03-abc", "at-123", "sk-ant-oat01-short", "sk-ant-oat01-" + "x".repeat(60) + " trailing"]) {
+      expect(() => writeAccountToken("union", bad)).toThrow(CcAccountError);
+    }
+    expect(accountTokenInfo("union")).toBeNull();
+  });
+
+  it("validates the profile name so the file path can't escape ~/.codecast", () => {
+    expect(() => accountTokenFilePath("../x")).toThrow(CcAccountError);
+    expect(accountTokenInfo("../x")).toBeNull();
+    expect(accountSourcePrefix("../x")).toBe("");
+  });
+
+  it("builds a source-the-file launch prefix only when a token is stored; warns and falls back otherwise", () => {
+    const warnings: string[] = [];
+    expect(accountSourcePrefix(undefined, (m) => warnings.push(m))).toBe("");
+    expect(accountSourcePrefix("union", (m) => warnings.push(m))).toBe("");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("cast accounts token union");
+    const file = writeAccountToken("union", TOKEN);
+    expect(accountSourcePrefix("union", (m) => warnings.push(m))).toBe(`. ${file} 2>/dev/null || true; `);
+    expect(warnings).toHaveLength(1);
+    // The secret never appears on the launch line.
+    expect(accountSourcePrefix("union")).not.toContain("sk-ant");
+  });
+
+  it("removes the file on --rm and reports whether one existed", () => {
+    expect(removeAccountToken("union")).toBe(false);
+    writeAccountToken("union", TOKEN);
+    expect(removeAccountToken("union")).toBe(true);
+    expect(accountTokenInfo("union")).toBeNull();
   });
 });

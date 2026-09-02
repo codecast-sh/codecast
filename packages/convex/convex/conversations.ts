@@ -1641,6 +1641,9 @@ export const getProjectInfo = query({
       // switched in-session has no transcript echo to re-pin from; the
       // conversation row is the only durable record.
       effort: conv.effort ?? null,
+      // Same for the per-session Claude account: a resume must re-source that
+      // account's token file or the session hops to the keychain login.
+      cc_account: conv.cc_account ?? null,
       // Lets the daemon refuse a legacy start_session that was enqueued before
       // this conversation crossed onto the fenced execution rail.
       execution_protocol_state: conv.execution_protocol_state ?? null,

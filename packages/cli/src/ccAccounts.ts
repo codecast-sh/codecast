@@ -26,6 +26,7 @@ import * as path from "path";
 import { readLocalCredential } from "./remote/session-move.js";
 import { readProfileIndexFile } from "./readForUpdate.js";
 import { atomicWriteFile } from "./atomicWrite.js";
+import { renderProviderEnvFile, sourceFilePrefix } from "./providerKeyLaunch.js";
 
 const ACTIVE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const PROFILE_KEYCHAIN_PREFIX = "codecast-cc-account-";
@@ -453,10 +454,165 @@ export function deleteProfile(name: string): CcProfileMeta {
     );
   }
   deleteProfileSecret(name);
+  removeAccountToken(name);
   delete index.profiles[name];
   writeProfileIndex(index);
   invalidateAccountsCache();
   return { name, ...meta, active: false };
+}
+
+// ---------------------------------------------------------------------------
+// Per-account launch token (`claude setup-token`)
+//
+// A setup-token is a static one-year OAuth token that Claude Code reads from
+// CLAUDE_CODE_OAUTH_TOKEN, which outranks the keychain login. Nothing about it
+// rotates, so none of the refresh / save-on-switch / split-grant machinery
+// above applies: it is a string in a 0600 file, sourced into ONE session's env
+// at launch. That makes the account a per-session choice instead of the
+// machine-global swap `useProfile` performs. The token can only make model
+// requests (no profile/usage scope), so identity and usage still come from the
+// keychain snapshot — the two live side by side under one profile name.
+// ---------------------------------------------------------------------------
+
+const SETUP_TOKEN_PREFIX = "sk-ant-oat01-";
+/** Anthropic mints setup-tokens for one year and never warns before expiry;
+ *  the file mtime (written at store time) is the only clock we have. */
+export const SETUP_TOKEN_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
+
+export function accountTokenFilePath(name: string): string {
+  assertValidProfileName(name);
+  return path.join(codecastDir(), `cc-account-${name}.env`);
+}
+
+/** Store a setup-token for a profile as a 0600 `export` file (same shape and
+ *  quoting as the provider-key file, so the launch line only ever carries the
+ *  PATH). Rejects anything that isn't a setup-token so a pasted keychain
+ *  access token or API key can't be sourced into a session by mistake. */
+export function writeAccountToken(name: string, token: string): string {
+  const t = token.trim();
+  if (!t.startsWith(SETUP_TOKEN_PREFIX) || /\s/.test(t) || t.length < SETUP_TOKEN_PREFIX.length + 20) {
+    throw new CcAccountError(`Not a Claude setup-token (expected ${SETUP_TOKEN_PREFIX}…) — mint one with: claude setup-token`);
+  }
+  const file = accountTokenFilePath(name);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  atomicWriteFile(file, renderProviderEnvFile({ CLAUDE_CODE_OAUTH_TOKEN: t }), { mode: 0o600 });
+  return file;
+}
+
+export function removeAccountToken(name: string): boolean {
+  const file = accountTokenFilePath(name);
+  const existed = fs.existsSync(file);
+  try { fs.rmSync(file, { force: true }); } catch {}
+  return existed;
+}
+
+export interface AccountTokenInfo {
+  file: string;
+  stored_at: number;
+  expires_at: number;
+}
+
+/** Non-secret facts about a stored token, or null when the profile has none. */
+export function accountTokenInfo(name: string): AccountTokenInfo | null {
+  let file: string;
+  try { file = accountTokenFilePath(name); } catch { return null; }
+  try {
+    const stored_at = fs.statSync(file).mtimeMs;
+    return { file, stored_at, expires_at: stored_at + SETUP_TOKEN_LIFETIME_MS };
+  } catch {
+    return null;
+  }
+}
+
+/** The token as it appears in `claude setup-token`'s output (or any pane /
+ *  clipboard text). Tokens are ~100 chars of URL-safe base64. */
+export function extractSetupToken(text: string): string | null {
+  const m = /sk-ant-oat01-[A-Za-z0-9_-]{40,}/.exec(text);
+  return m ? m[0] : null;
+}
+
+// ---------------------------------------------------------------------------
+// Account attribution for a scope-less token. A setup-token can't read its own
+// profile or usage, but every model response carries the account's unified
+// rate-limit windows. Two credentials whose 5h AND 7d reset timestamps match
+// to the second belong to the same account — that is how a freshly minted
+// token is proven to belong to the machine's login before it is stored under
+// that profile (the browser may have been signed into a different account).
+// ---------------------------------------------------------------------------
+
+export interface RateLimitFingerprint {
+  five_hour_reset: number | null;
+  seven_day_reset: number | null;
+  five_hour_utilization: number | null;
+  seven_day_utilization: number | null;
+}
+
+export function parseRateLimitFingerprint(headers: { get(name: string): string | null }): RateLimitFingerprint {
+  const num = (name: string): number | null => {
+    const raw = headers.get(name);
+    if (raw == null || raw === "") return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  };
+  return {
+    five_hour_reset: num("anthropic-ratelimit-unified-5h-reset"),
+    seven_day_reset: num("anthropic-ratelimit-unified-7d-reset"),
+    five_hour_utilization: num("anthropic-ratelimit-unified-5h-utilization"),
+    seven_day_utilization: num("anthropic-ratelimit-unified-7d-utilization"),
+  };
+}
+
+/** Same account iff both reset timestamps are known and identical. Utilization
+ *  is deliberately ignored — it moves between two probes seconds apart. */
+export function sameAccountFingerprint(a: RateLimitFingerprint, b: RateLimitFingerprint): boolean {
+  return (
+    a.five_hour_reset != null &&
+    a.seven_day_reset != null &&
+    a.five_hour_reset === b.five_hour_reset &&
+    a.seven_day_reset === b.seven_day_reset
+  );
+}
+
+const CC_MESSAGES_URL = process.env.CODECAST_CC_MESSAGES_URL || "https://api.anthropic.com/v1/messages";
+const CC_PROBE_MODEL = process.env.CODECAST_CC_PROBE_MODEL || "claude-haiku-4-5-20251001";
+
+/** One-token model call whose only purpose is the rate-limit headers. Costs a
+ *  handful of input tokens on the account; never touches the credential store. */
+export async function fetchRateLimitFingerprint(bearerToken: string): Promise<RateLimitFingerprint> {
+  const res = await fetch(CC_MESSAGES_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${bearerToken}`,
+      "anthropic-beta": "oauth-2025-04-20",
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+      "user-agent": "codecast-account-probe",
+    },
+    body: JSON.stringify({ model: CC_PROBE_MODEL, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new CcAccountError(`Account probe failed: HTTP ${res.status} ${body.slice(0, 160)}`);
+  }
+  return parseRateLimitFingerprint(res.headers);
+}
+
+/** Launch-line prefix that sources the profile's token file, or "" when no
+ *  account was requested. A requested account with no stored token is reported
+ *  through `warn` and falls back to the keychain login rather than failing the
+ *  launch — the session still starts, on the machine's default account. */
+export function accountSourcePrefix(name: string | undefined, warn?: (msg: string) => void): string {
+  if (!name) return "";
+  const info = accountTokenInfo(name);
+  if (!info) {
+    warn?.(`cc_account "${name}" requested but no setup-token stored (cast accounts token ${name}) — launching on the keychain login`);
+    return "";
+  }
+  if (info.expires_at <= Date.now()) {
+    warn?.(`cc_account "${name}" setup-token is past its one-year lifetime — re-mint with: claude setup-token | cast accounts token ${name}`);
+  }
+  return sourceFilePrefix(info.file);
 }
 
 /** Re-snapshot the ACTIVE account into whichever saved profile matches its
@@ -867,6 +1023,8 @@ export interface AccountsHeartbeatPayload {
     tier?: string;
     subscription?: string;
     usage?: CcUsageSnapshot;
+    // Per-session launch token on file for this profile (never the token).
+    token?: { stored_at: number; expires_at: number };
   }>;
 }
 
@@ -906,19 +1064,25 @@ export function createMtimeGatedCache<T>(
 // Recompute is small file reads — never the keychain — so the cache only
 // exists to skip parsing ~/.claude.json when nothing changed.
 const accountsCache = createMtimeGatedCache<AccountsHeartbeatPayload | null>(
-  () => [indexPath(), claudeJsonPath(), usageCachePath()],
+  // The directory itself is on the list so a token file appearing or vanishing
+  // (a rename into ~/.codecast) invalidates the payload like an index write.
+  () => [indexPath(), claudeJsonPath(), usageCachePath(), codecastDir()],
   () => {
     let value: AccountsHeartbeatPayload | null = null;
     try {
       const active = activeAccountSummary();
       const usage = readUsageCache().accounts;
-      const profiles = listProfiles().map(({ name, email, uuid, tier, subscription }) => ({
-        name,
-        email,
-        tier,
-        subscription,
-        usage: usage[uuid || email || ""] ?? undefined,
-      }));
+      const profiles = listProfiles().map(({ name, email, uuid, tier, subscription }) => {
+        const tok = accountTokenInfo(name);
+        return {
+          name,
+          email,
+          tier,
+          subscription,
+          usage: usage[uuid || email || ""] ?? undefined,
+          ...(tok ? { token: { stored_at: tok.stored_at, expires_at: tok.expires_at } } : {}),
+        };
+      });
       if (active?.email || profiles.length > 0) {
         value = { active_email: active?.email, active_uuid: active?.uuid, profiles };
       }

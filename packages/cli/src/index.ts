@@ -60,7 +60,7 @@ import {
   WorkspaceUnresolved,
   type Workspace,
 } from "./resolveWorkspace.js";
-import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError } from "./ccAccounts.js";
+import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, writeAccountToken, removeAccountToken, accountTokenInfo } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
@@ -4240,7 +4240,13 @@ accountsCmd
       for (const p of profiles) {
         const mark = p.active ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
         const tier = p.subscription ? ` ${c.dim}(${p.subscription}${p.tier?.includes("20x") ? " 20x" : ""})${c.reset}` : "";
-        console.log(`${mark} ${c.cyan}${p.name}${c.reset} ${p.email ?? ""}${tier}${p.active ? ` ${c.dim}— active${c.reset}` : ""}`);
+        const tok = accountTokenInfo(p.name);
+        const tokenNote = tok
+          ? (tok.expires_at <= Date.now()
+            ? ` ${c.yellow}· token expired${c.reset}`
+            : ` ${c.dim}· token, ${Math.ceil((tok.expires_at - Date.now()) / 86400000)}d left${c.reset}`)
+          : "";
+        console.log(`${mark} ${c.cyan}${p.name}${c.reset} ${p.email ?? ""}${tier}${tokenNote}${p.active ? ` ${c.dim}— active${c.reset}` : ""}`);
       }
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
@@ -4301,6 +4307,33 @@ accountsCmd
       process.exit(1);
     }
     await publishAccountsInventory();
+  });
+
+accountsCmd
+  .command("token <name>")
+  .description(
+    "Store a `claude setup-token` for a saved profile so sessions can run on that account\n" +
+    "without switching the machine's login: cast spawn --account <name> \"<task>\".\n" +
+    "Mint it with `claude setup-token` while the browser is signed into THAT account,\n" +
+    "then paste it here (hidden prompt) or pipe it on stdin. Tokens last one year."
+  )
+  .option("--rm", "Forget the stored token (the token itself stays valid until revoked at claude.ai → Settings → Claude Code)")
+  .action(async (name: string, options: any) => {
+    try {
+      if (options.rm) {
+        const existed = removeAccountToken(name);
+        console.log(existed ? `${c.green}✓${c.reset} removed token for ${c.cyan}${name}${c.reset}` : `${c.dim}no token stored for ${name}${c.reset}`);
+        return;
+      }
+      const token = await promptHiddenSecret(`Paste the setup-token for ${name}: `);
+      const file = writeAccountToken(name, token);
+      const info = accountTokenInfo(name)!;
+      console.log(`${c.green}✓${c.reset} token stored for ${c.cyan}${name}${c.reset} (${file}, expires ${new Date(info.expires_at).toISOString().slice(0, 10)})`);
+      console.log(`${c.dim}  launch on it: cast spawn --account ${name} "<task>"${c.reset}`);
+    } catch (err) {
+      console.error(err instanceof CcAccountError ? err.message : String(err));
+      process.exit(1);
+    }
   });
 
 // A mass revive resumes one claude process per blocked session — past this
@@ -10717,6 +10750,7 @@ program
   .option("--subagent [parent]", "Nest under a parent session as a subagent row (default parent: the session running this command)")
   .option("--model <model>", "Model override (e.g. opus, sonnet)")
   .option("--effort <level>", "Reasoning effort (claude: low|medium|high|max; varies by agent)")
+  .option("--account <name>", "Claude account profile to run on, without switching the machine's login (needs: cast accounts token <name>)")
   .option("--isolated", "Give each session its own git worktree")
   .option("--device <name>", "Machine to start on (label or device id, e.g. nose); falls back to an online machine with the repo if it's offline")
   .option("--label <name>", "File each spawned session under a label (created if new)")
@@ -10781,6 +10815,7 @@ program
           agent_type: agentType,
           model: options.model,
           effort: options.effort,
+          cc_account: options.account,
           isolated: options.isolated || undefined,
           device: options.device,
           parent_session: parentSession,
