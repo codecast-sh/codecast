@@ -19,11 +19,12 @@
 //     their token in memory, so blocked sessions must be killed + resumed to
 //     adopt the new account (the daemon's switch_account command does this).
 
-import { execFileSync } from "./proc.js";
+import { execFileSync, keychainReadAsync } from "./proc.js";
+import { createHash } from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { readLocalCredential } from "./remote/session-move.js";
+import { readLocalCredential, readLocalCredentialAsync } from "./remote/session-move.js";
 import { readProfileIndexFile } from "./readForUpdate.js";
 import { atomicWriteFile } from "./atomicWrite.js";
 import { renderProviderEnvFile, sourceFilePrefix } from "./providerKeyLaunch.js";
@@ -189,11 +190,22 @@ export function readActiveCredential(): string | null {
   // CC_ACCOUNTS_FORCE_FILE) would write the file while reads still probed the
   // keychain — the source of the sandbox reading the machine's real login.
   if (useFileStore()) {
-    const f = path.join(homeDir(), ".claude", ".credentials.json");
+    const f = activeCredentialFile();
     if (!fs.existsSync(f)) return null;
     return fs.readFileSync(f, "utf-8");
   }
   return readLocalCredential();
+}
+
+/** The same read for the daemon's timers, with the keychain call off the loop. */
+export async function readActiveCredentialAsync(): Promise<string | null> {
+  if (useFileStore()) return fs.promises.readFile(activeCredentialFile(), "utf-8").catch(() => null);
+  return readLocalCredentialAsync();
+}
+
+/** Where CC keeps the active login when the store is a file (Linux, sandboxed tests). */
+function activeCredentialFile(): string {
+  return path.join(homeDir(), ".claude", ".credentials.json");
 }
 
 /** The keychain item's account attribute ("acct"). CC created the item, so
@@ -214,7 +226,7 @@ export function writeActiveCredential(credentialJson: string): void {
     // 0600 is stated, not defaulted: the shared helper keeps whatever mode the
     // file already has, so an existing world-readable credential file would
     // stay world-readable. This is an OAuth token — narrow it on every write.
-    atomicWriteFile(path.join(homeDir(), ".claude", ".credentials.json"), credentialJson, {
+    atomicWriteFile(activeCredentialFile(), credentialJson, {
       mode: 0o600,
     });
     return;
@@ -313,24 +325,33 @@ export function patchOauthAccount(oauthAccount: Record<string, any>): void {
 
 function readProfileSecret(name: string): string | null {
   if (useFileStore()) {
-    const f = path.join(profileFileDir(), `${name}.json`);
+    const f = profileSecretFile(name);
     if (!fs.existsSync(f)) return null;
     return fs.readFileSync(f, "utf-8");
   }
   try {
-    return execFileSync(
-      "security",
-      ["find-generic-password", "-s", `${PROFILE_KEYCHAIN_PREFIX}${name}`, "-w"],
-      { encoding: "utf-8" },
-    ).trim();
+    return execFileSync("security", profileSecretArgs(name), { encoding: "utf-8" }).trim();
   } catch {
     return null;
   }
 }
 
+/** The same read for the daemon's timers, with the keychain call off the loop. */
+async function readProfileSecretAsync(name: string): Promise<string | null> {
+  if (useFileStore()) return fs.promises.readFile(profileSecretFile(name), "utf-8").catch(() => null);
+  return keychainReadAsync(profileSecretArgs(name)).catch(() => null);
+}
+
+function profileSecretArgs(name: string): string[] {
+  return ["find-generic-password", "-s", `${PROFILE_KEYCHAIN_PREFIX}${name}`, "-w"];
+}
+function profileSecretFile(name: string): string {
+  return path.join(profileFileDir(), `${name}.json`);
+}
+
 function deleteProfileSecret(name: string): void {
   if (useFileStore()) {
-    fs.rmSync(path.join(profileFileDir(), `${name}.json`), { force: true });
+    fs.rmSync(profileSecretFile(name), { force: true });
     return;
   }
   try {
@@ -348,7 +369,7 @@ function writeProfileSecret(name: string, content: string): void {
   if (useFileStore()) {
     // Same reason as writeActiveCredential: a saved profile holds the same
     // token, so the mode is stated rather than inherited from the old file.
-    atomicWriteFile(path.join(profileFileDir(), `${name}.json`), content, { mode: 0o600 });
+    atomicWriteFile(profileSecretFile(name), content, { mode: 0o600 });
     return;
   }
   execFileSync("security", [
@@ -383,13 +404,190 @@ function writeProfileIndex(index: ProfileIndex): void {
 }
 
 // ---------------------------------------------------------------------------
+// Verified identity: which account a credential ACTUALLY belongs to
+// ---------------------------------------------------------------------------
+//
+// ~/.claude.json's oauthAccount is a LABEL, written by a different program at a
+// different moment than the credential it describes. The two drift: a switch
+// writes the keychain and the label in two steps, and CC rewrites the label
+// only when it fetches a profile. A stale label is not cosmetic — every
+// destructive write in this module keys off it. `resnapshotActiveProfile` picks
+// which profile to overwrite from the label, so ONE desync copies the live
+// token into the wrong profile, and each later switch spreads it further.
+// (2026-09-02: claude2, claude3 and fresh all held one token, three labels.)
+//
+// The token can prove its own identity: /api/oauth/profile answers with the
+// account uuid for any credential carrying the user:profile scope, which every
+// CC OAuth login has. So identity is resolved FROM THE CREDENTIAL and cached
+// here, keyed by a hash of the access token. Callers stay synchronous; the
+// daemon refreshes the cache on the same timer as usage.
+
+const CC_PROFILE_URL =
+  process.env.CODECAST_CC_PROFILE_URL || "https://api.anthropic.com/api/oauth/profile";
+
+export interface VerifiedIdentity {
+  uuid?: string;
+  email?: string;
+  verified_at: number;
+}
+
+interface IdentityCache {
+  // Keyed by tokenKey() — a hash, never token material.
+  tokens: Record<string, VerifiedIdentity>;
+}
+
+function identityCachePath(): string {
+  return path.join(codecastDir(), "cc-identity.json");
+}
+
+/** Stable per-token key. A hash so the cache file holds no token material. */
+export function tokenKey(accessToken: string): string {
+  return createHash("sha256").update(accessToken).digest("hex").slice(0, 16);
+}
+
+function readIdentityCache(): IdentityCache {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(identityCachePath(), "utf-8"));
+    if (parsed && typeof parsed.tokens === "object") return parsed;
+  } catch {}
+  return { tokens: {} };
+}
+
+function writeIdentityCache(cache: IdentityCache): void {
+  atomicWriteFile(identityCachePath(), JSON.stringify(cache, null, 2), { mode: 0o600 });
+}
+
+/** Ask the account server whose credential this is. Throws on a dead token. */
+export async function fetchAccountIdentity(
+  accessToken: string,
+  opts: { fetchImpl?: typeof fetch } = {},
+): Promise<{ uuid?: string; email?: string }> {
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const resp = await fetchImpl(CC_PROFILE_URL, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "anthropic-beta": "oauth-2025-04-20",
+      "User-Agent": "codecast-daemon",
+      Accept: "application/json",
+    },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!resp.ok) throw new CcAccountError(`profile endpoint ${resp.status}`);
+  const data: any = await resp.json();
+  const acct = data?.account ?? {};
+  const uuid = typeof acct.uuid === "string" ? acct.uuid : undefined;
+  // The endpoint answers with `email`; CC's own oauthAccount block spells the
+  // same field `emailAddress`, so accept either rather than depend on one.
+  const rawEmail = acct.email ?? acct.email_address;
+  const email = typeof rawEmail === "string" ? rawEmail : undefined;
+  if (!uuid && !email) throw new CcAccountError("profile response carried no account identity");
+  return { uuid, email };
+}
+
+/** The cached verdict for a token, or null when it was never verified. */
+export function verifiedIdentityFor(accessToken: string | undefined): VerifiedIdentity | null {
+  if (!accessToken) return null;
+  return readIdentityCache().tokens[tokenKey(accessToken)] ?? null;
+}
+
+/** Verify one token and cache the answer. Returns null when the probe fails
+ *  (an expired or revoked token proves nothing about its account). */
+export async function verifyIdentity(
+  accessToken: string,
+  opts: { fetchImpl?: typeof fetch; now?: number } = {},
+): Promise<VerifiedIdentity | null> {
+  try {
+    const { uuid, email } = await fetchAccountIdentity(accessToken, opts);
+    const entry: VerifiedIdentity = { uuid, email, verified_at: opts.now ?? Date.now() };
+    const cache = readIdentityCache();
+    cache.tokens[tokenKey(accessToken)] = entry;
+    writeIdentityCache(cache);
+    invalidateAccountsCache();
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
+/** Verify the machine's current login. The daemon calls this on its usage
+ *  timer, so the synchronous readers below almost always find a fresh answer. */
+export async function verifyActiveIdentity(
+  opts: { fetchImpl?: typeof fetch; now?: number } = {},
+): Promise<VerifiedIdentity | null> {
+  const token = oauthOf(await readActiveCredentialAsync())?.accessToken;
+  if (typeof token !== "string" || !token) return null;
+  const known = verifiedIdentityFor(token);
+  if (known) return known;
+  return verifyIdentity(token, opts);
+}
+
+// ---------------------------------------------------------------------------
 // Public operations
 // ---------------------------------------------------------------------------
 
+/** Who the machine is logged in as. The credential's own verdict wins over
+ *  ~/.claude.json, which is only a label and can name a different account. */
 export function activeAccountSummary(): { email?: string; uuid?: string } | null {
+  const verified = verifiedIdentityFor(readActiveOauth()?.accessToken);
+  if (verified) return { email: verified.email, uuid: verified.uuid };
   const acct = readOauthAccount();
-  if (!acct) return null;
+  if (!acct?.accountUuid && !acct?.emailAddress) return null;
   return { email: acct.emailAddress, uuid: acct.accountUuid };
+}
+
+/** The same answer, plus whether the credential itself proved it. Destructive
+ *  writes need to know: an unverified identity may be naming another account. */
+export function activeAccountIdentity(): { email?: string; uuid?: string; verified: boolean } | null {
+  const verified = verifiedIdentityFor(readActiveOauth()?.accessToken);
+  if (verified) return { email: verified.email, uuid: verified.uuid, verified: true };
+  const acct = readOauthAccount();
+  if (!acct?.accountUuid && !acct?.emailAddress) return null;
+  return { email: acct.emailAddress, uuid: acct.accountUuid, verified: false };
+}
+
+/** One access token cannot belong to two accounts. When the credential we are
+ *  about to snapshot is already stored under a DIFFERENT profile, the label is
+ *  provably wrong — refuse rather than stamp a second name on one token. This
+ *  is the offline half of the identity rule: it needs no network and it stops
+ *  the spread at the first duplicate instead of the fifth. */
+function assertNotAnotherProfilesCredential(name: string, credentialJson: string): void {
+  const token = oauthOf(credentialJson)?.accessToken;
+  if (typeof token !== "string" || !token) return;
+  for (const other of Object.keys(readProfileIndex().profiles)) {
+    if (other === name) continue;
+    let stored: string | null;
+    try {
+      stored = readProfileSecret(other);
+    } catch {
+      continue;
+    }
+    if (!stored) continue;
+    let otherToken: unknown;
+    try {
+      otherToken = JSON.parse(stored)?.credentials?.claudeAiOauth?.accessToken;
+    } catch {
+      continue;
+    }
+    if (otherToken !== token) continue;
+    throw new CcAccountError(
+      `Refusing to save "${name}": this machine's credential is the one already stored as "${other}", ` +
+        `so the login is "${other}", not "${name}". Log into ${name}'s account (claude /login) and save again — ` +
+        `run \`cast accounts verify\` to see what each profile really holds.`,
+    );
+  }
+}
+
+/** The identity block to store beside the credential. When the credential has
+ *  proved whose it is, that verdict wins over ~/.claude.json's label, which may
+ *  still name the account we switched away from. */
+function activeOauthAccountForSave(): Record<string, any> | null {
+  const label = readOauthAccount();
+  const verified = verifiedIdentityFor(readActiveOauth()?.accessToken);
+  if (!verified?.uuid) return label;
+  if (label?.accountUuid === verified.uuid) return label;
+  // The label describes a different account: keep only what the credential
+  // itself proved, so nothing downstream reads the stale org/email.
+  return { accountUuid: verified.uuid, emailAddress: verified.email };
 }
 
 export function saveProfile(name: string): CcProfileMeta {
@@ -409,7 +607,8 @@ export function saveProfile(name: string): CcProfileMeta {
       `Active credential is unusable (${health.reason}) — refusing to snapshot it. Run /login first.`,
     );
   }
-  const profile = buildProfile(cred, readOauthAccount(), Date.now());
+  assertNotAnotherProfilesCredential(name, cred);
+  const profile = buildProfile(cred, activeOauthAccountForSave(), Date.now());
   writeProfileSecret(name, JSON.stringify(profile));
   const meta = profileMeta(profile);
   const index = readProfileIndex();
@@ -669,6 +868,16 @@ export function resnapshotActiveProfile(): string | null {
   }
 }
 
+/** The identity block for a profile that saved none, rebuilt from the index.
+ *  Empty when even the index has nothing — an unknown login, which readers
+ *  handle, unlike a confident wrong answer. */
+function identityBlockFor(
+  meta: Omit<CcProfileMeta, "name" | "active"> | undefined,
+): Record<string, any> {
+  if (!meta?.uuid && !meta?.email) return {};
+  return { accountUuid: meta.uuid, emailAddress: meta.email };
+}
+
 export interface SwitchResult {
   from: string | null; // profile name the outgoing account was re-saved as
   fromEmail?: string;
@@ -698,9 +907,20 @@ export function useProfile(name: string): SwitchResult {
   const fromEmail = activeAccountSummary()?.email;
   const from = resnapshotActiveProfile();
   writeActiveCredential(JSON.stringify(target.credentials));
-  if (target.oauthAccount && Object.keys(target.oauthAccount).length > 0) {
-    patchOauthAccount(target.oauthAccount);
-  }
+  // The label MUST move with the credential. Leaving the outgoing account's
+  // identity in ~/.claude.json when the target carries none was the whole bug:
+  // the machine then runs account B while every reader is told A, and the next
+  // switch-away re-saves B's live token under A's profile. No label is honest
+  // ("unknown", and the credential can still prove itself); a stale one is not.
+  const targetIdentity =
+    target.oauthAccount && Object.keys(target.oauthAccount).length > 0
+      ? target.oauthAccount
+      : identityBlockFor(readProfileIndex().profiles[name]);
+  patchOauthAccount(targetIdentity);
+  // Stamp the activation here, not at the next usage tick: the daemon's
+  // switch_account probes right after this, and `cast accounts use` from a
+  // terminal must not let a pre-switch snapshot pass as evidence meanwhile.
+  noteActiveAccount(targetIdentity?.accountUuid || targetIdentity?.emailAddress);
   invalidateAccountsCache();
   return { from, fromEmail, to: name, toEmail: target.oauthAccount?.emailAddress };
 }
@@ -729,7 +949,14 @@ const CC_OAUTH_TOKEN_URL =
 /** The parsed `claudeAiOauth` block of the active credential (null for API-key
  * logins, missing/corrupt credentials). */
 export function readActiveOauth(): Record<string, any> | null {
-  const raw = readActiveCredential();
+  return oauthOf(readActiveCredential());
+}
+
+export async function readActiveOauthAsync(): Promise<Record<string, any> | null> {
+  return oauthOf(await readActiveCredentialAsync());
+}
+
+function oauthOf(raw: string | null): Record<string, any> | null {
   if (!raw) return null;
   try {
     return JSON.parse(raw)?.claudeAiOauth ?? null;
@@ -738,9 +965,11 @@ export function readActiveOauth(): Record<string, any> | null {
   }
 }
 
-/** Epoch-ms expiry of the active access token, or null if unknown. */
-export function activeCredentialExpiresAt(): number | null {
-  const exp = readActiveOauth()?.expiresAt;
+/** Epoch-ms expiry of the active access token, or null if unknown. Async
+ * because every caller is a daemon timer or a login flow, and the read behind
+ * it is a keychain call. */
+export async function activeCredentialExpiresAt(): Promise<number | null> {
+  const exp = (await readActiveOauthAsync())?.expiresAt;
   return typeof exp === "number" ? exp : null;
 }
 
@@ -765,7 +994,7 @@ export async function refreshActiveCredential(
 ): Promise<RefreshResult> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const now = opts.now ?? Date.now();
-  const raw = readActiveCredential();
+  const raw = await readActiveCredentialAsync();
   if (!raw) return { refreshed: false, reason: "no active credential" };
   let cred: any;
   try {
@@ -836,10 +1065,10 @@ export async function refreshActiveCredential(
  * updated profile name, or null when there's nothing to do (no login, not saved
  * yet — first-time saves are `autoSaveActiveProfile`'s job — or already fresh).
  */
-export function resnapshotIfActiveFresher(): string | null {
+export async function resnapshotIfActiveFresher(): Promise<string | null> {
   const active = activeAccountSummary();
   if (!active?.uuid && !active?.email) return null;
-  const activeExpiry = activeCredentialExpiresAt() ?? 0;
+  const activeExpiry = (await activeCredentialExpiresAt()) ?? 0;
   const index = readProfileIndex();
   const match = Object.entries(index.profiles).find(
     ([, meta]) =>
@@ -847,7 +1076,7 @@ export function resnapshotIfActiveFresher(): string | null {
   );
   if (!match) return null;
   const [name] = match;
-  const raw = readProfileSecret(name);
+  const raw = await readProfileSecretAsync(name);
   let storedExpiry = 0;
   if (raw) {
     try {
@@ -864,6 +1093,113 @@ export function resnapshotIfActiveFresher(): string | null {
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Audit: what does each profile REALLY hold?
+// ---------------------------------------------------------------------------
+
+export interface ProfileAudit {
+  name: string;
+  labelled_email?: string;
+  labelled_uuid?: string;
+  actual_email?: string;
+  actual_uuid?: string;
+  /** ok = the credential is the account the profile claims.
+   *  mislabeled = it belongs to a different account (provable, from the token).
+   *  duplicate = mislabeled AND another profile already covers that account.
+   *  unverifiable = the token could not answer (expired, revoked, offline). */
+  verdict: "ok" | "mislabeled" | "duplicate" | "unverifiable";
+  reason?: string;
+  /** Set by repairProfileIdentities: what it did about a bad verdict. */
+  repair?: "dropped-credential" | "relabelled";
+}
+
+/** Probe every saved profile's stored credential and say whose it actually is.
+ *  Answers the only question the index cannot: the index records what we were
+ *  TOLD at save time, the token records the truth. */
+export async function auditProfileIdentities(
+  opts: { fetchImpl?: typeof fetch } = {},
+): Promise<ProfileAudit[]> {
+  const index = readProfileIndex();
+  const results: ProfileAudit[] = [];
+  for (const [name, meta] of Object.entries(index.profiles)) {
+    const row: ProfileAudit = {
+      name,
+      labelled_email: meta.email,
+      labelled_uuid: meta.uuid,
+      verdict: "unverifiable",
+    };
+    const raw = await readProfileSecretAsync(name);
+    const token = safeParse(raw ?? "")?.credentials?.claudeAiOauth?.accessToken;
+    if (typeof token !== "string" || !token) {
+      row.reason = raw ? "no access token in the stored snapshot" : "no stored credential";
+      results.push(row);
+      continue;
+    }
+    try {
+      const actual = await fetchAccountIdentity(token, opts);
+      row.actual_email = actual.email;
+      row.actual_uuid = actual.uuid;
+      row.verdict = !meta.uuid || meta.uuid === actual.uuid ? "ok" : "mislabeled";
+    } catch (err) {
+      row.reason = err instanceof Error ? err.message : String(err);
+    }
+    results.push(row);
+  }
+  // A mislabel whose real account another profile already covers is a pure
+  // duplicate: one token wearing two names, the shape that spreads.
+  for (const row of results) {
+    if (row.verdict !== "mislabeled") continue;
+    const covered = results.some(
+      (r) => r !== row && r.verdict === "ok" && r.actual_uuid && r.actual_uuid === row.actual_uuid,
+    );
+    if (covered) row.verdict = "duplicate";
+  }
+  return results;
+}
+
+function safeParse(raw: string): any {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** Repair what the audit found. A duplicate loses its credential (the account
+ *  is already covered under its right name, and the profile drops back to
+ *  "needs /login"); a mislabel nobody else covers is relabelled to the account
+ *  it actually holds, so a working token is never thrown away. */
+export async function repairProfileIdentities(
+  opts: { fetchImpl?: typeof fetch } = {},
+): Promise<ProfileAudit[]> {
+  const audit = await auditProfileIdentities(opts);
+  const index = readProfileIndex();
+  let dirty = false;
+  for (const row of audit) {
+    if (row.verdict === "duplicate") {
+      deleteProfileSecret(row.name);
+      removeAccountToken(row.name);
+      row.repair = "dropped-credential";
+      dirty = true;
+    } else if (row.verdict === "mislabeled") {
+      const raw = await readProfileSecretAsync(row.name);
+      const parsed = raw ? safeParse(raw) : null;
+      if (parsed) {
+        parsed.oauthAccount = { accountUuid: row.actual_uuid, emailAddress: row.actual_email };
+        writeProfileSecret(row.name, JSON.stringify(parsed));
+      }
+      index.profiles[row.name] = { ...index.profiles[row.name], uuid: row.actual_uuid, email: row.actual_email };
+      row.repair = "relabelled";
+      dirty = true;
+    }
+  }
+  if (dirty) {
+    writeProfileIndex(index);
+    invalidateAccountsCache();
+  }
+  return audit;
 }
 
 // ---------------------------------------------------------------------------
@@ -968,6 +1304,43 @@ export function readUsageCache(): UsageCache {
   return { accounts: {} };
 }
 
+// ---------------------------------------------------------------------------
+// Activation stamp — when the machine's active account last changed
+// ---------------------------------------------------------------------------
+// The server's auto-switch loop reads limit parks and usage snapshots as
+// evidence about the ACTIVE account. A park stamped before the account changed
+// hands belongs to the previous login, and a snapshot fetched before the change
+// says nothing about the new one — acting on either pushed a 2%-used account
+// off the machine twice on 2026-09-02. The stamp lets the loop tell the two
+// apart: it holds off judging the account until a probe fetched after `since`
+// lands, and `refreshUsageSnapshots` makes that probe skip the throttle.
+interface ActiveStamp {
+  key: string; // account uuid, else email — the usage cache's key
+  since: number;
+}
+
+function activeStampPath(): string {
+  return path.join(codecastDir(), "cc-active.json");
+}
+
+export function readActiveStamp(): ActiveStamp | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(activeStampPath(), "utf-8"));
+    if (parsed && typeof parsed.key === "string" && typeof parsed.since === "number") return parsed;
+  } catch {}
+  return null;
+}
+
+/** Record `key` as the active account. Returns when it became active: `now`
+ * if it just changed, else the stored time. */
+export function noteActiveAccount(key: string | undefined, now = Date.now()): number | undefined {
+  if (!key) return undefined;
+  const prev = readActiveStamp();
+  if (prev?.key === key) return prev.since;
+  atomicWriteFile(activeStampPath(), JSON.stringify({ key, since: now }), { mode: 0o644 });
+  return now;
+}
+
 export interface UsageRefreshSummary {
   probed: string[];
   skipped: string[];
@@ -991,7 +1364,10 @@ export async function refreshUsageSnapshots(
   const jobs = new Map<string, { label: string; token: string }>();
   const active = activeAccountSummary();
   const activeKey = active?.uuid || active?.email;
-  const activeCred = readActiveCredential();
+  const activeSince = noteActiveAccount(activeKey, now);
+  // Keychain reads go async: this runs on a daemon timer, and a busy keychain
+  // answered `security` in 2 to 3s (7 calls in one day's log, 2026-09-02).
+  const activeCred = await readActiveCredentialAsync();
   if (activeKey && activeCred && credentialHealth(activeCred, now).pushable) {
     try {
       const token = JSON.parse(activeCred)?.claudeAiOauth?.accessToken;
@@ -1005,7 +1381,7 @@ export async function refreshUsageSnapshots(
     if (!key) continue;
     knownKeys.add(key);
     if (jobs.has(key)) continue; // active covers it with the freshest token
-    const raw = readProfileSecret(name);
+    const raw = await readProfileSecretAsync(name);
     if (!raw) continue;
     let profile: CcProfile;
     try {
@@ -1024,7 +1400,12 @@ export async function refreshUsageSnapshots(
 
   for (const [key, job] of jobs) {
     const prev = cache.accounts[key];
-    if (prev && now - prev.fetched_at < minInterval) {
+    // A just-activated account is probed regardless of the throttle: its last
+    // snapshot predates the switch, and the server holds off judging the
+    // account until one fetched after the activation lands.
+    const predatesActivation =
+      key === activeKey && activeSince !== undefined && !!prev && prev.fetched_at < activeSince;
+    if (prev && !predatesActivation && now - prev.fetched_at < minInterval) {
       summary.skipped.push(job.label);
       continue;
     }
@@ -1053,6 +1434,10 @@ export async function refreshUsageSnapshots(
 export interface AccountsHeartbeatPayload {
   active_email?: string;
   active_uuid?: string;
+  // When the active account last changed (see the activation stamp). The
+  // server's auto-switch loop trusts a usage snapshot of the active account
+  // only if it was fetched after this.
+  active_since?: number;
   profiles: Array<{
     name: string;
     email?: string;
@@ -1069,11 +1454,14 @@ export interface AccountsHeartbeatPayload {
 // shows up on the very next heartbeat instead of after a blind expiry window.
 // The compute result — including a failed/null one — is memoized against the
 // same mtimes, so a broken source file isn't re-parsed every call.
+// `ttlMs` adds a time bound for a payload whose sources the mtimes cannot
+// fully name (the daemon's project roots also come from started sessions).
 export function createMtimeGatedCache<T>(
   paths: () => string[],
   compute: () => T,
+  opts?: { ttlMs?: number },
 ): { get(): T; invalidate(): void } {
-  let cached: { value: T; mtimes: number[] } | null = null;
+  let cached: { value: T; mtimes: number[]; at: number } | null = null;
   const mtimeOf = (p: string): number => {
     try {
       return fs.statSync(p).mtimeMs;
@@ -1083,12 +1471,14 @@ export function createMtimeGatedCache<T>(
   };
   return {
     get() {
+      const now = Date.now();
       const mtimes = paths().map(mtimeOf);
-      if (cached && cached.mtimes.every((m, i) => m === mtimes[i])) {
+      const fresh = opts?.ttlMs === undefined || (cached !== null && now - cached.at < opts.ttlMs);
+      if (cached && fresh && cached.mtimes.every((m, i) => m === mtimes[i])) {
         return cached.value;
       }
       const value = compute();
-      cached = { value, mtimes };
+      cached = { value, mtimes, at: now };
       return value;
     },
     invalidate() {
@@ -1102,11 +1492,14 @@ export function createMtimeGatedCache<T>(
 const accountsCache = createMtimeGatedCache<AccountsHeartbeatPayload | null>(
   // The directory itself is on the list so a token file appearing or vanishing
   // (a rename into ~/.codecast) invalidates the payload like an index write.
-  () => [indexPath(), claudeJsonPath(), usageCachePath(), codecastDir()],
+  () => [indexPath(), claudeJsonPath(), usageCachePath(), activeStampPath(), codecastDir()],
   () => {
     let value: AccountsHeartbeatPayload | null = null;
     try {
       const active = activeAccountSummary();
+      const stamp = readActiveStamp();
+      const activeSince =
+        stamp && (active?.uuid || active?.email) === stamp.key ? stamp.since : undefined;
       const usage = readUsageCache().accounts;
       const profiles = listProfiles().map(({ name, email, uuid, tier, subscription }) => {
         const tok = accountTokenInfo(name);
@@ -1120,7 +1513,12 @@ const accountsCache = createMtimeGatedCache<AccountsHeartbeatPayload | null>(
         };
       });
       if (active?.email || profiles.length > 0) {
-        value = { active_email: active?.email, active_uuid: active?.uuid, profiles };
+        value = {
+          active_email: active?.email,
+          active_uuid: active?.uuid,
+          ...(activeSince !== undefined ? { active_since: activeSince } : {}),
+          profiles,
+        };
       }
     } catch {
       value = null;

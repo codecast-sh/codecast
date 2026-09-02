@@ -98,15 +98,11 @@ EXPO_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
 EOF
 ```
 
-### Optional: `packages/electron/.env.local`
+### Optional: desktop app against your local web
 
-Only if working on the desktop app:
+The desktop app reads no `.env` file. Pass the origin on the command line; `bun run dev` in `packages/electron` already does (`CODECAST_URL=https://local.codecast.sh electron .`). The origin must be https: the http one redirects and lands on a different localStorage origin.
 
-```bash
-cat > packages/electron/.env.local << 'EOF'
-CODECAST_URL=http://local.codecast.sh
-EOF
-```
+A from-source run (`electron .`) also opens a Chrome DevTools Protocol port on `127.0.0.1:9333` so `cast app` and the perf harness can drive it. Set `CODECAST_CDP_PORT` to move it, or to open one on a packaged build.
 
 ## 4. Set Up Local Domains
 
@@ -193,20 +189,39 @@ The CLI config lives at `~/.codecast/config.json`:
 
 ## 8. Testing
 
-### E2E tests
+### Unit and integration tests
 
-Add test credentials to `packages/web/.env.local`:
+Every package runs `bun test`. `bun run test` at the root fans out through turbo. CI runs the web, convex, and cli suites plus the cli messaging e2e (real tmux) on every push to `main`.
+
+### End-to-end proof
+
+`cast doctor` proves the sync loop live: transcript to server, server to daemon to tmux inject, echo back. Exit code 0 means the whole loop works.
+
+### Driving the app itself: `cast app`
+
+`cast app` drives the running web or desktop app the way a user does, on top of `cast browser`. `cast browser` knows pages; `cast app` knows codecast: which surface is which, what "signed in" and "settled" mean, which build is loaded, and how to become a known account for a run. Every verb attaches to the page over the Chrome DevTools Protocol and reads the app's own handles (`window.__CODECAST_BUILD`, `__syncActivity`, `__syncReplication`, `__navLog`, and the dev-only `__inboxStore`), so nothing scrapes the DOM for state.
 
 ```bash
-TEST_USER_EMAIL=<get-from-team-lead>
-TEST_USER_PASSWORD=<get-from-team-lead>
+cast app doctor                     # origin, build, account, daemon owner, sync role, settled; exit 1 if not drivable
+cast app surfaces                   # the surfaces goto accepts and sweep walks
+cast app goto tasks                 # a surface by name; confirms where the app landed
+cast app goto jx7abcd               # a conversation by short id
+cast app wait-settle                # catch-up quiet, outbox empty
+cast app sweep --json               # every surface: rendered, no crash, no errors, no redirect
+cast app as-user demo@example.com   # sign the page in as a named account (--restore puts yours back)
+cast app shot                       # screenshot into the conversation
+cast app --desktop doctor           # the same against the desktop app
 ```
 
-Then:
+The loop is doctor, goto, wait-settle, then prove with `cast browser` (snapshot, get text, shot) or `eval`.
 
-```bash
-./scripts/run-e2e-suite.sh
-```
+The target is this session's tab in the managed Chrome, at local dev when vite answers on port 3200 and production otherwise (`--origin <url>` or `CAST_APP_ORIGIN` overrides). `--desktop` drives the desktop app over its debugging port instead: a from-source run opens `127.0.0.1:9333`, a packaged build only with `CODECAST_CDP_PORT` set.
+
+`goto` and `sweep` navigate in-app (pushState, the way a click routes) so surfaces switch in milliseconds and the store stays warm. The tab shell re-asserts its own URL when the destination is outside it (the settings pages, for one), so a bounced navigation falls back to a full document load; `--reload` forces that for every step. On local dev a full load is a vite transform pass and can take 30 seconds or more.
+
+`as-user` mints a real token pair through `packages/convex/run.sh verification:mintSession` (admin key, so only from the codecast checkout), swaps it into the page's localStorage and reloads. The identity that was there is saved on the page; `as-user --restore` puts it back. The user must own this machine's daemon for daemon-backed surfaces (terminal, vault, device commands) to read as online; doctor says when they do not.
+
+The surface list lives in `@codecast/shared/contracts/appSurfaces.ts`. A test in `routes.manifest.test.ts` fails when a param-free signed-in route is missing from it, or when it names a route the router no longer serves.
 
 ### Convex test scripts
 
@@ -338,7 +353,6 @@ CONVEX_CLOUD_URL       # alias for CONVEX_CLOUD_ORIGIN
 | `./scripts/deploy.sh` | Bump version, build, and deploy CLI binaries |
 | `./scripts/deploy-all.sh` | Full deployment (Convex + web + CLI) |
 | `./scripts/backup-convex.sh` | Backup Convex data (set `BACKUP_DIR`, `RETENTION_DAYS` to override defaults) |
-| `./scripts/run-e2e-suite.sh` | Run E2E test suite |
 
 ## Troubleshooting
 

@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { attachCommand, attachCopy } from "./tmuxAttach";
+import { REMOTE_TMUX_PATH } from "@codecast/shared/contracts";
 
 const mine = (ssh_host: string | null) => ({
   device_id: "d1",
@@ -22,8 +23,15 @@ const theirs = {
 describe("attachCommand", () => {
   test("your machine with an ssh host: wraps the attach for a remote shell", () => {
     expect(attachCommand("cc-resume-7ea05201", mine("nose"))).toBe(
-      `ssh nose -t "tmux attach -t 'cc-resume-7ea05201'"`,
+      `ssh nose -t "PATH=${REMOTE_TMUX_PATH} tmux attach -t 'cc-resume-7ea05201'"`,
     );
+  });
+
+  // `ssh host "cmd"` is a non-login shell: no .zprofile, so no Homebrew on
+  // PATH, so no tmux on a stock Mac. The command has to bring its own PATH.
+  test("the ssh form names where tmux lives, since the remote shell won't", () => {
+    const cmd = attachCommand("cc-x", mine("nose"))!;
+    expect(cmd).toContain("PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin tmux attach");
   });
 
   // Without -t, ssh allocates no TTY and tmux exits with
@@ -36,7 +44,7 @@ describe("attachCommand", () => {
   // remote shell re-parses must be double quotes.
   test("quoting nests rather than collides", () => {
     const cmd = attachCommand("cc-x", mine("m1@10.0.0.4"))!;
-    expect(cmd).toBe(`ssh m1@10.0.0.4 -t "tmux attach -t 'cc-x'"`);
+    expect(cmd).toBe(`ssh m1@10.0.0.4 -t "PATH=${REMOTE_TMUX_PATH} tmux attach -t 'cc-x'"`);
     expect(cmd.match(/"/g)).toHaveLength(2);
     expect(cmd.match(/'/g)).toHaveLength(2);
   });
@@ -71,7 +79,7 @@ describe("attachCopy", () => {
 
   test("your machine with an ssh host: the ssh form, plainly labelled", () => {
     const c = attachCopy("cc-x", mine("nose"));
-    expect(c.command).toBe(`ssh nose -t "tmux attach -t 'cc-x'"`);
+    expect(c.command).toBe(`ssh nose -t "PATH=${REMOTE_TMUX_PATH} tmux attach -t 'cc-x'"`);
     expect(c.message).toBe("ssh + tmux attach copied");
   });
 

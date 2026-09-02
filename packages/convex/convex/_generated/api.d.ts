@@ -169,6 +169,7 @@ import type * as transcripts from "../transcripts.js";
 import type * as userMessagesFilter from "../userMessagesFilter.js";
 import type * as users from "../users.js";
 import type * as vaultMirror from "../vaultMirror.js";
+import type * as verification from "../verification.js";
 import type * as webDocsPagination from "../webDocsPagination.js";
 import type * as workflow_runs from "../workflow_runs.js";
 import type * as workflows from "../workflows.js";
@@ -341,6 +342,7 @@ declare const fullApi: ApiFromModules<{
   userMessagesFilter: typeof userMessagesFilter;
   users: typeof users;
   vaultMirror: typeof vaultMirror;
+  verification: typeof verification;
   webDocsPagination: typeof webDocsPagination;
   workflow_runs: typeof workflow_runs;
   workflows: typeof workflows;

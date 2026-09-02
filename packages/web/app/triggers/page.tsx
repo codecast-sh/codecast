@@ -24,6 +24,7 @@ import { useTriggers, fetchTriggerRuns } from "../../hooks/useSyncTriggers";
 import { TriggerRunList, useTriggerRuns, openRunInStore } from "../../components/TriggerRunHistory";
 import { TriggerPromptView } from "../../components/TriggerPromptView";
 import { SelectBox } from "../../components/ui/select-box";
+import { SegmentedToggle } from "../../components/SegmentedToggle";
 import {
   ContextMenu,
   useContextMenu,
@@ -1008,104 +1009,126 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
     }
   };
 
-  const seg = (active: boolean) =>
-    `px-2.5 py-1 rounded-md text-xs transition-colors ${
-      active ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
-    }`;
+  // A labeled row on a hairline: label in a fixed column, the control bare
+  // beside it. The rule under each row is the control's line; it turns cyan
+  // while the row holds focus. Same grammar as the settings kit's rows.
+  const Row = ({ label, children, className = "" }: { label: string; children: React.ReactNode; className?: string }) => (
+    <div className={`flex items-start gap-4 border-b border-sol-border/40 focus-within:border-sol-cyan/70 transition-colors ${className}`}>
+      <span className="w-14 flex-shrink-0 pt-2 text-[10px] uppercase tracking-widest text-sol-text-dim select-none">{label}</span>
+      <div className="flex-1 min-w-0 flex flex-wrap items-center gap-x-4 gap-y-1">{children}</div>
+    </div>
+  );
+  const bareInput =
+    "bg-transparent py-2 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none";
 
   return (
-    // Standalone: a band between hairlines on the page, the inputs its only
-    // fills. Embedded: sits under the row's own divider.
-    <div className={embedded ? "pt-1" : "border-y border-sol-border/40 py-4 mb-6"}>
+    // Standalone: a band between hairlines on the page. Embedded: sits under
+    // the row's own divider. Either way, nothing inside draws a box; the
+    // primary button is the page's one fill.
+    <div className={embedded ? "pt-1" : "border-t border-sol-border/40 pt-1 mb-6"}>
       {isEdit && (
-        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-sol-cyan mb-2">
+        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-sol-cyan pt-2 pb-1">
           <Pencil className="w-3 h-3" /> Editing trigger
         </div>
       )}
-      <textarea
-        autoFocus
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
-          if (e.key === "Escape") onClose();
-        }}
-        placeholder='What should the agent do? e.g. "Check if CI is green on main and report"'
-        rows={3}
-        className="w-full bg-sol-bg-alt rounded-lg px-3 py-2 text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:ring-1 focus:ring-sol-cyan/50 resize-none"
-      />
-      <input
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        placeholder="Title (optional — auto-named from the prompt)"
-        className="w-full mt-2 bg-sol-bg-alt rounded-lg px-3 py-1.5 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:ring-1 focus:ring-sol-cyan/50"
-      />
-
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mt-3">
-        <div className="flex items-center gap-1 bg-sol-bg-alt rounded-lg p-0.5">
-          <button className={seg(kind === "now")} onClick={() => setKind("now")}>now</button>
-          <button className={seg(kind === "in")} onClick={() => setKind("in")}>in…</button>
-          <button className={seg(kind === "every")} onClick={() => setKind("every")}>every…</button>
-          <button className={seg(kind === "on")} onClick={() => setKind("on")}>on event</button>
-        </div>
+      <Row label="Prompt">
+        <textarea
+          autoFocus
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
+            if (e.key === "Escape") onClose();
+          }}
+          placeholder='What should the agent do? e.g. "Check if CI is green on main and report"'
+          rows={3}
+          className={`w-full ${bareInput} text-sm leading-relaxed resize-none`}
+        />
+      </Row>
+      <Row label="Title">
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Optional — auto-named from the prompt"
+          className={`w-full ${bareInput}`}
+        />
+      </Row>
+      <Row label="When">
+        <SegmentedToggle
+          variant="bare"
+          value={kind}
+          onChange={(k) => setKind(k as SchedKind)}
+          items={[
+            { key: "now", label: "now" },
+            { key: "in", label: "in…" },
+            { key: "every", label: "every…" },
+            { key: "on", label: "on event" },
+          ]}
+        />
         {needsDuration && (
-          <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-2">
             <input
               value={duration}
               onChange={(e) => setDuration(e.target.value)}
-              className={`w-20 bg-sol-bg-alt rounded-lg px-2 py-1 text-xs font-mono text-sol-text focus:outline-none ${
-                parsed === undefined ? "ring-1 ring-sol-red/50" : "focus:ring-1 focus:ring-sol-cyan/50"
+              aria-invalid={parsed === undefined}
+              className={`w-14 ${bareInput} font-mono border-b ${
+                parsed === undefined ? "border-sol-red text-sol-red" : "border-sol-border/60 focus:border-sol-cyan"
               }`}
             />
             <span className={`text-[11px] ${parsed === undefined ? "text-sol-red" : "text-sol-text-dim"}`}>{preview}</span>
-          </div>
+          </span>
         )}
         {kind === "on" && (
-          <SelectBox className="py-1 border-none" value={eventKey} onChange={(e) => setEventKey(e.target.value)}>
+          <SelectBox variant="bare" value={eventKey} onChange={(e) => setEventKey(e.target.value)}>
             {Object.keys(EVENT_SHORTHANDS).map((k) => (
               <option key={k} value={k}>{k}</option>
             ))}
           </SelectBox>
         )}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mt-3">
-        <label className="flex items-center gap-1.5 text-xs text-sol-text-muted cursor-pointer select-none">
+      </Row>
+      <Row label="Agent">
+        <SegmentedToggle
+          variant="bare"
+          value={agent}
+          onChange={(a) => setAgent(a as "claude" | "codex")}
+          items={[
+            { key: "claude", label: "claude" },
+            { key: "codex", label: "codex" },
+          ]}
+        />
+        <label className="inline-flex items-center gap-1.5 py-1 text-xs text-sol-text-muted cursor-pointer select-none">
           <input
             type="checkbox"
             checked={mode === "propose"}
             onChange={(e) => setMode(e.target.checked ? "propose" : "apply")}
             className="accent-sol-cyan"
           />
-          Read-only — report, don&apos;t change anything
+          read-only — report, don&apos;t change anything
         </label>
-        <div className="flex items-center gap-1 bg-sol-bg-alt rounded-lg p-0.5">
-          <button className={seg(agent === "claude")} onClick={() => setAgent("claude")}>claude</button>
-          <button className={seg(agent === "codex")} onClick={() => setAgent("codex")}>codex</button>
-        </div>
+      </Row>
+      <Row label="Project">
         <input
           value={project}
           onChange={(e) => setProject(e.target.value)}
           list="trigger-project-roots"
-          placeholder="Project path (optional)"
-          className="flex-1 min-w-[180px] bg-sol-bg-alt rounded-lg px-2 py-1 text-xs font-mono text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:ring-1 focus:ring-sol-cyan/50"
+          placeholder="Optional path"
+          className={`w-full ${bareInput} font-mono`}
         />
         <datalist id="trigger-project-roots">
           {projectOptions.map((p) => <option key={p} value={p} />)}
         </datalist>
-      </div>
+      </Row>
 
-
-      <div className="flex items-center justify-between mt-3">
+      <div className="flex items-center justify-between pt-3 pb-1">
         <span className="text-[11px] text-sol-text-dim">Runs on your daemon — it polls every 30s</span>
-        <div className="flex items-center gap-2">
-          <button onClick={onClose} className="px-3 py-1.5 text-xs text-sol-text-dim hover:text-sol-text transition-colors">
+        <div className="flex items-center gap-3">
+          <button onClick={onClose} className="text-xs text-sol-text-dim hover:text-sol-text transition-colors">
             Cancel
           </button>
           <button
             onClick={submit}
             disabled={!valid || submitting}
-            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-sol-cyan text-sol-bg hover:bg-sol-cyan/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="px-3 py-1.5 text-xs font-medium rounded-md bg-sol-cyan text-sol-bg hover:bg-sol-cyan/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             {isEdit
               ? submitting ? "Saving…" : "Save changes"
@@ -1327,15 +1350,19 @@ function matchesFilters(t: any, f: Filters): boolean {
   return true;
 }
 
-// The type filter renders as pills matching the rows' cadence chips (violet
-// loops, cyan one-shots, yellow event hooks) — click filters, click again
-// clears. Same toggle the stat strip's recurring/one-time cells drive.
-const TYPE_PILLS: { key: string; label: string; Icon: any; on: string }[] = [
-  { key: "recurring", label: "recurring", Icon: Repeat, on: "bg-sol-violet/15 text-sol-violet" },
-  { key: "once", label: "one-time", Icon: Clock, on: "bg-sol-cyan/15 text-sol-cyan" },
-  { key: "event", label: "event", Icon: Zap, on: "bg-sol-yellow/15 text-sol-yellow" },
+// The type filter is text that takes its cadence color when on (violet loops,
+// cyan one-shots, yellow event hooks) — click filters, click again clears.
+// Same toggle the overview line's recurring/one-time words drive.
+const TYPE_TOGGLES: { key: string; label: string; Icon: any; on: string }[] = [
+  { key: "recurring", label: "recurring", Icon: Repeat, on: "text-sol-violet" },
+  { key: "once", label: "one-time", Icon: Clock, on: "text-sol-cyan" },
+  { key: "event", label: "event", Icon: Zap, on: "text-sol-yellow" },
 ];
 
+// Palette grammar: the search is bare text on a hairline that turns cyan on
+// focus, and every filter beneath it is text — toggles that take color when
+// on, selects as value plus chevron, a ghost icon for grouping. No control
+// draws its own box; the bar's rules are the only lines.
 function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total, grouped, setGrouped }: {
   filters: Filters;
   update: (patch: Partial<Filters>) => void;
@@ -1349,48 +1376,43 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
 }) {
   const active = filtersActive(filters);
   return (
-    // Sticky with a hairline floor that ends on the column edges like every
-    // other rule on the page. Two deliberate rows: search owns the first,
-    // every filter control sits on the second.
-    <div className="sticky top-0 z-20 py-2.5 mb-2 bg-sol-bg/85 backdrop-blur border-b border-sol-border/40">
-      <div className="flex flex-col gap-2">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-sol-text-dim pointer-events-none" />
-          <input
-            id="trigger-search"
-            value={filters.search}
-            onChange={(e) => update({ search: e.target.value })}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                update({ search: "" });
-                e.currentTarget.blur();
-              }
-            }}
-            placeholder="Search title, prompt, last result…"
-            className="w-full bg-sol-bg-alt rounded-lg pl-8 pr-7 py-1.5 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:ring-1 focus:ring-sol-cyan/50"
-          />
-          {filters.search && (
-            <ShortcutTooltip label="Clear search">
-              <button
-                onClick={() => update({ search: "" })}
-                aria-label="Clear search"
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-sol-text-dim hover:text-sol-text"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </ShortcutTooltip>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-1">
-          {TYPE_PILLS.filter((p) => p.key !== "event" || hasEvent).map(({ key, label, Icon, on }) => (
+    <div className="sticky top-0 z-20 mb-2 bg-sol-bg/85 backdrop-blur border-b border-sol-border/40">
+      <div className="relative border-b border-sol-border/40 focus-within:border-sol-cyan/70 transition-colors">
+        <Search className="absolute left-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-sol-text-dim pointer-events-none" />
+        <input
+          id="trigger-search"
+          value={filters.search}
+          onChange={(e) => update({ search: e.target.value })}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              update({ search: "" });
+              e.currentTarget.blur();
+            }
+          }}
+          placeholder="Search title, prompt, last result…"
+          className="w-full bg-transparent pl-6 pr-6 py-2.5 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none"
+        />
+        {filters.search && (
+          <ShortcutTooltip label="Clear search">
+            <button
+              onClick={() => update({ search: "" })}
+              aria-label="Clear search"
+              className="absolute right-0 top-1/2 -translate-y-1/2 text-sol-text-dim hover:text-sol-text"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </ShortcutTooltip>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 py-1.5 text-[11px]">
+        <div className="flex items-center gap-3">
+          {TYPE_TOGGLES.filter((p) => p.key !== "event" || hasEvent).map(({ key, label, Icon, on }) => (
             <button
               key={key}
               onClick={() => update({ type: filters.type === key ? "all" : key })}
-              className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                filters.type === key
-                  ? on
-                  : "bg-sol-bg-alt text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight"
+              aria-pressed={filters.type === key}
+              className={`inline-flex items-center gap-1 py-1 font-medium transition-colors ${
+                filters.type === key ? on : "text-sol-text-dim hover:text-sol-text"
               }`}
             >
               <Icon className="w-3 h-3" />
@@ -1398,19 +1420,19 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
             </button>
           ))}
         </div>
-        <SelectBox className="border-none" value={filters.mode} onChange={(e) => update({ mode: e.target.value })}>
+        <SelectBox variant="bare" className="text-[11px]" value={filters.mode} onChange={(e) => update({ mode: e.target.value })}>
           <option value="all">all modes</option>
           <option value="apply">makes changes</option>
           <option value="propose">read-only</option>
         </SelectBox>
         {projects.length > 1 && (
-          <SelectBox className="border-none" value={filters.project} onChange={(e) => update({ project: e.target.value })}>
+          <SelectBox variant="bare" className="text-[11px]" value={filters.project} onChange={(e) => update({ project: e.target.value })}>
             <option value="all">all projects</option>
             {projects.map((p) => <option key={p} value={p}>{projectName(p)}</option>)}
           </SelectBox>
         )}
         {hasCodex && (
-          <SelectBox className="border-none" value={filters.agent} onChange={(e) => update({ agent: e.target.value })}>
+          <SelectBox variant="bare" className="text-[11px]" value={filters.agent} onChange={(e) => update({ agent: e.target.value })}>
             <option value="all">all agents</option>
             <option value="claude">claude</option>
             <option value="codex">codex</option>
@@ -1420,22 +1442,20 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
           <button
             onClick={() => setGrouped(!grouped)}
             aria-label="Group by project"
-            className={`p-1.5 rounded-lg transition-colors ${
-              grouped ? "text-sol-cyan bg-sol-cyan/15" : "bg-sol-bg-alt text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight"
-            }`}
+            aria-pressed={grouped}
+            className={`py-1 transition-colors ${grouped ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text"}`}
           >
             <LayoutGrid className="w-3.5 h-3.5" />
           </button>
         </ShortcutTooltip>
         {active && (
-          <span className="ml-auto inline-flex items-center gap-2 text-[11px] text-sol-text-dim">
+          <span className="ml-auto inline-flex items-center gap-2 text-sol-text-dim">
             <span className="tabular-nums">{shown} of {total}</span>
             <button onClick={() => update(EMPTY_FILTERS)} className="hover:text-sol-text underline underline-offset-2">
               clear
             </button>
           </span>
         )}
-        </div>
       </div>
     </div>
   );

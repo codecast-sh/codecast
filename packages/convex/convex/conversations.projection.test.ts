@@ -219,6 +219,51 @@ describe("overlay projection — placement rules", () => {
   });
 });
 
+describe("overlay projection — a team files as one group", () => {
+  test("a teammate rides its lead: bucket, fold and time flip follow the lead on the overlay and in the CLI stamping", async () => {
+    const tables = {
+      conversations: [
+        conv("lead", { updated_at: EPOCH - MIN, agent_team_name: "team", agent_name: "team-lead" }),
+        conv("mate_done", { updated_at: EPOCH - 2 * MIN, status: "completed", spawned_by_conversation_id: "conversations_lead", agent_team_name: "team" }),
+        conv("mate_pinned", { updated_at: EPOCH - 3 * MIN, inbox_pinned_at: EPOCH - 3 * MIN, spawned_by_conversation_id: "conversations_lead", agent_team_name: "team" }),
+        conv("mate_lead_absent", { updated_at: EPOCH - 4 * MIN, spawned_by_conversation_id: "conversations_nobody", agent_team_name: "team" }),
+        conv("edge", { updated_at: EPOCH - 30 * H }),
+        conv("old_lead", { updated_at: EPOCH - 31 * H, agent_team_name: "team", agent_name: "team-lead" }),
+        conv("mate_fresh_under_old_lead", { updated_at: EPOCH - 5 * MIN, spawned_by_conversation_id: "conversations_old_lead", agent_team_name: "team" }),
+      ],
+      managed_sessions: [
+        { _id: "ms_lead", user_id: ME, conversation_id: "conversations_lead", last_heartbeat: EPOCH - 1000, agent_status: "working", agent_status_updated_at: EPOCH - MIN },
+        { _id: "ms_mate_done", user_id: ME, conversation_id: "conversations_mate_done", last_heartbeat: EPOCH - 1000, agent_status: "stopped", agent_status_updated_at: EPOCH - 2 * MIN },
+      ],
+    };
+    const { liveness, projection } = await computeSessionsLiveness({ db: db(tables) }, ME as any);
+    expect(liveness.conversations_lead).toMatchObject({ bucket: "working", below_fold: false });
+    // The finished worker keeps its own verdict (needs_input: dead with
+    // output) but files with its lead, time flip included.
+    expect(liveness.conversations_mate_done).toMatchObject({ bucket: "working", work_state: "needs_input", below_fold: false });
+    expect(liveness.conversations_mate_done.bucket_stale_at).toBe(liveness.conversations_lead.bucket_stale_at);
+    expect(liveness.conversations_mate_done.stale_bucket).toBe(liveness.conversations_lead.stale_bucket);
+    // A pin is the viewer's act on the row: it keeps that place.
+    expect(liveness.conversations_mate_pinned).toMatchObject({ bucket: "pinned" });
+    // No lead present: the row places on its own.
+    expect(liveness.conversations_mate_lead_absent).toMatchObject({ bucket: "needs_input", below_fold: false });
+    // The fold rides too: a fresh teammate folds with its lead under the cut.
+    expect(liveness.conversations_old_lead).toMatchObject({ below_fold: true });
+    expect(liveness.conversations_mate_fresh_under_old_lead).toMatchObject({ bucket: "needs_input", below_fold: true });
+    expect(projection.tally.shown.working).toBe(2);
+    expect(projection.tally.shown.pinned).toBe(1);
+    expect(projection.tally.folded.needs_input).toBe(2);
+    // The CLI stamping files the team the same way.
+    _resetChildAuqProbeCacheForTests();
+    const cli = await computeInboxSessions({ db: db(tables) }, ME as any, { show_all: true, projection: true });
+    const cliRow = (id: string) => cli.sessions.find((s: any) => s._id === `conversations_${id}`);
+    expect(cliRow("mate_done")).toMatchObject({ bucket: "working", work_state: "needs_input", below_fold: false });
+    expect(cliRow("mate_fresh_under_old_lead")).toMatchObject({ bucket: "needs_input", below_fold: true });
+    expect(cliRow("mate_pinned")).toMatchObject({ bucket: "pinned" });
+    expect(cliRow("mate_lead_absent")).toMatchObject({ bucket: "needs_input" });
+  });
+});
+
 describe("overlay projection — the fold", () => {
   const foldTables = () => ({
     conversations: [

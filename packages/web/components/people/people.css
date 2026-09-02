@@ -9,6 +9,8 @@
   /* Its own window: the page never scrolls, the roster does. */
   height: 100vh;
   overflow: hidden;
+  /* The positioning box for the call settings sheet. */
+  position: relative;
   /* A buddy list is chrome end to end — names, presence lines, counts. Nothing
      here is a paragraph anyone copies, and a drag across it used to highlight
      half the roster. */
@@ -725,4 +727,59 @@
   font-size: 12px;
   font-weight: 600;
   color: var(--sol-text);
+}
+
+/* ---------------------------------------------------------------------------
+   The call settings sheet: the panel body over the roster, in the same window.
+   Covers rather than pushes, because at 320px a form beside a buddy list
+   leaves neither readable. Slides up like a drawer; reduced motion gets it in
+   place.
+   --------------------------------------------------------------------------- */
+.people-sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--sol-bg);
+  animation: people-sheet-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* A settings form is text a person may need to copy (a device name). */
+  user-select: text;
+}
+@keyframes people-sheet-in {
+  from { transform: translateY(12px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .people-sheet { animation: none; }
+}
+.people-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 36px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
+  flex-shrink: 0;
+}
+.people-sheet-title {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sol-text-dim);
+  outline: none;
+}
+.people-sheet-close {
+  border-radius: 4px;
+  padding: 4px;
+  color: var(--sol-text-dim);
+}
+.people-sheet-close:hover { color: var(--sol-text); }
+.people-sheet-body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 10px 16px;
 }
