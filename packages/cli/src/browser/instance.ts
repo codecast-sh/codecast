@@ -460,9 +460,12 @@ export async function acquireStartLock(
         process.once(sig, h);
         return [sig, h] as const;
       });
+      // bun-types narrows removeListener past Node's signal overloads; the
+      // EventEmitter surface is what both runtimes actually implement.
+      const emitter = process as NodeJS.EventEmitter;
       const cleanup = () => {
-        process.removeListener("exit", release);
-        for (const [sig, h] of handlers) process.removeListener(sig, h);
+        emitter.removeListener("exit", release);
+        for (const [sig, h] of handlers) emitter.removeListener(sig, h);
       };
       return () => {
         cleanup();
