@@ -1,34 +1,14 @@
-const { notarize } = require("@electron/notarize");
+// electron-builder's afterSign hook (wired by build.afterSign in package.json).
+//
+// The hook itself is @platform/desktop's: it reads the same environment this
+// file used to read — NOTARIZE_KEYCHAIN_PROFILE, or APPLE_ID + APPLE_PASSWORD
+// (+ APPLE_TEAM_ID) — notarizes the built .app, and skips with a printed line
+// when neither is set, so a local build still produces an app and a release
+// build cannot pass silently unnotarized.
+//
+// `@electron/notarize` is required lazily inside the hook, so loading this file
+// on a non-mac build or in a test costs nothing.
 
-exports.default = async function notarizing(context) {
-  const { electronPlatformName, appOutDir } = context;
-  if (electronPlatformName !== "darwin") return;
+const { createNotarizeHook } = require("@platform/desktop");
 
-  const useKeychainProfile = process.env.NOTARIZE_KEYCHAIN_PROFILE;
-  const useAppleId = process.env.APPLE_ID && process.env.APPLE_PASSWORD;
-
-  if (!useKeychainProfile && !useAppleId) {
-    console.log("Skipping notarization: set NOTARIZE_KEYCHAIN_PROFILE or APPLE_ID/APPLE_PASSWORD");
-    return;
-  }
-
-  const appName = context.packager.appInfo.productFilename;
-  const appPath = `${appOutDir}/${appName}.app`;
-  console.log(`Notarizing ${appName}...`);
-
-  if (useKeychainProfile) {
-    await notarize({
-      appPath,
-      keychainProfile: useKeychainProfile,
-    });
-  } else {
-    await notarize({
-      appPath,
-      appleId: process.env.APPLE_ID,
-      appleIdPassword: process.env.APPLE_PASSWORD,
-      teamId: process.env.APPLE_TEAM_ID,
-    });
-  }
-
-  console.log("Notarization complete");
-};
+exports.default = createNotarizeHook();
