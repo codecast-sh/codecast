@@ -91,6 +91,12 @@ export class CursorWatcher extends EventEmitter {
   private pollInterval: NodeJS.Timeout | null = null;
   private cursorPath: string;
   private workspaceStates: Map<string, WorkspaceState> = new Map();
+  // Newest mtime of each workspace's state.vscdb (or its WAL) at the last
+  // successful check. Opening a SQLite file and running two queries is real
+  // I/O; doing it for every workspace every 2s pinned the loop whenever the
+  // disk was busy. A file nobody wrote to since the last look cannot hold new
+  // chat rows, so it is skipped on a stat alone.
+  private dbMtimes: Map<string, number> = new Map();
   private pollFrequencyMs: number;
   private isFirstPoll: boolean = true;
   // Circuit breaker: suppress error logging for workspaces that fail repeatedly
@@ -160,8 +166,11 @@ export class CursorWatcher extends EventEmitter {
         }
 
         try {
-          const stat = fs.statSync(dbPath);
-          workspaces.push({ hash: workspaceHash, dbPath, mtime: stat.mtimeMs });
+          let mtime = fs.statSync(dbPath).mtimeMs;
+          // In WAL mode a write lands in state.vscdb-wal first; the main file's
+          // mtime only moves on checkpoint.
+          try { mtime = Math.max(mtime, fs.statSync(`${dbPath}-wal`).mtimeMs); } catch {}
+          workspaces.push({ hash: workspaceHash, dbPath, mtime });
         } catch {
           // Skip files we can't stat
         }
@@ -174,8 +183,10 @@ export class CursorWatcher extends EventEmitter {
       }
 
       for (const workspace of workspaces) {
+        if (this.dbMtimes.get(workspace.hash) === workspace.mtime) continue;
         try {
           this.checkWorkspaceForChanges(workspace.hash, workspace.dbPath);
+          this.dbMtimes.set(workspace.hash, workspace.mtime);
           // Reset error count on success
           this.workspaceErrorCounts.delete(workspace.hash);
         } catch (err) {
