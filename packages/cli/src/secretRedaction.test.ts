@@ -205,3 +205,34 @@ describe("opaque secret assignments (name-guarded, digit+length guarded)", () =>
     expect(redactSecrets(once)).toBe(once);
   });
 });
+
+describe("cast browser bridge token", () => {
+  const hex = "9f".repeat(32);
+
+  test("`token  <hex>` as `extension setup --show-token` prints it", () => {
+    expect(redactSecrets(`         token  ${hex}\n         port   41729`)).toBe(
+      "         token  [redacted:bridge-token]\n         port   41729",
+    );
+    expect(containsSecrets(`token ${hex}`)).toBe(true);
+  });
+
+  test("the bridge host's browser socket URL, whose path is the token", () => {
+    const url = `ws://127.0.0.1:41729/devtools/browser/${hex}`;
+    expect(redactSecrets(`CDP endpoint for any engine: ${url}`)).toBe(
+      "CDP endpoint for any engine: ws://127.0.0.1:41729/devtools/browser/[redacted:bridge-token]",
+    );
+    expect(containsSecrets(url)).toBe(true);
+  });
+
+  test("Chrome's own socket URL (a dashed UUID) and a short hex id are left alone", () => {
+    const chrome = "ws://127.0.0.1:9222/devtools/browser/3f0b2c1a-8d4e-4b7a-9c6d-1e2f3a4b5c6d";
+    expect(redactSecrets(chrome)).toBe(chrome);
+    expect(redactSecrets("token abcdef0123")).toBe("token abcdef0123");
+    expect(containsSecrets(chrome)).toBe(false);
+  });
+
+  test("idempotent over its own markers", () => {
+    const once = redactSecrets(`token ${hex} /devtools/browser/${hex}`);
+    expect(redactSecrets(once)).toBe(once);
+  });
+});

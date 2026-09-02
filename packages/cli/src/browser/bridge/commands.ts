@@ -15,7 +15,7 @@ import type { Command } from "commander";
 import { fmt, icons } from "../../colors.js";
 import { spawn } from "../../proc.js";
 import {
-  bridgeStatus, bridgeWsUrl, ensureBridgeConfig, ensureBridgeHost, isHostAlive, readBridgeState,
+  bridgeStatePath, bridgeStatus, bridgeWsUrl, ensureBridgeConfig, ensureBridgeHost, isHostAlive, probeHost, readBridgeState,
   rotateBridgeToken, runBridgeHost, stopBridgeHost,
 } from "./host.js";
 import { bridgePairingUrl } from "./protocol.js";
@@ -32,17 +32,21 @@ function die(msg: string, hint?: string): never {
 }
 
 /**
- * Hand a URL to the human's Chrome through the OS launcher, without waiting
- * for it. Only macOS has a launcher that targets an app by name; elsewhere
- * the caller prints the URL. `open` exits as soon as the OS has the request,
- * so a missing Chrome surfaces nowhere but the printed fallback, which is
- * why the fallback is always printed.
+ * Hand a URL to the human's Chrome without waiting for it. Only macOS has a
+ * launcher that targets an app by name; elsewhere the caller prints the URL.
+ * The URL carries the pairing token, so it goes to osascript on stdin, never
+ * in an argument: on macOS every user can read every other user's process
+ * arguments. osascript exits as soon as Chrome has the request, so a missing
+ * Chrome (or a denied automation prompt) surfaces nowhere but the printed
+ * fallback, which is why the fallback is always printed.
  */
 export function openInChrome(url: string, app = "Google Chrome"): boolean {
   if (process.platform !== "darwin") return false;
   try {
-    const child = spawn("open", ["-a", app, url], { stdio: ["ignore", "ignore", "ignore"], detached: true });
+    const child = spawn("osascript", ["-"], { stdio: ["pipe", "ignore", "ignore"], detached: true });
     child.on("error", () => {});
+    const quote = (s: string) => `"${s.replace(/[\\"]/g, "\\$&")}"`;
+    child.stdin?.end(`tell application ${quote(app)} to open location ${quote(url)}\n`);
     child.unref();
     return !!child.pid;
   } catch {
@@ -66,7 +70,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
   const { me } = deps;
 
   br.command("target [mode]")
-    .description("Default browser for verbs: clone (managed copy) or real (your Chrome via the extension)")
+    .description("Which browser the verbs act on: clone (the managed copy, default) or real (the human's own Chrome through the extension; a session acts only on tabs it opened)")
     .action(async (mode?: string) => {
       if (!mode) {
         const cur = stickyTarget(me());
@@ -84,13 +88,17 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
 
   const ext = br
     .command("extension")
-    .description("The bridge into your real Chrome: setup, status, revoke");
+    .description("The bridge into the human's real Chrome: setup pairs the extension once, status, revoke");
 
+  // The token is printed only on request. These commands run inside agent
+  // sessions whose output syncs off the machine, and the redactor cannot
+  // tell a bridge token from any other hex; the pairing URL carries it too.
   ext
     .command("setup")
-    .description("Start the bridge host and hand the token to the extension in your Chrome")
+    .description("Start the bridge host and open the extension's options in Chrome with the token filled in")
     .option("--json", "Machine-readable output (does not open Chrome)")
-    .action(async (o: { json?: boolean }) => {
+    .option("--show-token", "Print the token and the pairing URL, for pasting into the extension by hand")
+    .action(async (o: { json?: boolean; showToken?: boolean }) => {
       ensureBridgeConfig();
       let state;
       try {
@@ -99,18 +107,19 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
         die((err as Error).message);
       }
       const url = bridgePairingUrl(state);
+      const secret = o.showToken ? { token: state.token, url } : {};
       if (o.json) {
-        console.log(JSON.stringify({ port: state.port, token: state.token, url }));
+        console.log(JSON.stringify({ port: state.port, tokenFile: bridgeStatePath(), ...secret }));
         return;
       }
       // The extension has a fixed ID, so its options page has a fixed URL:
       // opened with the token in the fragment, the page saves it and connects.
       // Chrome shows an error page at that URL until the extension is loaded,
-      // so the install steps and the paste route stay on screen as the fallback.
+      // so the install steps stay on screen as the fallback.
       const opened = openInChrome(url);
       console.log(`${OK} bridge host listening on 127.0.0.1:${state.port}`);
       if (opened) {
-        console.log(`${OK} opened the extension's options in Chrome with the token filled in; it connects on its own`);
+        console.log(`${OK} handed the pairing to Chrome: the extension's options open with the token filled in and it connects on its own`);
       }
       console.log("");
       console.log(opened
@@ -118,11 +127,16 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
         : "  Install the extension (one time):");
       console.log(`    1. Open ${fmt.highlight("chrome://extensions")} in your real Chrome, turn on Developer mode`);
       console.log(`    2. ${fmt.highlight("Load unpacked")} → select the repo's ${fmt.highlight("packages/browser-extension")} directory`);
-      console.log(`    3. ${opened ? "Run this command again, or open" : "Open"} this URL in that Chrome:`);
-      console.log(`         ${fmt.highlight(url)}`);
-      console.log(`       or open the extension's ${fmt.highlight("options")} and paste:`);
-      console.log(`         token  ${fmt.highlight(state.token)}`);
-      console.log(`         port   ${fmt.highlight(String(state.port))}`);
+      if (o.showToken) {
+        console.log(`    3. ${opened ? "Run this command again, or open" : "Open"} this URL in that Chrome:`);
+        console.log(`         ${fmt.highlight(url)}`);
+        console.log(`       or open the extension's ${fmt.highlight("options")} and paste:`);
+        console.log(`         token  ${fmt.highlight(state.token)}`);
+        console.log(`         port   ${fmt.highlight(String(state.port))}`);
+      } else {
+        console.log(`    3. ${opened ? "Run this command again" : "Run this command with --show-token for the pairing URL"}`);
+        console.log(`       ${fmt.muted(`the token lives in ${bridgeStatePath()}; --show-token prints it for a paste by hand`)}`);
+      }
       console.log(`    4. Check with ${fmt.highlight("cast browser extension status")}`);
       console.log("");
       console.log(fmt.muted("  The token grants full control of that Chrome to local processes that hold it."));
@@ -138,13 +152,15 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
         console.log(`${fmt.muted(icons.dot)} not set up — \`cast browser extension setup\``);
         return;
       }
-      if (!(await isHostAlive(state.port))) {
+      if (!(await isHostAlive(state))) {
         console.log(`${WARN} bridge host is not running on 127.0.0.1:${state.port} (it auto-starts on first use)`);
         return;
       }
       let s;
+      let proven;
       try {
-        s = await bridgeStatus(state);
+        proven = await ensureBridgeHost();
+        s = await bridgeStatus(proven);
       } catch (err) {
         die((err as Error).message);
       }
@@ -154,19 +170,20 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       } else {
         console.log(`${WARN} extension not connected — open its options in Chrome and check token/port`);
       }
-      console.log(fmt.muted(`  CDP endpoint for any engine: ${bridgeWsUrl(state)}`));
+      console.log(fmt.muted(`  CDP endpoint for any engine: ${bridgeWsUrl(proven).replace(proven.token, "<token>")} (token in ${bridgeStatePath()})`));
     });
 
   ext
     .command("revoke")
-    .description("Rotate the token and disconnect the extension — nothing can drive the real Chrome until the new token is pasted")
+    .description("Rotate the token and disconnect the extension; nothing drives the real Chrome until setup runs again")
     .action(async () => {
       const next = rotateBridgeToken();
       const stopped = stopBridgeHost();
       if (stopped) {
         // Give the old host a beat to free the port before the next auto-start.
+        // It holds the old token, so "alive" is not the question; "gone" is.
         const deadline = Date.now() + 4000;
-        while (Date.now() < deadline && (await isHostAlive(next.port, 300))) {
+        while (Date.now() < deadline && (await probeHost(next, 300)) !== "down") {
           await new Promise((r) => setTimeout(r, 150));
         }
       }

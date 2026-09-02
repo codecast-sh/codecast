@@ -96,21 +96,46 @@ const SECRET_PATTERNS: SecretPattern[] = [
   },
 ];
 
-// Opaque secret assigned to a strongly secret-named variable — the .env-dump case
-// that no vendor prefix above matches. Group 1 (name + operator + optional opening
-// quote) is preserved; only the value is redacted. Guards against eating code: the
-// name ends in a strong secret word (bare `KEY` is deliberately excluded, so
-// FOREIGN_KEY/PRIMARY_KEY are ignored), and the value must be 16+ non-space chars
-// that include a digit — plain identifiers (`users_id`) have none.
-const SECRET_ASSIGNMENT_RE =
-  /\b([A-Za-z0-9_-]{0,40}(?:SECRET|PASSWORD|PASSWD|CREDENTIALS?|TOKEN|ACCESS[_-]?KEY|API[_-]?KEY|PRIVATE[_-]?KEY)\s*[=:]\s*["'`]?)(?=[^\s"'`]*\d)[A-Za-z0-9][^\s"'`]{15,}/gi;
-// `Bearer <token>` in a header/curl. Digit-guarded so `Bearer someVariable` in a
-// code discussion (no digit) is left alone; real bearer tokens contain digits.
-const BEARER_RE = /\b(Bearer\s+)(?=[A-Za-z0-9._-]*\d)[A-Za-z0-9._-]{20,}/g;
+// Secrets that follow a label. Group 1 (the label: a variable name and its
+// operator, `Bearer`, a URL path prefix) is preserved; only the value is
+// redacted.
+const LABELED_PATTERNS: SecretPattern[] = [
+  // Opaque secret assigned to a strongly secret-named variable — the .env-dump
+  // case that no vendor prefix above matches. Guards against eating code: the
+  // name ends in a strong secret word (bare `KEY` is deliberately excluded, so
+  // FOREIGN_KEY/PRIMARY_KEY are ignored), and the value must be 16+ non-space
+  // chars that include a digit — plain identifiers (`users_id`) have none.
+  {
+    re: /\b([A-Za-z0-9_-]{0,40}(?:SECRET|PASSWORD|PASSWD|CREDENTIALS?|TOKEN|ACCESS[_-]?KEY|API[_-]?KEY|PRIVATE[_-]?KEY)\s*[=:]\s*["'`]?)(?=[^\s"'`]*\d)[A-Za-z0-9][^\s"'`]{15,}/gi,
+    marker: "[redacted:secret-assignment]",
+  },
+  // `Bearer <token>` in a header/curl. Digit-guarded so `Bearer someVariable`
+  // in a code discussion (no digit) is left alone; real bearer tokens contain
+  // digits.
+  {
+    re: /\b(Bearer\s+)(?=[A-Za-z0-9._-]*\d)[A-Za-z0-9._-]{20,}/g,
+    marker: "[redacted:bearer-token]",
+  },
+  // The cast browser bridge token (32 random bytes as hex) in the two shapes
+  // the CLI prints it: `token  <hex>` from `extension setup --show-token`,
+  // and the bridge host's browser socket URL `/devtools/browser/<hex>`.
+  // Chrome's own socket URLs end in a dashed UUID, which never matches.
+  {
+    re: /\b(token\s+)[0-9a-f]{64}\b/gi,
+    marker: "[redacted:bridge-token]",
+  },
+  {
+    re: /(\/devtools\/browser\/)[0-9a-f]{64}\b/g,
+    marker: "[redacted:bridge-token]",
+  },
+];
 
-function redactAssignments(text: string): string {
-  let out = text.replace(SECRET_ASSIGNMENT_RE, (_m, label) => `${label}[redacted:secret-assignment]`);
-  out = out.replace(BEARER_RE, (_m, label) => `${label}[redacted:bearer-token]`);
+function redactLabeled(text: string): string {
+  let out = text;
+  for (const { re, marker } of LABELED_PATTERNS) {
+    re.lastIndex = 0;
+    out = out.replace(re, (_m, label) => `${label}${marker}`);
+  }
   return out;
 }
 
@@ -122,19 +147,15 @@ export function redactSecrets(text: string): string {
     re.lastIndex = 0;
     result = result.replace(re, marker);
   }
-  return redactAssignments(result);
+  return redactLabeled(result);
 }
 
 /** True if `text` contains at least one high-confidence secret. */
 export function containsSecrets(text: string): boolean {
   if (text == null) return false;
   const normalized = typeof text === "string" ? text : String(text);
-  const prefixHit = SECRET_PATTERNS.some(({ re }) => {
+  return [...SECRET_PATTERNS, ...LABELED_PATTERNS].some(({ re }) => {
     re.lastIndex = 0;
     return re.test(normalized);
   });
-  if (prefixHit) return true;
-  SECRET_ASSIGNMENT_RE.lastIndex = 0;
-  BEARER_RE.lastIndex = 0;
-  return SECRET_ASSIGNMENT_RE.test(normalized) || BEARER_RE.test(normalized);
 }
