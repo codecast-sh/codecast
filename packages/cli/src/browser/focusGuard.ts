@@ -36,7 +36,7 @@ function parsePid(stdout: string): number | null {
 
 /** ASN key of the frontmost app — cheap (one spawn), stable per app, so a
  *  poller can compare it between ticks and resolve the pid only on change. */
-export function frontAsn(): string | null {
+function frontAsn(): string | null {
   if (process.platform !== "darwin") return null;
   try {
     const asn = spawnSync("lsappinfo", ["front"], { encoding: "utf-8", timeout: LSAPPINFO_TIMEOUT_MS });
@@ -47,7 +47,7 @@ export function frontAsn(): string | null {
 }
 
 /** Resolve an ASN key from frontAsn() to its pid. */
-export function pidForAsn(key: string): number | null {
+function pidForAsn(key: string): number | null {
   try {
     const info = spawnSync("lsappinfo", ["info", "-only", "pid", key], { encoding: "utf-8", timeout: LSAPPINFO_TIMEOUT_MS });
     return parsePid(info.stdout ?? "");

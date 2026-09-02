@@ -120,35 +120,32 @@ export async function startFocusSentinel(log: (line: string) => void): Promise<N
     if (inFlight) return;
     inFlight = true;
     try {
-      await probe();
+      const asn = await frontAsnAsync();
+      if (!asn || asn === lastAsn) return;
+      lastAsn = asn;
+      const pid = await pidForAsnAsync(asn);
+      if (!pid) return;
+      if (!agentByPid.has(pid)) {
+        if (agentByPid.size > 256) agentByPid.clear();
+        agentByPid.set(pid, isAgentChromeCommand(commandOfPid(pid)));
+      }
+      if (!agentByPid.get(pid)) {
+        lastHumanPid = pid;
+        return;
+      }
+      const loginRaisedAt = readState()?.loginRaisedAt ?? 0;
+      const restore = shouldRestoreFocus({
+        agentChrome: true,
+        msSinceDeliberateRaise: Date.now() - Math.max(lastDeliberateRaiseAt, loginRaisedAt),
+        secondsSinceClick: clickAge(),
+      });
+      if (restore && lastHumanPid) {
+        log(`[FOCUS] agent Chrome ${pid} took the front unprovoked — returning focus to pid ${lastHumanPid}`);
+        raiseAppByPid(lastHumanPid, log);
+        lastAsn = null; // re-read next tick; the raise lands async
+      }
     } finally {
       inFlight = false;
-    }
-  };
-  const probe = async () => {
-    const asn = await frontAsnAsync();
-    if (!asn || asn === lastAsn) return;
-    lastAsn = asn;
-    const pid = await pidForAsnAsync(asn);
-    if (!pid) return;
-    if (!agentByPid.has(pid)) {
-      if (agentByPid.size > 256) agentByPid.clear();
-      agentByPid.set(pid, isAgentChromeCommand(commandOfPid(pid)));
-    }
-    if (!agentByPid.get(pid)) {
-      lastHumanPid = pid;
-      return;
-    }
-    const loginRaisedAt = readState()?.loginRaisedAt ?? 0;
-    const restore = shouldRestoreFocus({
-      agentChrome: true,
-      msSinceDeliberateRaise: Date.now() - Math.max(lastDeliberateRaiseAt, loginRaisedAt),
-      secondsSinceClick: clickAge(),
-    });
-    if (restore && lastHumanPid) {
-      log(`[FOCUS] agent Chrome ${pid} took the front unprovoked — returning focus to pid ${lastHumanPid}`);
-      raiseAppByPid(lastHumanPid, log);
-      lastAsn = null; // re-read next tick; the raise lands async
     }
   };
   return setInterval(() => { void tick(); }, 1_000);
