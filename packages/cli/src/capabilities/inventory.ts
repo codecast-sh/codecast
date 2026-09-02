@@ -53,6 +53,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { timeSyncFs } from "../slowSync.js";
 import { AGENT_CLIENTS, observedScopeRank, SNIPPET_CATALOG} from "@codecast/shared/contracts";
 import type { AgentClientId } from "@codecast/shared/contracts";
 
@@ -877,6 +878,12 @@ function readSharedAgentSkills(home: string, sink: UnreadablePath[]): { items: I
  * directory to a project.
  */
 export function readInventory(home: string, projectPath?: string): Inventory {
+  // Timed here rather than at a caller: the daemon's skills lookup and the
+  // heartbeat's capability inventory both walk through this one function.
+  return timeSyncFs("readInventory", projectPath ?? "global", () => scanInventory(home, projectPath));
+}
+
+function scanInventory(home: string, projectPath?: string): Inventory {
   const unreadable: UnreadablePath[] = [];
   const items: InventoryItem[] = [];
   const marketplaces: MarketplaceRef[] = [...readKnownMarketplaces(home, unreadable)];
