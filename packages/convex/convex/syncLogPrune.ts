@@ -29,8 +29,8 @@ const RETENTION_ALARM_MS = 32 * 24 * 60 * 60 * 1000;
 // Scopes probed per transaction. Worst case reads per run ≈ HEADS_PER_RUN heads
 // + HEADS_PER_RUN probes + (deleted rows ≤ DELETE_BUDGET) — far under limits.
 const HEADS_PER_RUN = 32;
-const DELETE_BUDGET = 400;
-const PER_SCOPE_PAGE = 100;
+const DELETE_BUDGET = 200;
+const PER_SCOPE_PAGE = 50;
 
 // Pure: given one scope's ascending action page, pick the deletable prefix.
 // Unit-tested. Returns the rows to delete and whether the walk stopped early
@@ -172,5 +172,40 @@ export const pruneSyncActions = internalMutation({
       }
     }
     return { pruned, done };
+  },
+});
+
+// The SYNC_LOG_DISABLED sweep (sync-log-cargo E9, review): writes made while
+// emission was off never reached any coalesced row, so once the switch flips
+// back a client's cached base and the row's cargo both lie. Treat the gap as
+// retention: set every scope's floor to its head, so every client takes the D7
+// resync path (drop cursor, full cold backfill) instead of trusting its base.
+// Ops runs this ONCE right after re-enabling:
+//   npx convex run syncLogPrune:markResyncAll
+export const markResyncAll = internalMutation({
+  args: { after_scope_key: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ marked: number; done: boolean }> => {
+    const heads = await ctx.db
+      .query("sync_heads")
+      .withIndex("by_scope", (q: any) =>
+        args.after_scope_key ? q.gt("scope_key", args.after_scope_key) : q)
+      .order("asc")
+      .take(HEADS_PER_RUN + 1);
+    const batch = heads.slice(0, HEADS_PER_RUN);
+    for (const head of batch) {
+      // A synthetic position, and the floor AT it: both resync checks are
+      // strict (floor > cursor), so a client that was fully caught up (cursor ==
+      // old head) must still fall below the floor — and the head change fires
+      // getHeads, so open tabs resync immediately (review blocker).
+      const p = head.position + 1;
+      await ctx.db.patch(head._id, { position: p, floor: p, updated_at: Date.now() });
+    }
+    const done = heads.length <= HEADS_PER_RUN;
+    if (!done) {
+      await ctx.scheduler.runAfter(200, internal.syncLogPrune.markResyncAll, {
+        after_scope_key: batch[batch.length - 1].scope_key,
+      });
+    }
+    return { marked: batch.length, done };
   },
 });

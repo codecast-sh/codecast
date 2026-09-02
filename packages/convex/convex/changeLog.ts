@@ -9,11 +9,51 @@
 // The pure helpers (scopeFromDoc / decidePatchScope) are unit-tested without a
 // db; the db-touching emit/lookup are thin shells around them.
 import {
+  buildCargo,
   emitScopeAction,
   emitSyncActions,
   isChurnOnlyPatch,
+  syncLogDisabled,
+  type ActionExtra,
   type SyncAckCollector,
 } from "./syncLog";
+import { accessStampFor, type AccessStamp } from "./lib/access";
+
+// One memoized POST-WRITE document read per tracked write. The sync log reads
+// it for three things (sync-log-cargo): the access-derived fan-out scopes, the
+// access stamp (always fresh — never reused across writes), and the partial
+// self-heal (a full cargo when the merged one can no longer prove itself).
+function postWriteDoc(rawDb: any, id: any, known?: any): () => Promise<any | null> {
+  let cached: Promise<any> | null = known !== undefined ? Promise.resolve(known) : null;
+  return () => (cached ??= rawDb.get(id));
+}
+
+// One memoized stamp per write, shared by every fan-out scope and by the sync
+// scope derivation below (a stamp for a pre-backfill row reads its linked
+// conversation, so computing it once per write matters).
+function syncExtra(rawDb: any, table: string, doc: () => Promise<any | null>, cargo: ActionExtra["cargo"]): ActionExtra {
+  let stamp: Promise<AccessStamp | null> | null = null;
+  return {
+    cargo,
+    table,
+    fullDoc: doc,
+    access: () => (stamp ??= doc().then((d) => accessStampFor({ db: rawDb }, table, d))),
+  };
+}
+
+// The sync log's scope IS the access stamp (fan-out is access-derived).
+function syncScopeFromStamp(stamp: AccessStamp | null): ChangeScope {
+  return {
+    owner_user_id: stamp?.access_owner,
+    workspace: stamp?.access_key,
+    assignee: stamp?.access_grants?.[0],
+  };
+}
+
+// Document fields whose change can move the entity between sync-log scopes or
+// change who may read it: the pre-write document is read so departed scopes
+// get their revocation delete (design D4, access-derived fan-out).
+const SCOPE_FIELDS = new Set(["user_id", "team_id", "workspace", "assignee"]);
 
 export type ChangeEntity =
   | "conversations"
@@ -35,7 +75,11 @@ export const TRACKED_TABLES: ReadonlySet<ChangeEntity> = new Set([
 
 export type ChangeScope = {
   owner_user_id: string | undefined;
-  team_id: string | undefined;
+  team_id?: string | undefined;
+  // Access facts the sync log fans out on (sync-log-cargo): the stored
+  // workspace key and a task's assignee. change_log ignores them.
+  workspace?: string;
+  assignee?: string;
 };
 
 // The owner/team scope of an entity, read straight off its document. Every
@@ -143,7 +187,14 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
       if (TRACKED_TABLES.has(table as any)) {
         const scope = scopeFromDoc(doc);
         await emitChange(rawDb, table as ChangeEntity, String(id), "upsert", scope, null);
-        await emitSyncActions(rawDb, collector, table as ChangeEntity, String(id), "upsert", scope);
+        if (!syncLogDisabled()) {
+          const full = { _id: id, ...doc };
+          const extra = syncExtra(rawDb, table, postWriteDoc(rawDb, id, full), buildCargo(table, doc, { full: true }));
+          await emitSyncActions(
+            rawDb, collector, table as ChangeEntity, String(id), "upsert",
+            syncScopeFromStamp(await extra.access!()), null, extra,
+          );
+        }
       } else if (table === "team_memberships" && doc?.user_id && doc?.team_id) {
         await emitScopeAction(rawDb, collector, String(doc.user_id), String(doc.team_id), "scope_added");
       }
@@ -154,8 +205,11 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
       const table = trackedTableOf(rawDb, id);
       // A patch that touches scope fields can MOVE the entity between scopes; the
       // departed scope needs a revocation action, which requires the pre-write doc.
-      const movesScope = !!table && ("user_id" in fields || "team_id" in fields);
+      const movesScope = !!table && Object.keys(fields).some((k) => SCOPE_FIELDS.has(k));
       const preDoc = movesScope ? await rawDb.get(id) : null;
+      const preScope = preDoc && table
+        ? syncScopeFromStamp(await accessStampFor({ db: rawDb }, table, preDoc))
+        : null;
       const res = await rawDb.patch(id, fields);
       if (table) {
         const entityId = String(id);
@@ -174,11 +228,18 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
         // the sync log — emitting them would serialize every streaming session of
         // a user on one head row and wake every online client per message flush.
         // The live snapshot floor re-delivers these fields on reconnect.
-        if (!isChurnOnlyPatch(table, fields)) {
-          await emitSyncActions(
-            rawDb, collector, table, entityId, "upsert", scope,
-            preDoc ? scopeFromDoc(preDoc) : null,
-          );
+        if (!isChurnOnlyPatch(table, fields) && !syncLogDisabled()) {
+          // The sync log's scopes and stamp come from the POST-write document
+          // (one memoized read; the D1 cost note anticipated it) — never from
+          // the change_log row, which knows only owner/team_id.
+          const extra = syncExtra(rawDb, table, postWriteDoc(rawDb, id), buildCargo(table, fields, { full: false }));
+          const stamp = await extra.access!();
+          if (stamp) {
+            await emitSyncActions(
+              rawDb, collector, table, entityId, "upsert",
+              syncScopeFromStamp(stamp), preScope, extra,
+            );
+          }
         }
       }
       return res;
@@ -187,15 +248,22 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
     async replace(id: any, doc: any) {
       const table = trackedTableOf(rawDb, id);
       const preDoc = table ? await rawDb.get(id) : null;
+      const preScope = preDoc && table
+        ? syncScopeFromStamp(await accessStampFor({ db: rawDb }, table, preDoc))
+        : null;
       const res = await rawDb.replace(id, doc);
       if (table) {
         // `undefined` (not null): a replaced entity usually already has a
         // change_log row from its insert — look it up and flip it, don't add one.
         await emitChange(rawDb, table, String(id), "upsert", scopeFromDoc(doc));
-        await emitSyncActions(
-          rawDb, collector, table, String(id), "upsert", scopeFromDoc(doc),
-          preDoc ? scopeFromDoc(preDoc) : null,
-        );
+        if (!syncLogDisabled()) {
+          const full = { _id: id, ...doc };
+          const extra = syncExtra(rawDb, table, postWriteDoc(rawDb, id, full), buildCargo(table, doc, { full: true }));
+          await emitSyncActions(
+            rawDb, collector, table, String(id), "upsert",
+            syncScopeFromStamp(await extra.access!()), preScope, extra,
+          );
+        }
       }
       return res;
     },
@@ -207,13 +275,17 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
           ? await rawDb.get(id)
           : null;
       // Read scope BEFORE the row is gone.
-      const scope = table ? scopeFromDoc(await rawDb.get(id)) : null;
+      const preDoc = table ? await rawDb.get(id) : null;
+      const scope = table ? scopeFromDoc(preDoc) : null;
+      const syncScope = table && preDoc
+        ? syncScopeFromStamp(await accessStampFor({ db: rawDb }, table, preDoc))
+        : null;
       const res = await rawDb.delete(id);
       if (table && scope) {
         // `undefined`: find the entity's existing upsert row and flip it to a
         // delete tombstone, rather than inserting a duplicate.
         await emitChange(rawDb, table, String(id), "delete", scope);
-        await emitSyncActions(rawDb, collector, table, String(id), "delete", scope);
+        if (syncScope) await emitSyncActions(rawDb, collector, table, String(id), "delete", syncScope);
       } else if (membershipDoc?.user_id && membershipDoc?.team_id) {
         await emitScopeAction(
           rawDb, collector, String(membershipDoc.user_id), String(membershipDoc.team_id), "scope_removed",
