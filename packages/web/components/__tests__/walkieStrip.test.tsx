@@ -44,7 +44,7 @@ const BASE = {
   name: "Riley Chen",
   stage: "incoming" as const,
   badge: "INCOMING",
-  hint: "Riley Chen is talking to you. HOLD their face to reply.",
+  hint: "Riley Chen is talking to you. TALK to answer.",
   headline: "Riley Chen is talking",
   locked: false,
   together: false,
@@ -112,7 +112,7 @@ describe("a teammate is talking to me", () => {
     expect(html).toContain("walkie-stage-incoming");
     expect(html).toContain(">INCOMING<");
     expect(html).toContain("walkie-strip-hint");
-    expect(html).toContain("HOLD their face to reply");
+    expect(html).toContain("TALK to answer");
   });
 
   test("and no emoji anywhere in it", () => {
@@ -350,6 +350,25 @@ describe("the live words come from the burst, not from the open channel", () => 
 
   test("cut from the front, so the newest words are the ones kept", () => {
     expect(source).toContain("`…${text.slice(-TAIL)}`");
+  });
+});
+
+describe("talking, one way", () => {
+  const html = render({
+    stage: "live",
+    badge: "TALKING",
+    hint: "Riley Chen sees you and hears you. You will not hear them until they JOIN. Click STOP when you are done.",
+    headline: "Riley Chen hears you",
+    tx: true,
+    actions: false,
+    myFace: { image: undefined, name: "Me" },
+    onStop: noop,
+  } as any);
+
+  test("the card carries Stop, full width, and no reply key for my own talk", () => {
+    expect(html).toContain(">TALKING<");
+    expect(html).toContain("Stop talking");
+    expect(html).not.toContain("walkie-strip-reply");
   });
 });
 

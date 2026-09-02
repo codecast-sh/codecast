@@ -363,12 +363,18 @@ export async function openMicForJoin(
   participant: { setMicrophoneEnabled: (on: boolean) => Promise<unknown> },
   opts: { intent?: JoinOpts["intent"] },
 ): Promise<void> {
-  // A LISTEN OPENS THE MICROPHONE — hearing a teammate means they can hear you
-  // — and every other join publishes in whatever mute state the person is
-  // already in. The rule lives here rather than at the call site so that the
-  // store write below is the only thing that ever claims an open microphone.
+  // A LISTEN PUBLISHES NOTHING. A walkie is one way: the person talking is
+  // seen and heard, and hears nobody back until the listener steps in on
+  // purpose (Join live), which is the moment the microphone opens. Every other
+  // join publishes in whatever mute state the person is already in. The rule
+  // lives here rather than at the call site so that the store write below is
+  // the only thing that ever claims an open microphone.
   const listen = opts.intent === "listen";
-  const muted = listen ? false : useInboxStore.getState().call.muted;
+  if (listen) {
+    setCall({ muted: true });
+    return;
+  }
+  const muted = useInboxStore.getState().call.muted;
   try {
     await participant.setMicrophoneEnabled(!muted);
     // THE CLAIM FOLLOWS THE PUBLICATION AND NEVER PRECEDES IT. Writing

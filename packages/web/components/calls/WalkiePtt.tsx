@@ -1,9 +1,8 @@
 // The mic button. The gesture it carries lives in hooks/useWalkie; this is only
-// what a hold looks like, so the composer, a hover card and the receiver banner
+// what the talk toggle looks like, so the composer, a hover card and the receiver banner
 // can each dress the same press differently.
 import { Mic } from "lucide-react";
-import { pttHoldProps, usePushToTalk, useWalkieLevelVar, walkieKeyName, walkieKeyState } from "../../hooks/useWalkie";
-import { WALKIE_LOCK_MS } from "../../lib/calls/walkie";
+import { talkToggleProps, usePushToTalk, useWalkieLevelVar, walkieKeyName, walkieKeyState } from "../../hooks/useWalkie";
 import "./walkie.css";
 
 export function WalkiePttButton({
@@ -72,12 +71,10 @@ export function WalkiePttButton({
       disabled={!!ptt.reason}
       data-walkie-ptt={roomKey ?? ""}
       data-walkie-state={state}
-      // The lock's clock, for the fill arc — one constant for the picture and
-      // the latch, same as the wall's seats.
-      style={{ ["--walkie-lock-ms" as string]: `${WALKIE_LOCK_MS}ms` }}
       aria-label={name}
-      title={ptt.reason ?? (state === "idle" ? (title ?? "Hold to talk") : name)}
-      {...pttHoldProps(ptt)}
+      aria-pressed={ptt.holding}
+      title={ptt.reason ?? (state === "idle" ? (title ?? "Talk — click to start, click again to stop") : name)}
+      {...talkToggleProps(ptt)}
     >
       <span className="walkie-key-ring" aria-hidden="true" />
       <Mic className="walkie-key-glyph" />
@@ -95,13 +92,11 @@ export function WalkiePttButton({
       {label && (
         <span className="walkie-key-label">
           {state === "dropped"
-            ? "Not heard"
+            ? "Stop"
             : state === "opening"
               ? "Opening"
               : state === "live"
-                ? ptt.live
-                  ? "Live"
-                  : "Recording"
+                ? "Stop"
                 : state === "locked"
                   ? "On the line"
                   : label}

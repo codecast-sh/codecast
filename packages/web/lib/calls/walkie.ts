@@ -78,7 +78,9 @@ type ConvexHandle = {
 // as an ordinary message. It is NOT a race against the orphan sweep — the
 // transcript pushes below rewrite the row every couple of seconds, so a burst
 // still being spoken into keeps itself alive.
-const MAX_BURST_MS = 120_000;
+// A talk is a TOGGLE now — click to start, click to stop — so the cap is the
+// backstop for a person who walked away mid-talk, not the length of a sentence.
+const MAX_BURST_MS = 5 * 60_000;
 /** The window the server sweeps a dead burst at, for ignoring a live row whose
  *  sender's tab died before anyone talked in that room again. */
 const BURST_STALE_MS = 120_000;
@@ -1161,61 +1163,6 @@ export function markWalkieUpgraded(roomKey: string): void {
 }
 
 /**
- * How long a hold must last before the key LOCKS — the ring around the face
- * fills over exactly this, so the number is the animation and the animation is
- * the promise. Above MIN_BURST_MS on purpose, and the ordering is load-bearing
- * the same way WALL_TAP_MS's is: a release under 300ms is a tap, under 700ms a
- * burst the engine discards, under this a burst that lands as a message, and a
- * hold that outlives it stops being a message at all. A test pins the ladder.
- */
-export const WALKIE_LOCK_MS = 1200;
-
-/**
- * May a fill that just completed lock this hold?
- *
- * Pure, because the answer gates an open microphone changing what it IS. The
- * burst must still be the one the fill was timing (`roomKey`), must not be
- * over (a max-length cap or a blur may have landed it mid-fill), and must not
- * already be upgraded (holding inside a huddle refills nothing — the room is
- * already a call, and locking it again would announce a join that happened).
- */
-export function shouldLockBurst(input: {
-  sending: { roomKey: string } | null;
-  joinedRoom: string | null;
-  roomKey: string;
-}): boolean {
-  if (!input.sending || input.sending.roomKey !== input.roomKey) return false;
-  return input.joinedRoom !== input.roomKey;
-}
-
-/**
- * THE FILL COMPLETED: the hold stops being a message and becomes a seat.
- *
- * This is the strip's "Join live" pressed from the key itself, so it IS that
- * path — `joinWalkieLive` stamps the room a call (sticky), says "You joined",
- * plays the join cue, and tells the far side through the ordinary roster
- * stamp. Then the burst lands: everything said during the fill arrives as the
- * message it already was, the roger stays quiet and the microphone stays open,
- * because both of those already read the upgraded mode (`burstUpgraded`).
- * From here the person is simply live in the room until they End — release,
- * blur and unmount all find no burst and do nothing.
- *
- * Nothing is awaited before the join: a cold microphone can still be opening
- * at fill-complete, and a lock that waited for it would be a latch that
- * sometimes ignores the hand. `endBurst` already awaits the setup internally,
- * so ordering is safe whatever state the fill found.
- */
-export async function lockBurstLive(opts: { name?: string | null } = {}): Promise<void> {
-  const b = burst;
-  if (!b || b.done) return;
-  if (!shouldLockBurst({ sending: b, joinedRoom: walkieJoinedRoom(status), roomKey: b.roomKey })) {
-    return;
-  }
-  await joinWalkieLive(b.roomKey, opts);
-  await endBurst();
-}
-
-/**
  * JOIN LIVE. The one gesture the whole upgrade exists for, and one click: the
  * person is already seated and already audible, so nothing here touches the
  * media plane except to put the camera back the way they left it.
@@ -1241,6 +1188,21 @@ export async function joinWalkieLive(
   // button, so the one gesture that turns a burst into a call made no sound.
   soundWalkieJoined();
   await joinCall(roomKey, { intent: "deliberate", walkieJoin: true });
+}
+
+/**
+ * END. The person pressed the red button: the call ends and the card goes
+ * WITH it — no thirty second "still open" seat after a hang-up. The linger
+ * exists so a burst can be answered; a hang-up is the opposite of an
+ * invitation to answer. Any burst still open lands as the message it is.
+ */
+export async function endWalkie(): Promise<void> {
+  if (burst) await endBurst();
+  const held = status.liveRoom;
+  if (status.incoming) emit({ incoming: null });
+  await leaveCall();
+  if (held) releaseRoom(held.key);
+  refresh();
 }
 
 /**
@@ -1516,10 +1478,7 @@ if (typeof window !== "undefined" && import.meta.env.DEV) {
     // roger) is the one thing here a screenshot cannot show.
     markUpgraded: markWalkieUpgraded,
     joinLive: joinWalkieLive,
-    // The fill's latch, and the room it latched into — the rig proves the
-    // gesture's promise (seat live, burst landed, release inert) through
-    // these, the same reason joinLive is here.
-    lockLive: lockBurstLive,
     joinedRoom: () => walkieJoinedRoom(getWalkieStatus()),
+    end: endWalkie,
   };
 }

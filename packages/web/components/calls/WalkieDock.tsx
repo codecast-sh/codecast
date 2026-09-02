@@ -36,14 +36,14 @@
 // stylesheet (components/__tests__/walkieStrip.test.tsx). WalkieBanner is the
 // half that knows where those props come from.
 import { useCallback, useSyncExternalStore, type ReactNode, type RefCallback } from "react";
-import { BellOff, MessageSquare, MicOff, PictureInPicture2, X } from "lucide-react";
+import { BellOff, MessageSquare, MicOff, PictureInPicture2, Square, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { leaveCall, setMuted } from "../../lib/calls/callManager";
+import { setMuted } from "../../lib/calls/callManager";
 import { popOutCall } from "../../lib/calls/popOutCall";
 import { canPopOutCall } from "../../lib/desktop";
-import { getWalkieStatus, joinWalkieLive, shutWalkieDoor, walkieJoinedRoom } from "../../lib/calls/walkie";
+import { endBurst, endWalkie, getWalkieStatus, joinWalkieLive, shutWalkieDoor, walkieJoinedRoom } from "../../lib/calls/walkie";
 import { getJoinAnnouncement, joinTitle, subscribeJoinAnnouncement } from "../../lib/calls/joinAnnounce";
 import {
   lastWalkieTarget,
@@ -210,20 +210,21 @@ export function WalkieBanner() {
       actions={(!strip.tx || strip.rx) && headline === strip.headline && !strip.locked}
       onMute={() => void setMuted(true)}
       onMuteToggle={() => void setMuted(s.call.muted === false)}
+      onStop={() => void endBurst()}
       // THE CALL, AS CIRCLES OVER THE WORK: the founder's picture of a voice
       // call. Only where the shell can make a see-through window.
       onFloat={canPopOutCall() ? () => void popOutCall({ size: "speaker" }) : undefined}
       onJoin={() => void joinWalkieLive(target.roomKey, { name })}
       onSnooze={snoozeWalkie}
       onOpenDm={() => router.push(`/chat/${target.channelId}`)}
-      onLeave={() => void leaveCall()}
+      onLeave={() => void endWalkie()}
       replyKey={
         <WalkiePttButton
           roomKey={target.roomKey}
           resolveChannelId={() => target.channelId}
           size="lg"
-          label="Hold to reply"
-          title="Hold to reply"
+          label="Talk back"
+          title="Talk back — click to start, click again to stop"
         />
       }
     />
@@ -301,6 +302,8 @@ export function WalkieStripView(props: {
   actions: boolean;
   onMute: () => void;
   onMuteToggle?: () => void;
+  /** Stop my own talk — the toggle's second click, on the card itself. */
+  onStop?: () => void;
   /** Float the call as circles over the work. Absent where the shell cannot. */
   onFloat?: () => void;
   onJoin: () => void;
@@ -439,6 +442,17 @@ export function WalkieStripView(props: {
           is about an open microphone, and nobody should have to guess what
           letting go, or pressing a button, will do. */}
       <div className="walkie-strip-hint">{props.hint}</div>
+
+      {/* TALKING: the one control a talk needs, full width. The face menu that
+          started it may be under this card by now; Stop lives here too. */}
+      {tx && !locked && props.onStop && (
+        <div className="walkie-strip-actions">
+          <button type="button" className="walkie-strip-stop" onClick={props.onStop}>
+            <Square className="h-4 w-4" />
+            Stop talking
+          </button>
+        </div>
+      )}
 
       {/* LOCKED: the two controls a live seat needs, full width and unmissable
           — this is an open microphone with nobody's hand on it, so what stops

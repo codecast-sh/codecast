@@ -179,23 +179,6 @@
   50%      { opacity: 1; }
 }
 
-/* THE FILL, on the key itself: the same once-around arc every face draws, over
- * the same --walkie-lock-ms, riding the ring as a ::before under its mask —
- * "keep holding and this becomes a call", and when the arc closes, it does.
- * (The @property registration lives in people.css; one is enough per page.) */
-.walkie-ptt-on .walkie-key-ring::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 999px;
-  background: conic-gradient(
-    from -90deg,
-    color-mix(in srgb, var(--walkie-tx) 85%, #fff 15%) var(--walkie-fill),
-    transparent 0
-  );
-  animation: walkie-lock-fill var(--walkie-lock-ms, 1200ms) linear forwards;
-}
-
 /* LOCKED: the closed arc, kept. The key comes back up — nothing is being held
  * — and burns steady: live, hands free, until End. */
 .walkie-ptt-locked {
@@ -250,8 +233,6 @@
   /* Rest fully visible: the word beside it already carries the state, and the
      blanket rule in globals.css would otherwise leave it parked at 0.55. */
   .walkie-ptt-opening { animation: none; opacity: 1; }
-  /* The latch still fires on the clock; only the sweep and the breathing go. */
-  .walkie-ptt-on .walkie-key-ring::before { animation: none; background: none; }
   .walkie-ptt-locked { animation: none; }
   /* The ring stops sweeping and becomes brightness alone. The level is still
      shown, because it is information and not decoration — somebody who has
@@ -1032,3 +1013,23 @@
 .walkie-strip-float:hover {
   filter: brightness(1.15);
 }
+
+/* STOP TALKING: the talk toggle's second click, on the card. Warm and filled
+ * like the talking key itself, so the button and the state are one colour. */
+.walkie-strip-stop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 9px;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--sol-bg);
+  background: var(--walkie-tx);
+  border: 1px solid var(--walkie-tx);
+  transition: filter 120ms, transform 90ms;
+}
+.walkie-strip-stop:hover { filter: brightness(1.12); }
+.walkie-strip-stop:active { transform: scale(0.99); }
