@@ -73,14 +73,6 @@ export function TeamBarFace({
     if (open && seatRef.current && !seatRef.current.contains(e.target as Node)) setOpen(false);
   });
 
-  // A BURST IS NOT A HUDDLE. `in_huddle` is true for any live seat, so the
-  // violet chip lit for three seconds of somebody's voice and read the same as
-  // an hour in a call — the founder's "identical for a burst, a huddle, or
-  // talking to a third party". While a burst is live with this person the chip
-  // stands down and the rings say what is happening instead; the moment
-  // somebody joins for real it is a call again and the chip comes back.
-  const burst = (key.sending || talking) && faces.joinedRoom !== key.roomKey;
-
   // Your own face is not a key: there is nobody to talk to. It stays the door
   // to your profile.
   if (isSelf) {
@@ -137,7 +129,7 @@ export function TeamBarFace({
         <MemberFace
           member={member}
           size={32}
-          showHuddle={!burst}
+          showHuddle={!key.burst}
           title=""
           className={selected ? SELECTED_RING : ""}
         />
