@@ -62,6 +62,16 @@ export function extractReplicationUpdates(
   state: any,
   isReplicatedKey: (key: string) => boolean,
   isCollectionKey: (key: string) => boolean,
+  opts?: {
+    /**
+     * The collection as last broadcast, per key. With it, a whole-collection
+     * replace ships only the rows whose object identity changed and emits real
+     * removals; without it, every row ships (a follower's first contact).
+     * applySyncTable preserves row identity whenever nothing rendered changed,
+     * so identity is a free, exact change signal.
+     */
+    shadowOf?: (key: string) => Record<string, any> | undefined;
+  },
 ): ReplicationUpdate[] {
   // key → collected changes; Maps preserve first-touch order.
   const collections = new Map<string, { ids: Set<string>; removes: Set<string>; whole: boolean }>();
@@ -82,13 +92,11 @@ export function extractReplicationUpdates(
     if (!entry) collections.set(key, (entry = { ids: new Set(), removes: new Set(), whole: false }));
 
     if (path.length === 1) {
-      // The whole collection was replaced (a sync snapshot landing, a boot
-      // seed). Diffing old vs new here is not possible from the patch alone —
-      // mark it whole and let the caller send every row. Removals cannot be
-      // derived (the pre-write keys are gone), so a whole-replace update is an
-      // upsert-only overlay; true deletions ride the explicit remove patches
-      // of ordinary writes, and a follower that misses one converges on its
-      // next snapshot.
+      // The whole collection was replaced — the common case: every feed push
+      // that changes a row assigns a fresh table object. The patch alone says
+      // nothing about which rows changed; the caller's shadow (opts.shadowOf)
+      // turns this into an identity diff with real removals. Without a shadow
+      // every row ships.
       entry.whole = true;
       continue;
     }
@@ -108,7 +116,17 @@ export function extractReplicationUpdates(
     const table = state?.[key] ?? {};
     const upserts: any[] = [];
     if (entry.whole) {
-      for (const row of Object.values(table)) upserts.push(row);
+      const shadow = opts?.shadowOf?.(key);
+      if (shadow) {
+        for (const id in table) {
+          if (table[id] !== shadow[id]) upserts.push(table[id]);
+        }
+        for (const id in shadow) {
+          if (table[id] === undefined) entry.removes.add(id);
+        }
+      } else {
+        for (const row of Object.values(table)) upserts.push(row);
+      }
     } else {
       for (const id of entry.ids) {
         const row = table[id];

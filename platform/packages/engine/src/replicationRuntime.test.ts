@@ -163,6 +163,28 @@ describe("replication runtime", () => {
     expect(f.store.useStore.getState().theme).toBe("dark");
   });
 
+  it("host feed pushes ship only the rows that changed, not the whole table", async () => {
+    const hub = createHub();
+    const posted: ReplicationMessage[] = [];
+    const h = wireHost(hub);
+    // Tap what the host posts: wrap its channel by observing a follower-side hub port.
+    const tap = hub.channel();
+    tap.onMessage((m) => posted.push(m));
+    (h.store.useStore.getState() as any).feed([
+      { _id: "a", title: "A", updated_at: 1 },
+      { _id: "b", title: "B", updated_at: 1 },
+      { _id: "c", title: "C", updated_at: 1 },
+    ]);
+    await tick();
+    // Second push changes ONE row; the table object is replaced wholesale.
+    (h.store.useStore.getState() as any).feed([{ _id: "b", title: "B2", updated_at: 2 }]);
+    await tick();
+    const updates = posted.filter((m): m is Extract<ReplicationMessage, { type: "update" }> => m.type === "update");
+    const last = updates[updates.length - 1].updates.find((u) => u.key === "sessions")!;
+    expect(last.upserts?.map((r: any) => r._id)).toEqual(["b"]);
+    expect(last.removes).toBeUndefined();
+  });
+
   it("a follower's optimistic action reaches the host and other followers", async () => {
     const hub = createHub();
     const h = wireHost(hub);

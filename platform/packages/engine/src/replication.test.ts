@@ -58,6 +58,26 @@ describe("extractReplicationUpdates", () => {
     ]);
   });
 
+  it("whole-collection replace with a shadow ships only identity-changed rows and real removals", () => {
+    const prev = { a: state.sessions.a, b: { _id: "b", title: "old B" }, gone: { _id: "gone" } };
+    const updates = extractReplicationUpdates(
+      [p("replace", ["sessions"], {})],
+      state, isReplicated, isCollection,
+      { shadowOf: (k) => (k === "sessions" ? prev : undefined) },
+    );
+    // `a` kept its identity (unchanged), `b` is a new object, `gone` vanished.
+    expect(updates).toEqual([{ key: "sessions", upserts: [state.sessions.b], removes: ["gone"] }]);
+  });
+
+  it("whole-collection replace with an identical shadow is a no-op", () => {
+    const updates = extractReplicationUpdates(
+      [p("replace", ["sessions"], {})],
+      state, isReplicated, isCollection,
+      { shadowOf: () => state.sessions },
+    );
+    expect(updates).toEqual([]);
+  });
+
   it("non-collection keys carry the whole value, with hasValue", () => {
     const updates = extractReplicationUpdates(
       [p("replace", ["counter"], 7)],
