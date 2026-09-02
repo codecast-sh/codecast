@@ -32,14 +32,17 @@
 // pane costs a few small writes a second even when quiet, because that is the
 // price of a keystroke not waiting on a heartbeat — see PANE_INPUT_POLL_MS.
 //
-// OWNERSHIP. You may watch panes on YOUR OWN devices only. A teammate's
-// machine is out of scope on purpose: relaying it would mean writing commands
-// into another account's daemon queue, which is a bigger decision than a
-// terminal view.
+// OWNERSHIP. You may watch panes on YOUR OWN devices, and on an AGENT BOX — a
+// machine whose daemon signs in as a bot account on your team — for a session
+// you own there (resolveReachableRunnerDevice in devices.ts, the same rule the
+// attach pill uses). A teammate's machine is out of scope on purpose: relaying
+// it would mean writing commands into a person's daemon queue, which is a
+// bigger decision than a terminal view. A bot has no person behind it.
 
 import { v } from "convex/values";
 import { query, mutation, internalMutation } from "./functions";
 import { requireUserOrToken } from "./lib/auth";
+import { resolveReachableRunnerDevice } from "./devices";
 import {
   PANE_COMMAND_DEBOUNCE_MS,
   PANE_LEASE_MS,
@@ -50,6 +53,35 @@ import {
   hexToBytes,
   isValidPaneTarget,
 } from "@codecast/shared/contracts";
+
+/**
+ * Whose daemon queue and frame rows a pane lives under. Your own device: you.
+ * A device the viewer reaches through a conversation — an agent box whose bot
+ * daemon runs a session they own (resolveReachableRunnerDevice) — the runner
+ * account, because that is the daemon that will answer the stream command and
+ * push the frames. Null is the "unknown-device" answer: not yours, not
+ * reachable through that conversation, or a conversation/device mismatch.
+ */
+async function resolveQueueUser(
+  ctx: any,
+  userId: any,
+  args: { device_id: string; conversation_id?: any },
+): Promise<any | null> {
+  if (args.conversation_id) {
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv) return null;
+    const reach = await resolveReachableRunnerDevice(ctx, userId, conv);
+    if (!reach || reach.device.device_id !== args.device_id) return null;
+    return reach.runnerUserId;
+  }
+  const device = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) =>
+      q.eq("user_id", userId).eq("device_id", args.device_id),
+    )
+    .first();
+  return device ? userId : null;
+}
 
 async function findRow(ctx: any, userId: any, device_id: string, target: string) {
   return await ctx.db
@@ -78,21 +110,21 @@ export const watchPane = mutation({
     /** The viewer has this pane focused, so keystrokes are imminent and the far
      *  loop should poll fast enough that the first one isn't swallowed. */
     interactive: v.optional(v.boolean()),
+    /** The conversation this pane belongs to. Lets a session owner watch a
+     *  pane on an agent box (a bot account's daemon); without it the relay
+     *  is own-device only. */
+    conversation_id: v.optional(v.id("conversations")),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await requireUserOrToken(ctx, args.api_token);
+    const viewerId = await requireUserOrToken(ctx, args.api_token);
     if (!isValidPaneTarget(args.target)) throw new Error("Invalid pane target");
 
-    // Own-device only. This is also what makes the command insert safe: it
-    // lands in the caller's own daemon queue, never someone else's.
-    const device = await ctx.db
-      .query("devices")
-      .withIndex("by_user_device", (q: any) =>
-        q.eq("user_id", userId).eq("device_id", args.device_id),
-      )
-      .first();
-    if (!device) return { ok: false as const, reason: "unknown-device" as const };
+    // Your device, or an agent box reached through a session you own. This is
+    // also what makes the command insert safe: it lands in a daemon queue the
+    // viewer is entitled to — their own, or the bot's that runs their session.
+    const userId = await resolveQueueUser(ctx, viewerId, args);
+    if (!userId) return { ok: false as const, reason: "unknown-device" as const };
 
     const now = Date.now();
     const row = await findRow(ctx, userId, args.device_id, args.target);
@@ -145,9 +177,16 @@ export const watchPane = mutation({
 
 /** The current screen, as the viewer subscribes to it. */
 export const getPane = query({
-  args: { device_id: v.string(), target: v.string(), api_token: v.optional(v.string()) },
+  args: {
+    device_id: v.string(),
+    target: v.string(),
+    conversation_id: v.optional(v.id("conversations")),
+    api_token: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
-    const userId = await requireUserOrToken(ctx, args.api_token);
+    const viewerId = await requireUserOrToken(ctx, args.api_token);
+    const userId = await resolveQueueUser(ctx, viewerId, args);
+    if (!userId) return null;
     const row = await findRow(ctx, userId, args.device_id, args.target);
     if (!row) return null;
     return {
@@ -249,13 +288,16 @@ export const sendPaneInput = mutation({
     target: v.string(),
     /** Lowercase hex, exactly as xterm produced the bytes. */
     data: v.string(),
+    conversation_id: v.optional(v.id("conversations")),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await requireUserOrToken(ctx, args.api_token);
+    const viewerId = await requireUserOrToken(ctx, args.api_token);
     if (!isValidPaneTarget(args.target)) throw new Error("Invalid pane target");
     if (hexToBytes(args.data) === null) throw new Error("Invalid input encoding");
 
+    const userId = await resolveQueueUser(ctx, viewerId, args);
+    if (!userId) return { ok: false as const, reason: "not-watching" as const };
     const row = await findRow(ctx, userId, args.device_id, args.target);
     if (!row) return { ok: false as const, reason: "not-watching" as const };
 

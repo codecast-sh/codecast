@@ -9,6 +9,8 @@
 //
 //   this machine   → the loopback PTY WebSocket. Interactive, byte-exact.
 //   your other box → screens relayed through Convex (lib/terminal/remotePane).
+//   an agent box   → the same relay, authorized by the session you own there
+//                    (a bot account's daemon runs it; devices.ts decides).
 //                    A few frames a second, and typing works at that same
 //                    speed: fine for answering an agent, wrong for vim.
 //   someone else's → nothing. Relaying it would mean writing commands into
@@ -103,8 +105,12 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
       }
 
       // Ask only the machine that owns the pane. When the pane's machine is
-      // unknown we keep the old broadcast lookup.
-      const endpoint = await getTerminalEndpoint(convex, { deviceId: machine?.device_id });
+      // unknown we keep the old broadcast lookup. An agent box answers under a
+      // bot account's daemon, which no loopback socket of ours can be — skip
+      // the discovery and go straight to the relay.
+      const endpoint = machine?.via_bot
+        ? null
+        : await getTerminalEndpoint(convex, { deviceId: machine?.device_id });
       const current = splits.get(convKey);
       if (!current) return;
 
@@ -120,10 +126,11 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
           interactive: true,
         });
       } else if (machine?.device_id) {
-        // The pane is on another of YOUR machines. No socket can reach it, so
-        // watch it through the relay instead.
+        // The pane is on another of YOUR machines, or on an agent box running
+        // a session you own. No socket can reach it, so watch it through the
+        // relay instead; the conversation is what authorizes the agent-box case.
         current.termId = openTerminal({
-          remote: { convex, deviceId: machine.device_id, target },
+          remote: { convex, deviceId: machine.device_id, target, conversationId: convKey },
           kind: "attach",
           target,
           title: target,
@@ -138,7 +145,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
     } finally {
       connecting.current = false;
     }
-  }, [convex, convKey, target, machine?.device_id, foreign, machineName]);
+  }, [convex, convKey, target, machine?.device_id, machine?.via_bot, foreign, machineName]);
 
   useEffect(() => {
     // Wait for the machine lookup: connecting before it lands would broadcast

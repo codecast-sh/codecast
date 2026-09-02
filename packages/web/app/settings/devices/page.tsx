@@ -11,7 +11,9 @@ import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { SettingsLinkRow, SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { DevicePanelHeader } from "../../../components/settings/DevicePanelHeader";
-import { useDevices, type Device } from "../../../components/DeviceBadge";
+import { useDevices, deviceDisplayName, DeviceDot, type Device } from "../../../components/DeviceBadge";
+import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
+import { Bot } from "lucide-react";
 
 type RepoPlane = NonNullable<Device["git_plane"]>[number];
 
@@ -133,7 +135,17 @@ function PlatformGlyph({ d }: { d: Device }) {
  * on the TARGET can see. The reported hostname is offered as a placeholder
  * because it's usually right, never as a silent default.
  */
-function SshHostField({ d }: { d: Device }) {
+function SshHostField({
+  d,
+  ownerUserId,
+  readOnly,
+}: {
+  d: Pick<Device, "device_id" | "ssh_host" | "hostname">;
+  /** An agent box: the device belongs to a bot account, so the mutation names
+   *  the owner and authorizes the caller as an admin of the bot's team. */
+  ownerUserId?: string;
+  readOnly?: boolean;
+}) {
   const setSshHost = useMutation(api.devices.setDeviceSshHost);
   const [value, setValue] = useState(d.ssh_host ?? "");
   const [saving, setSaving] = useState(false);
@@ -150,7 +162,11 @@ function SshHostField({ d }: { d: Device }) {
     if (!dirty || saving) return;
     setSaving(true);
     try {
-      const res = await setSshHost({ device_id: d.device_id, ssh_host: value.trim() });
+      const res = await setSshHost({
+        device_id: d.device_id,
+        ssh_host: value.trim(),
+        ...(ownerUserId ? { owner_user_id: ownerUserId as any } : {}),
+      });
       const next = res?.ssh_host ?? "";
       setCommitted(next);
       setValue(next);
@@ -178,6 +194,7 @@ function SshHostField({ d }: { d: Device }) {
             if (e.key === "Escape") setValue(committed);
           }}
           placeholder={d.hostname || "e.g. nose"}
+          disabled={readOnly}
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
@@ -255,6 +272,72 @@ function DeviceRow({ d }: { d: Device }) {
   );
 }
 
+/**
+ * An agent box: a machine whose daemon signs in as a bot account on one of the
+ * viewer's teams. It has no settings page of its own, so the SSH host that
+ * makes its sessions' attach command remote-ready is set here, by a team admin.
+ */
+type AgentBox = {
+  device_id: string;
+  owner_user_id: string;
+  bot_name: string | null;
+  can_edit: boolean;
+  label: string;
+  hostname?: string;
+  platform: string;
+  is_remote: boolean;
+  ssh_host?: string;
+  online: boolean;
+};
+
+function AgentBoxRow({ box }: { box: AgentBox }) {
+  return (
+    <div className="px-4 py-4 sm:px-5">
+      <div className="flex items-start gap-4">
+        <div className="mt-0.5 text-sol-magenta">
+          <Bot className="w-4 h-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 text-sm text-sol-text">
+            <span className="truncate">{deviceDisplayName(box as any)}</span>
+            <DeviceDot online={box.online} />
+          </div>
+          <div className="mt-1 text-[11px] text-sol-text-dim font-mono truncate">
+            {box.label} · runs as {box.bot_name ?? "a bot"}
+          </div>
+          <SshHostField d={box} ownerUserId={box.owner_user_id} readOnly={!box.can_edit} />
+          {!box.can_edit && (
+            <p className="mt-1 text-[11px] text-sol-text-dim">Only an admin of the bot's team can change this.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AgentBoxesSection() {
+  // An enrichment: the page is complete without it (useQueryNoThrow).
+  const boxes = (useQueryNoThrow(api.devices.listAgentBoxes, {}).data ?? []) as AgentBox[];
+  if (boxes.length === 0) return null;
+  return (
+    <SettingsSection
+      title="Agent boxes"
+      icon={Bot}
+      description={
+        <>
+          Machines whose daemon runs as a bot on your team. A session you own there shows in the header pill
+          as reachable: watch its terminal, and copy an attach command — an SSH host here makes that command
+          ready to paste from anywhere.
+        </>
+      }
+    >
+      {boxes.map((b) => (
+        <AgentBoxRow key={`${b.owner_user_id}:${b.device_id}`} box={b} />
+      ))}
+    </SettingsSection>
+  );
+}
+
 const openCliSection = () => useInboxStore.getState().openSettingsModal("cli");
 
 export default function DevicesSettingsPage() {
@@ -307,6 +390,7 @@ export default function DevicesSettingsPage() {
           onClick={openCliSection}
         />
       </SettingsSection>
+      <AgentBoxesSection />
     </SettingsPanel>
   );
 }

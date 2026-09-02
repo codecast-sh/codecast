@@ -14,7 +14,8 @@ import {
 } from "./deviceRouting";
 import { normalizeProjectPath } from "./projectPaths";
 import { bucketTs } from "./presenceState";
-import { checkConversationAccess } from "./privacy";
+import { checkConversationAccess, isTeamAdmin, isTeamMember } from "./privacy";
+import { isSessionOwner } from "./sessionOwners";
 import { fromConvexAgentType, findModelOption } from "@codecast/shared/contracts";
 
 async function getAuthenticatedUserId(
@@ -158,6 +159,9 @@ export async function enqueueStartSession(
     // they ride the payload so old daemons just ignore them.
     model?: string;
     effort?: string;
+    // Saved Claude account profile to launch on (the daemon sources its
+    // setup-token file; a name with no token file falls back to the keychain).
+    ccAccount?: string;
     // Stable-context launch prefs from the new-session page: override the
     // machine's stable mode for this session ("off" suppresses injection) and
     // drop specific feed cards. Same ride-along contract as model/effort.
@@ -229,6 +233,24 @@ export async function enqueueStartSession(
   if (opts.prompt) args.prompt = opts.prompt;
   if (model) args.model = model;
   if (opts.effort) args.effort = opts.effort;
+  // Per-session accounts: with the device flag on, a Claude launch that names
+  // no account is pinned to the profile covering that machine's current login
+  // (when it has a live setup-token). Stamped on the row too, so the pin
+  // survives every resume. Resolved here, the single start chokepoint.
+  let ccAccount = opts.ccAccount;
+  if (!ccAccount && opts.agentType === "claude" && target) {
+    const targetDevice = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", target))
+      .first();
+    if (targetDevice?.cc_session_tokens === true) {
+      ccAccount = activeTokenProfile(targetDevice.cc_accounts, Date.now());
+      if (ccAccount && conv && conv.cc_account !== ccAccount) {
+        await ctx.db.patch(opts.conversationId, { cc_account: ccAccount });
+      }
+    }
+  }
+  if (ccAccount) args.cc_account = ccAccount;
   if (opts.stableMode) args.stable_mode = opts.stableMode;
   if (opts.stableExclude?.length) args.stable_exclude = opts.stableExclude;
 
@@ -991,6 +1013,62 @@ export const listDevices = query({
  * cannot offer an attach command for a machine the viewer may not reach. That
  * guarantee lives here, not in the component.
  */
+/**
+ * The device a conversation's agent runs on, looked up under the account whose
+ * daemon stamped it (conv.user_id): that pair is exactly the by_user_device
+ * index, so no device_id-only index is needed, and a legacy cloned device id
+ * under another user can't shadow the real machine.
+ */
+async function runnerDeviceOf(ctx: { db: any }, conv: any) {
+  const deviceId = conv.owner_device_id as string | undefined;
+  if (!deviceId) return null;
+  return await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) =>
+      q.eq("user_id", conv.user_id).eq("device_id", deviceId),
+    )
+    .first();
+}
+
+/**
+ * May the viewer treat the machine a conversation runs on as their own — for
+ * the attach command, the terminal split and the pane relay? Two ways in:
+ *
+ *   - the viewer runs the session (conv.user_id), so the device is theirs;
+ *   - the session runs under a BOT account's daemon — an agent box, like the
+ *     team's Mac mini that Mr Bot signs into — and the viewer owns the session
+ *     and belongs to the bot's team.
+ *
+ * A teammate's machine stays out of reach: relaying a pane means writing into
+ * the device owner's daemon queue, which for a person is a real boundary. A bot
+ * has no person behind it; its daemon exists to run the team's sessions, and
+ * the owner of one of those sessions is exactly who it runs them for.
+ *
+ * Returns the device row and the account whose daemon queue and frame rows the
+ * device answers under (the runner), or null when the machine is genuinely
+ * someone else's. Exported so the relay (terminalStream.ts) applies the same
+ * rule as the pill: one predicate, never two that drift.
+ */
+export async function resolveReachableRunnerDevice(
+  ctx: { db: any },
+  userId: Id<"users">,
+  conv: any,
+): Promise<{ device: any; runnerUserId: Id<"users">; via_bot: boolean } | null> {
+  const device = await runnerDeviceOf(ctx, conv);
+  if (!device) return null;
+  if (conv.user_id.toString() === userId.toString()) {
+    return { device, runnerUserId: userId, via_bot: false };
+  }
+  const runner = await ctx.db.get(conv.user_id);
+  if (!runner?.is_bot || !runner.team_id) return null;
+  const owns =
+    conv.owner_user_id?.toString() === userId.toString() ||
+    (await isSessionOwner(ctx, conv._id, userId));
+  if (!owns) return null;
+  if (!(await isTeamMember(ctx, userId, runner.team_id))) return null;
+  return { device, runnerUserId: conv.user_id, via_bot: true };
+}
+
 export const getConversationMachine = query({
   args: { conversation_id: v.id("conversations"), api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -1000,28 +1078,24 @@ export const getConversationMachine = query({
     if (!conv) return null;
     if (!(await canAccessConversation(ctx, userId, conv))) return null;
 
-    const deviceId = (conv as any).owner_device_id;
-    if (!deviceId) return null;
-
-    // The device is registered under the account whose daemon runs the session
-    // (conv.user_id), which is the viewer only for first-party rows. That pair
-    // is exactly the by_user_device index, so no device_id-only index is needed.
-    const device = await ctx.db
-      .query("devices")
-      .withIndex("by_user_device", (q: any) =>
-        q.eq("user_id", conv.user_id).eq("device_id", deviceId),
-      )
-      .first();
+    const device = await runnerDeviceOf(ctx, conv);
     if (!device) return null;
 
-    const isMine = conv.user_id === userId;
+    const reach = await resolveReachableRunnerDevice(ctx, userId, conv);
     return {
       device_id: device.device_id,
       label: device.label,
       platform: device.platform,
       is_remote: device.is_remote ?? false,
-      is_mine: isMine,
-      ssh_host: isMine ? (device.ssh_host ?? null) : null,
+      // "Yours" in the sense that matters here: a command or a relay from you
+      // can reach it. True for your own machines and for an agent box running
+      // a session you own.
+      is_mine: !!reach,
+      // The pane lives under the bot's daemon, not a daemon you can reach on
+      // loopback — so the split should relay straight away instead of
+      // discovering first.
+      via_bot: reach?.via_bot ?? false,
+      ssh_host: reach ? (device.ssh_host ?? null) : null,
     };
   },
 });
@@ -1056,6 +1130,69 @@ export function sanitizeSshHost(raw: string | undefined | null): string | null {
 }
 
 /**
+ * The agent boxes the viewer can reach: devices whose daemon signs in as a bot
+ * account on one of the viewer's teams (Settings → Devices lists them under
+ * their own heading, with the SSH host editable by a team admin). Display
+ * fields only — the same projection getConversationMachine hands out.
+ */
+export const listAgentBoxes = query({
+  args: { api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return [];
+    const memberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+      .collect();
+    const now = Date.now();
+    const out: Array<{
+      device_id: string;
+      owner_user_id: Id<"users">;
+      bot_name: string | null;
+      team_id: Id<"teams">;
+      can_edit: boolean;
+      label: string;
+      hostname: string | undefined;
+      platform: string;
+      is_remote: boolean;
+      ssh_host: string | undefined;
+      online: boolean;
+      last_seen: number;
+    }> = [];
+    for (const m of memberships) {
+      const bots = await ctx.db
+        .query("users")
+        .withIndex("by_team_id", (q: any) => q.eq("team_id", m.team_id))
+        .collect();
+      for (const bot of bots) {
+        if (!(bot as any).is_bot) continue;
+        const devices = await ctx.db
+          .query("devices")
+          .withIndex("by_user_id", (q: any) => q.eq("user_id", bot._id))
+          .collect();
+        for (const d of devices) {
+          out.push({
+            device_id: d.device_id,
+            owner_user_id: bot._id,
+            bot_name: (bot as any).name ?? null,
+            team_id: m.team_id,
+            can_edit: m.role === "admin",
+            label: d.label,
+            hostname: d.hostname ?? undefined,
+            platform: d.platform,
+            is_remote: d.is_remote ?? false,
+            ssh_host: d.ssh_host ?? undefined,
+            online: now - d.last_seen < DEVICE_ONLINE_MS,
+            last_seen: bucketTs(d.last_seen)!,
+          });
+        }
+      }
+    }
+    return out.sort((a, b) => b.last_seen - a.last_seen);
+  },
+});
+
+/**
  * Set (or clear, with an empty string) how to reach a device over SSH. Web-set
  * only — an ssh alias resolves against the viewer's ~/.ssh/config, which the
  * daemon on the target machine has no way to know. Scoped to the caller's own
@@ -1067,13 +1204,23 @@ export const setDeviceSshHost = mutation({
     api_token: v.optional(v.string()),
     device_id: v.string(),
     ssh_host: v.string(),
+    // An agent box: the device belongs to a bot account, which has no settings
+    // page of its own, so an admin of the bot's team annotates it instead.
+    owner_user_id: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication required");
+    const ownerId = args.owner_user_id ?? userId;
+    if (ownerId.toString() !== userId.toString()) {
+      const owner = await ctx.db.get(ownerId);
+      if (!owner?.is_bot || !owner.team_id || !(await isTeamAdmin(ctx, userId, owner.team_id))) {
+        throw new Error("Only an admin of the bot's team can set an agent box's SSH host");
+      }
+    }
     const device = await ctx.db
       .query("devices")
-      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
+      .withIndex("by_user_device", (q: any) => q.eq("user_id", ownerId).eq("device_id", args.device_id))
       .first();
     if (!device) throw new Error("Unknown device");
 
