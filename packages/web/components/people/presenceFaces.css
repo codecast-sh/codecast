@@ -177,3 +177,10 @@
 }
 .presence-desc-actions .face-action-talk:not(:disabled) { color: var(--walkie-tx); }
 .presence-desc-actions .face-action-ring:not(:disabled) { color: #c8b6ff; }
+/* Over the actions the name has the plate's full width; the clamp that keeps
+   a hover line to one row must not cut "Member A." to "Me…". */
+.presence-desc-actions .presence-desc-name {
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+}
