@@ -828,7 +828,14 @@ export async function mediaFailureReason(kind: "camera" | "microphone", err?: an
   return err?.name === "NotAllowedError" ? `${label} permission denied` : `${label} unavailable`;
 }
 
-export async function setCamera(on: boolean): Promise<void> {
+/**
+ * `remember: false` publishes the camera WITHOUT changing what the person
+ * chose for calls. The walkie is the caller: holding the key shows your own
+ * face for the length of the burst, and a hold is not a decision about how
+ * your next huddle should start. Everything else about the publication is
+ * identical, so there is one path that opens a camera and not two.
+ */
+export async function setCamera(on: boolean, opts?: { remember?: boolean }): Promise<void> {
   setCall({ camera: on });
   // The next deliberate join starts the way this call ends. Written on the
   // INTENT rather than on the outcome below, because a camera that failed to
@@ -836,7 +843,7 @@ export async function setCamera(on: boolean): Promise<void> {
   // camera yanked by a device change, a track unpublished by the browser —
   // patch `call.camera` directly and never reach here, so nothing the person
   // did not choose can rewrite the preference.
-  rememberCamera(on);
+  if (opts?.remember !== false) rememberCamera(on);
   if (room) {
     try {
       const pub = await room.localParticipant.setCameraEnabled(on);

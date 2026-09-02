@@ -40,7 +40,14 @@ import { BellOff, MessageSquare, MicOff, PictureInPicture2, Square, X } from "lu
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { setMuted } from "../../lib/calls/callManager";
+import {
+  getCallTiles,
+  setMuted,
+  subscribeCallTiles,
+  type ParticipantTile,
+} from "../../lib/calls/callManager";
+import { CircleFace } from "./FaceCircle";
+import { useCircleFace } from "../../hooks/useCircleFace";
 import { popOutCall } from "../../lib/calls/popOutCall";
 import { canPopOutCall } from "../../lib/desktop";
 import { endBurst, endWalkie, getWalkieStatus, joinWalkieLive, shutWalkieDoor, walkieJoinedRoom } from "../../lib/calls/walkie";
@@ -78,6 +85,11 @@ const SNOOZE_NOTE_MS = 3_000;
  *  to answer. The stylesheet clamps it to two lines on top of this, so the
  *  budget is generous and the box is what really decides. */
 const TAIL = 160;
+
+// useSyncExternalStore compares snapshots by identity, so the empty case has
+// to be one array rather than a fresh one per call.
+const EMPTY_TILES: ParticipantTile[] = [];
+const emptyTiles = () => EMPTY_TILES;
 
 /** The talker's face. 56px, because this is the first thing the eye lands on
  *  when a voice arrives and a name is a slower way to answer "who". */
@@ -160,6 +172,12 @@ export function WalkieBanner() {
   );
   const myName = useInboxStore((st: any) => String(st.currentUser?.name ?? "You"));
   const myFaceRef = useWalkieLevelVar<HTMLSpanElement>(!!sending);
+  // MY OWN CAMERA, while I hold the key. The hold turns it on (walkie's
+  // startBurst) and this is where it lands: the circle that already shows my
+  // face becomes the live picture of me, so talking into the walkie is
+  // something I can see myself doing rather than a level ring on a photo.
+  const tiles = useSyncExternalStore(subscribeCallTiles, getCallTiles, emptyTiles);
+  const myTile = tiles.find((t) => t.isLocal && t.kind === "camera");
   if (!target) return null;
 
   // The teammate's own name when they are the one talking, and the room's label
@@ -188,6 +206,7 @@ export function WalkieBanner() {
       faceRef={faceRef}
       myFace={{ image: myImage, name: myName }}
       myFaceRef={myFaceRef}
+      myTile={myTile}
       stage={strip.stage}
       badge={strip.badge}
       hint={strip.hint}
@@ -284,6 +303,11 @@ export function WalkieStripView(props: {
   myFace?: { image?: string; name: string } | null;
   /** Writes `--level` onto my face while my mic is open. */
   myFaceRef?: RefCallback<HTMLSpanElement>;
+  /** My own camera, while the hold has it open — the circle shows the live
+   *  picture instead of my photo. Absent means no camera, which is the
+   *  ordinary case for a machine without one or a refused permission, and the
+   *  photo stands in exactly as it does on a call. */
+  myTile?: ParticipantTile;
   /** This client is talking. */
   tx: boolean;
   /** A teammate's burst is playing here. */
@@ -366,7 +390,7 @@ export function WalkieStripView(props: {
                 key="me"
                 className={`walkie-strip-face walkie-strip-face-tx walkie-face-pop${props.muted ? " walkie-strip-face-muted" : ""}`}
               >
-                <Avatar m={{ user_image: props.myFace.image, user_name: props.myFace.name }} size={FACE} />
+                <MyFace tile={props.myTile} image={props.myFace.image} name={props.myFace.name} />
                 {props.muted && (
                   <span className="walkie-strip-face-mutebadge">
                     <MicOff className="h-3 w-3" />
@@ -603,4 +627,27 @@ function useTalkerFace(
   const image = useInboxStore((st: any) => memberAvatarUrl(find(st)));
   const displayName = useInboxStore((st: any) => memberDisplayName(find(st), name));
   return userId ? { image, name: displayName } : null;
+}
+
+/**
+ * My own circle on the strip: the live camera while the hold has one, my
+ * photo otherwise.
+ *
+ * The circle, the crop and the mirror are the call circles' (FaceCircle's
+ * `useCircleFace`), because a face in a circle is one problem and this
+ * surface has no business solving it a second way. What is local is only the
+ * size and the fact that this circle is always me.
+ */
+function MyFace({ tile, image, name }: { tile?: ParticipantTile; image?: string; name: string }) {
+  const { hostRef, videoRef, track } = useCircleFace({
+    tile,
+    image,
+    diameter: FACE,
+    active: true,
+  });
+  return (
+    <span ref={hostRef} className="walkie-strip-myface face" style={{ width: FACE, height: FACE }}>
+      <CircleFace videoRef={videoRef} track={track} image={image} name={name} diameter={FACE} />
+    </span>
+  );
 }

@@ -555,6 +555,19 @@
     0 0 calc(4px + var(--level) * 18px) color-mix(in srgb, var(--walkie-tx) 40%, transparent);
 }
 
+/* MY OWN CAMERA IN THE CIRCLE, while the hold has it open. The circle clips
+ * itself so the video stays a disc, and the crop loop moves the frame by
+ * transform inside it — the same shape and the same machinery as the call
+ * circles, because it is the same component underneath. Without the clip the
+ * raw video would paint a square over the strip's rounded card. */
+.walkie-strip-myface {
+  display: block;
+  position: relative;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--sol-bg-alt);
+}
+
 /* Muted while live: the face dims and wears the fact, so a silent room is
  * explained by a glance at the corner rather than by doubt. */
 .walkie-strip-face.walkie-strip-face-muted {

@@ -402,3 +402,53 @@ describe("on the line, hands free", () => {
     expect(html).toContain("walkie-face-pop");
   });
 });
+
+// The founder's "when I walkie talkie I want by default my camera to take
+// video of ME, and I should see myself talking". The hold turns the camera on
+// (walkie's startBurst) and this circle is where it lands.
+describe("my own camera, while I hold the key", () => {
+  // A tile only has to attach and detach to be drawn; the real one wraps a
+  // LiveKit track, and the circle does not care which.
+  const tile = {
+    key: "me:camera:1",
+    identity: "me",
+    name: "Me",
+    isLocal: true,
+    kind: "camera",
+    track: { attach: () => {}, detach: () => {} },
+  } as any;
+
+  test("the circle becomes live video, not my photo", () => {
+    const html = render({
+      stage: "live",
+      badge: "TALKING",
+      headline: "Riley Chen hears you",
+      tx: true,
+      actions: false,
+      myFace: { image: "https://example.test/me.jpg", name: "Me" },
+      myTile: tile,
+      onStop: noop,
+    } as any);
+    expect(html).toContain("<video");
+    // The clip is what keeps the video a disc over the strip's rounded card.
+    expect(html).toContain("walkie-strip-myface");
+    // My photo stands down while the camera is on.
+    expect(html).not.toContain("https://example.test/me.jpg");
+  });
+
+  test("no camera is my photo, exactly as before", () => {
+    // A machine without one, or a permission the person refused. The burst is
+    // audio and must never depend on a camera.
+    const html = render({
+      stage: "live",
+      badge: "TALKING",
+      headline: "Riley Chen hears you",
+      tx: true,
+      actions: false,
+      myFace: { image: "https://example.test/me.jpg", name: "Me" },
+      onStop: noop,
+    } as any);
+    expect(html).not.toContain("<video");
+    expect(html).toContain("walkie-strip-myface");
+  });
+});
