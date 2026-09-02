@@ -120,3 +120,14 @@ export const FILE_VERBS: TriageVerb[] = [
 ];
 
 export const TRIAGE_VERBS: TriageVerb[] = [...PARK_VERBS, ...FILE_VERBS];
+
+/**
+ * What the bar shows at rest: the three verbs that cover nearly every triage
+ * decision — not now (defer), out of the way (stash), done (kill). Everything
+ * else lives one click away behind the bar's "more" menu, which is the same
+ * session menu every right-click opens, chords included.
+ */
+export const PRIMARY_VERBS: TriageVerb[] = TRIAGE_VERBS.filter((v) =>
+  v.id === "defer" || v.id === "stash" || v.id === "kill",
+);
+export const SECONDARY_VERBS: TriageVerb[] = TRIAGE_VERBS.filter((v) => !PRIMARY_VERBS.includes(v));

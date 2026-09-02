@@ -44,6 +44,7 @@ export type ShortcutAction =
   | 'ui.undo'
   | 'ui.redo'
   | 'inbox.toggleFlatView'
+  | 'inbox.toggleTriageBar'
   | 'nav.inbox'
   | 'search.open'
   | 'chat.search'

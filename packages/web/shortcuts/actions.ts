@@ -11,6 +11,7 @@ import { isPeopleWindow } from "../lib/desktop";
 import { useShortcutAction } from "./ShortcutProvider";
 import { performUndo, performRedo } from "../store/undoStack";
 import { useTriageActions } from "../components/triage/useTriageActions";
+import { toggleTriageBarCompact } from "../components/triage/graduation";
 import { checkMilestone } from "../tips/useTips";
 import { switchToWorkbench, sortedWorkbenches } from "../lib/workbenchSwitch";
 
@@ -176,6 +177,12 @@ export function useGlobalShortcutActions() {
 
   useShortcutAction('inbox.toggleFlatView', useCallback(() => {
     useInboxStore.getState().cycleInboxViewMode();
+  }, []));
+
+  // No chord: the bar hides from its own menu, and the palette is the way
+  // back — a hidden bar is not something to toggle by reflex.
+  useShortcutAction('inbox.toggleTriageBar', useCallback(() => {
+    toggleTriageBarCompact();
   }, []));
 
   useShortcutAction('nav.inbox', useCallback(() => {
