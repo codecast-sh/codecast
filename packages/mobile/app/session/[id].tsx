@@ -18,7 +18,7 @@ import { isTrustedImageSrc } from '@/lib/convex';
 import { parseInboundSessionMessage, isScheduledTaskMessage, parseChatWakePrompt, parseHuddleSummaryTag, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
 import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallbackFromLoaded, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
-import { isHiddenSystemNotice } from '@codecast/web/lib/conversationProcessor';
+import { isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
 import { MessageNavigatorSheet } from '@/components/session/MessageNavigatorSheet';
 import { MessageTickRail, MessageListButton } from '@/components/session/MessageTickRail';
 import { StickyPromptBanner, type StickyPrompt } from '@/components/session/StickyPromptBanner';
@@ -2386,12 +2386,17 @@ function SystemMessage({ message }: { message: Message }) {
   const content = (message.content || '').replace(/<[^>]+>/g, '').slice(0, 200);
   if (!content) return null;
 
+  // Usage-limit notices share the amber warning tone of the compact boundary
+  // pill; every other status line keeps the neutral system gray.
+  const warning = isWarningSystemNotice(message.content, message.subtype);
   return (
-    <RNView style={styles.systemMessage}>
+    <RNView style={[styles.systemMessage, warning && styles.systemMessageWarning]}>
       {message.subtype && (
-        <RNText style={styles.systemSubtypeLabel}>{message.subtype.replace(/_/g, ' ')}</RNText>
+        <RNText style={[styles.systemSubtypeLabel, warning && styles.systemWarningText]}>
+          {warning ? 'warning' : message.subtype.replace(/_/g, ' ')}
+        </RNText>
       )}
-      <RNText style={styles.systemMessageText} numberOfLines={2}>{content}</RNText>
+      <RNText style={[styles.systemMessageText, warning && styles.systemWarningText]} numberOfLines={2}>{content}</RNText>
     </RNView>
   );
 }
@@ -5487,6 +5492,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 6,
+  },
+  systemMessageWarning: {
+    backgroundColor: 'rgba(217,119,6,0.1)',
+    borderLeftColor: 'rgba(217,119,6,0.4)',
+  },
+  systemWarningText: {
+    color: '#d97706',
   },
   systemSubtypeLabel: {
     fontSize: 10,

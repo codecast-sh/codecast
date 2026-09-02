@@ -26,7 +26,7 @@ import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
+import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isWarningSystemNotice, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
 import { splitMarkdownBlocks } from "../lib/markdownBlocks";
 import { classifyApiErrorBanner, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "./DecisionAnswerFooter";
@@ -9229,14 +9229,17 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
   const cleanText = stripAnsiCodes(content.replace(/<[^>]+>/g, "")).slice(0, 200);
   if (!cleanText) return null;
 
+  // Usage-limit notices share the amber warning tone of ApiErrorCard's limit
+  // banner; every other status line keeps the neutral system gray.
+  const warning = isWarningSystemNotice(content, subtype);
   return (
-    <div className="mb-4 px-3 py-2 bg-sol-bg-alt/20 border-l-2 border-sol-border text-xs">
+    <div className={`mb-4 px-3 py-2 border-l-2 text-xs ${warning ? "bg-amber-500/10 border-amber-500/40" : "bg-sol-bg-alt/20 border-sol-border"}`}>
       {subtype && (
-        <span className="text-sol-text-dim text-[10px] mr-2">
-          {subtype.replace(/_/g, " ")}
+        <span className={`text-[10px] mr-2 ${warning ? "text-amber-500" : "text-sol-text-dim"}`}>
+          {warning ? "warning" : subtype.replace(/_/g, " ")}
         </span>
       )}
-      <span className="text-sol-text-muted font-mono">
+      <span className={`font-mono ${warning ? "text-amber-500" : "text-sol-text-muted"}`}>
         {cleanText}
         {content.length > 200 && "..."}
       </span>
