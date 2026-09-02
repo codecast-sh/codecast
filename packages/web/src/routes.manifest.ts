@@ -183,6 +183,7 @@ const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
 const Faces = lazy(() => import("@/app/faces/page"));
 const MeetingOffer = lazy(() => import("@/app/meeting-offer/page"));
+const CallRing = lazy(() => import("@/app/call-ring/page"));
 
 // Settings
 const Settings = lazy(() => import("@/app/settings/page"));
@@ -329,6 +330,12 @@ export const ROUTES: RouteEntry[] = [
   // -- The meeting-offer window (TransparentWindowLayout): the record-this-
   //    meeting card as a small chromeless corner window --
   { path: "meeting-offer", component: cast(MeetingOffer), layout: "palette" },
+
+  // -- The ring window (TransparentWindowLayout): an incoming huddle as a
+  //    small chromeless corner card. Same family as the meeting offer, and
+  //    for the same reason: a ring must reach somebody who is in another app
+  //    entirely, which a card inside an app window cannot do. --
+  { path: "call-ring", component: cast(CallRing), layout: "palette" },
 
   // -- Settings (SettingsLayout; index = /settings) --
   { path: "settings", component: cast(Settings), layout: "settings" },

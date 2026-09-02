@@ -32,6 +32,12 @@ const shared = createBridge({ ipcRenderer, argv: process.argv });
 // so this message is the only thing that keeps the huddle alive.
 const onCallPanelHandback = bufferedChannel(ipcRenderer, "call-panel-handback");
 
+// The ring window answered; the call window is the one that joins. Buffered
+// because that window is usually being CREATED by this very answer — the
+// message would otherwise land before the page has a listener, and the person
+// would have pressed Join on a huddle nobody joined.
+const onCallRingAccept = bufferedChannel(ipcRenderer, "call-ring-accept");
+
 // A meeting app started on this machine and the shell is offering to record
 // it. Buffered like a deep link: the offer is about something happening NOW,
 // and one that lands while the renderer is still booting would otherwise be
@@ -71,6 +77,7 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   closeCallPanel: (opts) => ipcRenderer.invoke("close-call-panel", opts ?? {}),
   reportCallPanelState: (state) => ipcRenderer.send("report-call-panel-state", state),
   onCallPanelHandback,
+  onCallRingAccept,
   // The four sizes. One window, because `transparent` and `frame` are decided
   // when a window is CONSTRUCTED: the call window is born see-through and
   // frameless, and changing size reshapes it in place rather than handing the
@@ -125,4 +132,17 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   meetingOfferSize: (size) => ipcRenderer.send("meeting-offer-size", size),
   meetingOfferHide: () => ipcRenderer.send("meeting-offer-hide"),
   meetingOfferOpenCall: (id) => ipcRenderer.send("meeting-offer-open-call", id),
+  // The ring window: an incoming huddle as a small chromeless corner card
+  // (route /call-ring). A ring is the one huddle surface that arrives
+  // unannounced, so it cannot live inside an app window — the person it is
+  // for is usually looking at something else.
+  //
+  // `callRingAnswer` hands the room to the CALL window rather than joining
+  // here: the media plane is a per-renderer singleton, so answering in this
+  // card would put the huddle in a corner with no stage and no controls.
+  isCallRingWindow: process.argv.includes("--call-ring-window"),
+  openCallRingWindow: () => ipcRenderer.invoke("open-call-ring-window"),
+  callRingSize: (size) => ipcRenderer.send("call-ring-size", size),
+  callRingHide: () => ipcRenderer.send("call-ring-hide"),
+  callRingAnswer: (inviteId, roomKey) => ipcRenderer.send("call-ring-answer", inviteId, roomKey),
 });

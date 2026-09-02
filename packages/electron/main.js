@@ -767,6 +767,8 @@ function callPanelUrl(roomKey, opts) {
   if (opts && opts.mic) q.set("mic", "1");
   if (opts && opts.camera) q.set("cam", "1");
   if (opts && opts.scribe) q.set("scribe", "1");
+  // Opened by an answered ring: the accept follows on its own channel.
+  if (opts && opts.ring) q.set("ring", "1");
   // The size the window is opening in, so the renderer's first paint is the
   // right shape rather than a stage that snaps to circles a frame later.
   if (callWindowSize !== "panel") q.set("size", callWindowSize);
@@ -1809,6 +1811,162 @@ ipcMain.on("meeting-offer-hide", (e) => {
   const win = meetingOfferWindow;
   if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
   win.hide();
+});
+
+// ---------------------------------------------------------------------------
+// The ring window: an incoming huddle as a small chromeless corner card
+// (route /call-ring).
+//
+// A ring is the one huddle surface that arrives UNANNOUNCED, which is why it
+// was the last one still drawn inside an app window: a toast in whichever
+// window happened to be open, clipped to that window's edges and invisible to
+// somebody working in another app. A ringing phone you have to go and find is
+// not a ringing phone.
+//
+// Same manners as the meeting offer, for the same reason: revealed with
+// showInactive and NEVER focused. A card that steals the keyboard from
+// somebody mid-sentence is worse than a ring they answer a second later.
+//
+// ANSWERING DOES NOT HAPPEN IN IT. The media plane is per-renderer, so a card
+// that joined would put the huddle in a 340px corner window with no stage and
+// no controls. `call-ring-answer` opens the call window on that room, which
+// joins by the ordinary route — and the ring window goes back to being glass.
+// ---------------------------------------------------------------------------
+let callRingWindow = null;
+const CALL_RING_MARGIN = 16;
+
+function createCallRingWindow() {
+  const zoom = getAutoZoomFactor();
+  const win = new BrowserWindow({
+    width: 340,
+    height: 96,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    show: false,
+    hasShadow: false,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      zoomFactor: zoom,
+      additionalArguments: [`--zoom-factor=${zoom}`, "--call-ring-window"],
+      // It rings on a timer. Throttled timers in a background window would
+      // stretch the ring period out past the invite's own TTL — a phone that
+      // rings once and then thinks about it.
+      backgroundThrottling: false,
+    },
+  });
+  callRingWindow = win;
+  // Over a fullscreen app — which is exactly where somebody is when a ring
+  // they cannot see arrives.
+  win.setAlwaysOnTop(true, "screen-saver");
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.loadURL(`${currentBaseUrl}/call-ring`);
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+  win.webContents.on("did-finish-load", () => {
+    if (!win.isDestroyed()) {
+      win.webContents.executeJavaScript(
+        "document.documentElement.classList.add('electron-desktop')"
+      );
+    }
+  });
+  win.on("closed", () => {
+    if (callRingWindow === win) callRingWindow = null;
+  });
+  return win;
+}
+
+// Top-right of the display the cursor is on, under the meeting offer's spot so
+// the two never cover each other when a meeting starts mid-ring.
+function placeCallRingWindow(width, height) {
+  const win = callRingWindow;
+  if (!win || win.isDestroyed()) return;
+  const cursor = screen.getCursorScreenPoint();
+  const area = screen.getDisplayNearestPoint(cursor).workArea;
+  // Electron refuses setBounds on a window that is not resizable, so the flag
+  // comes up for the call and goes straight back — the person still cannot
+  // drag an edge, and the card is still exactly as big as its content.
+  win.setResizable(true);
+  win.setBounds({
+    x: Math.round(area.x + area.width - width - CALL_RING_MARGIN),
+    y: Math.round(area.y + CALL_RING_MARGIN),
+    width: Math.round(width),
+    height: Math.round(height),
+  });
+  win.setResizable(false);
+}
+
+// Built on the first ring, not at launch: an always-on-top transparent window
+// with a Convex subscription behind it is real cost, and most launches never
+// see a ring. It stays alive afterwards, so every later ring is free.
+//
+// The shell cannot see invites — they arrive on a subscription inside a
+// renderer — so an app window asks for this window when one lands, and the
+// window then watches for itself.
+function ensureCallRingWindow() {
+  if (!callRingWindow || callRingWindow.isDestroyed()) createCallRingWindow();
+  return callRingWindow;
+}
+
+ipcMain.handle("open-call-ring-window", () => {
+  const win = ensureCallRingWindow();
+  return !!win && !win.isDestroyed();
+});
+
+ipcMain.on("call-ring-size", (e, size) => {
+  const win = callRingWindow;
+  if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
+  const width = Math.max(120, Math.min(520, Math.round(Number(size?.width) || 340)));
+  const height = Math.max(48, Math.min(360, Math.round(Number(size?.height) || 96)));
+  placeCallRingWindow(width, height);
+  // The reveal, and it never takes focus: the person is mid-sentence in
+  // another app and a ring is not worth their keystrokes.
+  if (!win.isVisible()) win.showInactive();
+});
+
+ipcMain.on("call-ring-hide", (e) => {
+  const win = callRingWindow;
+  if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
+  win.hide();
+});
+
+// Answer: the huddle goes to the CALL window, never to this card. The invite
+// is accepted by the window that will actually hold the media, so there is no
+// moment where a seat exists in a renderer with no stage behind it.
+ipcMain.on("call-ring-answer", (e, inviteId, roomKey) => {
+  const win = callRingWindow;
+  if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
+  if (typeof roomKey !== "string" || !roomKey) return;
+  win.hide();
+  // `ring=1` tells the call window an accept is on its way, so its URL
+  // takeover stands down: the ACCEPT is what takes the seat here, and a
+  // takeover racing it would join a room this person has not been admitted to
+  // yet and leave the invite ringing.
+  const call = createCallWindow(roomKey, { mic: true, ring: true });
+  if (!call || call.webContents.isDestroyed()) return;
+  const accept = () => {
+    if (!call.isDestroyed() && !call.webContents.isDestroyed()) {
+      call.webContents.send("call-ring-accept", { inviteId: String(inviteId ?? ""), roomKey });
+    }
+  };
+  // A window that is still loading has no listener yet; the preload buffers
+  // this channel, so sending once the page exists is enough.
+  // Sent straight away, even though the window is usually being BUILT by this
+  // very answer and its page has no listener yet: `call-ring-accept` is a
+  // buffered channel in the preload, which runs before any page JS and replays
+  // what landed early. That is the whole reason it is buffered — a dropped
+  // accept is somebody pressing Join on a huddle nobody joins.
+  accept();
 });
 
 // "Open the transcript" from the recording face: the card is not a place to

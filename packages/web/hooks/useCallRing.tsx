@@ -2,10 +2,24 @@ import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { soundCallRing, soundCallDeclined } from "../lib/sounds";
-import { notifyNative, getDesktopWindowRole } from "../lib/desktop";
+import {
+  notifyNative,
+  getDesktopWindowRole,
+  canRingInWindow,
+  isCallRingWindow,
+  openCallRingWindow,
+} from "../lib/desktop";
 import { acceptInvite, declineInvite } from "../lib/calls/callManager";
 import { CALL_INVITE_TTL_MS, CALL_KNOCK_TTL_MS, CALL_RING_PERIOD_MS } from "@codecast/shared/contracts";
 
+// THE RING HAS A WINDOW OF ITS OWN (route /call-ring, main.js
+// createCallRingWindow), and it is the ring on every build that has one.
+// A ring arrives unannounced, usually while the person is in another app
+// entirely, so a card clipped to an app window is a phone ringing in a drawer.
+// This hook keeps the SOUND and the native banner — both app-wide facts, not
+// surfaces — and draws the in-app toast only where no ring window exists: a
+// browser, or a desktop build that predates it. `canRingInWindow` is the test.
+//
 // Incoming huddle rings → toast + sound + native banner; outgoing declines →
 // a quiet settle. Mounted once app-wide beside useChatToasts — a ring must
 // reach someone who is NOT looking at the team strip.
@@ -65,7 +79,19 @@ export function useCallRing(): void {
         toast.dismiss(`ring:${invite._id}`);
         void declineInvite(String(invite._id));
       };
-      toast.custom(
+      // The ring window is drawing this same card, over every app, and two
+      // cards for one ring is one card too many. Only the TOAST stands down:
+      // the native banner below is a fact about the machine, not a surface,
+      // and it is what reaches somebody whose screen this window is not on.
+      const inWindow = canRingInWindow();
+      // The ring window is built on the first ring rather than at launch, so
+      // this is where it comes into being: the app saw the invite, and the
+      // shell cannot. Idempotent — a second ring finds the window already up.
+      // Never from inside the ring window itself, which would be it asking
+      // for itself.
+      if (inWindow && !isCallRingWindow()) void openCallRingWindow();
+      if (!inWindow) {
+        toast.custom(
         () => (
           // ONE layout, and stacked, at every width — because the width that
           // matters is the CARD's, not the window's. Sonner caps a toast at
@@ -137,8 +163,9 @@ export function useCallRing(): void {
             </div>
           </div>
         ),
-        { id: `ring:${invite._id}`, duration: CALL_INVITE_TTL_MS },
-      );
+          { id: `ring:${invite._id}`, duration: CALL_INVITE_TTL_MS },
+        );
+      }
       if (!quiet && !inCall) {
         // `key` collapses the ring reported by every desktop window into one
         // banner; `kind` sends its click to the window with the call UI.
@@ -163,7 +190,11 @@ export function useCallRing(): void {
 
     // The loop: one ring cycle per period while anything is ringing and we're
     // not the quiet door.
+    // The ring window rings for itself — it is the surface showing the ring,
+    // and a sound from every app window on top of it would be one phone
+    // ringing four times.
     const shouldRing =
+      !canRingInWindow() &&
       incoming.some((i: any) => !autoAccepted.current.has(String(i._id))) && !quiet && !inCall;
     if (shouldRing && !ringTimer.current) {
       soundCallRing();

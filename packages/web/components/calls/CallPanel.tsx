@@ -5,11 +5,12 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useTrackedStore } from "../../store/inboxStore";
 import { CallStage } from "./CallStage";
 import { CallFaces } from "./CallFaces";
-import { setCallOutlivesWindow, takeOverCall } from "../../lib/calls/callManager";
+import { acceptInvite, setCallOutlivesWindow, takeOverCall } from "../../lib/calls/callManager";
 import { callWindowReport, callWindowSizeOnFailedJoin } from "../../lib/calls/callHandoff";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
 import {
   closeCallPanel,
+  onCallRingAccept,
   faceTierForSize,
   facesModeForSize,
   getCallWindowSize,
@@ -145,8 +146,13 @@ export function CallPanel() {
   // window is already in, which `joinCall` treats as idempotent anyway, but the
   // scribe resume below is not free and should not repeat.
   const took = useRef(false);
+  // Opened by an answered ring: the seat is not ours yet, so there is nothing
+  // to take OVER. The accept arriving on its own channel is what joins, and a
+  // takeover racing it would join a room we have not been admitted to and
+  // leave the invite ringing at everyone else.
+  const byRing = params.get("ring") === "1";
   useWatchEffect(() => {
-    if (!roomKey || took.current) return;
+    if (!roomKey || took.current || byRing) return;
     took.current = true;
     void takeOverCall({
       roomKey,
@@ -154,7 +160,27 @@ export function CallPanel() {
       camera: params.get("cam") === "1",
       scribe: params.get("scribe") === "1",
     });
-  }, [roomKey, params]);
+  }, [roomKey, params, byRing]);
+
+  // ANSWERING A RING LANDS HERE, not in the card the person pressed Join on.
+  //
+  // The ring window is 340px of glass with no stage, no roster and no
+  // controls, and `acceptInvite` joins the media in whichever renderer calls
+  // it — so the accept is sent to this window, which is the one that will hold
+  // the huddle. The shell opened (or raised) this window for that room a
+  // moment ago; the accept is what takes the seat.
+  //
+  // Guarded by the same ref as the takeover above: the answer and the URL
+  // takeover are two routes to one join, and both running would be a second
+  // join of a room this window is already in.
+  useMountEffect(() => {
+    onCallRingAccept(({ inviteId, roomKey: ringRoom }) => {
+      if (!inviteId || !ringRoom) return;
+      if (took.current) return;
+      took.current = true;
+      void acceptInvite(inviteId, ringRoom);
+    });
+  });
 
   // Keep the shell told what this window is hosting, so a handback carries the
   // same room in the same state whichever way the window closes — this panel's
