@@ -570,6 +570,15 @@ async function main() {
       "--disable-background-networking",
       "--disable-sync",
       "--window-size=1200,900",
+      // On macOS Chrome drops the renderer of every tab that is not the
+      // active one into the background scheduling band, which Apple silicon
+      // confines to the efficiency cores. The tabs under test are created in
+      // the background on purpose (the seeding page, the pinned tab), so on a
+      // loaded machine their renderers starve and every evaluate on them
+      // times out (measured: 23 s at load average 170, instant with this
+      // flag). Keep the scratch Chrome's renderers in the normal band so the
+      // run reports on the code and not on the machine's load.
+      "--disable-features=MacAllowBackgroundingRenderProcesses",
       ...(headed ? [] : ["--headless=new"]),
       "about:blank",
     ],
