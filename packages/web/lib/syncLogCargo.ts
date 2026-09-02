@@ -70,7 +70,18 @@ export function planCargoApply(
   const unsetIn = cargo.unset ?? [];
   const triggers = ENRICH_TRIGGER_FIELDS[coll];
   let refetch = !!cargo.partial;
-  for (const k of [...Object.keys(raw), ...unsetIn]) if (triggers.has(k)) refetch = true;
+  // A trigger fires on a CHANGED value, never on presence: a coalesced or
+  // full cargo re-ships every field it ever carried (plan_id on a task that
+  // has always had one), and a refetch per re-shipped field would put every
+  // coalesced row back on the byIds path.
+  const same = (a: unknown, b: unknown) =>
+    a === b || (a != null && b != null && typeof a === "object" && typeof b === "object" && JSON.stringify(a) === JSON.stringify(b));
+  for (const k of Object.keys(raw)) {
+    if (triggers.has(k) && !(existing && same(existing[k], raw[k]))) refetch = true;
+  }
+  for (const k of unsetIn) {
+    if (triggers.has(k) && !(existing && existing[k] === undefined)) refetch = true;
+  }
 
   if (coll === "sessions") return planSessions(raw, unsetIn, existing, refetch);
 
