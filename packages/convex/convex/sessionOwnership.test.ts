@@ -6,6 +6,8 @@ import {
   performAddSessionOwner,
   performRemoveSessionOwner,
   performListOwners,
+  performListOwnerCandidates,
+  OWNER_CANDIDATE_CAP,
 } from "./sessionOwnership";
 
 // Fixtures: Mr Bot runs a team-visible session; Jason and Ashot are teammates.
@@ -403,18 +405,50 @@ describe("performListOwners", () => {
     expect(result?.owners.map((o) => o.user_id)).toEqual([JASON]);
   });
 
+  // The open-conversation subscription must not walk the team roster: that
+  // collect + N user-doc reads is what timed listOwners out (and re-ran on
+  // every teammate daemon heartbeat). Extra members exist so a regression
+  // that loads them is visible as db.get of their ids.
+  test("does not read team member user docs beyond the owner set", async () => {
+    const db = fixtures();
+    const extraIds: string[] = [];
+    for (let i = 0; i < 30; i++) {
+      const id = `users_extra_${i}`;
+      extraIds.push(id);
+      db._tables.users.push({ _id: id, name: `Extra ${i}`, email: `e${i}@x.com` });
+      db._tables.team_memberships.push({
+        _id: `tm_x_${i}`,
+        user_id: id,
+        team_id: TEAM,
+        visibility: "full",
+      });
+    }
+    const got = new Set<string>();
+    const innerGet = db.get.bind(db);
+    db.get = async (id: any) => {
+      got.add(String(id));
+      return innerGet(id);
+    };
+    const result = await performListOwners({ db }, ASHOT as any, "jx1abcd");
+    expect(result).not.toBeNull();
+    expect(result).not.toHaveProperty("team_members");
+    for (const id of extraIds) expect(got.has(id)).toBe(false);
+  });
+});
+
+describe("performListOwnerCandidates", () => {
   // The roster the picker offers must follow the SESSION's team: Ashot's
   // active context is team 1, but jx3abcd is stamped team 2, so the
   // candidates are team 2's members — never Jason or the bot.
   test("team_members is the session team's roster, not the caller's", async () => {
     const db = fixtures();
-    const result = await performListOwners({ db }, ASHOT as any, "jx3abcd");
+    const result = await performListOwnerCandidates({ db }, ASHOT as any, "jx3abcd");
     expect(result?.team_members.map((m) => m._id).sort()).toEqual([ASHOT, SAMVIT].sort());
   });
 
   test("team session roster carries display fields and the bot flag", async () => {
     const db = fixtures();
-    const result = await performListOwners({ db }, ASHOT as any, "jx1abcd");
+    const result = await performListOwnerCandidates({ db }, ASHOT as any, "jx1abcd");
     const bot = result?.team_members.find((m) => m._id === BOT);
     expect(bot?.is_bot).toBe(true);
     const jason = result?.team_members.find((m) => m._id === JASON);
@@ -426,7 +460,25 @@ describe("performListOwners", () => {
   test("teamless session offers only the caller", async () => {
     const db = fixtures();
     db._tables.conversations[1].owner_user_id = JASON;
-    const result = await performListOwners({ db }, JASON as any, "jx2abcd");
+    const result = await performListOwnerCandidates({ db }, JASON as any, "jx2abcd");
     expect(result?.team_members.map((m) => m._id)).toEqual([JASON]);
+  });
+
+  test("caps the membership walk so a huge team cannot blow the syscall budget", async () => {
+    const db = fixtures();
+    for (let i = 0; i < OWNER_CANDIDATE_CAP + 40; i++) {
+      const id = `users_cap_${i}`;
+      db._tables.users.push({ _id: id, name: `Cap ${i}` });
+      db._tables.team_memberships.push({
+        _id: `tm_cap_${i}`,
+        user_id: id,
+        team_id: TEAM,
+        visibility: "full",
+      });
+    }
+    const result = await performListOwnerCandidates({ db }, ASHOT as any, "jx1abcd");
+    // Fixtures already have 3 members on TEAM (bot, jason, ashot). The cap
+    // is on the index take, so we never return more than that.
+    expect(result?.team_members.length).toBeLessThanOrEqual(OWNER_CANDIDATE_CAP);
   });
 });

@@ -29,7 +29,7 @@ describe("shouldQueryOwners — guests never subscribe to listOwners", () => {
 // picker must offer the server's roster whenever it has answered — the
 // injected active-team roster can be a different team entirely (the "isn't a
 // member of this session's team" toast). It survives only as warm paint
-// while the query loads, and against an older server without team_members.
+// while listOwnerCandidates loads.
 describe("pickRoster — the session team's roster wins over the viewer's", () => {
   const sessionTeam = [{ _id: "samvit" }];
   const activeTeam = [{ _id: "jason" }];

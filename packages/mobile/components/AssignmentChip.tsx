@@ -16,7 +16,7 @@ import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useOwners } from '@codecast/web/hooks/useOwners';
+import { useOwners, useOwnerCandidates, pickRoster } from '@codecast/web/hooks/useOwners';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { Theme, Spacing, chipText, CHROME_FONT_CAP, CHIP_HEIGHT } from '@/constants/Theme';
 import {
@@ -87,7 +87,11 @@ export function AssignmentChip({
     currentUser,
     notify: (msg) => showToast(msg),
   });
-  const { ownerIds, ownerList, displayFor, toggle, clearAll, selectable } = owners;
+  const { ownerIds, ownerList, displayFor, toggle, clearAll, selectable: fallbackSelectable } = owners;
+  const serverRoster = useOwnerCandidates(conversationId ?? '', currentUser, sheetVisible);
+  const selectable = pickRoster(serverRoster, fallbackSelectable).filter(
+    (m: any) => m && !m.is_bot,
+  );
 
   const d = ownerDeviceId ? byId.get(ownerDeviceId) : undefined;
 

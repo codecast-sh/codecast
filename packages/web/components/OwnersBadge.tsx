@@ -13,7 +13,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { X, UserCheck } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
-import { useOwners, type OwnersApi } from "../hooks/useOwners";
+import { useOwners, useOwnerCandidates, pickRoster, type OwnersApi } from "../hooks/useOwners";
 import { AvatarImg } from "../lib/avatarCache";
 import { formatRelative, formatDateFull } from "../lib/utils";
 import {
@@ -57,8 +57,21 @@ export function useOwnersFromStore(conversationId: string): OwnersApi {
  * checkboxes + clear-all. Drop inside an open DropdownMenuContent; rows
  * preventDefault so the menu stays open across multi-select toggles.
  */
-export function OwnerMenuItems({ owners }: { owners: OwnersApi }) {
-  const { ownerIds, ownerList, displayFor, toggle, clearAll, selectable, currentUser } = owners;
+export function OwnerMenuItems({
+  owners,
+  conversationId,
+}: {
+  owners: OwnersApi;
+  conversationId: string;
+}) {
+  const { ownerIds, ownerList, displayFor, toggle, clearAll, currentUser } = owners;
+  // Mounted only while the assignment menu is open (Radix unmounts Content
+  // when closed). This is the team-roster collect that must not run for
+  // every open conversation.
+  const serverRoster = useOwnerCandidates(conversationId, currentUser);
+  const selectable = pickRoster(serverRoster, owners.selectable).filter(
+    (m: any) => m && !m.is_bot,
+  );
   // Optional handoff note, sent along with the NEXT assignment made from this
   // menu. It rides the notification (push + inbox row) and the assignee's
   // "assigned to you" banner, then clears once used.

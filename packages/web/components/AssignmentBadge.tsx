@@ -142,7 +142,7 @@ export function AssignmentBadge({
       <DropdownMenuContent align="end" className="min-w-[16rem] max-w-[24rem]">
         <RunOnDeviceItems conversationId={conversationId} ownerDeviceId={ownerDeviceId} />
         <DropdownMenuSeparator />
-        <OwnerMenuItems owners={owners} />
+        <OwnerMenuItems owners={owners} conversationId={conversationId} />
       </DropdownMenuContent>
     </DropdownMenu>
   );
