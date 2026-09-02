@@ -51,13 +51,21 @@ echo ""
 echo "[1.5/4] Verifying asar contains every local require..."
 ASAR="dist/mac-arm64/Codecast.app/Contents/Resources/app.asar"
 ASAR_LIST=$(npx asar list "$ASAR")
-for src in main.js preload.js; do
+# Every packaged module, not just the entry points: osPermissions.js is what
+# requires the native addon. A .node keeps its extension and must also sit
+# on disk beside the asar (asarUnpack), or dlopen fails inside the archive.
+for src in $(jq -r '.build.files[] | select(endswith(".js"))' package.json); do
   for mod in $(grep -oE 'require\("\./[^"]+"\)' "$src" | sed -E 's|require\("\./([^"]+)"\)|\1|'); do
-    if ! echo "$ASAR_LIST" | grep -qx "/${mod}.js"; then
-      echo "  ERROR: $src requires ./$mod but /${mod}.js is not in the asar — add it to build.files"
+    case "$mod" in *.js|*.node) f="/$mod" ;; *) f="/$mod.js" ;; esac
+    if ! echo "$ASAR_LIST" | grep -qx "$f"; then
+      echo "  ERROR: $src requires ./$mod but $f is not in the asar — add it to build.files"
       exit 1
     fi
-    echo "  $src -> ./$mod.js ok"
+    if [[ "$f" == *.node ]] && [ ! -f "${ASAR}.unpacked$f" ]; then
+      echo "  ERROR: $f is inside the asar but not unpacked — add it to build.asarUnpack"
+      exit 1
+    fi
+    echo "  $src -> .$f ok"
   done
 done
 
