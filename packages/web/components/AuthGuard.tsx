@@ -1,5 +1,5 @@
-import { useConvexAuth } from "convex/react";
 import { useRouter } from "next/navigation";
+import { AuthGuard as LocalFirstAuthGuard } from "@platform/auth/web";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useLocalAuth } from "../lib/localAuth";
 import { AppLoader } from "./AppLoader";
@@ -16,7 +16,8 @@ function RedirectToHome() {
  * dashboard paints instantly from the IndexedDB-hydrated store, online or
  * offline. The server still validates the token in the background; if it's
  * expired the auth layer refreshes it, and a definitive sign-out clears the
- * stored token, which flips this gate to the redirect.
+ * stored token, which flips this gate to the redirect. The rule itself is
+ * @platform/auth/web's; the loader and the redirect are codecast's.
  *
  * guestOk: render children for unauthenticated visitors instead of
  * redirecting home — for routes that do their own access resolution
@@ -38,13 +39,14 @@ export function AuthGuard({
   guestOk?: boolean;
   blankSignedOut?: boolean;
 }) {
-  const localAuthed = useLocalAuth();
-  const { isAuthenticated, isLoading } = useConvexAuth();
-
-  if (localAuthed || isAuthenticated) return <>{children}</>;
-  // No local token yet, but the provider is still reading storage (its
-  // IndexedDB fallback path) — a local, offline-safe wait of a few frames.
-  if (isLoading) return blankSignedOut ? null : <AppLoader />;
-  if (guestOk) return <>{children}</>;
-  return blankSignedOut ? null : <RedirectToHome />;
+  return (
+    <LocalFirstAuthGuard
+      guestOk={guestOk}
+      useLocalAuth={useLocalAuth}
+      loading={blankSignedOut ? null : <AppLoader />}
+      unauthenticated={blankSignedOut ? null : <RedirectToHome />}
+    >
+      {children}
+    </LocalFirstAuthGuard>
+  );
 }

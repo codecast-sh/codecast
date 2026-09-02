@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { createServerAnalytics } from "@platform/analytics/server";
 import { Hono } from "hono";
 import { readFile, stat } from "fs/promises";
 import { extname, join } from "path";
@@ -17,20 +18,15 @@ const DIST_DIR = join(import.meta.dirname, "../dist");
 // Server-side PostHog capture for funnel steps with no browser attached (curl
 // fetching the install script, dmg redirects). Same Railway env that bakes the
 // client key into the bundle. Personless events: a curl has no identity to
-// merge, and creating a person per fetch would pollute the person store.
+// merge, and creating a person per fetch would pollute the person store, so the
+// package sends a random distinct_id with $process_person_profile false.
 const POSTHOG_KEY = process.env.VITE_POSTHOG_KEY;
+const analytics = POSTHOG_KEY
+  ? createServerAnalytics({ posthogKey: POSTHOG_KEY, source: "web_server" })
+  : null;
 function phCapture(event: string, properties: Record<string, unknown> = {}) {
-  if (!POSTHOG_KEY) return;
-  fetch("https://us.i.posthog.com/i/v0/e/", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      api_key: POSTHOG_KEY,
-      event,
-      distinct_id: crypto.randomUUID(),
-      properties: { source: "web_server", $process_person_profile: false, ...properties },
-    }),
-  }).catch(() => {});
+  // Fire and forget; the send swallows its own failures.
+  void analytics?.capturePersonless(event, properties);
 }
 
 const MIME: Record<string, string> = {

@@ -1,4 +1,4 @@
-import { useAuthToken } from "@convex-dev/auth/react";
+import { createLocalAuth } from "@platform/auth/web";
 
 import { CONVEX_URL } from "./convexUrl";
 
@@ -15,33 +15,32 @@ import { CONVEX_URL } from "./convexUrl";
  * boots straight from the IndexedDB-hydrated store with no server round-trip.
  * The server-confirmed signal is still the right one for issuing authed
  * side effects; this one only decides what to draw.
+ *
+ * The signal itself lives in @platform/auth/web; the deployment URL below is
+ * the storage namespace it is built for.
  */
 
 export { CONVEX_URL };
 
-export const AUTH_STORAGE_NAMESPACE = CONVEX_URL.replace(/[^a-zA-Z0-9]/g, "");
+const localAuth = createLocalAuth(CONVEX_URL);
 
-export function namespacedAuthStorageKey(key: string): string {
-  return `${key}_${AUTH_STORAGE_NAMESPACE}`;
-}
+export const AUTH_STORAGE_NAMESPACE = localAuth.namespace;
+export const namespacedAuthStorageKey = localAuth.namespacedKey;
 
 // Mirrors @convex-dev/auth's useNamespacedStorage key layout:
 // `${key}_${namespace}` with non-alphanumerics stripped from the namespace,
 // which defaults to the deployment URL. Exported for the contract test —
 // if a package upgrade changes this layout, offline boot silently breaks.
-export const AUTH_JWT_STORAGE_KEY = namespacedAuthStorageKey("__convexAuthJWT");
-export const AUTH_REFRESH_TOKEN_STORAGE_KEY = namespacedAuthStorageKey("__convexAuthRefreshToken");
-export const AUTH_OAUTH_VERIFIER_STORAGE_KEY = namespacedAuthStorageKey("__convexAuthOAuthVerifier");
-export const AUTH_SERVER_STATE_STORAGE_KEY = namespacedAuthStorageKey("__convexAuthServerStateFetchTime");
+export const AUTH_JWT_STORAGE_KEY = localAuth.jwtKey;
+export const AUTH_REFRESH_TOKEN_STORAGE_KEY = localAuth.refreshTokenKey;
+export const AUTH_OAUTH_VERIFIER_STORAGE_KEY = localAuth.oauthVerifierKey;
+export const AUTH_SERVER_STATE_STORAGE_KEY = localAuth.serverStateKey;
+
+/** All four keys, the set an explicit logout must purge. */
+export const AUTH_STORAGE_KEYS = localAuth.keys;
 
 /** Synchronous peek: is a Convex auth JWT sitting in localStorage right now? */
-export function hasStoredAuthToken(): boolean {
-  try {
-    return localStorage.getItem(AUTH_JWT_STORAGE_KEY) !== null;
-  } catch {
-    return false;
-  }
-}
+export const hasStoredAuthToken = localAuth.hasStoredAuthToken;
 
 /**
  * True when the user is authenticated as far as this device knows: the auth
@@ -50,7 +49,4 @@ export function hasStoredAuthToken(): boolean {
  * deliberately ignored — refresh happens against the server in the
  * background, and offline the cached UI must keep rendering regardless.
  */
-export function useLocalAuth(): boolean {
-  const token = useAuthToken();
-  return token !== null || hasStoredAuthToken();
-}
+export const useLocalAuth = localAuth.useLocalAuth;
