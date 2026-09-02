@@ -177,7 +177,7 @@ APIs, no BigInt) imported by Convex, the web store, mobile, and the daemon. It e
   the fold differently are diverged, and the digest must say so. A property test
   asserts a fold flip with unchanged buckets changes the digest.
 - `computeBucketStale`: the time flip stamp (C2).
-- `INBOX_PROJECTION_VERSION = 2`, carried as `v` in every projection envelope. Golden
+- `INBOX_PROJECTION_VERSION = 3`, carried as `v` in every projection envelope. Golden
   fixtures (input rows to expected buckets, fold, and digest) are pinned in the shared
   package tests, and a second assertion ties the fixture hash to the version constant:
   a behavior change fails the fixtures, and updating the fixtures without bumping the
@@ -323,12 +323,15 @@ never re-ticks on iOS today.
 **Recovery discipline.** Every subscription pairs with an error handler and a
 controller backed probe; no feeder adds a bespoke interval beyond the ones named here.
 
-**Grouping never crosses a section boundary.** A subagent is never its own member and
-rides its present parent. An agent team teammate is a member (it counts in its own
-bucket, on the server and on every replica) and nests under its lead only while the two
-share a bucket; otherwise it renders flat in its own section. A section header count is
-therefore the count of rows placed in that bucket, which is what the tally and the CLI
-report.
+**A team files as one group.** A subagent is never its own member and rides its
+present parent. An agent team teammate is a member (it holds a seat, it lists, and its
+own `work_state` is what an orchestrator watches to see a worker finish) but it never
+stands alone: while its lead is a member too, the teammate takes the lead's bucket
+(`rideLeadPlacements`) and the lead's fold (inside `computeFold`), on the server, in
+the CLI stamping and on every replica, so the team nests under the lead card wherever
+the lead files and a section header count is the rows placed in that bucket, nested
+ones included. A teammate the viewer pinned, stashed or dismissed on its own keeps that
+place; a teammate whose lead is absent keeps its own placement and renders flat.
 
 ### C6 The compare
 

@@ -38,6 +38,7 @@ function makeDb(rows: Array<{ position: number; ts: number }>, head: { position:
           const q: any = {
             eq: (f: string, v: any) => { preds.push((r) => r[f] === v); return q; },
             gt: (f: string, v: any) => { preds.push((r) => r[f] > v); return q; },
+            lt: (f: string, v: any) => { preds.push((r) => r[f] < v); return q; },
           };
           fn(q);
           rows = rows.filter((r) => preds.every((p) => p(r)));
@@ -142,5 +143,31 @@ describe("pruneScope — floor branches", () => {
 describe("churn exemption — the projection's semantic fields ride the log", () => {
   test("armed_trigger_kind is not churn-only", () => {
     expect(CHURN_ONLY_FIELDS.conversations.has("armed_trigger_kind")).toBe(false);
+  });
+});
+
+describe("pruneScope — rows at or below the floor are dead regardless of age (review)", () => {
+  test("a resync sweep's rows are reaped young, then the drained scope floors at head", async () => {
+    // markResyncAll set floor = head + 1 = 4 over three young rows.
+    const { db, head, positions } = makeDb([{ position: 1, ts: YOUNG }, { position: 2, ts: YOUNG }, { position: 3, ts: YOUNG }], { position: 4, floor: 4 });
+    const r = await pruneScope(db, head(), CUTOFF, 100);
+    expect(r).toEqual({ pruned: 3, budget: 97, done: true });
+    expect(positions()).toEqual([]);
+    expect(head().floor).toBe(4);
+  });
+  test("reaping respects the budget and re-enters the scope next run", async () => {
+    const { db, head, positions } = makeDb([{ position: 1, ts: YOUNG }, { position: 2, ts: YOUNG }, { position: 3, ts: YOUNG }], { position: 3, floor: 3 });
+    const r = await pruneScope(db, head(), CUTOFF, 2);
+    expect(r.pruned).toBe(2);
+    expect(r.done).toBe(false);
+    expect(positions()).toHaveLength(1);
+  });
+  test("rows above the floor are untouched by the reap", async () => {
+    const { db, head, positions } = makeDb([{ position: 1, ts: YOUNG }, { position: 2, ts: YOUNG }], { position: 2, floor: 1 });
+    const r = await pruneScope(db, head(), CUTOFF, 100);
+    expect(r.pruned).toBe(1);
+    expect(positions()).toEqual([2]);
+    expect(head().floor).toBe(1);
+    expect((await readRangePage(db, SCOPE, 1, 10)).actions.map((a: any) => a.position)).toEqual([2]);
   });
 });

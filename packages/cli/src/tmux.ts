@@ -1,8 +1,13 @@
-import { execSync, execFileSync, spawnSync } from "./proc.js";
+import { execSync, execFileSync, spawnSync, execFileAsync } from "./proc.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 
 let _hasTmux: boolean | null = null;
+// A negative answer is re-checked, so an install after boot is noticed; a
+// positive one is final. Without the negative cache a tmuxless machine paid
+// a 2s execSync on every heartbeat, command poll and /term/sessions request.
+let _hasTmuxCheckedAt = 0;
+const HAS_TMUX_RECHECK_MS = 60_000;
 
 // A tmux client whose server dies mid-protocol wedges in a 100% CPU loop and
 // ignores SIGTERM, so a Node `execSync` without a timeout leaves a zombie that
@@ -41,6 +46,31 @@ export function tmuxRun(args: string[], opts?: { timeout?: number; env?: Record<
     stdout: typeof r.stdout === "string" ? r.stdout : "",
     stderr: typeof r.stderr === "string" ? r.stderr : "",
   };
+}
+
+export type TmuxRunResult = { status: number | null; stdout: string; stderr: string };
+
+// The promise twin of tmuxRun for callers on the daemon's event loop (the
+// loopback HTTP and WebSocket paths): same contract, never throws, status
+// null on a timeout kill. Node hands a non zero exit back as an error whose
+// `code` is the exit status; a kill carries a signal and no numeric code.
+export async function tmuxRunAsync(args: string[], opts?: { timeout?: number; env?: Record<string, string | undefined> }): Promise<TmuxRunResult> {
+  try {
+    const { stdout, stderr } = await execFileAsync("tmux", args, {
+      timeout: opts?.timeout ?? DEFAULT_TMUX_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+      encoding: "utf-8",
+      env: { ...process.env, PATH: ENRICHED_PATH, ...opts?.env },
+    });
+    return { status: 0, stdout, stderr };
+  } catch (err) {
+    const e = err as { code?: unknown; stdout?: unknown; stderr?: unknown };
+    return {
+      status: typeof e.code === "number" ? e.code : null,
+      stdout: typeof e.stdout === "string" ? e.stdout : "",
+      stderr: typeof e.stderr === "string" ? e.stderr : "",
+    };
+  }
 }
 
 // ── Finding the pane an agent lives in ────────────────────────────────────────
@@ -128,19 +158,21 @@ export function listCodecastPanes(): CodecastPane[] {
 }
 
 export function hasTmux(): boolean {
-  if (_hasTmux === null) {
-    try {
-      execSync("tmux -V", { stdio: "ignore", timeout: 2000, env: { ...process.env, PATH: ENRICHED_PATH } });
-      _hasTmux = true;
-    } catch {
-      return false;
-    }
+  if (_hasTmux === true) return true;
+  if (_hasTmux === false && Date.now() - _hasTmuxCheckedAt < HAS_TMUX_RECHECK_MS) return false;
+  _hasTmuxCheckedAt = Date.now();
+  try {
+    execSync("tmux -V", { stdio: "ignore", timeout: 2000, env: { ...process.env, PATH: ENRICHED_PATH } });
+    _hasTmux = true;
+  } catch {
+    _hasTmux = false;
   }
   return _hasTmux;
 }
 
 export function resetTmuxCache(): void {
   _hasTmux = null;
+  _hasTmuxCheckedAt = 0;
 }
 
 function installCommand(): string | null {

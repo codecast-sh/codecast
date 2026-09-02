@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+  railRowTip,
   authorFor,
   buildHandleSets,
   foldReactions,
@@ -267,5 +268,35 @@ describe("toMessageView", () => {
     expect(toMessageViews([answered], ctx)).toHaveLength(1);
     // And an ordinary burst is never dropped.
     expect(toMessageViews([row({ _id: "m7", voice: { status: "done" } } as any)], ctx)).toHaveLength(1);
+  });
+});
+
+describe("railRowTip", () => {
+  const members = [
+    { _id: "u_ann", name: "Ann Diaz" },
+    { _id: "u_me", name: "Me" },
+  ] as any;
+  test("a channel: hash name, topic, and the loudest state", () => {
+    expect(railRowTip({ id: "c1", name: "team", topic: "Everything", mentionCount: 2, unreadCount: 9 }, members)).toEqual({
+      title: "#team",
+      detail: "Everything",
+      state: "2 mentions",
+    });
+    expect(railRowTip({ id: "c1", name: "team", unreadCount: 1 }, members)).toEqual({
+      title: "#team",
+      detail: undefined,
+      state: "1 unread",
+    });
+    expect(railRowTip({ id: "c1", name: "team", mentionCount: 1 }, members).state).toBe("1 mention");
+    expect(railRowTip({ id: "c1", name: "team", muted: true }, members).state).toBe("Muted");
+    expect(railRowTip({ id: "c1", name: "team" }, members).state).toBeUndefined();
+  });
+  test("a DM: the person's name, no hash, no topic", () => {
+    const tip = railRowTip({ id: "d1", name: "", kind: "dm", dmMemberIds: ["u_ann"], topic: "ignored" }, members);
+    expect(tip.title).toBe("Ann Diaz");
+    expect(tip.detail).toBeUndefined();
+  });
+  test("a live huddle outranks every other state", () => {
+    expect(railRowTip({ id: "c1", name: "team", mentionCount: 3 }, members, { live: true }).state).toBe("Huddle live");
   });
 });

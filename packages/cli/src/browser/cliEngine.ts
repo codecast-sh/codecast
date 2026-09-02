@@ -87,9 +87,24 @@ export interface TargetChoice {
  */
 const CLONE_ONLY: Record<string, string> = {
   grant: "the extension cannot grant site permissions in the human's Chrome",
-  eval: "it has no real-mode path yet",
-  login: "it has no real-mode path yet",
+  eval: "it has no real mode path yet",
+  login: "it has no real mode path yet",
 };
+
+/**
+ * Why a verb refuses the real Chrome, or null when it drives both. The one
+ * reading of CLONE_ONLY: `ctxFor` dies with it before a standalone verb runs,
+ * and `runFlow` fails the step with it inside a `do` flow, so the two paths
+ * cannot disagree about which verbs the real Chrome gets.
+ */
+function cloneOnlyRefusal(verb: string, real: boolean): { message: string; hint: string } | null {
+  const why = CLONE_ONLY[verb];
+  if (!why || !real) return null;
+  return {
+    message: `\`${verb}\` drives the agent browser only: ${why}`,
+    hint: `cast browser ${verb} --clone …, or \`cast browser target clone\``,
+  };
+}
 
 /**
  * Options every engine call carries: this session, and the browser it drives.
@@ -114,10 +129,8 @@ async function ctx(choice: TargetChoice = {}): Promise<Ctx> {
 /** `ctx` for a named verb: a clone-only verb (CLONE_ONLY) asked for the real
  *  Chrome dies here, before any side effect in either browser. */
 async function ctxFor(verb: string, choice: TargetChoice): Promise<Ctx> {
-  const why = CLONE_ONLY[verb];
-  if (why && isRealMode(choice, auditOwner())) {
-    die(`\`${verb}\` drives the agent browser only: ${why}`, `cast browser ${verb} --clone …, or \`cast browser target clone\``);
-  }
+  const refused = cloneOnlyRefusal(verb, isRealMode(choice, auditOwner()));
+  if (refused) die(refused.message, refused.hint);
   return ctx(choice);
 }
 
@@ -587,7 +600,7 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     if (res.stderr) process.stderr.write(res.stderr);
     if (res.status !== 0) {
       const msg = engineFailureMessage(res.stderr, res.stdout);
-      await emitFailureBlock(engineSource({ session }), msg, { disabled: !capture });
+      await emitFailureBlock(engineSource(o), msg, { disabled: !capture });
       return res.status;
     }
   }
@@ -928,6 +941,10 @@ async function runFlow(
     let ok = true;
     console.log(`${fmt.highlight("›")} ${raw}`);
     try {
+      // The same table the standalone verbs read (cloneOnlyRefusal): a step
+      // the real Chrome cannot take fails here, before anything touches it.
+      const refused = cloneOnlyRefusal(verb, isRealSession(c.session));
+      if (refused) throw new Error(`${refused.message} (${refused.hint})`);
       if (verb === "shot") {
         const si = args.findIndex((a) => a === "-s" || a === "--selector");
         const selector = si >= 0 ? args[si + 1] : undefined;
@@ -935,7 +952,7 @@ async function runFlow(
         await takeShot(rest.find((a) => !a.startsWith("--")), { full: args.includes("--full"), selector }, c, deps);
       } else if (verb === "eval") {
         const script = readEvalScript(rest, null);
-        const out = await evalInPage(script, c.session);
+        const out = await evalInPage(script, c);
         console.log(out.output);
         if (!out.ok) throw new Error(out.hint ?? "eval failed");
       } else if (verb === "find") {
@@ -1237,7 +1254,7 @@ A script that throws prints the page's exception and exits 1.`;
       } catch (err) {
         die((err as Error).message);
       }
-      const out = await evalInPage(script, c.session, timeout);
+      const out = await evalInPage(script, c, timeout);
       console.log(out.output);
       if (!out.ok && out.hint) console.log(fmt.muted(`  ${out.hint}`));
       process.exit(out.ok ? 0 : 1);
@@ -1267,7 +1284,7 @@ sessions' tabs).`,
       const c = await ctxFor("grant", o);
       await ensureBrowser();
       await ensurePinnedTab(c.session);
-      const out = await grantPermissions(permissions, c.session, o);
+      const out = await grantPermissions(permissions, c, o);
       console.log(`${out.ok ? OK : BAD} ${out.output}`);
       if (out.hint) console.log(fmt.muted(`  ${out.hint}`));
       process.exit(out.ok ? 0 : 1);

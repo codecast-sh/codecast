@@ -169,10 +169,11 @@ export function createSyncEngine(config: PlatformConfig): SyncEngine {
     const prevCollection = base[field] || {};
     let { table, pending } = applySyncTable(
       field, incoming, base.pending, prevCollection,
-      (cfg.isDelta || cfg.ignoreFields || cfg.preserveFields || cfg.pruneAbsentScope || optionalClearFields)
+      (cfg.isDelta || cfg.ignoreFields || cfg.deepFields || cfg.preserveFields || cfg.pruneAbsentScope || optionalClearFields)
         ? {
             isDelta: cfg.isDelta,
             ignoreFields: cfg.ignoreFields,
+            deepFields: cfg.deepFields,
             preserveFields: cfg.preserveFields,
             pruneAbsentScope: cfg.pruneAbsentScope,
             optionalClearFields,

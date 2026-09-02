@@ -65,6 +65,7 @@ import {
   emptyInboxTally,
   isOrphanOrSubagent,
   rollupParentIdOf,
+  rideLeadPlacements,
   isHardBlocked,
   DEAD_AGENT_STATUSES,
   fnv1a32Update,
@@ -1562,6 +1563,10 @@ function workingSetRowOf(s: InboxSession): WorkingSetRow {
     inbox_stashed_at: s.inbox_stashed_at ?? null,
     has_pending_messages: s.has_pending ?? null,
     owned_by_me: s.owned_by_me ?? null,
+    // The lead a teammate rides (rollupParentIdOf): the fold and the bucket
+    // follow it in the shared computation.
+    spawned_by_conversation_id: s.spawned_by_conversation_id ?? null,
+    agent_team_name: s.agent_team_name ?? null,
   };
 }
 
@@ -2816,25 +2821,35 @@ export function placeInboxRows(
     return { bucket, work_state, below_fold: belowFold.has(s._id) };
   };
 
-  // 4. One walk: place every top-level real row; split active / set-aside.
+  // 4. Place every member — the visible rows and the folded members the tally
+  // still counts — on its own facts, then riders take their lead's bucket
+  // (the shared rideLeadPlacements; the fold rode inside computeFold). One
+  // walk over the visible rows then splits active / set-aside by the FINAL
+  // placement, so a teammate under a stashed lead is stashed with it.
   const placements = new Map<string, InboxRowPlacement>();
+  for (const s of Object.values(visibleSessions)) {
+    if (isMemberCandidate(s)) placements.set(s._id, placeRowWithOverlays(s));
+  }
+  if (membership) {
+    for (const id of membership.members) {
+      const row = placements.has(id) ? undefined : scoped[id];
+      if (row) placements.set(id, placeRowWithOverlays(row));
+    }
+  }
+  rideLeadPlacements(placements, (id) => scoped[id]);
   const activeKeyed: RankedSession[] = [];
   const dismissed: InboxSession[] = [];
   const stashed: InboxSession[] = [];
   for (const s of Object.values(visibleSessions)) {
-    let hiddenAnchor = false;
-    let p: InboxRowPlacement | null = null;
-    if (isMemberCandidate(s)) {
-      p = placeRowWithOverlays(s);
-      placements.set(s._id, p);
-      // An anchor's standing thread lives in its own space unless hard
-      // blocked — the shared `hidden` bucket, never rendered here.
-      hiddenAnchor = p.bucket === "hidden";
-    }
+    const p = placements.get(s._id) ?? null;
+    // A placed row files by its placement; a stub or child row by its own
+    // stamps. An anchor's standing thread lives in its own space unless hard
+    // blocked — the shared `hidden` bucket, never rendered here.
+    const setAside = p ? p.bucket === "dismissed" || p.bucket === "stashed" || p.bucket === "hidden" : isSessionHidden(s);
     // The rank reads the SAME verdict the section files under (rankVerdictOf).
-    if (!isSessionHidden(s) && !hiddenAnchor) activeKeyed.push({ s, rank: sessionSortRank(s, p) });
-    if (isSessionDismissed(s)) dismissed.push(s);
-    if (isSessionStashed(s)) stashed.push(s);
+    if (!setAside) activeKeyed.push({ s, rank: sessionSortRank(s, p) });
+    if (p ? p.bucket === "dismissed" : isSessionDismissed(s)) dismissed.push(s);
+    if (p ? p.bucket === "stashed" : isSessionStashed(s)) stashed.push(s);
   }
   activeKeyed.sort(compareRankedSessions);
   const sorted = activeKeyed.map((x) => x.s);
@@ -2843,14 +2858,14 @@ export function placeInboxRows(
   const allIds = new Set(sorted.map((s) => s._id));
 
   // 5. Nesting (both child kinds — see nestParentIdOf) and fork grouping.
-  // Grouping never crosses a section boundary: a subagent is never its own
-  // member and always rides its present parent, but an agent-team teammate IS
-  // a member (the shared rollupParentIdOf: it counts in its own bucket, on the
-  // server and here) and nests under its lead only while the two share a
-  // bucket. A teammate that needs input under a working lead renders flat in
-  // Needs Input — nesting it hid an actionable row and made the header count
-  // (2) disagree with the tally (12) every replica and the CLI agreed on
-  // (prod, 2026-09-01).
+  // A subagent is never its own member and always rides its present parent.
+  // An agent-team teammate is a member that RIDES its lead's bucket (the
+  // shared rideLeadPlacements), so the two share a section and the teammate
+  // nests there; the header count is the rows placed in the section, nested
+  // ones included, the number the tally and the CLI report. The one teammate
+  // that keeps its own bucket is one the viewer pinned, stashed or dismissed
+  // on its own (RIDE_KEEPS_OWN): it files where that act put it and never
+  // nests under a lead in another section.
   const subsByParent = new Map<string, InboxSession[]>();
   for (const s of sorted) {
     const nestParent = nestParentIdOf(s);
@@ -2892,14 +2907,8 @@ export function placeInboxRows(
   const tally = { shown: emptyInboxTally(), folded: emptyInboxTally() };
   if (membership) {
     for (const id of membership.members) {
-      let p = placements.get(id);
-      if (!p) {
-        const row = scoped[id];
-        if (!row) continue;
-        p = placeRowWithOverlays(row);
-        placements.set(id, p);
-      }
-      if (p.bucket === "hidden") continue;
+      const p = placements.get(id);
+      if (!p || p.bucket === "hidden") continue;
       (p.below_fold ? tally.folded : tally.shown)[p.bucket]++;
     }
   }
@@ -5133,6 +5142,9 @@ export type SyncOpts = {
   // every push. List such a field here to exclude it from the version key. Safe
   // to omit — a mistake here only costs an extra render, never a dropped update.
   ignoreFields?: string[];
+  // Non-scalar fields the identity reuse compares by content (a server-joined
+  // object that changes with no scalar on the row: projects.task_counts).
+  deepFields?: readonly string[];
   // Fields owned by a separate overlay channel (syncOverlay), not the base
   // payload. On a base sync these keep their previous (overlay-set) value rather
   // than being clobbered by the base's null — so the base list and the liveness
@@ -8325,10 +8337,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
     let { table, pending } = applySyncTable(
       field, incoming, base.pending, prevCollection,
-      (config.isDelta || config.ignoreFields || config.preserveFields || config.pruneAbsentScope)
+      (config.isDelta || config.ignoreFields || config.deepFields || config.preserveFields || config.pruneAbsentScope)
         ? {
             isDelta: config.isDelta,
             ignoreFields: config.ignoreFields,
+            deepFields: config.deepFields as string[] | undefined,
             preserveFields: config.preserveFields,
             pruneAbsentScope: config.pruneAbsentScope,
           }
