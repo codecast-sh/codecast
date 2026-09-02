@@ -262,9 +262,10 @@ export function LabelChipsRow({
   }, []);
 
   const hiddenCount = hiddenKeys.size;
-  const activeFilterHidden =
-    (s.activeBucketFilter && hiddenKeys.has(`label:${s.activeBucketFilter}`)) ||
-    (s.activeProjectFilter && hiddenKeys.has(`project:${s.activeProjectFilter}`));
+  // Filter terms whose in-row chip is clipped away — each gets a pinned twin
+  // after the row, so a shift-built list never loses a term into the +N pill.
+  const hiddenLabelTerms = labelFilters.filter((t) => hiddenKeys.has(`label:${t.id}`));
+  const activeProjectHidden = !!s.activeProjectFilter && hiddenKeys.has(`project:${s.activeProjectFilter}`);
 
   // The first chip that overflows the row's right edge. Unlike the rest of the
   // hidden chips, this one stays PAINTED — clipped in place where it sits (flush
@@ -279,11 +280,11 @@ export function LabelChipsRow({
     for (const [name] of projectCounts) ordered.push(`project:${name}`);
     const first = ordered.find((k) => hiddenKeys.has(k));
     if (!first || first === "create") return null;
-    // The active filter, when hidden, is already pinned separately above — don't
+    // A filter term, when hidden, is already pinned separately above — don't
     // also render it as the faded peek.
-    if (first === `label:${s.activeBucketFilter}` || first === `project:${s.activeProjectFilter}`) return null;
+    if (labelFilters.some((t) => first === `label:${t.id}`) || first === `project:${s.activeProjectFilter}`) return null;
     return first;
-  }, [visibleBuckets, rowBucketIds, projectCounts, hiddenKeys, s.activeBucketFilter, s.activeProjectFilter]);
+  }, [visibleBuckets, rowBucketIds, projectCounts, hiddenKeys, labelFilters, s.activeProjectFilter]);
 
   // ── Row-level reorder dragover: insertion index from chip midpoints ──────
   const rowDragOver = useCallback((e: React.DragEvent) => {
@@ -423,6 +424,13 @@ export function LabelChipsRow({
   });
 
   // ── Chips ────────────────────────────────────────────────────────────────
+  // One title per (polarity, list size) so the in-row chip and its pinned twin
+  // never describe the same click differently.
+  const filterChipTitle = (name: string, excluded: boolean, sole: boolean) =>
+    excluded
+      ? sole ? `Hiding "${name}" — click to clear` : `Hiding "${name}" — click to focus only it`
+      : sole ? `Filtering to "${name}" — click to clear` : `In filter — click to focus only "${name}"`;
+
   const labelChip = (bucket: BucketItem, index: number) => {
     const bc = getLabelColor(bucket.name);
     const term = labelFilters.find((t) => t.id === bucket._id);
@@ -475,13 +483,7 @@ export function LabelChipsRow({
                 ? "bg-gray-400/10 text-gray-400/60 hover:bg-gray-400/20 hover:text-gray-500"
                 : "bg-gray-400/10 text-gray-400 hover:bg-gray-400/20 hover:text-gray-500"
         }`}
-        title={
-          excluded
-            ? sole ? `Hiding "${bucket.name}" — click to clear` : `Hiding "${bucket.name}" — click to focus only it`
-            : active
-              ? sole ? `Filtering to "${bucket.name}" — click to clear` : `In filter — click to focus only "${bucket.name}"`
-              : `Label: ${bucket.name} — click to filter, right-click for more, drag to reorder`
-        }
+        title={active ? filterChipTitle(bucket.name, excluded, sole) : `Label: ${bucket.name} — click to filter, right-click for more, drag to reorder`}
       >
         {/* Exclude keeps the filter's colors; the dot flattens into a minus
             bar ("without this"). bg-current inherits the chip's label-colored
@@ -612,34 +614,40 @@ export function LabelChipsRow({
         />
       )}
 
-      {/* The active filter's chip, pinned OUTSIDE the clipped row whenever its
+      {/* Each filter term's chip, pinned OUTSIDE the clipped row whenever its
           in-row twin is hidden — what's selected is always visible, without
           mutating the user's order. Resizing wider un-hides the in-row chip
-          and this pin dissolves automatically. */}
-      {activeFilterHidden && (() => {
-        const excluded = s.chipFilterExclude;
-        const activeBucket = s.activeBucketFilter ? visibleBuckets.find((b) => b._id === s.activeBucketFilter) : undefined;
-        if (activeBucket) {
-          const bc = getLabelColor(activeBucket.name);
-          return (
-            <button
-              onClick={(e) => toggleBucket(activeBucket._id, e.altKey, e.shiftKey)}
-              onContextMenu={(e) => ctxMenu.open(e, { kind: "label", bucket: activeBucket })}
-              title={excluded ? `Hiding "${activeBucket.name}" — click to clear` : `Filtering to "${activeBucket.name}" — click to clear`}
-              className={`group min-w-0 px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 font-medium ${bc.bg} ${bc.text}`}
-            >
-              <span className={`w-1.5 flex-shrink-0 ${excluded ? "h-[2px] rounded-full bg-current" : `h-1.5 rounded-[2px] ${bc.dot}`}`} />
-              <span className={`truncate ${excluded ? "opacity-75" : ""}`}>{activeBucket.name}</span>
-              <span className="ml-0.5 relative inline-flex flex-shrink-0 items-center justify-center min-w-[10px]">
-                <span className="opacity-50 group-hover:opacity-0 tabular-nums">{bucketCounts[activeBucket._id] || 0}</span>
-                <span className="absolute inset-0 hidden group-hover:flex items-center justify-center opacity-70">
-                  <X className="w-2.5 h-2.5" />
-                </span>
+          and its pin dissolves automatically. */}
+      {hiddenLabelTerms.map((term) => {
+        const bucket = visibleBuckets.find((b) => b._id === term.id);
+        if (!bucket) return null;
+        const bc = getLabelColor(bucket.name);
+        const excluded = !!term.exclude;
+        return (
+          <button
+            key={`pin:${bucket._id}`}
+            onClick={(e) => toggleBucket(bucket._id, e.altKey, e.shiftKey)}
+            onContextMenu={(e) => ctxMenu.open(e, { kind: "label", bucket })}
+            title={filterChipTitle(bucket.name, excluded, labelFilters.length === 1)}
+            // Pins share the shell: a long name caps, and at widths too narrow
+            // for every name the pins shrink to dot + count (tooltip carries the
+            // name) so the +N pill after them always stays reachable.
+            className={`group min-w-0 max-w-[8rem] px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 font-medium ${bc.bg} ${bc.text}`}
+          >
+            <span className={`w-1.5 flex-shrink-0 ${excluded ? "h-[2px] rounded-full bg-current" : `h-1.5 rounded-[2px] ${bc.dot}`}`} />
+            <span className={`truncate ${excluded ? "opacity-75" : ""}`}>{bucket.name}</span>
+            <span className="ml-0.5 relative inline-flex flex-shrink-0 items-center justify-center min-w-[10px]">
+              <span className="opacity-50 group-hover:opacity-0 tabular-nums">{bucketCounts[bucket._id] || 0}</span>
+              <span className="absolute inset-0 hidden group-hover:flex items-center justify-center opacity-70">
+                <X className="w-2.5 h-2.5" />
               </span>
-            </button>
-          );
-        }
-        const activeProject = s.activeProjectFilter ? projectCounts.find(([name]) => name === s.activeProjectFilter) : undefined;
+            </span>
+          </button>
+        );
+      })}
+      {activeProjectHidden && (() => {
+        const excluded = s.chipFilterExclude;
+        const activeProject = projectCounts.find(([name]) => name === s.activeProjectFilter);
         if (!activeProject) return null;
         const pc = getLabelColor(activeProject[0]);
         return (
