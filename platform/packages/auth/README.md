@@ -28,8 +28,8 @@ Server, from `codecast/packages/convex/convex`:
 |---|---|---|
 | `auth.ts` (227) | `convex/createAuthConfig.ts`, `convex/providers.ts`, `convex/callbacks.ts` | Providers and callbacks become factories over parameters. |
 | `auth.config.ts` (8) | `convex/authHttpConfig.ts` | `createAuthHttpConfig()`. |
-| `cliAuth.ts` (175) | `convex/cliAuth.ts` | Pure claim/sweep helpers unchanged; Convex functions built by `makeCliAuthFunctions`. |
-| `apiTokens.ts` (315) | `convex/apiTokens.ts` | Pure helpers unchanged; functions built by `makeApiTokenFunctions`; analytics behind `onEvent`. |
+| `cliAuth.ts` (175) | `convex/cliAuth.ts` | Pure claim/sweep helpers unchanged; Convex functions come from `createCliAuthDefinitions`. |
+| `apiTokens.ts` (315) | `convex/apiTokens.ts` | Pure helpers unchanged; functions come from `createApiTokenDefinitions`; analytics behind `onEvent`. |
 | `lib/auth.ts` | `convex/access.ts` | `requireUser`, `getUserOrToken`, `requireUserOrToken`, `accessError`. |
 | `testDb.ts` | `convex/testDb.ts` | Test only. |
 
@@ -70,8 +70,34 @@ separate package decision.
 - `createAuthHttpConfig(domain?)`: the `auth.config.ts` body.
 - Providers: `appleNativeProvider({ audience, id? })`, `desktopRelayProvider({ claimForDesktop, id? })`, `otpEmailProvider(id, kind, sendOtp)`, `generateOtpCode()`.
 - Callbacks: `makeRedirectCallback({ deepLinkSchemes, siteUrl? })`, `makeCreateOrUpdateUser({ tables?, onUserCreated?, onUserUpdated? })`.
-- Relay: `makeCliAuthFunctions({ mutation, internalMutation, query, tables?, ttlMs? })` returning `{ deposit, claim, pendingDeposit, claimForDesktop, sweepExpired }`; pure `claimCliAuthRequest`, `claimDesktopAuthExchange`, `sweepExpiredCliAuthRequests`, `CLI_AUTH_TTL_MS`.
-- Tokens: `makeApiTokenFunctions({ mutation, query, internalMutation, internalQuery, tables?, onEvent?, exchangeExtras? })` returning `{ createToken, createSetupToken, listTokens, revokeToken, renameToken, exchangeSetupToken, deviceBindingAllows }`; pure `hashToken`, `generateToken`, `findTokenDoc`, `verifyApiToken`, `deviceBindingAllows`, `exchangeSetupTokenFor`.
+- Relay: `createCliAuthDefinitions({ tables?, ttlMs? })` returning `{ mutations: { deposit }, queries: { pendingDeposit }, internalMutations: { claim, claimForDesktop, sweepExpired } }`; pure `claimCliAuthRequest`, `claimDesktopAuthExchange`, `sweepExpiredCliAuthRequests`, `CLI_AUTH_TTL_MS`.
+- Tokens: `createApiTokenDefinitions({ tables?, onEvent?, exchangeExtras? })` returning `{ mutations: { createToken, createSetupToken, revokeToken, renameToken }, queries: { listTokens }, internalMutations: { exchangeSetupToken }, internalQueries: { deviceBindingAllows } }`; pure `hashToken`, `generateToken`, `findTokenDoc`, `verifyApiToken`, `deviceBindingAllows`, `exchangeSetupTokenFor`.
+
+Both return plain `{ args, handler }` definitions, and the app calls its own
+builders on them:
+
+```ts
+const defs = createApiTokenDefinitions({ onEvent, exchangeExtras });
+export const createToken = mutation(defs.mutations.createToken);
+export const listTokens = query(defs.queries.listTokens);
+export const exchangeSetupToken = internalMutation(defs.internalMutations.exchangeSetupToken);
+export const deviceBindingAllows = internalQuery(defs.internalQueries.deviceBindingAllows);
+```
+
+Call the builder at the app, never through this package. A Convex builder is
+generic over its own args validator, and that inference does not survive being
+passed in as a parameter: every function it builds falls back to `any`,
+`ApiFromModules` then drops the whole module, and `api.apiTokens.*` stops
+existing for callers. `engine-convex` solved the same problem the same way in
+`createDispatchDefinition`.
+
+The grouping names the visibility each function must be registered at, and one
+of those is a security boundary. Wire callable, `deviceBindingAllows` would
+answer "is this token real, and which machine is it tied to?" for anyone who
+reaches the deployment. `claim`, `claimForDesktop` and `sweepExpired` hand out
+or destroy live credentials on nothing but a nonce.
+
+- Older form, kept working for apps already on it: `makeCliAuthFunctions({ mutation, internalMutation, query, ... })` and `makeApiTokenFunctions({ mutation, query, internalMutation, internalQuery, ... })` call the builders for you and return the functions flat. They return `any`, so an app on this form must state the wire contract of every export by hand. Prefer the definitions above.
 - Access: `requireUser`, `getUserOrToken`, `requireUserOrToken`, `accessError`, `forbidden`, `notFound`, `invalidScope`.
 - Tables: `DEFAULT_AUTH_TABLES`, `resolveTables`, type `AuthTables`.
 
@@ -112,9 +138,9 @@ separate package decision.
 | User created hook | `onUserCreated(ctx, { userId, email, name, profile })` | advance view revision, schedule `internal.emails.send.sendWelcome` |
 | User updated hook | `onUserUpdated(ctx, { userId, patch })` | advance view revision |
 | Table and index names | `tables` | the defaults |
-| Relay TTL | `makeCliAuthFunctions.ttlMs` | 10 minutes (default) |
-| Token events | `makeApiTokenFunctions.onEvent` | schedule `internal.analytics.capture` |
-| Setup exchange extras | `makeApiTokenFunctions.exchangeExtras` | `{ team_id, convex_url }` |
+| Relay TTL | `createCliAuthDefinitions.ttlMs` | 10 minutes (default) |
+| Token events | `createApiTokenDefinitions.onEvent` | schedule `internal.analytics.capture` |
+| Setup exchange extras | `createApiTokenDefinitions.exchangeExtras` | `{ team_id, convex_url }` |
 | Storage namespace | `createLocalAuth(convexUrl)` | the deployment URL |
 | IndexedDB name | `createDurableAuthStorage({ dbName })` | `codecast-auth` |
 | SecureStore keys | `createTrustAnchorStore(store, key)` etc. | `last_verified_principal`, `biometric_enabled` |
@@ -157,8 +183,9 @@ Backend (`packages/convex/convex`):
   parameters from the table above and the two hooks. Deletable: the provider
   definitions, both callbacks, the OTP providers.
 - `auth.config.ts` becomes `export default createAuthHttpConfig()`.
-- `cliAuth.ts` becomes `export const { deposit, claim, pendingDeposit, claimForDesktop, sweepExpired } = makeCliAuthFunctions({ mutation, internalMutation, query })`, with the builders imported from `./functions` so the change feed wrapper still applies. Keep re-exporting `CLI_AUTH_TTL_MS` if anything imports it.
-- `apiTokens.ts` becomes `makeApiTokenFunctions({...})` plus `export { hashToken, verifyApiToken } from "@platform/auth/convex"` for the many in-process callers. `onEvent` schedules `internal.analytics.capture`; `exchangeExtras` reads `team_id` and adds `convex_url`.
+- `cliAuth.ts` calls `createCliAuthDefinitions()` and exports one `const` per function through its own builders, imported from `./functions` so the change feed wrapper still applies. Keep re-exporting `CLI_AUTH_TTL_MS` if anything imports it.
+- `apiTokens.ts` calls `createApiTokenDefinitions({...})` the same way, plus `export { hashToken, verifyApiToken } from "@platform/auth/convex"` for the many in-process callers. `onEvent` schedules `internal.analytics.capture`; `exchangeExtras` reads `team_id` and adds `convex_url`.
+- Export through the app's own builders and the generated `api` keeps its types, so no export needs a hand written `RegisteredMutation` or `RegisteredQuery` annotation.
 - `lib/auth.ts` becomes re-exports from `@platform/auth/convex`.
 - Tests `cliAuth.test.ts` and `apiTokens.deviceBinding.test.ts` are now here; delete them from codecast.
 - Unchanged: `http.ts` `cliRoute` (calls `internal.apiTokens.deviceBindingAllows`), `schema.ts`, `emails/*`, `analytics.ts`, `principalViewRevisions.ts`.
