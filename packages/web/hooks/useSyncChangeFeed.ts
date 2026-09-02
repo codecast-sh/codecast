@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef } from "react";
 import { useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, syncLogScopeMetaKey } from "../store/inboxStore";
+import { planCargoApply } from "../lib/syncLogCargo";
+import { track } from "../lib/analytics";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { onSyncWake } from "./syncWake";
 import { beginSyncInflight } from "../store/syncActivity";
@@ -12,11 +14,12 @@ import { beginSyncInflight } from "../store/syncActivity";
 // The server keeps an append-only, per-scope action log with gap-free positions
 // (convex/syncLog.ts). This hook holds one persisted cursor per scope
 // (`synclog:v1:<scope_key>` in syncMeta) and, on every wake signal, replays
-// (cursor, head] through the existing stage-two byIds queries into syncTable.
-// Deletion truth is authorized absence: EVERY changed id — upsert or delete —
-// is fetched through the authorized byIds query, and only ids the query omits
-// are pruned (a scope-move revocation delete can therefore never remove a row
-// the viewer still holds through another scope).
+// (cursor, head]. Rows carry their changed fields (cargo, sync-log-cargo E6):
+// a patch with a base row applies directly through the store's pending-aware
+// merge, and byIds is used only for deletes of ids this replica holds (deletion
+// truth is authorized absence — a scope-move revocation delete can never remove
+// a row the viewer still holds through another scope), rows with no cargo or no
+// base, partial cargo, and enrichment triggers (joins the replica cannot derive).
 //
 // Wake signals: a tiny getHeads live subscription (re-runs on semantic writes
 // only — the interceptor's churn exemption keeps message-flush bumps out),
@@ -65,6 +68,36 @@ const LEGACY_MAX_PAGES = 50;
 export const scopeMetaKey = syncLogScopeMetaKey;
 
 const RANGE_LIMIT = 500;
+
+// Latches off for the session if the server rejects the `cargo` arg (a web
+// bundle that shipped before its convex deploy, or a convex revert): catch-up
+// then runs on thin rows + byIds instead of dying — the same self-heal shape as
+// the dispatch ack flag.
+let cargoSupported = true;
+
+function cargoEnabled(): boolean {
+  if (!cargoSupported) return false;
+  try {
+    return typeof localStorage === "undefined" || localStorage.getItem("SYNCLOG_CARGO_OFF") !== "1";
+  } catch {
+    return true;
+  }
+}
+
+async function queryRange(convex: any, args: Record<string, any>): Promise<any> {
+  const withCargo = cargoEnabled();
+  try {
+    return await convex.query(api.syncLog.getRange, { ...args, ...(withCargo ? { cargo: true } : {}) });
+  } catch (e: any) {
+    const msg = String(e?.message ?? e);
+    if (withCargo && /ArgumentValidationError/i.test(msg) && /cargo/.test(msg)) {
+      cargoSupported = false;
+      console.warn("[syncLog] server lacks cargo — falling back to thin ranges");
+      return await convex.query(api.syncLog.getRange, args);
+    }
+    throw e;
+  }
+}
 const MAX_RANGE_PAGES = 50;
 // Head-movement debounce: positions are cumulative, so batching bursts loses
 // nothing; it just turns a fan-out's write burst into one catch-up cycle.
@@ -166,7 +199,18 @@ async function applyEntityIds(
   return applied;
 }
 
-type LogAction = { position: number; entity_type: string; entity_id: string; op: string };
+type LogAction = {
+  position: number;
+  entity_type: string;
+  entity_id: string;
+  op: string;
+  // Cargo (sync-log-cargo E1/E6): present when the server shipped the changed
+  // fields; absent means "fetch through byIds" (old rows, kill switch).
+  patch?: Record<string, any>;
+  unset?: string[];
+  full?: boolean;
+  partial?: boolean;
+};
 
 // Apply one scope's range page: scope lifecycle first, then acked-pending
 // retirement (BEFORE the overlay, so authoritative post-write rows land
@@ -181,7 +225,7 @@ async function applyLogPage(
   purgedTeams: Set<string>,
 ): Promise<void> {
   const store = useInboxStore.getState();
-  const entityActions: FeedChange[] = [];
+  const entityActions: LogAction[] = [];
   for (const a of actions) {
     if (a.entity_type === "scope") {
       if (a.op === "scope_removed") {
@@ -203,8 +247,76 @@ async function applyLogPage(
     entityActions.push(a);
   }
   store.retireAckedPending(scopeKey, upTo);
-  await applyEntityIds(convex, planFeedApply(entityActions));
+  // Cargo first (E6): actions that carry their fields apply directly through
+  // the store's pending-aware merge; everything else — deletes (authorized
+  // absence, E5), rows with no base, partial cargo, and enrichment triggers —
+  // goes through the byIds path exactly as before. Dedupe keeps the LAST
+  // action per entity (planFeedApply's rule), so a coalesced page applies once.
+  const byIds: FeedChange[] = [];
+  const latest = new Map<string, LogAction>();
+  for (const a of entityActions) latest.set(`${a.entity_type}:${a.entity_id}`, a);
+  let direct = 0;
+  const state = useInboxStore.getState();
+  for (const a of latest.values()) {
+    const coll = ENTITY_COLLECTION[a.entity_type];
+    if (!coll) continue;
+    if (a.op !== "upsert") {
+      // A delete for an id this replica does not hold has nothing to prune and
+      // needs no authorized-absence probe (review: private rows in a team used
+      // to cost every member a byIds call per edit).
+      if ((state as any)[coll]?.[a.entity_id] !== undefined) byIds.push(a);
+      continue;
+    }
+    if (!a.patch) { byIds.push(a); continue; }
+    const existing = (state as any)[coll]?.[a.entity_id];
+    if (a.full && !existing) {
+      // A whole raw document with no base: lift any exclude and seed the row,
+      // then refetch — a full cargo is the document minus churn/denylisted
+      // fields and carries none of the enrichment joins, so the seed makes the
+      // row visible now and byIds completes it a round trip later.
+      const plan = planCargoApply(coll, a, undefined);
+      state.clearFeedExcludes(coll, [a.entity_id]);
+      state.syncTable(coll, [{ _id: a.entity_id, ...plan.fields }] as any, { isDelta: true } as any);
+      direct++;
+      byIds.push(a);
+      continue;
+    }
+    if (!existing) { byIds.push(a); continue; }
+    // A full cargo WITH a base merges like any patch (review): overlaying it
+    // wholesale would drop the row's enrichment and churn fields.
+    const plan = planCargoApply(coll, a, existing);
+    const applied = state.applyCargoFields(coll, a.entity_id, plan.fields, plan.unset);
+    if (!applied) { byIds.push(a); continue; }
+    direct++;
+    if (plan.refetch) byIds.push(a);
+  }
+  state.noteSyncLogApply(direct, byIds.length);
+  tallyApply(direct, byIds.length);
+  if (byIds.length) await applyEntityIds(convex, planFeedApply(byIds));
   store.recordSyncMeta(scopeMetaKey(scopeKey), { cursor: upTo });
+}
+
+// synclog_apply telemetry (E6/E10 acceptance signal): the direct-vs-refetch
+// tally, flushed at most once a minute while there is something to report and
+// when the tab hides. Only the sync host applies pages, so followers emit none.
+let applyTally = { direct: 0, refetch: 0 };
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+function flushApplyTally(): void {
+  flushTimer = null;
+  const { direct, refetch } = applyTally;
+  if (!direct && !refetch) return;
+  applyTally = { direct: 0, refetch: 0 };
+  track("synclog_apply", { direct, refetch, ratio: direct / (direct + refetch) });
+}
+function tallyApply(direct: number, refetch: number): void {
+  applyTally.direct += direct;
+  applyTally.refetch += refetch;
+  if (!flushTimer) flushTimer = setTimeout(flushApplyTally, 60_000);
+}
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushApplyTally();
+  });
 }
 
 // Catch one scope up to its head. Cold scope: stamp the cursor at the head we
@@ -240,7 +352,9 @@ export async function catchUpScope(
   }
   let from = meta.cursor;
   for (let page = 0; page < MAX_RANGE_PAGES && from < head.position; page++) {
-    const res: any = await convex.query(api.syncLog.getRange, {
+    // Cargo opt-in rides the range call (this client applies patches);
+    // localStorage SYNCLOG_CARGO_OFF is the client-side kill switch.
+    const res: any = await queryRange(convex, {
       scope_key: head.scope_key,
       from,
       limit: RANGE_LIMIT,

@@ -167,6 +167,7 @@ function SyncDetailPanel({ stalled, color }: { stalled: boolean; color: string }
   const liveLoading = useInboxStore((s) => s.liveLoading);
   const syncProgress = useInboxStore((s) => s.syncProgress);
   const syncLogLag = useInboxStore((s) => s.syncLogLag);
+  const applyStats = useInboxStore((s) => s.syncLogApplyStats);
   const coldScopes = useInboxStore((s) =>
     Object.keys(s.liveLoading).filter((scope) => collectionIsCold(s, scope)).join(","));
   const known = Object.keys(SCOPE_LABELS);
@@ -191,6 +192,14 @@ function SyncDetailPanel({ stalled, color }: { stalled: boolean; color: string }
           {stalled ? "Sync is taking longer than usual" : "Syncing the latest data"}
         </div>
         <div className="px-3 py-2 space-y-1.5">
+          {(applyStats.direct > 0 || applyStats.refetch > 0) && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-sol-text">Log applied directly</span>
+              <span className="ml-auto tabular-nums text-sol-text-dim">
+                {applyStats.direct.toLocaleString()} / refetched {applyStats.refetch.toLocaleString()}
+              </span>
+            </div>
+          )}
           {behind.map(([scope, lag]) => (
                 <div key={scope} className="flex items-center gap-2 text-xs">
                   <span className="text-sol-text">{logScopeLabel(scope)}</span>
