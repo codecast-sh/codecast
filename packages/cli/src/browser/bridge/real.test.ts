@@ -12,7 +12,10 @@ import {
   bridgeEndpointIfConfigured, engineBrowserFor, isRealMode, ownedRealTab, pruneRealTabs, realTabOwnership, rememberRealTab,
   resolveRealTarget, setStickyTarget, splitTargetFlags, stickyTarget,
 } from "./real.js";
+import * as http from "node:http";
 import { writeBridgeState } from "./host.js";
+import { testBridgeHost } from "./host.testutil.js";
+import { freePort } from "../instance.js";
 import { isRealSession, realSessionKey } from "../engine.js";
 import { tabIdOfTarget, targetIdOfTab } from "./protocol.js";
 
@@ -129,23 +132,51 @@ describe("target flags on a raw argument line", () => {
 });
 
 describe("the browser behind an engine session key", () => {
-  test("a plain key drives the managed Chrome: no port, no socket", () => {
-    expect(engineBrowserFor("env-abc")).toEqual({ session: "env-abc" });
+  test("a plain key drives the managed Chrome: no socket", async () => {
+    expect(await engineBrowserFor("env-abc")).toEqual({ session: "env-abc" });
   });
 
-  test("a -real key drives the bridge: its port, and its socket URL carrying the token", () => {
-    writeBridgeState({ port: 47123, token: "tok" });
-    expect(engineBrowserFor(realSessionKey("env-abc"))).toEqual({
-      session: "env-abc-real",
-      port: 47123,
-      cdp: "ws://127.0.0.1:47123/devtools/browser/tok",
+  test("a -real key drives a PROVEN bridge host: its socket URL carrying the token", async () => {
+    const host = await testBridgeHost();
+    try {
+      expect(await engineBrowserFor(realSessionKey("env-abc"))).toEqual({
+        session: "env-abc-real",
+        cdp: `ws://127.0.0.1:${host.port}/devtools/browser/${host.token}`,
+      });
+      expect(await bridgeEndpointIfConfigured()).toEqual({ port: host.port, token: host.token });
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("a -real key with no bridge set up is refused, never routed to the clone", async () => {
+    await expect(engineBrowserFor("env-abc-real")).rejects.toThrow(/extension setup/);
+    expect(await bridgeEndpointIfConfigured()).toBeNull();
+  });
+
+  test("a -real key whose host is down, or squatted by a server that cannot prove the token, never gets the token", async () => {
+    const port = await freePort();
+    writeBridgeState({ port, token: "t".repeat(64) });
+    await expect(engineBrowserFor("env-abc-real")).rejects.toThrow(/no bridge host is answering/);
+    expect(await bridgeEndpointIfConfigured()).toBeNull();
+
+    // A squatter that knows what a healthz body looks like, but not the token.
+    const seen: string[] = [];
+    const squatter = http.createServer((req, res) => {
+      seen.push(req.url ?? "");
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("cast-bridge protocol=4 proof=" + "0".repeat(64));
     });
-    expect(bridgeEndpointIfConfigured()).toEqual({ port: 47123, token: "tok" });
-  });
-
-  test("a -real key with no bridge set up is refused, never routed to the clone", () => {
-    expect(() => engineBrowserFor("env-abc-real")).toThrow(/extension setup/);
-    expect(bridgeEndpointIfConfigured()).toBeNull();
+    await new Promise<void>((r) => squatter.listen(port, "127.0.0.1", r));
+    try {
+      await expect(engineBrowserFor("env-abc-real")).rejects.toThrow(/cannot prove it holds the token/);
+      expect(await bridgeEndpointIfConfigured()).toBeNull();
+      // Everything it ever saw was a nonce; the token was never presented.
+      expect(seen.length).toBeGreaterThan(0);
+      for (const url of seen) expect(url).toMatch(/^\/healthz\?nonce=[0-9a-f]{64}$/);
+    } finally {
+      await new Promise<void>((r) => squatter.close(() => r()));
+    }
   });
 });
 

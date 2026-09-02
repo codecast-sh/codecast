@@ -24,7 +24,9 @@ import { attachToTarget, type InstanceState, type PageSession } from "../instanc
 import { browserHome } from "../profile.js";
 import { armRecorder } from "../observe.js";
 import { isRealSession, type EngineOptions } from "../engine.js";
-import { bridgeEndpoint, bridgeStatus, bridgeWsUrl, ensureBridgeHost, readBridgeState, type BridgeState } from "./host.js";
+import {
+  bridgeEndpoint, bridgeStatus, bridgeWsUrl, ensureBridgeHost, proveBridgeHost, readBridgeState, type BridgeState, type ProvenBridge,
+} from "./host.js";
 
 // ---------------------------------------------------------------------------
 // Per-session state: which real tab is mine, and is real mode sticky
@@ -100,11 +102,20 @@ export function requireBridgeConfigured(): BridgeState {
   return state;
 }
 
-/** The bridge's CDP face for raw calls (reaper, pinned tab), or null when
- *  the bridge was never set up and there is nothing to reach. */
-export function bridgeEndpointIfConfigured(): CdpEndpoint | null {
+/**
+ * The bridge's CDP face for raw calls (reaper, pinned tab), or null when
+ * there is nothing to reach: the bridge was never set up, its host is not
+ * running, or what answers on the port cannot prove it is our host. Those
+ * callers are courtesies that never start a host, so all three are "no".
+ */
+export async function bridgeEndpointIfConfigured(): Promise<CdpEndpoint | null> {
   const state = readBridgeState();
-  return state?.token ? bridgeEndpoint(state) : null;
+  if (!state?.token) return null;
+  try {
+    return bridgeEndpoint(await proveBridgeHost(state));
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -112,12 +123,13 @@ export function bridgeEndpointIfConfigured(): CdpEndpoint | null {
  * key (engine.ts realSessionKey) drives the bridge, any other key drives the
  * managed Chrome, which runEngine reaches on its own. Every engine call for a
  * session must go through this so the flags never differ between calls —
- * the daemon resets its tab when they do.
+ * the daemon resets its tab when they do. The bridge URL carries the token,
+ * so the host is proven (host.ts probeHost) before the URL is ever built.
  */
-export function engineBrowserFor(session: string): EngineOptions & { session: string } {
+export async function engineBrowserFor(session: string): Promise<EngineOptions & { session: string }> {
   if (!isRealSession(session)) return { session };
   const state = requireBridgeConfigured();
-  return { session, port: state.port, cdp: bridgeWsUrl(state) };
+  return { session, cdp: bridgeWsUrl(await proveBridgeHost(state)) };
 }
 
 export function rememberRealTab(sessionKey: string | null, targetId: string): void {
@@ -162,7 +174,7 @@ export function realTabOwnership(sessionKey: string | null): { mine?: string; ot
  * with the setup instructions, beats failing on the first verb with less
  * context — a host with no extension can only ever answer errors.
  */
-export async function requireRealBridge(): Promise<BridgeState> {
+export async function requireRealBridge(): Promise<ProvenBridge> {
   requireBridgeConfigured();
   const state = await ensureBridgeHost();
   const status = await bridgeStatus(state);
@@ -176,16 +188,8 @@ export async function requireRealBridge(): Promise<BridgeState> {
   return state;
 }
 
-/**
- * The CDP URL any engine can drive the real Chrome through — for the
- * agent-browser adapter (`--cdp <url>`) and anything else that takes a URL.
- */
-export async function realCdpUrl(): Promise<string> {
-  return bridgeWsUrl(await requireRealBridge());
-}
-
 /** Live page targets in the real Chrome; also prunes stale ownership. */
-export async function listRealTargets(state: BridgeState): Promise<CdpTarget[]> {
+export async function listRealTargets(state: ProvenBridge): Promise<CdpTarget[]> {
   const targets = await listTargets(bridgeEndpoint(state));
   pruneRealTabs(new Set(targets.map((t) => t.targetId)));
   return targets;

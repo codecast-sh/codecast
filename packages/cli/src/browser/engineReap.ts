@@ -27,7 +27,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "../proc.js";
 import {
-  engineHome, engineSession, engineStateDir, findEngine, isRealSession, managedPort, REAL_SESSION_SUFFIX, runEngine,
+  baseSessionKey, engineHome, engineSession, engineStateDir, findEngine, isRealSession, managedPort, runEngine,
   type EngineOptions,
 } from "./engine.js";
 import { CdpConnection, type CdpEndpoint } from "./cdp.js";
@@ -167,7 +167,7 @@ export function scanLiveOwners(opts: { registryDir?: string; projectsDir?: strin
  */
 export function ownerState(key: string, live: LiveOwners): OwnerState {
   // A real-mode session is the same agent under a suffixed key (engine.ts).
-  if (isRealSession(key)) key = key.slice(0, -REAL_SESSION_SUFFIX.length);
+  key = baseSessionKey(key);
   const env = /^(?:env|session)-(.+)$/.exec(key);
   if (env) return live.session(env[1]);
   const pane = /^pane-(.+)$/.exec(key);
@@ -198,7 +198,7 @@ export interface ReapOptions {
   live?: LiveOwners;
   stateDir?: string;
   /** Close a session's tab and daemon; injectable for tests. */
-  closeSession?: (key: string) => boolean;
+  closeSession?: (key: string) => boolean | Promise<boolean>;
 }
 
 function stampPath(): string {
@@ -218,17 +218,18 @@ export function sessionTargetId(key: string, stateDir = engineStateDir()): strin
 /**
  * Where a session's tab lives, for a raw CDP call: the bridge for a `-real`
  * key (the human's Chrome), the managed browser for any other. Null when that
- * browser was never set up, so there is nothing to close.
+ * browser was never set up or is not reachable, so there is nothing to close.
  */
-export function sessionEndpoint(key: string): CdpEndpoint | null {
+export async function sessionEndpoint(key: string): Promise<CdpEndpoint | null> {
   return isRealSession(key) ? bridgeEndpointIfConfigured() : managedPort();
 }
 
 /** The engine options that reach a session's browser, or null when a real
- *  session's bridge was never configured (its daemon can still be closed). */
-function engineOptionsFor(key: string): (EngineOptions & { session: string }) | null {
+ *  session's bridge is not configured or not reachable (its daemon can still
+ *  be closed). */
+async function engineOptionsFor(key: string): Promise<(EngineOptions & { session: string }) | null> {
   try {
-    return engineBrowserFor(key);
+    return await engineBrowserFor(key);
   } catch {
     return null;
   }
@@ -256,19 +257,19 @@ export function closeTargetLater(targetId: string, endpoint: CdpEndpoint | null)
  * — through the daemon when it is alive (it knows its tab), by target id when
  * it is not.
  */
-export function closeSessionTab(key: string): boolean {
+export async function closeSessionTab(key: string): Promise<boolean> {
   const target = sessionTargetId(key);
   const binary = findEngine();
-  const browser = engineOptionsFor(key);
+  const browser = await engineOptionsFor(key);
   let ok = false;
   if (binary && browser) {
     const env = { ...process.env, AGENT_BROWSER_SESSION: key };
     const closedTab = runEngine(["tab", "close"], { ...browser, timeoutMs: 15_000 });
-    if (closedTab.status !== 0 && target) closeTargetLater(target, sessionEndpoint(key));
+    if (closedTab.status !== 0 && target) closeTargetLater(target, await sessionEndpoint(key));
     const res = spawnSync(binary, ["close"], { encoding: "utf-8", timeout: 20_000, stdio: ["ignore", "pipe", "pipe"], env });
     ok = res.status === 0;
   } else if (target) {
-    closeTargetLater(target, sessionEndpoint(key));
+    closeTargetLater(target, await sessionEndpoint(key));
   }
   return ok;
 }
@@ -295,7 +296,7 @@ function chromePids(userDataDirs: Set<string>): Array<{ pid: number; dir: string
  * known, that has been idle past `idleMs`), then sweep the debris. Safe to call
  * on every start: it is throttled, and it never touches `keep`.
  */
-export function reapEngineOrphans(opts: ReapOptions = {}): ReapReport {
+export async function reapEngineOrphans(opts: ReapOptions = {}): Promise<ReapReport> {
   const report: ReapReport = { closed: [], killed: 0, cleaned: [], tmpDirsRemoved: 0, skipped: false };
   const now = opts.now ?? Date.now();
   if (!opts.force) {
@@ -330,7 +331,7 @@ export function reapEngineOrphans(opts: ReapOptions = {}): ReapReport {
     const doomed = owner === "dead" || (owner === "unknown" && idle);
     if (!doomed) continue;
     if (s.running) {
-      close(s.key);
+      await close(s.key);
       report.closed.push(s.key);
       if (s.pid && isAlive(s.pid)) {
         try {
@@ -343,7 +344,7 @@ export function reapEngineOrphans(opts: ReapOptions = {}): ReapReport {
     } else {
       // The daemon died but its tab may still be open in the shared browser.
       const target = sessionTargetId(s.key, stateDir);
-      if (target) closeTargetLater(target, sessionEndpoint(s.key));
+      if (target) closeTargetLater(target, await sessionEndpoint(s.key));
     }
     gone.add(s.key);
   }
