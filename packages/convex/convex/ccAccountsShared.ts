@@ -74,9 +74,62 @@ export const ccAccountsValidator = v.object({
       tier: v.optional(v.string()),
       subscription: v.optional(v.string()),
       usage: v.optional(ccUsageValidator),
+      // A `claude setup-token` on file for this profile (per-session launch
+      // credential, see cli/ccAccounts.ts). Metadata only — never the token.
+      token: v.optional(v.object({ stored_at: v.number(), expires_at: v.number() })),
     }),
   ),
 });
+
+// The setup-token mint round trip (web toggle / "mint now" → daemon runs
+// `claude setup-token`, drives the browser approval, proves the token belongs
+// to the machine's login, stores it → outcome). Same state-channel contract as
+// cc_login_flow: the web watches this field reactively.
+export const ccMintFlowValidator = v.object({
+  status: v.union(v.literal("pending"), v.literal("confirmed"), v.literal("rejected")),
+  profile: v.optional(v.string()), // the profile the token is for
+  email: v.optional(v.string()),
+  reason: v.optional(v.string()), // rejected: why
+  started_at: v.number(),
+  finished_at: v.optional(v.number()),
+});
+// A pending mint older than this means the daemon died mid-flow (its own
+// watcher gives up at 5 min) — treat as no-flow, same as LOGIN_FLOW_STALE_MS.
+export const MINT_FLOW_STALE_MS = 6 * 60 * 1000;
+
+/** A profile's token is live when it exists and its one-year lifetime is not up. */
+export function profileHasToken(
+  profile: { token?: { expires_at: number } } | undefined | null,
+  now: number,
+): boolean {
+  return !!profile?.token && profile.token.expires_at > now;
+}
+
+/** The device-local profile name a session should be PINNED to (its
+ * `cc_account`): the account resolved on that device, only when that profile
+ * has a live setup-token there. Undefined = don't pin; the session follows
+ * the machine's keychain login. */
+export function tokenBackedProfile(
+  accounts: { profiles: Array<{ name: string; email?: string; token?: { expires_at: number } }> } | undefined | null,
+  target: { profile?: string; email?: string },
+  now: number,
+): string | undefined {
+  const name = resolveDeviceProfile(accounts, target);
+  if (!name) return undefined;
+  return profileHasToken(accounts?.profiles.find((p) => p.name === name), now) ? name : undefined;
+}
+
+/** The pin for a NEW session on a device with per-session tokens on: the
+ * profile covering the machine's current login, if it has a live token. */
+export function activeTokenProfile(
+  accounts:
+    | { active_email?: string; profiles: Array<{ name: string; email?: string; token?: { expires_at: number } }> }
+    | undefined
+    | null,
+  now: number,
+): string | undefined {
+  return accounts?.active_email ? tokenBackedProfile(accounts, { email: accounts.active_email }, now) : undefined;
+}
 
 // Auto-switch bookkeeping, stored on the primary device row. `attempts` is the
 // per-incident memory that stops the loop from re-trying an account that
