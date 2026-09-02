@@ -55,15 +55,12 @@ export function parseLoopFreeze(ts: number, message: string): LoopFreezeEvent | 
   return { ts, lateMs: Number(m[1]) * 1000, cpuMs: Number(m[2]), lastLog: rest, hotStacks };
 }
 
-/** The first hot stack entry with a source location; else the first entry. */
+/** The first hot stack entry with a source location, else the first entry,
+ *  without the trailing sample share the sampler appends. */
 export function primaryStack(hotStacks: string[]): string | null {
   if (hotStacks.length === 0) return null;
   const located = hotStacks.find((s) => s.includes("@"));
-  return stackName(located ?? hotStacks[0]);
-}
-
-function stackName(entry: string): string {
-  return entry.replace(/\s+\d+%$/, "");
+  return (located ?? hotStacks[0]).replace(/\s+\d+%$/, "");
 }
 
 /** `[TAG]` when the last log line carried one, else its first word. */
@@ -142,6 +139,10 @@ export const SLEEP_OVERLAP_TOLERANCE_MS = 5_000;
 /** Without pmset coverage a gap this long with under 1% CPU is sleep. */
 export const SLEEP_FALLBACK_GAP_MS = 300_000;
 export const SLEEP_FALLBACK_CPU_RATIO = 0.01;
+/** pmset keeps only the last few days. A window this near the event means the
+ *  log covers that time, so "no overlapping window" really means "was awake";
+ *  with nothing near it, the log says nothing and the CPU fallback decides. */
+const PMSET_COVERAGE_MS = 6 * 3_600_000;
 
 export type FreezeKind = "freeze" | "sleep";
 
@@ -152,7 +153,7 @@ export type FreezeKind = "freeze" | "sleep";
  */
 export function classifyFreeze(ev: LoopFreezeEvent, windows: SleepWindow[]): FreezeKind {
   const from = ev.ts - ev.lateMs;
-  const covered = windows.some((w) => w.start - 6 * 3_600_000 <= ev.ts && w.end + 6 * 3_600_000 >= from);
+  const covered = windows.some((w) => w.start - PMSET_COVERAGE_MS <= ev.ts && w.end + PMSET_COVERAGE_MS >= from);
   if (covered) {
     const overlaps = windows.some(
       (w) => w.start <= ev.ts + SLEEP_OVERLAP_TOLERANCE_MS && w.end >= from - SLEEP_OVERLAP_TOLERANCE_MS,

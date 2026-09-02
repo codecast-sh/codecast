@@ -13,7 +13,7 @@ import { tmuxRun } from "../tmux.js";
 import { fmt } from "../colors.js";
 import type { Config } from "../config/types.js";
 import { buildLogReport, readSleepWindows, type LogReport } from "./logReport.js";
-import { readLoopbackIdentity, localAuthHeaders, runLoopLagProbe, runLatencyProbe, type LoopLagResult, type LatencyProbeResult } from "./probes.js";
+import { readLoopbackIdentity, localAuthHeaders, runRouteProbes, type LoopLagResult, type LatencyProbeResult } from "./probes.js";
 import { runLoadBench, type LoadResult } from "./load.js";
 import type { LatencySummary } from "./stats.js";
 
@@ -99,13 +99,7 @@ export async function runDaemonBench(deps: BenchDeps, opts: BenchOptions, say: (
   say(fmt.muted(`  daemon pid ${context.daemonPid ?? "none"} on port ${port}; load ${context.loadAvg.join(" ")}; ${context.processCount} processes; ${context.tmuxSessions} tmux sessions`));
 
   say(fmt.muted(`  observing for ${Math.round(opts.durationMs / 1000)}s`));
-  const [loopLag, hookStatus, termSessions] = await Promise.all([
-    runLoopLagProbe({ port, durationMs: opts.durationMs }),
-    runLatencyProbe({ url: `http://127.0.0.1:${port}/hook/status`, durationMs: opts.durationMs }),
-    authHeaders
-      ? runLatencyProbe({ url: `http://127.0.0.1:${port}/term/sessions`, headers: authHeaders, durationMs: opts.durationMs })
-      : Promise.resolve(null),
-  ]);
+  const { loopLag, hookStatus, termSessions } = await runRouteProbes({ port, durationMs: opts.durationMs, authHeaders });
 
   say(fmt.muted("  reading daemon.log"));
   const log = buildLogReport(readDaemonLogLines(deps.configDir), {

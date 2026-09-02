@@ -35,7 +35,8 @@ export interface HarnessOptions extends ShimOptions {
 
 export interface Harness {
   tmuxSession: string;
-  shimPath: string;
+  /** null when `command` replaced the fake claude shim. */
+  shimPath: string | null;
   cwd: string;
   sessionId: string;
   jsonlPath: string;
@@ -48,13 +49,17 @@ export interface Harness {
 
 const ACTIVE_SESSIONS = new Set<string>();
 
+/** Wrap a value in single quotes for a `bash -c` body. */
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 export function spawnHarness(opts: HarnessOptions = {}): Harness {
   const tmuxPrefix = opts.tmuxPrefix ?? "cc-claude-test";
   const tmuxSession = `${tmuxPrefix}-${randomUUID().slice(0, 8)}`;
   const cwd = opts.cwd ?? fs.mkdtempSync(path.join(os.tmpdir(), "codecast-test-cwd-"));
   const sessionId = opts.sessionId ?? randomUUID();
-  const shimPath = opts.command ? "" : writeShimScript({ ...opts, sessionId });
-  const shellQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
+  const shimPath = opts.command ? null : writeShimScript({ ...opts, sessionId });
 
   // The shim must be discoverable as `claude` on PATH so an invocation of
   // `claude` lands on it. We do this by symlinking (or copying) it to a
@@ -73,11 +78,10 @@ export function spawnHarness(opts: HarnessOptions = {}): Harness {
   // Fatal-mode intentionally exits before the normal liveness probe. Retain
   // that pane so the test can prove the shim ran and inspect its real status;
   // unrelated bash/tmux startup failures still make the session disappear.
-  const shimCommand = opts.command
-    ? opts.command
-    : opts.fatal
-      ? `tmux set-option -p remain-on-exit on && exec ${shellQuote(shimPath)}`
-      : `exec ${shellQuote(shimPath)}`;
+  let shimCommand: string;
+  if (opts.command) shimCommand = opts.command;
+  else if (opts.fatal) shimCommand = `tmux set-option -p remain-on-exit on && exec ${shellQuote(shimPath!)}`;
+  else shimCommand = `exec ${shellQuote(shimPath!)}`;
   const spawnOnce = (): { status: number | null; stderr: string; stdout: string } => tmuxRun([
     "new-session", "-d", "-s", tmuxSession,
     "-x", "200", "-y", "50",

@@ -23,8 +23,8 @@ import {
 } from "../doctor.js";
 import { fetchExport } from "../jsonlGenerator.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
-import { spawnHarness, sweepStaleSessions, type Harness } from "../test-helpers/messagingHarness.js";
-import { runLoopLagProbe, runLatencyProbe, type LoopLagResult, type LatencyProbeResult } from "./probes.js";
+import { spawnHarness, sweepStaleSessions, shellQuote, type Harness } from "../test-helpers/messagingHarness.js";
+import { runRouteProbes, type LoopLagResult, type LatencyProbeResult } from "./probes.js";
 import { summarizeLatency, type LatencySummary } from "./stats.js";
 import type { Config } from "../config/types.js";
 
@@ -85,7 +85,6 @@ const ROUNDTRIP_TIMEOUT_MS = 90_000;
 const POLL_MS = 750;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /** The stub's own transcript line shape, so churn looks like the stub wrote it. */
 function transcriptLine(sessionId: string, cwd: string, role: "user" | "assistant", text: string): string {
@@ -139,7 +138,7 @@ export async function runLoadBench(
       const jsonlPath = path.join(projectDir, `${sessionId}.jsonl`);
       const registryPath = path.join(deps.configDir, "session-registry", `${sessionId}.json`);
       const bootToken = `boot-${randomBytes(4).toString("hex")}`;
-      const command = `DOCTOR_BOOT_TOKEN=${q(bootToken)} exec ${q(runtime)} ${q(stubPath)} ${q(sessionId)} ${q(jsonlPath)} ${q(registryPath)}`;
+      const command = `DOCTOR_BOOT_TOKEN=${shellQuote(bootToken)} exec ${shellQuote(runtime)} ${shellQuote(stubPath)} ${shellQuote(sessionId)} ${shellQuote(jsonlPath)} ${shellQuote(registryPath)}`;
       const start = Date.now();
       try {
         harnesses.push(spawnHarness({ cwd: realScratch, sessionId, jsonlPath, tmuxPrefix, command }));
@@ -188,21 +187,10 @@ export async function runLoadBench(
       }
     })();
     const probes = opts.port === null
-      ? Promise.resolve()
-      : (async () => {
-          const port = opts.port!;
-          const results = await Promise.all([
-            runLoopLagProbe({ port, durationMs: opts.durationMs, signal: abort.signal }),
-            runLatencyProbe({ url: `http://127.0.0.1:${port}/hook/status`, durationMs: opts.durationMs, signal: abort.signal }),
-            opts.authHeaders
-              ? runLatencyProbe({ url: `http://127.0.0.1:${port}/term/sessions`, headers: opts.authHeaders, durationMs: opts.durationMs, signal: abort.signal })
-              : Promise.resolve(null),
-          ]);
-          loopLag = results[0];
-          hookStatus = results[1];
-          termSessions = results[2];
-        })();
-    await Promise.all([churnDone, probes]);
+      ? Promise.resolve(null)
+      : runRouteProbes({ port: opts.port, durationMs: opts.durationMs, authHeaders: opts.authHeaders, signal: abort.signal });
+    const [, probed] = await Promise.all([churnDone, probes]);
+    if (probed) ({ loopLag, hookStatus, termSessions } = probed);
 
     // Delivery legs on a sample of K mapped panes, sequentially, like the doctor.
     const sampled = harnesses.filter((h) => mappings.has(h.sessionId)).slice(0, opts.sample);
