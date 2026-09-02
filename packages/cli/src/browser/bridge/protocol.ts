@@ -7,7 +7,7 @@
  *   clients (built-in driver, agent-browser, anything that speaks CDP)
  *          \  ws://127.0.0.1:PORT/devtools/browser/<token>   — REAL CDP
  *           bridge host
- *          /  ws://127.0.0.1:PORT/ext?token=<token>           — this protocol
+ *          /  ws://127.0.0.1:PORT/ext  (hello proves the token) — this protocol
  *   the extension (one, in the user's real Chrome, holding chrome.debugger)
  *
  * The client face is deliberately not a custom protocol: the host presents
@@ -29,13 +29,14 @@
  * `castGroup` or a group leak back to a client.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 /**
  * Bumped when a message shape changes incompatibly. Both ends report theirs.
  * 3: tabs.create takes `background` and `group`; tabs carry `group`.
+ * 4: the extension face authenticates both ways (see bridgeProof).
  */
-export const BRIDGE_PROTOCOL = 3;
+export const BRIDGE_PROTOCOL = 4;
 
 /** Default loopback port for the bridge host. Override: CAST_BRIDGE_PORT. */
 export const BRIDGE_DEFAULT_PORT = 41729;
@@ -70,6 +71,49 @@ export function bridgePairingUrl(state: { token: string; port: number }): string
 
 /** WS close code the host uses for a bad or missing token. */
 export const CLOSE_BAD_TOKEN = 4401;
+
+// ---------------------------------------------------------------------------
+// Mutual authentication
+// ---------------------------------------------------------------------------
+//
+// The token never travels on the extension face, and nothing trusts a server
+// for sitting on the port. Both sides prove they hold the token with an HMAC
+// over a fresh nonce the other side chose:
+//
+//   extension → host   hello {nonce, auth: HMAC(token, "ext:" + nonce)}
+//   host → extension   welcome {proof: HMAC(token, nonce)}
+//   CLI → host         GET /healthz?nonce=N  →  "… proof=HMAC(token, 'healthz:' + N)"
+//
+// A process that squats the port cannot answer any of these, so the extension
+// never hands it chrome.debugger and the CLI never presents the token to it.
+// The three messages are prefixed differently so a proof for one purpose can
+// never be replayed as another (a nonce is hex, so it cannot start with a
+// prefix either).
+
+export type ProofPurpose = "host" | "ext" | "healthz";
+
+/** 32 random bytes as hex: the shape `isNonce` accepts, on both sides. */
+export function randomNonce(): string {
+  return randomBytes(32).toString("hex");
+}
+
+export function isNonce(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+}
+
+/** The HMAC-SHA256 proof one side sends the other. Mirrored in background.js. */
+export function bridgeProof(token: string, purpose: ProofPurpose, nonce: string): string {
+  const message = purpose === "host" ? nonce : `${purpose}:${nonce}`;
+  return createHmac("sha256", token).update(message).digest("hex");
+}
+
+/** Constant-time comparison for tokens and proofs. */
+export function secretMatches(expected: string, got: string | null | undefined): boolean {
+  if (typeof got !== "string") return false;
+  const a = Buffer.from(expected);
+  const b = Buffer.from(got);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 /** Ops the extension implements. Anything else gets an error reply. */
 export type BridgeOp =
