@@ -9,6 +9,7 @@ import { parseProcessTable } from "./processTable.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
+import { walkFiles } from "./fsWalk.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
 import { reconcileClaudeSettingsModel } from "./claudeDefaultModel.js";
 import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, recordConvergenceSignals } from "./capabilities/heartbeat.js";
@@ -14816,9 +14817,9 @@ async function resolveReapSessionId(tmux: string): Promise<string | null> {
   if (!prefix || prefix.length < 8) return null;
   const claudeDir = path.join(process.env.HOME || "", ".claude", "projects");
   try {
-    for (const dir of fs.readdirSync(claudeDir, { withFileTypes: true })) {
+    for (const dir of await fs.promises.readdir(claudeDir, { withFileTypes: true })) {
       if (!dir.isDirectory()) continue;
-      const found = fs.readdirSync(path.join(claudeDir, dir.name))
+      const found = (await fs.promises.readdir(path.join(claudeDir, dir.name)))
         .find((f) => f.startsWith(prefix) && f.endsWith(".jsonl"));
       if (found) return found.replace(/\.jsonl$/, "");
     }
@@ -15329,10 +15330,8 @@ async function discoverAndLinkSession(
   const projectDir = path.join(claudeProjectsDir, projectDirName);
 
   const existingFiles = new Set<string>();
-  if (fs.existsSync(projectDir)) {
-    for (const f of fs.readdirSync(projectDir)) {
-      if (UUID_JSONL_RE.test(f)) existingFiles.add(f);
-    }
+  for (const f of await fs.promises.readdir(projectDir).catch(() => [] as string[])) {
+    if (UUID_JSONL_RE.test(f)) existingFiles.add(f);
   }
 
   for (let attempt = 0; attempt < 30; attempt++) {
@@ -15341,9 +15340,10 @@ async function discoverAndLinkSession(
       log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked by watcher, stopping discovery`);
       return;
     }
-    if (!fs.existsSync(projectDir)) continue;
+    const names = await fs.promises.readdir(projectDir).catch(() => null);
+    if (!names) continue;
     const candidates: string[] = [];
-    for (const f of fs.readdirSync(projectDir)) {
+    for (const f of names) {
       const m = f.match(UUID_JSONL_RE);
       if (!m || existingFiles.has(f)) continue;
       const sessionId = m[1];
@@ -18370,7 +18370,7 @@ function acquireLock(): boolean {
   return tryAcquirePidFileLock(PID_FILE, process.pid);
 }
 
-function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): string[] {
+async function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
   const staleFiles: { path: string; mtimeMs: number }[] = [];
   const now = Date.now();
@@ -18379,31 +18379,20 @@ function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): stri
     return [];
   }
 
+  // Top-level <project>/<session>.jsonl only, as before; async so the watchdog's
+  // sweep over the whole tree never pins the loop.
   try {
-    const projectDirs = fs.readdirSync(claudeProjectsDir);
-    for (const projectDir of projectDirs) {
-      const projectPath = path.join(claudeProjectsDir, projectDir);
-      const stat = fs.statSync(projectPath);
-      if (!stat.isDirectory()) continue;
-
-      const files = fs.readdirSync(projectPath);
-      for (const file of files) {
-        if (!file.endsWith(".jsonl")) continue;
-        const filePath = path.join(projectPath, file);
-        try {
-          const fileStat = fs.statSync(filePath);
-          const fileAge = now - fileStat.mtimeMs;
-
-          if (fileAge > maxAgeMs) continue;
-
-          const syncRecord = getSyncRecord(filePath);
-          if (shouldTreatClaudeFileAsStale(fileStat, syncRecord)) {
-            staleFiles.push({ path: filePath, mtimeMs: fileStat.mtimeMs });
-          }
-        } catch {
+    await walkFiles(
+      claudeProjectsDir,
+      { maxDepth: 2, fileFilter: (rel) => rel.endsWith(".jsonl") },
+      (f) => {
+        if (now - f.stat.mtimeMs > maxAgeMs) return;
+        const syncRecord = getSyncRecord(f.path);
+        if (shouldTreatClaudeFileAsStale(f.stat, syncRecord)) {
+          staleFiles.push({ path: f.path, mtimeMs: f.stat.mtimeMs });
         }
-      }
-    }
+      },
+    );
   } catch (err) {
     log(`Watchdog: Error scanning for stale files: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -18430,7 +18419,7 @@ export function shouldTreatClaudeFileAsStale(
 // importers of "./daemon.js" (e.g. daemon.stale.test.ts).
 export { isAppServerManagedCodexSessionHead };
 
-function findStaleCodexSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): string[] {
+async function findStaleCodexSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
   const codexSessionsDir = path.join(process.env.HOME || "", ".codex", "sessions");
   const staleFiles: { path: string; mtimeMs: number }[] = [];
   const now = Date.now();
@@ -18439,38 +18428,20 @@ function findStaleCodexSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000):
     return [];
   }
 
-  const scanDir = (dir: string): void => {
-    let entries: fs.Dirent[];
+  await walkFiles(codexSessionsDir, { fileFilter: (rel) => rel.endsWith(".jsonl") }, (f) => {
+    if (now - f.stat.mtimeMs > maxAgeMs) return;
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        scanDir(fullPath);
-      } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
-        try {
-          const fileStat = fs.statSync(fullPath);
-          const fileAge = now - fileStat.mtimeMs;
-          if (fileAge > maxAgeMs) continue;
-
-          const lastPosition = getPosition(fullPath);
-          if (fileStat.size !== lastPosition) {
-            const headContent = readFileHead(fullPath, 2048);
-            if (isAppServerManagedCodexSessionHead(headContent)) continue;
-            staleFiles.push({ path: fullPath, mtimeMs: fileStat.mtimeMs });
-          }
-        } catch {
-          continue;
-        }
+      const lastPosition = getPosition(f.path);
+      if (f.stat.size !== lastPosition) {
+        const headContent = readFileHead(f.path, 2048);
+        if (isAppServerManagedCodexSessionHead(headContent)) return;
+        staleFiles.push({ path: f.path, mtimeMs: f.stat.mtimeMs });
       }
+    } catch {
+      // unreadable this pass
     }
-  };
+  });
 
-  scanDir(codexSessionsDir);
   staleFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return staleFiles.map(f => f.path);
 }
@@ -18676,9 +18647,9 @@ function findStaleCursorSessions(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): St
   return staleSessions;
 }
 
-function findStaleCursorTranscriptFiles(
+async function findStaleCursorTranscriptFiles(
   maxAgeMs: number = 7 * 24 * 60 * 60 * 1000
-): string[] {
+): Promise<string[]> {
   const cursorProjectsDir = path.join(process.env.HOME || "", ".cursor", "projects");
   const staleFiles: { path: string; mtimeMs: number }[] = [];
   const now = Date.now();
@@ -18687,39 +18658,21 @@ function findStaleCursorTranscriptFiles(
     return [];
   }
 
-  const scanDir = (dir: string): void => {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        scanDir(fullPath);
-      } else if (entry.isFile() && entry.name.endsWith(".txt")) {
-        if (!fullPath.includes(`${path.sep}agent-transcripts${path.sep}`)) {
-          continue;
+  await walkFiles(
+    cursorProjectsDir,
+    { fileFilter: (rel) => rel.endsWith(".txt") && rel.includes(`${path.sep}agent-transcripts${path.sep}`) },
+    (f) => {
+      if (now - f.stat.mtimeMs > maxAgeMs) return;
+      try {
+        if (f.stat.size !== getPosition(f.path)) {
+          staleFiles.push({ path: f.path, mtimeMs: f.stat.mtimeMs });
         }
-        try {
-          const fileStat = fs.statSync(fullPath);
-          const fileAge = now - fileStat.mtimeMs;
-          if (fileAge > maxAgeMs) continue;
-
-          const lastPosition = getPosition(fullPath);
-          if (fileStat.size !== lastPosition) {
-            staleFiles.push({ path: fullPath, mtimeMs: fileStat.mtimeMs });
-          }
-        } catch {
-          continue;
-        }
+      } catch {
+        // unreadable this pass
       }
-    }
-  };
+    },
+  );
 
-  scanDir(cursorProjectsDir);
   staleFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return staleFiles.map(f => f.path);
 }
@@ -19333,10 +19286,10 @@ function startWatchdog(
       await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => next()));
     }
 
-    const staleClaudeFiles = findStaleSessionFiles().slice(0, WATCHDOG_MAX_STALE_PER_TYPE);
-    const staleCodexFiles = findStaleCodexSessionFiles().slice(0, WATCHDOG_MAX_STALE_PER_TYPE);
+    const staleClaudeFiles = (await findStaleSessionFiles()).slice(0, WATCHDOG_MAX_STALE_PER_TYPE);
+    const staleCodexFiles = (await findStaleCodexSessionFiles()).slice(0, WATCHDOG_MAX_STALE_PER_TYPE);
     const staleCursorSessions = findStaleCursorSessions().slice(0, WATCHDOG_MAX_STALE_PER_TYPE);
-    const staleCursorTranscriptFiles = findStaleCursorTranscriptFiles().slice(0, WATCHDOG_MAX_STALE_PER_TYPE);
+    const staleCursorTranscriptFiles = (await findStaleCursorTranscriptFiles()).slice(0, WATCHDOG_MAX_STALE_PER_TYPE);
     const totalStale =
       staleClaudeFiles.length +
       staleCodexFiles.length +

@@ -9,6 +9,7 @@ import { EventEmitter } from "events";
 import * as path from "path";
 import * as fs from "fs";
 import { RecursiveWatcher } from "./recursiveWatcher.js";
+import type { WalkFile } from "./fsWalk.js";
 import { AGENT_CLIENTS, type AgentClientId } from "@codecast/shared/contracts";
 
 export interface TranscriptDirEvent {
@@ -78,12 +79,11 @@ export class TranscriptDirWatcher extends EventEmitter {
       fs.mkdirSync(this.cfg.basePath, { recursive: true });
     }
 
-    this.emitExistingFilesSorted();
-
     this.watcher = new RecursiveWatcher({
       path: this.cfg.basePath,
       filter: this.cfg.watchFilter,
       callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
+      onExisting: (files) => this.emitExistingFilesSorted(files),
       maxDepth: this.cfg.maxDepth,
       debounceMs: this.cfg.debounceMs,
     });
@@ -93,30 +93,12 @@ export class TranscriptDirWatcher extends EventEmitter {
     this.watcher.start();
   }
 
-  private emitExistingFilesSorted(): void {
-    const files: { path: string; mtime: number }[] = [];
-
-    const scanDir = (dir: string): void => {
-      try {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          const fullPath = path.join(dir, entry.name);
-          if (entry.isDirectory()) {
-            scanDir(fullPath);
-          } else if (entry.isFile() && this.cfg.scanMatch(dir, entry.name)) {
-            try {
-              const stat = fs.statSync(fullPath);
-              files.push({ path: fullPath, mtime: stat.mtimeMs });
-            } catch {}
-          }
-        }
-      } catch {}
-    };
-
-    scanDir(this.cfg.basePath);
-    files.sort((a, b) => b.mtime - a.mtime);
-
-    for (const file of files) {
+  // Files the watcher's priming walk found (one walk serves both), narrowed by
+  // scanMatch and emitted newest first.
+  private emitExistingFilesSorted(files: WalkFile[]): void {
+    const matched = files.filter((f) => this.cfg.scanMatch(path.dirname(f.path), path.basename(f.path)));
+    matched.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+    for (const file of matched) {
       this.handleFileEvent(file.path, "add");
     }
   }

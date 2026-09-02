@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import * as path from "path";
 import * as fs from "fs";
 import { RecursiveWatcher } from "./recursiveWatcher.js";
+import type { WalkFile } from "./fsWalk.js";
 
 export interface SessionEvent {
   sessionId: string;
@@ -96,12 +97,11 @@ export class SessionWatcher extends EventEmitter {
       fs.mkdirSync(this.projectsPath, { recursive: true });
     }
 
-    this.emitExistingFilesSorted();
-
     this.watcher = new RecursiveWatcher({
       path: this.projectsPath,
       filter: watchFilter,
       callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
+      onExisting: (files) => this.emitExistingFilesSorted(files),
       // Deep enough for workflow agent transcripts (6 segments); watchFilter keeps
       // the extra depth from matching anything else.
       maxDepth: 6,
@@ -113,38 +113,14 @@ export class SessionWatcher extends EventEmitter {
     this.watcher.start();
   }
 
-  private emitExistingFilesSorted(): void {
-    const files: { path: string; size: number; mtimeMs: number }[] = [];
+  // Files the watcher's priming walk found (one walk serves both), newest
+  // first, limited to ones touched recently: the rest are already synced and
+  // the watchdog's stale sweep covers any that are not.
+  private emitExistingFilesSorted(files: WalkFile[]): void {
     const RECENT_THRESHOLD_MS = 10 * 60 * 1000;
     const now = Date.now();
-
-    const scanDir = (dir: string, depth: number) => {
-      if (depth > 5) return;
-      try {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          const fullPath = path.join(dir, entry.name);
-          if (entry.isDirectory()) {
-            scanDir(fullPath, depth + 1);
-          } else if (watchFilter(path.relative(this.projectsPath, fullPath))) {
-            try {
-              const fileStat = fs.statSync(fullPath);
-              files.push({ path: fullPath, size: fileStat.size, mtimeMs: fileStat.mtimeMs });
-            } catch {}
-          }
-        }
-      } catch {}
-    };
-
-    try {
-      scanDir(this.projectsPath, 0);
-    } catch {
-      return;
-    }
-
-    const recentFiles = files.filter(f => now - f.mtimeMs < RECENT_THRESHOLD_MS);
-    recentFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
-
+    const recentFiles = files.filter(f => now - f.stat.mtimeMs < RECENT_THRESHOLD_MS);
+    recentFiles.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
     for (const file of recentFiles) {
       this.handleFileEvent(file.path, "add");
     }
