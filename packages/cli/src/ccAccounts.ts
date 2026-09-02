@@ -591,11 +591,15 @@ export async function fetchRateLimitFingerprint(bearerToken: string): Promise<Ra
     body: JSON.stringify({ model: CC_PROBE_MODEL, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
     signal: AbortSignal.timeout(20000),
   });
-  if (!res.ok) {
+  const fp = parseRateLimitFingerprint(res.headers);
+  // A limit-parked account answers 429 — with the same window headers, which
+  // is all the fingerprint needs (2026-09-01: a mint for an exhausted account
+  // was thrown away because the probe treated its 429 as a failure).
+  if (!res.ok && !(fp.five_hour_reset != null && fp.seven_day_reset != null)) {
     const body = await res.text().catch(() => "");
     throw new CcAccountError(`Account probe failed: HTTP ${res.status} ${body.slice(0, 160)}`);
   }
-  return parseRateLimitFingerprint(res.headers);
+  return fp;
 }
 
 /** Launch-line prefix that sources the profile's token file, or "" when no
