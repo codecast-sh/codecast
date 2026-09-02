@@ -20,6 +20,10 @@ Live Convex table queries stay exactly as they are. They are the realtime push t
 the snapshot floor; the log owns ordered catch up, deletion, revocation, and write
 acknowledgement. Both feed the same `syncTable` appliers with idempotent upserts.
 
+> Superseded in part by `sync-log-cargo.md` (pl-498): the list queries for tasks, docs,
+> plans and projects are now one shot bootstrap floors (E8), and log rows carry the changed
+> fields (E1), so the log is the steady state delivery path for those collections.
+
 Honest scope of the proof: the log proves everything from a scope's first contact forward.
 The pre contact past keeps today's contract (cache + snapshot floors + cold backfill). That
 is a strict improvement, not a regression, and it avoids inventing a coverage matrix.
@@ -96,17 +100,24 @@ writers that page one scope should batch rows per transaction. Kill switch: sett
 `SYNC_LOG_DISABLED=1` Convex env var stops emission without a redeploy (reads and dual
 written change_log continue, so both client generations keep working).
 
-**Cost note.** During dual write the scope comes free from the change_log row lookup. If
-change_log is ever removed (D12), the hot path becomes head read + one post write doc get +
-action move/insert — state this in that removal, not silently.
+**Cost note.** Since the cargo design (E4) every tracked write already reads the post write
+document once (memoized) for the access stamp, the fan out scopes and the self heal, so the
+change_log removal in D12 no longer changes the hot path's cost.
 
 ### D2 — Tracked tables
 
 Exactly the `change_log` set: conversations, tasks, docs, plans, projects, plus scope
 membership actions (D5). Extension is declarative: a table joins by entering the tracked set
-and satisfying the same uniform `{ user_id, team_id? }` scope shape.
+and satisfying the access stamp shape (owner, workspace key, grants — cargo E4; the
+`{ user_id, team_id? }` shape below is change_log's).
 
-### D3 — Scope stamping mirrors change_log semantics exactly
+### D3 — Scope stamping (superseded by sync-log-cargo E4)
+
+Originally one action row per ROUTING scope (owner + `team_id`). Since the cargo design
+(pl-498) the log's scopes derive from ACCESS facts — owner, the workspace key's team, and
+explicit grants — so every reader who may read a row holds a scope it fans to and a private
+inside a team row never enters the team scope. `change_log` (old clients) keeps routing
+semantics. The paragraph below describes the routing era and is kept for history.
 
 One action row per scope. Tasks, docs, plans, projects: always the owner scope
 (`user:<user_id>`); additionally the team scope (`team:<team_id>`) when `team_id` is set.
@@ -122,14 +133,15 @@ contract, restated.
 
 ### D4 — Scope moves append a revocation
 
-When a patch changes `team_id` or `user_id`, the interceptor reads the document before the
-write and appends `delete` in each departed scope and `upsert` in each current scope. Entity
+When a patch changes `team_id`, `user_id`, `workspace` or `assignee` (the scope fields since
+cargo E4), the interceptor reads the document before the write and appends `delete` in each
+departed scope and `upsert` in each current scope. Entity
 deletion appends `delete` in every visible scope. The pre read happens only when the patch
 touches scope fields; the hot path stays head read + move/insert.
 
 **Client rule (review blocker):** a log `delete` is scope local and never prunes the store by
-itself. All changed ids — upserts and deletes alike — go through the authorized stage two
-fetch; only ids the authorized query omits are pruned (restart brief invariant 6: deletion
+itself. Deletes go through the authorized stage two fetch and only ids the authorized query
+omits are pruned (since cargo E6, upserts with a patch apply directly instead) (restart brief invariant 6: deletion
 truth is authorized absence). A multi scope viewer who receives the departed scope's delete
 after the entered scope's upsert therefore never loses the row.
 
@@ -158,12 +170,14 @@ for every row an authorized page returns (review C7). The purge's vocabulary cro
   `{ position, floor }` each. Tiny payload; the live wake signal. With the churn exemption it
   re-runs on semantic transitions only. The applier additionally debounces bursts (positions
   are cumulative, nothing is lost).
-- `getRange { scope_key, from, limit }` — membership checked, ascending page of actions past
-  `from`, `hasMore`/`nextFrom`, `resync: true` when `from < floor` (retention passed the
-  cursor), and `authorized: false` for a scope the caller no longer holds — distinguishable
-  from an empty caught up scope, because the client treats it as revocation (review C3).
+- `getRange { scope_key, from, limit, cargo? }` — membership checked, ascending page of
+  actions past `from` (bounded by rows and bytes), projected per caller (cargo E4),
+  `hasMore`/`nextFrom`, `resync: true` when `from < floor` (retention passed the cursor), and
+  `authorized: false` for a scope the caller no longer holds — distinguishable from an empty
+  caught up scope, because the client treats it as revocation (review C3).
 
-Stage two is unchanged: `conversations.getInboxSessionsByIds`, `tasks/docs/plans/projects.webGetByIds`.
+Stage two (`conversations.getInboxSessionsByIds`, `tasks/docs/plans/projects.webGetByIds`)
+now serves deletes, rows without cargo or base, partial cargo and re enrichment (cargo E5/E6).
 
 ### D7 — Client applier (replaces the internals of `useSyncChangeFeed`)
 
@@ -190,8 +204,9 @@ Applying a range:
 2. Retire acked pending entries for this scope up to the range's top position FIRST — so the
    authoritative post write rows land unblocked (review major: retiring after the apply
    strands a diverged field with no lock and no re fetch).
-3. Lift feed excludes for changed ids, fetch ALL changed ids through stage two byIds
-   (chunked ≤300), `syncTable(..., isDelta)`, prune only ids the authorized fetch omitted.
+3. Apply cargo directly where a base row exists (cargo E6); lift feed excludes and fetch
+   the rest through stage two byIds (chunked ≤300), `syncTable(..., isDelta)`, prune only
+   ids the authorized fetch omitted.
 4. Advance the cursor; handle scope lifecycle actions per D5.
 5. `resync: true`: clear the scope cursor and the affected workspaces' `backfilledAt`, then
    re-run the cold flow (the cold backfill heals the pre floor past).
@@ -281,7 +296,9 @@ Kept, with removal conditions:
   off. Mobile app store installs make this months long; name a forcing function (minimum
   supported version / forced upgrade) rather than an open ended watch. Until then the hot
   path pays both writes — the churn exemption keeps that affordable.
-- Live table queries, liveness overlay, recovery poll: not in scope (push transport).
+- Live table queries, liveness overlay, recovery poll: the sessions window and overlay stay
+  (push transport); the tasks/docs/plans/projects list queries became one shot bootstrap
+  floors under cargo E8.
 - Dormant v2 receipt tables: untouched here; separate cleanup.
 
 ### D13 — Rollout order
