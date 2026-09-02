@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { sameBucketExtras, sameInboxView, type InboxViewSnapshot } from "../inboxViewHistory";
+import { sameBucketExtras, sameInboxView, withInboxView, type InboxViewSnapshot } from "../inboxViewHistory";
 
 const snap = (extra: Partial<InboxViewSnapshot> = {}): InboxViewSnapshot => ({
   bucket: "b1",
@@ -24,5 +24,20 @@ describe("sameInboxView with shift-added label terms", () => {
     expect(sameInboxView(base, snap({ extras: [{ id: "b2", exclude: false }, { id: "b3", exclude: true }] }))).toBe(false);
     const two = snap({ extras: [{ id: "b2", exclude: false }, { id: "b3", exclude: true }] });
     expect(sameInboxView(two, snap({ extras: [{ id: "b3", exclude: true }, { id: "b2", exclude: false }] }))).toBe(false);
+  });
+});
+
+describe("withInboxView", () => {
+  it("carries the current entry's view tag onto a session navigation state", () => {
+    const g = globalThis as any;
+    const saved = g.window;
+    g.window = { history: { state: { inboxView: snap({ extras: [{ id: "b2", exclude: true }] }) } } };
+    try {
+      expect(withInboxView({ inboxId: "c1" })).toEqual({ inboxId: "c1", inboxView: snap({ extras: [{ id: "b2", exclude: true }] }) });
+      g.window.history.state = { inboxId: "c0" };
+      expect(withInboxView({ inboxId: "c1" })).toEqual({ inboxId: "c1" });
+    } finally {
+      if (saved === undefined) delete g.window; else g.window = saved;
+    }
   });
 });

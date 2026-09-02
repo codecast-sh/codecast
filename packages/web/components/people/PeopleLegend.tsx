@@ -5,7 +5,7 @@
 export function PeopleLegend({ inline = false }: { inline?: boolean }) {
   return (
     <div className={inline ? "people-legend people-legend-inline" : "people-legend"}>
-      <b>HOLD</b> a face to talk · <b>TAP</b> to message
+      <b>CLICK</b> a face for <b>Talk</b> · <b>Ring</b> · <b>Message</b>
     </div>
   );
 }

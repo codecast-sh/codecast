@@ -6,6 +6,12 @@
   "private": true,
   "license": "MIT",
   "scripts": {
+    "native": "scripts/build-native.sh",
+    "prestart": "npm run native",
+    "predev": "npm run native",
+    "prebuild": "npm run native",
+    "prebuild:dir": "npm run native",
+    "prebuild:local": "npm run native",
     "start": "electron .",
     "dev": "CODECAST_URL=https://local.codecast.sh electron .",
     "build": "NOTARIZE_KEYCHAIN_PROFILE=codecast electron-builder -m",
@@ -14,7 +20,7 @@
     "install:local": "npm run build:local && pkill -f Codecast.app 2>/dev/null; sleep 1 && rm -rf /Applications/Codecast.app && cp -R dist/mac-arm64/Codecast.app /Applications/Codecast.app && xattr -cr /Applications/Codecast.app && echo 'Installed to /Applications'"
   },
   "dependencies": {
-    "@platform/desktop": "file:../../platform/packages/desktop",
+    "@platform/desktop": "file:../../../platform/packages/desktop",
     "electron-updater": "^6.3.0"
   },
   "devDependencies": {
@@ -34,9 +40,13 @@
       "shortcutSettings.js",
       "updaterNet.js",
       "preload.js",
+      "native/notifications.node",
       "assets/icon.png",
       "assets/trayTemplate.png",
       "assets/trayTemplate@2x.png"
+    ],
+    "asarUnpack": [
+      "native/*.node"
     ],
     "directories": {
       "buildResources": "assets"

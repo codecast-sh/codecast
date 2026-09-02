@@ -9,56 +9,38 @@
 //
 // Microphone, camera and screen come from Electron's systemPreferences, which
 // reads the TCC database. Notifications have no Electron API at all — a
-// denied app's Notification.show() just silently does nothing — so the only
-// readable source is Notification Center's own preference store,
-// ~/Library/Preferences/com.apple.ncprefs.plist: an array of
-// { "bundle-id", flags, ... } dicts where bit 25 of `flags` is set for every
-// allowed app and clear for denied ones, and an app with NO entry was never
-// registered (macOS registers it, and shows Allow/Don't Allow, the first time
-// it posts a notification). Verified empirically on macOS 26 (Darwin 25):
-// allowed apps (Chrome, Slack, Notion) all carry 0x2000000; denied/unanswered
-// ones (Zoom, Discord, Signal) all lack it. `flags` can exceed 32 bits
-// (0x23088200e observed) — JS bitwise ops truncate to 32, which leaves bit 25
-// intact.
-
-const { execFile } = require("child_process");
-const os = require("os");
-const path = require("path");
+// denied app's Notification.show() just silently does nothing — so the shell
+// asks UNUserNotificationCenter through a native addon
+// (native/notifications.mm, built by scripts/build-native.sh). There is no
+// file to read instead: Notification Center's store needs Full Disk Access,
+// and the ncprefs.plist mirror it used to keep froze on macOS 26, so an app
+// installed since has no entry there and an allowed app read as never asked.
+// The API answers only the bundle's main executable, hence an addon in the
+// main process rather than a helper binary.
 
 const KINDS = ["notifications", "microphone", "camera", "screen"];
-const NOTIFICATIONS_ALLOWED_FLAG = 1 << 25;
 
-function parseNotificationState(xml, bundleId) {
-  // Chunk per app dict: keys are alphabetical, so everything between one
-  // bundle-id and the next belongs to that app. A lazy cross-dict regex could
-  // steal the NEXT dict's flags when an entry has none.
-  const chunks = xml.split("<key>bundle-id</key>");
-  for (let i = 1; i < chunks.length; i++) {
-    const id = chunks[i].match(/^\s*<string>([^<]*)<\/string>/);
-    if (!id || id[1] !== bundleId) continue;
-    const flags = chunks[i].match(/<key>flags<\/key>\s*<integer>(-?\d+)<\/integer>/);
-    if (!flags) return "ask";
-    return parseInt(flags[1], 10) & NOTIFICATIONS_ALLOWED_FLAG ? "granted" : "off";
+// UNAuthorizationStatus → readiness. -1 is the addon's "no answer" (outside
+// an app bundle, or Notification Center didn't reply in time).
+function authorizationStatusToReadiness(status) {
+  switch (status) {
+    case 0: return "ask"; // notDetermined
+    case 1: return "off"; // denied
+    case 2: // authorized
+    case 3: // provisional
+    case 4: return "granted"; // ephemeral
+    default: return "unknown";
   }
-  return "ask";
 }
 
-function readNotificationState(bundleId) {
-  return new Promise((resolve) => {
-    execFile(
-      "plutil",
-      ["-convert", "xml1", "-o", "-", path.join(os.homedir(), "Library/Preferences/com.apple.ncprefs.plist")],
-      { maxBuffer: 16 * 1024 * 1024 },
-      (err, stdout) => {
-        if (err) return resolve("unknown");
-        try {
-          resolve(parseNotificationState(String(stdout), bundleId));
-        } catch {
-          resolve("unknown");
-        }
-      },
-    );
-  });
+// A missing binary (a non-mac host, a build that skipped it) reads as
+// unknown — never nag on unknown — rather than a boot crash.
+function loadNotificationsAddon() {
+  try {
+    return require("./native/notifications.node");
+  } catch {
+    return null;
+  }
 }
 
 // systemPreferences.getMediaAccessStatus vocabulary → readiness.
@@ -90,10 +72,20 @@ function settingsUrl(kind, bundleId) {
   }
 }
 
-// `electron` is injected so the pure parts stay testable under plain node.
-function createOsPermissions({ electron, bundleId, showNotification }) {
+// `electron` and the notifications addon are injected so the pure parts
+// stay testable under plain node.
+function createOsPermissions({ electron, bundleId, notifications = loadNotificationsAddon() }) {
   const { systemPreferences, desktopCapturer, shell } = electron;
   const mac = process.platform === "darwin";
+
+  function readNotificationState() {
+    if (!notifications) return "unknown";
+    try {
+      return authorizationStatusToReadiness(notifications.authorizationStatus());
+    } catch {
+      return "unknown";
+    }
+  }
 
   async function getAll() {
     if (!mac) {
@@ -110,7 +102,7 @@ function createOsPermissions({ electron, bundleId, showNotification }) {
       }
     };
     return {
-      notifications: await readNotificationState(bundleId),
+      notifications: readNotificationState(),
       microphone: media("microphone"),
       camera: media("camera"),
       screen: media("screen"),
@@ -124,10 +116,13 @@ function createOsPermissions({ electron, bundleId, showNotification }) {
     if (!mac) return "granted";
     switch (kind) {
       case "notifications":
-        // Posting a real notification is what registers the app with
-        // Notification Center and raises Allow/Don't Allow. Not gated on
-        // focus: the user just clicked "Turn on".
-        showNotification("Notifications are on", "Codecast will notify you when someone messages or a session needs you.");
+        // Raises Allow / Don't Allow (a no-op once decided); the answer
+        // lands in Notification Center, so the caller re-polls for it.
+        if (notifications) {
+          try {
+            notifications.requestAuthorization();
+          } catch {}
+        }
         return "ask";
       case "microphone":
       case "camera": {
@@ -164,8 +159,7 @@ function createOsPermissions({ electron, bundleId, showNotification }) {
 
 module.exports = {
   KINDS,
-  NOTIFICATIONS_ALLOWED_FLAG,
-  parseNotificationState,
+  authorizationStatusToReadiness,
   mediaStatusToReadiness,
   settingsUrl,
   createOsPermissions,

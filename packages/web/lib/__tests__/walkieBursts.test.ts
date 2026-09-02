@@ -1,15 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { WALL_TAP_MS } from "../../components/people/peopleWallLayout";
 import {
-  MIN_BURST_MS,
-  WALKIE_LOCK_MS,
   hotListenDeadline,
   landBurst,
   measureBurst,
   nextRoomMode,
   pickLiveBurst,
   seatDeadline,
-  shouldLockBurst,
   shouldReleaseRoom,
   type LiveBurstRow,
 } from "../calls/walkie";
@@ -421,43 +417,6 @@ describe("meterLevel", () => {
   });
 });
 
-// The fill-to-lock gesture: a hold that outlives the fill stops being a
-// message and becomes a seat. The rules are small and the consequence is an
-// open microphone changing what it IS, so both halves are pinned: when a
-// completed fill may lock, and where the lock sits in the gesture ladder.
-describe("walkie: the fill locking a hold", () => {
-  it("locks the burst the fill was timing", () => {
-    expect(
-      shouldLockBurst({ sending: { roomKey: "dm:a:b" }, joinedRoom: null, roomKey: "dm:a:b" }),
-    ).toBe(true);
-  });
-
-  it("locks nothing when the burst already landed — a cap or a blur beat the fill", () => {
-    expect(shouldLockBurst({ sending: null, joinedRoom: null, roomKey: "dm:a:b" })).toBe(false);
-  });
-
-  it("locks nothing when the hold moved to another room under the timer", () => {
-    expect(
-      shouldLockBurst({ sending: { roomKey: "dm:a:c" }, joinedRoom: null, roomKey: "dm:a:b" }),
-    ).toBe(false);
-  });
-
-  it("re-locks nothing inside a room that is already a call — hold-to-reply stays a non-event", () => {
-    expect(
-      shouldLockBurst({ sending: { roomKey: "dm:a:b" }, joinedRoom: "dm:a:b", roomKey: "dm:a:b" }),
-    ).toBe(false);
-  });
-
-  it("keeps the gesture ladder in order: tap under burst under lock", () => {
-    // Release <WALL_TAP_MS is a tap, <MIN_BURST_MS a discarded brush,
-    // <WALKIE_LOCK_MS a burst that lands, and past the fill the hold locks.
-    // Each meaning needs real room on the clock or one gesture swallows its
-    // neighbour.
-    expect(WALL_TAP_MS).toBeLessThan(MIN_BURST_MS - 200);
-    expect(MIN_BURST_MS).toBeLessThan(WALKIE_LOCK_MS - 200);
-  });
-});
-
 // The blunt words. Every state the corner card can be in has one loud badge
 // and one instruction, and both are pinned here so a surface cannot soften
 // them back into a tooltip.
@@ -470,12 +429,13 @@ describe("walkie: the stage words", () => {
     const w = walkieStageWords({ ...base, sending: { live: true, heardLive: false } });
     expect(w.stage).toBe("recording");
     expect(w.badge).toBe("RECORDING");
-    expect(w.hint).toContain("Release to send");
-    expect(w.hint).toContain("keep holding to lock in");
+    expect(w.hint).toContain("Click STOP");
   });
 
-  it("says LIVE only once the room actually carries the voice", () => {
-    expect(walkieStageWords({ ...base, sending: { live: true, heardLive: true } }).badge).toBe("LIVE");
+  it("says TALKING, one way, only once the room actually carries the voice", () => {
+    const w = walkieStageWords({ ...base, sending: { live: true, heardLive: true } });
+    expect(w.badge).toBe("TALKING");
+    expect(w.hint).toContain("will not hear them until they JOIN");
     expect(walkieStageWords({ ...base, sending: { live: false, heardLive: false } }).badge).toBe("OPENING MIC");
   });
 
@@ -495,7 +455,8 @@ describe("walkie: the stage words", () => {
   it("an incoming voice lists all three answers", () => {
     const w = walkieStageWords({ ...base, incoming: true });
     expect(w.badge).toBe("INCOMING");
-    for (const word of ["HOLD", "JOIN LIVE", "SNOOZE"]) expect(w.hint).toContain(word);
+    expect(w.hint).toContain("they cannot hear you");
+    for (const word of ["TALK", "JOIN LIVE", "SNOOZE"]) expect(w.hint).toContain(word);
   });
 
   it("bad news first: a dropped room outranks everything", () => {
@@ -505,5 +466,25 @@ describe("walkie: the stage words", () => {
 
   it("a denied mic is said as a state, not hidden in a sentence", () => {
     expect(walkieStageWords({ ...base, micDenied: true }).badge).toBe("MIC OFF");
+  });
+});
+
+// A huddle you leave goes away on the other side too. A DM room with one seat
+// in it is a call with nobody on the other end.
+import { dmRoomEmptied } from "../../hooks/useWalkie";
+
+describe("walkie: the other person leaving a DM room", () => {
+  const me = "u-me";
+  it("ends once they were seen and their seat is gone", () => {
+    expect(dmRoomEmptied({ roomKey: "dm:a:b", seats: [{ user_id: me }], me, sawOther: true })).toBe(true);
+  });
+  it("waits while they have not arrived yet", () => {
+    expect(dmRoomEmptied({ roomKey: "dm:a:b", seats: [{ user_id: me }], me, sawOther: false })).toBe(false);
+  });
+  it("is nothing while they are in the room", () => {
+    expect(dmRoomEmptied({ roomKey: "dm:a:b", seats: [{ user_id: me }, { user_id: "u-them" }], me, sawOther: true })).toBe(false);
+  });
+  it("never ends a channel huddle, where people come and go", () => {
+    expect(dmRoomEmptied({ roomKey: "channel:x", seats: [{ user_id: me }], me, sawOther: true })).toBe(false);
   });
 });

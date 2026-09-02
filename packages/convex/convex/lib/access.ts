@@ -24,14 +24,92 @@ type AccessCtx = { db: any };
 // is also an explicit grant. team_id is ROUTING and is never consulted here —
 // see the workspace-key section below.
 
+// ── The access STAMP: one builder, two evaluators, zero drift ──
+// The sync log stores a copy of a row's access facts on every action row
+// (sync-log-cargo E4) and getRange decides delivery from it. So the stamp is
+// built HERE, next to the rules it encodes, and canAccessTask/Doc/Plan/Project
+// are defined as "evaluate the stamp" — the log and the byIds queries cannot
+// disagree by construction. `access_owner` is user_id; `access_key` is the
+// workspace key (stored, else computed — never for conversations, whose rule is
+// not owner-or-team and never reaches this layer); `access_grants` are explicit
+// per-user grants (a task's assignee).
+export type AccessStamp = {
+  access_owner?: string;
+  access_key?: string;
+  access_grants?: string[];
+};
+
+/** Pure stamp from a document that already carries its stored workspace key. */
+export function accessStampFromDoc(table: string, doc: any): AccessStamp | null {
+  if (!doc?.user_id) return null;
+  const stamp: AccessStamp = { access_owner: String(doc.user_id) };
+  if (table !== "conversations" && typeof doc.workspace === "string" && doc.workspace) {
+    stamp.access_key = doc.workspace;
+  }
+  if (table === "tasks" && isUserGrant(doc.assignee)) stamp.access_grants = [String(doc.assignee)];
+  return stamp;
+}
+
+// A task's assignee is a user grant only when it names a user (`agent:<name>`
+// assignees are not readers). Mirrored by the sync log's fan-out.
+export function isUserGrant(assignee: unknown): assignee is string {
+  return typeof assignee === "string" && assignee.length > 0 && !assignee.startsWith("agent:");
+}
+
+/** Stamp with the lazy key compute for rows minted before the backfill. */
+export async function accessStampFor(ctx: AccessCtx, table: string, doc: any): Promise<AccessStamp | null> {
+  const stamp = accessStampFromDoc(table, doc);
+  if (!stamp) return null;
+  if (table !== "conversations" && !stamp.access_key) {
+    stamp.access_key = await resolveWorkspaceKey(ctx, doc);
+  }
+  return stamp;
+}
+
+/**
+ * Pure evaluator: may `userId` read what the stamp guards, given the keys they
+ * hold (`user:<id>` plus every `team:<id>` membership)? A stamp with no owner
+ * grants NOTHING (fail closed, CLAUDE.md); unknown key variants match no held
+ * key and grant nothing either.
+ */
+export function authorizedFor(
+  stamp: AccessStamp | null | undefined,
+  userId: string,
+  heldKeys: ReadonlySet<string>,
+): boolean {
+  if (!stamp?.access_owner) return false;
+  if (stamp.access_owner === userId) return true;
+  if (stamp.access_grants?.includes(userId)) return true;
+  if (stamp.access_key && heldKeys.has(stamp.access_key)) return true;
+  return false;
+}
+
+/** The keys a user holds: their own personal key plus one per team membership. */
+export async function heldKeysFor(ctx: AccessCtx, userId: Id<"users">): Promise<Set<string>> {
+  const memberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .collect();
+  return new Set([`user:${String(userId)}`, ...memberships.map((m: any) => `team:${String(m.team_id)}`)]);
+}
+
+// Ctx-bound evaluator with the same rule as authorizedFor, short-circuiting on
+// owner/grant before touching memberships. A property test pins the two
+// evaluators to each other (syncLog.test.ts).
+async function authorizedForCtx(ctx: AccessCtx, stamp: AccessStamp | null, userId: Id<"users">): Promise<boolean> {
+  if (!stamp?.access_owner) return false;
+  const uid = String(userId);
+  if (stamp.access_owner === uid) return true;
+  if (stamp.access_grants?.includes(uid)) return true;
+  return await workspaceGrantsAccess(ctx, userId, stamp.access_key);
+}
+
 export async function canAccessTask(
   ctx: AccessCtx,
   userId: Id<"users">,
   task: any,
 ): Promise<boolean> {
-  if (String(task.user_id) === String(userId)) return true;
-  if (task.assignee && String(task.assignee) === String(userId)) return true;
-  return await workspaceGrantsAccess(ctx, userId, await resolveWorkspaceKey(ctx, task));
+  return authorizedForCtx(ctx, await accessStampFor(ctx, "tasks", task), userId);
 }
 
 export async function canAccessProject(
@@ -39,8 +117,29 @@ export async function canAccessProject(
   userId: Id<"users">,
   project: { user_id: Id<"users">; team_id?: Id<"teams">; workspace?: string },
 ): Promise<boolean> {
-  if (String(project.user_id) === String(userId)) return true;
-  return await workspaceGrantsAccess(ctx, userId, await resolveWorkspaceKey(ctx, project));
+  return authorizedForCtx(ctx, await accessStampFor(ctx, "projects", project), userId);
+}
+
+/**
+ * List-channel visibility for a row read off a TEAM routing index (webList and
+ * webListPaginated team branches): the same stamp rule, with a sync fast path
+ * for rows carrying their stored key so a 300-row page costs no reads. Rows
+ * minted before the backfill fall back to the async check. This is what keeps
+ * the bootstrap floor and the sync log's projection in agreement on a task with
+ * team_id T but workspace user:<owner> (private inside a team).
+ */
+export async function visibleInTeamList(
+  ctx: AccessCtx,
+  userId: Id<"users">,
+  table: string,
+  row: any,
+  teamId: Id<"teams"> | string,
+): Promise<boolean> {
+  const stamp = accessStampFromDoc(table, row);
+  if (stamp?.access_key) {
+    return authorizedFor(stamp, String(userId), new Set([`user:${String(userId)}`, `team:${String(teamId)}`]));
+  }
+  return authorizedForCtx(ctx, await accessStampFor(ctx, table, row), userId);
 }
 
 
@@ -424,8 +523,7 @@ export async function canAccessDoc(
   userId: Id<"users">,
   doc: { user_id: Id<"users">; team_id?: Id<"teams">; workspace?: string },
 ): Promise<boolean> {
-  if (String(doc.user_id) === String(userId)) return true;
-  return await workspaceGrantsAccess(ctx, userId, await resolveWorkspaceKey(ctx, doc));
+  return authorizedForCtx(ctx, await accessStampFor(ctx, "docs", doc), userId);
 }
 
 export async function canAccessPlan(
@@ -433,8 +531,7 @@ export async function canAccessPlan(
   userId: Id<"users">,
   plan: any,
 ): Promise<boolean> {
-  if (String(plan.user_id) === String(userId)) return true;
-  return await workspaceGrantsAccess(ctx, userId, await resolveWorkspaceKey(ctx, plan));
+  return authorizedForCtx(ctx, await accessStampFor(ctx, "plans", plan), userId);
 }
 
 // ── Owner-or-team: conversations (faithful, NOT oversimplified) ──

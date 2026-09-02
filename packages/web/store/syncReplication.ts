@@ -41,6 +41,8 @@ const SOLO_FALLBACK_MS = 8000;
 export type SyncReplicationStatus = {
   role: "host" | "follower";
   elected: boolean;
+  /** The Web Lock is held right now (elected AND not yet stopped). */
+  holdsLock: boolean;
   synced: boolean;
   selfId: string;
 };
@@ -146,6 +148,7 @@ export function startSyncReplication(opts: { eligible: boolean }): () => void {
   let host: ReplicationHost | null = null;
   let soloTimer: ReturnType<typeof setTimeout> | null = null;
   let releaseLock: (() => void) | null = null;
+  let holdsLock = false;
   const lockAbort = new AbortController();
 
   const armSoloFallback = () => {
@@ -219,11 +222,22 @@ export function startSyncReplication(opts: { eligible: boolean }): () => void {
       .request(
         LOCK_NAME,
         { mode: "exclusive", signal: lockAbort.signal },
-        () =>
-          new Promise<void>((resolve) => {
+        () => {
+          // Hold the lock until stop(). The holder promise is created BEFORE
+          // any host work runs and never rejects: a throw inside the promise
+          // executor would settle it and release the lock while this window
+          // still believed it was host — two "elected" hosts on one origin.
+          const held = new Promise<void>((resolve) => {
             releaseLock = resolve;
+          });
+          holdsLock = true;
+          try {
             becomeElectedHost();
-          }),
+          } catch (error) {
+            console.error("[replication] failed to become host", error);
+          }
+          return held;
+        },
       )
       .catch(() => {
         /* aborted on stop — never an error path */
@@ -238,6 +252,7 @@ export function startSyncReplication(opts: { eligible: boolean }): () => void {
     host?.stop();
     lockAbort.abort();
     releaseLock?.();
+    holdsLock = false;
     bc.close();
     const internals = useInboxStore.getState() as any;
     internals._setActionTee(null);
@@ -253,6 +268,7 @@ export function startSyncReplication(opts: { eligible: boolean }): () => void {
     status: () => ({
       role: useInboxStore.getState().syncRole,
       elected,
+      holdsLock,
       synced: follower?.synced() ?? false,
       selfId,
     }),

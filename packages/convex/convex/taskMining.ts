@@ -1,3 +1,4 @@
+import { insertTaskComment } from "./tasks";
 import { v } from "convex/values";
 import { internalMutation, internalQuery, internalAction, action, query } from "./functions";
 import { internal } from "./_generated/api";
@@ -263,13 +264,14 @@ export const mineTasksFromInsights = internalMutation({
         const similarPlan = findSimilarPlan(title);
 
         if (similarTask) {
-          await ctx.db.insert("task_comments", {
-            task_id: similarTask._id,
+          // Through the one comment writer so the task row gets its
+          // last_comment_at stamp — the replica's only signal that a joined
+          // comment changed (sync-log-cargo E7).
+          await insertTaskComment(ctx, similarTask._id, {
             author: "mining",
             text: `Related session insight: ${insight.summary.slice(0, 300)}`,
             conversation_id: insight.conversation_id,
-            comment_type: "note" as any,
-            created_at: ts,
+            comment_type: "note",
           });
           const matchedPlan = similarTask.plan_id
             ? await ctx.db.get(similarTask.plan_id)

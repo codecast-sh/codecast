@@ -37,6 +37,12 @@ import {
   activeAccountSummary,
   listProfiles,
   accountSourcePrefix,
+  accountTokenInfo,
+  writeAccountToken,
+  extractSetupToken,
+  fetchRateLimitFingerprint,
+  sameAccountFingerprint,
+  readActiveOauth,
 } from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
 import { buildDisclaimShellPrefix } from "./disclaim.js";
@@ -725,6 +731,10 @@ const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
 const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
 const VERSION_FILE = path.join(CONFIG_DIR, "daemon.version");
 const HOOK_PORT_FILE = path.join(CONFIG_DIR, "hook-port");
+// Port plus terminal token for local tools (cast bench, and the boot reuse in
+// pl-497 unit D). The token sits at rest at mode 0600, the same trust boundary
+// as the api token in config.json; the decision is recorded on pl-497.
+const LOOPBACK_IDENTITY_FILE = path.join(CONFIG_DIR, "loopback-identity.json");
 const STARTED_SESSIONS_FILE = path.join(CONFIG_DIR, "started-sessions.json");
 // Learned project-path map: basename/recorded-path -> local dir, auto-populated from
 // repos observed locally (see recordProjectMapping). Lets cross-machine forks resume
@@ -1510,6 +1520,17 @@ function startHookServer(
       try {
         fs.writeFileSync(HOOK_PORT_FILE, String(hookServerPort));
       } catch {}
+      try {
+        // Not unlinked on stop: unit D reads it back at boot. Readers detect a
+        // stale file through the port in hook-port and the pid.
+        fs.writeFileSync(
+          LOOPBACK_IDENTITY_FILE,
+          JSON.stringify({ port: hookServerPort, token: terminalToken, pid: process.pid }),
+          { mode: 0o600 },
+        );
+        // writeFileSync applies mode only when it creates the file.
+        fs.chmodSync(LOOPBACK_IDENTITY_FILE, 0o600);
+      } catch {}
       log(`Hook server listening on 127.0.0.1:${hookServerPort}`);
     }
   });
@@ -2120,6 +2141,233 @@ async function pushProviderKeysToRemoteHosts(reason: string, opts: { onlyIfChang
 }
 
 // ---------------------------------------------------------------------------
+// Setup-token mint flow (switch_account {mint}): per-session accounts pin a
+// session to a profile's `claude setup-token` (see accountSourcePrefix), so
+// every saved login needs one. The CLI's own `setup-token` runs the OAuth
+// flow and prints the token; this block (1) runs it in a utility pane with
+// $BROWSER pointed at a hook that RECORDS the sign-in URL instead of opening
+// it, (2) drives the one-button approval in the agent browser — a clone of the
+// human's Chrome, so signed into the same claude.ai account — falling back to
+// the default browser for a human click, (3) reads the token off the pane,
+// (4) proves it belongs to the machine's login by comparing rate-limit
+// fingerprints with the keychain credential (the browser may be signed into
+// another account; the token itself can't say whose it is), (5) stores it
+// under that profile. Outcome goes back through reportMintFlow, the web's
+// reactive state channel — the same shape as the login flow below.
+// ---------------------------------------------------------------------------
+
+const MINT_FLOW_TMUX = "cc-mint-flow";
+const MINT_FLOW_TIMEOUT_MS = 5 * 60 * 1000;
+const MINT_FLOW_POLL_MS = 2000;
+// Re-mint this close to the one-year expiry: CC never warns, and a dead token
+// silently drops every pinned session onto the keychain login.
+const MINT_RENEW_BEFORE_MS = 7 * 24 * 60 * 60 * 1000;
+let mintFlowActive = false;
+let mintFlowGeneration = 0;
+// The heartbeat reads the web-set device flag back; off until the first beat.
+let sessionTokensEnabled = false;
+// One auto-mint attempt per account per daemon lifetime — a rejected mint
+// (wrong browser account, closed tab) is not nagged; the web's "try again"
+// relaunches explicitly. Attempts are also stamped on disk so a daemon
+// restart (deploys, watchdog) doesn't re-open the consent tab within hours.
+const autoMintDecidedAccounts = new Set<string>();
+const AUTO_MINT_RETRY_MS = 6 * 60 * 60 * 1000;
+
+function autoMintAttemptsPath(): string {
+  return path.join(CONFIG_DIR, "cc-mint-attempts.json");
+}
+
+function readAutoMintAttempts(): Record<string, number> {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(autoMintAttemptsPath(), "utf-8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function stampAutoMintAttempt(key: string): void {
+  try {
+    const attempts = readAutoMintAttempts();
+    attempts[key] = Date.now();
+    fs.writeFileSync(autoMintAttemptsPath(), JSON.stringify(attempts), { mode: 0o600 });
+  } catch {}
+}
+
+function mintUrlPath(): string {
+  return path.join(CONFIG_DIR, "mint-flow.url");
+}
+
+/** The $BROWSER hook: CC hands it the OAuth URL as its one argument. */
+function writeMintBrowserHook(): string {
+  const hook = path.join(CONFIG_DIR, "mint-browser-hook.sh");
+  fs.writeFileSync(hook, `#!/bin/sh\nprintf '%s\\n' "$1" > ${shellEscapeForSh(mintUrlPath())}\n`, { mode: 0o700 });
+  return hook;
+}
+
+// Same PATH rule as the login flow (the pane inherits launchd's PATH); the
+// trailing sleep keeps a dying CLI's last words capturable.
+export function buildMintFlowCommand(hookPath: string): string {
+  return `PATH=${shellEscapeForSh(agentSpawnPath())} BROWSER=${shellEscapeForSh(hookPath)} claude setup-token; sleep 4`;
+}
+
+async function approveMintInBrowser(url: string): Promise<"agent" | "opened"> {
+  const res = await runCastCommand(["browser", "do", `open ${url}`, "find Authorize", "click"], { timeoutMs: 60 * 1000 });
+  if (res.code === 0) return "agent";
+  const why = (res.stderr.trim() || res.stdout.trim()).split("\n").pop()?.slice(0, 160) ?? `exit ${res.code}`;
+  log(`[MINT-FLOW] agent-browser approval failed (${why}) — opening the default browser for a manual approve`);
+  spawn(process.platform === "darwin" ? "open" : "xdg-open", [url], { stdio: "ignore", detached: true }).unref();
+  return "opened";
+}
+
+async function startMintFlow(profile: string, force = false): Promise<string> {
+  if (isRemoteDevice()) {
+    throw new Error("Remote devices run a pushed copy of the primary's credential — mint on the primary machine");
+  }
+  if (mintFlowActive && !force) return "mint_flow_already_running";
+  const gen = ++mintFlowGeneration;
+  mintFlowActive = true;
+  try {
+    // Only the ACTIVE login can be minted for: that is the account the
+    // browser is signed into, and the one we can fingerprint-check against.
+    const active = activeAccountSummary();
+    const covering = listProfiles().find((p) => p.active);
+    if (!covering) throw new Error("the machine's current login isn't saved as a profile yet");
+    if (covering.name !== profile) {
+      throw new Error(
+        `"${profile}" is not the machine's current login (${active?.email ?? "unknown"}, saved as "${covering.name}") — switch to it first`,
+      );
+    }
+    fs.rmSync(mintUrlPath(), { force: true });
+    const hook = writeMintBrowserHook();
+    await killTmuxSessionAndTree(MINT_FLOW_TMUX).catch(() => {});
+    tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", MINT_FLOW_TMUX, buildMintFlowCommand(hook)], { timeout: 5000 });
+    log(`[MINT-FLOW] started setup-token mint for "${profile}"${active?.email ? ` (${active.email})` : ""}${force ? " [forced relaunch]" : ""}`);
+    void watchMintFlow(profile, active?.email, gen)
+      .catch((err) => log(`[MINT-FLOW] watcher failed: ${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => { if (gen === mintFlowGeneration) mintFlowActive = false; });
+    return "mint_flow_started";
+  } catch (err) {
+    if (gen === mintFlowGeneration) mintFlowActive = false;
+    throw err;
+  }
+}
+
+async function watchMintFlow(profile: string, email: string | undefined, gen: number): Promise<void> {
+  const deadline = Date.now() + MINT_FLOW_TIMEOUT_MS;
+  let lastPane = "";
+  let urlHandled = false;
+
+  const finish = async (status: "confirmed" | "rejected", reason?: string): Promise<void> => {
+    await killTmuxSessionAndTree(MINT_FLOW_TMUX).catch(() => {});
+    fs.rmSync(mintUrlPath(), { force: true });
+    log(`[MINT-FLOW] ${status}${reason ? `: ${reason}` : ` — token stored for "${profile}"`}`);
+    // The token's metadata reaches the web on the inventory beat; push it now.
+    if (status === "confirmed") sendHeartbeat().catch(() => {});
+    await syncServiceRef?.reportMintFlow(status, profile, email, reason).catch((err) => {
+      log(`[MINT-FLOW] outcome report failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  };
+
+  const storeMinted = async (token: string): Promise<void> => {
+    try {
+      // Keep the comparison credential usable: an idle login may have lapsed.
+      if ((activeCredentialExpiresAt() ?? 0) <= Date.now() + 60_000) {
+        await refreshActiveCredential().catch(() => null);
+      }
+      const activeToken = readActiveOauth()?.accessToken;
+      if (typeof activeToken !== "string" || !activeToken) throw new Error("no usable keychain login to compare against");
+      const [mine, minted] = await Promise.all([fetchRateLimitFingerprint(activeToken), fetchRateLimitFingerprint(token)]);
+      if (!sameAccountFingerprint(mine, minted)) {
+        return finish(
+          "rejected",
+          `the browser is signed into a different Claude account than this machine's login (${email ?? "unknown"}) — sign into that account at claude.ai and try again`,
+        );
+      }
+      writeAccountToken(profile, token);
+    } catch (err) {
+      return finish("rejected", `could not verify or store the token: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return finish("confirmed");
+  };
+
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, MINT_FLOW_POLL_MS));
+    if (gen !== mintFlowGeneration) return;
+    if (!urlHandled) {
+      let url = "";
+      try { url = fs.readFileSync(mintUrlPath(), "utf-8").trim(); } catch {}
+      if (url.startsWith("http")) {
+        urlHandled = true;
+        void approveMintInBrowser(url)
+          .then((how) => log(`[MINT-FLOW] sign-in URL handed to ${how === "agent" ? "the agent browser (auto-approved)" : "the default browser"}`))
+          .catch((err) => log(`[MINT-FLOW] browser hand-off failed: ${err instanceof Error ? err.message : String(err)}`));
+      }
+    }
+    let pane: string;
+    try {
+      // -J joins wrapped lines: the token is ~100 chars and the pane is narrower.
+      pane = tmuxExecSync(["capture-pane", "-p", "-J", "-t", MINT_FLOW_TMUX], { timeout: 3000 });
+    } catch {
+      // A capture can fail because tmux was slow under load (2026-09-01: a 3s
+      // timeout mid-flow was read as "CLI exited" and killed a live approval).
+      // Only a missing session means the CLI is gone.
+      try {
+        tmuxExecSync(["has-session", "-t", MINT_FLOW_TMUX], { timeout: 3000 });
+        continue;
+      } catch {}
+      // Pane gone = the CLI exited; its last capture may still hold the token.
+      const late = extractSetupToken(lastPane);
+      if (late) return storeMinted(late);
+      const tail = summarizeLoginPaneTail(lastPane);
+      return finish(
+        "rejected",
+        tail && !/paste code here/i.test(tail)
+          ? tail
+          : "claude setup-token exited before the browser approval completed",
+      );
+    }
+    lastPane = pane;
+    const token = extractSetupToken(pane);
+    if (token) return storeMinted(token);
+  }
+  return finish("rejected", "timed out waiting for the browser approval (5 min)");
+}
+
+// With per-session accounts on, the active login needs a live token (only the
+// active one can be minted — see startMintFlow). Runs on every beat that
+// carries the flag; acts once per account per daemon lifetime, and again a
+// week before a token's expiry.
+function maybeAutoMintToken(): void {
+  if (!sessionTokensEnabled || isRemoteDevice() || mintFlowActive) return;
+  try {
+    const active = listProfiles().find((p) => p.active);
+    if (!active) return;
+    const key = active.uuid || active.email || active.name;
+    if (autoMintDecidedAccounts.has(key)) return;
+    const tok = accountTokenInfo(active.name);
+    if (tok && tok.expires_at > Date.now() + MINT_RENEW_BEFORE_MS) return;
+    autoMintDecidedAccounts.add(key);
+    const lastAttempt = readAutoMintAttempts()[key] ?? 0;
+    if (Date.now() - lastAttempt < AUTO_MINT_RETRY_MS) {
+      log(`[MINT-FLOW] auto-mint for "${active.name}" skipped — attempted ${Math.round((Date.now() - lastAttempt) / 60000)}m ago (retry after 6h, or "mint now" in Settings)`);
+      return;
+    }
+    stampAutoMintAttempt(key);
+    syncServiceRef?.reportMintFlow("pending", active.name, active.email).catch(() => {});
+    startMintFlow(active.name)
+      .then((r) => log(`[MINT-FLOW] auto-mint for "${active.name}": ${r}`))
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`[MINT-FLOW] auto-mint launch failed: ${msg}`);
+        syncServiceRef?.reportMintFlow("rejected", active.name, active.email, msg).catch(() => {});
+      });
+  } catch (err) {
+    log(`[MINT-FLOW] auto-mint check failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Browser sign-in flow (start_login): the web banner's "Sign in as <email>"
 // CTA. `claude auth login` is a first-class CLI subcommand that opens the
 // machine's browser on the OAuth page (pre-filled via --email) and writes the
@@ -2580,6 +2828,12 @@ async function sendHeartbeat(): Promise<void> {
     // waits for the next beat. The kill switch works the moment the server
     // flips capabilities_mode, no CLI ship needed.
     recordConvergenceSignals(data);
+    // Per-session accounts flag (web-set on the device row) — drives the
+    // daemon's auto-mint of setup-tokens for the active login.
+    if (typeof data.cc_session_tokens === "boolean") {
+      sessionTokensEnabled = data.cc_session_tokens;
+      maybeAutoMintToken();
+    }
     // Team-gated agent snippets follow the team feature flags: install when a
     // team turns chat/calls on, disable when the last team turns it off.
     if (data.snippet_availability && typeof data.snippet_availability === "object") {
@@ -2756,7 +3010,9 @@ function runCastCommand(
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(cmd, [...prefixArgs, ...args], {
-        env: { ...process.env },
+        // The daemon's launchd PATH has no node/bun/homebrew; the cast shim and
+        // anything it execs (a browser driver, claude) need the agent PATH.
+        env: { ...process.env, PATH: agentSpawnPath() },
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (err) {
@@ -4052,6 +4308,20 @@ async function executeRemoteCommand(
             sendHeartbeat().catch(() => {});
           } catch (err) {
             error = `Profile remove failed: ${err instanceof Error ? err.message : String(err)}`;
+          }
+          break;
+        }
+
+        // mint mode: mint a setup-token for the machine's current login (the
+        // web toggle / "mint now"). Returns at once — the browser approval
+        // outlives any command TTL — and the detached watcher reports the
+        // outcome through reportMintFlow (see the MINT-FLOW block).
+        if (typeof parsed.mint === "string" && parsed.mint) {
+          try {
+            result = await startMintFlow(parsed.mint, parsed.force === true);
+          } catch (err) {
+            error = `Mint launch failed: ${err instanceof Error ? err.message : String(err)}`;
+            syncServiceRef?.reportMintFlow("rejected", parsed.mint, undefined, error).catch(() => {});
           }
           break;
         }

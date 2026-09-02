@@ -1,3 +1,4 @@
+import { withInboxView } from "../lib/inboxViewHistory";
 import { useEffect, useRef, useState } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
@@ -218,7 +219,7 @@ export function DesktopProvider() {
 
         const cur = window.location.pathname;
         if (cur.startsWith("/inbox") || cur.startsWith("/conversation/")) {
-          window.history.pushState({ inboxId: convId }, "", path);
+          window.history.pushState(withInboxView({ inboxId: convId }), "", path);
           return;
         }
       }

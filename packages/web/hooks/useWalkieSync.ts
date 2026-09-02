@@ -19,6 +19,8 @@ import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useConvexSync } from "./useConvexSync";
 import { useMountEffect } from "./useMountEffect";
+import { useWatchEffect } from "./useWatchEffect";
+import { useRef } from "react";
 import { memberDisplayName } from "../lib/liveEntities";
 import {
   bindWalkie,
@@ -28,9 +30,10 @@ import {
   observeWalkie,
   refreshWalkie,
   walkieJoinedRoom,
+  endWalkie,
   type LiveBurstRow,
 } from "../lib/calls/walkie";
-import { otherJoinedLive, senderHearingFrom, useWalkieStatus } from "./useWalkie";
+import { dmRoomEmptied, otherJoinedLive, senderHearingFrom, useWalkieStatus } from "./useWalkie";
 import { machineDoorNow, subscribeMachineDoor, walkieDoorOpen } from "../lib/calls/walkieDoor";
 import { readJoinPrefs } from "../lib/calls/joinPrefs";
 import { setCamera } from "../lib/calls/callManager";
@@ -132,6 +135,7 @@ export function useWalkieSync(): void {
   useConvexSync(callSig, useCallback(() => refreshWalkie(), []));
 
   useWalkieUpgrade();
+  useRoomEmptiesOut();
   useWalkieAwayTick();
 }
 
@@ -281,3 +285,53 @@ export function observeWalkieUpgrade(room: string, name: string): void {
   }
 }
 
+
+
+/** How long an emptied DM room is given before this side hangs up too: the
+ *  roster lags a leave by a push, and a reconnect blip must not end a call. */
+const ROOM_EMPTY_GRACE_MS = 4_000;
+
+/**
+ * A huddle you leave goes away — on the other side as well.
+ *
+ * Once the other person has been seen in a two-person room and their seat
+ * goes, this side ends its own after a short grace. Read off the roster as a
+ * one-word signature ("with" / "alone" / ""), so the heartbeat churn on the
+ * occupancy rows wakes nothing.
+ */
+function useRoomEmptiesOut(): void {
+  const status = useWalkieStatus();
+  const joined = walkieJoinedRoom(status);
+  const sawOther = useRef(false);
+  const s = useTrackedStore([
+    (st: any) => String(st.currentUser?._id ?? ""),
+    (st: any) => {
+      if (!joined) return "";
+      const me = String(st.currentUser?._id ?? "");
+      const seats = (st.callOccupancy?.[joined] as any[]) ?? [];
+      return seats.some((r) => String(r?.user_id ?? "") !== me) ? "with" : "alone";
+    },
+    (st: any) => st.call?.phase ?? "idle",
+  ]);
+  const me = String(s.currentUser?._id ?? "");
+  const seats = joined ? (((s as any).callOccupancy?.[joined] as any[]) ?? []) : [];
+  const together = seats.some((r) => String(r?.user_id ?? "") !== me);
+  if (together) sawOther.current = true;
+  if (!joined) sawOther.current = false;
+  const emptied =
+    (s as any).call?.phase === "connected" &&
+    dmRoomEmptied({ roomKey: joined, seats, me, sawOther: sawOther.current });
+  useWatchEffect(() => {
+    if (!emptied) return;
+    const t = setTimeout(() => {
+      // Re-checked at the deadline: a seat that came back inside the grace
+      // is a call that goes on.
+      const st = useInboxStore.getState() as any;
+      const room = walkieJoinedRoom(getWalkieStatus());
+      if (!room) return;
+      const now = (st.callOccupancy?.[room] as any[]) ?? [];
+      if (dmRoomEmptied({ roomKey: room, seats: now, me, sawOther: true })) void endWalkie();
+    }, ROOM_EMPTY_GRACE_MS);
+    return () => clearTimeout(t);
+  }, [emptied, joined, me]);
+}

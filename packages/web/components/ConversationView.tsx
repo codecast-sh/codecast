@@ -8,7 +8,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
-import { useShortcutContext, useShortcutAction, isMac, getShortcutsForAction, formatShortcutParts, formatAcceleratorParts, hasOpenModal, altChordDirection, type ShortcutAction } from "../shortcuts";
+import { useShortcutContext, useShortcutAction, isMac, getShortcutsForAction, formatShortcutParts, hasOpenModal, altChordDirection, type ShortcutAction } from "../shortcuts";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useChatMessageRow, useEnsureChatMessage } from "../hooks/useChatSync";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
@@ -7036,33 +7036,38 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
   if (parts) {
     const chipText = `${parsed.status}${parts.exitCode ? ` \u00b7 exit ${parts.exitCode}` : ''}`;
     return (
-      <div className="mb-1.5 mx-1">
-        {/* Same anatomy as a session-message card (left accent, header line) \u2014
-            both are machine deliveries into this thread, so they share one
-            visual language. */}
-        <div
-          className={`rounded border-l-2 ${cfg.accent}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
-          onClick={childId ? () => router.push(`/conversation/${childId}`) : undefined}
-        >
-          <div className="flex items-start gap-2 px-3 py-2 text-xs">
+      /* Same anatomy as a session-message card (left accent, header line) \u2014
+         both are machine deliveries into this thread, so they share one
+         visual language. */
+      <div
+        className={`mb-1.5 mx-1 rounded border-l-2 ${cfg.accent}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
+        onClick={childId ? () => router.push(`/conversation/${childId}`) : undefined}
+      >
+        <div className="flex items-start gap-2 px-3 py-2 text-xs">
+          {woke ? (
+            /* The wake cue takes the status glyph's slot: a corner arrow
+               pointing down and into the row below \u2014 the turn this
+               notification pulled the agent back for. The status itself still
+               reads from the chip on the right. */
+            <CornerDownRight
+              className={`w-3.5 h-3.5 shrink-0 mt-px ${cfg.color}`}
+              strokeWidth={2.25}
+              aria-label="Woke the agent"
+            />
+          ) : (
             <span className={`font-mono text-sm leading-none shrink-0 mt-0.5 ${cfg.color}`}>{cfg.icon}</span>
-            <span className={`text-[10px] font-medium tracking-wide uppercase shrink-0 mt-px ${cfg.eyebrow}`}>{parts.kind}</span>
-            <ExpandableLine text={parts.description} className="text-sol-text font-medium" title={parsed.summary} />
-            <span className={`px-1 py-0 rounded border text-[9px] font-semibold shrink-0 mt-px ${cfg.chip}`}>{chipText}</span>
-            {childId && (
-              <svg className={`w-3 h-3 shrink-0 mt-0.5 ${cfg.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-            )}
-            <span className="text-sol-text-dim font-mono text-[10px] shrink-0">{parsed.taskId}</span>
-            <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
-          </div>
+          )}
+          <span className={`text-[10px] font-medium tracking-wide uppercase shrink-0 mt-px ${cfg.eyebrow}`}>{parts.kind}</span>
+          <ExpandableLine text={parts.description} className="text-sol-text font-medium" title={parsed.summary} />
+          <span className={`px-1 py-0 rounded border text-[9px] font-semibold shrink-0 mt-px ${cfg.chip}`}>{chipText}</span>
+          {childId && (
+            <svg className={`w-3 h-3 shrink-0 mt-0.5 ${cfg.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          )}
+          <span className="text-sol-text-dim font-mono text-[10px] shrink-0">{parsed.taskId}</span>
+          <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         </div>
-        {woke && (
-          <div className="pl-2 pt-0.5" title="The turn below was woken by this notification">
-            <CornerDownRight className={`w-3.5 h-3.5 ${cfg.color} opacity-60`} />
-          </div>
-        )}
       </div>
     );
   }
@@ -9702,33 +9707,6 @@ function GitDiffView({ diff }: { diff: string }) {
   );
 }
 
-// The composer's own send chords. They are handled inline in handleKeyDown
-// (they must run from a focused textarea, which the global registry never
-// does), so this table is their one source of truth for the "?" popover;
-// every other binding lives in the registry and shows in the shortcuts panel.
-const SEND_CHORDS: ReadonlyArray<{ accel: string; label: string }> = [
-  { accel: "enter", label: "Send" },
-  { accel: "shift+enter", label: "New line" },
-  { accel: "ctrl+enter", label: "Queue for later" },
-  { accel: "alt+enter", label: "Send and advance" },
-  { accel: "alt+shift+enter", label: "Send and stash" },
-  { accel: "meta+shift+enter", label: "Fork and send" },
-  { accel: "meta+shift+e", label: "Rich editor" },
-];
-
-function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-sol-text/70">{label}</span>
-      <span className="flex items-center gap-[2px]">
-        {keys.map((k, i) => (
-          <KeyCap key={i} size="xs">{k}</KeyCap>
-        ))}
-      </span>
-    </div>
-  );
-}
-
 function GuestJoinCTA() {
   return (
     <div className="bg-sol-bg border-t border-sol-border/30">
@@ -9872,7 +9850,7 @@ function WorkingStatusLine({ startedAt, toolLabel }: { startedAt?: number; toolL
   );
 }
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, bareComposer, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingTool, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; bareComposer?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, threadStateNode, bareComposer, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingTool, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; bareComposer?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -9949,7 +9927,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     return uid ? { kind: "personal" as const, userId: uid } : { kind: "any" as const };
   }, [mentionTeamId, composeTeamId, memberTeams, mentionUser?._id]);
   const composeMentionQuery = useMentionQuery(mentionScope);
-  const [shortcutTooltip, setShortcutTooltip] = useState<{ x: number; y: number } | null>(null);
   const [pendingMessageId, setPendingMessageId] = useState<Id<"pending_messages"> | null>(null);
   const [sentAt, setSentAt] = useState<number | null>(null);
   const [showStuckBanner, setShowStuckBanner] = useState(false);
@@ -11724,8 +11701,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               </div>
             </div>
           )}
-          {!bareComposer && (isFocused || reviewCount > 0 || shortcutTooltip || showStuckBanner || isSessionStarting || isSessionReady || isInactive || optimisticSending || isSessionDisconnected || (pendingMessageId || existingPending) || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
-            <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "conv-col" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
+          {/* The composer's status line: always one row tall, so focusing the
+              box or the agent changing state never shifts the composer. The
+              left side carries the live status (or nothing); the right side
+              is the send-options "?" and the permission mode dot. */}
+          {!bareComposer && (
+            <div className={`mx-auto px-2 sm:px-4 mb-1 min-h-[18px] flex justify-between items-center ${isExpanded ? "conv-col" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
               <p className="text-[11px] text-sol-text-dim/70 pl-1">
                 {((isSessionStarting && !agentStatus) || isAgentStarting) && !showStuckBanner ? (
                   <span className="flex items-center gap-1.5">
@@ -11844,26 +11825,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 ) : isInactive ? "Session idle — message to resume" : "\u00A0"}
               </p>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const rect = sendRef.current?.getBoundingClientRect();
-                    if (rect) setShortcutTooltip(prev => prev ? null : { x: rect.right, y: rect.top });
-                  }}
-                  onMouseEnter={() => {
-                    clearTimeout((window as any).__shortcutTooltipTimer);
-                    const rect = sendRef.current?.getBoundingClientRect();
-                    if (rect) setShortcutTooltip({ x: rect.right, y: rect.top });
-                  }}
-                  onMouseLeave={() => {
-                    (window as any).__shortcutTooltipTimer = setTimeout(() => {
-                      if (!document.querySelector('[data-shortcut-tooltip]:hover')) setShortcutTooltip(null);
-                    }, 150);
-                  }}
-                  className="text-[9px] text-sol-text-dim hover:text-sol-text transition-colors w-4 h-4 flex items-center justify-center rounded-full border border-sol-text-dim/50 hover:border-sol-text-dim bg-sol-bg-alt font-semibold"
-                >
-                  ?
-                </button>
                 {permissionMode && (
                   <div className="relative">
                     <button
@@ -11880,10 +11841,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                         permissionMode === "dontAsk" ? "bg-sol-yellow" :
                         "bg-sol-base00/50"
                       }`} />
+                      {/* A non-default mode is worth a word, not just a dot:
+                          "bypass" changes what the agent may do. The label
+                          brightens for a beat when the mode cycles, then
+                          settles to a quiet reading. */}
                       {permissionMode !== "default" && (
                         <span
-                          className={`text-[10px] font-mono transition-all duration-300 ease-out overflow-hidden whitespace-nowrap ${
-                            showModeLabel ? "max-w-[80px] opacity-100 translate-x-0" : "max-w-0 opacity-0 -translate-x-1"
+                          className={`text-[10px] font-mono transition-opacity duration-300 ease-out whitespace-nowrap ${
+                            showModeLabel ? "opacity-100" : "opacity-60"
                           } ${
                             permissionMode === "plan" ? "text-sol-blue" :
                             permissionMode === "acceptEdits" ? "text-emerald-400" :
@@ -11926,6 +11891,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               </div>
             </div>
           )}
+          {/* The pinned thread state slots between the status line and the
+              box: the status line says what the session is doing right now,
+              the pinned state says where the work stands, the box is where you
+              answer. Reading top to bottom, that is the order a person needs
+              them in. */}
+          {threadStateNode}
           {acTrigger && (acItems.length > 0 || (acTrigger.type === "@" && acServerLoading && !acQuery.includes(" "))) && (() => {
             const typeConfig: Record<string, { icon: typeof User; color: string; label: string }> = {
               person: { icon: User, color: "text-sol-green", label: "People" },
@@ -12270,33 +12241,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           </form>
         </div>
       </div>
-      {shortcutTooltip && createPortal(
-        <div
-          data-shortcut-tooltip
-          className="fixed z-[10000] bg-sol-bg border border-sol-border/60 rounded-lg shadow-lg p-3 w-56"
-          style={{ top: shortcutTooltip.y - 30, left: shortcutTooltip.x, transform: 'translate(-100%, -100%)' }}
-          onMouseEnter={() => clearTimeout((window as any).__shortcutTooltipTimer)}
-          onMouseLeave={() => {
-            (window as any).__shortcutTooltipTimer = setTimeout(() => setShortcutTooltip(null), 150);
-          }}
-        >
-          <div className="text-[10px] font-medium text-sol-text/80 mb-2">Sending</div>
-          <div className="space-y-1.5 text-[9px] text-sol-text-dim/70">
-            {SEND_CHORDS.map(({ accel, label }) => (
-              <ShortcutHint key={accel} keys={formatAcceleratorParts(accel)} label={label} />
-            ))}
-            <div className="border-t border-sol-border/20 mt-1.5 pt-1.5">
-              <button
-                onClick={() => { setShortcutTooltip(null); useInboxStore.getState().toggleShortcutsPanel(); }}
-                className="text-sol-cyan/80 hover:text-sol-cyan transition-colors flex items-center gap-1"
-              >
-                <Keyboard className="w-3 h-3" /> View all shortcuts
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
       {lightboxImageIndex !== null && pastedImages[lightboxImageIndex] && createPortal(
         // Center the preview in the space ABOVE the composer, not the whole
         // viewport: the composer stays visible over the lightbox (so you can
@@ -16136,6 +16080,22 @@ const ConversationViewInner = (
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sig stands in for the array
   }, [subagentMenuSig]);
 
+  // The pinned thread state (`cast state`) is one node with two homes: under
+  // the owner composer's status line when that composer is mounted, else in
+  // the feed/composer seam (see the render below).
+  const ownerComposerMounted = !!(showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && effectiveIsOwner);
+  const threadStatePanel = conversation ? (
+    <ThreadStatePanel
+      conversationId={conversation._id.toString()}
+      threadState={conversation.thread_state}
+      threadStateAt={conversation.thread_state_at}
+      threadStateMsgCount={conversation.thread_state_msg_count}
+      threadStateStatus={conversation.thread_state_status}
+      messageCount={conversation.message_count}
+      canClear={effectiveIsOwner}
+    />
+  ) : null;
+
   return (
     <HighlightContext.Provider value={highlightQuery}>
     <FilePathContext.Provider value={filePathCtx}>
@@ -17204,22 +17164,13 @@ const ConversationViewInner = (
 
       </div>
 
-      {/* The pinned thread state sits between the feed and the composer, outside
-          data-sv-feed so it can't perturb the virtualizer, and outside the
-          composer's own condition so it stays readable while a permission
-          prompt owns the input. It renders nothing when the agent has not
-          pinned a state. */}
-      {conversation && (
-        <ThreadStatePanel
-          conversationId={conversation._id.toString()}
-          threadState={conversation.thread_state}
-          threadStateAt={conversation.thread_state_at}
-          threadStateMsgCount={conversation.thread_state_msg_count}
-          threadStateStatus={conversation.thread_state_status}
-          messageCount={conversation.message_count}
-          canClear={effectiveIsOwner}
-        />
-      )}
+      {/* The pinned thread state belongs under the composer's status line
+          (threadStateNode on MessageInput below). When the owner composer is
+          not mounted — a permission prompt owns the input, or a non-owner is
+          reading — it sits here between the feed and whatever replaces the
+          composer, outside data-sv-feed so it can't perturb the virtualizer.
+          It renders nothing when the agent has not pinned a state. */}
+      {!ownerComposerMounted && threadStatePanel}
 
       {decisionItem && conversation && (
         <SessionDecisionCard key={decisionItem.key} item={decisionItem} stepper={decisionStepper} />
@@ -17261,7 +17212,7 @@ const ConversationViewInner = (
                   ))}
                 </div>
               ) : null}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingTool={workingTool} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} branchMapNode={treePopoverOpen ? (
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingTool={workingTool} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={threadStatePanel} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray
                   open

@@ -1,7 +1,0 @@
-{
-  "darwin-arm64": "<sha256>",
-  "darwin-x64": "<sha256>",
-  "linux-arm64": "<sha256>",
-  "linux-x64": "<sha256>",
-  "windows-x64": "<sha256>"
-}

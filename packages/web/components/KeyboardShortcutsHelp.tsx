@@ -1,12 +1,14 @@
 import { cloneElement, isValidElement, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { X, Keyboard } from "lucide-react";
 import { formatShortcutParts, formatAcceleratorParts, getShortcutsForAction, getShortcutsByContext } from "../shortcuts";
-import type { ShortcutAction, ShortcutDef } from "../shortcuts";
+import type { ShortcutAction } from "../shortcuts";
 import { HELP_SECTIONS } from "../shortcuts/sections";
+import { SEND_CHORDS } from "../shortcuts/sendChords";
 import { useTrackedStore } from "../store/inboxStore";
 import { useEventListener } from "../hooks/useEventListener";
 import { DESKTOP_SHORTCUTS, getDesktopShortcutConfig } from "../lib/desktop";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
+import { isTriageBarCompact, toggleTriageBarCompact } from "./triage/graduation";
 
 const KEYCAP_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
 
@@ -28,7 +30,10 @@ export function KeyCap({ children, size = "sm" }: { children: React.ReactNode; s
 export function KeyboardShortcutsPanel() {
   const s = useTrackedStore([
     s => s.shortcutsPanelOpen,
+    s => s.clientState.ui?.triage_bar_compact,
+    s => s.clientState.ui?.inbox_shortcuts_hidden,
   ]);
+  const triageBarHidden = isTriageBarCompact(s.clientState.ui);
 
   useEventListener("keydown", (e: KeyboardEvent) => {
     if (s.shortcutsPanelOpen && e.key === "Escape") {
@@ -55,14 +60,27 @@ export function KeyboardShortcutsPanel() {
 
   const sections = useMemo(() => {
     const seen = new Set<string>();
-    const result: { label: string; accent: string; shortcuts: ShortcutDef[] }[] = [];
+    type Row = { key: string; description: string; parts: string[] };
+    const result: { label: string; accent: string; rows: Row[] }[] = [];
     for (const { when, label, accent } of HELP_SECTIONS) {
       const defs = getShortcutsByContext(when).filter(d => {
         if (seen.has(d.action)) return false;
         seen.add(d.action);
         return true;
       });
-      if (defs.length > 0) result.push({ label, accent, shortcuts: defs });
+      if (defs.length > 0) {
+        result.push({ label, accent, rows: defs.map((d) => ({ key: d.action, description: d.description, parts: formatShortcutParts(d) })) });
+      }
+      // The composer's send chords live in their own table (they run from a
+      // focused textarea, outside the registry); they read as the
+      // conversation's companion, so they file right under it.
+      if (when === "conversation") {
+        result.push({
+          label: "Composer",
+          accent: "bg-sol-violet",
+          rows: SEND_CHORDS.map((c) => ({ key: c.accel, description: c.label, parts: formatAcceleratorParts(c.accel) })),
+        });
+      }
     }
     return result;
   }, []);
@@ -103,15 +121,15 @@ export function KeyboardShortcutsPanel() {
               </p>
             </section>
           )}
-          {sections.map(({ label, accent, shortcuts }) => (
+          {sections.map(({ label, accent, rows }) => (
             <section key={label}>
               <div className="flex items-center gap-2 mb-2">
                 <div className={`w-1.5 h-1.5 rounded-full ${accent}`} />
                 <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-sol-text-dim">{label}</h3>
               </div>
               <div className="space-y-0.5">
-                {shortcuts.map((def) => (
-                  <ShortcutRow key={def.action} description={def.description} parts={formatShortcutParts(def)} />
+                {rows.map((row) => (
+                  <ShortcutRow key={row.key} description={row.description} parts={row.parts} />
                 ))}
               </div>
             </section>
@@ -120,12 +138,22 @@ export function KeyboardShortcutsPanel() {
 
         <div className="px-4 py-2.5 border-t border-sol-border/30 text-[10px] text-sol-text-dim flex items-center gap-1.5 whitespace-nowrap">
           <KeyCap size="xs">?</KeyCap> toggles this panel
-          <button
-            onClick={() => s.setTriageNuxOpen(true)}
-            className="ml-auto text-sol-text-dim hover:text-sol-cyan transition-colors"
-          >
-            Replay the tour
-          </button>
+          <span className="ml-auto flex items-center gap-3">
+            {triageBarHidden && (
+              <button
+                onClick={toggleTriageBarCompact}
+                className="text-sol-text-dim hover:text-sol-cyan transition-colors"
+              >
+                Show triage bar
+              </button>
+            )}
+            <button
+              onClick={() => s.setTriageNuxOpen(true)}
+              className="text-sol-text-dim hover:text-sol-cyan transition-colors"
+            >
+              Replay the tour
+            </button>
+          </span>
         </div>
       </div>
     </div>
