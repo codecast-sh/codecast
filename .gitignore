@@ -123,3 +123,6 @@ packages/convex/_*.mjs
 _tok.json
 packages/web/public/_tok.json
 packages/web/tsconfig.*.tmp.json
+
+# tsc incremental state, regenerated on every typecheck
+packages/web/tsconfig.tsbuildinfo
