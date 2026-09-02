@@ -15,15 +15,34 @@ only the transport differs.
 
 ## Install (about 3 minutes)
 
-1. In a terminal: `cast browser extension setup`. It starts the local bridge
-   host and prints a **token** and **port**.
-2. In Chrome, open `chrome://extensions`, turn on **Developer mode** (top
+1. In Chrome, open `chrome://extensions`, turn on **Developer mode** (top
    right), click **Load unpacked**, and select this directory
    (`packages/browser-extension`).
-3. Click the extension's **Details → Extension options**, paste the token and
-   port, hit **Save & connect**. The status line should say `connected`.
-4. Verify from the terminal: `cast browser extension status` → both lines
+2. In a terminal: `cast browser extension setup`. It starts the local bridge
+   host and, on macOS, opens the extension's options page in Chrome with the
+   **token** and **port** already filled in; the page saves them and connects.
+   The status line should say `connected`.
+3. Verify from the terminal: `cast browser extension status` → both lines
    green.
+
+If the page did not open (another OS, or Chrome was not found), `setup`
+prints the same pairing URL to open by hand, and the token and port to paste
+into **Details → Extension options** followed by **Save & connect**. The
+token travels in the URL fragment, which never leaves the browser, and the
+page clears it from the address bar as soon as it has read it.
+
+The pairing URL works because the extension has a fixed ID on every machine:
+`dfimhlggoaabdefnfhlpboehapdaakol`. Chrome names an unpacked extension after
+its install path unless the manifest carries a `key`, so `manifest.json`
+holds a committed public key and the ID is derived from it (SHA-256 of the
+DER key, first 32 hex characters, digits mapped onto the letters a to p; see
+`extensionIdOfKey` in `packages/cli/src/browser/bridge/protocol.ts`, which
+exports the ID as `BRIDGE_EXTENSION_ID`). The matching private key was
+deleted after generation: an unpacked load only needs the public half, and a
+signed `.crx` is not part of this workflow. To change the key, generate a
+new pair with `openssl genrsa 2048` and `openssl rsa -pubout -outform DER`,
+base64 the DER, update `key` and `BRIDGE_EXTENSION_ID`, and delete the
+private key again; the test in `protocol.test.ts` checks the two agree.
 
 Chrome will warn that the extension can use the debugger API. That is the
 point: it is the machinery that lets cast drive tabs.
@@ -42,12 +61,19 @@ opened** (or one you name with `--tab`). It never touches your other tabs.
 
 ## How you can tell a tab is being driven
 
-Two indicators, both per tab:
-
 - Chrome's own banner — *"cast-browser-bridge is debugging this browser"* —
   shown for as long as the debugger is attached. Clicking **Cancel** there
   detaches instantly; the extension notices and lets go.
 - A red `CAST` badge on the extension icon while that tab is attached.
+- A Chrome tab group per session, named after it. Its title gains cycling
+  dots while a command runs and a checkmark for three seconds after. Every
+  tab a session opens joins its group; the group disappears with its last tab.
+- A thin border in the group's colour around the driven page. It never takes
+  a click, it is hidden for every screenshot, and it goes away when the
+  session detaches. It is injected through the debugger session itself, so
+  the extension needs no access to page content beyond the debugger it
+  already holds. If you cancel the banner yourself the border stays on that
+  page until the next navigation.
 
 ## Security posture
 
@@ -72,10 +98,10 @@ Two indicators, both per tab:
 Native messaging would make Chrome spawn and own the host process, inverted
 from what cast needs (many short-lived CLI processes sharing one long-lived
 connection — a local socket would be required anyway). It also needs an
-OS-level manifest naming the extension ID, which for an unpacked extension is
-derived from its install path and so differs per machine. The loopback WS is
-one moving part that serves both sides, and the open socket keeps the MV3
-service worker alive (Chrome 116+).
+OS-level manifest naming the extension ID, installed per user in a
+browser-specific directory. The loopback WS is one moving part that serves
+both sides, and the open socket keeps the MV3 service worker alive (Chrome
+116+).
 
 ## Smoke test
 
@@ -85,9 +111,10 @@ SMOKE_HEADED=1 bun packages/browser-extension/smoke.mjs   # watch it happen
 ```
 
 Launches a **separate** Chrome with a scratch profile (your running browser is
-never touched), loads this extension unpacked, and runs the full verb set
+never touched), loads this extension unpacked, runs the full verb set
 (open, snapshot, find, click, type, press, eval, shot, tabs) through the
-bridge, printing PASS/FAIL per verb. Requires an unbranded build (Chrome for
+bridge, then checks the tab group, the working indicator and the border
+overlay as a raw CDP client, printing PASS/FAIL per check. Requires an unbranded build (Chrome for
 Testing or Chromium — branded Chrome ≥137 ignores `--load-extension`); it
 finds one in the puppeteer/playwright caches, or
 `npx @puppeteer/browsers install chrome@stable`.

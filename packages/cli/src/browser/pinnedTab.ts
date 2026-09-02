@@ -24,9 +24,10 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { CdpConnection } from "./cdp.js";
-import { engineSession, engineStateDir } from "./engine.js";
+import { CdpConnection, cdpHttpUrl, type CdpEndpoint } from "./cdp.js";
+import { engineSession, engineStateDir, isRealSession, REAL_SESSION_SUFFIX } from "./engine.js";
 import { readState } from "./instance.js";
+import { bridgeEndpointIfConfigured } from "./bridge/real.js";
 import { isPidAlive } from "../workspace/chrome.js";
 
 /** The engine daemon for this session, if one is alive. */
@@ -58,14 +59,53 @@ export function writeBoundTarget(session: string, targetId: string, stateDir = e
   fs.renameSync(tmp, file);
 }
 
-async function targetAlive(port: number, targetId: string): Promise<boolean> {
+async function targetAlive(endpoint: CdpEndpoint, targetId: string): Promise<boolean> {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2_000) });
+    const res = await fetch(cdpHttpUrl(endpoint, "/json/list"), { signal: AbortSignal.timeout(2_000) });
     if (!res.ok) return false;
     return ((await res.json()) as Array<{ id: string }>).some((t) => t.id === targetId);
   } catch {
     return false;
   }
+}
+
+/**
+ * The Chrome tab group a real-mode session's tabs sit in, named so the human
+ * can tell whose it is at a glance: `cast ` plus the start of the session id.
+ */
+export function sessionTabGroupTitle(session: string): string {
+  const id = session
+    .slice(0, isRealSession(session) ? -REAL_SESSION_SUFFIX.length : undefined)
+    .replace(/^(?:env|session)-/, "");
+  return `cast ${id.slice(0, 7)}`;
+}
+
+/** The browser a session's pinned tab lives in, and how to create it there. */
+export interface PinnedTabBrowser {
+  endpoint: CdpEndpoint;
+  /** `Target.createTarget` params: always a background tab, never a raise. */
+  create: Record<string, unknown>;
+}
+
+/**
+ * A `-real` session (engine.ts) pins into the human's Chrome through the
+ * bridge, grouped under the session's name; the extra `castGroup` param is
+ * the bridge host's, stripped before the call reaches Chrome. Any other
+ * session pins into the managed Chrome. Null when that browser is not up:
+ * the pinned tab is a courtesy and never starts one.
+ */
+export function pinnedTabBrowser(session: string): PinnedTabBrowser | null {
+  if (isRealSession(session)) {
+    const endpoint = bridgeEndpointIfConfigured();
+    if (!endpoint) return null;
+    return {
+      endpoint,
+      create: { url: "about:blank", background: true, castGroup: { title: sessionTabGroupTitle(session), color: "blue" } },
+    };
+  }
+  const state = readState();
+  if (!state || state.remote || !isPidAlive(state.pid)) return null;
+  return { endpoint: state.port, create: { url: "about:blank", background: true } };
 }
 
 /**
@@ -75,20 +115,15 @@ async function targetAlive(port: number, targetId: string): Promise<boolean> {
  */
 export async function ensurePinnedTab(session = engineSession()): Promise<void> {
   try {
-    const state = readState();
-    if (!state || state.remote || !isPidAlive(state.pid)) return;
+    const browser = pinnedTabBrowser(session);
+    if (!browser) return;
     if (sessionDaemonPid(session)) return;
     const bound = readBoundTarget(session);
-    if (bound && (await targetAlive(state.port, bound))) return;
+    if (bound && (await targetAlive(browser.endpoint, bound))) return;
 
-    const conn = await CdpConnection.fromPort(state.port, 5_000);
+    const conn = await CdpConnection.fromPort(browser.endpoint, 5_000);
     try {
-      const r = await conn.send<{ targetId: string }>(
-        "Target.createTarget",
-        { url: "about:blank", background: true },
-        undefined,
-        5_000,
-      );
+      const r = await conn.send<{ targetId: string }>("Target.createTarget", browser.create, undefined, 5_000);
       if (r?.targetId) writeBoundTarget(session, r.targetId);
     } finally {
       conn.close();

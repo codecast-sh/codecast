@@ -19,10 +19,11 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { CdpConnection, listTargets, type CdpTarget } from "../cdp.js";
+import { CdpConnection, listTargets, type CdpEndpoint, type CdpTarget } from "../cdp.js";
 import { attachToTarget, type InstanceState, type PageSession } from "../instance.js";
 import { browserHome } from "../profile.js";
 import { armRecorder } from "../observe.js";
+import { isRealSession, type EngineOptions } from "../engine.js";
 import { bridgeEndpoint, bridgeStatus, bridgeWsUrl, ensureBridgeHost, readBridgeState, type BridgeState } from "./host.js";
 
 // ---------------------------------------------------------------------------
@@ -74,6 +75,51 @@ export function isRealMode(opts: { real?: boolean; clone?: boolean }, sessionKey
   return stickyTarget(sessionKey) === "real";
 }
 
+/**
+ * Pull `--real` / `--clone` out of a raw argument list. Passthrough verbs
+ * accept unknown options and forward them to the engine, so these two must
+ * be taken off the line here or the engine would receive them.
+ */
+export function splitTargetFlags(args: string[]): { real?: boolean; clone?: boolean; args: string[] } {
+  const real = args.includes("--real") || undefined;
+  const clone = args.includes("--clone") || undefined;
+  return { real, clone, args: args.filter((a) => a !== "--real" && a !== "--clone") };
+}
+
+// ---------------------------------------------------------------------------
+// The bridge as the engine's browser
+// ---------------------------------------------------------------------------
+
+/** The bridge config, or the setup instruction. Sync, for callers that only
+ *  need the port and token (the host itself is started on `open`). */
+export function requireBridgeConfigured(): BridgeState {
+  const state = readBridgeState();
+  if (!state?.token) {
+    throw new Error("the extension bridge is not set up — run `cast browser extension setup` first");
+  }
+  return state;
+}
+
+/** The bridge's CDP face for raw calls (reaper, pinned tab), or null when
+ *  the bridge was never set up and there is nothing to reach. */
+export function bridgeEndpointIfConfigured(): CdpEndpoint | null {
+  const state = readBridgeState();
+  return state?.token ? bridgeEndpoint(state) : null;
+}
+
+/**
+ * The engine options that reach the browser behind a session key: a `-real`
+ * key (engine.ts realSessionKey) drives the bridge, any other key drives the
+ * managed Chrome, which runEngine reaches on its own. Every engine call for a
+ * session must go through this so the flags never differ between calls —
+ * the daemon resets its tab when they do.
+ */
+export function engineBrowserFor(session: string): EngineOptions & { session: string } {
+  if (!isRealSession(session)) return { session };
+  const state = requireBridgeConfigured();
+  return { session, port: state.port, cdp: bridgeWsUrl(state) };
+}
+
 export function rememberRealTab(sessionKey: string | null, targetId: string): void {
   const s = readRealState();
   const tabs = { ...(s.tabsBySession ?? {}) };
@@ -117,9 +163,7 @@ export function realTabOwnership(sessionKey: string | null): { mine?: string; ot
  * context — a host with no extension can only ever answer errors.
  */
 export async function requireRealBridge(): Promise<BridgeState> {
-  if (!readBridgeState()?.token) {
-    throw new Error("the extension bridge is not set up — run `cast browser extension setup` first");
-  }
+  requireBridgeConfigured();
   const state = await ensureBridgeHost();
   const status = await bridgeStatus(state);
   if (!status.extensionConnected) {

@@ -1,13 +1,34 @@
 const $ = (id) => document.getElementById(id);
+const DEFAULT_PORT = 41729;
+
+async function save(token, port) {
+  await chrome.storage.local.set({ bridge: { token, port } });
+  await chrome.runtime.sendMessage({ op: "reconnect" });
+  setTimeout(refreshStatus, 600);
+}
+
+/**
+ * `cast browser extension setup` opens this page as
+ * options.html#token=T&port=P so nothing has to be pasted. A fragment never
+ * leaves the browser, and it is cleared from the address bar as soon as it
+ * is read so the token does not linger in history or a screenshot.
+ */
+async function pairFromFragment() {
+  const frag = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const token = (frag.get("token") || "").trim();
+  if (!token) return false;
+  const port = parseInt(frag.get("port") || "", 10) || DEFAULT_PORT;
+  history.replaceState(null, "", location.pathname);
+  await save(token, port);
+  $("notice").textContent = `Paired from the terminal on port ${port}. Connecting.`;
+  $("notice").hidden = false;
+  return true;
+}
 
 async function load() {
   const { bridge } = await chrome.storage.local.get("bridge");
-  if (bridge) {
-    $("token").value = bridge.token || "";
-    $("port").value = bridge.port || 41729;
-  } else {
-    $("port").value = 41729;
-  }
+  $("token").value = (bridge && bridge.token) || "";
+  $("port").value = (bridge && bridge.port) || DEFAULT_PORT;
 }
 
 async function refreshStatus() {
@@ -22,14 +43,10 @@ async function refreshStatus() {
   }
 }
 
-$("save").addEventListener("click", async () => {
-  const token = $("token").value.trim();
-  const port = parseInt($("port").value, 10) || 41729;
-  await chrome.storage.local.set({ bridge: { token, port } });
-  await chrome.runtime.sendMessage({ op: "reconnect" });
-  setTimeout(refreshStatus, 600);
+$("save").addEventListener("click", () => {
+  save($("token").value.trim(), parseInt($("port").value, 10) || DEFAULT_PORT);
 });
 
-load();
+pairFromFragment().then(load);
 refreshStatus();
 setInterval(refreshStatus, 2000);

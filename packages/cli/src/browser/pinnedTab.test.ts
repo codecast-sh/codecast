@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { readBoundTarget, sessionDaemonPid, writeBoundTarget } from "./pinnedTab.js";
+import { pinnedTabBrowser, readBoundTarget, sessionDaemonPid, sessionTabGroupTitle, writeBoundTarget } from "./pinnedTab.js";
+import { writeBridgeState } from "./bridge/host.js";
 
 const TARGET = "2BE86883491FD502B8D986C164423006";
 
@@ -53,5 +54,48 @@ describe("sessionDaemonPid", () => {
     fs.writeFileSync(path.join(dir, "dead.pid"), "999999999");
     expect(sessionDaemonPid("dead", dir)).toBeNull();
     expect(sessionDaemonPid("missing", dir)).toBeNull();
+  });
+});
+
+describe("pinnedTabBrowser", () => {
+  let home: string;
+  let prevEnv: string | undefined;
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "pinned-tab-home-"));
+    prevEnv = process.env.CODECAST_DIR;
+    process.env.CODECAST_DIR = home;
+  });
+  afterEach(() => {
+    if (prevEnv === undefined) delete process.env.CODECAST_DIR;
+    else process.env.CODECAST_DIR = prevEnv;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  test("a -real session pins into the bridge, in the background, under the session's tab group", () => {
+    writeBridgeState({ port: 47123, token: "tok" });
+    expect(pinnedTabBrowser("env-1234567890-real")).toEqual({
+      endpoint: { port: 47123, token: "tok" },
+      create: { url: "about:blank", background: true, castGroup: { title: "cast 1234567", color: "blue" } },
+    });
+  });
+
+  test("a -real session with no bridge set up pins nowhere", () => {
+    expect(pinnedTabBrowser("env-abc-real")).toBeNull();
+  });
+
+  test("a plain session never pins into the bridge", () => {
+    writeBridgeState({ port: 47123, token: "tok" });
+    // No managed browser runs under this CODECAST_DIR, so there is nothing to
+    // pin into; the point is that the bridge is not offered instead.
+    expect(pinnedTabBrowser("env-abc")).toBeNull();
+  });
+});
+
+describe("sessionTabGroupTitle", () => {
+  test("names the group after the session id, with or without the real suffix", () => {
+    expect(sessionTabGroupTitle("env-941b0bbd-1234-real")).toBe("cast 941b0bb");
+    expect(sessionTabGroupTitle("session-941b0bbd")).toBe("cast 941b0bb");
+    expect(sessionTabGroupTitle("pane--12-real")).toBe("cast pane--1");
+    expect(sessionTabGroupTitle("default")).toBe("cast default");
   });
 });
