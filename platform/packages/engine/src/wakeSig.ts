@@ -68,10 +68,23 @@ export function makeCollectionSig<T>(
 ): (collection: Record<string, T>) => string {
   let lastRef: unknown;
   let lastSig = "";
+  const projectedByRow = new WeakMap<object, string>();
   return (collection: Record<string, T>): string => {
     if (collection === lastRef) return lastSig;
     const parts: string[] = [];
-    for (const id in collection) parts.push(project(collection[id]));
+    for (const id in collection) {
+      const row = collection[id];
+      if (row !== null && typeof row === "object") {
+        let projected = projectedByRow.get(row);
+        if (projected === undefined) {
+          projected = project(row);
+          projectedByRow.set(row, projected);
+        }
+        parts.push(projected);
+      } else {
+        parts.push(project(row));
+      }
+    }
     lastRef = collection;
     // Newline-joined so two distinct collections can't concatenate into one
     // string; project() outputs never contain a newline.

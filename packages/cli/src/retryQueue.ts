@@ -30,6 +30,7 @@ import {
   type LogLevel,
   parseRateLimitDelay,
 } from "@platform/cli-kit/retryQueue";
+import { SHUTDOWN_FLUSH_MS } from "./shutdownBudget.js";
 
 export { parseRateLimitDelay };
 export type { LogLevel };
@@ -454,8 +455,8 @@ export class RetryQueue {
   /** Flush the queue to disk on demand. Used after an executor mutates an op's
    *  params in place (e.g. offloading image base64 → storageId) so the shrunk
    *  payload survives a restart and isn't re-processed as raw base64. */
-  persistNow(): void {
-    this.queue.persistNow();
+  persistNow(opts: { sync?: boolean } = {}): void {
+    this.queue.persistNow(opts);
   }
 
   getQueueSize(): number {
@@ -546,4 +547,48 @@ export class RetryQueue {
       oldestPendingMs,
     };
   }
+}
+
+/** How long shutdown waits for the queue to drain before giving up on it.
+ *  Defined next to the stop deadline it has to fit inside. */
+export { SHUTDOWN_FLUSH_MS };
+
+/** The slice of the queue a shutdown flush touches. Narrow on purpose so a
+ *  test can hand this function a plain object. */
+export interface ShutdownFlushable {
+  getQueueSize(): number;
+  notifyConnectionRestored(): void;
+  persistNow(opts?: { sync?: boolean }): void;
+}
+
+/**
+ * Drain the retry queue on the way out instead of abandoning it.
+ *
+ * The old shutdown logged "Dropping N pending retry operations", which was
+ * never true: the generic queue flushes to disk on process exit, so the ops
+ * came back on the next boot. What was actually lost is time. Every queued
+ * message waited out a whole daemon restart before its first retry. Pulling
+ * the retries forward and giving them a few seconds delivers most of them now.
+ *
+ * The budget is bounded so nothing outside ends shutdown for us. It has to fit
+ * under two deadlines, and the tighter one is the caller's: `cast stop` sends
+ * SIGKILL DAEMON_STOP_SIGKILL_MS after its SIGTERM, and the daemon's own hard
+ * exit is 15s. Whatever is left is persisted synchronously and returned.
+ */
+export async function flushRetryQueueForShutdown(
+  queue: ShutdownFlushable,
+  timeoutMs = SHUTDOWN_FLUSH_MS,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): Promise<number> {
+  if (queue.getQueueSize() === 0) return 0;
+  // Pulls every nextRetryAt to now and schedules the check that runs them.
+  queue.notifyConnectionRestored();
+  const pollMs = 100;
+  for (let waited = 0; waited < timeoutMs; waited += pollMs) {
+    await sleep(pollMs);
+    if (queue.getQueueSize() === 0) break;
+  }
+  const remaining = queue.getQueueSize();
+  queue.persistNow({ sync: true });
+  return remaining;
 }

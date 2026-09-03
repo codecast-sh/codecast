@@ -83,6 +83,43 @@ export function isAgentCommand(command: string): boolean {
   return isRecognizedAgentComm(base);
 }
 
+/** Program names that can be argv0 of a daemon. Anything else naming `_daemon`
+ *  or a daemon file is talking ABOUT the daemon, not running it. */
+const DAEMON_ARGV0_RE = /^(codecast|cast|bun|node|deno)(\.exe)?$/;
+
+/**
+ * Is this command line a codecast daemon? Matches all three install shapes:
+ * source (`bun .../packages/cli/src/daemon.ts _daemon`), built JS
+ * (`node .../dist/daemon.js`) and the compiled binary (`codecast -- _daemon`).
+ *
+ * Two tests keep the neighbours out, and both are load bearing because the
+ * split brain sweep KILLS what this matches. The program has to be one of ours
+ * or an interpreter, which rejects `nginx: master ... -g daemon off;`. And the
+ * daemon token has to sit in the first argument position, which rejects every
+ * cast command that merely mentions it: `cast send jx7c6zk restart the _daemon
+ * now` and `cast blame packages/cli/src/daemon.ts` are ordinary commands, and
+ * ps flattens quoting so a message body is just more argv tokens.
+ *
+ * It also deliberately misses `codecast _watchdog` and the worker shape
+ * `codecast _worker <kind>`: those are meant to live.
+ */
+export function isDaemonCommand(command: string): boolean {
+  const argv = command.trim().split(/\s+/).filter((t) => t.length > 0);
+  if (argv.length < 2) return false;
+  const argv0 = argv[0].split("/").pop() ?? "";
+  if (!DAEMON_ARGV0_RE.test(argv0)) return false;
+  // Interpreter flags (`bun --smol`, `node --enable-source-maps`) and the
+  // argument separator sit before the entry point; nothing else may.
+  const first = argv.slice(1).find((t) => t !== "--" && !t.startsWith("-"));
+  if (!first) return false;
+  return first === "_daemon" || first.endsWith("/daemon.ts") || first.endsWith("/daemon.js");
+}
+
+/** Pids of every other daemon process on this machine. */
+export function findOtherDaemonPids(procs: ProcRow[], selfPid = process.pid): number[] {
+  return procs.filter((p) => p.pid !== selfPid && isDaemonCommand(p.command)).map((p) => p.pid);
+}
+
 export interface StaleTmuxServer {
   pid: number;
   command: string;

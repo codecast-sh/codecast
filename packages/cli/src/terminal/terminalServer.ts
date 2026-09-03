@@ -141,19 +141,28 @@ export function originAllowed(origin: string | undefined, opts: TerminalServerOp
   return opts.allowOrigin?.(origin) ?? false;
 }
 
+// A constant-time compare of two zero-length buffers reports a match, so an
+// unconfigured server would accept a caller presenting no token at all. The
+// daemon's token is state now (it loads from disk early in boot), so "not yet
+// loaded" is a state a caller can reach; make it authenticate nobody.
+function presentedTokenMatches(presented: string, opts: TerminalServerOptions): boolean {
+  return opts.token.length > 0 && timingSafeEqual(presented, opts.token);
+}
+
 /** Constant-time check of a token presented on a WS hello frame. */
 export function tokenMatches(token: unknown, opts: TerminalServerOptions): boolean {
-  return typeof token === "string" && timingSafeEqual(token, opts.token);
+  return typeof token === "string" && presentedTokenMatches(token, opts);
 }
 
 /** The whole auth envelope for one loopback HTTP request: an allowed origin AND
- *  the per-boot bearer token. Every feature mounted on this server (terminal,
+ *  the bearer token the daemon keeps on disk (loopbackIdentity.ts, rotated with
+ *  `cast daemon rotate-token`). Every feature mounted on this server (terminal,
  *  vault) goes through this one check — a route that authenticated differently
  *  would be the hole in a server that can read the user's disk. */
 export function authorizeLocalRequest(req: http.IncomingMessage, opts: TerminalServerOptions): boolean {
   const auth = req.headers.authorization ?? "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  return originAllowed(req.headers.origin, opts) && timingSafeEqual(token, opts.token);
+  return originAllowed(req.headers.origin, opts) && presentedTokenMatches(token, opts);
 }
 
 export function corsHeaders(origin: string | undefined, opts: TerminalServerOptions): Record<string, string> {
@@ -470,8 +479,4 @@ export function clampDim(value: unknown, max: number, min = 2): number {
   const n = typeof value === "number" ? Math.floor(value) : NaN;
   if (!Number.isFinite(n)) return Math.max(80, min);
   return Math.min(Math.max(n, min), max);
-}
-
-export function generateTerminalToken(): string {
-  return crypto.randomBytes(32).toString("hex");
 }

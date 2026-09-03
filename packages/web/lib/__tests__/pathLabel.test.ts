@@ -105,3 +105,31 @@ describe("tabNeedsUrlRestore — inbox/conversation spellings are the same conte
     expect(tabNeedsUrlRestore("/conversation/jx7abc", "/tasks")).toBe(true);
   });
 });
+
+describe("pathLabel for the repository pages", () => {
+  it("names the repository index", () => {
+    expect(pathLabel("/repo")).toBe("Repositories");
+  });
+
+  it("names a repository by its own name, not its owner", () => {
+    expect(pathLabel("/repo/codecast-sh/codecast")).toBe("codecast");
+    expect(pathLabel("/repo/codecast-sh/codecast?branch=main")).toBe("codecast");
+  });
+
+  it("names a file or directory by what the query says is open", () => {
+    expect(pathLabel("/repo/o/n/blob/main?path=packages%2Fweb%2Flib%2FcodeLanguage.ts")).toBe(
+      "codeLanguage.ts",
+    );
+    expect(pathLabel("/repo/o/n/tree/main?path=packages%2Fweb")).toBe("web");
+    // A tree at the root names no path, so the repository is the honest answer.
+    expect(pathLabel("/repo/o/n/tree/main")).toBe("n");
+  });
+
+  it("shortens a commit sha instead of showing all forty characters", () => {
+    expect(pathLabel("/commit/o/n/034e8d4c8cf2749a7d14fe6a39d8ec6fb471f21c")).toBe("034e8d4");
+  });
+
+  it("names a pull request by its number", () => {
+    expect(pathLabel("/pr/codecast-sh/shepherd-lab/2")).toBe("PR #2");
+  });
+});

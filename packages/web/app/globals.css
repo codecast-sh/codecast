@@ -1705,6 +1705,18 @@ pre[class*="language-"] {
     background 120ms, transform 120ms;
 }
 
+/* A diff row the reader has selected to comment on. The wash sits under the
+   added/removed tint rather than replacing it, so a selected line still reads as
+   added or removed, and the left edge marks the run's extent at a glance. */
+.cc-diff-selected {
+  background-image: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--sol-cyan) 16%, transparent),
+    color-mix(in srgb, var(--sol-cyan) 10%, transparent)
+  );
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--sol-cyan) 70%, transparent);
+}
+
 /* Mirror of .cc-block-quote on the RIGHT gutter: anchor a teammate comment thread
    to this message. Carries a count badge when the message already has comments. */
 .cc-block-comment {
