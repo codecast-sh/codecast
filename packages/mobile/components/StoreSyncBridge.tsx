@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { AppState } from 'react-native';
 import { useSyncCore } from '@codecast/web/hooks/useSyncCore';
 import { emitSyncWake } from '@codecast/web/hooks/syncWake';
+import { flushPersistence } from '@codecast/web/store/idbCache';
 
 // Hosts the inbox store's server-sync hooks OUTSIDE any screen. The live
 // listInboxSessions subscription re-renders whichever component holds it on
@@ -28,6 +29,9 @@ export function StoreSyncBridge() {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') emitSyncWake();
+      // Scheduled blob writes (idbCache.native) ride a short delay; iOS may
+      // suspend or kill a backgrounded app at any moment, so land them now.
+      else void flushPersistence();
     });
     return () => sub.remove();
   }, []);

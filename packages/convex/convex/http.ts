@@ -7,6 +7,7 @@ import { auth } from "./auth";
 import { internal, api } from "./_generated/api";
 import { callback as googleOAuthCallback, GOOGLE_CALLBACK_PATH } from "./googleOAuth";
 import { callback as connectorCallback, CONNECTOR_CALLBACK_PATH } from "./oauthConnectors";
+import { verifyLinearSignature, linearDeliveryId } from "./linearWebhooks";
 
 const http = httpRouter();
 
@@ -371,7 +372,22 @@ http.route({
       });
     }
 
-    if (["pull_request", "push", "issue_comment", "pull_request_review", "pull_request_review_comment"].includes(eventType)) {
+    // Every kind a processor in githubWebhooks.ts consumes. The check events
+    // need the App's "checks" permission; until it is granted GitHub simply
+    // never sends them, and nothing here changes.
+    if ([
+      "pull_request",
+      "push",
+      "issues",
+      "issue_comment",
+      "pull_request_review",
+      "pull_request_review_comment",
+      "pull_request_review_thread",
+      "check_run",
+      "check_suite",
+      "status",
+      "workflow_run",
+    ].includes(eventType)) {
       const action = payload.action;
       const result = await ctx.runMutation(internal.githubWebhooks.storeWebhookEvent, {
         delivery_id: deliveryId,
@@ -387,6 +403,70 @@ http.route({
     }
 
     return new Response(JSON.stringify({ success: true, ignored: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }),
+});
+
+// Linear webhooks (issue sync, docs/architecture/issue-sync.md S6). Same shape
+// as the GitHub App route above: verify the raw body, refuse anything we cannot
+// verify, hand the payload to a mutation that dedupes and schedules, answer 200
+// fast. Linear retries a non-2xx and disables an endpoint that keeps failing, so
+// nothing slow or fallible belongs in this handler.
+http.route({
+  path: "/api/webhooks/linear",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const rawBody = await request.text();
+    const secret = process.env.LINEAR_WEBHOOK_SECRET;
+
+    // Missing secret is OUR misconfiguration, not a bad caller: 500 asks Linear
+    // to retry once it is set, where a 401 would tell it to give up for good.
+    if (!secret) {
+      console.error("[linear webhook] LINEAR_WEBHOOK_SECRET not configured; refusing webhook");
+      return new Response(JSON.stringify({ error: "Webhook not configured" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (!(await verifyLinearSignature(rawBody, request.headers.get("linear-signature"), secret))) {
+      return new Response(JSON.stringify({ error: "Invalid signature" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    let payload: any;
+    try {
+      payload = JSON.parse(rawBody);
+    } catch {
+      return new Response(JSON.stringify({ error: "Invalid JSON" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // Replay window. The signature alone would let a captured delivery be
+    // replayed forever; Linear signs the timestamp INTO the body, so a stale
+    // one cannot be rewritten without breaking the HMAC.
+    const ts = Number(payload?.webhookTimestamp);
+    if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > 60_000) {
+      return new Response(JSON.stringify({ error: "Stale timestamp" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    const deliveryId = linearDeliveryId(payload);
+    const result = await ctx.runMutation(internal.linearWebhooks.storeWebhookEvent, {
+      delivery_id: deliveryId,
+      event_type: String(payload.type ?? "unknown"),
+      action: typeof payload.action === "string" ? payload.action : undefined,
+      payload: rawBody,
+    });
+
+    return new Response(JSON.stringify(result), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
@@ -2671,7 +2751,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, version, platform, pid, autostart_enabled, has_tmux, local_project_roots, git_plane, git_pubkey, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, daemon_started_at, loop_freeze_ms, device_id, device_label, device_hostname, is_remote_device, input_idle_ms, cc_accounts, codex_usage, codex_accounts, provider_key_pubkey, managed_provider_ids, settings, model_inventory } = body;
+      const { api_token, version, platform, pid, autostart_enabled, has_tmux, local_project_roots, git_plane, git_pubkey, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, daemon_started_at, loop_freeze_ms, loop_freeze_1h_ms, loop_freeze_max_ms, loop_freeze_top, device_id, device_label, device_hostname, is_remote_device, input_idle_ms, cc_accounts, codex_usage, codex_accounts, provider_key_pubkey, managed_provider_ids, settings, model_inventory } = body;
 
       if (!api_token || !version || !platform) {
         return new Response(JSON.stringify({ error: "Missing required fields" }), {
@@ -2696,6 +2776,9 @@ http.route({
         pending_sync_conversations,
         daemon_started_at,
         loop_freeze_ms,
+        loop_freeze_1h_ms,
+        loop_freeze_max_ms,
+        loop_freeze_top,
         device_id,
         device_label,
         device_hostname,
@@ -3965,6 +4048,45 @@ cliRoute("/cli/work/snippet", async (ctx, body) => {
 cliRoute("/cli/work/heartbeat", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.heartbeat, body);
 });
+cliRoute("/cli/work/spawn", async (ctx, body) => {
+  return await ctx.runMutation(api.tasks.spawnForTask, body);
+});
+
+// ── Integrations (cast integrations …) ──
+//
+// Connect/disconnect delegate to integrations.ts, which resolves the caller
+// from the api_token and then calls the SAME flow the web buttons call. The
+// issue-sync source verbs are issueSync's own cli* functions, so the CLI and
+// the /settings/integrations page act on one implementation each.
+cliRoute("/cli/integrations/list", async (ctx, body) => {
+  // appConnections.listConnections already authenticates by api_token, so the
+  // CLI reads the exact rows the integrations page renders.
+  return await ctx.runQuery(api.appConnections.listConnections, body);
+});
+cliRoute("/cli/integrations/connect-url", async (ctx, body) => {
+  return await ctx.runAction(api.integrations.cliConnectUrl, body);
+});
+cliRoute("/cli/integrations/disconnect", async (ctx, body) => {
+  return await ctx.runAction(api.integrations.cliDisconnect, body);
+});
+cliRoute("/cli/integrations/sources", async (ctx, body) => {
+  return await ctx.runQuery(api.issueSync.cliListSources, body);
+});
+cliRoute("/cli/integrations/candidates", async (ctx, body) => {
+  return await ctx.runAction(api.issueSync.cliListRemoteCandidates, body);
+});
+cliRoute("/cli/integrations/add-source", async (ctx, body) => {
+  return await ctx.runMutation(api.issueSync.cliAddSource, body);
+});
+cliRoute("/cli/integrations/update-source", async (ctx, body) => {
+  return await ctx.runMutation(api.issueSync.cliUpdateSource, body);
+});
+cliRoute("/cli/integrations/remove-source", async (ctx, body) => {
+  return await ctx.runMutation(api.issueSync.cliRemoveSource, body);
+});
+cliRoute("/cli/integrations/sync", async (ctx, body) => {
+  return await ctx.runAction(api.issueSync.cliSyncNow, body);
+});
 
 cliRoute("/cli/work/mine", async (ctx, body) => {
   return await ctx.runAction(internal.taskMining.backfillDocsFromMessages, { user_id: body.user_id });
@@ -4187,6 +4309,38 @@ cliRoute("/cli/sessions/rename", async (ctx, body) => ctx.runMutation(api.conver
 // clears it. body: { api_token, session, text? }.
 cliRoute("/cli/sessions/state/set", async (ctx, body) => ctx.runMutation(api.conversations.setThreadState, body));
 cliRoute("/cli/sessions/state/get", async (ctx, body) => ctx.runQuery(api.conversations.getThreadState, body));
+
+// Pull requests (cast pr): list, read, follow and steer a PR from a shell. Each
+// route takes the same locator: a reference the caller typed plus the
+// repository, branch and session the CLI already knew. prCli.resolve
+// decides which pull request that names. body: { api_token, ref?, repository?,
+// number?, session?, branch?, ... }.
+cliRoute("/cli/pr/ls", async (ctx, body) => ctx.runQuery((api as any).prCli.ls, body));
+cliRoute("/cli/pr/show", async (ctx, body) => ctx.runQuery((api as any).prCli.show, body));
+cliRoute("/cli/pr/events", async (ctx, body) => ctx.runQuery((api as any).prCli.events, body));
+cliRoute("/cli/pr/resolve", async (ctx, body) => ctx.runQuery((api as any).prCli.resolve, body));
+cliRoute("/cli/pr/shepherd", async (ctx, body) => ctx.runMutation((api as any).prCli.shepherd, body));
+// Commenting reuses codeComments.create wholesale: it records the comment
+// against the session, writes the timeline event and mirrors it to GitHub. The
+// only thing prCli adds is turning the caller's reference into a pull request.
+cliRoute("/cli/pr/comment", async (ctx, body) => {
+  const { content, file_path, line_number, session, ...locator } = body;
+  const resolved = await ctx.runQuery((api as any).prCli.resolve, locator);
+  const pr = resolved?.pull_request;
+  if (!pr) return { error: "No pull request matched that reference" };
+  const created = await ctx.runMutation((api as any).codeComments.create, {
+    api_token: body.api_token,
+    repository: pr.repository,
+    pull_request_id: pr.id,
+    ref: pr.head_sha ?? undefined,
+    file_path,
+    line_number,
+    content,
+    conversation_ref: session,
+    author_kind: "agent",
+  });
+  return { repository: pr.repository, number: pr.number, url: pr.url, comment_id: created?.comment_id };
+});
 
 cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOwnership.addSessionOwner, body));
 cliRoute("/cli/sessions/disown", async (ctx, body) => ctx.runMutation(api.sessionOwnership.removeSessionOwner, body));

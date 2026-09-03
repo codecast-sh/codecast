@@ -27,7 +27,7 @@ import { Switch } from "../../../components/ui/switch";
 import { SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { toast } from "sonner";
 import { Check, Copy, KeyRound, Laptop, Pin, TimerReset, Trash2, Zap } from "lucide-react";
-import { AccountUsageBars } from "../../../components/AccountUsageMeter";
+import { AccountUsageBars, LoginExpiredBadge, UsageRefreshButton } from "../../../components/AccountUsageMeter";
 import { formatAgo } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useAccountRecoveryToggles } from "../../../hooks/useAccountRecoveryToggles";
@@ -46,6 +46,7 @@ type DeviceAccounts = {
     subscription?: string;
     usage?: CcUsage;
     token?: { stored_at: number; expires_at: number };
+    login_expired_at?: number;
   }>;
   auto_switch: boolean;
   /** Absent on servers that predate the field — treated as on. */
@@ -370,6 +371,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
             <span className={`h-1.5 w-1.5 rounded-full ${online ? "bg-sol-green" : "bg-sol-border"}`} />
             {online ? "online" : "offline"}
           </span>
+          {!device.is_remote && <UsageRefreshButton device={device} />}
         </>
       }
     >
@@ -397,6 +399,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                     {plan}
                   </span>
                 )}
+                <LoginExpiredBadge profile={p} />
                 {(() => {
                   const badge = tokenBadge(p, now);
                   return badge ? (

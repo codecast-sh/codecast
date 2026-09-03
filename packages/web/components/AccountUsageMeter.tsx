@@ -5,6 +5,11 @@
 // usage credits). Shared by the header chip's popover and the Claude Accounts
 // settings page so both always tell the same story.
 
+import { useEffect, useRef, useState } from "react";
+import { useMutation } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
+import { toast } from "sonner";
+import { RefreshCw } from "lucide-react";
 import { isWindowRolled, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { formatAgo, formatCountdown } from "@codecast/shared/contracts";
 import { usageTone } from "../lib/usageTone";
@@ -126,5 +131,84 @@ export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: 
       )}
       {stale && <div className="pt-0.5 text-[10px] text-sol-text-dim">as of {formatAgo(now - usage.fetched_at)}</div>}
     </div>
+  );
+}
+
+/** "login expired" next to a profile whose saved login the daemon could not
+ * refresh: switching there lands on a dead credential until that account
+ * signs in again. Renders nothing for a live profile. */
+export function LoginExpiredBadge({ profile }: { profile: { login_expired_at?: number | null } }) {
+  if (!profile.login_expired_at) return null;
+  return (
+    <span
+      className="shrink-0 rounded bg-sol-red/10 px-1.5 py-0.5 text-[10px] text-sol-red"
+      title="The saved login for this account no longer works — sign into it in Claude Code once and it is re-saved"
+    >
+      login expired
+    </span>
+  );
+}
+
+// A refresh request is "in flight" until the daemon's heartbeat moves some
+// profile's reading, or this long passes (the command's own TTL is 5 min;
+// past this the click has visibly failed and the button should be usable).
+const REFRESH_WAIT_MS = 30_000;
+
+type RefreshableDevice = {
+  device_id: string;
+  online?: boolean;
+  is_remote?: boolean;
+  profiles: Array<{ usage?: CcUsage | null }>;
+  codex_accounts?: { profiles: Array<{ usage?: CcUsage | null }> } | null;
+};
+
+function newestReading(device: RefreshableDevice): number {
+  const all = [...device.profiles, ...(device.codex_accounts?.profiles ?? [])];
+  return all.reduce((max, p) => Math.max(max, p.usage?.fetched_at ?? 0), 0);
+}
+
+/** Refresh every account's usage on one machine now. Shared by the header
+ * chip's panel and the Claude Accounts settings page. The daemon answers by
+ * heartbeating fresh readings; the spinner runs until one lands. */
+export function UsageRefreshButton({ device, className }: { device: RefreshableDevice; className?: string }) {
+  const requestRefresh = useMutation(api.accountSwitch.requestUsageRefresh);
+  const [awaiting, setAwaiting] = useState<number | null>(null); // the newest reading at click time
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const newest = newestReading(device);
+  const spinning = awaiting !== null && newest <= awaiting;
+  useEffect(() => {
+    if (!spinning && awaiting !== null) setAwaiting(null);
+  }, [spinning, awaiting]);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const online = device.online !== false && device.is_remote !== true;
+
+  const click = async () => {
+    if (spinning) return;
+    setAwaiting(newest);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setAwaiting(null), REFRESH_WAIT_MS);
+    try {
+      await requestRefresh({ device_id: device.device_id });
+    } catch (err) {
+      setAwaiting(null);
+      toast.error(err instanceof Error ? err.message : "Refresh failed");
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={click}
+      disabled={!online || spinning}
+      aria-label="Refresh usage for every account on this machine"
+      title={
+        online
+          ? "Refresh usage for every account on this machine"
+          : "The daemon on this machine is offline"
+      }
+      className={`shrink-0 rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-alt hover:text-sol-text disabled:opacity-50 disabled:hover:bg-transparent ${className ?? ""}`}
+    >
+      <RefreshCw className={`h-3 w-3 ${spinning ? "animate-spin" : ""}`} />
+    </button>
   );
 }

@@ -10,19 +10,20 @@
 
 import { useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { KeyRound, TimerReset, Zap, ZapOff } from "lucide-react";
 import { ClaudeIcon, OpenAIIcon } from "./BrandIcons";
 import { Switch } from "./ui/switch";
 import { useCoarseNow } from "../hooks/useCoarseNow";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useAccountRecoveryToggles } from "../hooks/useAccountRecoveryToggles";
 import { useTrackedStore } from "../store/inboxStore";
 import { exhaustionBannerCopy, isExhaustionCurrent, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { formatAgo } from "@codecast/shared/contracts";
 import { usageTone } from "../lib/usageTone";
-import { AccountUsageBars } from "./AccountUsageMeter";
+import { AccountUsageBars, LoginExpiredBadge, UsageRefreshButton } from "./AccountUsageMeter";
 
 type ProfileRow = {
   name: string;
@@ -30,6 +31,7 @@ type ProfileRow = {
   tier?: string;
   subscription?: string;
   usage?: CcUsage;
+  login_expired_at?: number;
 };
 
 function MiniMeter({ percent }: { percent: number }) {
@@ -83,7 +85,10 @@ function ProviderSegment({
 }
 
 export function AccountUsageChip() {
-  const data = useQuery(api.accountSwitch.listAccountProfiles, {});
+  // No-throw: the chip lives in always-mounted chrome, so a backend that can't
+  // serve this must cost the chip, not the surface hosting it. Undefined reads
+  // as "no accounts yet", which the render below already handles.
+  const { data } = useQueryNoThrow(api.accountSwitch.listAccountProfiles, {});
   const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
   const router = useRouter();
   const now = useCoarseNow(30_000);
@@ -259,6 +264,7 @@ export function AccountUsageChip() {
                 {e.p.name}
                 {(e.p.subscription ?? e.p.tier) ? ` · ${e.p.subscription ?? e.p.tier}` : ""}
               </span>
+              <LoginExpiredBadge profile={e.p} />
               {e.isActive ? (
                 <span className="shrink-0 text-[10px] font-medium text-sol-green">active</span>
               ) : e.provider === "claude" ? (
@@ -344,6 +350,7 @@ export function AccountUsageChip() {
             <KeyRound className="h-3.5 w-3.5 text-sol-cyan" />
             Model usage
             <span className="ml-auto font-normal text-[10px] text-sol-text-dim">{device.label}</span>
+            <UsageRefreshButton device={device} />
           </div>
         </div>
 

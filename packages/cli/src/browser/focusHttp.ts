@@ -2,12 +2,13 @@
  * Loopback route that raises a driven-browser tab: POST /browser/focus?tab=<id>.
  *
  * Mounted on the daemon's hook server next to the terminal and vault routes,
- * behind the same origin + per-boot-token envelope (authorizeLocalRequest).
- * The web's "open tab" link resolves this server through the existing
- * get_terminal_endpoint discovery, then asks it to focus the tab a `cast
- * browser` row printed (tabId.ts). Loopback-only by construction, which IS the
- * "same machine" test: a viewer on another machine reaches their own daemon,
- * whose browsers have no such tab, and gets a clean 404 to fall back on.
+ * behind the same envelope of an allowed origin and the daemon's persisted
+ * loopback token (authorizeLocalRequest). The web's "open tab" link resolves
+ * this server through the existing get_terminal_endpoint discovery, then asks
+ * it to focus the tab a `cast browser` row printed (tabId.ts). Loopback-only by
+ * construction, which IS the "same machine" test: a viewer on another machine
+ * reaches their own daemon, whose browsers have no such tab, and gets a clean
+ * 404 to fall back on.
  *
  * Engine-agnostic: browsers are found through FocusEngine, and the route asks
  * each in turn. Two ship by default — the built-in driver's state file (cheap,

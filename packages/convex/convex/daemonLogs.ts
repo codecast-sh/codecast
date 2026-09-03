@@ -4,6 +4,8 @@ import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
+import { getSystemConfig } from "./systemConfig";
+import { DEVICE_ONLINE_MS } from "./deviceRouting";
 
 const isAdmin = (user: { role?: string } | null) => user?.role === "admin";
 
@@ -343,22 +345,31 @@ export const adminGetStats = query({
   },
 });
 
+// Only care about daemons that beat inside the last 24h.
+const RECENTLY_ACTIVE_MS = 24 * 60 * 60 * 1000;
+
+// Range-scan only the daemons that beat inside the window via the
+// by_last_heartbeat index, instead of loading the whole (growing) users table
+// on every 5 minute cron tick. Both health crons read the same set, so the
+// query and the window live here rather than in each handler.
+async function recentlyActiveDaemonUsers(
+  ctx: MutationCtx,
+  now: number,
+  windowMs: number = RECENTLY_ACTIVE_MS,
+) {
+  return await ctx.db
+    .query("users")
+    .withIndex("by_last_heartbeat", (q) => q.gte("last_heartbeat", now - windowMs))
+    .collect();
+}
+
 export const checkDaemonHealth = internalMutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
     const OFFLINE_THRESHOLD_MS = 10 * 60 * 1000; // 10 min no heartbeat = offline
-    const RECENTLY_ACTIVE_MS = 24 * 60 * 60 * 1000; // Only care about daemons active in last 24h
 
-    // Range-scan only the handful of daemons that beat within the last 24h via
-    // the by_last_heartbeat index, instead of loading the whole (growing) users
-    // table every 5min. gte covers the RECENTLY_ACTIVE_MS window exactly.
-    const activeUsers = await ctx.db
-      .query("users")
-      .withIndex("by_last_heartbeat", (q) =>
-        q.gte("last_heartbeat", now - RECENTLY_ACTIVE_MS)
-      )
-      .collect();
+    const activeUsers = await recentlyActiveDaemonUsers(ctx, now);
 
     let alertsCreated = 0;
 
@@ -394,6 +405,143 @@ export const checkDaemonHealth = internalMutation({
     }
 
     return { checked: activeUsers.length, alertsCreated };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Loop-freeze SLO alert: one aggregated notification per machine per incident
+// ---------------------------------------------------------------------------
+
+// More than two minutes of the last hour blocked is the bar. Under it the web
+// still shows "under load"; past it a person should know, because every
+// delivery and echo on that machine is running late.
+export const LOOP_FREEZE_ALERT_MS = 120_000;
+// The same cooldown accountSwitch uses for blocked sessions: past it, a WORSE
+// hour announces itself again.
+export const FREEZE_NOTIFY_COOLDOWN_MS = 30 * 60 * 1000;
+// A machine that keeps breaching the bar without ever beating its own peak is
+// still broken, and the person still needs to hear about it. It just does not
+// need to hear about it every half hour, so a breach that is not worse waits
+// this long instead.
+export const FREEZE_RENOTIFY_MS = 6 * 60 * 60 * 1000;
+
+/** The whole decision, so the cron handler stays a loop over rows.
+ * Three cases past the bar, and the split matters because the founder's own
+ * laptop is the chronic case:
+ * - The number has not moved at all. That is an old daemon that stopped
+ *   reporting and left its last value frozen on the row, so it never alerts
+ *   again. A bare cooldown would announce that stale number forever.
+ * - The number is worse than the one we announced. That is a deteriorating
+ *   machine, and it gets the short cooldown.
+ * - The number moved but is not worse. That is a machine sitting between the
+ *   bar and its own past peak, which the earlier "worse than last time" rule
+ *   silenced for the life of the row. It re-alerts on the long interval.
+ * The handler also clears the stamp once a recovered machine has stayed under
+ * the bar past the cooldown, so a recovered machine alerts again on its next
+ * incident however small. A frozen value never falls under the bar, so it is
+ * never cleared. */
+export function shouldNotifyDeviceFreeze(input: {
+  hourMs: number | undefined;
+  thresholdMs: number;
+  online: boolean;
+  state?: { last_notified_at: number; last_hour_ms: number };
+  now: number;
+}): boolean {
+  if (!input.online) return false;
+  if (!input.hourMs || input.hourMs < input.thresholdMs) return false;
+  const state = input.state;
+  if (!state) return true;
+  if (input.hourMs === state.last_hour_ms) return false;
+  const sinceLast = input.now - state.last_notified_at;
+  if (input.hourMs > state.last_hour_ms) return sinceLast >= FREEZE_NOTIFY_COOLDOWN_MS;
+  return sinceLast >= FREEZE_RENOTIFY_MS;
+}
+
+const secs = (ms: number) => `${Math.round(ms / 1000)}s`;
+
+/** Runs on the same 5 minute cron as checkDaemonHealth, as its own entry so a
+ * failure in one alert never stops the other. The cron cadence IS the debounce,
+ * so there is no scheduler hop here. */
+export const checkDeviceLoopFreeze = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const configured = Number(await getSystemConfig(ctx, "loop_freeze_alert_ms"));
+    const thresholdMs = Number.isFinite(configured) && configured > 0 ? configured : LOOP_FREEZE_ALERT_MS;
+
+    // Only a machine that is beating right now can alert, so read the ten
+    // minute window rather than the whole day. The user doc's last_heartbeat
+    // lags the device's last_seen by at most the 50s user doc throttle, so ten
+    // minutes covers every device inside the two minute online bar with room to
+    // spare, and it keeps this tick from reading rows daemonHeartbeat is
+    // writing every 30 seconds.
+    const activeUsers = await recentlyActiveDaemonUsers(ctx, now, 10 * 60_000);
+
+    let notified = 0;
+    let devicesChecked = 0;
+
+    for (const user of activeUsers) {
+      const devices = await ctx.db
+        .query("devices")
+        .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
+        .collect();
+
+      for (const device of devices) {
+        devicesChecked++;
+        const hourMs = device.loop_freeze_1h_ms;
+        const online = now - device.last_seen < DEVICE_ONLINE_MS;
+
+        // The incident is over: forget the stamp so the next one alerts on its
+        // own merits. Without this the stored hour total only ever ratchets
+        // upward, and a machine's second real incident goes unreported for the
+        // life of the row because it was smaller than the first.
+        // Only past the cooldown, though. A machine hovering at the bar dips
+        // under it every few ticks, and clearing on the dip would hand the next
+        // tick a clean slate and alert again five minutes later, forever.
+        if ((hourMs ?? 0) < thresholdMs) {
+          const stamp = device.freeze_notify_state;
+          if (stamp && now - stamp.last_notified_at >= FREEZE_NOTIFY_COOLDOWN_MS) {
+            await ctx.db.patch(device._id, { freeze_notify_state: undefined });
+          }
+          continue;
+        }
+
+        if (!shouldNotifyDeviceFreeze({ hourMs, thresholdMs, online, state: device.freeze_notify_state, now })) {
+          continue;
+        }
+
+        const machine = device.label || device.hostname || device.platform || "This machine";
+        const worst = device.loop_freeze_max_ms ? ` Worst single freeze ${secs(device.loop_freeze_max_ms)}.` : "";
+        const cause = device.loop_freeze_top ? ` Top cause: ${device.loop_freeze_top}.` : "";
+        const message =
+          `The daemon's event loop was frozen ${secs(hourMs!)} in the last hour.${worst}${cause}` +
+          ` Deliveries and echoes on this machine are delayed, not lost.`;
+
+        // Stamp BEFORE delivering so a racing tick cannot deliver twice.
+        await ctx.db.patch(device._id, {
+          freeze_notify_state: { last_notified_at: now, last_hour_ms: hourMs! },
+        });
+        // The router drops the row when the recipient muted the preference this
+        // event maps to, so count what it actually wrote. The stamp stays where
+        // it is: a muted user has been told as far as this machine is
+        // concerned, and re-running the decision every tick would only build a
+        // backlog of rows nobody sees.
+        const res = await ctx.runMutation(internal.notificationRouter.emit, {
+          event_type: "daemon_overloaded" as const,
+          entity_type: "device" as const,
+          entity_id: device._id,
+          direct_recipient_id: user._id,
+          actor_name: machine,
+          message,
+          // No `link`: that field is for pages OUTSIDE the app and the bell
+          // opens it in a new tab. The device entity routes in-app to
+          // /settings/devices through notificationRoute.
+        });
+        notified += res?.notified ?? 0;
+      }
+    }
+
+    return { devicesChecked, notified };
   },
 });
 

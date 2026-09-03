@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyBypassBlock, classifyTmuxLiveState, extractTmuxLiveRegion, isPhantomBypassPermissionBlock, paneContentAfterLaunchEcho } from "./daemon.js";
+import { classifyBypassBlock, classifyTmuxLiveState, clearUnresolvablePane, extractTmuxLiveRegion, isPhantomBypassPermissionBlock, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planTrustPromptStep } from "./daemon.js";
 
 describe("isPhantomBypassPermissionBlock", () => {
   test("suppresses auto-approved tool permission_blocked in bypass mode", () => {
@@ -466,4 +466,153 @@ test("workspace trust prompt classifies as trust, not rewind", () => {
     " Enter to confirm · Esc to cancel",
   ].join("\n");
   expect(classifyTmuxLiveState(region)).toBe("trust");
+});
+
+// ── Agent update menu, and why Enter is the wrong key (ct-48187) ────────────
+// Verbatim capture from `codex 0.147.0` launched with a CODEX_HOME whose
+// version.json advertised 0.153.0. Two details matter and both are load-bearing:
+// the selection cursor is '›' (U+203A), not '❯', and the footer says "Press
+// enter to continue" while the cursor rests on "Update now". The pane therefore
+// used to classify "idle" (any '›' read as a live composer), and would have
+// classified "warning" without the cursor — and BOTH of those press Enter, which
+// runs `bun install -g @openai/codex` inside the agent's pane.
+const CODEX_UPDATE_MENU_PANE = `
+  ✨ Update available! 0.147.0 -> 0.153.0
+
+  Release notes: https://github.com/openai/codex/releases/latest
+
+› 1. Update now (runs \`bun install -g @openai/codex\`)
+  2. Skip
+  3. Skip until next version
+
+  Press enter to continue`;
+
+describe("agent update menu", () => {
+  test("classifies as update_menu, not idle and not warning", () => {
+    const region = extractTmuxLiveRegion(CODEX_UPDATE_MENU_PANE);
+    expect(classifyTmuxLiveState(region)).toBe("update_menu");
+  });
+
+  test("the '›' cursor alone must never read as an idle composer", () => {
+    // The regression in one line: '›' is a menu cursor here, not a prompt.
+    expect(classifyTmuxLiveState("› 1. Update now\n  2. Skip\n  Press enter to continue"))
+      .not.toBe("idle");
+  });
+
+  test("a real composer showing '›' still reads idle", () => {
+    // The narrow match must not cost us ordinary readiness detection.
+    expect(classifyTmuxLiveState("› Ask Codex to do anything\n  gpt-5.6-sol · /tmp")).toBe("idle");
+  });
+
+  test("parseInteractivePrompt sees all three options and the cursor", () => {
+    const prompt = parseInteractivePrompt(CODEX_UPDATE_MENU_PANE);
+    expect(prompt).not.toBeNull();
+    // Before the fix the '›' row failed the option regex, so the menu parsed as
+    // two options with no cursor indicator.
+    expect(prompt!.options.map(o => o.label)).toEqual([
+      "Update now (runs `bun install -g @openai/codex`)",
+      "Skip",
+      "Skip until next version",
+    ]);
+  });
+});
+
+// ── Deferral is finite (ct-48187) ──────────────────────────────────────────
+describe("noteUnresolvablePane", () => {
+  test("rebuilds only after the threshold, counting well-spaced failures", () => {
+    const store = new Map<string, { count: number; last: number }>();
+    const results = [1, 2, 3, 4, 5].map(i =>
+      noteUnresolvablePane("s1", "AGENT_UNKNOWN_STATE: deferring", 20_000 * i, store),
+    );
+    expect(results).toEqual([false, false, false, false, true]);
+  });
+
+  test("a burst during one slow boot counts once, not five times", () => {
+    // The first deploy tore down a pane that was merely booting: it failed this
+    // check five times in four seconds while its TUI painted.
+    const store = new Map<string, { count: number; last: number }>();
+    const burst = [0, 900, 1800, 2700, 3600, 4500].map(t =>
+      noteUnresolvablePane("s1", "AGENT_UNKNOWN_STATE: deferring", t, store),
+    );
+    expect(burst).toEqual([false, false, false, false, false, false]);
+    expect(store.get("s1")!.count).toBe(1);
+  });
+
+  test("a pane that recovered in between starts a fresh streak", () => {
+    const store = new Map<string, { count: number; last: number }>();
+    noteUnresolvablePane("s1", "AGENT_UNKNOWN_STATE", 0, store);
+    noteUnresolvablePane("s1", "AGENT_UNKNOWN_STATE", 20_000, store);
+    // Long gap: unrelated failures must not accumulate into a teardown.
+    expect(noteUnresolvablePane("s1", "AGENT_UNKNOWN_STATE", 60 * 60_000, store)).toBe(false);
+    expect(store.get("s1")!.count).toBe(1);
+  });
+
+  test("a success clears the streak", () => {
+    const store = new Map<string, { count: number; last: number }>();
+    for (const i of [1, 2, 3, 4]) noteUnresolvablePane("s1", "AGENT_STUCK_WARNING", 20_000 * i, store);
+    clearUnresolvablePane("s1", store);
+    expect(noteUnresolvablePane("s1", "AGENT_STUCK_WARNING", 100_000, store)).toBe(false);
+  });
+
+  test("ignores errors that already terminate in a rebuild", () => {
+    const store = new Map<string, { count: number; last: number }>();
+    for (const i of [1, 2, 3, 4, 5, 6]) {
+      expect(noteUnresolvablePane("s1", "SESSION_EXITED: no agent process in the pane", 20_000 * i, store)).toBe(false);
+    }
+  });
+
+  test("counts every state we cannot act on", () => {
+    for (const err of ["AGENT_UNKNOWN_STATE: deferring", "AGENT_NOT_READY: live state", "AGENT_STUCK_WARNING: x", "AGENT_CAPTURE_FAILED: x"]) {
+      const store = new Map<string, { count: number; last: number }>();
+      const last = [1, 2, 3, 4, 5].map(i => noteUnresolvablePane("s", err, 20_000 * i, store)).pop();
+      expect(last).toBe(true);
+    }
+  });
+});
+
+
+// ── Workspace trust dialog (jx745rs5, 2026-09-03) ──────────────────────────
+// Verbatim from Claude Code 2.1.259 in an untrusted directory. The detail that
+// caused the outage: "No, exit" is the DEFAULT highlight, so the blind Enter the
+// daemon used to send chose it and the agent quit. Escape is the same option by
+// another name. Both keys act on a selection nobody read.
+const TRUST_DIALOG = [
+  " Accessing workspace:",
+  " /Users/ashot/src/bookmark",
+  " Quick safety check: Is this a project you created or one you trust?",
+  " Claude Code'll be able to read, edit, and execute files here.",
+  " Security guide",
+  " \u276f No, exit",
+  "   Yes, I trust this folder",
+  " Enter to confirm \u00b7 Esc to cancel",
+];
+
+describe("planTrustPromptStep", () => {
+  test("moves the highlight onto the affirmative option instead of confirming", () => {
+    expect(planTrustPromptStep(TRUST_DIALOG)).toEqual({ action: "move", key: "Down", times: 1 });
+  });
+
+  test("confirms only once the highlight is on the affirmative option", () => {
+    const moved = TRUST_DIALOG.map(l =>
+      l.includes("No, exit") ? "   No, exit" : l.includes("Yes, I trust") ? " \u276f Yes, I trust this folder" : l);
+    expect(planTrustPromptStep(moved)).toEqual({
+      action: "confirm",
+      option: "\u276f Yes, I trust this folder",
+    });
+  });
+
+  test("presses nothing when the highlight is not visible", () => {
+    const noCursor = TRUST_DIALOG.map(l => l.replace("\u276f", " "));
+    expect(planTrustPromptStep(noCursor).action).toBe("none");
+  });
+
+  test("presses nothing on a dialog with no affirmative option", () => {
+    // A future dialog we do not understand must not be answered by guessing.
+    expect(planTrustPromptStep([" \u276f No, exit", " Enter to confirm"]).action).toBe("none");
+  });
+
+  test("walks upward when the affirmative option is above the highlight", () => {
+    expect(planTrustPromptStep(["   Yes, I trust this folder", " \u276f No, exit"]))
+      .toEqual({ action: "move", key: "Up", times: 1 });
+  });
 });
