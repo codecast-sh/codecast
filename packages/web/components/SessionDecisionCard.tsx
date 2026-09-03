@@ -15,6 +15,7 @@ import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { hasOpenModal } from "../shortcuts";
 import { PublishedPageEmbed } from "./PublishedPageEmbed";
+import { Maximize2, Minimize2 } from "lucide-react";
 
 // The decision card lives INSIDE the conversation — it is how a session asks
 // its human something, so it renders wherever the session renders (inbox,
@@ -323,10 +324,6 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       >
         <KeyCap size="xs">x</KeyCap><span>dismiss</span>
       </button>
-      <button onClick={full ? shrink : grow} className="flex items-center gap-1.5 hover:text-sol-text transition-colors">
-        <KeyCap size="xs">{full ? "↑" : "↓"}</KeyCap>
-        <span>{full ? "read the thread" : "back to the question"}</span>
-      </button>
       {!full && (
         <button onClick={() => setSize("line")} className="flex items-center gap-1.5 hover:text-sol-text transition-colors">
           <span>fold away</span>
@@ -338,6 +335,25 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         </button>
       )}
     </div>
+  );
+
+  // The one control that changes the card's size, and it has to look like
+  // one: a labelled button in the header, not a grip line. Docked, it grows
+  // the card to own the pane; full, it hands the pane back to the thread.
+  const sizeToggle = (
+    <button
+      onClick={full ? shrink : grow}
+      className={`shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded border text-[12px] transition-colors ${
+        full
+          ? "border-sol-border text-sol-text-muted hover:text-sol-text hover:bg-sol-card"
+          : "border-sol-blue/40 text-sol-blue hover:bg-sol-blue hover:text-sol-bg"
+      }`}
+      title={full ? "Shrink the question and read the thread" : "Open the question full screen, with its context"}
+    >
+      {full ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+      <span>{full ? "Read the thread" : "Full screen"}</span>
+      <KeyCap size="xs">{full ? "↑" : "↓"}</KeyCap>
+    </button>
   );
 
   const optionRow = (
@@ -444,7 +460,10 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       >
         <div className="px-6 shrink-0 pt-3">
           <button onClick={shrink} className="mx-auto block h-1 w-10 rounded-full bg-sol-border hover:bg-sol-text-dim transition-colors mb-2" title="Show the conversation" />
-          {stepperRail}
+          <div className="flex items-start gap-3">
+            <div className="flex-1 min-w-0">{stepperRail}</div>
+            {sizeToggle}
+          </div>
         </div>
         <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto px-6">
           {whoIsAsking}
@@ -500,8 +519,11 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       onWheel={(e) => { if (e.deltaY > 0 && stepper) grow(); }}
     >
       <div className="px-6 shrink-0 pt-2">
-        <button onClick={grow} className="mx-auto block h-1 w-10 rounded-full bg-sol-border hover:bg-sol-text-dim transition-colors mb-1.5" title="Back to the question" />
-        {stepperRail ?? <div className="mb-1.5">{whoIsAsking}</div>}
+        <button onClick={grow} className="mx-auto block h-1 w-10 rounded-full bg-sol-border hover:bg-sol-text-dim transition-colors mb-1.5" title="Open the question full screen" />
+        <div className="flex items-start gap-3 mb-1.5">
+          <div className="flex-1 min-w-0">{stepperRail ?? whoIsAsking}</div>
+          {sizeToggle}
+        </div>
       </div>
       <div className="px-6 shrink-0">
         <div className="text-sm text-sol-text leading-snug line-clamp-2" title={question}>{question || "Waiting on you"}</div>

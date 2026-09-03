@@ -11,6 +11,9 @@ export const sessionTypes = new Set([
   "session_idle",
   "session_error",
   "permission_request",
+  // An alert about a whole machine, but it belongs where a reader looks for "my
+  // agents are not moving": a frozen daemon is why nothing is coming back.
+  "daemon_overloaded",
 ]);
 
 export const socialTypes = new Set([
@@ -64,6 +67,7 @@ export const typeLabels: Record<string, string> = {
   chat_dm: "sent you a direct message",
   chat_added: "added you to a channel",
   chat_post: "posted in a channel you follow",
+  daemon_overloaded: "daemon under load",
 };
 
 export const typeColors: Record<string, string> = {
@@ -91,6 +95,7 @@ export const typeColors: Record<string, string> = {
   chat_dm: "text-sol-orange",
   chat_added: "text-sol-cyan",
   chat_post: "text-sol-cyan",
+  daemon_overloaded: "text-sol-orange",
 };
 
 export const agentNames: Record<string, string> = {
@@ -137,5 +142,8 @@ export function notificationRoute(
   if (entityType === "chat_channel") {
     return chatMessageId ? `/chat/${entityId}?m=${chatMessageId}` : `/chat/${entityId}`;
   }
+  // A device has no page of its own; the roster with its health is the place a
+  // reader can act on the alert.
+  if (entityType === "device") return "/settings/devices";
   return null;
 }

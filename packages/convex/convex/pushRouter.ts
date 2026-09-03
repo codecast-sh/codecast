@@ -147,6 +147,7 @@ const TYPE_LABELS: Record<string, [string, string]> = {
   chat_dm: ["direct message", "direct messages"],
   chat_added: ["channel invite", "channel invites"],
   chat_post: ["channel message", "channel messages"],
+  daemon_overloaded: ["overloaded daemon", "overloaded daemons"],
 };
 
 export function summarizePushBatch(

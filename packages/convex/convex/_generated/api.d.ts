@@ -43,6 +43,7 @@ import type * as chatTyping from "../chatTyping.js";
 import type * as cleanup from "../cleanup.js";
 import type * as cliAuth from "../cliAuth.js";
 import type * as client_state from "../client_state.js";
+import type * as cloud from "../cloud.js";
 import type * as collab from "../collab.js";
 import type * as commentViewWrites from "../commentViewWrites.js";
 import type * as comments from "../comments.js";
@@ -216,6 +217,7 @@ declare const fullApi: ApiFromModules<{
   cleanup: typeof cleanup;
   cliAuth: typeof cliAuth;
   client_state: typeof client_state;
+  cloud: typeof cloud;
   collab: typeof collab;
   commentViewWrites: typeof commentViewWrites;
   comments: typeof comments;
