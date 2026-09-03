@@ -2,7 +2,7 @@
 // per-message delivery note so both surfaces tell the same story. `label` is
 // the short chip text; `detail` is a full sentence for a tooltip or a bubble
 // note; `command` is what the user can run (click to copy).
-import { formatDuration, type DaemonHealth } from "../hooks/useDaemonHealth";
+import { formatDuration, OVERLOADED_HOUR_MS, type DaemonHealth } from "../hooks/useDaemonHealth";
 
 export interface DaemonHealthCopy {
   colorVar: string;
@@ -48,13 +48,23 @@ export function describeDaemonHealth(health: DaemonHealth): DaemonHealthCopy | n
         detail: `The CLI daemon restarted ${secs(health.sinceMs)} ago and is recovering sessions and watchers. Deliveries and echoes catch up once it settles.`,
         command: "cast status",
       };
-    case "overloaded":
+    case "overloaded": {
+      // Lead with the hour when the hour tier fired: a machine that freezes
+      // hard every few minutes reads as fine in any one minute, and the top
+      // cause is the only part of this a person can act on.
+      const worst = health.maxMs ? ` (worst freeze ${secs(health.maxMs)})` : "";
+      const cause = health.topCause ? ` Top cause: ${health.topCause}.` : "";
+      const detail =
+        health.hourMs !== undefined
+          ? `The CLI daemon's event loop was frozen ${secs(health.hourMs)} in the last hour${worst}.${cause} Deliveries and echoes are delayed, not lost.`
+          : `The CLI daemon was frozen for ${secs(health.freezeMs)} of the last minute (the machine is busy). Deliveries and echoes are delayed, not lost.`;
       return {
         colorVar: "--sol-orange",
         label: `daemon under load`,
-        detail: `The CLI daemon was frozen for ${secs(health.freezeMs)} of the last minute (the machine is busy). Deliveries and echoes are delayed, not lost.`,
+        detail,
         command: "cast status",
       };
+    }
     case "sync_stalled": {
       const stalled = formatDuration(health.stalledMs);
       // Prefer the honest message count; fall back to logical ops for older
@@ -75,4 +85,27 @@ export function describeDaemonHealth(health: DaemonHealth): DaemonHealthCopy | n
     default:
       return null;
   }
+}
+
+// One machine's freeze line for the devices page, worded like the chip so the
+// two surfaces never drift. Null when the machine has reported no freeze, and
+// null for a machine that is not beating: a laptop shut a week ago would
+// otherwise keep showing the last number its daemon wrote, as would a machine
+// downgraded to a daemon that no longer reports the field. `online` is required
+// so every surface that shows this has to answer that question.
+export function describeDeviceFreeze(row: {
+  loop_freeze_1h_ms?: number | null;
+  loop_freeze_max_ms?: number | null;
+  loop_freeze_top?: string | null;
+  online: boolean;
+}): { text: string; colorVar: string } | null {
+  if (!row.online) return null;
+  const hourMs = row.loop_freeze_1h_ms ?? 0;
+  if (hourMs <= 0) return null;
+  const worst = row.loop_freeze_max_ms ? `, worst ${secs(row.loop_freeze_max_ms)}` : "";
+  const cause = row.loop_freeze_top ? ` · ${row.loop_freeze_top}` : "";
+  return {
+    text: `frozen ${secs(hourMs)}/h${worst}${cause}`,
+    colorVar: hourMs >= OVERLOADED_HOUR_MS ? "--sol-orange" : "--sol-text-dim",
+  };
 }

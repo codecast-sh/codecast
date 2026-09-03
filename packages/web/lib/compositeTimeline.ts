@@ -1,3 +1,5 @@
+import type { GitEventRow } from './externalEvents';
+
 type Message = {
   _id: string;
   message_uuid?: string;
@@ -48,7 +50,8 @@ type PullRequest = {
 export type TimelineItem =
   | { type: 'message'; data: Message; timestamp: number }
   | { type: 'commit'; data: Commit; timestamp: number }
-  | { type: 'pull_request'; data: PullRequest; timestamp: number };
+  | { type: 'pull_request'; data: PullRequest; timestamp: number }
+  | { type: 'git_event'; data: GitEventRow; timestamp: number };
 
 // Cache keyed by the messages array reference. Lets re-visits to a previously-built
 // timeline (e.g. switching back to a conversation whose messages haven't mutated)
@@ -56,33 +59,55 @@ export type TimelineItem =
 const timelineCache = new WeakMap<object, {
   commits: Commit[];
   pullRequests: PullRequest[];
+  gitEvents: GitEventRow[];
   result: TimelineItem[];
 }>();
+
+const NO_GIT_EVENTS: GitEventRow[] = [];
 
 export function buildCompositeTimeline(
   messages: Message[],
   commits: Commit[],
   pullRequests: PullRequest[],
+  gitEvents: GitEventRow[] = NO_GIT_EVENTS,
 ): TimelineItem[] {
   const cached = timelineCache.get(messages);
-  if (cached && cached.commits === commits && cached.pullRequests === pullRequests) {
+  if (
+    cached &&
+    cached.commits === commits &&
+    cached.pullRequests === pullRequests &&
+    cached.gitEvents === gitEvents
+  ) {
     return cached.result;
   }
+  // A commit that arrives as a git event is the same commit the commits lane
+  // holds. Show one of them, and prefer the event: it carries the actor, the
+  // links to the task and the PR, and the same row style as everything else
+  // git puts in the transcript.
+  const gitEventShas = new Set<string>();
+  for (const e of gitEvents) if (e.sha) gitEventShas.add(e.sha);
   const items: TimelineItem[] = [
     ...messages.map((msg) => ({
       type: 'message' as const,
       data: msg,
       timestamp: msg.timestamp,
     })),
-    ...commits.map((commit) => ({
-      type: 'commit' as const,
-      data: commit,
-      timestamp: commit.timestamp,
-    })),
+    ...commits
+      .filter((commit) => !commit.sha || !gitEventShas.has(commit.sha))
+      .map((commit) => ({
+        type: 'commit' as const,
+        data: commit,
+        timestamp: commit.timestamp,
+      })),
     ...pullRequests.map((pr) => ({
       type: 'pull_request' as const,
       data: pr,
       timestamp: pr.created_at,
+    })),
+    ...gitEvents.map((event) => ({
+      type: 'git_event' as const,
+      data: event,
+      timestamp: event.created_at ?? 0,
     })),
   ];
 
@@ -121,6 +146,6 @@ export function buildCompositeTimeline(
     if (msg.role === 'user' && (!msg.content || !msg.content.trim()) && !(msg.images && msg.images.length > 0)) return false;
     return true;
   });
-  timelineCache.set(messages, { commits, pullRequests, result });
+  timelineCache.set(messages, { commits, pullRequests, gitEvents, result });
   return result;
 }

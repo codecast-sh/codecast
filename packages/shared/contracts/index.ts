@@ -60,3 +60,6 @@ export * from "./appDescriptors";
 // order-independent digest every client compares against (sync-convergence C3, C8).
 export * from "./inboxProjection";
 export * from "./appSurfaces";
+// How a pull request is named: one parser for the reference forms people type
+// and one builder for the codecast page link, shared by the CLI, Convex and web.
+export * from "./prRefs";

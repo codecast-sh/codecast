@@ -95,6 +95,9 @@ import { ComposerSuggestion, ComposerSuggestionHandle } from "./ComposerSuggesti
 import { ReviewComposerContext } from "./reviewContext";
 import { CommentDock } from "./comments/CommentDock";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
+import { useSyncConversationGitEvents, useGitEvents, gitEventsOldestFirst } from "../hooks/useSyncGitEvents";
+import { ExternalEventRow } from "./feed/ExternalEventRow";
+import { gitEventToExternalEvent, type GitEventRow } from "../lib/externalEvents";
 import { parseTriggerCadence, fmtDuration, fmtClock } from "./triggerCadence";
 import { TriggerPromptView } from "./TriggerPromptView";
 import { CollapsibleBody, ExpandableLine } from "./CollapsibleBody";
@@ -12703,7 +12706,16 @@ const ConversationViewInner = (
   // Pipe this conversation's comment thread into the inbox cache once; the dock
   // and the inline per-message threads all read from the store.
   useConversationCommentsSync(conversation?._id?.toString());
+  // Git activity for this conversation: the feeder subscribes, the store keeps
+  // the rows, and the timeline memo below reads them. Same shape as comments.
+  useSyncConversationGitEvents(conversation?._id?.toString());
   const effectiveConversationId = conversation?._id;
+  const convIdForGit = conversation?._id?.toString();
+  const gitEventsWhere = useMemo(
+    () => (convIdForGit ? (e: GitEventRow) => e.conversation_id === convIdForGit : () => false),
+    [convIdForGit],
+  );
+  const conversationGitEvents = useGitEvents(gitEventsWhere, gitEventsOldestFirst);
 
   const handleSendInlineMessage = useCallback(async (content: string) => {
     if (!conversation || !effectiveConversationId) return;
@@ -13316,7 +13328,8 @@ const ConversationViewInner = (
   type TimelineItem =
     | { type: 'message'; data: Message; timestamp: number }
     | { type: 'commit'; data: Commit; timestamp: number }
-    | { type: 'pull_request'; data: PullRequest; timestamp: number };
+    | { type: 'pull_request'; data: PullRequest; timestamp: number }
+    | { type: 'git_event'; data: GitEventRow; timestamp: number };
 
   // Pending messages: read directly so they ALWAYS render, regardless of what
   // setMessages/mergeMessages/buildCompositeTimeline do to the server message arrays.
@@ -13341,6 +13354,7 @@ const ConversationViewInner = (
       messages,
       commits,
       pullRequests,
+      conversationGitEvents,
     ) as TimelineItem[];
     // Guaranteed render: append any pending messages not already in the timeline.
     // This is the ONLY merge point — the store never mixes pending into messages[].
@@ -13386,7 +13400,7 @@ const ConversationViewInner = (
     }
     if (toAdd.length === 0) return base;
     return [...base, ...toAdd.map((m: any) => ({ type: 'message' as const, data: m, timestamp: m.timestamp }))];
-  }, [messages, commits, pullRequests, pendingMsgs, serverPending, pendingConvId]);
+  }, [messages, commits, pullRequests, conversationGitEvents, pendingMsgs, serverPending, pendingConvId]);
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
 
@@ -14150,6 +14164,7 @@ const ConversationViewInner = (
   const rowKeys = useMemo(() => uniqueRowKeys(timeline.map((item) => {
     if (item.type === 'message') return messageRowKey(item.data as Message);
     if (item.type === 'commit') return `commit-${(item.data as any).sha || (item.data as any)._id}`;
+    if (item.type === 'git_event') return `git-${(item.data as any)._id}`;
     return `pr-${(item.data as any)._id}`;
   })), [timeline]);
   const getItemKey = useCallback((index: number) => rowKeys[index] ?? index, [rowKeys]);
@@ -14181,6 +14196,10 @@ const ConversationViewInner = (
     if (cachedHeight !== undefined) return cachedHeight;
 
     if (item.type === 'commit') return 80;
+    // A git event is one line plus its pill row. Everything below this point
+    // reads item.data as a Message, so a non-message type must return here.
+    if (item.type === 'git_event') return 44;
+    if (item.type === 'pull_request') return 120;
 
     const msg = item.data as Message;
     // Compact: a collapsed turn is one card on the first assistant message; the
@@ -15831,6 +15850,19 @@ const ConversationViewInner = (
       );
     }
 
+    if (item.type === 'git_event') {
+      const row = item.data as GitEventRow;
+      return (
+        <div key={row._id} className="mx-auto conv-col px-2 sm:px-4 py-0.5">
+          <ExternalEventRow
+            event={gitEventToExternalEvent(row)}
+            density="transcript"
+            omitRefs={["session_id"]}
+          />
+        </div>
+      );
+    }
+
     const msg = item.data as Message;
     if (msg.role === "system") {
       return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} timestamp={msg.timestamp} messageUuid={msg.message_uuid} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
@@ -17052,7 +17084,7 @@ const ConversationViewInner = (
               const item = timeline[virtualItem.index];
               const content = renderItem(item, virtualItem.index);
               const isSearchDimmed = highlightQuery && allMatchingMessageIds.length > 0 && item.type === 'message' && !allMatchingMessageIds.includes((item.data as Message)._id);
-              const itemId = item.type === 'message' ? (item.data as Message)._id : item.type === 'commit' ? `commit-${(item.data as any).sha || (item.data as any)._id}` : `pr-${(item.data as any)._id}`;
+              const itemId = item.type === 'message' ? (item.data as Message)._id : item.type === 'commit' ? `commit-${(item.data as any).sha || (item.data as any)._id}` : item.type === 'git_event' ? `git-${(item.data as any)._id}` : `pr-${(item.data as any)._id}`;
               const isNew = newItemIdsRef.current.has(itemId);
               const isForkSelected = forkSelectionIdx !== null && forkSelectionIdx === virtualItem.index;
               const isBelowForkSelection = forkSelectionIdx !== null && virtualItem.index > forkSelectionIdx;

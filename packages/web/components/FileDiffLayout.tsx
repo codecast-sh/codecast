@@ -39,6 +39,17 @@ export interface DiffFile {
   patch?: string;
 }
 
+export type FileLineThreads = {
+  /** One file's threads, keyed by FILE line number. A line mapped to an empty
+   *  array still gets a row — that is how a surface opens a composer on a line
+   *  with no thread yet. */
+  threadsFor: (filename: string) => ReadonlyMap<number, unknown[]> | undefined;
+  /** Render one line's thread (and its composer, when the surface wants one). */
+  render: (filename: string, lineNumber: number, items: unknown[]) => React.ReactNode;
+  /** Hover handle click. Omit to leave the diff read only. */
+  onComment?: (filename: string, lineNumber: number | undefined, code: string) => void;
+};
+
 export interface FileDiffLayoutProps {
   files: DiffFile[];
   title?: string;
@@ -51,6 +62,10 @@ export interface FileDiffLayoutProps {
   // Enables inline line comments (ephemeral review batch + durable file:line
   // threads) on each file's DiffView. Called with the file's ORIGINAL path.
   commentContextFor?: (filename: string) => { conversationId: string; anchorKey: string; filePath: string } | undefined;
+  // Line threads the OWNER holds and renders (the PR page's code comments,
+  // which are not conversation comments). DiffView only places them; every
+  // callback here is called with the file's ORIGINAL path.
+  lineThreads?: FileLineThreads;
   // External "open this file" request (raw pre-strip path, e.g. from a comment
   // rail jump). Honored whenever the value changes to a file in the list.
   focusFile?: string | null;
@@ -489,6 +504,7 @@ function FileDiffContent({
   onToggleSidebar,
   sidebarOpen,
   commentContextFor,
+  lineThreads,
 }: {
   file: DiffFile | null;
   onComment?: (filename: string, lineNumber?: number) => void;
@@ -498,6 +514,7 @@ function FileDiffContent({
   onToggleSidebar?: () => void;
   sidebarOpen?: boolean;
   commentContextFor?: FileDiffLayoutProps["commentContextFor"];
+  lineThreads?: FileLineThreads;
 }) {
   if (!file) {
     return (
@@ -620,10 +637,25 @@ function FileDiffContent({
         language={language}
         maxLines={100}
         commentContext={commentContextFor?.(file.originalFilename ?? file.filename)}
+        {...lineThreadProps(lineThreads, file)}
       />
       {renderExtra && renderExtra(file)}
     </div>
   );
+}
+
+// One file's owner-held threads, bound to that file's original path, in the
+// shape DiffView takes.
+function lineThreadProps(lineThreads: FileLineThreads | undefined, file: DiffFile) {
+  if (!lineThreads) return undefined;
+  const path = file.originalFilename ?? file.filename;
+  return {
+    lineThreads: lineThreads.threadsFor(path),
+    renderLineThread: (line: number, items: unknown[]) => lineThreads.render(path, line, items),
+    onLineComment: lineThreads.onComment
+      ? (line: number | undefined, code: string) => lineThreads.onComment!(path, line, code)
+      : undefined,
+  };
 }
 
 function UnifiedDiffView({
@@ -631,11 +663,13 @@ function UnifiedDiffView({
   onComment,
   renderExtra,
   commentContextFor,
+  lineThreads,
 }: {
   files: DiffFile[];
   onComment?: (filename: string, lineNumber?: number) => void;
   renderExtra?: (file: DiffFile) => React.ReactNode;
   commentContextFor?: FileDiffLayoutProps["commentContextFor"];
+  lineThreads?: FileLineThreads;
 }) {
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden">
@@ -668,6 +702,7 @@ function UnifiedDiffView({
                 language={language}
                 maxLines={500}
                 commentContext={commentContextFor?.(file.originalFilename ?? file.filename)}
+                {...lineThreadProps(lineThreads, file)}
               />
             ) : (
               <div className="text-sol-text-muted text-sm py-4 text-center">
@@ -700,6 +735,7 @@ export function FileDiffLayout({
   renderFileExtra,
   onCloseDiffPanel,
   commentContextFor,
+  lineThreads,
   focusFile,
 }: FileDiffLayoutProps) {
   // Strip common prefix once for consistent comparisons
@@ -854,6 +890,7 @@ export function FileDiffLayout({
     onToggleSidebar: toggleSidebar,
     sidebarOpen,
     commentContextFor,
+    lineThreads,
   };
 
   const totalAdditions = files.reduce((sum, f) => sum + f.additions, 0);
@@ -927,6 +964,7 @@ export function FileDiffLayout({
             onComment={onFileComment}
             renderExtra={renderFileExtra}
             commentContextFor={commentContextFor}
+            lineThreads={lineThreads}
           />
         </div>
       </div>

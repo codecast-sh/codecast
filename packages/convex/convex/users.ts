@@ -1,4 +1,5 @@
 import { mutation, query, internalMutation, internalQuery } from "./functions";
+import { wakeDevicesFor } from "./cloud";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
@@ -291,6 +292,13 @@ export const daemonHeartbeat = mutation({
     pending_sync_conversations: v.optional(v.number()),
     daemon_started_at: v.optional(v.number()),
     loop_freeze_ms: v.optional(v.number()),
+    // The loop freeze budget: blocked ms over the trailing hour, the worst
+    // single freeze, and the stacks it was in. These live on the device row
+    // only. Their twins on the user doc keep whatever the last machine to beat
+    // wrote, which would mask one machine's trouble behind another's beats.
+    loop_freeze_1h_ms: v.optional(v.number()),
+    loop_freeze_max_ms: v.optional(v.number()),
+    loop_freeze_top: v.optional(v.string()),
     // Device identity (remote/device.ts). When present, upsert a per-device
     // row so multiple machines don't clobber each other's project roots.
     device_id: v.optional(v.string()),
@@ -476,6 +484,9 @@ export const daemonHeartbeat = mutation({
         // value a newer one wrote — same rule as backlogFieldsPatch.
         ...(args.daemon_started_at !== undefined ? { daemon_started_at: args.daemon_started_at } : {}),
         ...(args.loop_freeze_ms !== undefined ? { loop_freeze_ms: args.loop_freeze_ms } : {}),
+        ...(args.loop_freeze_1h_ms !== undefined ? { loop_freeze_1h_ms: args.loop_freeze_1h_ms } : {}),
+        ...(args.loop_freeze_max_ms !== undefined ? { loop_freeze_max_ms: args.loop_freeze_max_ms } : {}),
+        ...(args.loop_freeze_top !== undefined ? { loop_freeze_top: args.loop_freeze_top } : {}),
         ...(args.pending_sync_count !== undefined ? { pending_sync_count: args.pending_sync_count } : {}),
         ...(args.oldest_pending_ms !== undefined ? { oldest_pending_ms: args.oldest_pending_ms } : {}),
         ...(args.pending_sync_messages !== undefined ? { pending_sync_messages: args.pending_sync_messages } : {}),
@@ -495,6 +506,8 @@ export const daemonHeartbeat = mutation({
           : {}),
         ...(args.device_hostname !== undefined ? { hostname: args.device_hostname } : {}),
         ...(args.is_remote_device !== undefined ? { is_remote: args.is_remote_device } : {}),
+        // The device is awake: whatever asked for it has been answered.
+        ...((existingDevice as any)?.wake_requested_at !== undefined ? { wake_requested_at: undefined } : {}),
         ...(args.local_project_roots !== undefined
           ? { local_project_roots: args.local_project_roots }
           : {}),
@@ -598,12 +611,26 @@ export const daemonHeartbeat = mutation({
       .withIndex("by_key", (q) => q.eq("key", "capabilities_mode"))
       .unique();
 
+    // Cloud hosts asleep with work waiting (cloud.requestRemoteWake). Only a
+    // LOCAL daemon gets the list — it holds the host registry and the SSH key
+    // — and the device's own beat above already cleared its stamp.
+    const wakeDevices = args.is_remote_device
+      ? []
+      : wakeDevicesFor(
+          await ctx.db
+            .query("devices")
+            .withIndex("by_user_id", (q) => q.eq("user_id", auth.userId))
+            .collect(),
+          now,
+        );
+
     return {
       commands: visibleCommands.map((c) => ({
         id: c._id,
         command: c.command,
         args: c.args,
       })),
+      wake_devices: wakeDevices,
       sync_mode: user?.sync_mode ?? "all",
       sync_projects: user?.sync_projects ?? [],
       cc_session_tokens: sessionTokensEnabled,

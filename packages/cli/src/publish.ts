@@ -13,6 +13,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "./proc.js";
+import { stdinText } from "./sendBody.js";
 import type { Command } from "commander";
 import open from "open";
 import { cliFetch, cliFetchRead } from "./cliHttp.js";
@@ -688,7 +689,7 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
     )
     .argument("[target]", "file.html, file.md, or a directory — or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set")
     .argument("[args...]", "subcommand arguments")
-    .option("--title <title>", "Override the page title (default: <title> tag / first heading / filename)")
+    .option("--title <title>", stdinText("Override the page title (default: <title> tag / first heading / filename)"))
     .option("--new", "Publish under a fresh URL even if this path was published before")
     .option("--json", "Emit the raw JSON response")
     .option("--watch", "Keep watching the file/directory and republish on change")

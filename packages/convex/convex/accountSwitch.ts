@@ -38,8 +38,11 @@ import {
   activeTokenProfile,
   continueTargetPin,
   continueNeedsRestart,
+  parkedOnActiveAccount,
+  resumePinFor,
 } from "./ccAccountsShared";
 import { deliverSessionNotificationToParties } from "./notifications";
+import { canOwnerOrTeamAccess } from "./privacy";
 
 // The freshest online NON-remote device: it holds the keychain profiles and is
 // the canonical credential source remotes are pushed from.
@@ -1182,9 +1185,17 @@ export const autoSwitchCheck = internalMutation({
       });
     };
 
+    // A park is read as a fact about the account the session ran on: the
+    // owning device's active login unless the row pins another account's
+    // token. Only the former can wait on the active account's windows.
+    const onlineById = new Map(online.map((d) => [d.device_id, d]));
+    const parksOnActive = targets.filter((c) =>
+      parkedOnActiveAccount(c, (c.owner_device_id && onlineById.get(c.owner_device_id)) || primary),
+    );
     const decision = decideAutoSwitch({
       now,
       parkedAt: Math.max(...targets.map((c) => c.updated_at ?? 0)),
+      activeParkedAt: parksOnActive.length ? Math.max(...parksOnActive.map((c) => c.updated_at ?? 0)) : null,
       activeEmail: primary.cc_accounts?.active_email,
       activeSince: primary.cc_accounts?.active_since,
       profiles: primary.cc_accounts?.profiles ?? [],
@@ -1268,6 +1279,41 @@ export const autoSwitchCheck = internalMutation({
     }
     await ctx.db.patch(primary._id, { cc_auto_switch_state: nextState });
     return { acted: "exhausted", next_check_at: nextState.next_check_at };
+  },
+});
+
+// The pin a daemon sources when it resumes a conversation. The daemon used
+// to read the row's `cc_account` raw, so a session parked on a limit while
+// pinned to a spent account re-sourced that account's token on every resume
+// — a hand-typed "continue" restarted it straight back into the same banner,
+// and only the banner's revive button knew to rewrite the pin. Every resume
+// of a parked session is that same continue, so the rule (resumePinFor)
+// runs here, at the one read the daemon makes before it launches, and the
+// row is corrected in the same step so later resumes agree.
+export const pinForResume = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    device_id: v.string(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ cc_account: string | null } | null> => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv) return null;
+    if (!(await canOwnerOrTeamAccess(ctx, userId, conv))) return null;
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
+      .first();
+    const pin = resumePinFor(conv, device ?? undefined, Date.now());
+    if ((conv.cc_account ?? undefined) !== pin) {
+      await ctx.db.patch(conv._id, { cc_account: pin });
+      console.log(
+        `pinForResume: ${conv._id} parked (${conv.pending_api_error_kind}) on pin "${conv.cc_account}" — resuming under ${pin ? `"${pin}"` : "the keychain login"}`,
+      );
+    }
+    return { cc_account: pin ?? null };
   },
 });
 

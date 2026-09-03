@@ -17,6 +17,9 @@ import { useInboxStore, useTrackedStore, sessionsWakeSig, isAgentActive, sortSes
 import { feedCoverMetaKey, newestTs, oldestTs, planFeedCatchup, walkStep, FEED_CATCHUP_PAGE_LIMIT, FEED_CATCHUP_MAX_PAGES } from "../lib/feedCatchup";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { ExternalEventRow } from "./feed/ExternalEventRow";
+import { gitEventToExternalEvent, type GitEventRow } from "../lib/externalEvents";
+import { useGitEvents, gitEventsNewestFirst } from "../hooks/useSyncGitEvents";
 import { FolderGit2 } from "lucide-react";
 import type { CSSProperties } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -351,9 +354,31 @@ function RollupHeader({ convs, compact }: {
   );
 }
 
-function DaySection({ date, convs, showActor, onNavigate, compact, projectColors, onProjectFilter }: {
+// A day holds two kinds of rows: the sessions it always held, and the team's
+// git events from the same day. `ts` is what the two are ordered by.
+type FeedEntry =
+  | { kind: "conv"; ts: number; conv: Conversation }
+  | { kind: "git"; ts: number; event: GitEventRow };
+
+// Place the git rows among the sessions by time WITHOUT reordering the
+// sessions. Their order comes from the stable-order hook and from the inbox
+// sort, and both must survive: a git row only takes a slot between two
+// sessions it sits between in time.
+function mergeDayEntries(convEntries: FeedEntry[], gitEntries: FeedEntry[]): FeedEntry[] {
+  if (gitEntries.length === 0) return convEntries;
+  const out: FeedEntry[] = [];
+  let gi = 0;
+  for (const conv of convEntries) {
+    while (gi < gitEntries.length && gitEntries[gi].ts >= conv.ts) out.push(gitEntries[gi++]);
+    out.push(conv);
+  }
+  while (gi < gitEntries.length) out.push(gitEntries[gi++]);
+  return out;
+}
+
+function DaySection({ date, entries, showActor, onNavigate, compact, projectColors, onProjectFilter }: {
   date: string;
-  convs: Conversation[];
+  entries: FeedEntry[];
   showActor: boolean;
   onNavigate?: (id: string) => void;
   compact?: boolean;
@@ -362,6 +387,11 @@ function DaySection({ date, convs, showActor, onNavigate, compact, projectColors
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const label = formatDate(date);
+
+  const convs = useMemo(
+    () => entries.flatMap((e) => (e.kind === "conv" ? [e.conv] : [])),
+    [entries],
+  );
 
   const { projects, people, active } = useMemo(() => {
     const projSet = new Set<string>();
@@ -406,15 +436,23 @@ function DaySection({ date, convs, showActor, onNavigate, compact, projectColors
 
       {!collapsed && (
         <div className="space-y-1.5">
-          {convs.map((conv) => (
-            <FeedCard
-              key={conv._id}
-              conv={conv}
-              showActor={showActor}
-              onNavigate={onNavigate}
-              projectColor={projectColors[extractWorkspace(conv.project_path) || ""]}
-            />
-          ))}
+          {entries.map((entry) =>
+            entry.kind === "git" ? (
+              <ExternalEventRow
+                key={`git-${entry.event._id}`}
+                event={gitEventToExternalEvent(entry.event)}
+                density="feed"
+              />
+            ) : (
+              <FeedCard
+                key={entry.conv._id}
+                conv={entry.conv}
+                showActor={showActor}
+                onNavigate={onNavigate}
+                projectColor={projectColors[extractWorkspace(entry.conv.project_path) || ""]}
+              />
+            ),
+          )}
         </div>
       )}
     </div>
@@ -423,9 +461,11 @@ function DaySection({ date, convs, showActor, onNavigate, compact, projectColors
 
 // Shared rendering for both sources: window/actor/project filter, live rollup,
 // people row (team only), day grouping, FLIP animation, infinite scroll.
-function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoadingMore, onNavigate, compact, hidePeopleRow, initialActorId, shareNudge }: {
+function FeedBody({ source, sourceConvs, gitEvents = [], hasMore, loadMore, isLoading, isLoadingMore, onNavigate, compact, hidePeopleRow, initialActorId, shareNudge }: {
   source: "team" | "personal";
   sourceConvs: Conversation[];
+  /** Team mode only: the git events to interleave into the day sections. */
+  gitEvents?: GitEventRow[];
   hasMore: boolean;
   loadMore: (opts?: { reconfirm?: boolean }) => void;
   isLoading: boolean;
@@ -446,6 +486,10 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
 
   const [actorFilter, setActorFilter] = useState<Id<"users"> | undefined>(initialActorId as Id<"users"> | undefined);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
+  // Local state, not a saved preference: the ui prefs bag (ClientUI in
+  // store/inboxStore.ts) is a closed type, so a saved key would mean editing
+  // that file too.
+  const [showGit, setShowGit] = useState(true);
   const tz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
 
   const isHovered = useRef(false);
@@ -484,6 +528,33 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
   const windowed = useMemo(() => displayConvs.slice(0, renderLimit), [displayConvs, renderLimit]);
   const canReveal = renderLimit < displayConvs.length;
 
+  // Git events get their own window so they never eat the session window: keep
+  // the ones that fall inside the time span the shown sessions already cover,
+  // capped so a busy repo cannot flood a quiet day. The same actor and project
+  // filters apply, by the person who did it and by the repository name.
+  const gitInView = useMemo(() => {
+    if (gitEvents.length === 0) return [] as GitEventRow[];
+    let floor = 0;
+    for (const c of windowed) {
+      const ts = c.updated_at || c.started_at || 0;
+      if (ts && (floor === 0 || ts < floor)) floor = ts;
+    }
+    const proj = projectFilter?.toLowerCase();
+    const actor = actorFilter?.toString();
+    return gitEvents
+      .filter((e) => {
+        const ts = e.created_at ?? 0;
+        if (!ts || ts < floor) return false;
+        if (actor && e.actor_user_id?.toString() !== actor) return false;
+        if (proj) {
+          const repo = e.repository?.split("/").filter(Boolean).pop()?.toLowerCase();
+          if (repo !== proj) return false;
+        }
+        return true;
+      })
+      .slice(0, 200);
+  }, [gitEvents, windowed, actorFilter, projectFilter]);
+
   // People from the full window set (ignores actor filter) so the row stays
   // populated and a selection can always be cleared.
   const people = useMemo(() => {
@@ -502,17 +573,35 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
   const projectColors = useProjectColors(displayConvs);
 
   const days = useMemo(() => {
-    const map = new Map<string, Conversation[]>();
+    const dayKey = (ts: number) => new Date(ts).toLocaleDateString("en-CA", { timeZone: tz });
+    const convDays = new Map<string, FeedEntry[]>();
     for (const c of windowed) {
       const ts = c.updated_at || c.started_at || Date.now();
-      const date = new Date(ts).toLocaleDateString("en-CA", { timeZone: tz });
-      if (!map.has(date)) map.set(date, []);
-      map.get(date)!.push(c);
+      const date = dayKey(ts);
+      if (!convDays.has(date)) convDays.set(date, []);
+      convDays.get(date)!.push({ kind: "conv", ts, conv: c });
     }
-    return [...map.entries()]
-      .sort((a, b) => b[0].localeCompare(a[0]))
-      .map(([date, convs]) => ({ date, convs }));
-  }, [windowed, tz]);
+    const gitDays = new Map<string, FeedEntry[]>();
+    if (showGit) {
+      for (const e of gitInView) {
+        const ts = e.created_at ?? 0;
+        if (!ts) continue;
+        const date = dayKey(ts);
+        if (!gitDays.has(date)) gitDays.set(date, []);
+        gitDays.get(date)!.push({ kind: "git", ts, event: e });
+      }
+    }
+    const dates = new Set([...convDays.keys(), ...gitDays.keys()]);
+    return [...dates]
+      .sort((a, b) => b.localeCompare(a))
+      .map((date) => ({
+        date,
+        entries: mergeDayEntries(
+          convDays.get(date) ?? [],
+          (gitDays.get(date) ?? []).sort((a, b) => b.ts - a.ts),
+        ),
+      }));
+  }, [windowed, gitInView, showGit, tz]);
 
   // --- Infinite scroll. DashboardLayout nests the feed inside a scroll container
   // that varies by route, so a viewport-rooted IntersectionObserver doesn't fire;
@@ -570,17 +659,31 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
 
       {showPeople && <PeopleRow people={people} onSelect={setActorFilter} selectedId={actorFilter} />}
 
-      {projectFilter && (
-        <button
-          onClick={() => setProjectFilter(null)}
-          className="flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] bg-sol-bg-alt/60 text-sol-text-muted hover:text-sol-text transition-colors"
-        >
-          <span className="font-mono">{projectFilter}</span>
-          <span className="text-sol-text-dim/40">×</span>
-        </button>
+      {(projectFilter || gitEvents.length > 0) && (
+        <div className="flex items-center gap-2">
+          {projectFilter && (
+            <button
+              onClick={() => setProjectFilter(null)}
+              className="flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] bg-sol-bg-alt/60 text-sol-text-muted hover:text-sol-text transition-colors"
+            >
+              <span className="font-mono">{projectFilter}</span>
+              <span className="text-sol-text-dim/40">×</span>
+            </button>
+          )}
+          {gitEvents.length > 0 && (
+            <button
+              onClick={() => setShowGit((v) => !v)}
+              title={showGit ? "Hide git events" : "Show git events"}
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] transition-colors ${showGit ? "bg-sol-bg-alt/60 text-sol-text-muted hover:text-sol-text" : "bg-sol-bg-alt/30 text-sol-text-dim/50 hover:text-sol-text-muted"}`}
+            >
+              <span className="font-mono">Git</span>
+              <span className="tabular-nums text-sol-text-dim/40">{gitInView.length}</span>
+            </button>
+          )}
+        </div>
       )}
 
-      {displayConvs.length === 0 && !hasMore ? (
+      {displayConvs.length === 0 && days.length === 0 && !hasMore ? (
         <EmptyState
           title={source === "team" ? "No team sessions yet" : "No sessions"}
           description={
@@ -596,11 +699,11 @@ function FeedBody({ source, sourceConvs, hasMore, loadMore, isLoading, isLoading
         />
       ) : (
         <div ref={animate ? flipContainerRef : undefined} className={compact ? "space-y-2" : "space-y-3"}>
-          {days.map(({ date, convs }) => (
+          {days.map(({ date, entries }) => (
             <DaySection
               key={date}
               date={date}
-              convs={convs}
+              entries={entries}
               showActor={showActor}
               onNavigate={onNavigate}
               compact={compact}
@@ -856,10 +959,14 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
     return shouldShowSession(c, { excludeDefaultTitles: !c.is_own });
   }), [cached]);
 
+  // Read the store the team feeder fills; the feeder itself is mounted globally.
+  const gitEvents = useGitEvents(undefined, gitEventsNewestFirst);
+
   return (
     <FeedBody
       source="team"
       sourceConvs={sourceConvs}
+      gitEvents={gitEvents}
       hasMore={knownCursor === null ? false : (knownHasMore ?? liveHasMore)}
       loadMore={loadMore}
       isLoadingMore={loadingMore}

@@ -437,11 +437,44 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
     feeds: ["commits.getCommitsForTimeline"],
   },
+  // The PR page feeds one row into the same collection, so opening a PR paints
+  // from whatever the timeline already cached and the single row refreshes it.
   pullRequests: {
     persistence: { kind: "collection", key: "pullRequests" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
-    feeds: ["pull_requests.getPRsForTimeline"],
+    feeds: ["pull_requests.getPRsForTimeline", "pull_requests.getPRByNumber"],
+  },
+  // Code comments (review_comments): a comment on a file and line in a repo,
+  // with or without a PR. The only feed is one PR's set, which is complete for
+  // that PR but a window onto the table, so the overlay is a delta.
+  codeComments: {
+    persistence: { kind: "collection", key: "codeComments" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    indexes: "_id, pull_request_id, repository, file_path, created_at",
+    feeds: ["codeComments.listForPR"],
+  },
+  // Git activity as first class events (git_events): one row per commit,
+  // push, PR change, review, check result or code comment. Every feed is a
+  // window (a team page, one conversation, one PR), so the overlay is a
+  // delta: absence in a payload means "outside this window", never "deleted".
+  // Not workspace scoped — access is decided server side by team membership
+  // or by the linked conversation, and a row carries no `workspace` key.
+  gitEvents: {
+    persistence: { kind: "collection", key: "gitEvents" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    indexes: "_id, team_id, conversation_id, pr_id, task_id, repository, created_at",
+    feeds: [
+      "gitEvents.listForTeam",
+      "gitEvents.listForConversation",
+      "gitEvents.listForPR",
+      "gitEvents.listForTask",
+      "gitEvents.listForPlan",
+      "gitEvents.listForProject",
+      "gitEvents.listForRepository",
+    ],
   },
   // The daemon-side fleet (managed_sessions). listActiveSessions is the
   // COMPLETE live set (24h heartbeat window) — snapshot, so a session that
@@ -827,6 +860,8 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   sessionThreads: "shared",
   commits: "shared",
   pullRequests: "shared",
+  codeComments: "shared",
+  gitEvents: "shared",
   managedSessions: "shared",
   sessionMetricsAggregate: "shared",
   pendingPermissions: "shared",

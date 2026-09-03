@@ -12,6 +12,8 @@ import {
   targetAccountEmail,
   continueTargetPin,
   continueNeedsRestart,
+  parkedOnActiveAccount,
+  resumePinFor,
   isExhaustionCurrent,
   isUsageExhausted,
   isWindowRolled,
@@ -732,5 +734,143 @@ describe("continueNeedsRestart", () => {
     expect(continueNeedsRestart({ pending_api_error_kind: "auth" }, pinned, now)).toBe(true);
     expect(continueNeedsRestart({ pending_api_error_kind: "auth" }, undefined, now)).toBe(true);
     expect(continueNeedsRestart({ pending_api_error_kind: "limit", cc_account: "other" }, { ...pinned, is_remote: true }, now)).toBe(false);
+  });
+});
+
+describe("parks on another account's pin", () => {
+  const now = 10_000_000_000;
+  const parkedAt = now - 60_000; // parked a minute ago — no settled probe yet
+  const live = { expires_at: now + 1 };
+  const device = {
+    is_remote: false,
+    cc_session_tokens: true,
+    cc_accounts: {
+      active_email: "a@x.com",
+      profiles: [
+        { name: "ashot", email: "a@x.com" },
+        { name: "spent", email: "s@x.com", token: live },
+      ],
+    },
+  };
+  const headroom: CcUsage = {
+    fetched_at: parkedAt + 30_000, // seconds after the park: fails the settled-probe bar
+    session: { percent: 63, resets_at: now + 3 * 3600_000 },
+    weekly: { percent: 33, resets_at: now + 6 * 86_400_000 },
+  };
+  const base = {
+    now,
+    parkedAt,
+    activeEmail: "a@x.com",
+    activeSince: now - 86_400_000,
+    profiles: [{ name: "ashot", email: "a@x.com", usage: headroom }, { name: "spent", email: "s@x.com" }],
+    attempts: [],
+    allowSwitch: false,
+  };
+
+  test("parkedOnActiveAccount: unpinned and own-identity pins ran on the active login; other, unknown and identity-less pins did not", () => {
+    expect(parkedOnActiveAccount({}, device)).toBe(true);
+    expect(parkedOnActiveAccount({ cc_account: null }, device)).toBe(true);
+    expect(parkedOnActiveAccount({ cc_account: "ashot" }, device)).toBe(true);
+    expect(parkedOnActiveAccount({ cc_account: "spent" }, device)).toBe(false);
+    expect(parkedOnActiveAccount({ cc_account: "gone" }, device)).toBe(false);
+    expect(parkedOnActiveAccount({ cc_account: "ashot" }, { ...device, cc_accounts: { profiles: [{ name: "ashot" }] } })).toBe(false);
+    // Remotes run the pushed credential; a stale pin there is inert.
+    expect(parkedOnActiveAccount({ cc_account: "spent" }, { ...device, is_remote: true })).toBe(true);
+    expect(parkedOnActiveAccount({ cc_account: "spent" }, undefined)).toBe(false);
+  });
+
+  test("a park that only implicates another account's pin continues at once — no wait on the active windows", () => {
+    // Read as the active account's own park nothing proves headroom yet, so
+    // the loop books the active session reset hours away (the 2026-09-03 wait).
+    expect(decideAutoSwitch(base).action).toBe("exhausted");
+    expect(decideAutoSwitch({ ...base, activeParkedAt: parkedAt }).action).toBe("exhausted");
+    // Read as the pinned account's park: the restart that corrects the pin
+    // un-parks it, and the active meters show headroom.
+    expect(decideAutoSwitch({ ...base, activeParkedAt: null })).toEqual({ action: "continue" });
+  });
+
+  test("a spent active account still gates: foreign parks wait on its reset like every other", () => {
+    const pegged: CcUsage = {
+      fetched_at: now - 60_000,
+      session: { percent: 100, resets_at: now + 3600_000 },
+      weekly: { percent: 40, resets_at: now + 86_400_000 },
+    };
+    const d = decideAutoSwitch({
+      ...base,
+      activeParkedAt: null,
+      profiles: [{ name: "ashot", email: "a@x.com", usage: pegged }],
+    });
+    expect(d).toEqual({ action: "exhausted", retry_at: now + 3600_000 + 2 * 60_000 });
+  });
+
+  test("mixed parks: the active account's own park still needs its evidence, then one continue covers both", () => {
+    const mixed = { ...base, activeParkedAt: parkedAt - 10_000 };
+    expect(decideAutoSwitch(mixed).action).toBe("exhausted");
+    const settled = { ...headroom, fetched_at: parkedAt + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS };
+    expect(
+      decideAutoSwitch({ ...mixed, profiles: [{ name: "ashot", email: "a@x.com", usage: settled }] }),
+    ).toEqual({ action: "continue" });
+  });
+
+  test("a continue already tried for this park is not repeated", () => {
+    const d = decideAutoSwitch({
+      ...base,
+      activeParkedAt: null,
+      attempts: [{ profile: AUTO_SWITCH_CONTINUE_KEY, at: parkedAt + 1000 }],
+    });
+    expect(d.action).toBe("exhausted");
+  });
+
+  test("a snapshot older than the activation still waits for the post-switch probe", () => {
+    const d = decideAutoSwitch({
+      ...base,
+      activeParkedAt: null,
+      activeSince: now - 60_000,
+      profiles: [{ name: "ashot", email: "a@x.com", usage: { ...headroom, fetched_at: now - 10 * 60_000 } }],
+    });
+    expect(d.action).toBe("wait");
+  });
+});
+
+describe("resumePinFor", () => {
+  const now = 1_000_000;
+  const live = { expires_at: now + 1 };
+  const keychainOnly = {
+    is_remote: false,
+    cc_session_tokens: true,
+    cc_accounts: {
+      active_email: "a@x.com",
+      profiles: [
+        { name: "ashot", email: "a@x.com" },
+        { name: "spent", email: "s@x.com", token: live },
+      ],
+    },
+  };
+  const tokened = {
+    ...keychainOnly,
+    cc_accounts: {
+      active_email: "a@x.com",
+      profiles: [
+        { name: "ashot", email: "a@x.com", token: live },
+        { name: "spent", email: "s@x.com", token: live },
+      ],
+    },
+  };
+  const limitParked = { pending_api_error: true, pending_api_error_kind: "limit", cc_account: "spent" };
+
+  test("a limit- or auth-parked session pinned to another account resumes under this device's continue pin", () => {
+    expect(resumePinFor(limitParked, keychainOnly, now)).toBeUndefined();
+    expect(resumePinFor(limitParked, tokened, now)).toBe("ashot");
+    expect(resumePinFor({ ...limitParked, pending_api_error_kind: "auth" }, tokened, now)).toBe("ashot");
+    expect(resumePinFor({ ...limitParked, cc_account: "gone" }, keychainOnly, now)).toBeUndefined();
+  });
+
+  test("an unparked session, a connection park, a remote, or a pin already on this account keeps its pin", () => {
+    expect(resumePinFor({ cc_account: "spent" }, keychainOnly, now)).toBe("spent");
+    expect(resumePinFor({ ...limitParked, pending_api_error: false }, keychainOnly, now)).toBe("spent");
+    expect(resumePinFor({ ...limitParked, pending_api_error_kind: "connection" }, keychainOnly, now)).toBe("spent");
+    expect(resumePinFor({ ...limitParked, cc_account: "ashot" }, tokened, now)).toBe("ashot");
+    expect(resumePinFor({ ...limitParked, cc_account: undefined }, tokened, now)).toBeUndefined();
+    expect(resumePinFor(limitParked, { ...keychainOnly, is_remote: true }, now)).toBe("spent");
   });
 });
