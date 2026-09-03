@@ -1,6 +1,6 @@
 import { test, expect, describe, beforeEach } from "bun:test";
 import { useInboxStore } from "../store/inboxStore";
-import { takeReviewBatch, attachReviewToMessage } from "./reviewActions";
+import { takeReviewBatch, attachReviewToMessage, createReviewComment } from "./reviewActions";
 import { formatPlanFeedback, formatDocFeedback, formatPendingComments, sortPendingComments, type PendingComment } from "./quoteFormat";
 
 const CONV = "conv-test";
@@ -157,5 +157,16 @@ describe("removeReviewComment clears the review target (no lingering highlight)"
     const s = useInboxStore.getState();
     expect(s.reviewComments[CONV]?.map((c) => c.id)).toEqual(["1"]);
     expect(s.reviewMessageId).toBe("m1"); // m1 still has quote "1"
+  });
+});
+
+describe("createReviewComment", () => {
+  test("commits the quote, targets its block, and opens its note editor", () => {
+    const id = createReviewComment(CONV, "m9", 2, "the chunk");
+    const s = useInboxStore.getState();
+    expect(s.reviewComments[CONV]).toEqual([expect.objectContaining({ id, messageId: "m9", blockIndex: 2, quote: "the chunk", body: "" })]);
+    expect(s.reviewMessageId).toBe("m9");
+    expect(s.reviewActiveBlock).toBe(2);
+    expect(s.reviewEditingId).toBe(id);
   });
 });
