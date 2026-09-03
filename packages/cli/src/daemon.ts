@@ -849,6 +849,19 @@ interface DaemonState {
   lastHeartbeatTick?: number;
   runtimeVersion?: string;
   lastSelfHealRestart?: number;
+  // Loop freeze budget, written by the 30s monitor tick so `cast health` can
+  // print the SLO without asking the daemon. `at` is the stamp so a stale state
+  // file reads as stale rather than current.
+  loopFreeze?: {
+    recentMs: number;
+    hourMs: number;
+    hourCount: number;
+    hourMaxMs: number;
+    bootMs: number;
+    bootCount: number;
+    top: string;
+    at: number;
+  };
   // macOS App Data (TCC) outcome for Cursor's data dir, recorded so later
   // logins can start the watcher without re-touching an undecided TCC state
   // (see cursorWatcherDecision) and doctor can explain a denial.
@@ -2071,8 +2084,12 @@ function syncHealthFields(): {
   pending_sync_conversations: number;
   daemon_started_at: number;
   loop_freeze_ms: number;
+  loop_freeze_1h_ms: number;
+  loop_freeze_max_ms: number;
+  loop_freeze_top: string;
 } {
   const health = retryQueueRef?.getHealth();
+  const freeze = loopFreezes.summary();
   return {
     pending_sync_count: health?.pending ?? 0,
     oldest_pending_ms: health?.oldestPendingMs ?? 0,
@@ -2081,7 +2098,13 @@ function syncHealthFields(): {
     // Boot time and recent loop-freeze budget: the web reads these as
     // "restarted, catching up" and "under load" (see LoopFreezeLedger).
     daemon_started_at: daemonStartedAt,
-    loop_freeze_ms: loopFreezes.recentMs(),
+    loop_freeze_ms: freeze.recentMs,
+    // Rounded at the source, not only in the projection: the server rewrites the
+    // devices row whenever a heartbeat field changed, so a raw millisecond value
+    // would churn the roster on every 30s beat.
+    loop_freeze_1h_ms: Math.round(freeze.hourMs / 5_000) * 5_000,
+    loop_freeze_max_ms: Math.round(freeze.hourMaxMs / 1_000) * 1_000,
+    loop_freeze_top: freeze.top,
   };
 }
 
@@ -10120,7 +10143,11 @@ function extractPromptHeading(lines: string[], firstOptionIdx: number): { header
 
 export function parseInteractivePrompt(text: string): InteractivePrompt | null {
   const lines = text.split("\n");
-  const optionPattern = /^\s*[❯>)]*\s*(\d+)[.)]\s+(.+?)(?:\s{2,}(.+?))?$/;
+  // '›' (U+203A) belongs here alongside '❯': codex draws its menu cursor with it.
+  // Without it the cursor ROW of a codex menu fails to parse, so a three-option
+  // menu reads as two options with no cursor — enough to miss the menu entirely
+  // and let the readiness poll declare the pane idle while a modal is up.
+  const optionPattern = /^\s*[❯›>)]*\s*(\d+)[.)]\s+(.+?)(?:\s{2,}(.+?))?$/;
   const options: Array<{ label: string; description?: string }> = [];
   let firstOptionIdx = -1;
   let lastOptionIdx = -1;
@@ -10142,7 +10169,7 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
     if (m) {
       if (lastOptionIdx < 0) lastOptionIdx = i;
       firstOptionIdx = i;
-      if (/^\s*[❯>]\s*\d/.test(lines[i])) hasCursorIndicator = true;
+      if (/^\s*[❯›>]\s*\d/.test(lines[i])) hasCursorIndicator = true;
       if (CHECKBOX_PREFIX.test(m[2])) hasCheckbox = true;
       const label = m[2]
         .replace(CHECKBOX_PREFIX, "")        // multiSelect checkbox: "[ ]" / "[x]" / "☐"
@@ -10823,6 +10850,7 @@ export type TmuxLiveState =
   | "rewind"        // Rewind/Restore modal — Escape to cancel (NEVER Enter, that rewinds)
   | "trust"         // workspace "Quick safety check" prompt — Enter accepts ("Yes, I trust" is preselected)
   | "warning"       // dismissable banner — Enter to ack
+  | "update_menu"   // agent's own "Update available" menu — Escape (Enter would RUN the update)
   | "exited"        // bare shell, agent has exited — abort
   | "unknown";      // anything we don't recognize — defer, do not guess
 
@@ -10869,6 +10897,36 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // an Enter-press-loop that mis-classifies as AGENT_STUCK_WARNING for any
   // Claude Code session with an update pending. Mirrors injectViaTmuxInner's
   // own guard, which only acks warnings when no prompt is visible.
+  // A numbered menu the agent never asked for, checked BEFORE the idle rule
+  // below because it defeats that rule twice over. Codex's startup banner is:
+  //
+  //     Update available! 0.147.0 -> 0.153.0
+  //   › 1. Update now (runs `bun install -g @openai/codex`)
+  //     2. Skip
+  //     3. Skip until next version
+  //     Press enter to continue
+  //
+  // Its selection cursor is '›', which `promptVisible` reads as a live composer,
+  // so the whole pane classified "idle" and took a paste + Enter. And its footer
+  // says "Press enter to continue", so the warning rule would ALSO press Enter.
+  // Both are wrong in the same direction: the cursor rests on "Update now", so
+  // Enter runs a global package install inside the agent's pane. Escape is the
+  // only safe key here (verified against codex 0.147.0), which is why this needs
+  // its own state rather than folding into "warning".
+  // Keyed on the menu's SHAPE, not on the banner text: the live region is the
+  // last few lines, so "Update available!" has usually scrolled out of it by the
+  // time we classify. What is always in view is a numbered option row carrying
+  // the selection cursor, together with the "Press enter to continue" footer.
+  //
+  // That pair is specific enough to be safe. A Claude warning banner has the same
+  // footer but no numbered options, so it stays "warning" and still gets Enter. An
+  // AskUserQuestion menu has numbered options but not this footer, so it stays a
+  // blocking menu for parseInteractivePrompt to handle rather than being dismissed
+  // out from under the user.
+  const numberedCursorRow = /^[^\S\n]*[›❯>][^\S\n]*\d+[.)][^\S\n]/m.test(region);
+  if (numberedCursorRow && /Press enter to continue|Update available!/i.test(region)) {
+    return "update_menu";
+  }
   const promptVisible = region.includes("❯") || region.includes("›");
   if (promptVisible) return "idle";
   if (/Press enter to continue|Update available|weekly limit|recorded with model|⚠/i.test(region)) return "warning";
@@ -12158,6 +12216,187 @@ async function healSqueezedAgentWindows(): Promise<number> {
   return healed;
 }
 
+// Reported when the pane holds no agent process. Prefixed SESSION_EXITED so it
+// routes through the existing transient path: short backoff, then a retry that
+// recreates the pane. That retry is the whole point — a pane we cannot classify
+// must end in a rebuild, never in an unbounded defer.
+const DEAD_PANE_ERROR = "SESSION_EXITED: no agent process in the pane";
+
+/**
+ * Positive evidence that a pane exists and has NO agent process in its tree.
+ *
+ * The asymmetry is deliberate and load-bearing: a `true` here authorizes tearing
+ * the pane down, so every uncertain path must return `false`. A failed tmux
+ * probe, an unreadable process tree, a pane that has already vanished — none of
+ * those are evidence of death, and treating them as such would kill live panes
+ * on a transient hiccup. Only "the pane is there, and nothing agent-shaped is
+ * running under it" returns true.
+ *
+ * This is the check that makes recovery total. Pane TEXT can only be classified
+ * against shapes we have already seen, so `classifyTmuxLiveState` will always
+ * have an unknown case; process liveness has no vocabulary to fall outside of.
+ */
+async function paneHasNoAgent(target: string): Promise<boolean> {
+  const bare = target.split(":")[0];
+  if (!bare || !hasTmux()) return false;
+  try {
+    // The pane must demonstrably exist. A missing one is handled by the callers
+    // that recreate it, and must not be reported as "alive but empty".
+    const { stdout } = await tmuxExec(
+      ["list-panes", "-t", bare, "-F", "#{pane_pid}"],
+      { timeout: 3000, killSignal: "SIGKILL" },
+    );
+    const panePid = parseInt(stdout.trim().split("\n")[0] ?? "", 10);
+    if (!Number.isInteger(panePid)) return false;
+    return (await findAgentPidInTree(panePid)) === null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Is `pid` reachable through `target`'s pane — that is, is the pane's shell one
+ * of its ancestors?
+ *
+ * Walks UP from the process rather than down from the pane: the chain is short
+ * and bounded, and it answers the question directly. An orphan reparented to
+ * init has `1` as its whole chain, so it can never match a pane.
+ *
+ * Uncertainty returns `true` (assume the pane does own it). A false negative
+ * here would discard a perfectly good route to a live agent, which is the more
+ * expensive mistake: the orphan case is rare, a broken ps read is not.
+ */
+async function paneOwnsPid(target: string, pid: number): Promise<boolean> {
+  const bare = target.split(":")[0];
+  if (!bare || !hasTmux() || !Number.isInteger(pid)) return true;
+  try {
+    const { stdout } = await tmuxExec(
+      ["list-panes", "-t", bare, "-F", "#{pane_pid}"],
+      { timeout: 3000, killSignal: "SIGKILL" },
+    );
+    const panePids = new Set(
+      stdout.trim().split("\n").map(s => parseInt(s.trim(), 10)).filter(Number.isInteger),
+    );
+    if (panePids.size === 0) return true;
+    let cur = pid;
+    for (let hop = 0; hop < 12 && cur > 1; hop++) {
+      if (panePids.has(cur)) return true;
+      const { stdout: out } = await execAsync(`ps -o ppid= -p ${cur} 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
+      const parent = parseInt(out.trim(), 10);
+      if (!Number.isInteger(parent) || parent === cur) return true;
+      cur = parent;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Clean up an agent process that no pane can reach any more.
+ *
+ * Such a process is pure cost: it cannot be talked to, and it keeps holding the
+ * tty that makes `ps` lookups resolve to a pane which can no longer drive it.
+ * The one in ct-48187 sat at ~45% of a core for forty minutes.
+ *
+ * Killing the WRONG process here is a mistake this codebase has already paid for
+ * once: a Codex subagent resolves to its PARENT's pid, so reaping on the
+ * subagent's behalf SIGKILLs the parent TUI and every sibling thread. So all four
+ * conditions must hold independently:
+ *
+ *   1. the caller established that the pane is not an ancestor of the pid,
+ *   2. it is orphaned to init — a process with a living parent is somebody's
+ *      child and not ours to collect,
+ *   3. its argv names THIS session, which a borrowed parent pid never does,
+ *   4. the session positively OWNS its process (planSessionTeardown refuses on
+ *      "unknown" rather than guessing).
+ *
+ * Any doubt skips the reap. Skipping costs one stray process; guessing wrong
+ * kills a live agent somebody is talking to.
+ */
+async function reapOrphanedAgent(sessionId: string, pid: number, pane: string): Promise<void> {
+  try {
+    const { stdout } = await execAsync(
+      `ps -o ppid=,command= -p ${pid} 2>/dev/null`,
+      { timeout: 3000, killSignal: "SIGKILL" },
+    );
+    const line = stdout.trim();
+    if (!line) return;
+    const ppid = parseInt(line.split(/\s+/)[0] ?? "", 10);
+    if (ppid !== 1) {
+      log(`[ORPHAN] not reaping pid=${pid} for ${shortId(sessionId)}: parent ${ppid} is alive, so it is not orphaned`);
+      return;
+    }
+    if (!line.includes(sessionId)) {
+      log(`[ORPHAN] not reaping pid=${pid} for ${shortId(sessionId)}: argv does not name this session (likely a borrowed parent pid)`);
+      return;
+    }
+    if (!planSessionTeardown(sessionProcessOwnership(sessionId)).reapPidTree) {
+      log(`[ORPHAN] not reaping pid=${pid} for ${shortId(sessionId)}: session does not positively own its process`);
+      return;
+    }
+    const killed = await reapPidTree(pid);
+    log(`[ORPHAN] reaped ${killed} process(es) for ${shortId(sessionId)} (pid=${pid}, stranded off ${pane})`);
+  } catch {}
+}
+
+/**
+ * Accept Claude Code's workspace trust dialog by SELECTING the affirmative
+ * option, never by pressing a key blind. Returns true once it confirmed.
+ *
+ * The dialog, verified against Claude Code 2.1.259:
+ *
+ *     ❯ No, exit
+ *       Yes, I trust this folder
+ *     Enter to confirm · Esc to cancel
+ *
+ * "No, exit" is the DEFAULT highlight. So the bare Enter this used to send chose
+ * it, the agent quit, the pane died, the resume rebuilt it, and the next Enter
+ * killed it again — an unbounded loop that never delivered (jx745rs5). Escape is
+ * no better: it is this dialog's cancel, which is the same "No, exit". The 2026-08-21
+ * fix swapped Escape for Enter and moved the check earlier, but both keys share
+ * the real defect — they act on a selection nobody read.
+ *
+ * Hence the loop below: read the dialog, move the highlight onto the line that
+ * grants trust, re-read to prove it moved, and only then confirm. If the
+ * highlight cannot be placed, press NOTHING and let the caller retry or escalate.
+ * Never confirming is recoverable; confirming the wrong option is not.
+ */
+export async function acceptTrustPrompt(target: string): Promise<boolean> {
+  const CURSOR = /^\s*[❯>]\s*\S/;
+  const AFFIRMATIVE = /^\s*[❯>]?\s*Yes\b/i;
+  const capture = async (): Promise<string[]> => {
+    const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-30"]);
+    return stdout.split("\n");
+  };
+  const press = async (key: string, times = 1) => {
+    for (let i = 0; i < times; i++) {
+      await tmuxExec(["send-keys", "-t", target, key]);
+      await new Promise(r => setTimeout(r, 120));
+    }
+  };
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const lines = await capture();
+    const cursorIdx = lines.findIndex(l => CURSOR.test(l));
+    const yesIdx = lines.findIndex(l => AFFIRMATIVE.test(l));
+    if (yesIdx < 0) return false;                 // not the dialog we know — do nothing
+    if (cursorIdx === yesIdx) {
+      log(`Accepting workspace trust prompt in ${target} (Enter on "${lines[yesIdx].trim()}")`);
+      await tmuxExec(["send-keys", "-t", target, "Enter"]);
+      await new Promise(r => setTimeout(r, 2000));
+      return true;
+    }
+    if (cursorIdx < 0) return false;              // can't see the highlight — never guess
+    const delta = yesIdx - cursorIdx;
+    await press(delta > 0 ? "Down" : "Up", Math.abs(delta));
+    await new Promise(r => setTimeout(r, 300));
+    // Loop re-reads and only confirms once the highlight is provably on "Yes".
+  }
+  log(`Could not place the trust-dialog highlight on the affirmative option in ${target}; pressing nothing`);
+  return false;
+}
+
 export async function ensureTmuxReady(target: string, agentType?: AgentClientId): Promise<{ busy: boolean }> {
   const STUCK_BUDGET_MS = 8_000;
   await ensureTmuxPaneWide(target);
@@ -12195,6 +12434,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId)
 
     // Corrective states: cap total time and bail if our key didn't move the state.
     if (Date.now() - startedAt >= STUCK_BUDGET_MS) {
+      if (await paneHasNoAgent(target)) throw new Error(DEAD_PANE_ERROR);
       throw new Error(`AGENT_NOT_READY: live state '${state}' did not settle within ${STUCK_BUDGET_MS}ms`);
     }
 
@@ -12209,6 +12449,11 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId)
 
     if (state === lastCorrectiveState) {
       if (++sameStateAttempts >= 3) {
+        // Our key changed nothing three times running. The commonest reason is
+        // that there is nobody to press it AT: a dead pane's shell echoes a new
+        // prompt for every Enter, so the state "never settles" forever. Ask the
+        // process tree before blaming the UI.
+        if (await paneHasNoAgent(target)) throw new Error(DEAD_PANE_ERROR);
         throw new Error(`AGENT_STUCK_${state.toUpperCase()}: corrective input did not change live state`);
       }
     } else {
@@ -12217,6 +12462,18 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId)
     }
 
     if (state === "unknown") {
+      // "Unknown" is a statement about our vocabulary, not about the pane. Text
+      // classification can only recognize shapes someone has already seen, so it
+      // can never be complete — and an unrecognized pane used to defer forever
+      // (ct-48187: a resume with cwd=/ left a bare shell whose "/:" prompt matched
+      // no rule, and delivery retried into it for 40 minutes). The process tree
+      // answers the question that actually matters and cannot be out of
+      // vocabulary: if no agent lives in this pane, the pane is dead whatever it
+      // renders. Report that as the terminating state so the caller recreates it.
+      if (await paneHasNoAgent(target)) {
+        log(`Unrecognized live UI in ${target} AND no agent process in the pane — treating as exited: ${region.replace(/\s+/g, " ").slice(0, 160)}`);
+        throw new Error(DEAD_PANE_ERROR);
+      }
       log(`Unrecognized live UI in ${target}, deferring: ${region.replace(/\s+/g, " ").slice(0, 240)}`);
       throw new Error("AGENT_UNKNOWN_STATE: deferring");
     }
@@ -12230,9 +12487,13 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId)
       await tmuxExec(["send-keys", "-t", target, "Escape"]);
       await new Promise(resolve => setTimeout(resolve, 500));
     } else if (state === "trust") {
-      log(`Accepting workspace trust prompt in ${target} (Enter)`);
-      await tmuxExec(["send-keys", "-t", target, "Enter"]);
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await acceptTrustPrompt(target);
+    } else if (state === "update_menu") {
+      // Escape, never Enter: the cursor sits on "Update now", so Enter would run
+      // a package install inside the agent's pane. See classifyTmuxLiveState.
+      log(`Dismissing agent update menu in ${target} (Escape, never Enter)`);
+      await tmuxExec(["send-keys", "-t", target, "Escape"]);
+      await new Promise(resolve => setTimeout(resolve, 800));
     } else if (state === "warning") {
       log(`Dismissing warning banner in ${target}`);
       await tmuxExec(["send-keys", "-t", target, "Enter"]);
@@ -14511,6 +14772,50 @@ const SESSION_CIRCUIT_BREAKER_THRESHOLD = 3;
 const SESSION_CIRCUIT_BREAKER_COOLDOWN_MS = 300_000; // 5 minutes — fatal failures
 const SESSION_CIRCUIT_BREAKER_TRANSIENT_COOLDOWN_MS = 15_000; // 15s — transient (slow/raced boot)
 
+// ── Last-resort pane rebuild ────────────────────────────────────────────────
+// The classifier and the process probe together cover every failure we know how
+// to name, and that is exactly why this exists: it covers the ones we don't.
+//
+// The residual case is a pane that still HAS an agent process, so `paneHasNoAgent`
+// says nothing is wrong, whose UI we cannot classify — a hung TUI, a redraw we've
+// never seen, a future client's screen. Backing off and retrying into it produces
+// the same verdict forever, which is precisely the shape of the ct-48187 wedge:
+// three messages retried for forty minutes with no path that ever rebuilt.
+//
+// So deferral is made finite. After enough consecutive unresolvable attempts the
+// pane is torn down and the ordinary resume path builds a fresh one. Recovery
+// then no longer depends on recognizing the failure, which is the only way a
+// session can be recoverable from a state nobody anticipated.
+const PANE_REBUILD_THRESHOLD = 5;
+const PANE_REBUILD_WINDOW_MS = 10 * 60_000;
+const unresolvablePanes = new Map<string, { count: number; last: number }>();
+
+// Errors meaning "a pane is there but we could not act on it". SESSION_EXITED is
+// deliberately absent: it already terminates in a rebuild. So are the two
+// rethrown "payload not consumed yet" signals, which mean the pane is fine.
+const UNRESOLVABLE_PANE_ERRORS = /^(AGENT_UNKNOWN_STATE|AGENT_NOT_READY|AGENT_STUCK_|AGENT_CAPTURE_FAILED)/;
+
+/** Record an unresolvable inject and report whether this pane has earned a rebuild. */
+export function noteUnresolvablePane(
+  sessionId: string,
+  errorMessage: string,
+  now = Date.now(),
+  store = unresolvablePanes,
+): boolean {
+  if (!UNRESOLVABLE_PANE_ERRORS.test(errorMessage)) return false;
+  const prev = store.get(sessionId);
+  // A gap longer than the window means the pane recovered in between; start over
+  // rather than accumulating unrelated failures into a teardown.
+  const count = prev && now - prev.last <= PANE_REBUILD_WINDOW_MS ? prev.count + 1 : 1;
+  store.set(sessionId, { count, last: now });
+  return count >= PANE_REBUILD_THRESHOLD;
+}
+
+/** Any successful delivery clears the streak — the pane demonstrably works. */
+export function clearUnresolvablePane(sessionId: string, store = unresolvablePanes): void {
+  store.delete(sessionId);
+}
+
 export function isSessionCircuitOpen(sessionId: string): boolean {
   const entry = sessionDeliveryFailures.get(sessionId);
   if (!entry) return false;
@@ -15786,9 +16091,10 @@ async function probeStartedPane(entry: StartedSessionInfo): Promise<{ state: Sta
   }
   const state = classifyStartedPane(paneContent, AGENT_CLIENTS[entry.agentType].promptReadyPattern);
   if (state === "trust") {
-    log(`Started session ${entry.tmuxSession} showing trust prompt, sending Enter to accept`);
-    await tmuxExec(["send-keys", "-t", entry.tmuxSession, "Enter"]).catch(() => {});
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    // Same dialog, same hazard as the resume path: "No, exit" is the default
+    // highlight, so a bare Enter here quit the agent it had just started.
+    log(`Started session ${entry.tmuxSession} showing trust prompt, selecting the affirmative option`);
+    await acceptTrustPrompt(entry.tmuxSession).catch(() => false);
   }
   return { state, pane: paneContentAfterLaunchEcho(paneContent) };
 }
@@ -16489,6 +16795,26 @@ async function resolveLiveTmuxTarget(
       return { tmuxTarget: null, source: null, proc: null, cachedStillValid };
     }
     let pane = await findTmuxPaneForTty(proc.tty);
+    // A process can OUTLIVE the pane that launched it while still holding that
+    // pane's tty. Kill the launch wrapper and the agent is reparented to init,
+    // but its controlling terminal is unchanged, so the tty→pane map still points
+    // here and this lookup "finds" a pane that can no longer reach it. Injecting
+    // then types into whatever the shell left behind and the agent never sees it.
+    //
+    // This is what made ct-48187 unrecoverable rather than merely broken. The
+    // pane tree check above had ALREADY reported the session dead and cleared the
+    // cache; this branch then resurrected the same dead pane from a `ps` match,
+    // claimed "already alive, reusing", and every retry re-entered the same loop.
+    // Two liveness oracles disagreed and the weaker one won, so the recreate path
+    // was never reached at all.
+    //
+    // A pane is only a route to a process if it is an ancestor of that process.
+    if (pane && !(await paneOwnsPid(pane, proc.pid))) {
+      log(`[ORPHAN] ${shortId(sessionId)} pid=${proc.pid} holds ${proc.tty} but is not in ${pane}'s process tree — pane cannot reach it`);
+      await reapOrphanedAgent(sessionId, proc.pid, pane);
+      sessionProcessCache.delete(sessionId);
+      return { tmuxTarget: null, source: null, proc: null, cachedStillValid };
+    }
     // Claude often runs in a tmux pane whose pty mapping isn't visible (nested tmux, fresh
     // pane): fall back to a still-valid cached target rather than the AppleScript path,
     // which would type into the foreground terminal and silently drop the message.
@@ -18000,6 +18326,7 @@ async function deliverMessage(
         agentDetectedDead = true;
       } else {
         if (live.source === "cache") syncService.setSessionError(conversationId).catch(logConvexFailure);
+        clearUnresolvablePane(sessionId);
         logDelivery(`Injected via tmux ${injectTarget} (source=${live.source})`);
         const isPollResponse = !!parsePollMessage(content);
         if (content.trimStart().startsWith("/") || isPollResponse) {
@@ -18017,6 +18344,16 @@ async function deliverMessage(
         throw err;
       }
       logDelivery(`tmux injection failed for ${injectTarget}: ${msg}`);
+      if (noteUnresolvablePane(sessionId, msg)) {
+        // Deferring again would just reproduce this verdict. Tear the pane down
+        // and let the resume below build a fresh one.
+        logDelivery(`[REBUILD] ${resumeShortId(sessionId)}: ${tmuxSessionName} unresolvable ${PANE_REBUILD_THRESHOLD}x running — rebuilding the pane`);
+        await killTmuxSessionAndTree(tmuxSessionName);
+        resumeSessionCache.delete(sessionId);
+        sessionProcessCache.delete(sessionId);
+        clearUnresolvablePane(sessionId);
+        agentDetectedDead = true;
+      }
     }
   }
 
@@ -18679,25 +19016,34 @@ function restartDaemonProcess(reason: string): void {
 // code. lastEventLoopTick is refreshed by the event-loop monitor every ~30s; if it
 // drifts far past that, the monitor's timer is dead rather than merely slow.
 let lastEventLoopTick = Date.now();
+let lastEventLoopTickMono = performance.now();
 let selfHealing = false;
 const SELF_HEAL_TICK_STALE_MS = 5 * 60 * 1000;
 
 // Restart only when the event-loop monitor's timer is dead (tick far past its ~30s
 // cadence), never when it is merely slow under load, and never twice.
+// Staleness is the smaller of the wall gap and the monotonic gap, because the
+// monotonic clock stops while the machine is suspended. A wake from hibernate
+// shows hours of wall staleness and about none of monotonic: on 2026-09-02 a
+// 2234s wall gap restarted a daemon whose timers were fine. A genuinely dead
+// timer keeps accruing monotonic staleness and still restarts, one threshold
+// after the wake.
 export function shouldSelfHeal(
   staleMs: number,
   alreadyHealing: boolean,
   thresholdMs: number = SELF_HEAL_TICK_STALE_MS,
+  monoStaleMs: number = staleMs,
 ): boolean {
   if (alreadyHealing) return false;
-  return staleMs > thresholdMs;
+  return Math.min(staleMs, monoStaleMs) > thresholdMs;
 }
 
 function selfHealIfTimersStalled(source: string): void {
   const stale = Date.now() - lastEventLoopTick;
-  if (!shouldSelfHeal(stale, selfHealing)) return;
+  const monoStale = performance.now() - lastEventLoopTickMono;
+  if (!shouldSelfHeal(stale, selfHealing, SELF_HEAL_TICK_STALE_MS, monoStale)) return;
   selfHealing = true;
-  log(`[SELF-HEAL] event-loop timer stalled ${Math.round(stale / 1000)}s (timers dead, likely post-sleep), restarting via ${source}`);
+  log(`[SELF-HEAL] event-loop timer stalled ${Math.round(monoStale / 1000)}s of loop time (${Math.round(stale / 1000)}s wall, timers dead, likely post-sleep), restarting via ${source}`);
   logLifecycle("self_heal_restart", `tick stalled ${Math.round(stale / 1000)}s, via ${source}`);
   restartDaemonProcess(`event-loop timers stalled, via ${source}`);
 }
@@ -19244,22 +19590,82 @@ const LOOP_FREEZE_REPORT_MS = 5_000;
 // state and the per-message delivery note reads it: a message that has not
 // echoed while the loop was frozen 40s of the last 60s is delayed by the
 // daemon, not lost by the session, and must not prompt a kill & restart.
+// The attribution string travels through the heartbeat, the devices row and the
+// web roster signature, which joins fields with "|" and rows with newlines. A
+// stack summary carrying either character would corrupt that whole encoding, so
+// the ledger is where they get stripped: one place, every consumer safe.
+export const FREEZE_TOP_MAX_CHARS = 120;
+export interface LoopFreezeSummary {
+  /** Blocked ms inside the trailing minute (what the web "under load" tier reads). */
+  recentMs: number;
+  /** Blocked ms, freeze count and worst single freeze inside the trailing hour. */
+  hourMs: number;
+  hourCount: number;
+  hourMaxMs: number;
+  /** Totals since boot; never pruned. */
+  bootMs: number;
+  bootCount: number;
+  /** Hot stacks of the worst freeze in the hour, sanitized and capped. */
+  top: string;
+}
 export class LoopFreezeLedger {
-  private events: Array<{ at: number; ms: number }> = [];
-  constructor(private readonly windowMs = 60_000) {}
-  record(ms: number, now = Date.now()): void {
-    this.events.push({ at: now, ms });
+  private events: Array<{ at: number; ms: number; top: string }> = [];
+  private bootTotalMs = 0;
+  private bootTotalCount = 0;
+  constructor(
+    private readonly windowMs = 60_000,
+    private readonly retentionMs = 60 * 60_000,
+  ) {}
+  record(ms: number, now = Date.now(), top = ""): void {
+    this.events.push({ at: now, ms, top });
+    this.bootTotalMs += ms;
+    this.bootTotalCount += 1;
     this.prune(now);
   }
-  /** Total ms the loop was blocked inside the trailing window. */
+  /** Total ms the loop was blocked inside the trailing minute. */
   recentMs(now = Date.now()): number {
     this.prune(now);
-    return this.events.reduce((sum, e) => sum + e.ms, 0);
+    const cutoff = now - this.windowMs;
+    return this.events.reduce((sum, e) => (e.at >= cutoff ? sum + e.ms : sum), 0);
+  }
+  summary(now = Date.now()): LoopFreezeSummary {
+    this.prune(now);
+    const minuteCutoff = now - this.windowMs;
+    let recent = 0;
+    let hourMs = 0;
+    let hourMaxMs = 0;
+    let worstTop = "";
+    for (const e of this.events) {
+      if (e.at >= minuteCutoff) recent += e.ms;
+      hourMs += e.ms;
+      // The worst freeze in the hour, not the newest: the biggest one is the
+      // one worth acting on, and a newer 6s blip would otherwise hide it.
+      if (e.ms >= hourMaxMs) {
+        hourMaxMs = e.ms;
+        worstTop = e.top;
+      }
+    }
+    return {
+      recentMs: recent,
+      hourMs,
+      hourCount: this.events.length,
+      hourMaxMs,
+      bootMs: this.bootTotalMs,
+      bootCount: this.bootTotalCount,
+      top: sanitizeFreezeTop(worstTop),
+    };
   }
   private prune(now: number): void {
-    const cutoff = now - this.windowMs;
+    const cutoff = now - this.retentionMs;
     while (this.events.length && this.events[0].at < cutoff) this.events.shift();
   }
+}
+
+export function sanitizeFreezeTop(raw: string): string {
+  return (raw || "")
+    .replace(/[|\r\n]+/g, " ")
+    .trim()
+    .slice(0, FREEZE_TOP_MAX_CHARS);
 }
 const loopFreezes = new LoopFreezeLedger();
 const daemonStartedAt = Date.now();
@@ -19276,6 +19682,26 @@ export const SUSPEND_GAP_MIN_MS = 30_000;
 export const SUSPEND_CPU_RATE = 0.005;
 export function isSuspendGap(lateMs: number, cpuMs: number): boolean {
   return lateMs >= SUSPEND_GAP_MIN_MS && cpuMs < lateMs * SUSPEND_CPU_RATE;
+}
+
+// The monotonic clock does not run while the machine is suspended, so the time
+// the loop actually failed to run is the SMALLER of the wall gap and the
+// monotonic gap. A wall gap with little monotonic lateness is a sleep whatever
+// the CPU counter says, and a big monotonic gap is a real freeze even when it
+// straddles a wake (the wall number would then wildly overstate it).
+// The CPU rule stays as the second signal, so on a platform where the monotonic
+// clock DOES advance across suspend this degrades to exactly the old behavior.
+// Exported for tests.
+export function classifyLoopGap(
+  wallLateMs: number,
+  monoLateMs: number,
+  cpuMs: number,
+): { kind: "freeze" | "suspend"; freezeMs: number } {
+  const blockedMs = Math.min(wallLateMs, monoLateMs);
+  if (blockedMs < LOOP_FREEZE_REPORT_MS || isSuspendGap(blockedMs, cpuMs)) {
+    return { kind: "suspend", freezeMs: 0 };
+  }
+  return { kind: "freeze", freezeMs: blockedMs };
 }
 
 export function summarizeSamplingTraces(raw: unknown, top = 5): string {
@@ -19326,6 +19752,10 @@ function startLoopFreezeProbe(): NodeJS.Timeout {
     } catch {}
   }
   let lastProbe = Date.now();
+  // Monotonic twin of lastProbe. performance.now() is frozen while the machine
+  // is suspended, so comparing the two clocks tells a sleep from a freeze
+  // without depending on the CPU counter (see classifyLoopGap).
+  let lastProbeMono = performance.now();
   let lastCpu = process.cpuUsage();
   // Snapshot of lastLogLine at the previous tick: the newest line written
   // before the loop stopped ticking. (Reading lastLogLine at report time would
@@ -19333,19 +19763,24 @@ function startLoopFreezeProbe(): NodeJS.Timeout {
   let logAtLastProbe = lastLogLine;
   const t = setInterval(() => {
     const now = Date.now();
+    const nowMono = performance.now();
     const late = now - lastProbe - LOOP_FREEZE_PROBE_INTERVAL_MS;
+    const monoLate = nowMono - lastProbeMono - LOOP_FREEZE_PROBE_INTERVAL_MS;
     const cpu = process.cpuUsage(lastCpu);
     lastProbe = now;
+    lastProbeMono = nowMono;
     lastCpu = process.cpuUsage();
     let traces: unknown = null;
     try { traces = drainTraces?.(); } catch {}
     if (late >= LOOP_FREEZE_REPORT_MS) {
       const cpuMs = Math.round((cpu.user + cpu.system) / 1000);
-      const suspend = isSuspendGap(late, cpuMs);
-      if (!suspend) loopFreezes.record(late, now);
       const hot = summarizeSamplingTraces(traces);
+      const verdict = classifyLoopGap(late, monoLate, cpuMs);
+      const suspend = verdict.kind === "suspend";
+      if (!suspend) loopFreezes.record(verdict.freezeMs, now, hot);
+      const reported = suspend ? late : verdict.freezeMs;
       log(
-        `[LOOP-FREEZE] event loop blocked ${Math.round(late / 1000)}s (${cpuMs}ms CPU during the freeze${suspend ? "; machine was suspended, not counted as load" : ""}); ` +
+        `[LOOP-FREEZE] event loop blocked ${Math.round(reported / 1000)}s (${cpuMs}ms CPU during the freeze${suspend ? `; machine was suspended, not counted as load (wall ${Math.round(late / 1000)}s, loop ${Math.round(Math.max(0, monoLate) / 1000)}s)` : ""}); ` +
         `last log before it: ${logAtLastProbe}${hot ? `; hot stacks: ${hot}` : ""}`,
       );
     }
@@ -19367,8 +19802,9 @@ function startEventLoopMonitor(): NodeJS.Timeout {
     const cpuDelta = process.cpuUsage(lastTickCpu);
     lastTickCpu = process.cpuUsage();
 
-    saveDaemonState({ lastHeartbeatTick: now });
+    saveDaemonState({ lastHeartbeatTick: now, loopFreeze: { ...loopFreezes.summary(now), at: now } });
     lastEventLoopTick = now;
+    lastEventLoopTickMono = performance.now();
 
     if (elapsed > EVENT_LOOP_LAG_THRESHOLD_MS) {
       // Only a genuine suspend gets recovery. A busy stall means the loop was

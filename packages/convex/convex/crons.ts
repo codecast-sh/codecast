@@ -31,6 +31,14 @@ crons.interval(
   internal.daemonLogs.checkDaemonHealth
 );
 
+// Separate entry from "check daemon health" so a failure in one alert never
+// stops the other. The 5 minute cadence is also this alert's debounce.
+crons.interval(
+  "check daemon loop freeze",
+  { minutes: 5 },
+  internal.daemonLogs.checkDeviceLoopFreeze
+);
+
 crons.interval(
   // pending_permissions was never pruned — resolved rows matter for ~5 min and
   // the daemon cancels its own after ~1h, so drop the leftovers hourly to keep

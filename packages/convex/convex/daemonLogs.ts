@@ -4,6 +4,8 @@ import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
+import { getSystemConfig } from "./systemConfig";
+import { DEVICE_ONLINE_MS } from "./deviceRouting";
 
 const isAdmin = (user: { role?: string } | null) => user?.role === "admin";
 
@@ -394,6 +396,103 @@ export const checkDaemonHealth = internalMutation({
     }
 
     return { checked: activeUsers.length, alertsCreated };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Loop-freeze SLO alert: one aggregated notification per machine per incident
+// ---------------------------------------------------------------------------
+
+// More than two minutes of the last hour blocked is the bar. Under it the web
+// still shows "under load"; past it a person should know, because every
+// delivery and echo on that machine is running late.
+export const LOOP_FREEZE_ALERT_MS = 120_000;
+// Same shape as accountSwitch's blocked-incident cooldown: past it, a WORSE
+// hour announces itself again.
+export const FREEZE_NOTIFY_COOLDOWN_MS = 30 * 60 * 1000;
+
+/** The whole decision, so the cron handler stays a loop over rows.
+ * The "covered" rule compares hour totals rather than only timing out: an old
+ * daemon that stopped reporting leaves its last value frozen on the row, and a
+ * frozen value never grows, so it can alert at most once. A bare cooldown would
+ * re-alert on that stale number every 30 minutes forever. */
+export function shouldNotifyDeviceFreeze(input: {
+  hourMs: number | undefined;
+  thresholdMs: number;
+  online: boolean;
+  state?: { last_notified_at: number; last_hour_ms: number };
+  now: number;
+}): boolean {
+  if (!input.online) return false;
+  if (!input.hourMs || input.hourMs < input.thresholdMs) return false;
+  const state = input.state;
+  if (!state) return true;
+  if (input.hourMs <= state.last_hour_ms) return false;
+  return input.now - state.last_notified_at >= FREEZE_NOTIFY_COOLDOWN_MS;
+}
+
+const secs = (ms: number) => `${Math.round(ms / 1000)}s`;
+
+/** Runs on the same 5 minute cron as checkDaemonHealth, as its own entry so a
+ * failure in one alert never stops the other. The cron cadence IS the debounce,
+ * so there is no scheduler hop here. */
+export const checkDeviceLoopFreeze = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const RECENTLY_ACTIVE_MS = 24 * 60 * 60 * 1000;
+    const configured = Number(await getSystemConfig(ctx, "loop_freeze_alert_ms"));
+    const thresholdMs = Number.isFinite(configured) && configured > 0 ? configured : LOOP_FREEZE_ALERT_MS;
+
+    const activeUsers = await ctx.db
+      .query("users")
+      .withIndex("by_last_heartbeat", (q) =>
+        q.gte("last_heartbeat", now - RECENTLY_ACTIVE_MS)
+      )
+      .collect();
+
+    let notified = 0;
+    let devicesChecked = 0;
+
+    for (const user of activeUsers) {
+      const devices = await ctx.db
+        .query("devices")
+        .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
+        .collect();
+
+      for (const device of devices) {
+        devicesChecked++;
+        const hourMs = device.loop_freeze_1h_ms;
+        const online = now - device.last_seen < DEVICE_ONLINE_MS;
+        if (!shouldNotifyDeviceFreeze({ hourMs, thresholdMs, online, state: device.freeze_notify_state, now })) {
+          continue;
+        }
+
+        const machine = device.label || device.hostname || device.platform || "This machine";
+        const worst = device.loop_freeze_max_ms ? ` Worst single freeze ${secs(device.loop_freeze_max_ms)}.` : "";
+        const cause = device.loop_freeze_top ? ` Top cause: ${device.loop_freeze_top}.` : "";
+        const message =
+          `The daemon's event loop was frozen ${secs(hourMs!)} in the last hour.${worst}${cause}` +
+          ` Deliveries and echoes on this machine are delayed, not lost.`;
+
+        // Stamp BEFORE delivering so a racing tick cannot double-push.
+        await ctx.db.patch(device._id, {
+          freeze_notify_state: { last_notified_at: now, last_hour_ms: hourMs! },
+        });
+        await ctx.runMutation(internal.notificationRouter.emit, {
+          event_type: "daemon_overloaded" as const,
+          entity_type: "device" as const,
+          entity_id: device._id,
+          direct_recipient_id: user._id,
+          actor_name: machine,
+          message,
+          link: "/settings/devices",
+        });
+        notified++;
+      }
+    }
+
+    return { devicesChecked, notified };
   },
 });
 

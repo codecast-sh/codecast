@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyBypassBlock, classifyTmuxLiveState, extractTmuxLiveRegion, isPhantomBypassPermissionBlock, paneContentAfterLaunchEcho } from "./daemon.js";
+import { classifyBypassBlock, classifyTmuxLiveState, clearUnresolvablePane, extractTmuxLiveRegion, isPhantomBypassPermissionBlock, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt } from "./daemon.js";
 
 describe("isPhantomBypassPermissionBlock", () => {
   test("suppresses auto-approved tool permission_blocked in bypass mode", () => {
@@ -466,4 +466,95 @@ test("workspace trust prompt classifies as trust, not rewind", () => {
     " Enter to confirm · Esc to cancel",
   ].join("\n");
   expect(classifyTmuxLiveState(region)).toBe("trust");
+});
+
+// ── Agent update menu, and why Enter is the wrong key (ct-48187) ────────────
+// Verbatim capture from `codex 0.147.0` launched with a CODEX_HOME whose
+// version.json advertised 0.153.0. Two details matter and both are load-bearing:
+// the selection cursor is '›' (U+203A), not '❯', and the footer says "Press
+// enter to continue" while the cursor rests on "Update now". The pane therefore
+// used to classify "idle" (any '›' read as a live composer), and would have
+// classified "warning" without the cursor — and BOTH of those press Enter, which
+// runs `bun install -g @openai/codex` inside the agent's pane.
+const CODEX_UPDATE_MENU_PANE = `
+  ✨ Update available! 0.147.0 -> 0.153.0
+
+  Release notes: https://github.com/openai/codex/releases/latest
+
+› 1. Update now (runs \`bun install -g @openai/codex\`)
+  2. Skip
+  3. Skip until next version
+
+  Press enter to continue`;
+
+describe("agent update menu", () => {
+  test("classifies as update_menu, not idle and not warning", () => {
+    const region = extractTmuxLiveRegion(CODEX_UPDATE_MENU_PANE);
+    expect(classifyTmuxLiveState(region)).toBe("update_menu");
+  });
+
+  test("the '›' cursor alone must never read as an idle composer", () => {
+    // The regression in one line: '›' is a menu cursor here, not a prompt.
+    expect(classifyTmuxLiveState("› 1. Update now\n  2. Skip\n  Press enter to continue"))
+      .not.toBe("idle");
+  });
+
+  test("a real composer showing '›' still reads idle", () => {
+    // The narrow match must not cost us ordinary readiness detection.
+    expect(classifyTmuxLiveState("› Ask Codex to do anything\n  gpt-5.6-sol · /tmp")).toBe("idle");
+  });
+
+  test("parseInteractivePrompt sees all three options and the cursor", () => {
+    const prompt = parseInteractivePrompt(CODEX_UPDATE_MENU_PANE);
+    expect(prompt).not.toBeNull();
+    // Before the fix the '›' row failed the option regex, so the menu parsed as
+    // two options with no cursor indicator.
+    expect(prompt!.options.map(o => o.label)).toEqual([
+      "Update now (runs `bun install -g @openai/codex`)",
+      "Skip",
+      "Skip until next version",
+    ]);
+  });
+});
+
+// ── Deferral is finite (ct-48187) ──────────────────────────────────────────
+describe("noteUnresolvablePane", () => {
+  test("rebuilds only after the threshold, counting consecutive failures", () => {
+    const store = new Map<string, { count: number; last: number }>();
+    const results = [1, 2, 3, 4, 5].map(i =>
+      noteUnresolvablePane("s1", "AGENT_UNKNOWN_STATE: deferring", 1000 * i, store),
+    );
+    expect(results).toEqual([false, false, false, false, true]);
+  });
+
+  test("a pane that recovered in between starts a fresh streak", () => {
+    const store = new Map<string, { count: number; last: number }>();
+    noteUnresolvablePane("s1", "AGENT_UNKNOWN_STATE", 0, store);
+    noteUnresolvablePane("s1", "AGENT_UNKNOWN_STATE", 1000, store);
+    // Long gap: unrelated failures must not accumulate into a teardown.
+    expect(noteUnresolvablePane("s1", "AGENT_UNKNOWN_STATE", 60 * 60_000, store)).toBe(false);
+    expect(store.get("s1")!.count).toBe(1);
+  });
+
+  test("a success clears the streak", () => {
+    const store = new Map<string, { count: number; last: number }>();
+    for (const i of [1, 2, 3, 4]) noteUnresolvablePane("s1", "AGENT_STUCK_WARNING", 1000 * i, store);
+    clearUnresolvablePane("s1", store);
+    expect(noteUnresolvablePane("s1", "AGENT_STUCK_WARNING", 5000, store)).toBe(false);
+  });
+
+  test("ignores errors that already terminate in a rebuild", () => {
+    const store = new Map<string, { count: number; last: number }>();
+    for (const i of [1, 2, 3, 4, 5, 6]) {
+      expect(noteUnresolvablePane("s1", "SESSION_EXITED: no agent process in the pane", 1000 * i, store)).toBe(false);
+    }
+  });
+
+  test("counts every state we cannot act on", () => {
+    for (const err of ["AGENT_UNKNOWN_STATE: deferring", "AGENT_NOT_READY: live state", "AGENT_STUCK_WARNING: x", "AGENT_CAPTURE_FAILED: x"]) {
+      const store = new Map<string, { count: number; last: number }>();
+      const last = [1, 2, 3, 4, 5].map(i => noteUnresolvablePane("s", err, 1000 * i, store)).pop();
+      expect(last).toBe(true);
+    }
+  });
 });
