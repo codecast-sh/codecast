@@ -26,8 +26,8 @@ import { isPidAlive } from "../../workspace/chrome.js";
 import { armRecorder } from "../observe.js";
 import { isRealSession, type EngineOptions } from "../engine.js";
 import {
-  bridgeEndpoint, bridgeWsUrl, ensureBridgeHost, proveBridgeHost, readBridgeState, waitForExtension, type BridgeState,
-  type ProvenBridge,
+  bridgeEndpoint, bridgeWsUrl, ensureBridgeHost, proveBridgeHost, readBridgeState, waitForExtension, type BridgeHostStarter,
+  type BridgeHostStatus, type BridgeState, type ProvenBridge,
 } from "./host.js";
 
 // ---------------------------------------------------------------------------
@@ -177,11 +177,15 @@ export async function bridgeEndpointIfConfigured(): Promise<CdpEndpoint | null> 
  * session must go through this so the flags never differ between calls —
  * the daemon resets its tab when they do. The bridge URL carries the token,
  * so the host is proven (host.ts probeHost) before the URL is ever built.
+ *
+ * Bare, this never starts a host: a down host is an error, which is what the
+ * reaper and other courtesies want. A verb about to act passes the bridge
+ * `requireRealBridge` returned, which started the host if it had to and saw
+ * the extension on it.
  */
-export async function engineBrowserFor(session: string): Promise<EngineOptions & { session: string }> {
+export async function engineBrowserFor(session: string, bridge?: ProvenBridge): Promise<EngineOptions & { session: string }> {
   if (!isRealSession(session)) return { session };
-  const state = requireBridgeConfigured();
-  return { session, cdp: bridgeWsUrl(await proveBridgeHost(state)) };
+  return { session, cdp: bridgeWsUrl(bridge ?? (await proveBridgeHost(requireBridgeConfigured()))) };
 }
 
 export function rememberRealTab(sessionKey: string | null, targetId: string): void {
@@ -226,18 +230,31 @@ export function realTabOwnership(sessionKey: string | null): { mine?: string; ot
 export const EXTENSION_RECONNECT_GRACE_MS = 8_000;
 
 /**
+ * The bridge with its host up, and whether the extension is on it. A host
+ * that is not running is started here, never reported: the extension can
+ * only prove itself to a running host, and it reconnects to a new one on its
+ * own within seconds (host.ts waitForExtension), so a host that just came up
+ * is given EXTENSION_RECONNECT_GRACE_MS to hear from it before the answer is
+ * "not connected". Every question about the real Chrome's reachability goes
+ * through here, whether it wants the answer (status) or a bridge to act on
+ * (requireRealBridge). `start` is the test seam for bringing the host up.
+ */
+export async function connectRealBridge(
+  start?: BridgeHostStarter,
+): Promise<{ bridge: ProvenBridge & { started: boolean }; status: BridgeHostStatus }> {
+  requireBridgeConfigured();
+  const bridge = await ensureBridgeHost(start);
+  const status = await waitForExtension(bridge, bridge.started ? EXTENSION_RECONNECT_GRACE_MS : 0);
+  return { bridge, status };
+}
+
+/**
  * A ready bridge: host up and the extension on the other end. Failing here,
  * with the setup instructions, beats failing on the first verb with less
  * context — a host with no extension can only ever answer errors.
  */
-export async function requireRealBridge(): Promise<ProvenBridge> {
-  requireBridgeConfigured();
-  const state = await ensureBridgeHost();
-  // A host that just came up has no extension yet: the extension finds it
-  // within seconds on its own (host.ts waitForExtension), so the first real
-  // command after a host restart waits instead of failing with the
-  // instructions for a machine that was never paired.
-  const status = await waitForExtension(state, state.started ? EXTENSION_RECONNECT_GRACE_MS : 0);
+export async function requireRealBridge(start?: BridgeHostStarter): Promise<ProvenBridge> {
+  const { bridge, status } = await connectRealBridge(start);
   if (!status.extensionConnected) {
     throw new Error(
       "the cast bridge extension is not connected to this machine's bridge host.\n" +
@@ -245,7 +262,7 @@ export async function requireRealBridge(): Promise<ProvenBridge> {
         "  `cast browser extension setup`; it hands the extension the current token and port.",
     );
   }
-  return state;
+  return bridge;
 }
 
 /** Live page targets in the real Chrome; also prunes stale ownership. */

@@ -169,6 +169,12 @@ const ShareMessage = lazy(() => import("@/app/share/message/[token]/page"));
 const ShareDoc = lazy(() => import("@/app/share/doc/[token]/page"));
 const SharePlan = lazy(() => import("@/app/share/plan/[token]/page"));
 
+// Browsing a repository
+const RepoIndex = lazy(() => import("@/app/repo/page"));
+const RepoHistory = lazy(() => import("@/app/repo/[owner]/[name]/page"));
+const RepoTree = lazy(() => import("@/app/repo/[owner]/[name]/tree/[ref]/page"));
+const RepoBlob = lazy(() => import("@/app/repo/[owner]/[name]/blob/[ref]/page"));
+
 // Code review
 const CommitView = lazy(() => import("@/app/commit/[owner]/[repo]/[sha]/page"));
 const PrView = lazy(() => import("@/app/pr/[owner]/[repo]/[number]/page"));
@@ -199,7 +205,7 @@ const SettingsTeam = lazy(() => import("@/app/settings/team/page"));
 const SettingsTeamCreate = lazy(() => import("@/app/settings/team/create/page"));
 const SettingsTeamJoin = lazy(() => import("@/app/settings/team/join/page"));
 const SettingsNotifications = lazy(() => import("@/app/settings/notifications/page"));
-const SettingsIntegrationsGithub = lazy(() => import("@/app/settings/integrations/github-app/page"));
+const SettingsIntegrations = lazy(() => import("@/app/settings/integrations/page"));
 const SettingsDesktop = lazy(() => import("@/app/settings/desktop/page"));
 
 /**
@@ -303,9 +309,17 @@ export const ROUTES: RouteEntry[] = [
   { path: "share/doc/:token", component: cast(ShareDoc), layout: "share", guestOk: true, guestKind: "public" },
   { path: "share/plan/:token", component: cast(SharePlan), layout: "share", guestOk: true, guestKind: "public" },
 
+  // -- Browsing a repository. The tree and blob pages carry the file path in the
+  //    query string (`?path=`), not the route, so every path here is a fixed set
+  //    of segments and the tab shell can render all four in place. --
+  { path: "repo", component: cast(RepoIndex), layout: "dashboardShell", tab: "/repo", fullWidth: true },
+  { path: "repo/:owner/:name", component: cast(RepoHistory), layout: "codeReview", tab: "/repo/:owner/:name", fullWidth: true },
+  { path: "repo/:owner/:name/tree/:ref", component: cast(RepoTree), layout: "codeReview", tab: "/repo/:owner/:name/tree/:ref", fullWidth: true },
+  { path: "repo/:owner/:name/blob/:ref", component: cast(RepoBlob), layout: "codeReview", tab: "/repo/:owner/:name/blob/:ref", fullWidth: true },
+
   // -- Code review --
-  { path: "commit/:owner/:repo/:sha", component: cast(CommitView), layout: "codeReview", fullWidth: true },
-  { path: "pr/:owner/:repo/:number", component: cast(PrView), layout: "codeReview", fullWidth: true },
+  { path: "commit/:owner/:repo/:sha", component: cast(CommitView), layout: "codeReview", tab: "/commit/:owner/:repo/:sha", fullWidth: true },
+  { path: "pr/:owner/:repo/:number", component: cast(PrView), layout: "codeReview", tab: "/pr/:owner/:repo/:number", fullWidth: true },
   { path: "review/:id", component: cast(ReviewView), layout: "codeReview" },
   { path: "review/batch", component: cast(ReviewBatch), layout: "codeReview" },
 
@@ -351,7 +365,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "settings/team/create", component: cast(SettingsTeamCreate), layout: "settings" },
   { path: "settings/team/join", component: cast(SettingsTeamJoin), layout: "settings" },
   { path: "settings/notifications", component: cast(SettingsNotifications), layout: "settings" },
-  { path: "settings/integrations/github-app", component: cast(SettingsIntegrationsGithub), layout: "settings" },
+  { path: "settings/integrations", component: cast(SettingsIntegrations), layout: "settings" },
+  { path: "settings/integrations/github-app", component: cast(SettingsIntegrations), layout: "settings" },
   { path: "settings/desktop", component: cast(SettingsDesktop), layout: "settings" },
 
   // -- Public profiles (anonymous, guest-viewable, at the ROOT: /<handle>) --

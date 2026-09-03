@@ -6,14 +6,18 @@
 // which of the existing connect flows the button runs. The flows themselves
 // already exist elsewhere and are not duplicated here:
 //
-//   oauth-popup         Slack's "Add to Slack" flow (convex/slack.ts
-//                       getInstallUrl / completeSlackInstall).
+//   oauth-popup         An authorize round trip in a popup. Slack runs its own
+//                       "Add to Slack" flow (convex/slack.ts getInstallUrl /
+//                       completeSlackInstall), Gmail runs convex/googleOAuth.ts,
+//                       and Linear and Notion share the generic connector in
+//                       convex/oauthConnectors.ts (one PROVIDERS entry each).
 //   github-app-install  The GitHub App install URL (github.com/apps/<slug>/
 //                       installations/new; convex/githubApp.ts stores the
 //                       installation the webhook reports back).
 //   coming-soon         No connector exists yet. The card renders, says so,
-//                       and is not clickable. Gmail, Linear and Notion sit
-//                       here until their connectors land (Gmail: ct-43101).
+//                       and is not clickable. No app sits here today; the kind
+//                       stays for the next service that arrives before its
+//                       connector does.
 //
 // Connection STATE is not in this file either — `appConnections.listConnections`
 // (convex) answers that per workspace, in the `AppConnectionStatus` shape below,
@@ -64,7 +68,7 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
     tagline: "Give agents the repositories your team works in.",
     bullets: [
       "Run triggers when a PR opens, gets a comment, or merges",
-      "Act on repositories with a scoped token instead of a personal one",
+      "Import a repository's issues as tasks and write changes back",
       "Limit access to the repositories you pick at install",
     ],
     connectKind: "github-app-install",
@@ -87,9 +91,9 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
     name: "Linear",
     tagline: "Keep issues in step with the code agents ship.",
     bullets: [
-      "File an issue from a failing test or a found bug",
-      "Move the issue when the fixing PR merges",
-      "Pull an issue's description into the session working on it",
+      "Import a team or project as a codecast project, issues as tasks",
+      "Write a task's title, status, assignee and comments back to the issue",
+      "Hand an issue to an agent when it takes the label you choose",
     ],
     connectKind: "oauth-popup",
     scope: "team",
@@ -97,11 +101,10 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
   notion: {
     id: "notion",
     name: "Notion",
-    tagline: "Read and write the docs your team lives in.",
+    tagline: "Hold the grant now; the reading and writing lands next.",
     bullets: [
-      "Turn a session's findings into a page",
-      "Answer questions from the docs you share with it",
-      "Keep a runbook current as the system changes",
+      "Connect the workspace and pick the pages you share",
+      "No agent surface reads Notion yet — the grant just waits here",
     ],
     connectKind: "oauth-popup",
     scope: "team",
@@ -140,4 +143,17 @@ export type AppConnectionStatus =
        * button that can only fail.
        */
       disconnect_id?: string;
+      /**
+       * Liveness of the connection itself, as the connector stamps it
+       * (docs/architecture/issue-sync.md S1.5: `last_webhook_at`,
+       * `last_sync_at` and `last_error` on `app_installations` /
+       * `github_app_installations`). Absent means the connector does not
+       * stamp health yet — the UI then says nothing rather than reporting a
+       * silence it cannot distinguish from a failure.
+       */
+      health?: {
+        last_webhook_at?: number;
+        last_sync_at?: number;
+        last_error?: string;
+      };
     };

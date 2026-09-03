@@ -731,6 +731,16 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   inbox_dormant_at?: number | null;
   anchor_id?: unknown;
   armed_trigger_kind?: string | null;
+  // The pull request this session shepherds (prShepherd.refreshConversationPrStatus).
+  // Presentation only: no bucket or work-state rule reads it.
+  pr_status?: {
+    pr_id: string;
+    repository: string;
+    number: number;
+    title?: string;
+    state: string;
+    at: number;
+  } | null;
   loop_state?: Pick<LoopState, "status" | "wakeup_at" | "fired_at" | "event_at"> | null;
   settle_verdict?: string | null;
   settle_verdict_at?: number | null;

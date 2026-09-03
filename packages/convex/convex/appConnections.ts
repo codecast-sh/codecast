@@ -25,6 +25,12 @@ async function installerName(
   return user?.name ?? user?.email ?? null;
 }
 
+/** S1.5 health stamps as the connector writes them; undefined until it has. */
+function healthOf(row: { last_webhook_at?: number; last_sync_at?: number; last_error?: string }) {
+  if (row.last_webhook_at === undefined && row.last_sync_at === undefined && row.last_error === undefined) return undefined;
+  return { last_webhook_at: row.last_webhook_at, last_sync_at: row.last_sync_at, last_error: row.last_error };
+}
+
 export const listConnections = query({
   args: { api_token: v.optional(v.string()) },
   handler: async (ctx, args): Promise<{ apps: AppConnectionStatus[] }> => {
@@ -81,6 +87,7 @@ export const listConnections = query({
             at: row.created_at,
             detail: row.account_label ?? undefined,
             disconnect_id: String(row._id),
+            health: healthOf(row),
           });
         }
         continue;
@@ -167,6 +174,7 @@ export const listConnections = query({
         // (requireTeamAdmin), so only an admin gets it — a plain member would
         // otherwise see a Disconnect button that can only fail.
         disconnect_id: isTeamAdmin ? String(install._id) : undefined,
+        health: healthOf(install),
       });
     }
 

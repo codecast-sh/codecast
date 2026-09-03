@@ -25,3 +25,58 @@ export function useCommits(where?: (c: any) => boolean): any[] {
 export function usePullRequests(where?: (p: any) => boolean): any[] {
   return useCollectionRows<any>("pullRequests", { where, sig: prSig, sort: byUpdatedDesc });
 }
+
+// One PR, fed into the same collection the timeline fills. The page reads the
+// store, so a PR the timeline already cached paints before this answers.
+export function useSyncPullRequest(args: { repository: string; number: number } | "skip") {
+  return useSyncCollection("pullRequests", api.pull_requests.getPRByNumber, args, {
+    select: (row: any) => (row ? [row] : []),
+  });
+}
+
+// The PR page paints far more of a row than the timeline lane does, so it wakes
+// on its own signature rather than widening the lane's.
+const prDetailSig = (p: any) =>
+  [
+    p.title, p.state, p.draft, p.updated_at, p.merged_at ?? "", p.body,
+    p.head_sha ?? "", p.mergeable_state ?? "", p.behind_by ?? "", p.review_decision ?? "",
+    p.checks_state ?? "", (p.checks ?? []).length, p.unresolved_review_count ?? "",
+    (p.requested_reviewers ?? []).join(","), (p.linked_session_ids ?? []).join(","),
+    (p.task_ids ?? []).join(","), (p.files ?? []).length,
+    p.shepherd_state ?? "", p.shepherd_enabled ?? "", p.shepherd_conversation_id ?? "",
+    p.shepherd_last_wake_at ?? "", p.shepherd_wake_count ?? "",
+  ].join("|");
+
+export function usePullRequest(repository: string, number: number): any | undefined {
+  const rows = useCollectionRows<any>("pullRequests", {
+    where: (p) => p.repository === repository && p.number === number,
+    sig: prDetailSig,
+  });
+  return rows[0];
+}
+
+// One commit, fed into the same collection the timeline fills. Same trick as
+// useSyncPullRequest: the commit page paints from whatever the timeline already
+// cached, and this refreshes the row with everything the lane leaves out.
+export function useSyncCommit(sha: string | undefined) {
+  return useSyncCollection("commits", api.commits.getCommitBySha, sha ? { sha } : "skip", {
+    select: (row: any) => (row ? [row] : []),
+  });
+}
+
+// The commit page paints the whole row, files included, so it wakes on its own
+// signature rather than widening the lane's.
+const commitDetailSig = (c: any) =>
+  [
+    c.message, c.timestamp, c.branch ?? "", c.conversation_id ?? "",
+    c.pr_id ?? "", c.pr_number ?? "", (c.task_ids ?? []).join(","),
+    (c.files ?? []).length, c.insertions ?? "", c.deletions ?? "",
+  ].join("|");
+
+export function useCommit(sha: string | undefined): any | undefined {
+  const rows = useCollectionRows<any>("commits", {
+    where: (c) => !!sha && c.sha === sha,
+    sig: commitDetailSig,
+  });
+  return rows[0];
+}

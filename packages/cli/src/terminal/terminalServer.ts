@@ -471,7 +471,3 @@ export function clampDim(value: unknown, max: number, min = 2): number {
   if (!Number.isFinite(n)) return Math.max(80, min);
   return Math.min(Math.max(n, min), max);
 }
-
-export function generateTerminalToken(): string {
-  return crypto.randomBytes(32).toString("hex");
-}

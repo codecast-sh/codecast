@@ -25,3 +25,30 @@ export function getFileStatus(status: string): {
       return { label: "?", color: "text-sol-text-muted", bgColor: "bg-sol-text-muted/20" };
   }
 }
+
+// Which side of a diff a line belongs to: LEFT is the file before the change,
+// RIGHT the file after. GitHub names the sides this way on a review comment,
+// and a comment is anchored to a side as well as a line, because the same
+// number means two different lines on the two sides.
+export type DiffSide = "LEFT" | "RIGHT";
+
+/** The anchor a line thread hangs on. */
+export type DiffLineAnchor = { side: DiffSide; lineNumber: number };
+
+/** One string key for an anchor, so a Map can hold both sides of a line. */
+export function diffLineKey(anchor: DiffLineAnchor): string {
+  return `${anchor.side}:${anchor.lineNumber}`;
+}
+
+export function parseDiffLineKey(key: string): DiffLineAnchor {
+  const [side, line] = key.split(":");
+  return { side: side === "LEFT" ? "LEFT" : "RIGHT", lineNumber: Number(line) };
+}
+
+/** The side a comment with no explicit side belongs to. GitHub defaults an
+ *  unsided comment to the file after the change. */
+export const DEFAULT_DIFF_SIDE: DiffSide = "RIGHT";
+
+export function normalizeDiffSide(side: string | undefined): DiffSide {
+  return (side ?? "").toUpperCase() === "LEFT" ? "LEFT" : DEFAULT_DIFF_SIDE;
+}

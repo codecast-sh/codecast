@@ -59,6 +59,10 @@ const SharePlan = lazy(() => import("@/app/share/plan/[token]/page"));
 const PublicProfile = lazy(() => import("@/app/u/[username]/page"));
 
 const CommitView = lazy(() => import("@/app/commit/[owner]/[repo]/[sha]/page"));
+const RepoIndex = lazy(() => import("@/app/repo/page"));
+const RepoHistory = lazy(() => import("@/app/repo/[owner]/[name]/page"));
+const RepoTree = lazy(() => import("@/app/repo/[owner]/[name]/tree/[ref]/page"));
+const RepoBlob = lazy(() => import("@/app/repo/[owner]/[name]/blob/[ref]/page"));
 const PrView = lazy(() => import("@/app/pr/[owner]/[repo]/[number]/page"));
 const ReviewView = lazy(() => import("@/app/review/[id]/page"));
 const ReviewBatch = lazy(() => import("@/app/review/batch/page"));
@@ -118,8 +122,10 @@ const SettingsTeam = lazy(() => import("@/app/settings/team/page"));
 const SettingsTeamCreate = lazy(() => import("@/app/settings/team/create/page"));
 const SettingsTeamJoin = lazy(() => import("@/app/settings/team/join/page"));
 const SettingsNotifications = lazy(() => import("@/app/settings/notifications/page"));
-const SettingsIntegrationsGithub = lazy(() => import("@/app/settings/integrations/github-app/page"));
+const SettingsIntegrations = lazy(() => import("@/app/settings/integrations/page"));
 const SettingsDesktop = lazy(() => import("@/app/settings/desktop/page"));
+// Registers the issue feed kinds with ExternalEventRow before any feed paints.
+import "@/lib/issueEventStyles";
 
 function E({ name, children }: { name: string; children: ReactNode }) {
   return <ErrorBoundary name={name} level="panel">{children}</ErrorBoundary>;
@@ -250,6 +256,12 @@ export function App() {
             <Route path="share/doc/:token" element={<E name="ShareDoc"><ShareDoc /></E>} />
             <Route path="share/plan/:token" element={<E name="SharePlan"><SharePlan /></E>} />
 
+            {/* Browsing a repository: its history, its source, one commit. */}
+            <Route path="repo" element={<E name="RepoIndex"><RepoIndex /></E>} />
+            <Route path="repo/:owner/:name" element={<E name="RepoHistory"><RepoHistory /></E>} />
+            <Route path="repo/:owner/:name/tree/:ref" element={<E name="RepoTree"><RepoTree /></E>} />
+            <Route path="repo/:owner/:name/blob/:ref" element={<E name="RepoBlob"><RepoBlob /></E>} />
+
             {/* Code review */}
             <Route path="commit/:owner/:repo/:sha" element={<E name="CommitView"><CommitView /></E>} />
             <Route path="pr/:owner/:repo/:number" element={<E name="PrView"><PrView /></E>} />
@@ -293,7 +305,9 @@ export function App() {
               <Route path="team/create" element={<E name="SettingsTeamCreate"><SettingsTeamCreate /></E>} />
               <Route path="team/join" element={<E name="SettingsTeamJoin"><SettingsTeamJoin /></E>} />
               <Route path="notifications" element={<E name="SettingsNotifications"><SettingsNotifications /></E>} />
-              <Route path="integrations/github-app" element={<E name="SettingsIntegrations"><SettingsIntegrationsGithub /></E>} />
+              <Route path="integrations" element={<E name="SettingsIntegrations"><SettingsIntegrations /></E>} />
+              {/* Old deep link; the GitHub install flow still returns here. */}
+              <Route path="integrations/github-app" element={<E name="SettingsIntegrations"><SettingsIntegrations /></E>} />
               <Route path="desktop" element={<E name="SettingsDesktop"><SettingsDesktop /></E>} />
             </Route>
 
