@@ -20,13 +20,13 @@ import { threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } fro
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, chipBucketFilters, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { sessionsWakeSig, resolveShowOld, showsBlockedBadge } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { actedBlockedConversations, isBlockedConversation, isSubagentConversation, isUsageExhausted, nestParentIdOf, worstUsagePercent, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { isLivenessStale, blockedContinueClientId, rankByHeadroom, CONTINUE_BANNER_KINDS, isStashHidden } from "@codecast/shared/contracts";
+import { isLivenessStale, rankByHeadroom, isStashHidden } from "@codecast/shared/contracts";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -654,36 +654,13 @@ function BlockedSessionsBanner({
     onClearForced?.();
   };
 
-  // Local-first: queue "continue" through the store's own send path (optimistic
-  // bubble + outbox-durable sendMessage), the exact machinery a hand-typed
-  // "continue" in each composer would use. The sessions flip to WORKING with
-  // the amber pending pill synchronously — no server round trip gates the UI —
-  // and delivery/retry/failure honesty is inherited from the outbox. Same
-  // selection and same minute-bucketed client id as the server's
-  // continueAllBlocked (the CLI path), so a racing CLI run or double-click
-  // dedups server-side into a single send.
-  const handleContinueAll = () => {
-    const store = useInboxStore.getState();
-    const targets = acted.filter((sess) =>
-      CONTINUE_BANNER_KINDS.includes(sess.pending_api_error_kind ?? ""),
-    );
-    const at = Date.now();
-    for (const sess of targets) {
-      const clientId = blockedContinueClientId(sess._id, at);
-      store.addOptimisticMessage(sess._id, "continue", undefined, clientId);
-      store.sendMessage(sess._id, "continue", undefined, clientId);
-    }
-    // Stamp so the banner/pill drop these instantly too (their server blocked
-    // flag stays set until the agent actually resumes).
-    store.markBlockedReviveRequested(targets.map((sess) => sess._id));
-    toast.success(`Queued "continue" to ${targets.length} blocked session${targets.length === 1 ? "" : "s"}`);
-    closeBanner();
-  };
-
-  // Revive on the account the machine is signed into NOW: no swap — the
-  // no-profile switch command degrades to kill (the blocked processes hold
-  // the dead token in memory) + continue, so a re-login on the same account
-  // doesn't force a switch to a different one.
+  // Revive on the account the machine is signed into NOW: no swap. The
+  // server sends each session the delivery it needs — a plain "continue"
+  // where a message reaches it, a kill + resume first where it cannot: a
+  // signed-out process holds the dead token in memory, and a process pinned
+  // to another account's setup-token would only re-fail on that account
+  // (its pin is corrected before the restart, so the resume lands on this
+  // account). The client cannot see pins, so it never picks the delivery.
   // The daemon work (keychain swap, kill, restart, re-queue) is inherently
   // remote, but the user's gesture renders instantly, in every acted session at
   // once: the "continue" each one is about to receive is painted into its local
@@ -734,10 +711,12 @@ function BlockedSessionsBanner({
         for (const id of stranded) store.removeOptimisticMessage(id, clientIds[id]);
         store.clearBlockedReviveRequested(stranded);
       }
+      const restarted = (res as { restarted?: number }).restarted ?? 0;
       toast.success(
         (targetLabel
           ? `Switching to ${targetLabel} — ${res.conversations} blocked session${res.conversations === 1 ? "" : "s"} will continue on it`
-          : `Restarting ${res.conversations} blocked session${res.conversations === 1 ? "" : "s"} on the current account`) +
+          : `Queued "continue" to ${res.conversations} blocked session${res.conversations === 1 ? "" : "s"} on the current account` +
+            (restarted > 0 ? ` (${restarted} restarted first)` : "")) +
           (res.unreachable > 0 ? ` (${res.unreachable} unreachable: daemon offline)` : "") +
           (unswitchable > 0
             ? ` (${unswitchable} skipped: ${unswitchableDevices.join(", ")} ${unswitchableDevices.length === 1 ? "does" : "do"} not have that account saved)`
@@ -760,11 +739,7 @@ function BlockedSessionsBanner({
   // machinery's problem, resolved here per click, never a menu the user picks
   // from. The button therefore always acts on the whole acted set and always
   // says the full count.
-  const handleContinue = () => {
-    if (selectedAccount) return void runRevive(switchTarget(selectedAccount));
-    if (authCount > 0) return void runRevive(undefined);
-    handleContinueAll();
-  };
+  const handleContinue = () => void runRevive(selectedAccount ? switchTarget(selectedAccount) : undefined);
   // "all" only when the button truly covers the headline count — when
   // subagents are skipped the label drops to a plain number and the breakdown
   // line right above accounts for the difference.
@@ -772,9 +747,7 @@ function BlockedSessionsBanner({
     acted.length === 1 ? "it" : acted.length === blocked.length ? `all ${acted.length}` : `${acted.length}`;
   const continueTitle = selectedAccount
     ? `Switch ${executors.length === 1 ? executors[0].label : "the machines owning these sessions"} to ${selectedAccount.email ?? selectedAccount.name}, restart the blocked sessions, and continue them on it`
-    : authCount > 0
-      ? `Send "continue" to each blocked session — ${authCount === acted.length ? "they are" : `the ${authCount} signed out are`} restarted first (their processes hold an expired login), no account change`
-      : `Send "continue" to each blocked session — no restart, no account change${limitCount > 0 ? "; they resume once the limit resets" : ""}`;
+    : `Send "continue" to each blocked session on the current account — ${authCount > 0 ? `${authCount === acted.length ? "they are" : `the ${authCount} signed out are`} restarted first (their processes hold an expired login); ` : ""}a session pinned to another account's token is restarted on this one${limitCount > 0 && authCount === 0 ? "; the rest resume once the limit resets" : ""}`;
 
   // The permanent decision: clear the banner flag on these sessions so they
   // leave the blocked set for good (only a NEW banner re-flags them). Local
@@ -3355,6 +3328,7 @@ function SessionListPanelImpl({
     s => s.activeBucketFilter,
     s => s.chipFilterExclude,
     s => s.extraBucketFilters,
+    s => s.extraProjectFilters,
     s => s.buckets,
     s => s.bucketAssignments,
     s => s.collapsedSections,
@@ -3527,9 +3501,9 @@ function SessionListPanelImpl({
   const filterByChip = useCallback(
     (items: InboxSession[]) =>
       items.filter((sess) =>
-        chipMatchesSession(sess, { projectFilter: s.activeProjectFilter, exclude: s.chipFilterExclude, bucketFilters: chipBucketFilters(s), bucketByConv }),
+        chipMatchesSession(sess, { projectFilters: chipProjectFilters(s), bucketFilters: chipBucketFilters(s), bucketByConv }),
       ),
-    [s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, bucketByConv],
+    [s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv],
   );
 
   // The Stashed / Killed buckets' open state is ephemeral and CLOSED by
@@ -3583,15 +3557,13 @@ function SessionListPanelImpl({
     () => [...statusQuestions, ...filteredNeedsInput, ...filteredDone, ...filteredDormant],
     [statusQuestions, filteredNeedsInput, filteredDone, filteredDormant],
   );
-  // Schedule rows honor the project chip like session cards do.
+  // Schedule rows honor the project chips like session cards do.
   const scheduleRowsView = useMemo(
     () =>
       s.activeProjectFilter
-        ? schedulePartition.rows.filter(
-            (r) => (getProjectName(undefined, r.task.project_path) === s.activeProjectFilter) !== s.chipFilterExclude,
-          )
+        ? schedulePartition.rows.filter((r) => passesFilterTerms(chipProjectFilters(s), getProjectName(undefined, r.task.project_path)))
         : schedulePartition.rows,
-    [schedulePartition.rows, s.activeProjectFilter, s.chipFilterExclude],
+    [schedulePartition.rows, s.activeProjectFilter, s.chipFilterExclude, s.extraProjectFilters],
   );
   // A schedule row opens the conversation behind it — the loop's home session
   // or the newest run; the dismissed-peek path handles folded runs.
@@ -3906,9 +3878,9 @@ function SessionListPanelImpl({
         manualOrder,
         freezeOrder: viewMode === "recent" ? recentFreezeOrder : null,
         chipMatches: (sess) =>
-          chipMatchesSession(sess, { projectFilter: s.activeProjectFilter, exclude: s.chipFilterExclude, bucketFilters: chipBucketFilters(s), bucketByConv }),
+          chipMatchesSession(sess, { projectFilters: chipProjectFilters(s), bucketFilters: chipBucketFilters(s), bucketByConv }),
       }),
-    [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, bucketByConv],
+    [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv],
   );
   const totalSubagentCount = useMemo(() => {
     let count = 0;
@@ -3976,19 +3948,20 @@ function SessionListPanelImpl({
   // No label tier — everything falls to project groups via the shared grouper.
   const favoritesView = s.showFavorites;
   const allFavorites = useMemo(
-    () => (favoritesView ? selectFavoriteSessions(s.sessions, null, s.favorites) : EMPTY_FAVORITES),
+    () => (favoritesView ? selectFavoriteSessions(s.sessions, undefined, s.favorites) : EMPTY_FAVORITES),
     [favoritesView, s.sessions, s.favorites],
   );
   const favoriteGroups = useMemo(() => {
     if (!favoritesView) return null;
-    const scoped = s.activeProjectFilter
-      ? allFavorites.filter((x) => (getProjectName(x.git_root, x.project_path) === s.activeProjectFilter) !== s.chipFilterExclude)
+    const projectFilters = chipProjectFilters(s);
+    const scoped = projectFilters.length
+      ? allFavorites.filter((x) => passesFilterTerms(projectFilters, getProjectName(x.git_root, x.project_path)))
       : allFavorites;
     const pinned = scoped.filter((x) => x.is_pinned).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
     const rest = scoped.filter((x) => !x.is_pinned);
     const { projectGroups } = groupSessionsForLabelView(rest, {}, {});
     return { pinned, projectGroups, count: scoped.length };
-  }, [favoritesView, allFavorites, s.activeProjectFilter, s.chipFilterExclude]);
+  }, [favoritesView, allFavorites, s.activeProjectFilter, s.chipFilterExclude, s.extraProjectFilters]);
   const favChipCounts = useMemo(
     () => (favoritesView ? computeChipCounts(allFavorites, bucketByConv) : null),
     [favoritesView, allFavorites, bucketByConv],

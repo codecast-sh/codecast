@@ -8,6 +8,7 @@ import { useOpenRecentVisit } from "../hooks/useOpenRecentVisit";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader } from "./ui/context-menu";
 import { RecentVisitRow } from "./RecentVisitRow";
+import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 
 // The standalone URL a visit maps to, when one exists. Label/project visits
 // are store filters with no URL of their own, so they get null (menu items
@@ -62,14 +63,15 @@ export function RecentlyViewedMenu({ onSelectSession }: { onSelectSession: (id: 
 
   return (
     <div ref={menuRef} className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className={`p-1.5 transition-colors rounded hover:bg-sol-bg-alt ${open ? "text-sol-text bg-sol-bg-alt" : "text-sol-text-muted hover:text-sol-text"}`}
-        title="Recently viewed"
-        aria-label="Recently viewed"
-      >
-        <History className="w-4 h-4" />
-      </button>
+      <ShortcutTooltip label="Recently viewed">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className={`p-1.5 transition-colors rounded hover:bg-sol-bg-alt ${open ? "text-sol-text bg-sol-bg-alt" : "text-sol-text-muted hover:text-sol-text"}`}
+          aria-label="Recently viewed"
+        >
+          <History className="w-4 h-4" />
+        </button>
+      </ShortcutTooltip>
       {open && (
         <div className="absolute top-full left-0 mt-1 w-[380px] max-h-[70vh] overflow-y-auto bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[200] py-1">
           <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-sol-text-dim/70">
