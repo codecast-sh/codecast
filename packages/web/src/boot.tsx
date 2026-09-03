@@ -87,10 +87,12 @@ idle(() => {
         // stale shell would pin users to old bundles across deploys. Poll so
         // the new worker (skipWaiting+clientsClaim) takes over unprompted;
         // any stale lazy-chunk fetch after the swap is healed by the chunk
-        // reload guard in ErrorBoundary.
+        // reload guard in ErrorBoundary. Fifteen minutes: a deploy reaches a
+        // window that never navigates within a quarter hour plus its next
+        // hide, instead of an hour plus.
         onRegisteredSW(_url, reg) {
           if (!reg) return;
-          setInterval(() => { reg.update().catch(() => {}); }, 60 * 60 * 1000);
+          setInterval(() => { reg.update().catch(() => {}); }, 15 * 60 * 1000);
         },
         // Without this, autoUpdate hard-reloads every open window the moment
         // the new worker activates — visibly blinking whichever window the
