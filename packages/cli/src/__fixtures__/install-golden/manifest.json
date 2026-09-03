@@ -29,7 +29,7 @@
   "tasks": {
     "config": {
       "work_enabled": true,
-      "work_version": "8"
+      "work_version": "9"
     },
     "stdout": "* Tasks & Plans — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -38,7 +38,7 @@
   "triggers": {
     "config": {
       "task_enabled": true,
-      "task_version": "5"
+      "task_version": "6"
     },
     "stdout": "* Triggers — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -131,7 +131,7 @@
   "orchestration": {
     "config": {
       "orch_enabled": true,
-      "orch_version": "8"
+      "orch_version": "9"
     },
     "stdout": "* Orchestration — updated in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": false,

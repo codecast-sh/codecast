@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "lib/repoView.ts",
+    "lib/prView.ts",
+    "lib/codeLanguage.ts",
+    "hooks/useRepoBrowse.ts",
+    "hooks/useLineComments.ts",
+    "hooks/useSyncCodeComments.ts",
+    "hooks/useSyncTimeline.ts",
+    "components/repo/*.tsx",
+    "app/repo/**/*.tsx",
+    "app/commit/**/*.tsx",
+    "src/routes.manifest.ts",
+    "src/App.tsx",
+    "components/RoutePane.tsx"
+  ]
+}

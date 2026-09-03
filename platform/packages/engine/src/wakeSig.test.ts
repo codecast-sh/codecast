@@ -49,6 +49,22 @@ describe("makeCollectionSig", () => {
     expect(projections).toBe(1);
   });
 
+  it("reuses projections for unchanged row references", () => {
+    let projections = 0;
+    const sig = makeCollectionSig<{ _id: string; group: string; beats: number }>((row) => {
+      projections++;
+      return `${row._id}:${row.group}`;
+    });
+    const a = { _id: "a", group: "one", beats: 1 };
+    const b = { _id: "b", group: "two", beats: 1 };
+    const first = sig({ a, b });
+
+    const second = sig({ a, b: { ...b, beats: 2 } });
+
+    expect(second).toBe(first);
+    expect(projections).toBe(3);
+  });
+
   it("flips when a projected field changes and holds when a churn field does", () => {
     const sig = makeCollectionSig<any>((row) => `${row._id}:${row.group}`);
     const base = sig({ a: { _id: "a", group: "one", beats: 1 } });

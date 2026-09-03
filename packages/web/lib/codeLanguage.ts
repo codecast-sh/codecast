@@ -77,3 +77,65 @@ export function highlightCode(code: string, language?: string): string | null {
     return null;
   }
 }
+
+/**
+ * The same highlighting, split into one HTML string per source line.
+ *
+ * A file viewer needs each line as its own element: a line number beside it, a
+ * comment thread under it, a blame note in front of it. Prism highlights the
+ * whole file at once, and a token can cross a newline (a block comment, a
+ * template string), so the split re-closes every open span at the end of a line
+ * and re-opens it at the start of the next. Highlighting per line instead would
+ * mis-colour everything after the first `/*`.
+ *
+ * Returns null when there is no grammar, exactly as highlightCode does.
+ */
+export function highlightLines(code: string, language?: string): string[] | null {
+  const html = highlightCode(code, language);
+  return html === null ? null : splitHighlightedLines(html);
+}
+
+/** Split highlighted HTML on newlines, keeping every span balanced per line. */
+export function splitHighlightedLines(html: string): string[] {
+  const lines: string[] = [];
+  const open: string[] = [];
+  let current = "";
+  let i = 0;
+
+  const closeAll = () => "</span>".repeat(open.length);
+
+  while (i < html.length) {
+    const nextTag = html.indexOf("<", i);
+    const nextBreak = html.indexOf("\n", i);
+    // Whichever comes first; -1 means "not in the rest of the string".
+    const stop =
+      nextTag === -1 ? nextBreak : nextBreak === -1 ? nextTag : Math.min(nextTag, nextBreak);
+
+    if (stop === -1) {
+      current += html.slice(i);
+      break;
+    }
+    current += html.slice(i, stop);
+
+    if (stop === nextBreak) {
+      lines.push(current + closeAll());
+      current = open.join("");
+      i = stop + 1;
+      continue;
+    }
+
+    const end = html.indexOf(">", stop);
+    if (end === -1) {
+      current += html.slice(stop);
+      break;
+    }
+    const tag = html.slice(stop, end + 1);
+    if (tag.startsWith("</")) open.pop();
+    else if (!tag.endsWith("/>")) open.push(tag);
+    current += tag;
+    i = end + 1;
+  }
+
+  lines.push(current + closeAll());
+  return lines;
+}
