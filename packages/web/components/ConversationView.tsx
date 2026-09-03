@@ -28,7 +28,7 @@ import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } fr
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isWarningSystemNotice, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
 import { splitMarkdownBlocks } from "../lib/markdownBlocks";
-import { classifyApiErrorBanner, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, isNoResponseStub, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "./DecisionAnswerFooter";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { parseLimitResetAt } from "../lib/limitReset";
@@ -90,7 +90,7 @@ import { quoteSelectionIntoReply } from "../lib/quoteSelection";
 import { MessageReview } from "./MessageReview";
 import { SelectionQuoteToolbar } from "./SelectionQuoteToolbar";
 import { ReviewBar } from "./ReviewBar";
-import { SuggestionPills, SuggestionPillsHandle } from "./SuggestionPills";
+import { ComposerSuggestion, ComposerSuggestionHandle } from "./ComposerSuggestion";
 import { ReviewComposerContext } from "./reviewContext";
 import { CommentDock } from "./comments/CommentDock";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
@@ -2178,7 +2178,7 @@ function stripSystemTags(content: string): string {
 // Fork-point selection and branch-chip anchoring must treat it as invisible:
 // a fork recorded against it would have no message to render its chips under.
 function isHiddenStubMessage(msg: { role?: string; content?: string }): boolean {
-  return msg.role === "assistant" && stripSystemTags(msg.content || "").trim() === "No response requested.";
+  return msg.role === "assistant" && isNoResponseStub(stripSystemTags(msg.content || ""));
 }
 
 // Can this message host branch chips? Only user/assistant blocks render a
@@ -10231,7 +10231,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // auto-resume) while a delivery was already in flight, which is exactly what
   // made slow deliveries look like lost messages.
   const isAgentAliveIdle = isAliveIdleStatus(agentStatus as LiveAgentStatus | undefined);
-  const stuckThresholdMs = isAgentResuming ? 120_000 : isSessionStarting || isAgentStarting || isAgentDelivering || isAgentAliveIdle ? 60_000 : isSessionReady ? 30_000 : 15_000;
+  // The floor (no agent status reported at all) is 30s: a slow inject or a
+  // heartbeat that has not propagated yet routinely takes 15-20s, and reading
+  // that as "Disconnected" was the most common false alarm in the composer.
+  const stuckThresholdMs = isAgentResuming ? 120_000 : isSessionStarting || isAgentStarting || isAgentDelivering || isAgentAliveIdle ? 60_000 : 30_000;
 
   const isExistingMessageDead = existingPending?.status === "failed" || existingPending?.status === "undeliverable";
 
@@ -10802,22 +10805,20 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     store.setQueuedMessagesFor(conversationId, next);
   }, [conversationId]);
   const [selectedQueueIndex, setSelectedQueueIndex] = useState<number | null>(null);
-  // Keyboard selection for the suggestion pill row lives inside the component
-  // (the pill list is its server subscription); the composer drives it through
-  // this handle as the top rung of the ↑ ladder: pills over queue over images.
-  const suggestionPillsRef = useRef<SuggestionPillsHandle | null>(null);
-  // Mirror of the pill row's selection, reported up so Escape ownership (the
-  // effect below) can stand the compose popup down while a pill is selected.
-  const [pillSelectionActive, setPillSelectionActive] = useState(false);
+  // The ghost suggestion in the empty composer (components/ComposerSuggestion):
+  // the composer drives it through this handle from its keydown (Tab accepts,
+  // ↑/↓ cycle) and blanks its own placeholder while the ghost is showing.
+  const suggestionRef = useRef<ComposerSuggestionHandle | null>(null);
+  const [ghostVisible, setGhostVisible] = useState(false);
   // Tell the host (compose popup) when Escape is spoken for by inner UI — the
   // lightbox, an image/queue chip selection, or the slash-command menu — so its
   // document-capture Escape listener stands down and the textarea handler above
   // gets to unwind that state instead of the whole dialog closing.
   useWatchEffect(() => {
     if (escapeOwnedRef) {
-      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null || pillSelectionActive;
+      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null;
     }
-  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex, pillSelectionActive]);
+  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex]);
   const setSessionHasQueuedMessages = useInboxStore((s) => s.setSessionHasQueuedMessages);
   useWatchEffect(() => {
     setSessionHasQueuedMessages(conversationId, queuedMessages.length > 0);
@@ -11064,6 +11065,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     let message = composeMode && composeRef.current
       ? composeRef.current.getMarkdown()
       : messageRef.current;
+    suggestionRef.current?.settleSend(message);
     if (onGateSend) {
       const text = message.trim();
       // Same reconcile as the main path: the durable draft is the record of
@@ -11394,45 +11396,20 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       return;
     }
 
-    // Top rung of the ↑ ladder: a selected suggestion pill. Enter sends it
-    // as-is (the pill contract), Tab drops it into the composer for editing.
-    const pills = suggestionPillsRef.current;
-    if (pills?.active()) {
-      if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        pills.move(-1);
-        return;
-      }
-      if (e.key === "ArrowRight") {
-        e.preventDefault();
-        pills.move(1); // past the last pill exits back to the composer
-        return;
-      }
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        pills.clear();
-        if (queuedMessages.length > 0) setSelectedQueueIndex(0);
-        else if (pastedImages.length > 0) setSelectedImageIndex(0);
-        return;
-      }
-      if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        e.preventDefault();
-        pills.send();
-        return;
-      }
+    // The ghost suggestion in an empty composer: Tab takes it, ↑/↓ step
+    // through the alternatives. Typing anything replaces it, so no key is
+    // spent on dismissing. The queue and image rungs keep ↑ when they exist.
+    const ghost = suggestionRef.current;
+    if (ghost?.visible() && !message) {
       if (e.key === "Tab" && !e.shiftKey) {
         e.preventDefault();
-        pills.edit();
+        ghost.accept();
         return;
       }
-      if (e.key === "Escape") {
+      if ((e.key === "ArrowUp" || e.key === "ArrowDown") && ghost.count() > 1 && queuedMessages.length === 0 && pastedImages.length === 0) {
         e.preventDefault();
-        e.stopPropagation();
-        pills.clear();
+        ghost.cycle(e.key === "ArrowUp" ? -1 : 1);
         return;
-      }
-      if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) {
-        pills.clear();
       }
     }
 
@@ -11503,11 +11480,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (selectedQueueIndex !== null && queuedMessages.length > 0) {
       if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
         e.preventDefault();
-        // ↑ off the top of the queue climbs to the suggestion pill row.
-        if (e.key === "ArrowUp" && selectedQueueIndex === 0 && pills?.enter()) {
-          setSelectedQueueIndex(null);
-          return;
-        }
         setSelectedQueueIndex(Math.max(0, selectedQueueIndex - 1));
         return;
       }
@@ -11568,16 +11540,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       if (textarea && textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
         e.preventDefault();
         setSelectedQueueIndex(queuedMessages.length - 1);
-        return;
-      }
-    }
-
-    // Last rung: nothing else to select above the caret, climb to the pills.
-    if (e.key === "ArrowUp" && pills?.visible() && selectedImageIndex === null && selectedQueueIndex === null) {
-      const textarea = textareaRef.current;
-      if (textarea && textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
-        e.preventDefault();
-        pills.enter();
         return;
       }
     }
@@ -11844,14 +11806,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                         permissionMode === "dontAsk" ? "bg-sol-yellow" :
                         "bg-sol-base00/50"
                       }`} />
-                      {/* A non-default mode is worth a word, not just a dot:
-                          "bypass" changes what the agent may do. The label
-                          brightens for a beat when the mode cycles, then
-                          settles to a quiet reading. */}
+                      {/* The mode label appears for a beat when the mode
+                          cycles, then collapses back to the dot. Hover the
+                          dot for the full name. */}
                       {permissionMode !== "default" && (
                         <span
-                          className={`text-[10px] font-mono transition-opacity duration-300 ease-out whitespace-nowrap ${
-                            showModeLabel ? "opacity-100" : "opacity-60"
+                          className={`text-[10px] font-mono transition-all duration-300 ease-out overflow-hidden whitespace-nowrap ${
+                            showModeLabel ? "max-w-[80px] opacity-100 translate-x-0" : "max-w-0 opacity-0 -translate-x-1"
                           } ${
                             permissionMode === "plan" ? "text-sol-blue" :
                             permissionMode === "acceptEdits" ? "text-emerald-400" :
@@ -12007,22 +11968,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             // positioning context the caret-anchored popup hangs from.
             return <div ref={acAnchorRef} className="relative h-0">{dropdown}</div>;
           })()}
-          {!bareComposer && suggestionsEnabled && !onGateSend && !onWorkflowLaunch && !hasAskUserQuestion && (
-            <div className={`mx-auto px-2 sm:px-4 ${isExpanded ? "conv-col" : "max-w-md"}`}>
-              <SuggestionPills
-                ref={suggestionPillsRef}
-                conversationId={conversationId}
-                idle={!isWaitingForResponse && !isThinking && !(agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus))}
-                hidden={!!message || pastedImages.length > 0 || composeMode}
-                // handleSubmit reads messageRef, not React state, so stamping
-                // both and submitting on the same tick is race-free (the same
-                // contract ComposeEditor's onSubmit relies on).
-                onSend={(t) => { setMessage(t); messageRef.current = t; void handleSubmit({ preventDefault: () => {} } as any); }}
-                onEdit={(t) => { setMessage(t); textareaRef.current?.focus(); }}
-                onActiveChange={setPillSelectionActive}
-              />
-            </div>
-          )}
           <form onSubmit={handleFormSubmit} className={bareComposer ? "w-full" : `mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "conv-col" : "max-w-md"}`}>
             <div className={`flex flex-col ${bareComposer ? "" : "border"} transition-colors duration-150 ${bareComposer ? "px-2.5 py-0.5 rounded-lg bg-sol-text/[0.04] focus-within:bg-sol-text/[0.07]" : `border px-4 py-2 shadow-lg bg-sol-bg-alt ${isExpanded ? "rounded-2xl" : "rounded-full"}`} ${composeMode ? "min-h-[40vh]" : ""} ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : bareComposer ? "" : "border-sol-border"}`}>
               {isSelectionActive && (
@@ -12180,6 +12125,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 </div>
               ) : (
                 <div className="flex items-end gap-2">
+                  <div className="relative flex-1 min-w-0">
                   <textarea
                     ref={textareaRef}
                     data-chat-input
@@ -12190,11 +12136,27 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     onPaste={handlePaste}
                     onFocus={() => setIsFocused(true)}
                     onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
-                    placeholder={bareComposer ? (composerPlaceholder ?? "Comment…") : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? `Send ${reviewCount} quote${reviewCount !== 1 ? "s" : ""} as-is, or add a reply first...` : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message..."}
+                    placeholder={ghostVisible ? "" : bareComposer ? (composerPlaceholder ?? "Comment…") : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? `Send ${reviewCount} quote${reviewCount !== 1 ? "s" : ""} as-is, or add a reply first...` : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message..."}
                     rows={1}
                     style={FIELD_SIZING_STYLE}
-                    className={`flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
+                    className={`block w-full bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
                   />
+                  {!bareComposer && suggestionsEnabled && !onGateSend && !onWorkflowLaunch && !hasAskUserQuestion && (
+                    <ComposerSuggestion
+                      ref={suggestionRef}
+                      conversationId={conversationId}
+                      idle={!isWaitingForResponse && !isThinking && !(agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus))}
+                      hidden={!!message || pastedImages.length > 0}
+                      onAccept={(t) => {
+                        setMessage(t);
+                        messageRef.current = t;
+                        const ta = textareaRef.current;
+                        if (ta) { ta.focus(); requestAnimationFrame(() => ta.setSelectionRange(t.length, t.length)); }
+                      }}
+                      onVisibleChange={setGhostVisible}
+                    />
+                  )}
+                  </div>
                   <div ref={sendRef} className="shrink-0 flex items-end gap-1">
                     {isMultiline && (
                       <button
