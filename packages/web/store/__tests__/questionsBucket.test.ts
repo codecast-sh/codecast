@@ -27,7 +27,11 @@ const row = (id: string, over: Partial<InboxSession> = {}): InboxSession => ({
   is_idle: true,
   has_pending: false,
   message_count: 3,
-  updated_at: T0,
+  // A settled row as the server ships it (ct-47609): a minute of quiet, the
+  // status change past the idle grace, the last turn the agent's.
+  updated_at: T0 - 60_000,
+  agent_status_updated_at: T0 - 60_000,
+  last_role_is_user: false,
   title: id,
   ...(over as any),
 });
