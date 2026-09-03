@@ -20,13 +20,23 @@ const session = (id: string, extra: Partial<InboxSession> = {}): InboxSession =>
   // Recent: a working fixture (is_idle:false) must read as genuinely working —
   // the chokepoint sweeps an active session gone quiet past the trust TTL
   // into needs-input. All fixtures share one timestamp, so sort order is unchanged.
-  updated_at: Date.now(),
+  // A settled row as the server ships it (ct-47609): a minute of quiet, the
+  // status change past the idle grace, the last turn the agent's.
+  updated_at: Date.now() - 60_000,
+  agent_status_updated_at: Date.now() - 60_000,
+  last_role_is_user: false,
   agent_type: "claude_code",
   message_count: 3,
   is_idle: true,
   has_pending: false,
   last_user_message: "hi",
   title: `Session ${id}`,
+  // A "working" fixture (is_idle:false) is genuinely working: an active status
+  // on a daemon that heartbeats. The replica derives the bucket from those
+  // facts; the idle bit alone no longer says anything.
+  ...(extra.is_idle === false && !extra.agent_status
+    ? { agent_status: "working" as const, last_heartbeat: Date.now() - 5_000, daemon_alive_until: Date.now() + 85_000 }
+    : {}),
   ...extra,
 });
 const byId = (rows: InboxSession[]): Record<string, InboxSession> =>
