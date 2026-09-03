@@ -58,3 +58,4 @@ export * from "./appDescriptors";
 // Convex overlay and the CLI inbox both call, the time-flip stamps and the
 // order-independent digest every client compares against (sync-convergence C3, C8).
 export * from "./inboxProjection";
+export * from "./appSurfaces";

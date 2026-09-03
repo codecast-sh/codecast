@@ -31,6 +31,18 @@ if (process.platform === "darwin") {
   app.commandLine.appendSwitch("enable-features", "MacLoopbackAudioForScreenShare,MacSckSystemAudioLoopbackOverride");
 }
 
+// Chrome DevTools Protocol port so agents can drive the desktop app the way
+// `cast browser` drives Chrome (`cast app` targets it, and so does the perf
+// harness). Loopback only. On by default when running from source
+// (`electron .`), because that process already has the tree it is verifying;
+// a packaged build opens it only when CODECAST_CDP_PORT is set explicitly,
+// since the port hands the signed-in session to any local process.
+const CDP_PORT = process.env.CODECAST_CDP_PORT || (app.isPackaged ? "" : "9333");
+if (CDP_PORT) {
+  app.commandLine.appendSwitch("remote-debugging-port", CDP_PORT);
+  app.commandLine.appendSwitch("remote-debugging-address", "127.0.0.1");
+}
+
 // Pin Chromium's download path to our userData dir so macOS TCC never
 // probes ~/Documents or ~/Downloads and triggers the permission dialog.
 const _ud = app.getPath("userData");

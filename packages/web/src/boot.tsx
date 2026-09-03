@@ -13,6 +13,11 @@ import "../store/inboxStore";
 // module dynamically — see main.tsx for why (the desktop hand-off must be able
 // to skip the app entirely). Nothing else about the boot sequence changed.
 
+// Which build a driver is attached to (`cast app doctor`). Stamped by the
+// vite define in vite.config.ts; without it an agent cannot tell a stale
+// bundle from the tree it just edited.
+(window as any).__CODECAST_BUILD = __CODECAST_BUILD__;
+
 setupErrorToasts();
 // Stop compositing infinite animations while the desktop window is backgrounded.
 installIdleAnimationPause();
