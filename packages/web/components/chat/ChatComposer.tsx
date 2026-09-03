@@ -50,6 +50,7 @@ export const ChatComposer = memo(function ChatComposer({
   compact,
   dropFilesRef,
   walkieRoomKey,
+  walkieRing,
 }: {
   channelId: string;
   threadRootId?: string;
@@ -72,6 +73,8 @@ export const ChatComposer = memo(function ChatComposer({
    *  Absent in a channel and in a thread: v1 walkie is a DM conversation, and
    *  a burst spoken into a thread would land where nobody is listening. */
   walkieRoomKey?: string;
+  /** Who a ring under the key rings — the DM's people. Absent: no ring. */
+  walkieRing?: string[];
 }) {
   const draftKey = chatDraftKey(channelId, threadRootId);
   // The channel is already open, so keying the mic needs no lookup — but the
@@ -165,6 +168,7 @@ export const ChatComposer = memo(function ChatComposer({
                 size="sm"
                 label="Talk"
                 title="Talk to them — they see your face and hear you; click again to stop"
+                ring={walkieRing ? { toUserIds: walkieRing } : undefined}
               />
             </span>
             {/* The chord for the same gesture, ON the control rather than in

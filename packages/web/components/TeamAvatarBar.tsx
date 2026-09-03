@@ -26,6 +26,7 @@ import { useMemberHuddle } from "./presence/useMemberHuddle";
 import { PopOutPeopleButton } from "./people/PopOutPeopleButton";
 import { useOpenDm } from "../hooks/useChatSync";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import "./calls/walkie.css";
 import "./people/people.css";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -185,44 +186,47 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           several of them" gesture starts here — the new-huddle field, which
           also reaches group threads and channels.
 
-          A LABELLED BUTTON, not a dashed circle. The faces beside it are now
-          the walkie, and a dashed ring with a headset in it read as a seventh
-          person — the founder read it as the walkie's own control. It says the
-          word instead. */}
+          A solid circle the size of a face, with a solid border: a DASHED
+          ring with a headset in it once read as a seventh person, so the
+          border is solid and the word lives in the tooltip. */}
       {callsEnabled && teamMembers.length > 1 && (
-        <button
-          onClick={() => useInboxStore.getState().openCreateModal("huddle")}
-          className="ml-1 flex h-7 items-center gap-1.5 rounded-full border border-sol-border/60 px-2.5 text-[11px] text-sol-text-muted transition-colors hover:border-sol-violet/50 hover:text-sol-violet"
-          title="Start a huddle with several teammates"
-        >
-          <Headphones className="h-3.5 w-3.5" />
-          <span className="tb-squeeze-1">Huddle</span>
-        </button>
+        <ShortcutTooltip label="Start a huddle with several teammates">
+          <button
+            onClick={() => useInboxStore.getState().openCreateModal("huddle")}
+            className="ml-1 flex h-8 w-8 items-center justify-center rounded-full border border-sol-border/60 text-sol-text-muted transition-colors hover:border-sol-violet/50 hover:text-sol-violet"
+            aria-label="Start a huddle with several teammates"
+          >
+            <Headphones className="h-3.5 w-3.5" />
+          </button>
+        </ShortcutTooltip>
       )}
       {/* Pop the roster out into its own window — the buddy list, floating
           beside whatever you are doing. Hidden inside the people window
           itself, where the gesture has nowhere to go. */}
       <PopOutPeopleButton className="flex h-8 w-8 items-center justify-center rounded-full text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text" />
       {teamMembers.length > 6 && (
-        <button
-          onClick={() => router.push("/team/activity?filter=team")}
-          className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-sol-border/50 bg-sol-bg-highlight text-xs text-sol-text-muted transition-colors hover:border-sol-border"
-          title={`${teamMembers.length - 6} more team members`}
-        >
-          +{teamMembers.length - 6}
-        </button>
+        <ShortcutTooltip label={`${teamMembers.length - 6} more team members`}>
+          <button
+            onClick={() => router.push("/team/activity?filter=team")}
+            className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-sol-border/50 bg-sol-bg-highlight text-xs text-sol-text-muted transition-colors hover:border-sol-border"
+          >
+            +{teamMembers.length - 6}
+          </button>
+        </ShortcutTooltip>
       )}
       {selectedMember && (
-        <button
-          onClick={handleClearFilter}
-          className="ml-1 flex items-center gap-1.5 rounded-full border border-sol-cyan/40 bg-sol-cyan/20 px-2 py-1 text-xs text-sol-cyan transition-colors hover:bg-sol-cyan/30"
-          title="Clear filter"
-        >
-          <span className="max-w-[80px] truncate">{memberDisplayName(selectedMember)}</span>
-          <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
+        <ShortcutTooltip label="Clear filter">
+          <button
+            onClick={handleClearFilter}
+            className="ml-1 flex items-center gap-1.5 rounded-full border border-sol-cyan/40 bg-sol-cyan/20 px-2 py-1 text-xs text-sol-cyan transition-colors hover:bg-sol-cyan/30"
+            aria-label="Clear filter"
+          >
+            <span className="max-w-[80px] truncate">{memberDisplayName(selectedMember)}</span>
+            <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </ShortcutTooltip>
       )}
       <ContextMenu state={ctxMenu}>
         {(m) => (

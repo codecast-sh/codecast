@@ -4,14 +4,17 @@ import { Hash, Lock, Plus, BellOff, Users, SquarePen } from "lucide-react";
 import type { ChatChannelView } from "./chatTypes";
 import { OccupancyChip } from "../calls/OccupancyChip";
 import { CommentAvatar } from "../comments/CommentAvatar";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import {
   channelDisplayName,
   chatViewRoomKey,
   dmCounterpart,
   memberName,
+  railRowTip,
   suggestedDmMembers,
   type ChatMember,
 } from "../../lib/chatViews";
+import { hueFor, initials } from "../../lib/avatarInitials";
 import { useInboxStore } from "../../store/inboxStore";
 import { memberAvatarUrl } from "../../lib/liveEntities";
 import "./chat.css";
@@ -27,6 +30,35 @@ import "./chat.css";
 // Two sections, one row shape. Channels wear a hash (or a lock), direct
 // messages wear the person's face — the icon IS the distinction, the row's
 // unread grammar stays identical.
+//
+// NARROW, THE ROW IS A TILE. Under 940px the rail is a 44px strip with the
+// names hidden (chat.css), and a column of identical hashes told nobody which
+// channel was which. So every channel also carries a monogram — its initials
+// on the same hue its name gets everywhere else — that the stylesheet swaps in
+// for the hash there; a DM's face already is its monogram. And every row
+// speaks on hover: the name, the topic, and the one state worth a word, in a
+// real tooltip beside the strip rather than the browser's title balloon.
+
+/** The tooltip beside a row. One provider for the rail, so moving down the
+ *  strip does not wait out the delay on every tile. */
+function RailTip({
+  tip,
+  children,
+}: {
+  tip: { title: string; detail?: string; state?: string };
+  children: React.ReactElement;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="right" sideOffset={6} className="ch-rail-tip">
+        <span className="ch-rail-tip-title">{tip.title}</span>
+        {tip.detail && <span className="ch-rail-tip-detail">{tip.detail}</span>}
+        {tip.state && <span className="ch-rail-tip-state">{tip.state}</span>}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 function RailRow({
   c,
@@ -48,16 +80,22 @@ function RailRow({
   const isDm = c.kind === "dm";
   const name = channelDisplayName(c, members);
   const counterpart = dmCounterpart(c, members);
+  const roomKey = chatViewRoomKey(c, viewer, members);
+  // The same question HuddleButton asks: the strip has no room for the chip,
+  // so a live room shows as a ring on the tile and a word in the tooltip.
+  const live = useInboxStore((st) => (st.callOccupancy[roomKey]?.length ?? 0) > 0);
   const cls = [
     "ch-chan",
     active ? "ch-chan-active" : "",
     // An active channel is being read, so it never also shouts unread.
     unread && !active ? "ch-chan-unread" : "",
     c.muted ? "ch-chan-muted" : "",
+    live ? "ch-chan-live" : "",
   ]
     .filter(Boolean)
     .join(" ");
   return (
+    <RailTip tip={railRowTip(c, members, { live })}>
     <button
       key={c.id}
       type="button"
@@ -65,8 +103,18 @@ function RailRow({
       onClick={() => onSelect(c.id)}
       onContextMenu={onChannelContextMenu ? (e) => onChannelContextMenu(e, c) : undefined}
       aria-current={active ? "page" : undefined}
-      title={c.topic || (isDm ? name : `#${name}`)}
+      aria-label={isDm ? name : `#${name}`}
     >
+      {!isDm && (
+        <span
+          className="ch-chan-mono"
+          aria-hidden="true"
+          style={{ backgroundColor: hueFor(name) }}
+        >
+          {initials(name, 2)}
+          {c.isPrivate && <Lock className="ch-chan-mono-lock" />}
+        </span>
+      )}
       <span className="ch-chan-hash" aria-hidden="true">
         {isDm ? (
           counterpart ? (
@@ -86,7 +134,7 @@ function RailRow({
         )}
       </span>
       <span className="ch-chan-name">{name}</span>
-      <OccupancyChip roomKey={chatViewRoomKey(c, viewer, members)} className="shrink-0" />
+      <OccupancyChip roomKey={roomKey} className="shrink-0 ch-chan-occ" />
       {c.muted && <BellOff className="w-3 h-3 shrink-0 opacity-70" aria-label="Muted" />}
       {mentions > 0 ? (
         <span className="ch-chan-badge" aria-label={`${mentions} mentions`}>
@@ -98,6 +146,7 @@ function RailRow({
         unread && !active && c.muted && <span className="ch-chan-dot" aria-label="Unread" />
       )}
     </button>
+    </RailTip>
   );
 }
 
@@ -133,6 +182,7 @@ export const ChatChannelRail = memo(function ChatChannelRail({
   // titlebar (same pattern as PageShell).
   const titlebarStripRef = useTitlebarHead<HTMLDivElement>();
   return (
+    <TooltipProvider delayDuration={200} skipDelayDuration={400}>
     <nav className="ch-rail" aria-label="Channels">
       <div ref={titlebarStripRef} className="titlebar-strip shrink-0" />
       <div className="ch-rail-head">
@@ -177,11 +227,11 @@ export const ChatChannelRail = memo(function ChatChannelRail({
           />
         ))}
         {suggested.map((m) => (
+          <RailTip key={String(m._id)} tip={{ title: memberName(m), state: "Start a conversation" }}>
           <button
-            key={String(m._id)}
             type="button"
             className="ch-chan ch-chan-suggest"
-            title={`Message ${memberName(m)}`}
+            aria-label={`Message ${memberName(m)}`}
             onClick={() => onOpenDm!(String(m._id))}
           >
             <span className="ch-chan-hash" aria-hidden="true">
@@ -194,11 +244,13 @@ export const ChatChannelRail = memo(function ChatChannelRail({
             </span>
             <span className="ch-chan-name">{memberName(m)}</span>
           </button>
+          </RailTip>
         ))}
         {dms.length === 0 && suggested.length === 0 && (
           <div className="ch-rail-empty-dms">Messages with teammates land here.</div>
         )}
       </div>
     </nav>
+    </TooltipProvider>
   );
 });

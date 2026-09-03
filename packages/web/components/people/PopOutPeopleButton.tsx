@@ -1,6 +1,7 @@
 import { PictureInPicture2 } from "lucide-react";
 import { POP_OUT_PEOPLE_TITLE, isPeopleWindow } from "../../lib/desktop";
 import { popOutPeople } from "./popOutPeople";
+import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 
 /**
  * Pop the buddy list out into its own window.
@@ -26,20 +27,21 @@ export function PopOutPeopleButton({
 }) {
   if (isPeopleWindow()) return null;
   return (
-    <button
-      type="button"
-      onClick={(e) => {
-        // In the sidebar this sits inside a nav row that is itself a link.
-        e.preventDefault();
-        e.stopPropagation();
-        void popOutPeople();
-        onDone?.();
-      }}
-      className={className}
-      title={POP_OUT_PEOPLE_TITLE}
-      aria-label={POP_OUT_PEOPLE_TITLE}
-    >
-      <PictureInPicture2 className={iconClassName} />
-    </button>
+    <ShortcutTooltip label={POP_OUT_PEOPLE_TITLE}>
+      <button
+        type="button"
+        onClick={(e) => {
+          // In the sidebar this sits inside a nav row that is itself a link.
+          e.preventDefault();
+          e.stopPropagation();
+          void popOutPeople();
+          onDone?.();
+        }}
+        className={className}
+        aria-label={POP_OUT_PEOPLE_TITLE}
+      >
+        <PictureInPicture2 className={iconClassName} />
+      </button>
+    </ShortcutTooltip>
   );
 }

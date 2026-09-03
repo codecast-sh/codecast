@@ -3,9 +3,9 @@
 // Talk is a toggle: click, talk, click again. It is ONE WAY — they see your
 // face pop up and hear you; you hear nothing back until they Join. Ring starts
 // a real huddle and rings them. Message opens the conversation. The same three
-// live under a face on the wall, in the floating faces' slot, and (Talk and
-// Ring) in the chat header, so there is one vocabulary for talking to a person
-// wherever their face is.
+// live under a face on the wall and in the floating faces' slot; the chat
+// header shows the one key, with Ring under it (right click, long press) — so
+// there is one vocabulary for talking to a person wherever their face is.
 //
 // No icon stands alone: a button here is a word, and an icon beside it.
 import { Headphones, MessageSquare, Mic, Square } from "lucide-react";

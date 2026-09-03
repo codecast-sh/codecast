@@ -1,29 +1,12 @@
 import { AgentIcon } from "../ConversationList";
 import { AvatarImg } from "../../lib/avatarCache";
+import { hueFor, initials } from "../../lib/avatarInitials";
 
 // The app's small round avatar. Used by comments, by chat, and by anything else
 // that draws one face: a teammate must not be a circle in one surface and a
 // square in another on the same screen. The agent renders with the SAME
 // Claude/Codex/etc. icon the conversation uses for assistant messages, so a
 // reply reads as that agent. Users render their image, else a colored initial.
-
-const HUES = ["#268bd2", "#2aa198", "#859900", "#b58900", "#cb4b16", "#d33682", "#6c71c4"];
-
-function hueFor(name: string): string {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return HUES[h % HUES.length];
-}
-
-/** "Ada Lovelace" → "AL", "ada" → "AD". Two letters read as a person where one
- *  reads as a bullet, which matters once faces overlap in a stack. */
-function initials(name: string, letters: 1 | 2): string {
-  const parts = (name || "").trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (letters === 1) return parts[0].charAt(0).toUpperCase();
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
 
 export function CommentAvatar({
   name,
