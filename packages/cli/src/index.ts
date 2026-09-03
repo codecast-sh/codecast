@@ -2934,6 +2934,7 @@ program
     "Examples:\n" +
     "  cast send jx7c6zk \"can you take the auth half?\"\n" +
     "  cast send jx7c6zk \"done\" --from jx7abcd\n" +
+    "  cast send jx7c6zk --raw \"/model opus\"   # slash command, no wrapper: switches that session's model\n" +
     "  cast send jx7c6zk - <<'EOF'\n" +
     "  Multi-line briefing with headings and code blocks,\n" +
     "  delivered exactly as written.\n" +
@@ -2942,6 +2943,7 @@ program
   .argument("<session_id>", "Target session short ID (e.g. jx7c6zk)")
   .argument("<text>", "Message text; '-' reads it from stdin (heredoc-friendly for multi-line markdown)")
   .option("--from <id>", "Override sender session (default: detect current session)")
+  .option("--raw", "Deliver the text exactly as typed, without the session-message wrapper — for the agent's own slash commands (/model opus, /effort high). Own sessions only.")
   .action(async (sessionId: string, text: string, options: any) => {
     const body = expandStdinPromptArgs([text ?? ""])[0];
     if (!body.trim()) {
@@ -2953,6 +2955,7 @@ program
       to: sessionId,
       from,
       body,
+      ...(options.raw ? { raw: true } : {}),
     });
     const fromNote =
       result.from_short_id && result.from_short_id !== "unknown"
