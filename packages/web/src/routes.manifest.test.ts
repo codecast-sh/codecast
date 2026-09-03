@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { ROUTES, routeHref, tabRoutes, type RouteEntry } from "./routes.manifest";
+import { APP_SURFACES, APP_SURFACE_EXCLUDED_PATHS } from "@codecast/shared/contracts";
 
 /**
  * Completeness / parity guard for the routing manifest (Wave 1 seed).
@@ -390,3 +391,38 @@ describe("non-tab routes (tabRouting.ts) are NOT tagged tab-routable in the mani
 
 // Re-export for any future Wave 2 consumer that wants the parsed live-source views.
 export type { RouteEntry };
+
+// (e) The CLI's surface list (@codecast/shared/contracts/appSurfaces) is what
+// `cast app goto` resolves and `cast app sweep` walks. It must name every
+// signed-in page a URL alone can reach, and nothing the router no longer serves.
+describe("(e) every param-free signed-in route is a cast app surface", () => {
+  const signedIn = ROUTES.filter(
+    (r) =>
+      !r.path.includes(":") &&
+      !r.guestOk &&
+      (r.layout === "dashboardShell" || r.layout === "standalone" || r.layout === "settings"),
+  );
+
+  it("every param-free dashboard, standalone and settings route is listed or explicitly excluded", () => {
+    const missing = signedIn
+      .map((r) => r.path)
+      .filter((p) => !APP_SURFACE_EXCLUDED_PATHS.has(p) && !APP_SURFACES.some((s) => s.name === p));
+    expect(missing).toEqual([]);
+  });
+
+  it("no listed surface is a route the router no longer serves", () => {
+    const routePaths = new Set(ROUTES.map((r) => r.path));
+    const stale = APP_SURFACES.map((s) => s.name).filter((n) => !routePaths.has(n));
+    expect(stale).toEqual([]);
+  });
+
+  it("surface kinds match the manifest layout", () => {
+    const byPath = new Map(ROUTES.map((r) => [r.path, r.layout]));
+    const wrong = APP_SURFACES.filter((s) => {
+      const layout = byPath.get(s.name);
+      const expected = layout === "dashboardShell" ? "dashboard" : layout;
+      return expected !== s.kind;
+    }).map((s) => `${s.name}: ${s.kind} vs ${byPath.get(s.name)}`);
+    expect(wrong).toEqual([]);
+  });
+});

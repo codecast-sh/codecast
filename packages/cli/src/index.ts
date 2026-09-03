@@ -13,6 +13,7 @@ import { registerSwitchCommand } from "./switchCommand.js";
 import { buildTaskStartBody } from "./taskClaim.js";
 import { chatSendOrigin, sessionIdFromEnv } from "./sessionIdentity.js";
 import { registerBrowserCommand } from "./browser/cli.js";
+import { registerAppCommand } from "./app/cli.js";
 import { registerExecCommand } from "./execCommand.js";
 import open from "open";
 import * as fs from "fs";
@@ -2900,6 +2901,7 @@ registerImageCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerStateCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerSwitchCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId });
+registerAppCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerExecCommand(program);
 
 program

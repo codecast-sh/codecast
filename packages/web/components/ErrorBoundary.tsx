@@ -145,7 +145,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     }
 
     return (
-      <div className="h-full flex items-center justify-center p-4">
+      <div data-error-boundary={name || "app"} className="h-full flex items-center justify-center p-4">
         <div className="text-center space-y-2">
           <p className="text-sm text-gray-400">
             {name ? `${name} crashed` : "Something went wrong"}
