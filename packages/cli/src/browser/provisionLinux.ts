@@ -166,18 +166,29 @@ sudo tee /usr/local/bin/cast-idle-check >/dev/null <<'IDLE'
 # instance, so this is what makes idle time cost only the disk.
 # "Active" means someone or something is genuinely using the machine:
 #   - an inbound SSH connection (a person, a CDP tunnel, a stream viewer)
-#   - Chrome running (browser work in flight)
-#   - a Claude process (a session lives here right now)
 #   - the encoder running (someone is literally watching the screen)
-# The daemon's own outbound websocket deliberately does NOT count.
+#   - the codecast daemon's activity stamp is fresh: it touches
+#     ~/.codecast/host-active when a message is delivered, a transcript grows
+#     or a session launches. A dormant session's claude process is alive but
+#     idle, so counting processes kept the box awake and billing forever;
+#     the stamp lets it sleep, and the queued work that wakes it resumes the
+#     session (its worktree and transcript are on this disk).
+# Until the daemon has written a stamp at all (a box provisioned before this
+# rule) the old process rules apply, so an upgrade never sleeps under a live
+# session. The daemon's own outbound websocket deliberately does NOT count.
 MINUTES=$(cat /etc/cast-idle-minutes 2>/dev/null || echo 0)
 [ "$MINUTES" -le 0 ] && exit 0
 STATE=/run/cast-last-active
+STAMP=/home/ubuntu/.codecast/host-active
 active=0
 [ "$(ss -Htn state established '( sport = :22 )' | wc -l)" -gt 0 ] && active=1
-pgrep -f 'chrome' >/dev/null 2>&1 && active=1
-pgrep -x claude >/dev/null 2>&1 && active=1
 pgrep -f 'x11grab' >/dev/null 2>&1 && active=1
+if [ -f "$STAMP" ]; then
+  [ $(( $(date +%s) - $(stat -c %Y "$STAMP") )) -lt 180 ] && active=1
+else
+  pgrep -f 'chrome' >/dev/null 2>&1 && active=1
+  pgrep -x claude >/dev/null 2>&1 && active=1
+fi
 now=$(date +%s)
 if [ "$active" = 1 ]; then echo "$now" > "$STATE"; exit 0; fi
 last=$(cat "$STATE" 2>/dev/null || echo "$now")

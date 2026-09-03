@@ -16,12 +16,13 @@ const { resolveDesktopConfig } = require("./config");
 const { pickWindow, chooseLeader, RecentKeys, createNotificationRouter } = require("./notificationRouter");
 const { fetchText, downloadResumable } = require("./updaterNet");
 const { cmpVersions, feedUrlFor, parseFeed, mustApplyNow, swapScript } = require("./updaterLogic");
+const { createWebCache, createProtocolHandler } = require("./webCache");
 
 function createDesktopApp(userConfig, electron = require("electron")) {
   const cfg = resolveDesktopConfig(userConfig);
   const {
     app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen,
-    Notification, session, powerMonitor, desktopCapturer,
+    Notification, session, powerMonitor, desktopCapturer, protocol, net,
   } = electron;
 
   const PRODUCT = cfg.productName;
@@ -98,6 +99,40 @@ function createDesktopApp(userConfig, electron = require("electron")) {
   // app.whenReady) — production validation is left fully intact.
   const LOCAL_DEV_HOST = cfg.localDevHost;
 
+  // The offline copy of the site. Tied to the origin the shell booted with
+  // (prod, or an env override) — never the local dev server, whose files
+  // change under the app and are served by Vite.
+  const webCache =
+    cfg.web.cache && BASE_URL !== LOCAL_URL
+      ? createWebCache({
+          dir: path.join(app.getPath("userData"), "web-cache"),
+          origin: BASE_URL,
+          manifestPath: cfg.web.manifestPath,
+          seedDir: cfg.web.seedDir,
+          // Electron's net: the system proxy and certificate store, and the
+          // bypass flag the cache sets so its downloads skip the interceptor.
+          fetchImpl: (url, opts) => net.fetch(url, opts),
+          log: (m) => console.log(m),
+        })
+      : null;
+  const webHosts = () => new Set(webCache ? [new URL(webCache.origin).host] : []);
+  // The release the main window last loaded from, so a refresh that lands a
+  // newer one can tell the page.
+  let webLoadedRelease = null;
+  function broadcastWebUpdate(result) {
+    if (!result || result.status !== "updated") return;
+    if (!mainWindow || mainWindow.isDestroyed() || !webLoadedRelease) return;
+    if (webLoadedRelease === result.release) return;
+    mainWindow.webContents.send("web-update", { release: result.release, from: result.from });
+  }
+  function refreshWeb() {
+    if (!webCache) return Promise.resolve(null);
+    return webCache.refresh().then((r) => {
+      broadcastWebUpdate(r);
+      return r;
+    });
+  }
+
   const { DEFAULT_SHORTCUTS, mergeShortcuts, diffOverrides } = cfg.shortcuts.settings;
 
   let mainWindow = null;
@@ -155,7 +190,7 @@ function createDesktopApp(userConfig, electron = require("electron")) {
   }
   if (gotLock) {
     app.on("second-instance", (_e, argv) => {
-      const url = argv.find((a) => a.startsWith(`${cfg.protocol}://`));
+      const url = argv.find((a) => isAppUrl(a));
       if (url) handleDeepLink(url);
       if (mainWindow) {
         mainWindow.show();
@@ -174,6 +209,30 @@ function createDesktopApp(userConfig, electron = require("electron")) {
     app.setAsDefaultProtocolClient(cfg.protocol);
   } else if (process.env[cfg.env.claimProtocol]) {
     app.setAsDefaultProtocolClient(cfg.protocol, process.execPath, [app.getAppPath()]);
+  }
+
+  // Every scheme the app answers: its own plus the extras (mailto:, …).
+  const APP_SCHEMES = [cfg.protocol, ...cfg.extraProtocols.map((p) => p.scheme)];
+  const isAppUrl = (s) => typeof s === "string" && APP_SCHEMES.some((scheme) => s.toLowerCase().startsWith(`${scheme}:`));
+
+  // Extra schemes are claimed on request (menu, IPC, or the first launch of a
+  // packaged build), not on every launch: macOS confirms each claim with a
+  // dialog, and a person who said no once should not be asked daily.
+  function claimDefaultClient(scheme) {
+    if (!cfg.extraProtocols.some((p) => p.scheme === scheme)) return false;
+    app.setAsDefaultProtocolClient(scheme);
+    return app.isDefaultProtocolClient(scheme);
+  }
+  // True on the first launch of this profile; the marker makes every later
+  // launch quiet. Extra schemes marked claimOnFirstRun are claimed then.
+  function firstRun() {
+    const marker = path.join(app.getPath("userData"), "first-run-done");
+    if (fs.existsSync(marker)) return false;
+    fs.writeFileSync(marker, String(Date.now()));
+    if (app.isPackaged) {
+      for (const p of cfg.extraProtocols) if (p.claimOnFirstRun) claimDefaultClient(p.scheme);
+    }
+    return true;
   }
 
   app.on("open-url", (e, url) => {
@@ -208,11 +267,39 @@ function createDesktopApp(userConfig, electron = require("electron")) {
     return cfg.assets.icon ? { icon: cfg.assets.icon } : {};
   }
 
+  // Last window bounds, when they still land on a display.
+  function savedBounds() {
+    if (!cfg.window.rememberBounds) return {};
+    const b = loadFullSettings().bounds;
+    if (!b || typeof b.width !== "number" || typeof b.height !== "number") return {};
+    const out = { width: Math.max(cfg.window.minWidth, b.width), height: Math.max(cfg.window.minHeight, b.height) };
+    if (typeof b.x === "number" && typeof b.y === "number" && screen.getAllDisplays) {
+      const onScreen = screen.getAllDisplays().some(({ workArea: w }) =>
+        b.x + 40 <= w.x + w.width && b.x + b.width - 40 >= w.x && b.y >= w.y - 5 && b.y + 40 <= w.y + w.height);
+      if (onScreen) Object.assign(out, { x: b.x, y: b.y });
+    }
+    return out;
+  }
+  let boundsTimer = null;
+  function rememberBounds(win) {
+    if (!cfg.window.rememberBounds) return;
+    const save = () => {
+      clearTimeout(boundsTimer);
+      boundsTimer = setTimeout(() => {
+        if (!win || win.isDestroyed?.() || win.isMinimized?.() || win.isFullScreen?.()) return;
+        updateSettings({ bounds: win.getNormalBounds ? win.getNormalBounds() : win.getBounds() });
+      }, 300);
+    };
+    win.on("resize", save);
+    win.on("move", save);
+  }
+
   function createWindow() {
     const zoom = getAutoZoomFactor();
     mainWindow = new BrowserWindow({
       width: cfg.window.width,
       height: cfg.window.height,
+      ...savedBounds(),
       minWidth: cfg.window.minWidth,
       minHeight: cfg.window.minHeight,
       titleBarStyle: "hiddenInset",
@@ -274,10 +361,13 @@ function createDesktopApp(userConfig, electron = require("electron")) {
       mainWindow.show();
     });
 
+    rememberBounds(mainWindow);
+
     mainWindow.webContents.on("did-finish-load", () => {
       clearTimeout(stallTimer);
       stallTimer = null;
       loadAttempts = 0;
+      webLoadedRelease = webCache?.current()?.release ?? null;
       mainWindow.webContents.setZoomFactor(getAutoZoomFactor());
       mainWindow.webContents.executeJavaScript(HTML_CLASS_JS);
       // Sticky env can boot us into local mode — mark the title the same way
@@ -314,7 +404,8 @@ function createDesktopApp(userConfig, electron = require("electron")) {
     // single window that navigates in place, so a same-origin link here (e.g. a
     // published artifact) still means "open outside the app".
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-      if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+      if (cfg.downloadUrls && cfg.downloadUrls(url)) mainWindow.webContents.downloadURL(url);
+      else if (/^https?:\/\//i.test(url)) shell.openExternal(url);
       return { action: "deny" };
     });
 
@@ -776,6 +867,9 @@ function createDesktopApp(userConfig, electron = require("electron")) {
           { type: "separator" },
           { label: "Check for Updates…", click: () => checkForDesktopUpdate({ manual: true }) },
           { type: "separator" },
+          ...withSeparator(
+            cfg.extraProtocols.filter((p) => p.menuLabel).map((p) => ({ label: p.menuLabel, click: () => claimDefaultClient(p.scheme) })),
+          ),
           ...(cfg.menu.settingsPath
             ? [
                 { label: "Settings…", accelerator: "CommandOrControl+,", click: () => navigateMain(cfg.menu.settingsPath) },
@@ -1086,6 +1180,10 @@ function createDesktopApp(userConfig, electron = require("electron")) {
   // which holds whenever this handler runs: renderers exist only post-ready.
   ipcMain.handle("get-system-idle-seconds", () => powerMonitor.getSystemIdleTime());
   ipcMain.handle("restart-for-update", () => installUpdateAndRestart());
+  ipcMain.handle("get-web-release", () => webCache?.current() ?? null);
+  ipcMain.handle("refresh-web", () => refreshWeb());
+  ipcMain.handle("set-default-client", (_e, scheme) => claimDefaultClient(String(scheme)));
+  ipcMain.handle("is-default-client", (_e, scheme) => app.isDefaultProtocolClient(String(scheme)));
   // Any renderer-invoked check is user-initiated ("Try again" / "Update now"),
   // which lets it supersede a wedged in-flight download (see checkForDesktopUpdate).
   ipcMain.handle("check-for-update", (_e, opts) => checkForDesktopUpdate({ manual: opts?.manual === true, userInitiated: true }));
@@ -1218,7 +1316,28 @@ function createDesktopApp(userConfig, electron = require("electron")) {
     }
   }
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    // The offline copy: every http(s) request of the session passes through
+    // the handler, which answers the app host from the copy and hands the
+    // rest to the network untouched. The launch waits (briefly) for one
+    // manifest check so an online start paints the current release.
+    if (webCache) {
+      const handler = createProtocolHandler({
+        cache: webCache,
+        appHosts: webHosts,
+        passthrough: cfg.web.passthrough,
+        net,
+        productName: PRODUCT,
+      });
+      protocol.handle("https", handler);
+      protocol.handle("http", handler);
+      webCache.init();
+      const first = refreshWeb();
+      await Promise.race([first, new Promise((r) => setTimeout(r, cfg.web.startupTimeoutMs))]);
+      setInterval(() => { refreshWeb(); }, cfg.web.checkIntervalMs);
+      powerMonitor.on?.("resume", () => { refreshWeb(); });
+    }
+
     // Trust the local mkcert dev cert at the network-service layer. This runs
     // before any cert check, so unlike the "certificate-error" event it also
     // covers the Vite HMR WebSocket — not just the page load. callback(0) =
@@ -1358,6 +1477,9 @@ function createDesktopApp(userConfig, electron = require("electron")) {
       setTimeout(() => { checkForDesktopUpdate(); }, cfg.update.initialDelayMs);
       setInterval(() => { checkForDesktopUpdate(); }, cfg.update.intervalMs);
     }
+
+    const isFirstRun = firstRun();
+    if (cfg.hooks.onReady) cfg.hooks.onReady(api, { firstRun: isFirstRun });
   });
 
   app.on("activate", () => {
@@ -1384,6 +1506,9 @@ function createDesktopApp(userConfig, electron = require("electron")) {
     showCompose,
     openFullSessionInMain,
     toggleEnvironment,
+    refreshWeb,
+    webRelease: () => webCache?.current() ?? null,
+    claimDefaultClient,
   };
   return api;
 }

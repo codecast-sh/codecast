@@ -51,6 +51,8 @@ const Questions = lazyPage("@/app/questions/page", () => import("@/app/questions
 // The Threads inbox: every conversation the viewer is in, one page.
 const Threads = lazyPage("@/app/threads/page", () => import("@/app/threads/page"));
 const AdminDaemonLogs = lazyPage("@/app/admin/daemon-logs/page", () => import("@/app/admin/daemon-logs/page"));
+// Code review pages open in the shell like any other detail view.
+const PrView = lazyPage("@/app/pr/[owner]/[repo]/[number]/page", () => import("@/app/pr/[owner]/[repo]/[number]/page"));
 
 type RouteEntry = {
   pattern: RegExp;
@@ -77,6 +79,7 @@ const ROUTES: RouteEntry[] = [
   // reconciles beside the project's list instead of navigating away from it.
   { pattern: /^\/projects\/([^/]+)\/([^/]+)$/, paramNames: ["id", "taskId"], component: ProjectDetail },
   { pattern: /^\/projects\/([^/]+)$/, paramNames: ["id"], component: ProjectDetail },
+  { pattern: /^\/pr\/([^/]+)\/([^/]+)\/([^/]+)$/, paramNames: ["owner", "repo", "number"], component: PrView },
   // Same component as the bare route, so opening a channel reconciles in place
   // instead of remounting the whole surface and losing the scroll position.
   { pattern: /^\/chat\/([^/]+)$/, paramNames: ["channelId"], component: Chat },

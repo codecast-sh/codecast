@@ -11,6 +11,7 @@ const notificationRouter = require("./notificationRouter");
 const updaterNet = require("./updaterNet");
 const updaterLogic = require("./updaterLogic");
 const { createNotarizeHook, notarizeCredentials, NOTARIZE_ENV } = require("./notarize");
+const webCache = require("./webCache");
 const path = require("path");
 
 module.exports = {
@@ -30,6 +31,10 @@ module.exports = {
   // Updater: network layer + pure decisions
   updaterNet,
   updaterLogic,
+  // The offline copy of the site (see webCache.js); the Vite plugin that
+  // publishes its manifest is `@platform/desktop/vite`.
+  webCache,
+  createWebCache: webCache.createWebCache,
   // Build
   createNotarizeHook,
   notarizeCredentials,

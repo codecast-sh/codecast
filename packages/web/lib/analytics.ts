@@ -3,19 +3,23 @@
 // configuration (its Vite env values, its platform label) plus the error
 // reporting layered on top of it: cause chain reading (./errorCause) and the
 // one error toast (./errorToast). Every consumer keeps importing from here.
-import {
-  captureError,
-  claimErrorKey,
-  identifyUser,
-  initAnalytics as initPlatformAnalytics,
-  posthog,
-  resetUser,
-  Sentry,
-  setupErrorToasts as setupPlatformErrorToasts,
-  track,
-} from "@platform/analytics/web";
 import { describeError, errorChain, errorSummary, rootError } from "./errorCause";
 import { showErrorToast } from "./errorToast";
+import {
+  claimErrorKey,
+  setupErrorToasts as setupPlatformErrorToasts,
+} from "@platform/analytics/errors";
+
+type AnalyticsRuntime = typeof import("@platform/analytics/web");
+
+let runtime: AnalyticsRuntime | undefined;
+let initPromise: Promise<void> | undefined;
+const queuedCalls: Array<(analytics: AnalyticsRuntime) => void> = [];
+
+function withAnalytics(call: (analytics: AnalyticsRuntime) => void) {
+  if (runtime) call(runtime);
+  else queuedCalls.push(call);
+}
 
 // Indirect access so this file also TYPECHECKS inside the mobile program (its
 // tsconfig has no vite/client ImportMeta.env). The cast erases at compile time,
@@ -42,15 +46,37 @@ export function getPlatform(): AnalyticsPlatform {
 // pageviews on history changes, and platform/environment/app on every event as
 // super properties. Dev and prod share one PostHog project, so the environment
 // property is what keeps local traffic out of product metrics.
-export function initAnalytics() {
-  initPlatformAnalytics({
-    posthogKey: META_ENV.VITE_POSTHOG_KEY,
-    posthogHost: META_ENV.VITE_POSTHOG_HOST,
-    sentryDsn: META_ENV.VITE_SENTRY_DSN,
-    environment: META_ENV.DEV ? "development" : "production",
-    platform: getPlatform(),
-    appName: "codecast",
+export function initAnalytics(): Promise<void> {
+  if (initPromise) return initPromise;
+  initPromise = import("@platform/analytics/web").then((analytics) => {
+    analytics.initAnalytics({
+      posthogKey: META_ENV.VITE_POSTHOG_KEY,
+      posthogHost: META_ENV.VITE_POSTHOG_HOST,
+      sentryDsn: META_ENV.VITE_SENTRY_DSN,
+      environment: META_ENV.DEV ? "development" : "production",
+      platform: getPlatform(),
+      appName: "codecast",
+    });
+    runtime = analytics;
+    for (const call of queuedCalls.splice(0)) call(analytics);
   });
+  return initPromise;
+}
+
+export function identifyUser(userId: string, traits?: Record<string, unknown>) {
+  withAnalytics((analytics) => analytics.identifyUser(userId, traits));
+}
+
+export function resetUser() {
+  withAnalytics((analytics) => analytics.resetUser());
+}
+
+export function track(event: string, properties?: Record<string, unknown>) {
+  withAnalytics((analytics) => analytics.track(event, properties));
+}
+
+export function captureError(error: Error, context?: Record<string, unknown>) {
+  withAnalytics((analytics) => analytics.captureError(error, context));
 }
 
 // Known-benign errors thrown from third-party internals that don't affect the
@@ -118,11 +144,10 @@ export function reportRecoverableRenderError(
 export function setupErrorToasts() {
   setupPlatformErrorToasts({
     showErrorToast,
+    captureError,
     ignoredErrorPatterns: IGNORED_ERROR_PATTERNS,
     summarize: errorSummary,
     describe: describeError,
     toError: rootError,
   });
 }
-
-export { captureError, identifyUser, posthog, resetUser, Sentry, track };

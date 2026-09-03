@@ -50,6 +50,10 @@ function createBridge({ ipcRenderer, argv = [], platform = process.platform }) {
   // misses a download that already progressed or finished.
   const onUpdateStatus = bufferedChannel(ipcRenderer, "update-status", { latest: true });
 
+  // The offline copy of the site moved to a new release while this page was
+  // up. Latest only: the page decides when to reload into it.
+  const onWebUpdate = bufferedChannel(ipcRenderer, "web-update", { latest: true });
+
   // Tabs handed back by detached tab windows. Buffered like deep links: an
   // adoption can land while the main renderer is still booting, and a dropped
   // one would silently lose the user's tab.
@@ -72,6 +76,15 @@ function createBridge({ ipcRenderer, argv = [], platform = process.platform }) {
     onDeepLink,
     onUpdateStatus,
     restartForUpdate: () => ipcRenderer.invoke("restart-for-update"),
+    onWebUpdate,
+    // The offline copy: { release, dir } or null, and a refresh on demand.
+    getWebRelease: () => ipcRenderer.invoke("get-web-release"),
+    refreshWeb: () => ipcRenderer.invoke("refresh-web"),
+    // URL schemes beyond the app's own (mailto:, …): ask the OS to make this
+    // app their handler (macOS confirms with its own dialog), and read back
+    // whether it is.
+    setAsDefaultClient: (scheme) => ipcRenderer.invoke("set-default-client", scheme),
+    isDefaultClient: (scheme) => ipcRenderer.invoke("is-default-client", scheme),
     checkForUpdate: (opts) => ipcRenderer.invoke("check-for-update", opts),
     // Resolves { shown } — false when main dropped it (duplicate from another
     // window, or an app window is focused), so only the announcing window sounds.
