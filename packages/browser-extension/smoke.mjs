@@ -52,7 +52,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
-import { BRIDGE_EXTENSION_ID, bridgePairingUrl, targetIdOfTab } from "../cli/src/browser/bridge/protocol.ts";
+import { BRIDGE_EXTENSION_ID, bridgePairingUrl, CAST_TAB_GROUP, targetIdOfTab } from "../cli/src/browser/bridge/protocol.ts";
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
 const extDir = path.join(repoRoot, "packages/browser-extension");
@@ -397,7 +397,7 @@ const BORDER_STATE_EXPR = `(() => {
   const e = [...document.documentElement.children].find((c) => c.getAttribute("aria-hidden") === "true" && c.style.position === "fixed");
   if (!e) return { present: false };
   const cs = getComputedStyle(e);
-  return { present: true, color: cs.borderTopColor, pointer: cs.pointerEvents, visibility: cs.visibility,
+  return { present: true, color: e.dataset.castColor || cs.borderTopColor, pointer: cs.pointerEvents, visibility: cs.visibility,
     hit: document.elementFromPoint(1, 1)?.id === e.id };
 })()`;
 
@@ -437,8 +437,16 @@ async function chromePage(cdpPort, url) {
 /** A page pixel is white; a border pixel is the group's colour, as the
  *  overlay's computed style names it (`rgb(r, g, b)`). */
 const isWhitePixel = (px) => px[0] > 200 && px[1] > 200 && px[2] > 200;
-const isPixelOf = (px, rgb) => {
-  const want = (rgb || "").match(/\d+/g)?.map(Number);
+/**
+ * The frame is a gradient that starts, at the top left corner, from the
+ * group colour mixed 55/45 with white (background.js borderSource), so the
+ * corner pixel is that mix, not the colour itself.
+ */
+const isPixelOf = (px, color) => {
+  const hex = /^#([0-9a-f]{6})$/i.exec(color || "");
+  const want = hex
+    ? [0, 2, 4].map((i) => Math.round(0.55 * parseInt(hex[1].slice(i, i + 2), 16) + 0.45 * 255))
+    : (color || "").match(/\d+/g)?.map(Number);
   return !!want && want.length === 3 && want.every((c, i) => Math.abs(c - px[i]) <= 24);
 };
 
@@ -613,9 +621,10 @@ async function cliRealMode(engineBinary, ext, cdpPort, pageUrl, token, bridgePor
 
   const grouped = await groupTitleOf();
   check(
-    "cli: the tab sits in one group named for the session, in a colour that is not grey",
-    grouped.tabs === 1 && typeof grouped.title === "string" && grouped.title.startsWith("cast ") && grouped.title.includes(CLI_SESSION_ID.slice(0, 7)) &&
-      typeof grouped.color === "string" && grouped.color !== "grey",
+    "cli: the tab sits in the Cast group",
+    // The title may still wear the working frame or the checkmark from the open.
+    grouped.tabs === 1 && typeof grouped.title === "string" && grouped.title.replace(/(\.{1,3}| ✓)\s*$/, "").trim() === CAST_TAB_GROUP.title &&
+      grouped.color === CAST_TAB_GROUP.color,
     JSON.stringify(grouped),
   );
   check("cli: the daemon adopted the pinned tab (one tab in the group)", grouped.members === 1, JSON.stringify(grouped));
@@ -628,7 +637,7 @@ async function cliRealMode(engineBinary, ext, cdpPort, pageUrl, token, bridgePor
   check(
     "cli: open --new-tab puts the second tab in the same group (members === 2)",
     second.code === 0 && both.tabs === 2 && both.groupIds.length === 1 && both.members === 2,
-    `${second.all.slice(0, 200)} / ${JSON.stringify(both)}`,
+    `exit ${second.code}: ${second.all.slice(-300)} / ${JSON.stringify(both)}`,
   );
   // Back to one tab so the rest of the checks read the first page. The
   // daemon binds to the tab it just opened, so switch to the first tab by
@@ -681,7 +690,7 @@ async function cliRealMode(engineBinary, ext, cdpPort, pageUrl, token, bridgePor
   const endedUrl = url + "?ended";
   const endedKey = "env-ended-real";
   const raw = await Cdp.connect(bridgePort, token);
-  const ended = await raw.send("Target.createTarget", { url: endedUrl, background: true, castGroup: { title: "cast ended", color: "red" } });
+  const ended = await raw.send("Target.createTarget", { url: endedUrl, background: true, castGroup: CAST_TAB_GROUP });
   raw.ws.close();
   const endedFile = path.join(engineHome, `${endedKey}.target`);
   fs.writeFileSync(endedFile, JSON.stringify({ targetId: ended.targetId, url: "about:blank", pinned: true }));

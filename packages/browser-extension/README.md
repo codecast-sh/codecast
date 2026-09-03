@@ -104,21 +104,24 @@ Rules the CLI enforces in real mode:
 
 ## What you see while a session drives a tab
 
-- **A coloured Chrome tab group** named `cast <session>` (the first seven
-  characters of the session id; a session known only by its tmux pane is
-  named `cast pane <n>`). The colour is chosen from the session id, so two
-  agents in the same Chrome get different colours and the same agent gets the
-  same colour on every run. Every tab the session opens joins the group. The
-  extension remembers which groups it created and touches only those: a
-  group you made yourself is never renamed, animated or adopted by a session.
+- **One Chrome tab group named `Cast`**, in red, where every tab an agent
+  opens in your Chrome lives, whichever session opened it. New tabs join it
+  in the window that already holds it. Chrome opens a new tab inside the
+  active tab's group, so a tab you open yourself next to an agent's would
+  land in `Cast` and wear its colour; the extension moves such tabs back out
+  at once, since the group means agent tabs. It remembers the groups and tabs
+  it created and touches only those: a group you made yourself is never
+  renamed, animated or adopted by a session.
   While a session works the title shows cycling dots; CDP calls that arrive
   within 600 ms of each other count as one span, the dots start once a span
   has run for 300 ms, and a checkmark follows for three seconds when the span
   ends. The frames have a fixed width so the tab strip does not shift. The
   group disappears with its last tab.
-- **A thin border** around the driven page, in the group's colour. It takes
-  no clicks, and the extension hides it for every screenshot, so captures
-  show the page alone. The extension injects it through the debugger
+- **A frame around the driven page**, a soft gradient in the group's colour,
+  and a pointer in the same colour that glides to wherever the agent's mouse
+  events land and pulses on a click, then fades after a few seconds of
+  stillness. Neither takes clicks, and the extension hides both for every
+  screenshot, so captures show the page alone. The extension injects it through the debugger
   session it already holds, so it needs no host permission and no content
   script, and it runs its script in an isolated world with a random element
   id: the page cannot reach the script, cannot watch for the moment before a

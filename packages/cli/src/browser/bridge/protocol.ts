@@ -135,6 +135,14 @@ export interface BridgeGroup {
   color: BridgeGroupColor;
 }
 
+/**
+ * The one group every cast tab in the human's Chrome sits in. One group, not
+ * one per session: the human wants a single place where agent tabs are, and
+ * the title animates while any session works there. Red is the Chrome
+ * colour nearest the coral of the codecast mark.
+ */
+export const CAST_TAB_GROUP: BridgeGroup = { title: "Cast", color: "red" };
+
 /** Host → extension request. */
 export interface BridgeRequest {
   id: number;

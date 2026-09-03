@@ -248,7 +248,13 @@ async function handle(m) {
     }
 
     case "tabs.create": {
-      const t = await chrome.tabs.create({ url: m.url || "about:blank", active: !m.background });
+      await groupsLoaded;
+      // Into the window that already holds this group, so cast tabs stay
+      // together instead of a second group appearing per window.
+      const windowId = m.group ? windowOfOwnedGroup(m.group.title) : undefined;
+      const t = await chrome.tabs.create({ url: m.url || "about:blank", active: !m.background, ...(windowId !== undefined ? { windowId } : {}) });
+      ownedTabs.add(t.id);
+      persistOwned();
       if (m.group) await placeInGroup(t, m.group);
       return { tabId: t.id };
     }
@@ -280,6 +286,7 @@ async function handle(m) {
       const screenshot = m.method === "Page.captureScreenshot";
       try {
         if (screenshot) await setBorderVisible(m.tabId, false);
+        else if (m.method === "Input.dispatchMouseEvent") movePointer(m.tabId, m.params || {});
         const result = await chrome.debugger.sendCommand({ tabId: m.tabId }, m.method, m.params || {});
         return { result: result || {} };
       } finally {
@@ -295,7 +302,19 @@ async function handle(m) {
 
 async function attachTab(tabId) {
   if (!attached.has(tabId)) {
-    await chrome.debugger.attach({ tabId }, "1.3");
+    try {
+      await chrome.debugger.attach({ tabId }, "1.3");
+    } catch (err) {
+      // Chrome keeps an extension's debugger sessions across service worker
+      // lives; our bookkeeping does not. A session this worker's predecessor
+      // held is still on the tab, and only a detach clears it. The detach
+      // succeeds for our own session alone: another extension's, or open
+      // DevTools, leaves an error worth naming.
+      if (!/already attached/i.test(String((err && err.message) || err))) throw err;
+      const ours = await chrome.debugger.detach({ tabId }).then(() => true, () => false);
+      if (!ours) throw new Error(`another debugger holds this tab (DevTools, or another extension); close it there first`);
+      await chrome.debugger.attach({ tabId }, "1.3");
+    }
     attached.add(tabId);
     markDriven(tabId, true);
   }
@@ -363,15 +382,18 @@ const indicators = new Map(); // groupId → indicator state (beginWork)
  * session storage) also drops every group id, so nothing stale survives.
  */
 const ownedGroups = new Set();
+const ownedTabs = new Set(); // tabs this extension opened; the only ones that belong in an owned group
 const groupsLoaded = chrome.storage.session
-  .get("ownedGroups")
-  .then(({ ownedGroups: ids }) => {
-    for (const id of ids || []) ownedGroups.add(id);
+  .get(["ownedGroups", "ownedTabs"])
+  .then(({ ownedGroups: gids, ownedTabs: tids }) => {
+    for (const id of gids || []) ownedGroups.add(id);
+    for (const id of tids || []) ownedTabs.add(id);
   })
   .catch(() => {});
 
-function persistOwnedGroups() {
-  chrome.storage.session.set({ ownedGroups: [...ownedGroups] }).catch(() => {});
+/** Both sets outlive this worker (session storage), so a restart keeps telling ours from the human's. */
+function persistOwned() {
+  chrome.storage.session.set({ ownedGroups: [...ownedGroups], ownedTabs: [...ownedTabs] }).catch(() => {});
 }
 
 async function refreshGroups() {
@@ -397,10 +419,16 @@ async function placeInGroup(tab, group) {
   tabGroupOf.set(tab.id, groupId);
   if (!existing) {
     ownedGroups.add(groupId);
-    persistOwnedGroups();
+    persistOwned();
     const g = await chrome.tabGroups.update(groupId, { title: group.title, color: group.color });
     groups.set(groupId, g);
   }
+}
+
+/** The window of a group we made with this plain title, if one is open. */
+function windowOfOwnedGroup(title) {
+  const g = [...groups.values()].find((x) => ownedGroups.has(x.id) && plainTitle(x.id, x) === title);
+  return g ? g.windowId : undefined;
 }
 
 async function groupOfTab(tabId) {
@@ -528,7 +556,7 @@ chrome.tabGroups.onUpdated.addListener((g) => {
 chrome.tabGroups.onRemoved.addListener((g) => {
   groups.delete(g.id);
   dropIndicator(g.id);
-  if (ownedGroups.delete(g.id)) persistOwnedGroups();
+  if (ownedGroups.delete(g.id)) persistOwned();
 });
 
 // --------------------------------------------------------------------------
@@ -580,9 +608,49 @@ function borderSource(id, color) {
         el.setAttribute("aria-hidden", "true");
         root.appendChild(el);
       }
-      el.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:none;box-sizing:border-box;" +
-        "border:3px solid ${color};margin:0;padding:0;background:transparent;";
+      // The colour the frame is drawn from, readable by anything that looks
+      // at the page: the border itself is a gradient image, which computed
+      // style reports as transparent.
+      el.dataset.castColor = ${JSON.stringify(color)};
+      el.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:none;box-sizing:border-box;margin:0;padding:0;" +
+        "border:3px solid transparent;border-image:linear-gradient(135deg,color-mix(in srgb,${color} 55%,white),${color} 55%,color-mix(in srgb,${color} 70%,black)) 1;" +
+        "box-shadow:inset 0 0 26px 0 color-mix(in srgb,${color} 16%,transparent);background:transparent;";
+      // The pointer: an arrow in the frame's colour that glides to where the
+      // agent's mouse events land and pulses on a press, then fades when the
+      // agent has been still for a while. A child of the frame, so whatever
+      // hides the frame (a screenshot) hides it too.
+      let cur = el.firstElementChild;
+      if (!cur) {
+        cur = document.createElement("div");
+        cur.style.cssText = "position:absolute;left:0;top:0;width:28px;height:36px;opacity:0;transform:translate(-100px,-100px);" +
+          "transition:transform 160ms cubic-bezier(.2,.7,.2,1),opacity 300ms ease;will-change:transform;";
+        cur.innerHTML = '<svg width="28" height="36" viewBox="0 0 28 36" style="position:absolute;left:0;top:0;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35))">' +
+          '<path d="M3 2 L3 27 L9 21 L13 31 L17 29 L13 20 L22 20 Z" fill="${color}" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg>' +
+          '<span style="position:absolute;left:-14px;top:-14px;width:36px;height:36px;border-radius:50%;border:2px solid ${color};opacity:0;transform:scale(.4)"></span>';
+        el.appendChild(cur);
+      }
       return true;
+    };
+    let hideTimer = null;
+    globalThis.__castPointer = (x, y, kind) => {
+      const el = document.getElementById(ID);
+      const cur = el && el.firstElementChild;
+      if (!cur) return;
+      cur.style.transform = "translate(" + x + "px," + y + "px)";
+      cur.style.opacity = "1";
+      if (kind === "down") {
+        const ring = cur.lastElementChild;
+        ring.style.transition = "none";
+        ring.style.opacity = "0.9";
+        ring.style.transform = "scale(.4)";
+        requestAnimationFrame(() => {
+          ring.style.transition = "transform 420ms ease-out, opacity 420ms ease-out";
+          ring.style.opacity = "0";
+          ring.style.transform = "scale(1.4)";
+        });
+      }
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => { cur.style.opacity = "0"; }, 4000);
     };
     const lease = () => {
       const el = document.getElementById(ID);
@@ -655,6 +723,13 @@ async function removeBorder(tabId) {
   worlds.delete(tabId);
 }
 
+/** The pointer follows the agent's mouse events; a press pulses. Never awaited: it is a courtesy, not a step. */
+function movePointer(tabId, p) {
+  if (typeof p.x !== "number" || typeof p.y !== "number" || !borderIds.has(tabId)) return;
+  const kind = p.type === "mousePressed" ? "down" : "move";
+  evalInWorld(tabId, `globalThis.__castPointer && __castPointer(${p.x}, ${p.y}, ${JSON.stringify(kind)})`).catch(() => {});
+}
+
 /** Hidden around a screenshot so the capture shows the page, not our frame. */
 async function setBorderVisible(tabId, visible) {
   const id = borderIds.get(tabId);
@@ -707,11 +782,21 @@ chrome.tabs.onCreated.addListener((t) => {
   }
 });
 chrome.tabs.onUpdated.addListener((tabId, info, t) => {
-  if (info.groupId !== undefined) tabGroupOf.set(tabId, info.groupId);
+  if (info.groupId !== undefined) {
+    tabGroupOf.set(tabId, info.groupId);
+    // Chrome opens a new tab inside the active tab's group, so a tab the
+    // human opens next to an agent's lands in the Cast group and wears its
+    // colour. The group means "agent tabs": anything we neither opened nor
+    // hold goes back out.
+    if (ownedGroups.has(info.groupId) && !ownedTabs.has(tabId) && !attached.has(tabId)) {
+      chrome.tabs.ungroup([tabId]).catch(() => {});
+    }
+  }
   send({ op: "tab", kind: "updated", tab: describeTab(t) });
 });
 chrome.tabs.onRemoved.addListener((tabId, info) => {
   attached.delete(tabId);
+  if (ownedTabs.delete(tabId)) persistOwned();
   tabGroupOf.delete(tabId);
   borderScripts.delete(tabId);
   borderIds.delete(tabId);
