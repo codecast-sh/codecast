@@ -33,7 +33,11 @@ describe("taskDisplayTitle / cleanPromptSliceTitle", () => {
 const session = (id: string, extra: Partial<InboxSession> = {}): InboxSession => ({
   _id: id,
   session_id: `session-${id}`,
-  updated_at: Date.now(),
+  // A settled row as the server ships it (ct-47609): a minute of quiet, the
+  // status change past the idle grace, the last turn the agent's.
+  updated_at: Date.now() - 60_000,
+  agent_status_updated_at: Date.now() - 60_000,
+  last_role_is_user: false,
   agent_type: "claude_code",
   message_count: 3,
   is_idle: true,
@@ -319,7 +323,9 @@ describe("an armed trigger's resting home in the walk (the armed_trigger_kind fa
   const sessions: Record<string, InboxSession> = {
     resting: session("resting", { is_idle: true, armed_trigger_kind: "standing", last_turn_allows_park: true }),
     ni: session("ni", { is_idle: true }),
-    parked: session("parked", { is_idle: true, agent_status: "dormant" }),
+    // Declared dormant on a daemon that heartbeats: with the daemon gone the
+    // wake it promised cannot arrive, and the row would be the human's again.
+    parked: session("parked", { is_idle: true, agent_status: "dormant", last_heartbeat: Date.now() - 5_000, daemon_alive_until: Date.now() + 85_000 }),
   };
 
   it("walks the resting home with the DORMANT section, after the triage buckets", () => {
