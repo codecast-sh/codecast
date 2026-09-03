@@ -31,6 +31,12 @@ export const oauthConnectorTables = {
      *  authenticated browser session confirms it owns the redirect. */
     pending_confirm_hash: v.optional(v.string()),
     pending_expires_at: v.optional(v.number()),
+    /** Health stamps read by the integrations page. issue-sync.md S1.5 —
+     *  the same three fields github_app_installations carries, so one card
+     *  renderer serves both. */
+    last_webhook_at: v.optional(v.number()),
+    last_sync_at: v.optional(v.number()),
+    last_error: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.number(),
   })

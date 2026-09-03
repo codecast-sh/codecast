@@ -128,11 +128,17 @@ describe("authorization boundary coverage", () => {
   });
 
   test("GitHub webhook handlers call the internal PR API", () => {
+    // Naming individual functions pinned the shape of the moment: the closed-PR
+    // handler stopped calling updatePRState when it moved to the shared
+    // patchPullRequest, and this test failed while nothing had gone wrong. What
+    // matters is the boundary, so that is what is pinned now: the webhook file
+    // reaches the pull_requests module ONLY through internal.
     const src = readFileSync(join(DIR, "githubWebhooks.ts"), "utf8");
-    expect(src).not.toContain("api.pull_requests.updatePRFiles");
-    expect(src).not.toContain("api.pull_requests.updatePRState");
-    expect(src).toContain("internal.pull_requests.updatePRFiles");
-    expect(src).toContain("internal.pull_requests.updatePRState");
+    expect(src).not.toContain("api.pull_requests.");
+
+    const refs = src.match(/(?<![a-zA-Z.])[a-zA-Z]+\.pull_requests\.[a-zA-Z]+/g) ?? [];
+    expect(refs.length).toBeGreaterThan(0);
+    expect(refs.filter((r) => !r.startsWith("internal."))).toEqual([]);
   });
 });
 

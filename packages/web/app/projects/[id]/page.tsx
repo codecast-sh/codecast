@@ -12,8 +12,11 @@ import { TaskDetailContent } from "../../tasks/[id]/page";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { projectDotClass } from "../../../lib/projectColors";
-import { buildProgressSeries } from "../../../lib/projectProgress";
+import { buildBurndown, buildProgressSeries } from "../../../lib/projectProgress";
 import { ProgressChart } from "../../../components/ProgressChart";
+import { BurndownChart } from "../../../components/BurndownChart";
+import { ProjectUpdates } from "../../../components/ProjectUpdates";
+import { ProjectTimeline } from "../../../components/ProjectTimeline";
 import { useSyncPlans } from "../../../hooks/useSyncPlans";
 import { useSyncDocs } from "../../../hooks/useSyncDocs";
 import { useSyncProjects } from "../../../hooks/useSyncProjects";
@@ -44,6 +47,9 @@ import {
   ChevronRight,
   ChevronDown,
   Activity,
+  CalendarClock,
+  History,
+  Megaphone,
 } from "lucide-react";
 
 const api = _api as any;
@@ -81,6 +87,12 @@ const DOC_TYPE_DOTS: Record<string, string> = {
   investigation: "bg-sol-yellow",
   handoff: "bg-sol-orange",
 };
+
+/** Timestamp → the yyyy-mm-dd a date input wants, in local time. */
+function toDateInput(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 function fmtAge(ms: number): string {
   const diff = Date.now() - ms;
@@ -209,9 +221,11 @@ function ProjectDetailContent() {
   useSyncTasks();
 
   // Which face of the project you're on. Tasks is the default: a project is
-  // somewhere to work, and the overview is the summary you step back to.
+  // somewhere to work; the others are the ways you step back from it —
+  // overview for shape, updates for narration, timeline for the record.
   const searchParams = useSearchParams();
-  const tab = searchParams.get("tab") === "overview" ? "overview" : "tasks";
+  const tabParam = searchParams.get("tab");
+  const tab = tabParam === "overview" || tabParam === "updates" || tabParam === "timeline" ? tabParam : "tasks";
   const setTab = useCallback((next: string) => {
     const params = new URLSearchParams(searchParams.toString());
     if (next === "tasks") params.delete("tab"); else params.set("tab", next);
@@ -286,6 +300,12 @@ function ProjectDetailContent() {
     [projectTasks]
   );
 
+  // Remaining work projected forward — will this project hit its date?
+  const burndown = useMemo(
+    () => buildBurndown(progressSeries, project?.target_date, Date.now()),
+    [progressSeries, project?.target_date]
+  );
+
   // Docs in this project
   const projectDocs = useMemo(() =>
     wsDocs.filter((d: any) => d.project_id === projectId)
@@ -311,6 +331,26 @@ function ProjectDetailContent() {
   const handleStatusChange = useCallback((status: string) => {
     updateProject(projectId, { status });
     toast.success(`Project marked as ${status}`);
+  }, [projectId, updateProject]);
+
+  const [editingDeadline, setEditingDeadline] = useState(false);
+  // Commit on blur or Enter, never on change — a date input fires onChange on
+  // the first keystroke of a typed year, and committing there would store
+  // year 0002 and slam the editor shut mid-typing.
+  const handleDeadlineCommit = useCallback((value: string) => {
+    setEditingDeadline(false);
+    if (!value) return;
+    // yyyy-mm-dd → end of that day LOCAL time, so a project "due Sep 26" is
+    // on time all of Sep 26, not just until midnight UTC.
+    const [y, m, d] = value.split("-").map(Number);
+    if (!y || y < 1990 || !m || !d) return;
+    const ts = new Date(y, m - 1, d, 23, 59, 59).getTime();
+    if (ts !== project?.target_date) updateProject(projectId, { target_date: ts });
+  }, [projectId, updateProject, project?.target_date]);
+  const handleDeadlineClear = useCallback(() => {
+    setEditingDeadline(false);
+    // null rides through the dispatch to webUpdate, which drops the field.
+    updateProject(projectId, { target_date: null });
   }, [projectId, updateProject]);
 
   if (!project) {
@@ -395,10 +435,46 @@ function ProjectDetailContent() {
             <span className="text-xs text-sol-text-dim">{project.description}</span>
           )}
 
-          {project.target_date && (
-            <span className="text-xs text-sol-text-dim tabular-nums">
-              Due {new Date(project.target_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+          {/* Deadline. Click to change; the burndown projects against it. */}
+          {editingDeadline ? (
+            <span className="flex items-center gap-1.5">
+              <input
+                type="date"
+                autoFocus
+                defaultValue={project.target_date ? toDateInput(project.target_date) : ""}
+                className="text-xs bg-transparent text-sol-text border-b border-sol-cyan/40 outline-none tabular-nums"
+                onBlur={(e) => handleDeadlineCommit(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setEditingDeadline(false);
+                  if (e.key === "Enter") handleDeadlineCommit((e.target as HTMLInputElement).value);
+                }}
+              />
+              {project.target_date && (
+                <button
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={handleDeadlineClear}
+                  className="text-[10px] text-sol-text-dim hover:text-sol-red transition-colors"
+                  title="Clear the deadline"
+                >
+                  clear
+                </button>
+              )}
             </span>
+          ) : (
+            <button
+              onClick={() => setEditingDeadline(true)}
+              className={`flex items-center gap-1 text-xs tabular-nums whitespace-nowrap flex-shrink-0 transition-colors ${
+                project.target_date
+                  ? "text-sol-text-dim hover:text-sol-text"
+                  : "text-sol-text-dim/50 hover:text-sol-text-dim"
+              }`}
+              title="Set the project deadline"
+            >
+              <CalendarClock className="w-3 h-3" />
+              {project.target_date
+                ? `Due ${new Date(project.target_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+                : "Set deadline"}
+            </button>
           )}
 
           {/* Summary counts */}
@@ -429,6 +505,8 @@ function ProjectDetailContent() {
           {([
             { key: "tasks", label: "Tasks", icon: ListChecks, count: 0 },
             { key: "overview", label: "Overview", icon: Target, count: projectPlans.length + projectDocs.length },
+            { key: "updates", label: "Updates", icon: Megaphone, count: 0 },
+            { key: "timeline", label: "Timeline", icon: History, count: 0 },
           ] as const).map((t) => {
             const Icon = t.icon;
             const active = tab === t.key;
@@ -457,6 +535,14 @@ function ProjectDetailContent() {
         <div className="flex-1 min-h-0">
           <TaskListContent projectId={projectId} />
         </div>
+      ) : tab === "updates" ? (
+        <div className="flex-1 overflow-y-auto">
+          <ProjectUpdates projectId={projectId} />
+        </div>
+      ) : tab === "timeline" ? (
+        <div className="flex-1 overflow-y-auto">
+          <ProjectTimeline projectId={projectId} />
+        </div>
       ) : (
       <div className="flex-1 overflow-y-auto">
         {/* Overview answers "what is this and how is it going" — it deliberately
@@ -469,6 +555,11 @@ function ProjectDetailContent() {
           <SectionHeader icon={Activity} label="Progress" count={0} />
           <div className="px-1 pb-2">
             <ProgressChart series={progressSeries} />
+          </div>
+
+          <SectionHeader icon={CalendarClock} label="Burndown" count={0} />
+          <div className="px-1 pb-2">
+            <BurndownChart burndown={burndown} />
           </div>
 
           {projectPlans.length > 0 && (

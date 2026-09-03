@@ -83,6 +83,37 @@ export function isAgentCommand(command: string): boolean {
   return isRecognizedAgentComm(base);
 }
 
+/** Program names that can be argv0 of a daemon. Anything else naming `_daemon`
+ *  or a daemon file is talking ABOUT the daemon, not running it. */
+const DAEMON_ARGV0_RE = /^(codecast|cast|bun|node|deno)(\.exe)?$/;
+
+/**
+ * Is this command line a codecast daemon? Matches all three install shapes:
+ * source (`bun .../packages/cli/src/daemon.ts _daemon`), built JS
+ * (`node .../dist/daemon.js`) and the compiled binary (`codecast -- _daemon`).
+ *
+ * The argv0 test is what keeps the neighbours out. `grep _daemon src/daemon.ts`
+ * and `nginx: master ... -g daemon off;` both carry the token and neither is a
+ * daemon. It also deliberately misses `codecast _watchdog` and the worker shape
+ * `codecast _worker <kind>`: the split brain sweep kills what it matches, and
+ * those are meant to live.
+ */
+export function isDaemonCommand(command: string): boolean {
+  const argv = command.trim().split(/\s+/).filter((t) => t.length > 0);
+  if (argv.length < 2) return false;
+  const argv0 = argv[0].split("/").pop() ?? "";
+  if (!DAEMON_ARGV0_RE.test(argv0)) return false;
+  return argv
+    .slice(1)
+    .filter((t) => t !== "--")
+    .some((t) => t === "_daemon" || t.endsWith("/daemon.ts") || t.endsWith("/daemon.js"));
+}
+
+/** Pids of every other daemon process on this machine. */
+export function findOtherDaemonPids(procs: ProcRow[], selfPid = process.pid): number[] {
+  return procs.filter((p) => p.pid !== selfPid && isDaemonCommand(p.command)).map((p) => p.pid);
+}
+
 export interface StaleTmuxServer {
   pid: number;
   command: string;

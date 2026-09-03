@@ -11,8 +11,8 @@
 // ./update.ts re-exports every getter here, so existing importers are unchanged.
 
 const MEMORY_VERSION = "14"; // bumped: --state done / dormant, states answer who acts next
-const TASK_VERSION = "5"; // bumped: triggers have short ids (tr-42) + shared "Referencing objects" section
-const WORK_VERSION = "8"; // bumped: "Reading tasks" — server-side filters, --json on every read, show takes several ids and lists linked sessions
+const TASK_VERSION = "6"; // bumped: issue_* events on --on (Linear and GitHub issues)
+const WORK_VERSION = "9"; // bumped: cast task start --spawn; tasks backed by a Linear or GitHub issue print its identifier and link
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
 const MESSAGING_VERSION = "9"; // bumped: a plain stash pops back on a trigger wake; cast stash --hide keeps it silent
