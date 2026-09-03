@@ -22,6 +22,8 @@ import { AvatarImg } from "../lib/avatarCache";
 import { getQuoteUnits, quoteUnitAt, unitTop } from "../lib/quoteUnits";
 import { createReviewComment, exitReviewMode } from "../lib/reviewActions";
 import { quoteSelectionIntoReply } from "../lib/quoteSelection";
+import { stepReviewBlock } from "../lib/reviewNav";
+import { altChordDirection } from "../shortcuts";
 import { focusComposer } from "../lib/composerControl";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
@@ -222,8 +224,6 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     };
   }, [content, measureActive, measure]);
 
-  const blockCount = rects.length || 1;
-
   // ----- stack rail cards: anchor to their block, push down to avoid overlap -----
   const sortedComments = useMemo(
     () => [...myComments].sort((a, b) => a.blockIndex - b.blockIndex || a.createdAt - b.createdAt),
@@ -262,8 +262,6 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     return () => ro.disconnect();
   }, [engaged, restack]);
 
-  const setActiveBlock = useCallback((i: number) => useInboxStore.getState().setReviewActiveBlock(i), []);
-
   const blockText = useCallback((i: number): string => {
     const el = getQuoteUnits(contentRef.current)[i];
     return el ? el.innerText : "";
@@ -301,15 +299,15 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   }, [cancelClear]);
 
   // ----- keyboard nav (only while this message is the review target) -----
-  // ↑/↓ (or j/k) move between blocks; c/Enter quotes the active block (like
-  // clicking ❝); n/e adds or opens its note; x/⌫ removes it; Esc leaves. The
+  // ↑/↓ (j/k, ⌥J/⌥K) walk chunks, crossing into the neighbouring reply at
+  // either edge and back into the composer past the last; c/Enter (or n/e) quotes
+  // the active block and opens its note (like clicking ❝); x/⌫ removes it; Esc leaves. The
   // outgoing message auto-attaches the batch on send, so there's no submit key.
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (!isReviewTarget) return;
       const tag = (e.target as HTMLElement).tagName;
       if (tag === "TEXTAREA" || tag === "INPUT") return;
-      const last = blockCount - 1;
       const cur = useInboxStore.getState().reviewActiveBlock;
       const blockComments = myComments.filter((c) => c.blockIndex === cur);
       const key = e.key;
@@ -323,22 +321,23 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
           return;
         }
       }
-      if (key === "ArrowDown" || key === "j") {
+      // ↑/↓, j/k and the ⌥J/⌥K chords all walk chunks; the walker crosses into
+      // the neighbouring reply at either edge and drops back into the composer
+      // past the last chunk (lib/reviewNav).
+      const chord = altChordDirection(e.nativeEvent);
+      const dir = chord === "up" || chord === "down" ? chord
+        : key === "ArrowDown" || key === "j" ? "down"
+        : key === "ArrowUp" || key === "k" ? "up"
+        : null;
+      if (dir) {
         e.preventDefault();
-        setActiveBlock(Math.min(last, cur + 1));
-      } else if (key === "ArrowUp" || key === "k") {
-        e.preventDefault();
-        setActiveBlock(Math.max(0, cur - 1));
-      } else if (key === "c" || key === "Enter") {
-        // Quote the active block, or open its note if it's already quoted.
+        stepReviewBlock(messageId, dir === "down" ? 1 : -1);
+      } else if (key === "c" || key === "Enter" || key === "n" || key === "e") {
+        // Quote the active block and write its note: quoting opens the editor
+        // (createReviewComment); on an already-quoted block just reopen it.
         e.preventDefault();
         if (blockComments.length) useInboxStore.getState().setReviewEditingId(blockComments[0].id);
         else startComment(cur);
-      } else if (key === "n" || key === "e") {
-        // Add note: open the active block's note editor (quoting it first if needed).
-        e.preventDefault();
-        const id = blockComments.length ? blockComments[0].id : startComment(cur);
-        useInboxStore.getState().setReviewEditingId(id);
       } else if (key === "x" || key === "Delete" || key === "Backspace") {
         if (blockComments.length) {
           e.preventDefault();
@@ -349,7 +348,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
         exitReviewMode();
       }
     },
-    [isReviewTarget, blockCount, myComments, conversationId, setActiveBlock, startComment],
+    [isReviewTarget, myComments, conversationId, messageId, startComment],
   );
 
   // keep active block in view + hold focus so single-letter keys are captured here
@@ -405,9 +404,23 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
         // else the keyboard-active block. Replaces the in-card quote as the
         // "what does this comment point at" cue.
         const hi = peekBlock != null ? peekBlock : isReviewTarget ? activeBlock : -1;
-        return hi >= 0 && rects[hi] ? (
-          <div className="cc-active-overlay" style={{ top: rects[hi].top, height: rects[hi].height }} />
-        ) : null;
+        if (hi < 0 || !rects[hi]) return null;
+        // The keyboard-lit chunk names its verb: an unquoted block shows the
+        // quote key at its top-right (a quoted one already shows N / ⌫ on its
+        // chip). A sibling of the overlay, not a child — the overlay sits behind
+        // the text, and this must sit above it.
+        const hint = peekBlock == null && isReviewTarget && !editingId && !myComments.some((c) => c.blockIndex === hi);
+        return (
+          <>
+            <div className="cc-active-overlay" style={{ top: rects[hi].top, height: rects[hi].height }} />
+            {hint && (
+              <div className="cc-active-hint" style={{ top: rects[hi].top }}>
+                <KeyCap size="xs">C</KeyCap>
+                quote
+              </div>
+            )}
+          </>
+        );
       })()}
 
       <div ref={contentRef} className="cc-content">
@@ -416,7 +429,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
 
       {/* Modeless single verb: hover any block → one Quote handle in the LEFT
           gutter (separated from the meta actions in the top-right corner). Click
-          quotes the block into your reply and opens an optional note; leave the
+          quotes the block into your reply and opens its note focused; leave the
           note blank for a bare quote. */}
       {hoverIndex !== null && editingId === null && (
         <button

@@ -87,6 +87,7 @@ import { appendToDraft, formatPlanFeedback } from "../lib/quoteFormat";
 import { imagePlaceholderToken, insertImagePlaceholder, dropImagePlaceholder } from "../lib/imagePlaceholder";
 import { quoteToComposer, submitReview, attachReviewToMessage, takeReviewBatch } from "../lib/reviewActions";
 import { quoteSelectionIntoReply } from "../lib/quoteSelection";
+import { enterReviewNearCenter, enterReviewFromComposer } from "../lib/reviewNav";
 import { MessageReview } from "./MessageReview";
 import { SelectionQuoteToolbar } from "./SelectionQuoteToolbar";
 import { ReviewBar } from "./ReviewBar";
@@ -11396,9 +11397,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       return;
     }
 
-    // The ghost suggestion in an empty composer: Tab takes it, ↑/↓ step
-    // through the alternatives. Typing anything replaces it, so no key is
-    // spent on dismissing. The queue and image rungs keep ↑ when they exist.
+    // The ghost suggestion in an empty composer: Tab takes it, ↓ steps through
+    // the alternatives (it wraps). Typing anything replaces it, so no key is
+    // spent on dismissing. ↑ is not the ghost's: from the input it climbs into
+    // the transcript (climbIntoTranscript below).
     const ghost = suggestionRef.current;
     if (ghost?.visible() && !message) {
       if (e.key === "Tab" && !e.shiftKey) {
@@ -11406,11 +11408,29 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         ghost.accept();
         return;
       }
-      if ((e.key === "ArrowUp" || e.key === "ArrowDown") && ghost.count() > 1 && queuedMessages.length === 0 && pastedImages.length === 0) {
+      if (e.key === "ArrowDown" && ghost.count() > 1) {
         e.preventDefault();
-        ghost.cycle(e.key === "ArrowUp" ? -1 : 1);
+        ghost.cycle(1);
         return;
       }
+    }
+
+    // Leave the input for the transcript: the last reply becomes the review
+    // target at its last chunk, and the same ↑/↓ (or ⌥K/⌥J) then walk the
+    // quotable chunks across replies; ↓ past the last one lands back here.
+    // Reached from the top rung of whatever sits above the text — the image
+    // strip, then the queue — and from the caret at the very start of the
+    // text (matching how those rungs take ↑). ⌥K / ⌥↑ climb from anywhere.
+    const climbIntoTranscript = () => {
+      if (!enterReviewFromComposer()) return false;
+      setSelectedImageIndex(null);
+      setLightboxImageIndex(null);
+      setSelectedQueueIndex(null);
+      return true;
+    };
+    if (altChordDirection(e.nativeEvent) === "up" && climbIntoTranscript()) {
+      e.preventDefault();
+      return;
     }
 
     if (selectedImageIndex !== null && pastedImages.length > 0) {
@@ -11458,11 +11478,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        // ↑ from the image strip climbs to the queue row above it.
+        // ↑ from the image strip climbs to the queue row above it, or on into
+        // the transcript when there is no queue.
         if (queuedMessages.length > 0) {
           setSelectedImageIndex(null);
           setLightboxImageIndex(null);
           setSelectedQueueIndex(queuedMessages.length - 1);
+        } else {
+          climbIntoTranscript();
         }
         return;
       }
@@ -11480,7 +11503,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (selectedQueueIndex !== null && queuedMessages.length > 0) {
       if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
         e.preventDefault();
-        setSelectedQueueIndex(Math.max(0, selectedQueueIndex - 1));
+        // ↑ from the top queue row climbs on into the transcript.
+        if (selectedQueueIndex === 0 && e.key === "ArrowUp") climbIntoTranscript();
+        else setSelectedQueueIndex(Math.max(0, selectedQueueIndex - 1));
         return;
       }
       if (e.key === "ArrowRight" || e.key === "ArrowDown") {
@@ -11540,6 +11565,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       if (textarea && textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
         e.preventDefault();
         setSelectedQueueIndex(queuedMessages.length - 1);
+        return;
+      }
+    }
+
+    if (e.key === "ArrowUp" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+      const textarea = textareaRef.current;
+      if (textarea && textarea.selectionStart === 0 && textarea.selectionEnd === 0 && climbIntoTranscript()) {
+        e.preventDefault();
         return;
       }
     }
@@ -14565,18 +14598,7 @@ const ConversationViewInner = (
   useShortcutAction('conv.review', useCallback(() => {
     if (!conversation) return;
     if (quoteSelectionIntoReply(conversation._id)) return;
-    const regions = Array.from(document.querySelectorAll<HTMLElement>('.cc-msg-review'));
-    const center = window.innerHeight / 2;
-    let best: { id: string; dist: number } | null = null;
-    for (const region of regions) {
-      const id = (region.closest('[id^="msg-"]') as HTMLElement | null)?.id?.slice(4);
-      if (!id) continue;
-      const rect = region.getBoundingClientRect();
-      if (rect.bottom < 0 || rect.top > window.innerHeight) continue;
-      const dist = Math.abs(rect.top + rect.height / 2 - center);
-      if (!best || dist < best.dist) best = { id, dist };
-    }
-    if (best) useInboxStore.getState().setReviewTarget(best.id, 0);
+    enterReviewNearCenter();
   }, [conversation]));
 
   useShortcutAction('conv.toggleDiff', useCallback(() => {

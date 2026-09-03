@@ -18,7 +18,7 @@ export function genCommentId(): string {
 
 // Create a pending comment anchored to a block (quote = full block) or a
 // sub-selection (quote = highlighted text), make its message the review target,
-// and open its editor. Returns the new comment id.
+// and open its note editor focused. Returns the new comment id.
 export function createReviewComment(
   conversationId: string,
   messageId: string,
@@ -27,11 +27,13 @@ export function createReviewComment(
 ): string {
   const s = useInboxStore.getState();
   const id = genCommentId();
-  // First click commits a bare quote immediately (no editor) — it shows up as a
-  // chip in the rail and a row in the batch tray. The note is optional, added
-  // later via "Add note". setReviewTarget keeps keyboard nav anchored to it.
+  // The quote is committed at once — it shows up as a chip in the rail and a
+  // row in the batch tray — and the note editor opens on it right away, since a
+  // quote is nearly always the start of a remark. Leaving the note blank (Esc)
+  // keeps it a bare quote. setReviewTarget keeps keyboard nav anchored to it.
   s.addReviewComment(conversationId, { id, messageId, blockIndex, quote, body: "", createdAt: Date.now() });
   s.setReviewTarget(messageId, blockIndex);
+  s.setReviewEditingId(id);
   return id;
 }
 
