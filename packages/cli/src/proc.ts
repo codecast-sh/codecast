@@ -11,6 +11,7 @@
  */
 import * as cp from "node:child_process";
 import { promisify } from "node:util";
+import { SLOW_SYNC_SPAWN_MS, reportSpawnTimeout, timeSync } from "./slowSync.js";
 
 export type {
   ChildProcess,
@@ -51,37 +52,23 @@ export function withWindowsHide(args: unknown[]): unknown[] {
   return out;
 }
 
-// A synchronous child process blocks the whole event loop for its lifetime —
+// A synchronous child process blocks the whole event loop for its lifetime:
 // timers, delivery, heartbeats all freeze until it exits. Individually cheap
 // calls become a multi-second stall when a sweep runs hundreds back to back
 // under load, and nothing in a stack sample survives to name them afterwards.
-// So every sync spawn is timed and, past the threshold, reported through
-// whatever sink the host installs (the daemon points this at its log). Runs on
-// every platform: a blocked loop is a blocked loop.
-export const SLOW_SYNC_SPAWN_MS = 1_000;
-let slowSyncSink: ((message: string) => void) | null = null;
-export function setSlowSyncSpawnSink(sink: ((message: string) => void) | null): void {
-  slowSyncSink = sink;
-}
+// So every sync spawn is timed through slowSync.ts and, past the threshold,
+// reported through whatever sink the host installs (the daemon points it at
+// its log). Runs on every platform: a blocked loop is a blocked loop.
+export { SLOW_SYNC_SPAWN_MS } from "./slowSync.js";
 function describeSpawnArgs(args: unknown[]): string {
   const cmd = typeof args[0] === "string" ? args[0] : String(args[0]);
   const list = Array.isArray(args[1]) ? ` ${(args[1] as unknown[]).join(" ")}` : "";
   return `${cmd}${list}`.slice(0, 200);
 }
 function wrapSync<T extends (...args: never[]) => unknown>(name: string, fn: T): T {
-  const wrapped = (...args: unknown[]) => {
-    const startedAt = performance.now();
-    try {
-      return (fn as unknown as (...a: unknown[]) => unknown)(...withWindowsHide(args));
-    } finally {
-      const elapsedMs = performance.now() - startedAt;
-      if (elapsedMs >= SLOW_SYNC_SPAWN_MS && slowSyncSink) {
-        try {
-          slowSyncSink(`[SLOW-SYNC-SPAWN] ${name} blocked the event loop ${Math.round(elapsedMs)}ms: ${describeSpawnArgs(args)}`);
-        } catch {}
-      }
-    }
-  };
+  const wrapped = (...args: unknown[]) =>
+    timeSync("SLOW-SYNC-SPAWN", SLOW_SYNC_SPAWN_MS, name, () => describeSpawnArgs(args), () =>
+      (fn as unknown as (...a: unknown[]) => unknown)(...withWindowsHide(args)));
   return wrapped as unknown as T;
 }
 
@@ -106,6 +93,30 @@ export const exec: typeof cp.exec = wrap(cp.exec);
 export const execSync: typeof cp.execSync = wrapSync("execSync", cp.execSync);
 export const execFile: typeof cp.execFile = wrap(cp.execFile);
 export const execFileSync: typeof cp.execFileSync = wrapSync("execFileSync", cp.execFileSync);
+/** The promise form of the wrapped execFile, shared so no caller promisifies its own copy. */
+export const execFileAsync = promisify(execFile);
+
+// A keychain read answers in tens of milliseconds on an idle machine. A locked
+// keychain or an access prompt can hang it, and the daemon's credential ticks
+// hold an in flight flag for the length of the call, so a hung read would stop
+// those ticks for good with nothing in the log. The timeout kills the child;
+// the first timeout per item is reported so the stop is visible.
+export const KEYCHAIN_READ_TIMEOUT_MS = 30_000;
+const keychainTimeoutsReported = new Set<string>();
+/** `security <args>` off the loop, trimmed. Rejects like execFileAsync. */
+export async function keychainReadAsync(args: string[], timeoutMs = KEYCHAIN_READ_TIMEOUT_MS): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("security", args, { encoding: "utf-8", timeout: timeoutMs });
+    return stdout.trim();
+  } catch (err) {
+    const detail = args.join(" ");
+    if ((err as { killed?: boolean }).killed && !keychainTimeoutsReported.has(detail)) {
+      keychainTimeoutsReported.add(detail);
+      reportSpawnTimeout("security", detail, timeoutMs);
+    }
+    throw err;
+  }
+}
 
 /** Absolute path `name` resolves to on PATH, or null when it is not installed. */
 export function whichBin(name: string): string | null {
