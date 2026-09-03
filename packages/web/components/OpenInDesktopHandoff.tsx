@@ -1,15 +1,15 @@
-import { useRef, useState } from "react";
-import { Monitor, X } from "lucide-react";
+import { useRef } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import {
-  buildDesktopDeepLink,
+  armForegroundHandoff,
   isDesktop,
   isForegroundTab,
   isFreshNavigation,
+  openDesktop,
   readSkippedUrl,
   shouldAttemptHandoff,
-  skipHandoffForUrl,
+  showHandoffScreen,
   takePendingPreferBrowser,
   writeHandoffMirror,
   type HandoffContext,
@@ -19,18 +19,17 @@ import { useTrackedStore } from "../store/inboxStore";
 /**
  * When a codecast.sh page is opened in a foreground browser tab and the user
  * owns the desktop app, hand the page off to the app (codecast://open/<path>)
- * — the Figma/Slack flavor: open immediately, then show an "Opened in Codecast
- * desktop" screen with an escape hatch (use the browser for this page, or a
- * sticky "always open in browser"). Pure gating lives in `shouldAttemptHandoff`;
- * this collects the context, re-checks on focus for background-opened tabs, and
- * renders the screen.
+ * — the Figma/Slack flavor: open immediately, then show the static "Opened in
+ * Codecast desktop" screen from index.html (close this tab, or use the browser
+ * for this page, or a sticky "always open in browser"). Pure gating lives in
+ * `shouldAttemptHandoff`; this collects the context and re-checks on focus for
+ * background-opened tabs.
  *
  * Most handoffs never get here: the same gate runs inlined in index.html's
  * <head> against a localStorage mirror of the two synced preferences, firing the
  * deep link before any app chunk loads (lib/desktopHandoff.ts). This component
- * covers what that path can't know — a first visit before the mirror exists, and
- * a tab that only reaches the foreground later — and it is what keeps the mirror
- * honest.
+ * covers the one case that path can't know — a first visit before the mirror
+ * exists — and it is what keeps the mirror honest.
  */
 export function OpenInDesktopHandoff() {
   const s = useTrackedStore([
@@ -39,40 +38,15 @@ export function OpenInDesktopHandoff() {
     (s) => s.clientState.dismissed?.prefer_browser_links,
   ]);
 
-  const [visible, setVisible] = useState(false);
   const attemptedRef = useRef(false);
-
-  // `auto` distinguishes the page redirecting itself on load from the user
-  // clicking the "Reopen desktop app" button — the desktop only trusts the
-  // latter unconditionally (see shouldApplyAutoDeepLink).
-  const openInDesktop = (opts?: { auto?: boolean }) => {
-    window.location.href = buildDesktopDeepLink(
-      window.location.pathname + window.location.search,
-      opts,
-    );
-  };
-
-  // Use the browser for THIS page only — does not change the sticky preference,
-  // so the next fresh visit still hands off to the app. Recorded for the tab so
-  // the pre-boot gate honors it too (a reload of this page would otherwise
-  // bounce straight back to the app).
-  const stayHereOnce = () => {
-    skipHandoffForUrl(window.location.pathname + window.location.search);
-    setVisible(false);
-  };
-
-  // Permanent opt-out: never hand off again (synced per-user). One click both
-  // persists and dismisses, so it's never a two-step choice.
-  const alwaysBrowser = () => {
-    s.updateClientDismissed("prefer_browser_links", true);
-    setVisible(false);
-  };
+  const hideScreenRef = useRef<(() => void) | null>(null);
 
   // The pre-boot screen can take the permanent opt-out before the app exists, so
   // it parks the choice for whoever boots next; only the store can reach the
   // server with it.
   useMountEffect(() => {
     if (takePendingPreferBrowser()) s.updateClientDismissed("prefer_browser_links", true);
+    return () => hideScreenRef.current?.();
   });
 
   // Keep the pre-boot mirror in step with the synced preferences. This is the
@@ -111,8 +85,16 @@ export function OpenInDesktopHandoff() {
       if (attemptedRef.current) return true;
       if (!shouldAttemptHandoff(buildCtx())) return false;
       attemptedRef.current = true;
-      openInDesktop({ auto: true });
-      setVisible(true);
+      // `auto` distinguishes the page redirecting itself from the user clicking
+      // "Reopen desktop app" — the desktop only trusts the latter
+      // unconditionally (see shouldApplyAutoDeepLink).
+      openDesktop({ auto: true });
+      // Permanent opt-out, synced per-user: one click both persists and
+      // dismisses, so it's never a two-step choice.
+      hideScreenRef.current = showHandoffScreen({
+        booted: true,
+        onAlways: () => s.updateClientDismissed("prefer_browser_links", true),
+      });
       return true;
     };
 
@@ -123,76 +105,12 @@ export function OpenInDesktopHandoff() {
     // retry the moment the user actually looks at it. Any other blocker
     // (preferBrowser, ineligible path, not our host, …) is permanent — bail.
     if (!shouldAttemptHandoff({ ...buildCtx(), foreground: true })) return;
-
-    // Armed only briefly: a cmd-clicked background tab the user looks at soon
-    // should hand off; a forgotten or automation-driven tab focused much later
-    // must not detonate a stale handoff (agent tabs park on app pages for hours,
-    // and any focus of that window would yank the desktop app).
-    const ARM_WINDOW_MS = 120_000;
-    const armedAt = Date.now();
-    const onActive = () => {
-      if (Date.now() - armedAt > ARM_WINDOW_MS) {
-        teardown();
-        return;
-      }
-      if (tryHandoff()) teardown();
-    };
-    const teardown = () => {
-      window.removeEventListener("focus", onActive);
-      document.removeEventListener("visibilitychange", onActive);
-    };
-    window.addEventListener("focus", onActive);
-    document.addEventListener("visibilitychange", onActive);
-    return teardown;
+    return armForegroundHandoff(tryHandoff);
   }, [
     s.clientStateInitialized,
     s.clientState.dismissed?.has_used_desktop,
     s.clientState.dismissed?.prefer_browser_links,
   ]);
 
-  if (!visible) return null;
-
-  return (
-    <div className="fixed inset-0 z-[9999] grid place-items-center bg-sol-bg/70 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="relative mx-4 w-full max-w-sm rounded-xl border border-sol-cyan/30 bg-sol-bg-alt p-6 shadow-2xl shadow-sol-cyan/10 animate-in zoom-in-95 duration-200">
-        <button
-          onClick={stayHereOnce}
-          aria-label="Dismiss"
-          className="absolute right-3 top-3 text-sol-text-dim transition-colors hover:text-sol-text"
-        >
-          <X className="h-4 w-4" />
-        </button>
-
-        <div className="flex items-center gap-3">
-          <span className="grid h-10 w-10 flex-shrink-0 place-items-center rounded-lg bg-sol-cyan/10 text-sol-cyan">
-            <Monitor className="h-5 w-5" />
-          </span>
-          <div className="leading-tight">
-            <div className="text-sm font-medium text-sol-text">Opened in Codecast desktop</div>
-            <div className="text-xs text-sol-text-dim">This page was sent to the app.</div>
-          </div>
-        </div>
-
-        <div className="mt-5 flex flex-col gap-2">
-          <button
-            onClick={stayHereOnce}
-            className="w-full rounded-md bg-sol-cyan px-3 py-2 text-xs font-medium text-sol-bg transition-opacity hover:opacity-90"
-          >
-            Open in browser
-          </button>
-          <button
-            onClick={() => openInDesktop()}
-            className="w-full rounded-md border border-sol-border px-3 py-2 text-xs text-sol-text-dim transition-colors hover:border-sol-cyan/40 hover:text-sol-text"
-          >
-            Didn’t open? Reopen desktop app
-          </button>
-        </div>
-
-        <label className="mt-4 flex cursor-pointer select-none items-center gap-2 text-[11px] text-sol-text-dim">
-          <input type="checkbox" onChange={alwaysBrowser} className="accent-sol-cyan" />
-          Always open Codecast links in browser
-        </label>
-      </div>
-    </div>
-  );
+  return null;
 }

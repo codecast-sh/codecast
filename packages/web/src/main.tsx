@@ -1,4 +1,4 @@
-import { handoffTookOverBoot, isStandaloneSharePath } from "../lib/desktopHandoff";
+import { bootAfterHandoffGate, isStandaloneSharePath } from "../lib/desktopHandoff";
 import "../app/globals.css";
 
 /**
@@ -10,13 +10,15 @@ import "../app/globals.css";
  * IndexedDB hydration and a render nobody sees.
  *
  * That decision was already made, inlined in index.html's <head>
- * (plugins/handoffBoot.ts) — this only honors it.
+ * (plugins/handoffBoot.ts) — this only honors it, including the held case: a
+ * background tab that will hand off once looked at boots only if the gate
+ * decides against the handoff.
  *
  * globals.css stays imported here so the stylesheet remains a plain <link> in
  * the built HTML, fetched in parallel on every load.
  */
-if (!handoffTookOverBoot()) {
+bootAfterHandoffGate(() => {
   // Share pages boot standalone: they hydrate server-rendered markup and never
   // need the store, the inbox, or auth. Everything else is the app.
   void (isStandaloneSharePath(window.location.pathname) ? import("./shareBoot") : import("./boot"));
-}
+});

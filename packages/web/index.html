@@ -88,11 +88,11 @@
       }
       #root:not(:empty) ~ #boot-shell { opacity: 0; pointer-events: none; }
 
-      /* Desktop hand-off screen. Shown when the inlined pre-boot gate
-         (lib/desktopHandoff.ts) sends this page to the desktop app: the app
-         itself never loads, so this is plain markup revealed by one attribute
-         on <html> rather than the React dialog in OpenInDesktopHandoff.tsx —
-         keep the two looking the same. */
+      /* Desktop hand-off screen. Shown when the page is sent to the desktop
+         app (lib/desktopHandoff.ts showHandoffScreen): on the pre-boot path the
+         app never loads, so this is plain markup revealed by one attribute on
+         <html>; the React fallback (OpenInDesktopHandoff.tsx) reveals the same
+         markup. Opaque on purpose — nothing behind it should show. */
       #cc-handoff { display: none; }
       html[data-cc-handoff] #boot-shell { display: none; }
       html[data-cc-handoff] #cc-handoff {
@@ -160,6 +160,37 @@
       }
       html.dark #cc-handoff .secondary { border-color: #586e75; }
       #cc-handoff .secondary:hover { color: inherit; border-color: rgba(42, 161, 152, 0.4); }
+      #cc-handoff .tertiary {
+        border: 0;
+        background: transparent;
+        color: #657b83;
+        padding-top: 0.25rem;
+        padding-bottom: 0;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+        text-decoration-color: rgba(101, 123, 131, 0.4);
+      }
+      #cc-handoff .tertiary:hover { color: inherit; }
+      /* Revealed when the browser refused to close the tab. */
+      #cc-handoff .kept { display: none; margin-top: 0.75rem; font-size: 11px; line-height: 1.6; color: #657b83; }
+      html[data-cc-handoff-kept] #cc-handoff .kept { display: block; }
+      #cc-handoff kbd {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 16px;
+        height: 16px;
+        padding: 0 4px;
+        margin: 0 1px;
+        font: inherit;
+        font-size: 9px;
+        line-height: 1;
+        border: 1px solid rgba(147, 161, 161, 0.5);
+        border-radius: 4px;
+        background: #FBF5E2;
+        box-shadow: 0 1px 0 rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      }
+      html.dark #cc-handoff kbd { background: #002b36; border-color: rgba(88, 110, 117, 0.5); }
       #cc-handoff .dismiss {
         position: absolute;
         top: 0.5rem;
@@ -213,9 +244,14 @@
           </div>
         </div>
         <div class="actions">
-          <button class="primary" data-cc-handoff-action="browser">Open in browser</button>
-          <button class="secondary" data-cc-handoff-action="retry">Didn&rsquo;t open? Reopen desktop app</button>
+          <button class="primary" data-cc-handoff-action="close">Close this tab</button>
+          <button class="secondary" data-cc-handoff-action="browser">Open in browser</button>
+          <button class="tertiary" data-cc-handoff-action="retry">Didn&rsquo;t open? Reopen desktop app</button>
         </div>
+        <p class="kept">
+          Your browser kept this tab open. Close it with
+          <kbd data-cc-handoff-modifier>⌘</kbd><kbd>W</kbd>
+        </p>
         <label class="always">
           <input type="checkbox" data-cc-handoff-action="always" />
           Always open Codecast links in browser
