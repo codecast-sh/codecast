@@ -1,0 +1,240 @@
+{
+  "about": "Agent-team teammates ride their present lead's bucket and fold (rideLeadPlacements, computeFold). A teammate the viewer pinned, stashed or dismissed keeps its own place; a teammate whose lead is absent keeps its own; chains ride to the root. Two clusters: the fresh one and one past the 12h gap.",
+  "epoch": "E",
+  "asking": [],
+  "rows": [
+    {
+      "_id": "lead",
+      "status": "active",
+      "updated_at": "E-1m",
+      "message_count": 20,
+      "agent_status": "working",
+      "is_idle": false,
+      "agent_team_name": "team",
+      "agent_name": "team-lead"
+    },
+    {
+      "_id": "mate_done",
+      "status": "completed",
+      "updated_at": "E-2m",
+      "message_count": 30,
+      "agent_status": "stopped",
+      "is_idle": true,
+      "spawned_by_conversation_id": "lead",
+      "agent_team_name": "team"
+    },
+    {
+      "_id": "mate_needs",
+      "status": "active",
+      "updated_at": "E-3m",
+      "message_count": 12,
+      "is_idle": true,
+      "spawned_by_conversation_id": "lead",
+      "agent_team_name": "team"
+    },
+    {
+      "_id": "mate_pinned",
+      "status": "active",
+      "updated_at": "E-4m",
+      "message_count": 12,
+      "is_idle": true,
+      "inbox_pinned_at": "E-4m",
+      "spawned_by_conversation_id": "lead",
+      "agent_team_name": "team"
+    },
+    {
+      "_id": "mate_stashed",
+      "status": "active",
+      "updated_at": "E-5m",
+      "message_count": 12,
+      "is_idle": true,
+      "inbox_stashed_at": "E-5m",
+      "spawned_by_conversation_id": "lead",
+      "agent_team_name": "team"
+    },
+    {
+      "_id": "mate_of_mate",
+      "status": "active",
+      "updated_at": "E-6m",
+      "message_count": 12,
+      "is_idle": true,
+      "spawned_by_conversation_id": "mate_done",
+      "agent_team_name": "team"
+    },
+    {
+      "_id": "mate_old_under_fresh_lead",
+      "status": "active",
+      "updated_at": "E-32h",
+      "message_count": 12,
+      "is_idle": true,
+      "spawned_by_conversation_id": "lead",
+      "agent_team_name": "team"
+    },
+    {
+      "_id": "mate_lead_absent",
+      "status": "active",
+      "updated_at": "E-7m",
+      "message_count": 12,
+      "is_idle": true,
+      "spawned_by_conversation_id": "nobody",
+      "agent_team_name": "team"
+    },
+    {
+      "_id": "handoff_not_a_rider",
+      "status": "active",
+      "updated_at": "E-8m",
+      "message_count": 12,
+      "is_idle": true,
+      "parent_conversation_id": "lead",
+      "parent_message_uuid": "plan-handoff"
+    },
+    {
+      "_id": "edge",
+      "status": "active",
+      "updated_at": "E-30h",
+      "message_count": 12,
+      "is_idle": true
+    },
+    {
+      "_id": "old_lead",
+      "status": "active",
+      "updated_at": "E-31h",
+      "message_count": 12,
+      "is_idle": true,
+      "agent_team_name": "team",
+      "agent_name": "team-lead"
+    },
+    {
+      "_id": "mate_fresh_under_old_lead",
+      "status": "active",
+      "updated_at": "E-9m",
+      "message_count": 12,
+      "is_idle": true,
+      "spawned_by_conversation_id": "old_lead",
+      "agent_team_name": "team"
+    },
+    {
+      "_id": "dismissed_lead",
+      "status": "active",
+      "updated_at": "E-10m",
+      "message_count": 12,
+      "is_idle": true,
+      "inbox_dismissed_at": "E-10m",
+      "agent_team_name": "team",
+      "agent_name": "team-lead"
+    },
+    {
+      "_id": "mate_under_dismissed_lead",
+      "status": "active",
+      "updated_at": "E-11m",
+      "message_count": 12,
+      "is_idle": true,
+      "spawned_by_conversation_id": "dismissed_lead",
+      "agent_team_name": "team"
+    }
+  ],
+  "expected": {
+    "truncated": [],
+    "tally": {
+      "shown": {
+        "questions": 0,
+        "pinned": 1,
+        "new": 0,
+        "needs_input": 3,
+        "done": 0,
+        "dormant": 0,
+        "working": 5,
+        "idle": 0,
+        "stashed": 1,
+        "dismissed": 2,
+        "hidden": 0
+      },
+      "folded": {
+        "questions": 0,
+        "pinned": 0,
+        "new": 0,
+        "needs_input": 2,
+        "done": 0,
+        "dormant": 0,
+        "working": 0,
+        "idle": 0,
+        "stashed": 0,
+        "dismissed": 0,
+        "hidden": 0
+      }
+    },
+    "set_digest": "fcafd606c222059a",
+    "placements": {
+      "dismissedleadz130000000000000000": [
+        "dismissed",
+        "needs_input",
+        false
+      ],
+      "edgez400000000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "handoffnotariderz160000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "leadz400000000000000000000000000": [
+        "working",
+        "working",
+        false
+      ],
+      "matedonez80000000000000000000000": [
+        "working",
+        "needs_input",
+        false
+      ],
+      "matefreshunderoldleadz2100000000": [
+        "needs_input",
+        "needs_input",
+        true
+      ],
+      "mateleadabsentz14000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "mateneedsz9000000000000000000000": [
+        "working",
+        "needs_input",
+        false
+      ],
+      "mateofmatez100000000000000000000": [
+        "working",
+        "needs_input",
+        false
+      ],
+      "mateoldunderfreshleadz2100000000": [
+        "working",
+        "needs_input",
+        false
+      ],
+      "matepinnedz100000000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "matestashedz11000000000000000000": [
+        "stashed",
+        "needs_input",
+        false
+      ],
+      "mateunderdismissedleadz220000000": [
+        "dismissed",
+        "needs_input",
+        false
+      ],
+      "oldleadz700000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        true
+      ]
+    }
+  }
+}

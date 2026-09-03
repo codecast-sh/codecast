@@ -39,6 +39,11 @@ describe("sessionsProjection is read only by its owner and the compare", () => {
       ["store/inboxStore.ts", "buffer owner: applier + envelope clock"],
       // The digest compare (sync-convergence C6) — the buffer's one consumer.
       ["store/inboxDigestCompare.ts", "the compare module (ct-47203)"],
+      // Cross-window replication (sync-host): only the host subscribes to the
+      // overlay, so the slot crosses to follower windows as a value and lands
+      // through the owner's applyReplicatedProjection (ct-47927).
+      ["store/clientSyncRegistry.ts", "REPLICATED_EPHEMERAL_KEYS names the slot"],
+      ["store/syncReplication.ts", "routes the replicated slot to the owner's applier"],
     ]);
     expect(offendersFor(ALL_DIRS, /\bsessionsProjection\b/, allowed)).toEqual([]);
   }, 120_000);
