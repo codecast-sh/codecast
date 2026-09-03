@@ -22,10 +22,12 @@ import * as path from "node:path";
 import { CdpConnection, listTargets, type CdpEndpoint, type CdpTarget } from "../cdp.js";
 import { attachToTarget, type InstanceState, type PageSession } from "../instance.js";
 import { browserHome } from "../profile.js";
+import { isPidAlive } from "../../workspace/chrome.js";
 import { armRecorder } from "../observe.js";
 import { isRealSession, type EngineOptions } from "../engine.js";
 import {
-  bridgeEndpoint, bridgeStatus, bridgeWsUrl, ensureBridgeHost, proveBridgeHost, readBridgeState, type BridgeState, type ProvenBridge,
+  bridgeEndpoint, bridgeWsUrl, ensureBridgeHost, proveBridgeHost, readBridgeState, waitForExtension, type BridgeState,
+  type ProvenBridge,
 } from "./host.js";
 
 // ---------------------------------------------------------------------------
@@ -66,15 +68,63 @@ export function setStickyTarget(sessionKey: string | null, mode: "real" | "clone
   writeRealState({ ...s, stickyBySession: { ...(s.stickyBySession ?? {}), [keyOf(sessionKey)]: mode } });
 }
 
-export function stickyTarget(sessionKey: string | null): "real" | "clone" {
-  return readRealState().stickyBySession?.[keyOf(sessionKey)] ?? "clone";
+/** The choice a session made with `cast browser target`, or null when it never did. */
+export function explicitTarget(sessionKey: string | null): "real" | "clone" | null {
+  return readRealState().stickyBySession?.[keyOf(sessionKey)] ?? null;
+}
+
+/** Has the extension ever proved itself to this machine's bridge host? */
+export function extensionPaired(): boolean {
+  const state = readBridgeState();
+  return !!state?.token && !!state.extensionSeenAt;
+}
+
+/**
+ * Is the human's Chrome reachable right now: a live host holding a proven
+ * extension connection. Read off the state file the host maintains, so every
+ * verb can ask without a round trip.
+ */
+export function extensionReady(): boolean {
+  const state = readBridgeState();
+  return !!state?.token && !!state.hostPid && isPidAlive(state.hostPid) && state.extensionConnected === true;
+}
+
+/**
+ * Which browser a session's verbs act on. An explicit `cast browser target`
+ * wins. Otherwise the human's Chrome is the default whenever the extension is
+ * connected, and the clone when it is not. With `settle` the default is
+ * written down as the session's choice, so a session that started in one
+ * browser stays there even if the extension comes or goes mid-session.
+ */
+export function stickyTarget(sessionKey: string | null, opts: { settle?: boolean } = {}): "real" | "clone" {
+  const chosen = explicitTarget(sessionKey);
+  if (chosen) return chosen;
+  const mode = extensionReady() ? "real" : "clone";
+  if (opts.settle) setStickyTarget(sessionKey, mode);
+  return mode;
 }
 
 /** Does this invocation act on the real Chrome? Flag beats sticky beats default. */
 export function isRealMode(opts: { real?: boolean; clone?: boolean }, sessionKey: string | null): boolean {
   if (opts.real) return true;
   if (opts.clone) return false;
-  return stickyTarget(sessionKey) === "real";
+  return stickyTarget(sessionKey, { settle: true }) === "real";
+}
+
+/**
+ * What a session on the clone should hear when it meets a sign-in wall: the
+ * human's Chrome already holds that login, and the one step that reaches it
+ * from where the bridge stands. Null when the session is already there.
+ */
+export function realModeHint(sessionKey: string | null): string | null {
+  if (stickyTarget(sessionKey) === "real") return null;
+  if (extensionReady()) {
+    return "your real Chrome is paired and holds this login: `cast browser target real` moves this session there (`open --real <url>` for one verb)";
+  }
+  if (extensionPaired()) {
+    return "your real Chrome holds this login, but the codecast extension is not connected right now: open Chrome (or reload the extension), then `cast browser target real`";
+  }
+  return "your real Chrome holds this login: pair the codecast extension once with `cast browser extension setup`, and sessions use your Chrome by default from then on";
 }
 
 /**
@@ -169,6 +219,10 @@ export function realTabOwnership(sessionKey: string | null): { mine?: string; ot
 // Reaching the real browser
 // ---------------------------------------------------------------------------
 
+/** How long a host this process just started may wait for the extension to
+ *  reconnect before it is declared absent. */
+export const EXTENSION_RECONNECT_GRACE_MS = 8_000;
+
 /**
  * A ready bridge: host up and the extension on the other end. Failing here,
  * with the setup instructions, beats failing on the first verb with less
@@ -177,12 +231,16 @@ export function realTabOwnership(sessionKey: string | null): { mine?: string; ot
 export async function requireRealBridge(): Promise<ProvenBridge> {
   requireBridgeConfigured();
   const state = await ensureBridgeHost();
-  const status = await bridgeStatus(state);
+  // A host that just came up has no extension yet: the extension finds it
+  // within seconds on its own (host.ts waitForExtension), so the first real
+  // command after a host restart waits instead of failing with the
+  // instructions for a machine that was never paired.
+  const status = await waitForExtension(state, state.started ? EXTENSION_RECONNECT_GRACE_MS : 0);
   if (!status.extensionConnected) {
     throw new Error(
       "the cast bridge extension is not connected to this machine's bridge host.\n" +
-        "  In Chrome: check the extension is loaded (chrome://extensions) and that its options\n" +
-        "  hold the current token and port — `cast browser extension setup` prints both.",
+        "  In Chrome: check the extension is loaded (chrome://extensions), then run\n" +
+        "  `cast browser extension setup`; it hands the extension the current token and port.",
     );
   }
   return state;

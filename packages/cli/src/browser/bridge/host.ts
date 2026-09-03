@@ -74,6 +74,12 @@ export interface BridgeState {
   token: string;
   hostPid?: number;
   startedAt?: number;
+  /** Is the extension on the socket right now? Written by the host process,
+   *  true only while it holds a proven extension connection. With a live
+   *  hostPid this is what makes the real Chrome the default (real.ts). */
+  extensionConnected?: boolean;
+  /** When the extension last proved itself: "paired" means this is set. */
+  extensionSeenAt?: number;
 }
 
 export function bridgeStatePath(): string {
@@ -185,11 +191,11 @@ export async function proveBridgeHost(state: BridgeState, timeoutMs = 1200): Pro
  * separate process. An impostor on the port is named rather than raced: a
  * host we start could not bind anyway.
  */
-export async function ensureBridgeHost(): Promise<ProvenBridge> {
+export async function ensureBridgeHost(): Promise<ProvenBridge & { started: boolean }> {
   const state = ensureBridgeConfig();
   const probe = await probeHost(state);
-  if (probe === "alive") return { ...state, proven: true };
-  if (probe === "impostor") return proveBridgeHost(state);
+  if (probe === "alive") return { ...state, proven: true, started: false };
+  if (probe === "impostor") return { ...(await proveBridgeHost(state)), started: false };
 
   // Respawn ourselves. Under bun/node the entry script must be repeated;
   // in the compiled binary process.execPath IS the cast binary.
@@ -199,9 +205,12 @@ export async function ensureBridgeHost(): Promise<ProvenBridge> {
   const child = spawn(process.execPath, args, { detached: true, stdio: "ignore" });
   child.unref();
 
-  const deadline = Date.now() + 6000;
+  // Generous on purpose: run from source, the detached host is a fresh bun
+  // parsing the whole CLI, which on a loaded machine takes longer than the
+  // host itself needs to bind.
+  const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    if (await isHostAlive(state, 500)) return { ...(readBridgeState() ?? state), proven: true };
+    if (await isHostAlive(state, 500)) return { ...(readBridgeState() ?? state), proven: true, started: true };
     await sleep(150);
   }
   throw new Error(
@@ -221,17 +230,35 @@ export function stopBridgeHost(): boolean {
   }
 }
 
-/** Ask a running host whether the extension is connected. */
-export async function bridgeStatus(state: ProvenBridge): Promise<{
+export interface BridgeHostStatus {
   extensionConnected: boolean;
   extensionVersion?: string;
   extensionProtocol?: number;
-}> {
+}
+
+/** Ask a running host whether the extension is connected. */
+export async function bridgeStatus(state: ProvenBridge): Promise<BridgeHostStatus> {
   const res = await fetch(`http://127.0.0.1:${state.port}/status?token=${encodeURIComponent(state.token)}`, {
     signal: AbortSignal.timeout(3000),
   });
   if (!res.ok) throw new Error(`bridge host answered ${res.status} — token mismatch? re-run \`cast browser extension setup\``);
-  return (await res.json()) as any;
+  return (await res.json()) as BridgeHostStatus;
+}
+
+/**
+ * The host's status once the extension is connected, or the last status seen
+ * when `timeoutMs` passes first. The extension reconnects on its own a few
+ * seconds after a host comes up (background.js retries at 1 s, 2 s and 5 s,
+ * then every 30 s), so a caller that just started the host, or just handed
+ * the extension a token, asks here instead of declaring it absent at once.
+ */
+export async function waitForExtension(state: ProvenBridge, timeoutMs: number): Promise<BridgeHostStatus> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const status = await bridgeStatus(state);
+    if (status.extensionConnected || Date.now() >= deadline) return status;
+    await sleep(250);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -281,8 +308,13 @@ function cdpError(id: number, message: string, code = -32000) {
  * Start the server in-process. `runBridgeHost` (the CLI entry) wraps this
  * with state-file bookkeeping and signal handling; tests call it directly.
  */
-export function startBridgeHost(opts: { port: number; token: string }): Promise<RunningHost> {
-  const { port, token } = opts;
+export function startBridgeHost(opts: {
+  port: number;
+  token: string;
+  /** The extension came (true) or went (false); the host process records it. */
+  onExtension?: (connected: boolean) => void;
+}): Promise<RunningHost> {
+  const { port, token, onExtension } = opts;
 
   let ext: WebSocket | null = null;
   let extMeta: { version?: string; protocol?: number; userAgent?: string } = {};
@@ -456,8 +488,10 @@ export function startBridgeHost(opts: { port: number; token: string }): Promise<
         const sessionId = crypto.randomBytes(16).toString("hex").toUpperCase();
         client.sessions.set(sessionId, tabId);
         const t = (await listTabs()).find((x) => x.tabId === tabId);
-        // Attaching to a grouped tab adopts its group; an ungrouped tab (a
-        // human's tab named with --tab) leaves the session's group alone.
+        // Attaching to a grouped tab adopts its group. The extension reports
+        // a group only for groups it created itself (background.js
+        // ownedGroups), so a human's tab, grouped by the human or not, never
+        // hands the session a group of the human's.
         if (t?.group) client.group = t.group;
         sendJson(client.ws, {
           method: "Target.attachedToTarget",
@@ -660,10 +694,12 @@ export function startBridgeHost(opts: { port: number; token: string }): Promise<
       if (ext && ext !== ws) ext.close(1000, "replaced by a newer extension connection");
       ext = ws;
       extMeta = { version: msg.version, protocol: msg.protocol, userAgent: msg.userAgent };
+      onExtension?.(true);
       ws.on("message", (raw) => onExtMessage(String(raw)));
       ws.on("close", () => {
         if (ext !== ws) return;
         ext = null;
+        onExtension?.(false);
         for (const [, p] of extPending) p.reject(new Error("the extension disconnected mid-command — check the cast bridge extension in Chrome"));
         extPending.clear();
         failAllClients("the extension disconnected");
@@ -749,10 +785,18 @@ export async function runBridgeHost(): Promise<void> {
     console.error(`a bridge host is already answering on 127.0.0.1:${state.port}`);
     process.exit(0);
   }
-  const host = await startBridgeHost({ port: state.port, token: state.token });
-  writeBridgeState({ ...state, hostPid: process.pid, startedAt: Date.now() });
+  // The state file is how every short-lived CLI process learns, without a
+  // round trip, whether the extension is here: the host is the only writer
+  // of these two fields, and it clears the flag on the way out.
+  const record = (connected: boolean): void => {
+    const cur = readBridgeState() ?? state;
+    writeBridgeState({ ...cur, extensionConnected: connected, ...(connected ? { extensionSeenAt: Date.now() } : {}) });
+  };
+  const host = await startBridgeHost({ port: state.port, token: state.token, onExtension: record });
+  writeBridgeState({ ...state, hostPid: process.pid, startedAt: Date.now(), extensionConnected: false });
   const shutdown = async () => {
     await host.close();
+    record(false);
     process.exit(0);
   };
   process.on("SIGTERM", shutdown);
