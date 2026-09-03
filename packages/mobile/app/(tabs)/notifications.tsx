@@ -11,6 +11,7 @@ import { Theme, Spacing } from '@/constants/Theme';
 import { NotificationListSkeleton } from '@/components/SkeletonLoader';
 import { AgentLogoSvg } from '@/components/AgentLogo';
 import { openLink } from '@/lib/links';
+import { CODECAST_BASE_URL } from '@codecast/shared/entities';
 import { cleanNotificationBody } from '@codecast/web/lib/notificationText';
 import {
   agentNames,
@@ -29,7 +30,7 @@ type Notification = {
   read: boolean;
   created_at: number;
   conversation_id?: Id<"conversations">;
-  entity_type?: "task" | "doc" | "plan" | "conversation" | "artifact" | "chat_channel";
+  entity_type?: "task" | "doc" | "plan" | "conversation" | "artifact" | "chat_channel" | "device";
   entity_id?: string;
   chat_message_id?: string;
   link?: string;
@@ -101,6 +102,7 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
     case "chat_reply": return { name: "comments", color: Theme.accent };
     case "chat_here": return { name: "bullhorn", color: Theme.orange };
     case "chat_post": return { name: "hashtag", color: Theme.cyan };
+    case "daemon_overloaded": return { name: "hourglass-half", color: Theme.orange };
     default: return { name: "bell", color: Theme.textMuted };
   }
 }
@@ -263,6 +265,13 @@ export default function NotificationsScreen() {
     // A deep link wins (artifact comments open the published page).
     if (notification.link) {
       void openLink(notification.link);
+      return;
+    }
+    // A machine has no screen in the app. The daemon's overload alert opens the
+    // devices roster on the web, which is where a person can act on it, and
+    // matches where the same notification lands on web.
+    if (notification.entity_type === "device") {
+      void openLink(`${CODECAST_BASE_URL}/settings/devices`);
       return;
     }
     if (notification.entity_type && notification.entity_id && notification.entity_type !== "conversation") {

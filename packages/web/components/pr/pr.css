@@ -1,0 +1,97 @@
+/* The pull request page.
+ *
+ * One idea carries the look: the PR's state is a color, and that color is the
+ * page's weather. `--pr-accent` is set once on the root from the state (green
+ * open, violet merged, red closed, muted draft); the header band, the rails
+ * between the status figures and every focus ring read it. Nothing here names
+ * a color of its own, so light and dark follow the solarized tokens. */
+
+.pr-page {
+  --pr-accent: var(--sol-green);
+  --pr-wash: color-mix(in srgb, var(--pr-accent) 8%, transparent);
+}
+
+/* The header band: a fine diagonal hatch in the state color, fading out
+ * downward so the title sits on quiet ground. */
+.pr-band {
+  position: relative;
+  isolation: isolate;
+  background-color: color-mix(in srgb, var(--pr-accent) 4%, var(--sol-bg));
+}
+
+.pr-band::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--pr-wash) 0px,
+    var(--pr-wash) 1px,
+    transparent 1px,
+    transparent 7px
+  );
+  -webkit-mask-image: linear-gradient(to bottom, black, transparent 85%);
+  mask-image: linear-gradient(to bottom, black, transparent 85%);
+}
+
+/* One staggered reveal on load. `--d` is the element's place in the sequence. */
+@keyframes pr-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.pr-rise {
+  animation: pr-rise 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+
+/* The checks bar: coloured segments that grow into place from nothing. */
+.pr-seg {
+  height: 100%;
+  transition: width 640ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.pr-seg-track {
+  display: flex;
+  height: 4px;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sol-text-dim) 18%, transparent);
+}
+
+/* The right rail carries context, not content: it goes away before the diff
+ * does. 900px is the width below which two columns stop being readable. */
+.pr-rail {
+  display: none;
+}
+
+@media (min-width: 900px) {
+  .pr-rail {
+    display: block;
+  }
+}
+
+/* A day divider that stays put while its day scrolls past. */
+.pr-day {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  backdrop-filter: blur(6px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pr-rise {
+    animation: none;
+  }
+  .pr-seg {
+    transition: none;
+  }
+}

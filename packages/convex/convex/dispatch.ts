@@ -15,6 +15,7 @@ import { applyHideTransition } from "./cleanup";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
 import { canSendProductMessage, enqueuePendingMessage } from "./pendingMessages";
+import { enqueueCloudSpawn } from "./cloud";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
 import {
   BUCKETS_VIEW_CONTRACT_ID,
@@ -705,7 +706,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string }]) => {
     const sessionId = opts.session_id || crypto.randomUUID();
     // Idempotent on (user, session_id). The optimistic web client keys a New
     // Session by a client-minted stub id and passes it as session_id, then
@@ -813,6 +814,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(parentConversationId
         ? { parent_conversation_id: parentConversationId, is_subagent: true }
         : {}),
+      // "Run in the cloud": park the row on the host before anything is queued.
+      // The same pair createQuickSession stamps — the web's deferred create just
+      // reaches this side effect instead of that mutation.
+      ...(opts.cloud_device_id
+        ? { owner_device_id: opts.cloud_device_id, cloud_placement: "pending" as const }
+        : {}),
     });
 
     await ctx.db.patch(conversationId, { short_id: conversationId.toString().slice(0, 7) });
@@ -843,6 +850,18 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         ...(requestedModel ? { model: daemonType === "claude" ? `claude-${requestedModel}` : requestedModel } : {}),
         ...(effortOk ? { effort: opts.effort } : {}),
       });
+    }
+    // A cloud session starts nowhere yet: the browser cannot SSH, so an online
+    // local daemon prepares the host (wake, refresh the checkout, acquire a
+    // worktree) and then places the row, and placement is what enqueues the
+    // start. Queuing start_session here would race that and route the session at
+    // a host with no checkout to run in.
+    if (opts.cloud_device_id) {
+      await enqueueCloudSpawn(ctx, userId, {
+        conversationId,
+        cloudDeviceId: opts.cloud_device_id,
+      });
+      return conversationId;
     }
     await enqueueStartSession(ctx, userId, {
       conversationId,

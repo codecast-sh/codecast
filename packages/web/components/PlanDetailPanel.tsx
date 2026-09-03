@@ -13,6 +13,9 @@ import { TaskStatusBadge, getExecStatusConfig } from "./TaskStatusBadge";
 import { LivenessDot, ActiveSessionBadge } from "./LivenessDot";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { EntryTimeline } from "./EntryTimeline";
+import { ExternalEventRow } from "./feed/ExternalEventRow";
+import { gitEventToExternalEvent, type GitEventRow } from "../lib/externalEvents";
+import { useSyncPlanGitEvents, useGitEvents, gitEventsNewestFirst } from "../hooks/useSyncGitEvents";
 import { toast } from "sonner";
 import {
   Circle,
@@ -1009,6 +1012,43 @@ export function StartWorkflowButton({ workflowId, planId }: { workflowId: string
 
 type PlanTab = "overview" | "orchestration" | "board" | "graph";
 
+/**
+ * What happened in git while this plan ran: commits, pushes, pull request
+ * moves, reviews and checks on the plan's tasks.
+ *
+ * It mounts its own feeder and reads the store, so a caller passes the plan id
+ * and nothing else. It draws nothing when the plan has no git events, which is
+ * the common case for a plan that has not reached code yet. Both plan surfaces
+ * (this panel and the plan page) render it under their comment timeline.
+ */
+export function PlanGitEvents({ planId }: { planId: string }) {
+  useSyncPlanGitEvents(planId);
+  const where = useMemo(
+    () => (row: GitEventRow) => !!planId && !!row.plan_ids?.includes(planId),
+    [planId],
+  );
+  const events = useGitEvents(where, gitEventsNewestFirst);
+  if (events.length === 0) return null;
+  return (
+    <div className="mb-6">
+      <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
+        <GitBranch className="w-4 h-4 text-sol-text-dim" />
+        Git ({events.length})
+      </h2>
+      <div className="space-y-1">
+        {events.map((e) => (
+          <ExternalEventRow
+            key={e._id}
+            event={gitEventToExternalEvent(e)}
+            density="feed"
+            omitRefs={["plan_id"]}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function PlanDetailPanel({ planId }: { planId: string }) {
   const queryArgs = planId.startsWith("pl-") ? { short_id: planId } : { id: planId };
   const queryPlan = useQuery(api.plans.webGet, queryArgs);
@@ -1187,6 +1227,8 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
           <PlanTaskSection planShortId={plan.short_id} tasks={liveTasks || []} sessions={plan.sessions || []} />
 
           <EntryTimeline entries={plan.comments} />
+
+          <PlanGitEvents planId={plan._id} />
         </>
       ) : (
         <OrchestrationTab tasks={liveTasks || []} sessions={plan.sessions || []} />

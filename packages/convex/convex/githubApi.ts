@@ -417,3 +417,260 @@ export const getPRFiles = internalAction({
     };
   },
 });
+
+// ── Repository browsing ──
+//
+// Read-only wrappers over the contents, git and GraphQL APIs, used by repos.ts
+// behind a cache. Each one takes an already-minted token and returns plain
+// data: the caching, the freshness rules and the access checks all live in
+// repos.ts, so these stay a thin, testable edge onto GitHub.
+
+const MAX_BLOB_BYTES = 1024 * 1024;
+
+function repoParts(repository: string): [string, string] {
+  const [owner, repo] = repository.split("/");
+  if (!owner || !repo) throw new Error(`Invalid repository format: ${repository}. Expected: owner/repo`);
+  return [owner, repo];
+}
+
+function ghHeaders(token: string) {
+  return {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+}
+
+/**
+ * One place to turn a GitHub failure into a sentence a person can act on.
+ * A 404 through an App token usually means the installation does not cover the
+ * repository, which reads nothing like "not found" to whoever asked.
+ */
+async function ghFetch(url: string, token: string): Promise<any> {
+  const response = await fetch(url, { headers: ghHeaders(token) });
+  if (response.status === 404) {
+    throw new Error(`GitHub returned 404 for ${url} — the ref or path does not exist, or the installation does not cover this repository`);
+  }
+  if (response.status === 403 && response.headers.get("X-RateLimit-Remaining") === "0") {
+    const reset = response.headers.get("X-RateLimit-Reset");
+    throw new Error(`GitHub rate limit reached${reset ? `, resets at ${new Date(Number(reset) * 1000).toISOString()}` : ""}`);
+  }
+  if (!response.ok) {
+    throw new Error(`GitHub API error: ${response.status} ${await response.text()}`);
+  }
+  return await response.json();
+}
+
+export const listBranches = internalAction({
+  args: {
+    repository: v.string(),
+    github_access_token: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    const [owner, repo] = repoParts(args.repository);
+    const repoInfo = await ghFetch(`${GITHUB_API_BASE}/repos/${owner}/${repo}`, args.github_access_token);
+    const branches = await ghFetch(
+      `${GITHUB_API_BASE}/repos/${owner}/${repo}/branches?per_page=100`,
+      args.github_access_token,
+    );
+    return {
+      default_branch: repoInfo.default_branch as string,
+      branches: branches.map((b: any) => ({
+        name: b.name as string,
+        sha: b.commit?.sha as string,
+        protected: !!b.protected,
+      })),
+    };
+  },
+});
+
+export const getTree = internalAction({
+  args: {
+    repository: v.string(),
+    ref: v.string(),
+    recursive: v.optional(v.boolean()),
+    github_access_token: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    const [owner, repo] = repoParts(args.repository);
+    const suffix = args.recursive ? "?recursive=1" : "";
+    const data = await ghFetch(
+      `${GITHUB_API_BASE}/repos/${owner}/${repo}/git/trees/${encodeURIComponent(args.ref)}${suffix}`,
+      args.github_access_token,
+    );
+    return {
+      sha: data.sha as string,
+      truncated: !!data.truncated,
+      entries: (data.tree ?? []).map((entry: any) => ({
+        path: entry.path as string,
+        type: entry.type as string,
+        sha: entry.sha as string,
+        size: entry.size as number | undefined,
+      })),
+    };
+  },
+});
+
+export const getBlob = internalAction({
+  args: {
+    repository: v.string(),
+    ref: v.string(),
+    path: v.string(),
+    github_access_token: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    const [owner, repo] = repoParts(args.repository);
+    const data = await ghFetch(
+      `${GITHUB_API_BASE}/repos/${owner}/${repo}/contents/${args.path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(args.ref)}`,
+      args.github_access_token,
+    );
+    if (Array.isArray(data)) {
+      throw new Error(`${args.path} is a directory, not a file`);
+    }
+    if (typeof data.size === "number" && data.size > MAX_BLOB_BYTES) {
+      return { content: "", size: data.size, truncated: true, sha: data.sha as string };
+    }
+    // GitHub returns base64 with newlines, which atob rejects.
+    const raw = typeof data.content === "string" ? atob(data.content.replace(/\n/g, "")) : "";
+    const bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0));
+    return {
+      content: new TextDecoder().decode(bytes),
+      size: data.size as number,
+      truncated: false,
+      sha: data.sha as string,
+    };
+  },
+});
+
+export const listCommits = internalAction({
+  args: {
+    repository: v.string(),
+    sha: v.optional(v.string()),
+    path: v.optional(v.string()),
+    per_page: v.optional(v.number()),
+    page: v.optional(v.number()),
+    github_access_token: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    const [owner, repo] = repoParts(args.repository);
+    const params = new URLSearchParams({
+      per_page: String(args.per_page ?? 50),
+      page: String(args.page ?? 1),
+    });
+    if (args.sha) params.set("sha", args.sha);
+    if (args.path) params.set("path", args.path);
+
+    const data = await ghFetch(
+      `${GITHUB_API_BASE}/repos/${owner}/${repo}/commits?${params.toString()}`,
+      args.github_access_token,
+    );
+    return {
+      commits: data.map((commit: any) => ({
+        sha: commit.sha as string,
+        message: (commit.commit?.message ?? "") as string,
+        author_name: (commit.commit?.author?.name ?? "") as string,
+        author_login: commit.author?.login as string | undefined,
+        author_avatar_url: commit.author?.avatar_url as string | undefined,
+        timestamp: new Date(commit.commit?.author?.date ?? commit.commit?.committer?.date ?? 0).getTime(),
+        html_url: commit.html_url as string,
+      })),
+    };
+  },
+});
+
+export const compare = internalAction({
+  args: {
+    repository: v.string(),
+    base: v.string(),
+    head: v.string(),
+    github_access_token: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    const [owner, repo] = repoParts(args.repository);
+    const data = await ghFetch(
+      `${GITHUB_API_BASE}/repos/${owner}/${repo}/compare/${encodeURIComponent(args.base)}...${encodeURIComponent(args.head)}`,
+      args.github_access_token,
+    );
+    return {
+      ahead_by: data.ahead_by as number,
+      behind_by: data.behind_by as number,
+      total_commits: data.total_commits as number,
+      status: data.status as string,
+      files: (data.files ?? []).map((file: any) => ({
+        filename: file.filename as string,
+        status: file.status as string,
+        additions: (file.additions ?? 0) as number,
+        deletions: (file.deletions ?? 0) as number,
+      })),
+    };
+  },
+});
+
+/**
+ * Blame for one file, which only GraphQL answers. The App installation token
+ * works there too, so this needs no extra credential.
+ */
+export const getBlame = internalAction({
+  args: {
+    repository: v.string(),
+    ref: v.string(),
+    path: v.string(),
+    github_access_token: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    const [owner, repo] = repoParts(args.repository);
+    const query = `
+      query($owner: String!, $repo: String!, $expression: String!, $path: String!) {
+        repository(owner: $owner, name: $repo) {
+          object(expression: $expression) {
+            ... on Commit {
+              blame(path: $path) {
+                ranges {
+                  startingLine
+                  endingLine
+                  age
+                  commit {
+                    oid
+                    message
+                    committedDate
+                    author { name user { login avatarUrl } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }`;
+
+    const response = await fetch(`${GITHUB_API_BASE}/graphql`, {
+      method: "POST",
+      headers: { ...ghHeaders(args.github_access_token), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        variables: { owner, repo, expression: args.ref, path: args.path },
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`GitHub GraphQL error: ${response.status} ${await response.text()}`);
+    }
+    const body = await response.json();
+    if (body.errors?.length) {
+      throw new Error(`GitHub GraphQL error: ${body.errors.map((e: any) => e.message).join("; ")}`);
+    }
+
+    const ranges = body.data?.repository?.object?.blame?.ranges ?? [];
+    return {
+      ranges: ranges.map((range: any) => ({
+        start_line: range.startingLine as number,
+        end_line: range.endingLine as number,
+        sha: range.commit?.oid as string,
+        message: ((range.commit?.message ?? "") as string).split("\n")[0],
+        author_name: range.commit?.author?.name as string | undefined,
+        author_login: range.commit?.author?.user?.login as string | undefined,
+        author_avatar_url: range.commit?.author?.user?.avatarUrl as string | undefined,
+        committed_at: new Date(range.commit?.committedDate ?? 0).getTime(),
+      })),
+    };
+  },
+});

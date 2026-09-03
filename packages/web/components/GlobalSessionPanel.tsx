@@ -44,6 +44,7 @@ import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
 import { AnchorGlyph, AnchorScopePill } from "./anchor/AnchorIdentity";
 import { useAnchorIdentity } from "../hooks/useSyncAnchors";
 import { SharePopover } from "./SharePopover";
+import { PrStatusChip } from "./PrStatusChip";
 import { shareOrigin } from "../lib/utils";
 import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
@@ -2760,9 +2761,20 @@ export const SessionCard = memo(function SessionCard({
               <span className="truncate">{sessionLabel ?? project}</span>
             </span>
           )}
-          {session.worktree_name && (
-            <span data-simple-hide className="text-[9px] text-sol-cyan font-mono truncate max-w-[80px]" title={session.worktree_branch || session.worktree_name}>
-              {session.worktree_name}
+          {(session.worktree_name || session.cloud_placement === "pending") && (
+            <span
+              data-simple-hide
+              className={`inline-flex items-center gap-1 text-[9px] font-mono truncate max-w-[130px] ${session.cloud_placement === "pending" ? "text-sol-violet animate-pulse" : "text-sol-cyan"}`}
+              title={session.cloud_placement === "pending"
+                ? "Preparing the cloud host — its worktree is being made now."
+                : (session.worktree_branch || session.worktree_name || "")}
+            >
+              {/* The machine only appears when it is a host you would not
+                  otherwise expect — a worktree on your own laptop needs no icon. */}
+              {runHost && <DeviceIcon d={runHost} className="w-2.5 h-2.5 shrink-0" />}
+              <span className="truncate">
+                {session.cloud_placement === "pending" ? "preparing" : session.worktree_name}
+              </span>
             </span>
           )}
           {showModelBadge && session.model && (
@@ -2776,6 +2788,7 @@ export const SessionCard = memo(function SessionCard({
             </span>
           )}
           <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
+            <PrStatusChip status={session.pr_status} />
             {isFork(session) && (
               <span data-simple-hide className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20" title="Fork">
                 <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>

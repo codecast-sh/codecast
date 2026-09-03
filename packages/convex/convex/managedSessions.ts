@@ -712,6 +712,11 @@ export const updateAgentStatus = mutation({
     // open_tasks). Sent with settle verdicts; an empty array means "checked,
     // nothing open" and is as informative as a full one.
     open_tasks: v.optional(v.array(openTaskValidator)),
+    // The status is the daemon's own presumption, not an observation: it just
+    // pasted a message and reports "thinking" so the session reads live at
+    // once. Such a status paints the row but proves nothing about delivery —
+    // see activeStatusAcksInjected.
+    presumed: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
