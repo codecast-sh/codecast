@@ -31,7 +31,34 @@ export function pathLabel(path: string): string {
     } catch {}
     return "Files";
   }
+  // Browsing a repository. The tab says what you are looking at, which for a
+  // file or a directory lives in the query (`?path=`) exactly as it does for
+  // /files above. Without this a blob tab reads "main" and a commit tab reads a
+  // forty character sha.
+  if (clean.startsWith("/repo/")) {
+    const inPath = (() => {
+      try {
+        const p = new URLSearchParams(path.split("?")[1] ?? "").get("path");
+        return p ? decodeURIComponent(p).split("/").filter(Boolean).pop() : null;
+      } catch {
+        return null;
+      }
+    })();
+    // [_, "repo", owner, name, ...] — the repository is the honest fallback for
+    // its own history, and for a tree or blob that names no path.
+    return inPath || clean.split("/")[3] || "Repository";
+  }
+  if (clean.startsWith("/commit/")) {
+    const sha = clean.split("/")[4] ?? "";
+    return sha ? sha.slice(0, 7) : "Commit";
+  }
+  if (clean.startsWith("/pr/")) {
+    const number = clean.split("/")[4] ?? "";
+    return number ? `PR #${number}` : "Pull request";
+  }
+
   const segments: Record<string, string> = {
+    "/repo": "Repositories",
     "/tasks": "Tasks",
     "/docs": "Docs",
     "/files": "Files",

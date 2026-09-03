@@ -1,0 +1,137 @@
+/* Browsing a repository: history, source and one commit.
+ *
+ * One idea carries the look across the three pages: each page has a single
+ * accent that says what you are looking at, and everything else is quiet. The
+ * accent is set once on the root as `--repo-accent` (cyan for history, blue for
+ * source, and on a commit page the balance of what it added against what it
+ * removed), and the header band, the active tab and the focus rings all read
+ * it. Nothing here names a colour of its own, so light and dark both follow the
+ * solarized tokens.
+ */
+
+.repo-page {
+  --repo-accent: var(--sol-cyan);
+  --repo-wash: color-mix(in srgb, var(--repo-accent) 9%, transparent);
+  /* The rail collapses on the PAGE's width, not the window's: this page can be
+   * one cell of a split stage. */
+  container-type: inline-size;
+}
+
+/* The header band: a fine vertical rule pattern in the accent, fading out
+ * downward, so the repository name sits on quiet ground. Vertical rather than
+ * the pull request page's diagonal, because these pages are about columns of
+ * lines and the band should rhyme with them. */
+.repo-band {
+  position: relative;
+  isolation: isolate;
+  background-color: color-mix(in srgb, var(--repo-accent) 4%, var(--sol-bg));
+}
+
+.repo-band::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--repo-wash) 0px,
+    var(--repo-wash) 1px,
+    transparent 1px,
+    transparent 9px
+  );
+  -webkit-mask-image: linear-gradient(to bottom, black, transparent 90%);
+  mask-image: linear-gradient(to bottom, black, transparent 90%);
+}
+
+/* One staggered reveal on load. `--d` is the element's place in the sequence. */
+@keyframes repo-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.repo-rise {
+  animation: repo-rise 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+
+/* A history row reveals its actions on hover, and keeps them visible while one
+ * of them holds focus so the keyboard can reach them. */
+.repo-row-actions {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.repo-row:hover .repo-row-actions,
+.repo-row:focus-within .repo-row-actions {
+  opacity: 1;
+}
+
+/* Source: the code column. Lines are their own grid rows so a blame gutter, a
+ * line number and the code all sit on one baseline. */
+.repo-code {
+  font-variant-ligatures: none;
+  tab-size: 2;
+}
+
+.repo-line-number {
+  user-select: none;
+  color: var(--sol-text-dim);
+}
+
+.repo-line:hover .repo-line-number {
+  color: var(--sol-text-muted);
+}
+
+.repo-line-selected {
+  background: color-mix(in srgb, var(--repo-accent) 12%, transparent);
+}
+
+.repo-line-selected .repo-line-number {
+  color: var(--repo-accent);
+}
+
+/* The comment handle, a plus that appears in the gutter on hover. */
+.repo-line-handle {
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+
+.repo-line:hover .repo-line-handle,
+.repo-line-handle:focus-visible {
+  opacity: 1;
+}
+
+/* The blame gutter reads as margin notes, so it is set quiet and only the first
+ * line of each range carries a label. */
+.repo-blame {
+  color: var(--sol-text-dim);
+  border-right: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
+}
+
+.repo-blame-start {
+  border-top: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+}
+
+/* The right rail carries context, not content: it goes away before the log
+ * does. 900px is the width below which two columns stop being readable. */
+.repo-rail {
+  display: none;
+}
+
+@container (min-width: 900px) {
+  .repo-rail {
+    display: block;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .repo-rise {
+    animation: none;
+  }
+}

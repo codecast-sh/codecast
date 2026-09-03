@@ -1,6 +1,7 @@
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
 import { v } from "convex/values";
 import { enqueueStartSession, resolveOwnerDevice } from "./devices";
+import { enqueueCloudSpawn } from "./cloud";
 import { findConversationBySessionReference, resolveConversationRefRanked, findConversationByAnyRefWhere, findConversationByAnyRef } from "./conversationSessionLookup";
 import { applyHideTransition, cascadeHideToNestedChildren } from "./cleanup";
 import { paginationOptsValidator } from "convex/server";
@@ -43,7 +44,7 @@ import { latestImagePreviewUrl } from "./messages";
 import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
-import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, requireSessionCommandTarget } from "./daemonCommandUtils";
+import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget } from "./daemonCommandUtils";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, formatAgentSwitchNotice, findModelOption } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, isUserDormant, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
@@ -1143,6 +1144,9 @@ export const createQuickSession = mutation({
     session_id: v.optional(v.string()),
     isolated: v.optional(v.boolean()),
     worktree_name: v.optional(v.string()),
+    // "Run in the cloud": the row is parked on this remote device until a local
+    // daemon prepares the host and places it (cloud_spawn → cast cloud start).
+    cloud_device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1169,11 +1173,19 @@ export const createQuickSession = mutation({
       message_count: 0,
       ...privacy,
       status: "active",
+      ...(args.cloud_device_id
+        ? { owner_device_id: args.cloud_device_id, cloud_placement: "pending" as const }
+        : {}),
     });
 
     await ctx.db.patch(conversationId, {
       short_id: conversationId.toString().slice(0, 7),
     });
+
+    if (args.cloud_device_id) {
+      await enqueueCloudSpawn(ctx, userId, { conversationId, cloudDeviceId: args.cloud_device_id });
+      return conversationId;
+    }
 
     const daemonAgentType = fromConvexAgentType(agentType);
     await enqueueStartSession(ctx, userId, {
@@ -2645,6 +2657,7 @@ export const listConversations = query({
             active_plan_id: c.active_plan_id || null,
             worktree_name: c.worktree_name || null,
             worktree_branch: c.worktree_branch || null,
+            cloud_placement: c.cloud_placement || null,
           };
         }
 
@@ -2673,6 +2686,7 @@ export const listConversations = query({
             active_plan_id: c.active_plan_id || null,
             worktree_name: c.worktree_name || null,
             worktree_branch: c.worktree_branch || null,
+            cloud_placement: c.cloud_placement || null,
           };
         }
 
@@ -2729,6 +2743,7 @@ export const listConversations = query({
             active_plan_id: c.active_plan_id || null,
             worktree_name: c.worktree_name || null,
             worktree_branch: c.worktree_branch || null,
+            cloud_placement: c.cloud_placement || null,
           };
         }
 
@@ -2877,6 +2892,7 @@ export const listConversations = query({
           active_plan_id: c.active_plan_id || null,
           worktree_name: c.worktree_name || null,
           worktree_branch: c.worktree_branch || null,
+          cloud_placement: c.cloud_placement || null,
         };
       })
     );
@@ -5443,6 +5459,18 @@ export const forkFromMessage = mutation({
       v.literal("pi"),
       v.literal("grok")
     )),
+    // `cast fork --cloud`: the branch runs on the cloud host, in a worktree the
+    // CLI already acquired there. Routing goes to that device, the row and the
+    // daemon args carry the worktree as project path, and the JSONL-copy fast
+    // path is off (the parent's transcript is not on that machine — the
+    // deferred resume rebuilds the branch from the server copy).
+    cloud_device_id: v.optional(v.string()),
+    cloud_project_path: v.optional(v.string()),
+    cloud_worktree: v.optional(v.object({
+      name: v.string(),
+      branch: v.optional(v.string()),
+      path: v.optional(v.string()),
+    })),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -5580,17 +5608,18 @@ export const forkFromMessage = mutation({
     // The fork lives where the parent's transcript lives: route daemon commands
     // to the parent's owner device (it has the JSONL and the checkout). Falls
     // back to project-root routing when the parent has no live owner.
-    const ownerTarget = await resolveOwnerDevice(ctx, userId, {
+    const ownerTarget = args.cloud_device_id ?? await resolveOwnerDevice(ctx, userId, {
       projectPath: original.project_path,
       gitRoot: original.git_root,
       ownerDeviceId: original.owner_device_id ?? null,
     });
+    const forkProjectPath = args.cloud_project_path ?? original.project_path;
     // Fast path applies when the fork's history is the parent's transcript
     // verbatim AND the same claude binary will resume it — the daemon copies
     // the parent's JSONL instead of waiting for the server copy + rebuild.
     const isPlainFork = !args.target_agent_type || args.target_agent_type === original.agent_type;
     const fastPathEligible = atTip && isPlainFork && daemonAgentType === "claude" &&
-      (original.agent_type === "claude_code" || !original.agent_type);
+      (original.agent_type === "claude_code" || !original.agent_type) && !args.cloud_device_id;
     // opencode forks through its serve sidecar: POST /session/:id/fork mints a
     // REAL, resumable ses_ id from the parent session (a synthetic forked-<id>
     // never resolves in opencode.db — that's the bug this fixes). The daemon needs
@@ -5620,7 +5649,7 @@ export const forkFromMessage = mutation({
       })(),
       subtitle: original.subtitle,
       project_hash: original.project_hash,
-      project_path: original.project_path,
+      project_path: forkProjectPath,
       model: isAgentSwitch ? undefined : original.model,
       started_at: now,
       updated_at: now,
@@ -5636,10 +5665,10 @@ export const forkFromMessage = mutation({
       git_remote_url: original.git_remote_url,
       git_root: original.git_root,
       cli_flags: original.cli_flags,
-      worktree_name: original.worktree_name,
-      worktree_branch: original.worktree_branch,
-      worktree_path: original.worktree_path,
-      worktree_status: original.worktree_status,
+      worktree_name: args.cloud_worktree?.name ?? original.worktree_name,
+      worktree_branch: args.cloud_worktree ? args.cloud_worktree.branch : original.worktree_branch,
+      worktree_path: args.cloud_worktree ? args.cloud_worktree.path : original.worktree_path,
+      worktree_status: args.cloud_worktree ? ("active" as const) : original.worktree_status,
       fork_status: "copying",
       fork_copy_total: totalToCopy,
       fork_copied: 0,
@@ -5653,7 +5682,7 @@ export const forkFromMessage = mutation({
       session_id: forkSessionId,
       agent_type: daemonAgentType,
       conversation_id: newConversationId,
-      project_path: original.project_path || original.git_root,
+      project_path: forkProjectPath || original.git_root,
       // Copy-the-JSONL hints. The deferred (post-copy) command may also use
       // them: copy-first is cache-stable even when the rebuild would be safe.
       ...(fastPathEligible ? { fork_fast_path: true, parent_session_id: original.session_id } : {}),
@@ -8164,6 +8193,7 @@ async function enrichInboxSessionRow(
     active_task,
     worktree_name: conv.worktree_name,
     worktree_branch: conv.worktree_branch,
+    cloud_placement: (conv as any).cloud_placement ?? null,
     workflow_run_id: conv.workflow_run_id || null,
     is_workflow_primary: conv.is_workflow_primary || false,
     workflow_run_status,
@@ -8179,6 +8209,10 @@ async function enrichInboxSessionRow(
     // Denormalized armed inject-trigger state (see schema) — the classifier's
     // structural dormancy input, read off the row instead of agent_tasks.
     armed_trigger_kind: conv.armed_trigger_kind ?? null,
+    // The pull request this session shepherds (see schema). Folded onto the row
+    // so the inbox card and the thread state panel can show its state without
+    // reading pull_requests per card.
+    pr_status: conv.pr_status ?? null,
     // Harness /loop state (see loopState.ts) — an armed self-wakeup makes this
     // session a standing machine intent, so the trigger set can row it like an
     // armed trigger. Stopped loops are a server-side tombstone only.
@@ -10212,6 +10246,10 @@ export const getConversationLifecycle = query({
       inbox_stashed_at: conv.inbox_stashed_at ?? null,
       inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
       inbox_pinned_at: conv.inbox_pinned_at ?? null,
+      // Undelivered work is waiting for this session. The hibernation pass
+      // refuses to park such a session, because parking it would trade a live
+      // pane for a resume the very next tick.
+      has_pending_messages: conv.has_pending_messages ?? false,
     };
   },
 });
@@ -10429,6 +10467,32 @@ export const cliResumeSession = mutation({
       deduplicated,
       was_hidden: wasHidden,
       rearmed_schedules: rearmed,
+    };
+  },
+});
+
+// Agent-facing hibernate (cast hibernate <session> via /cli/sessions/hibernate).
+// Asks the session's daemon to park the pane now, without waiting for the fleet
+// cap to pick it: same teardown, same wake. The card is left exactly where it
+// is — parking a session is not a reason to pull a hidden one back into the
+// inbox, which is the one thing this does that cliResumeSession does not.
+export const cliHibernateSession = mutation({
+  args: {
+    session: v.string(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token
+      ? await getAuthenticatedUserId(ctx, args.api_token)
+      : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await resolveCommandableSession(ctx, userId, args.session, "hibernate");
+    const { deduplicated } = await enqueueHibernateSession(ctx, conv);
+
+    return {
+      ...sessionCommandResult(conv),
+      deduplicated,
     };
   },
 });

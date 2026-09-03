@@ -281,6 +281,9 @@ export interface ConversationLifecycle {
   inboxStashedAt?: number | null;
   inboxDismissedAt?: number | null;
   inboxPinnedAt?: number | null;
+  /** Undelivered messages are queued for this conversation. Only the lifecycle
+   *  source carries it; the status fallback leaves it undefined. */
+  hasPendingMessages?: boolean;
   /** True only when the hide fields were actually fetched (source === "lifecycle"). */
   hideStateKnown: boolean;
   source: "lifecycle" | "status-fallback";
@@ -1471,6 +1474,7 @@ export class SyncService {
             inboxStashedAt: res.inbox_stashed_at ?? null,
             inboxDismissedAt: res.inbox_dismissed_at ?? null,
             inboxPinnedAt: res.inbox_pinned_at ?? null,
+            hasPendingMessages: res.has_pending_messages ?? undefined,
             hideStateKnown: true,
             source: "lifecycle",
           };
@@ -1755,6 +1759,26 @@ export class SyncService {
     } catch {}
   }
 
+  /** The per-session account a RESUME must source, resolved by the server
+   * (accountSwitch.pinForResume): the row's pin, unless the session is
+   * parked on a limit/auth banner under a pin this device would not
+   * continue on — then the server rewrites the row and answers with the
+   * corrected pin. Falls back to the raw row read when the call fails, so an
+   * old server or a blip never blocks a resume. */
+  async pinForResume(conversationId: string): Promise<{ cc_account: string | null } | null> {
+    if (!this.apiToken) return null;
+    try {
+      const res = await this.mutate("accountSwitch:pinForResume" as any, {
+        conversation_id: conversationId,
+        device_id: deviceId(),
+        api_token: this.apiToken,
+      });
+      return res && typeof res === "object" ? { cc_account: (res as any).cc_account ?? null } : null;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Atomic pre-spawn ownership claim. Returns { won: false } if another LIVE
    * device already owns this conversation, so the caller skips spawning — the
@@ -1804,7 +1828,10 @@ export class SyncService {
     } catch {}
   }
 
-  async updateSessionAgentStatus(conversationId: string, status: AgentStatus, clientTs?: number, permissionMode?: string, openTasks?: OpenTaskReport[]): Promise<void> {
+  // hibernatedAt: a number stamps the park, null clears it, undefined leaves the
+  // field alone — so a resume can undo the park in the same write that reports
+  // the session is back.
+  async updateSessionAgentStatus(conversationId: string, status: AgentStatus, clientTs?: number, permissionMode?: string, openTasks?: OpenTaskReport[], presumed?: boolean, hibernatedAt?: number | null): Promise<void> {
     if (!this.apiToken) return;
     try {
       await this.mutate(
@@ -1816,6 +1843,10 @@ export class SyncService {
           api_token: this.apiToken,
           ...(permissionMode ? { permission_mode: permissionMode } : {}),
           ...(openTasks ? { open_tasks: openTasks } : {}),
+          // The daemon's own post-injection presumption — painted, never taken
+          // as delivery proof (managedSessions.activeStatusAcksInjected).
+          ...(presumed ? { presumed: true } : {}),
+          ...(hibernatedAt !== undefined ? { hibernated_at: hibernatedAt } : {}),
         }
       );
     } catch {}

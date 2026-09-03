@@ -80,7 +80,7 @@ cast trigger log tr-42                # show last run conversation
 Options:
 - `--in <duration>`: delay before run (30m, 2h, 1d)
 - `--every <duration>`: recurring interval
-- `--on <event>`: fire on webhook (pr_comment, pr_opened, pr_merged, push)
+- `--on <event>`: fire on webhook (pr_comment, pr_opened, pr_merged, push, issue_opened, issue_assigned, issue_labeled, issue_closed, issue_commented). The `issue_*` events cover Linear and GitHub alike: one trigger fires wherever the issue lives.
 - `--spawn`: fresh session per run, no history — linked back to the trigger in the UI
 - `--for <session>`: bind runs to a specific session (defaults to the one you're in)
 - `--safe`: read-only spawned run — write tools removed, state-changing commands blocked. Default is permissive: the run can act. A run injecting into an existing session inherits that session's rules.

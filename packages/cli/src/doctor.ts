@@ -448,7 +448,7 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
       name: "tmux servers",
       run: async () => {
         const procs = snapshotProcessTable();
-        const stale = findStaleTmuxServers(procs, liveTmuxServerPid());
+        const stale = findStaleTmuxServers(procs, await liveTmuxServerPid());
         if (stale.length === 0) return { ok: true, detail: "one server on the default socket" };
         const trees = stale.reduce((n, s) => n + s.descendants, 0);
         const agents = stale.reduce((n, s) => n + s.agents, 0);

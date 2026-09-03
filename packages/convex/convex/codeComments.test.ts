@@ -1,0 +1,333 @@
+import { describe, expect, test } from "bun:test";
+import { makeFakeDb } from "./testDb";
+import { create, listForFile, mirrorToGitHub, resolve, update } from "./codeComments";
+
+const USER = "user_1" as any;
+const OTHER = "user_2" as any;
+const TEAM = "team_1" as any;
+const CONV = "conv_1" as any;
+const PR = "pr_1" as any;
+const HEAD = "abcdef1234567890abcdef1234567890abcdef12";
+
+function context(user: string | null, seed: Record<string, any[]> = {}) {
+  const scheduled: Array<{ delay: number; reference: any; args: any }> = [];
+  const db = makeFakeDb({
+    users: [{ _id: USER, name: "Ashot" }, { _id: OTHER, name: "Sam" }],
+    team_memberships: [
+      { _id: "m1", user_id: USER, team_id: TEAM },
+      { _id: "m2", user_id: OTHER, team_id: TEAM },
+    ],
+    github_app_installations: [
+      { _id: "inst_1", team_id: TEAM, installation_id: 7, account_login: "codecast-sh", repository_selection: "all" },
+    ],
+    conversations: [{ _id: CONV, user_id: USER, is_private: true, session_id: "sess-1", title: "Git backend" }],
+    pull_requests: [
+      {
+        _id: PR, team_id: TEAM, repository: "codecast-sh/codecast", number: 12, title: "PR", state: "open",
+        head_sha: HEAD, head_ref: "b", author_github_username: "ashot", linked_session_ids: [],
+        created_at: 1, updated_at: 2,
+        files: [{ filename: "src/foo.ts", status: "modified", additions: 1, deletions: 0, changes: 1 }],
+      },
+    ],
+    review_comments: [],
+    external_events: [],
+    tasks: [],
+    managed_sessions: [],
+    ...seed,
+  });
+  return {
+    db,
+    auth: { async getUserIdentity() { return user ? { subject: `${user}|session` } : null; } },
+    scheduler: {
+      async runAfter(delay: number, reference: any, args: any) { scheduled.push({ delay, reference, args }); },
+    },
+    _scheduled: scheduled,
+  } as any;
+}
+
+describe("codeComments.create", () => {
+  test("writes a codecast comment, records the event and queues the mirror", async () => {
+    const ctx = context(USER);
+    const result = await (create as any)._handler(ctx, {
+      repository: "codecast-sh/codecast",
+      ref: HEAD,
+      file_path: "src/foo.ts",
+      line_number: 42,
+      content: "this leaks on the error path",
+      conversation_ref: "sess-1",
+    });
+
+    const comment = ctx.db._tables.review_comments[0];
+    expect(comment).toMatchObject({
+      repository: "codecast-sh/codecast",
+      ref: HEAD,
+      file_path: "src/foo.ts",
+      line_number: 42,
+      author_user_id: USER,
+      author_kind: "user",
+      codecast_origin: true,
+      conversation_id: CONV,
+      resolved: false,
+    });
+    expect(result.comment_id).toBe(comment._id);
+
+    const event = ctx.db._tables.external_events[0];
+    expect(event).toMatchObject({
+      kind: "code_comment",
+      source: "codecast",
+      team_id: TEAM,
+      title: "Comment on src/foo.ts:42",
+      summary: "this leaks on the error path",
+      conversation_id: CONV,
+      comment_id: comment._id,
+    });
+
+    // The file sits in an open pull request, so the comment is mirrored there.
+    expect(comment.pull_request_id).toBe(PR);
+    const mirror = ctx._scheduled.find((s: any) => s.args?.comment_id === comment._id);
+    expect(mirror.args).toMatchObject({ comment_id: comment._id, pr_id: PR });
+  });
+
+  test("a comment on the pull request itself needs no file and still mirrors", async () => {
+    const ctx = context(USER);
+    await (create as any)._handler(ctx, {
+      repository: "codecast-sh/codecast",
+      content: "rebased and green now",
+      pull_request_id: PR,
+    });
+
+    const comment = ctx.db._tables.review_comments[0];
+    expect(comment.file_path).toBeUndefined();
+    expect(comment.pull_request_id).toBe(PR);
+    expect(ctx.db._tables.external_events[0].title).toBe("Comment on the pull request");
+
+    // It mirrors as a GitHub issue comment on the PR, not a line comment.
+    expect(ctx._scheduled[0].args).toMatchObject({ comment_id: comment._id, pr_id: PR });
+  });
+
+  test("an unanchored comment naming no pull request stays inside codecast", async () => {
+    const ctx = context(USER);
+    await (create as any)._handler(ctx, {
+      repository: "codecast-sh/codecast",
+      content: "a thought about this repo",
+    });
+    expect(ctx._scheduled).toHaveLength(0);
+    expect(ctx.db._tables.review_comments[0].pull_request_id).toBeUndefined();
+  });
+
+  test("an agent's comment says so", async () => {
+    const ctx = context(USER);
+    await (create as any)._handler(ctx, {
+      repository: "codecast-sh/codecast",
+      file_path: "src/foo.ts",
+      content: "fixed in the next push",
+      author_kind: "agent",
+    });
+    expect(ctx.db._tables.review_comments[0].author_kind).toBe("agent");
+  });
+
+  test("mirror false keeps the comment inside codecast", async () => {
+    const ctx = context(USER);
+    await (create as any)._handler(ctx, {
+      repository: "codecast-sh/codecast",
+      file_path: "src/foo.ts",
+      content: "note to self",
+      mirror: false,
+    });
+    expect(ctx._scheduled).toHaveLength(0);
+    expect(ctx.db._tables.review_comments[0].pull_request_id).toBeUndefined();
+  });
+
+  test("a file no open pull request touches is not mirrored", async () => {
+    const ctx = context(USER);
+    await (create as any)._handler(ctx, {
+      repository: "codecast-sh/codecast",
+      file_path: "docs/unrelated.md",
+      content: "typo here",
+    });
+    expect(ctx._scheduled).toHaveLength(0);
+  });
+
+  test("a repository nobody installed the app on is refused", async () => {
+    const ctx = context(USER, { github_app_installations: [] });
+    await expect(
+      (create as any)._handler(ctx, { repository: "someone/else", file_path: "a.ts", content: "hi" }),
+    ).rejects.toThrow("No GitHub App installation covers someone/else");
+  });
+
+  test("a stranger to the team is refused", async () => {
+    const ctx = context("user_3", { team_memberships: [{ _id: "m1", user_id: USER, team_id: TEAM }] });
+    await expect(
+      (create as any)._handler(ctx, { repository: "codecast-sh/codecast", file_path: "a.ts", content: "hi" }),
+    ).rejects.toThrow("Forbidden");
+  });
+
+  test("a reply inherits its parent's pull request and ref", async () => {
+    const ctx = context(USER, {
+      review_comments: [
+        {
+          _id: "rc_parent", pull_request_id: PR, repository: "codecast-sh/codecast", ref: HEAD,
+          file_path: "src/foo.ts", line_number: 42, content: "this leaks", resolved: false,
+          created_at: 1, author_github_username: "samvit", author_kind: "github",
+        },
+      ],
+    });
+    await (create as any)._handler(ctx, {
+      repository: "codecast-sh/codecast",
+      file_path: "src/foo.ts",
+      line_number: 42,
+      content: "fixed, thanks",
+      parent_id: "rc_parent",
+      mirror: false,
+    });
+    const reply = ctx.db._tables.review_comments[1];
+    expect(reply).toMatchObject({ parent_id: "rc_parent", pull_request_id: PR, ref: HEAD });
+  });
+});
+
+describe("codeComments reads and writes", () => {
+  const seeded = () => ({
+    review_comments: [
+      {
+        _id: "rc_1", repository: "codecast-sh/codecast", file_path: "src/foo.ts", ref: HEAD,
+        content: "mine", resolved: false, created_at: 1, author_user_id: USER, author_kind: "user",
+      },
+      {
+        _id: "rc_2", repository: "codecast-sh/codecast", file_path: "src/foo.ts", ref: "other-sha",
+        content: "on another commit", resolved: false, created_at: 2, author_user_id: USER, author_kind: "user",
+      },
+      {
+        _id: "rc_3", repository: "codecast-sh/codecast", file_path: "src/foo.ts", ref: HEAD,
+        content: "from github", resolved: false, created_at: 3, author_github_username: "samvit", author_kind: "github",
+      },
+    ],
+  });
+
+  test("listForFile answers for a file, and narrows to one ref when asked", async () => {
+    const ctx = context(USER, seeded());
+    const all = await (listForFile as any)._handler(ctx, {
+      repository: "codecast-sh/codecast",
+      file_path: "src/foo.ts",
+    });
+    expect(all.map((c: any) => c._id)).toEqual(["rc_1", "rc_2", "rc_3"]);
+
+    const atHead = await (listForFile as any)._handler(ctx, {
+      repository: "codecast-sh/codecast",
+      file_path: "src/foo.ts",
+      ref: HEAD,
+    });
+    expect(atHead.map((c: any) => c._id)).toEqual(["rc_1", "rc_3"]);
+  });
+
+  test("a comment from GitHub is edited on GitHub, not here", async () => {
+    const ctx = context(USER, seeded());
+    await expect(
+      (update as any)._handler(ctx, { comment_id: "rc_3", content: "no" }),
+    ).rejects.toThrow("edit this comment on GitHub");
+  });
+
+  test("only the author may edit their own comment", async () => {
+    const ctx = context(OTHER, seeded());
+    await expect(
+      (update as any)._handler(ctx, { comment_id: "rc_1", content: "no" }),
+    ).rejects.toThrow("only the author");
+  });
+
+  test("anyone with access may mark a thread settled, and it says who", async () => {
+    const ctx = context(OTHER, seeded());
+    await (resolve as any)._handler(ctx, { comment_id: "rc_3" });
+    const comment = ctx.db._tables.review_comments[2];
+    expect(comment.resolved).toBe(true);
+    expect(comment.resolved_by).toBe(OTHER);
+    expect(comment.resolved_at).toBeGreaterThan(0);
+  });
+});
+
+// ── Round four: mirroring a comment on a range of lines ──
+//
+// GitHub anchors a multi line review comment with start_line..line. Sending
+// only `line` pins the comment to the last line of the range and silently drops
+// what it was pointing at.
+
+function mirrorContext(comment: Record<string, any>) {
+  const sent: any[] = [];
+  const recorded: any[] = [];
+  const ctx = {
+    async runQuery(_ref: any, args: any) {
+      if (args.comment_id) return { _id: args.comment_id, content: "look at this block", file_path: "src/foo.ts", side: "RIGHT", ...comment };
+      return { _id: PR, repository: "codecast-sh/codecast", number: 12, head_sha: HEAD };
+    },
+    async runAction() { return "tok_123"; },
+    async runMutation(_ref: any, args: any) { recorded.push(args); },
+  } as any;
+  return { ctx, sent, recorded };
+}
+
+async function withStubbedFetch<T>(sent: any[], fn: () => Promise<T>): Promise<T> {
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (url: any, init: any) => {
+    sent.push({ url: String(url), body: JSON.parse(init.body) });
+    return { ok: true, async json() { return { id: 999, html_url: "https://github.com/c/999" }; } } as any;
+  }) as any;
+  try { return await fn(); } finally { globalThis.fetch = real; }
+}
+
+describe("mirrorToGitHub", () => {
+  test("a range comment carries both ends", async () => {
+    const { ctx, sent } = mirrorContext({ line_number: 10, line_end: 20 });
+    const out = await withStubbedFetch<{ ok: boolean }>(sent, () =>
+      (mirrorToGitHub as any)._handler(ctx, { comment_id: "rc_1", pr_id: PR }),
+    );
+
+    expect(out.ok).toBe(true);
+    expect(sent[0].url).toContain("/pulls/12/comments");
+    expect(sent[0].body).toMatchObject({
+      path: "src/foo.ts",
+      start_line: 10,
+      start_side: "RIGHT",
+      line: 20,
+      side: "RIGHT",
+      commit_id: HEAD,
+    });
+  });
+
+  test("a single line comment sends no range", async () => {
+    const { ctx, sent } = mirrorContext({ line_number: 42 });
+    await withStubbedFetch(sent, () =>
+      (mirrorToGitHub as any)._handler(ctx, { comment_id: "rc_1", pr_id: PR }),
+    );
+
+    expect(sent[0].body.line).toBe(42);
+    expect(sent[0].body.start_line).toBeUndefined();
+    expect(sent[0].body.start_side).toBeUndefined();
+  });
+
+  test("a range of one line is not a range", async () => {
+    const { ctx, sent } = mirrorContext({ line_number: 42, line_end: 42 });
+    await withStubbedFetch(sent, () =>
+      (mirrorToGitHub as any)._handler(ctx, { comment_id: "rc_1", pr_id: PR }),
+    );
+
+    expect(sent[0].body.line).toBe(42);
+    expect(sent[0].body.start_line).toBeUndefined();
+  });
+
+  test("a comment with no line goes on the conversation", async () => {
+    const { ctx, sent } = mirrorContext({ file_path: undefined, line_number: undefined });
+    await withStubbedFetch(sent, () =>
+      (mirrorToGitHub as any)._handler(ctx, { comment_id: "rc_1", pr_id: PR }),
+    );
+
+    expect(sent[0].url).toContain("/issues/12/comments");
+    expect(sent[0].body).toEqual({ body: "look at this block" });
+  });
+
+  test("the side the author chose is used for both ends", async () => {
+    const { ctx, sent } = mirrorContext({ line_number: 10, line_end: 20, side: "LEFT" });
+    await withStubbedFetch(sent, () =>
+      (mirrorToGitHub as any)._handler(ctx, { comment_id: "rc_1", pr_id: PR }),
+    );
+
+    expect(sent[0].body).toMatchObject({ side: "LEFT", start_side: "LEFT" });
+  });
+});
