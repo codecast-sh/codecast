@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -15,6 +15,10 @@ import {
   restoreWipSnapshot,
   wipRef,
 } from "./wipSnapshot.js";
+
+// Real git per test, several commands each: 3 to 4s on a loaded machine, so
+// the 5s default times out under load.
+setDefaultTimeout(30_000);
 
 // Real git repos, not mocks: this module is git plumbing, and the properties that
 // matter (a temp index leaves the real one alone, .gitignore excludes secrets,

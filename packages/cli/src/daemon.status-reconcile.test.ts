@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { classifyCodexTranscriptTail, classifyLivePaneFor, classifyTmuxLiveState, classifyTranscriptTail, extractTmuxLiveRegion, findCachedSessionIdForConversation, findSessionFile, glyphlessPromptPattern, workflowAgentTranscriptPathFor, isInterruptControlMessage, paneReconcileTarget, preferLiveSessionId, reconciledStatus, resetSessionFileIndexForTests, refreshSessionFileIndex, ageSessionFileIndexForTests, resumeShortId, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked } from "./daemon.js";
+import { classifyCodexTranscriptTail, classifyLivePaneFor, classifyTmuxLiveState, classifyTranscriptTail, extractTmuxLiveRegion, findCachedSessionIdForConversation, findSessionFile, glyphlessPromptPattern, workflowAgentTranscriptPathFor, isInterruptControlMessage, paneReconcileTarget, preferLiveSessionId, reconciledStatus, resetSessionFileIndexForTests, refreshSessionFileIndex, primeSessionFileIndexAtBoot, ageSessionFileIndexForTests, resumeShortId, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked } from "./daemon.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 import type { TranscriptTurnState } from "./daemon.js";
+import { setSlowSyncFsThresholdForTests, setSlowSyncSink } from "./slowSync.js";
 
 // Regression test for the "session stuck in 'working' (or 'stopped') forever" bug,
 // re-surfaced via session jx770k5 (2026-05-24). The status hook is a last-write-wins
@@ -665,6 +666,48 @@ describe("permissionBlockedRecoveryTarget", () => {
   test("only acts on permission_blocked; leaves every other status alone", () => {
     for (const s of ["working", "idle", "thinking", "connected", "stopped", "resuming", undefined] as const) {
       expect(permissionBlockedRecoveryTarget(s, "user")).toBeNull();
+    }
+  });
+});
+
+// The boot warmup walks the five transcript stores off the loop. The status
+// file replay and the first hook pushes look sessions up before it lands;
+// a lookup against no map used to build the index cold on the loop (1s at
+// load 60, 6s under the fleet, 2026-09-02). Now the boot path installs an
+// empty map first, and any lookup with a refresh in flight answers null.
+describe("session file index: no cold sync walk on the loop while a refresh is in flight", () => {
+  test("a lookup during the warmup answers null with no walk, then hits from the landed map", async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "cc-index-boot-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+    const seen: string[] = [];
+    try {
+      const proj = path.join(tmpHome, ".claude", "projects", "-Users-x-proj");
+      fs.mkdirSync(proj, { recursive: true });
+      const sid = "dddddddd-0000-0000-0000-000000000004";
+      const file = path.join(proj, `${sid}.jsonl`);
+      fs.writeFileSync(file, "{}\n");
+      resetSessionFileIndexForTests();
+      setSlowSyncSink((m) => seen.push(m));
+      setSlowSyncFsThresholdForTests(0);
+
+      const warm = primeSessionFileIndexAtBoot();
+      expect(findSessionFile(sid, { staleOk: true })).toBeNull();
+      // No map at all with the same refresh in flight (a reset, a HOME swap):
+      // still no walk on the loop.
+      resetSessionFileIndexForTests();
+      expect(findSessionFile(sid, { staleOk: true })).toBeNull();
+      expect(seen.filter((m) => m.includes("walkDirsSync"))).toEqual([]);
+
+      await warm;
+      expect(findSessionFile(sid, { staleOk: true })?.path).toBe(file);
+      expect(seen.filter((m) => m.includes("walkDirsSync"))).toEqual([]);
+    } finally {
+      setSlowSyncSink(null);
+      setSlowSyncFsThresholdForTests(null);
+      process.env.HOME = prevHome;
+      resetSessionFileIndexForTests();
+      fs.rmSync(tmpHome, { recursive: true, force: true });
     }
   });
 });

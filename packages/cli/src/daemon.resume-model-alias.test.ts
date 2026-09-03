@@ -89,6 +89,15 @@ describe("claudeModelAlias", () => {
     expect(claudeModelAlias(transcript)).toBe("fable");
   });
 
+  test("matches the backtick-quoted switch line newer Claude Code builds write", () => {
+    // Verbatim from a 2026-09 transcript: the name sits in backticks, no ANSI.
+    const transcript = [
+      asst("claude-fable-5"),
+      user("<local-command-stdout>Set model to `Opus 5` and saved as your default for new sessions</local-command-stdout>"),
+    ].join("\n");
+    expect(claudeModelAlias(transcript)).toBe("opus");
+  });
+
   test("ignores a message merely quoting 'Set model to ...'", () => {
     const transcript = [asst("claude-fable-5"), user("the log said: Set model to Opus 4.8")].join("\n");
     expect(claudeModelAlias(transcript)).toBe("fable");

@@ -147,6 +147,13 @@ printf '\\033[?2004h'
 # depends on, and echoke (the macOS and Linux default) erases it from the
 # display too.
 stty kill '^K' 2>/dev/null || true
+# DO NOT ECHO CONTROL BYTES. A real TUI runs raw with no echo, so the pane
+# shows only the pasted text. The tty's default echoctl renders the paste
+# markers as "^[[200~hello^[[201~" at the prompt, and the daemon's composer
+# watcher (awaitTmuxComposerPayload) rightly reads that as foreign text: it
+# drains, re-pastes twice and gives up AGENT_STDIN_NOT_READY. Without echoctl
+# the raw ESC[200~ reaches tmux, which drops the unknown sequence.
+stty -echoctl 2>/dev/null || true
 
 has_paste_start() { case "$1" in *$'\\033'"[200~"*) return 0 ;; *) return 1 ;; esac; }
 has_paste_end() { case "$1" in *$'\\033'"[201~"*) return 0 ;; *) return 1 ;; esac; }

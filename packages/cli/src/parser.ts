@@ -1002,6 +1002,16 @@ export function parseCursorPrompts(dbValue: string): ParsedMessage[] {
   }
 }
 
+/**
+ * A cursor transcript role header: `user:`, `assistant:` or `system:` alone
+ * on its line. The ingest window cut (cursorPassBoundary) and the parser
+ * share this rule, so a header one accepts is never invisible to the other.
+ */
+export function isCursorRoleHeaderLine(line: string): boolean {
+  const trimmed = line.trim().toLowerCase();
+  return trimmed === "user:" || trimmed === "assistant:" || trimmed === "system:";
+}
+
 export function parseCursorTranscriptFile(content: string): ParsedMessage[] {
   const messages: ParsedMessage[] = [];
   const lines = content.split("\n");
@@ -1054,10 +1064,9 @@ export function parseCursorTranscriptFile(content: string): ParsedMessage[] {
   };
 
   for (const line of lines) {
-    const trimmed = line.trim().toLowerCase();
-    if (trimmed === "user:" || trimmed === "assistant:" || trimmed === "system:") {
+    if (isCursorRoleHeaderLine(line)) {
       flush();
-      currentRole = trimmed.slice(0, -1) as "user" | "assistant" | "system";
+      currentRole = line.trim().toLowerCase().slice(0, -1) as "user" | "assistant" | "system";
       continue;
     }
     buffer.push(line);

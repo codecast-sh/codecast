@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { sessionProcessOwnership } from "./daemon.js";
+import { readCodexSessionMetaHeadAsync, sessionMetaHeadCut, sessionProcessOwnership } from "./daemon.js";
 import { planSessionTeardown, shortId } from "./sessionProcessMatcher.js";
 
 // ct-41071, anchored to the incident that produced it: ~/.codex/sessions/2026/08/02.
@@ -387,4 +387,38 @@ describe("shortId on the incident's ids", () => {
       expect(shortId(sid)).not.toBe(shortId(PARENT));
     }
   });
+});
+
+// The metrics tick reads the same leading block off the loop. Both readers
+// must cut at the same place: after the last session_meta line, before the
+// first line that is anything else.
+describe("readCodexSessionMetaHeadAsync", () => {
+  test("returns the leading session_meta block of a 3 deep chain", async () => {
+    const p = path.join(rolloutDir, "rollout-2026-08-02T15-00-00-chain.jsonl");
+    const metas = [metaLine("a", {}), metaLine("b", { parent_thread_id: "a" }), metaLine("c", { parent_thread_id: "b" })];
+    const head = metas.join("\n") + "\n";
+    fs.writeFileSync(p, head + JSON.stringify({ type: "event_msg", payload: {} }) + "\n" + "x".repeat(1000) + "\n");
+    expect(await readCodexSessionMetaHeadAsync(p)).toBe(head);
+    expect(sessionMetaHeadCut(head + '{"type":"other"}\n')).toBe(head.length);
+  });
+
+  test("an empty block when the first line is not session_meta", async () => {
+    const p = path.join(rolloutDir, "rollout-2026-08-02T15-00-01-nometa.jsonl");
+    fs.writeFileSync(p, JSON.stringify({ type: "event_msg", payload: {} }) + "\n" + metaLine("late", {}) + "\n");
+    expect(await readCodexSessionMetaHeadAsync(p)).toBe("");
+  });
+
+  test("stops at the byte cap on a file with no non meta line", async () => {
+    const p = path.join(rolloutDir, "rollout-2026-08-02T15-00-02-allmeta.jsonl");
+    // Each meta line is ~37KB in real rollouts; 17MB of them exceeds the 16MB cap.
+    const line = metaLine("big", { base_instructions: "i".repeat(36 * 1024) }) + "\n";
+    const fd = fs.openSync(p, "w");
+    let written = 0;
+    while (written < 17 * 1024 * 1024) { fs.writeSync(fd, line); written += line.length; }
+    fs.closeSync(fd);
+    const head = await readCodexSessionMetaHeadAsync(p);
+    expect(head.length).toBeLessThanOrEqual(16 * 1024 * 1024);
+    expect(head.length).toBeGreaterThan(15 * 1024 * 1024);
+    expect(head.endsWith("\n")).toBe(true);
+  }, 30_000);
 });
