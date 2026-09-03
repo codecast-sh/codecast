@@ -92,15 +92,17 @@ export function extensionReady(): boolean {
 /**
  * Which browser a session's verbs act on. An explicit `cast browser target`
  * wins. Otherwise the human's Chrome is the default whenever the extension is
- * connected, and the clone when it is not. With `settle` the default is
- * written down as the session's choice, so a session that started in one
- * browser stays there even if the extension comes or goes mid-session.
+ * connected, and the clone when it is not. With `settle` a real default is
+ * written down as the session's choice, so a session that started in the
+ * human's Chrome stays there if the extension drops; a clone default is not
+ * written, so a session waiting on the clone moves over the moment the
+ * extension is paired, which is the reason the human paired it.
  */
 export function stickyTarget(sessionKey: string | null, opts: { settle?: boolean } = {}): "real" | "clone" {
   const chosen = explicitTarget(sessionKey);
   if (chosen) return chosen;
   const mode = extensionReady() ? "real" : "clone";
-  if (opts.settle) setStickyTarget(sessionKey, mode);
+  if (opts.settle && mode === "real") setStickyTarget(sessionKey, mode);
   return mode;
 }
 

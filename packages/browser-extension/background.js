@@ -248,7 +248,10 @@ async function handle(m) {
     }
 
     case "tabs.create": {
-      const t = await chrome.tabs.create({ url: m.url || "about:blank", active: !m.background });
+      // Into the window that already holds this group, so cast tabs stay
+      // together instead of a second group appearing per window.
+      const windowId = m.group ? windowOfOwnedGroup(m.group.title) : undefined;
+      const t = await chrome.tabs.create({ url: m.url || "about:blank", active: !m.background, ...(windowId !== undefined ? { windowId } : {}) });
       if (m.group) await placeInGroup(t, m.group);
       return { tabId: t.id };
     }
@@ -295,7 +298,19 @@ async function handle(m) {
 
 async function attachTab(tabId) {
   if (!attached.has(tabId)) {
-    await chrome.debugger.attach({ tabId }, "1.3");
+    try {
+      await chrome.debugger.attach({ tabId }, "1.3");
+    } catch (err) {
+      // Chrome keeps an extension's debugger sessions across service worker
+      // lives; our bookkeeping does not. A session this worker's predecessor
+      // held is still on the tab, and only a detach clears it. The detach
+      // succeeds for our own session alone: another extension's, or open
+      // DevTools, leaves an error worth naming.
+      if (!/already attached/i.test(String((err && err.message) || err))) throw err;
+      const ours = await chrome.debugger.detach({ tabId }).then(() => true, () => false);
+      if (!ours) throw new Error(`another debugger holds this tab (DevTools, or another extension); close it there first`);
+      await chrome.debugger.attach({ tabId }, "1.3");
+    }
     attached.add(tabId);
     markDriven(tabId, true);
   }
@@ -401,6 +416,12 @@ async function placeInGroup(tab, group) {
     const g = await chrome.tabGroups.update(groupId, { title: group.title, color: group.color });
     groups.set(groupId, g);
   }
+}
+
+/** The window of a group we made with this plain title, if one is open. */
+function windowOfOwnedGroup(title) {
+  const g = [...groups.values()].find((x) => ownedGroups.has(x.id) && plainTitle(x.id, x) === title);
+  return g ? g.windowId : undefined;
 }
 
 async function groupOfTab(tabId) {

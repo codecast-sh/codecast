@@ -104,13 +104,11 @@ Rules the CLI enforces in real mode:
 
 ## What you see while a session drives a tab
 
-- **A coloured Chrome tab group** named `cast <session>` (the first seven
-  characters of the session id; a session known only by its tmux pane is
-  named `cast pane <n>`). The colour is chosen from the session id, so two
-  agents in the same Chrome get different colours and the same agent gets the
-  same colour on every run. Every tab the session opens joins the group. The
-  extension remembers which groups it created and touches only those: a
-  group you made yourself is never renamed, animated or adopted by a session.
+- **One Chrome tab group named `Cast`**, in red, where every tab an agent
+  opens in your Chrome lives, whichever session opened it. New tabs join it
+  in the window that already holds it. The extension remembers the groups it
+  created and touches only those: a group you made yourself is never renamed,
+  animated or adopted by a session.
   While a session works the title shows cycling dots; CDP calls that arrive
   within 600 ms of each other count as one span, the dots start once a span
   has run for 300 ms, and a checkmark follows for three seconds when the span

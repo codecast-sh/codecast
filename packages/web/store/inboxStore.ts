@@ -32,8 +32,9 @@ import {
 // definition — the applier (useSyncChangeFeed) persists cursors under it and
 // stampSyncAck's immediate-retire branch reads it; a second spelling would
 // silently break the retire race it exists for.
+const SYNC_LOG_META_PREFIX = "synclog:v1:";
 export function syncLogScopeMetaKey(scopeKey: string): string {
-  return `synclog:v1:${scopeKey}`;
+  return `${SYNC_LOG_META_PREFIX}${scopeKey}`;
 }
 
 // Reverse of the registry's storeKey→server-table dispatch map, for stamping
@@ -48,7 +49,8 @@ import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, TRUST_DECAYING_STATUSES, isLivenessStale, isStatusTrustStale, openTasksVouchForWaiting, modelOptionKey, formatDecisionAnswer } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, deriveLiveAt, rowLiveDeadlines, type LiveFacts, modelOptionKey, formatDecisionAnswer } from "@codecast/shared/contracts";
+import { liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
 // Membership on this replica is the SAME selection the server scan runs.
@@ -494,6 +496,16 @@ export type InboxSession = {
   is_connected?: boolean;
   has_pending: boolean;
   agent_status?: AgentStatus;
+  // The is_idle inputs (ct-47609), overlay-owned facts: the replica re-derives
+  // is_idle / is_unresponsive / the trusted status at its own clock from these
+  // (shared deriveLiveAt), so the idle grace, a heartbeat lapse and the status
+  // decay flip locally without a server re-execution.
+  agent_status_updated_at?: number | null;
+  last_heartbeat?: number | null;
+  last_role_is_user?: boolean | null;
+  auq_open?: boolean | null;
+  daemon_alive_until?: number | null;
+  producing_until?: number | null;
   tmux_session?: string | null;
   permission_mode?: string | null;
   // When the agent process behind this session started. Background watches and
@@ -1591,7 +1603,12 @@ function isMemberCandidate(s: InboxSession): boolean {
 // this render index. The activity term is separate from sessionsWakeSig on
 // purpose: the sidebar's wake signature must stay heartbeat-blind, while
 // membership genuinely depends on activity time at minute grain.
-const membershipTimeSig = makeCollectionSig<InboxSession>((s) => String(Math.floor((s.updated_at ?? 0) / 60_000)));
+// The stamps membership reads ride the key too (workingSetRowOf reads the
+// STAMPS, while the structural signature reads the pinned flag and the sort
+// rank), so a gesture that moves only a stamp can never leave membership
+// serving the previous selection.
+const membershipTimeSig = makeCollectionSig<InboxSession>((s) =>
+  `${Math.floor((s.updated_at ?? 0) / 60_000)}|${s.inbox_pinned_at ?? ""}|${s.inbox_dismissed_at ?? ""}|${s.inbox_stashed_at ?? ""}|${s.inbox_killed_at ?? ""}`);
 let _membershipKey: string | null = null;
 let _membershipVal: InboxMembership | null = null;
 export function computeInboxMembership(
@@ -2197,7 +2214,15 @@ const _classifyCache = new WeakMap<object, SessionVerdict>();
 export function classifySession(s: InboxSession): SessionVerdict {
   let c = _classifyCache.get(s);
   if (!c) {
-    const ws = placeProjectableRow(projectableRowOf(s, false, false, 0), false, inboxEpoch(s.updated_at ?? 0)).work_state;
+    // The shipped live fields as they stand — no clock, no re-derivation.
+    const live: LiveFacts = {
+      agent_status: s.agent_status ?? null,
+      is_idle: !!s.is_idle,
+      is_unresponsive: !!s.is_unresponsive,
+      awaiting_input: !!s.awaiting_input,
+      daemon_alive: !!s.is_connected,
+    };
+    const ws = placeProjectableRow(projectableRowOf(s, live), false, inboxEpoch(s.updated_at ?? 0)).work_state;
     c = verdictOfWorkState(ws);
     _classifyCache.set(s, c);
   }
@@ -2435,66 +2460,23 @@ export type PlaceInboxState = {
   pending?: InboxOverlayState["pending"];
 };
 
-// How old the latest overlay payload may be (receipt clock) for its facts to
-// count as FRESH. Past this the replica's rows are frozen: the staleness sweep
-// below takes over for rendering, and the digest compare skips (its
-// INBOX_COMPARE_MAX_PAYLOAD_AGE_MS is this same bound). The stale probe
-// (inboxDigestCompare) forces a fresh execution within five minutes.
+// How old the latest overlay payload may be (receipt clock) before the digest
+// compare stops trusting it (INBOX_COMPARE_MAX_PAYLOAD_AGE_MS is this bound)
+// and the stale probe forces a fresh execution within five minutes. Rendering
+// does not gate on it: a row's live fields re-derive from its replicated
+// facts at any instant (deriveLiveAt), payload or no payload.
 export const INBOX_PAYLOAD_FRESH_MS = 90_000;
 
-// Which rows the latest overlay payload covers with fresh facts. A covered
-// row's is_idle / agent_status / has_pending are the server's, computed at its
-// execution from inputs the replica does not hold (last_message_role,
-// agent_status_updated_at, a producing child), and the shared module places
-// them exactly as the server did — so the client-only staleness sweep must
-// NOT touch them (it filed a parent with a producing subagent, and a live
-// daemon holding an unanswered message, under needs-input while the server
-// and the CLI kept them working: the two-replica simulation, 2026-09-01).
-// The sweep stays for the rows this cannot vouch for: liveness never
-// delivered, a row outside the payload, or a payload past the fresh bound.
-// Reads only stamp PRESENCE and the envelope clock, never a stamp's bucket.
-function overlayCoverage(state: PlaceInboxState, nowMono: number): (id: string) => boolean {
-  const slot = state.sessionsProjection?.["mine"];
-  const stamps = slot?.stamps;
-  if (!stamps || slot.receivedAtMono == null || nowMono - slot.receivedAtMono > INBOX_PAYLOAD_FRESH_MS) return () => false;
-  return (id) => id in stamps;
-}
-
-// The client mirror of the server's trustedAgentStatus (convex/inboxFilters)
-// for rows the liveness overlay no longer covers. The overlay ships the
-// TRUSTED status for every covered row, so a covered row needs nothing here;
-// a frozen row past the trust TTL takes the same quiet-time leg the server
-// applies at enrichment: a DECAYING status (an active one, or an inferred
-// "waiting" no fresh open_tasks report vouches for) reads as "idle"; a
-// declared verdict ("dormant" / "done") and every other status survive, so a
-// nightly trigger's home quiet for 23h stays parked exactly as the server
-// files it. The dead-daemon leg (→ "stopped") needs the heartbeat, which only
-// the server holds; the overlay delivers that coercion as a fact.
-function decayedAgentStatus(s: InboxSession, now: number): string | null {
-  const status = s.agent_status ?? null;
-  if (!status || !TRUST_DECAYING_STATUSES.has(status)) return status;
-  if (status === "waiting" && openTasksVouchForWaiting(s.open_tasks_at, s.open_tasks?.length ?? 0, now)) return status;
-  return "idle";
-}
-
-// InboxSession → the shared ProjectableInboxRow. `stale` (isLivenessStale) is
-// the client mirror of the server's recency-gated is_idle for rows the overlay
-// no longer refreshes: past the liveness TTL the row's frozen live-looking
-// fields are no longer believable, so the classifier sees a SETTLED row and
-// the row's own rest verdict decides — never the stale WORKING appearance.
-// `decayed` (isStatusTrustStale) applies the status trust decay above. Fields
-// the server enrichment ships already currency-filtered (is_dormant,
-// settle_verdict) are mapped back onto stamps the shared currency rules
-// accept as current.
-function projectableRowOf(s: InboxSession, stale: boolean, decayed: boolean, now: number): ProjectableInboxRow {
+// InboxSession → the shared ProjectableInboxRow, with the live fields
+// (agent_status, is_idle, is_unresponsive, awaiting_input) taken from `live`:
+// the shared deriveLiveAt over the row's replicated facts at the caller's
+// clock (ct-47609). Fields the server enrichment ships already
+// currency-filtered (is_dormant, settle_verdict) are mapped back onto stamps
+// the shared currency rules accept as current.
+function projectableRowOf(s: InboxSession, live: LiveFacts): ProjectableInboxRow {
   const base = workingSetRowOf(s);
   return {
     ...base,
-    // Only a FROZEN row blanks the queue flag: its has_pending froze with the
-    // rest of its liveness, and trusting it would pin the row in WORKING
-    // forever. (The fold over a frozen row therefore differs from the render
-    // path's raw flag by construction; the parity check skips that bit.)
-    has_pending_messages: stale ? false : base.has_pending_messages,
     inbox_dormant_at: s.inbox_dormant_at ?? (s.is_dormant ? (s.updated_at || 1) : null),
     anchor_id: s.is_anchor ? s._id : null,
     armed_trigger_kind: s.armed_trigger_kind ?? null,
@@ -2504,13 +2486,19 @@ function projectableRowOf(s: InboxSession, stale: boolean, decayed: boolean, now
     thread_state_status: s.thread_state_status ?? null,
     pending_api_error: s.pending_api_error === true,
     last_user_message: s.last_user_message ?? null,
-    agent_status: decayed ? decayedAgentStatus(s, now) : (s.agent_status ?? null),
-    // A covered row's is_idle is the server's fact, as is; a frozen row past
-    // the liveness TTL reads as settled (see overlayCoverage / rowTrustAt).
-    is_idle: stale ? true : (s.is_idle ?? null),
-    is_unresponsive: s.is_unresponsive ?? null,
-    awaiting_input: s.awaiting_input ?? null,
+    agent_status: live.agent_status,
+    is_idle: live.is_idle,
+    is_unresponsive: live.is_unresponsive,
+    awaiting_input: live.awaiting_input,
     last_turn_allows_park: s.last_turn_allows_park ?? null,
+    agent_status_updated_at: s.agent_status_updated_at ?? null,
+    last_heartbeat: s.last_heartbeat ?? null,
+    last_role_is_user: s.last_role_is_user ?? null,
+    auq_open: s.auq_open ?? null,
+    daemon_alive_until: s.daemon_alive_until ?? null,
+    producing_until: s.producing_until ?? null,
+    open_tasks: s.open_tasks ?? null,
+    open_tasks_at: s.open_tasks_at ?? null,
   };
 }
 
@@ -2519,26 +2507,21 @@ function projectableRowOf(s: InboxSession, stale: boolean, decayed: boolean, now
 // A real recompute re-derives placement only for rows that changed — the
 // row-level half of the incremental contract. WeakMap so entries die with
 // their row (no leak, no stale key).
-type RowPlacementEntry = { epoch: number; stale: boolean; decayed: boolean; asking: boolean; bucket: InboxBucket; work_state: WorkState };
+type RowPlacementEntry = { epoch: number; live: string; asking: boolean; bucket: InboxBucket; work_state: WorkState };
 const _rowPlacementCache = new WeakMap<object, RowPlacementEntry>();
 
-// The two time-driven trust bits a row's placement depends on, computed once
-// per (row, now) so the row cache, the parity check and the deadline signature
-// read the same pair.
-function rowTrustAt(s: InboxSession, now: number, covered: boolean): { stale: boolean; decayed: boolean } {
-  // The sweep applies only to rows the fresh overlay does not vouch for (see
-  // overlayCoverage); the status trust decay is the server's own rule over
-  // the same two inputs (agent_status, updated_at), so it stays ungated and
-  // flips a covered row locally at the hour boundary exactly as the server
-  // will on its next execution.
-  return { stale: !covered && isLivenessStale(s, now), decayed: isStatusTrustStale(s, now) };
-}
 
-function sharedPlacementOf(s: InboxSession, trust: { stale: boolean; decayed: boolean }, asking: boolean, epoch: number, now: number): RowPlacementEntry {
+// The live fields as one cache key: a recompute re-places a row only when a
+// time term moved one of them (the row-level half of the incremental contract).
+function liveKeyOf(live: LiveFacts): string {
+  return `${live.agent_status ?? ""}|${live.is_idle ? 1 : 0}${live.is_unresponsive ? 1 : 0}${live.awaiting_input ? 1 : 0}`;
+}
+function sharedPlacementOf(s: InboxSession, live: LiveFacts, asking: boolean, epoch: number): RowPlacementEntry {
+  const key = liveKeyOf(live);
   const hit = _rowPlacementCache.get(s);
-  if (hit && hit.epoch === epoch && hit.stale === trust.stale && hit.decayed === trust.decayed && hit.asking === asking) return hit;
-  const p = placeProjectableRow(projectableRowOf(s, trust.stale, trust.decayed, now), asking, epoch);
-  const entry: RowPlacementEntry = { epoch, stale: trust.stale, decayed: trust.decayed, asking, bucket: p.bucket, work_state: p.work_state };
+  if (hit && hit.epoch === epoch && hit.live === key && hit.asking === asking) return hit;
+  const p = placeProjectableRow(projectableRowOf(s, live), asking, epoch);
+  const entry: RowPlacementEntry = { epoch, live: key, asking, bucket: p.bucket, work_state: p.work_state };
   _rowPlacementCache.set(s, entry);
   return entry;
 }
@@ -2557,7 +2540,7 @@ const EMPTY_PLACEMENT_OBJ: Record<string, never> = {};
 // scheduling hint from the overlay payload). A coarse tick that crosses none
 // of these deadlines leaves the signature byte-identical, so the memo returns
 // the previous refs and nothing downstream re-renders.
-function placementDeadlineSig(state: PlaceInboxState, now: number, covered: (id: string) => boolean): string {
+function placementDeadlineSig(state: PlaceInboxState, now: number): string {
   let h = FNV1A32_OFFSET;
   let n = 0;
   const mix = (tag: string, id: string) => {
@@ -2568,10 +2551,12 @@ function placementDeadlineSig(state: PlaceInboxState, now: number, covered: (id:
   for (const id in sessions) {
     const row = sessions[id];
     if (!row || !isMemberCandidate(row)) continue;
-    // The stale entry carries the decayed status too: an inferred "waiting"
-    // decays only once its open_tasks vouch expires, one more time boundary.
-    if (!covered(id) && isLivenessStale(row, now)) mix("s", id + (decayedAgentStatus(row, now) ?? ""));
-    else if (isStatusTrustStale(row, now)) mix("t", id + (decayedAgentStatus(row, now) ?? ""));
+    // The row's passed live deadlines (the SHARED list the server's time flip
+    // reads): the count changes exactly when a time term crosses, so the
+    // signature moves at the same instants the server's stamp would.
+    let passed = 0;
+    for (const d of rowLiveDeadlines(liveFactsOf(row))) if (d != null && d <= now) passed++;
+    if (passed > 0) mix(`l${passed}`, id);
     if (row._hasDraft) mix("d", id);
   }
   const revive = state.blockedReviveRequestedAt;
@@ -2646,7 +2631,7 @@ function deriveInboxAsking(
 export function projectReplicaInbox(
   state: PlaceInboxState,
   ctx: {
-    scope: "mine" | "team"; focusedId: string | null; epoch: number; now: number; nowMono?: number;
+    scope: "mine" | "team"; focusedId: string | null; epoch: number; now: number;
     scoped?: Record<string, InboxSession>; askingOf?: (s: InboxSession) => boolean;
   },
 ): {
@@ -2659,14 +2644,12 @@ export function projectReplicaInbox(
   const meId = state.currentUser?._id?.toString?.() ?? null;
   const scoped = ctx.scoped ?? filterInboxScope(state.sessions, ctx.scope, meId, state.teamInboxIds ?? EMPTY_TEAM_INBOX_IDS, ctx.focusedId);
   const askingOf = ctx.askingOf ?? deriveInboxAsking(state, meId).askingOf;
-  const covered = overlayCoverage(state, ctx.nowMono ?? monotonicNow());
   const adapted = new Map<string, ProjectableInboxRow>();
   const rowById = new Map<string, InboxSession>();
   for (const s of Object.values(scoped)) {
     if (!isMemberCandidate(s)) continue;
     rowById.set(s._id, s);
-    const trust = rowTrustAt(s, ctx.now, covered(s._id));
-    adapted.set(s._id, projectableRowOf(s, trust.stale, trust.decayed, ctx.now));
+    adapted.set(s._id, projectableRowOf(s, deriveLiveAt(liveFactsOf(s), ctx.now)));
   }
   const proj = projectInbox(adapted.values(), ctx.epoch, {
     asking: (id) => {
@@ -2724,6 +2707,10 @@ function sameTally(a: PlacedInbox["tally"], b: PlacedInbox["tally"]): boolean {
 // previous call's; clearing the slot memo keeps assertions on fresh refs.
 export function __resetInboxPlacementCacheForTests(): void {
   _placedMemo.clear();
+  _membershipKey = null;
+  _membershipVal = null;
+  _visibleKey = null;
+  _visibleVal = null;
 }
 // Dev-only parity throttle (assertPlacementParity below).
 let _lastParityCheckAt = 0;
@@ -2733,7 +2720,6 @@ export function placeInboxRows(
   opts: { focusedId?: string | null; scope?: "mine" | "team"; now?: number; nowMono?: number } = {},
 ): PlacedInbox {
   const now = opts.now ?? Date.now();
-  const covered = overlayCoverage(state, opts.nowMono ?? monotonicNow());
   const scope = opts.scope ?? state.clientState.ui?.inbox_scope ?? "mine";
   const showOld = resolveShowOld(state.clientState.ui);
   const meId = state.currentUser?._id?.toString?.() ?? null;
@@ -2748,7 +2734,7 @@ export function placeInboxRows(
   const key = [
     sessionsWakeSig(state.sessions),
     membershipTimeSig(state.sessions),
-    placementDeadlineSig(state, now, covered),
+    placementDeadlineSig(state, now),
     showOld, meId, teamInboxIds, epoch,
     state.sessionsWithQueuedMessages,
     pendingSendWakeSig(state.pendingMessages),
@@ -2796,7 +2782,7 @@ export function placeInboxRows(
   // ALREADY acted, so a settled verdict yields to WORKING until the echo lands.
   const belowFold = membership?.belowFold ?? (new Set<string>() as ReadonlySet<string>);
   const placeRowWithOverlays = (s: InboxSession): InboxRowPlacement => {
-    const base = sharedPlacementOf(s, rowTrustAt(s, now, covered(s._id)), askingOf(s), epoch, now);
+    const base = sharedPlacementOf(s, deriveLiveAt(liveFactsOf(s), now), askingOf(s), epoch);
     let bucket = base.bucket;
     let work_state = base.work_state;
     if ((bucket === "needs_input" || bucket === "done" || bucket === "dormant") && inFlight(s._id)) {
@@ -3034,7 +3020,7 @@ export function placeInboxRows(
   // the work, and one run per few seconds is plenty to catch a drifted cache.
   if (process.env.NODE_ENV !== "production" && membership && now - _lastParityCheckAt > 5_000) {
     _lastParityCheckAt = now;
-    assertPlacementParity(state, { scope, focusedId, epoch, now, nowMono: opts.nowMono, scoped, askingOf, inFlight, placements, membership });
+    assertPlacementParity(state, { scope, focusedId, epoch, now, scoped, askingOf, inFlight, placements, membership });
   }
 
   _placedMemo.set(slot, { key, sessions: state.sessions, val });
@@ -3055,7 +3041,7 @@ function assertPlacementParity(
   state: PlaceInboxState,
   ctx: {
     scope: "mine" | "team"; focusedId: string | null;
-    epoch: number; now: number; nowMono?: number;
+    epoch: number; now: number;
     scoped: Record<string, InboxSession>;
     askingOf: (s: InboxSession) => boolean;
     inFlight: (id: string) => boolean;
@@ -3064,8 +3050,7 @@ function assertPlacementParity(
   },
 ): void {
   try {
-    const { proj, rowById } = projectReplicaInbox(state, { scope: ctx.scope, focusedId: ctx.focusedId, epoch: ctx.epoch, now: ctx.now, nowMono: ctx.nowMono, scoped: ctx.scoped, askingOf: ctx.askingOf });
-    const covered = overlayCoverage(state, ctx.nowMono ?? monotonicNow());
+    const { proj } = projectReplicaInbox(state, { scope: ctx.scope, focusedId: ctx.focusedId, epoch: ctx.epoch, now: ctx.now, scoped: ctx.scoped, askingOf: ctx.askingOf });
     for (const [id, p] of proj.placements) {
       if (ctx.inFlight(id)) continue; // declared overlay carve-out
       const mine = ctx.placements.get(id);
@@ -3075,12 +3060,7 @@ function assertPlacementParity(
         }
         continue;
       }
-      // A frozen row's fold bit deviates by construction (projectableRowOf
-      // blanks its queue flag for placement; the render fold reads the raw
-      // flag, as the server does) — compare its bucket only.
-      const row = rowById.get(id);
-      const foldComparable = !row || !rowTrustAt(row, ctx.now, covered(id)).stale;
-      if (mine.bucket !== p.bucket || (foldComparable && mine.below_fold !== p.below_fold)) {
+      if (mine.bucket !== p.bucket || mine.below_fold !== p.below_fold) {
         console.error(
           `[placeInboxRows] parity: ${id} incremental=${mine.bucket}/${mine.below_fold} full=${p.bucket}/${p.below_fold}`,
         );
@@ -4387,11 +4367,25 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // synclog_apply metric: how many actions applied directly vs went to byIds.
   syncLogApplyStats: { direct: number; refetch: number };
   noteSyncLogApply: (direct: number, refetch: number) => void;
-  // Set once the applier has captured heads and stamped every scope cursor
-  // this page session. The bootstrap floors wait for it (sync-log-cargo E8 /
-  // D9): a floor cut BEFORE the cursor is stamped can miss writes that commit
-  // between the floor's query and the heads capture. Ephemeral.
-  syncLogStampedAt: number | null;
+  // Scope keys whose log cursor the applier stamped THIS page session (value:
+  // when). The bootstrap floors wait for the scopes their args resolve to
+  // (sync-log-cargo E8 / D9): a floor cut before its scope's cursor is stamped
+  // can miss a write that commits between the floor's query and the heads
+  // capture. Per scope, not global: a membership acquired mid-session has no
+  // cursor until the next heads pass, and a global flag would let its floor
+  // through early (review). Dropped with the cursor (clearSyncMeta). Ephemeral.
+  syncLogScopeStamps: Record<string, number>;
+  stampSyncLogScope: (scopeKey: string) => void;
+  // Bumped when the floors' contract is voided for the page session — a
+  // retention resync restamped a cursor at a later head, a team scope was
+  // (re)added — so every mounted one-shot floor recuts. Monotonic across a
+  // sign-out (clearProtectedInboxMemory), so a floor cut for the previous
+  // principal can never apply into the next one's store. Ephemeral.
+  syncLogFloorEpoch: number;
+  bumpSyncLogFloorEpoch: () => void;
+  // Lift the excludes purgeTeamScopeRows planted for one scope (a rejoin): the
+  // recut floor's rows would otherwise be dropped by every delta merge.
+  liftScopeExcludes: (scopeKey: string) => void;
 
   // -- Generic sync --
   syncTable: (field: string, incoming: any, opts?: SyncOpts) => void;
@@ -7513,16 +7507,26 @@ const inboxStoreConfig = (set: any, get: any) => ({
       for (const [id, row] of Object.entries(rows)) {
         if (row?.workspace === wsKey) {
           delete rows[id];
-          this.pending[`${coll}:${id}`] = { type: "exclude", ts: now };
+          // Tagged with the scope so a rejoin can lift exactly these
+          // (liftScopeExcludes); the rows are gone, so nothing else can name them.
+          this.pending[`${coll}:${id}`] = { type: "exclude", ts: now, scope: wsKey };
         }
       }
     }
   }),
 
+  liftScopeExcludes: sync(function (this: Draft, scopeKey: string) {
+    for (const [key, entry] of Object.entries(this.pending)) {
+      if ((entry as any)?.type === "exclude" && (entry as any).scope === scopeKey) delete this.pending[key];
+    }
+  }),
+
   // Drop a syncMeta key outright (recordSyncMeta only advances). Used for log
-  // cursor resets: scope revocation and retention resync.
+  // cursor resets: scope revocation and retention resync. A scope cursor's
+  // page-session stamp goes with it: the floors must wait for the restamp.
   clearSyncMeta: sync(function (this: Draft, key: string) {
     delete this.syncMeta[key];
+    if (key.startsWith(SYNC_LOG_META_PREFIX)) delete this.syncLogScopeStamps[key.slice(SYNC_LOG_META_PREFIX.length)];
   }),
 
   applyCargoFields: sync(function (
@@ -9536,7 +9540,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
   liveLoading: {},
   syncLogLag: {},
   syncLogApplyStats: { direct: 0, refetch: 0 },
-  syncLogStampedAt: null,
+  syncLogScopeStamps: {},
+  stampSyncLogScope: (scopeKey: string) => {
+    if (scopeKey in useInboxStore.getState().syncLogScopeStamps) return;
+    set((s: any) => ({ syncLogScopeStamps: { ...s.syncLogScopeStamps, [scopeKey]: Date.now() } }));
+  },
+  syncLogFloorEpoch: 0,
+  bumpSyncLogFloorEpoch: () => set((s: any) => ({ syncLogFloorEpoch: s.syncLogFloorEpoch + 1 })),
   mentionIndex: { tasks: {}, docs: {}, plans: {} },
   docs: {},
   plans: {},
@@ -10922,6 +10932,11 @@ export function clearProtectedInboxMemory(): void {
   // already mirrored to localStorage; no server or principal data is retained.
   reset.clientState = { ui: readCriticalUiPrefs() as ClientUI };
   reset.clientStateInitialized = false;
+  // Monotonic through the reset: a bootstrap floor still in flight for the
+  // old principal fences on the epoch it was cut at and must not apply into
+  // this cleared store, and the next sign-in's floors must never resolve to
+  // the old principal's already-applied entries.
+  reset.syncLogFloorEpoch = (state.syncLogFloorEpoch ?? 0) + 1;
   useInboxStore.setState(reset);
   _idbHydrating.clear();
 }

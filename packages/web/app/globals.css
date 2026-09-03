@@ -1627,6 +1627,28 @@ pre[class*="language-"] {
 .cc-rail-inline .cc-active-overlay {
   left: calc(var(--cc-rail-w) + var(--cc-rail-gap) - 0.5rem);
 }
+/* The verb for the keyboard-lit chunk, pinned to the overlay's top-right corner
+   (above the text, on an opaque chip, since it may sit over a long first line). */
+.cc-active-hint {
+  position: absolute;
+  right: -0.5rem;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.12rem 0.45rem 0.12rem 0.3rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--sol-text-muted);
+  background: var(--sol-bg);
+  border: 1px solid var(--sol-border);
+  border-radius: 7px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  pointer-events: none;
+  z-index: 6;
+  animation: ccPop 120ms ease-out;
+  transition: top 120ms ease;
+}
 
 /* Modeless per-block hover actions: [quote][comment] pill at the hovered block's
    top-right. Sits at the content's right edge; slides left of the rail when the

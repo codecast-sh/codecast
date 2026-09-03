@@ -26,7 +26,8 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { actedBlockedConversations, isBlockedConversation, isSubagentConversation, isUsageExhausted, nestParentIdOf, worstUsagePercent, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { isLivenessStale, rankByHeadroom, isStashHidden } from "@codecast/shared/contracts";
+import { rankByHeadroom, isStashHidden } from "@codecast/shared/contracts";
+import { sessionIdleAt, sessionLiveAt } from "../lib/liveness";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -514,12 +515,13 @@ export function SignInCta({
 
 // When several sessions are parked on an API-error banner at once (the classic
 // "the whole fleet hit the Max usage limit together"), surface ONE fleet-level
-// action instead of N per-card errors: send "continue" to them all. Signed-out
-// sessions are the exception — their processes hold a dead token, so the
-// restart path (requestAccountSwitch with no profile, which degrades to
-// kill + continue; see convex/accountSwitch.ts) reaches them. Account
-// switching itself lives in settings/auto-switch, not in this banner. Own
-// component so its account query stays out of the hot panel render.
+// action instead of N per-card errors: send "continue" to them all, on a
+// choice of account. One mutation (requestAccountSwitch; see
+// convex/accountSwitch.ts) decides per session whether a message reaches it
+// or it must be killed and resumed first (signed out, or pinned to another
+// account's setup-token). Account switching itself lives in
+// settings/auto-switch, not in this banner. Own component so its account
+// query stays out of the hot panel render.
 function BlockedSessionsBanner({
   blocked,
   onOpen,
@@ -2121,7 +2123,7 @@ export const SessionCard = memo(function SessionCard({
   // pinned-state age line — and re-render only when one of those flips.
   const coarseNow = useNowWhen(
     (t) =>
-      `${formatIdleDuration(session.updated_at)}|${isLivenessStale(session, t) ? 1 : 0}|` +
+      `${formatIdleDuration(session.updated_at)}|${sessionIdleAt(session, t) ? 1 : 0}|` +
       `${showsBlockedBadge(session.pending_api_error, false, reviveRequestedAtRef.current, t) ? 1 : 0}|` +
       `${threadStateView(session, session.message_count, t)?.cardLine ?? ""}`,
     30_000,
@@ -2219,7 +2221,7 @@ export const SessionCard = memo(function SessionCard({
   // needs-input. Past the trust TTL (keyed on updated_at, which a real working
   // agent bumps far more often) the pulse goes dark — the dot and the bucket now
   // read the SAME staleness check, so they can't disagree.
-  const isLive = !session.is_idle && session.message_count > 0 && !isLivenessStale(session, Date.now());
+  const isLive = sessionLiveAt(session, Date.now());
   // Age-gated because a restart navigated away from has no owner left to clear
   // its entry; liveness-gated so the green dot takes over the moment the
   // session is actually back. The coarse clock above keeps the age fresh.
@@ -4182,9 +4184,8 @@ function SessionListPanelImpl({
     // A hidden bucket is not a dead bucket: a stashed agent keeps running, and
     // an armed schedule can keep driving a killed/stashed conversation. Same
     // predicate as the card's green dot (isLive) so header and rows can't
-    // disagree; coarseNow keeps the trust-stale check on the panel's ticker.
-    const isBucketLive = (sess: InboxSession) =>
-      !sess.is_idle && sess.message_count > 0 && !isLivenessStale(sess, coarseNow);
+    // disagree; coarseNow keeps the live derivation on the panel's ticker.
+    const isBucketLive = (sess: InboxSession) => sessionLiveAt(sess, coarseNow);
     const liveCount = items.filter(isBucketLive).length;
     const allIds = new Set(items.map((sess) => sess._id));
     const subMap = new Map<string, InboxSession[]>();
