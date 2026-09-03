@@ -13,8 +13,8 @@
  *     file must not import anything.
  *  2. The React component `OpenInDesktopHandoff` runs the same gate after boot,
  *     covering what the pre-boot path cannot know: a first visit before the
- *     localStorage mirror exists, and a tab that only reaches the foreground
- *     later.
+ *     localStorage mirror exists. It shows the same static screen
+ *     (`showHandoffScreen`) — there is one screen, not a React twin.
  */
 
 // ---------------------------------------------------------------------------
@@ -197,12 +197,28 @@ export const HANDOFF_SKIP_KEY = "codecast-handoff-skip";
 // server a prefer_browser_links write once it boots.
 export const HANDOFF_PERSIST_KEY = "codecast-handoff-prefer-browser";
 
-// Set by the inlined pre-boot script, read by the app entry (src/main.tsx).
+// Set by the inlined pre-boot script, read by the app entry (src/main.tsx):
+// the gate sent this page to the desktop app, so the app must not boot.
 const HANDOFF_PENDING_FLAG = "__ccHandoffPending";
-// Drives the static escape-hatch screen in index.html purely through CSS, so it
-// appears as soon as the body parses with no further JavaScript involved.
+// Also set by the pre-boot script: a Promise<boolean> the entry waits on while
+// a background tab decides. Resolves true when the tab handed off (no boot),
+// false when it should boot after all.
+const HANDOFF_HOLD_FLAG = "__ccHandoffHold";
+// Drives the static escape-hatch screen in index.html purely through CSS, so
+// it appears as soon as the body parses with no further JavaScript involved.
 const HANDOFF_SCREEN_ATTR = "data-cc-handoff";
+// Set on <html> once "Close this tab" was refused by the browser; reveals the
+// keyboard hint on the screen.
+const HANDOFF_KEEP_ATTR = "data-cc-handoff-kept";
 const ACTION_ATTR = "data-cc-handoff-action";
+const MODIFIER_ATTR = "data-cc-handoff-modifier";
+
+// How long a background tab stays armed to hand off once the user looks at it.
+// A cmd-clicked tab looked at soon should hand off; a forgotten or
+// automation-driven tab focused much later must not detonate a stale handoff
+// (agent tabs park on app pages for hours, and any focus of that window would
+// yank the desktop app).
+export const ARM_WINDOW_MS = 120_000;
 
 function readLocal(key: string): string | null {
   try {
@@ -290,9 +306,27 @@ export function shouldAttemptPreBootHandoff(c: PreBootHandoffContext): boolean {
   });
 }
 
+/**
+ * What to do with a page load, given the gate's verdict now and its verdict
+ * once the tab is in the foreground. Pure so the three-way split is testable:
+ *  - "handoff": send it to the app now.
+ *  - "hold": everything but the foreground check passes — wait for the user
+ *    to look at the tab before deciding, and don't boot the app meanwhile.
+ *  - "boot": some permanent blocker; boot the app as usual.
+ */
+export type PreBootVerdict = "handoff" | "hold" | "boot";
+
+export function preBootVerdict(c: PreBootHandoffContext): PreBootVerdict {
+  if (shouldAttemptPreBootHandoff(c)) return "handoff";
+  if (c.foreground) return "boot";
+  return shouldAttemptPreBootHandoff({ ...c, foreground: true }) ? "hold" : "boot";
+}
+
 // window.__CODECAST_ELECTRON__ is exposed by the desktop preload before any page
 // script runs, but the user-agent check keeps this honest even on a build whose
 // preload failed to load — a desktop window must never hand off to itself.
+// The twin of lib/desktop.ts's isDesktopShell, copied rather than imported
+// because this file is inlined pre-boot and may import nothing.
 function isDesktopShell(): boolean {
   if ((window as any).__CODECAST_ELECTRON__) return true;
   return typeof navigator !== "undefined" && / Electron\//.test(navigator.userAgent);
@@ -302,23 +336,160 @@ function currentUrl(): string {
   return window.location.pathname + window.location.search;
 }
 
-/**
- * True when the pre-boot gate already sent this page to the desktop app, so the
- * app entry must not boot — that is the whole point. The escape-hatch buttons on
- * the static screen reload the page instead of booting in place, because the
- * protocol launch can cut the entry module's own fetch short (Chrome interrupts
- * the document load), leaving nothing to call.
- */
-export function handoffTookOverBoot(): boolean {
-  return typeof window !== "undefined" && !!(window as any)[HANDOFF_PENDING_FLAG];
+function readPreBootContext(): PreBootHandoffContext {
+  return {
+    mirror: readLocal(HANDOFF_MIRROR_KEY),
+    isDesktopShell: isDesktopShell(),
+    isTopWindow: window.top === window.self,
+    foreground: isForegroundTab(),
+    host: window.location.host,
+    freshNavigation: isFreshNavigation(),
+    path: window.location.pathname,
+    search: window.location.search,
+    skippedUrl: readSkippedUrl(),
+  };
+}
+
+/** Navigate this page to its desktop deep link. */
+export function openDesktop(opts?: { auto?: boolean }): void {
+  window.location.href = buildDesktopDeepLink(currentUrl(), opts);
 }
 
 /**
- * The inlined pre-boot entry point. `appPreloadUrls` are the module chunks the
- * app entry will dynamically import; injecting them here keeps a normal load
- * exactly as parallel as it was before the entry was split, while a handoff
- * skips them entirely and fetches nothing.
+ * Wait for a background tab to reach the foreground, then run `attempt` — the
+ * caller's gate check plus handoff. Armed only for ARM_WINDOW_MS (see above);
+ * `onLapse` runs when the window closes without a handoff. Returns a teardown
+ * for the caller that unmounts first.
  */
+export function armForegroundHandoff(attempt: () => boolean, onLapse?: () => void): () => void {
+  const armedAt = Date.now();
+  const teardown = () => {
+    clearTimeout(timer);
+    window.removeEventListener("focus", onActive);
+    document.removeEventListener("visibilitychange", onActive);
+  };
+  const lapse = () => {
+    teardown();
+    onLapse?.();
+  };
+  const onActive = () => {
+    if (Date.now() - armedAt > ARM_WINDOW_MS) {
+      lapse();
+      return;
+    }
+    if (attempt()) teardown();
+  };
+  const timer = setTimeout(lapse, ARM_WINDOW_MS);
+  window.addEventListener("focus", onActive);
+  document.addEventListener("visibilitychange", onActive);
+  return teardown;
+}
+
+/**
+ * Boot the app unless the pre-boot gate took the page over. `boot` runs at
+ * once on a normal load, never after a handoff, and only once a held
+ * background tab has decided against handing off. Without the inlined gate
+ * (dev server without the plugin, a stale shell) nothing is flagged and the
+ * app boots as usual.
+ */
+export function bootAfterHandoffGate(boot: () => void): void {
+  const w = window as any;
+  if (w[HANDOFF_PENDING_FLAG]) return;
+  const hold: Promise<boolean> | undefined = w[HANDOFF_HOLD_FLAG];
+  if (!hold) {
+    boot();
+    return;
+  }
+  void hold.then((handoff) => {
+    if (!handoff) boot();
+  });
+}
+
+export type HandoffScreenOptions = {
+  // Whether the app is running behind the screen. When it is not (the pre-boot
+  // takeover), "use the browser" has to reload: the entry module may never have
+  // run, because launching the protocol can cut the document load short. When
+  // it is, the screen simply goes away, and the permanent opt-out reaches the
+  // server through `onAlways` instead of being parked for the next boot.
+  booted: boolean;
+  onAlways?: () => void;
+};
+
+/**
+ * Show the static "Opened in Codecast desktop" screen from index.html and wire
+ * its actions. Both the inlined pre-boot script and the React fallback use it,
+ * so there is exactly one screen. Returns a function that hides it again.
+ *
+ * Clicks are delegated from `document`, which exists even while the head is
+ * still parsing — the buttons are parsed later, and waiting for
+ * DOMContentLoaded would never work on the pre-boot path, since launching the
+ * protocol interrupts the document load and that event may never fire.
+ */
+export function showHandoffScreen(opts: HandoffScreenOptions): () => void {
+  const root = document.documentElement;
+  root.setAttribute(HANDOFF_SCREEN_ATTR, "");
+  const hide = () => {
+    root.removeAttribute(HANDOFF_SCREEN_ATTR);
+    root.removeAttribute(HANDOFF_KEEP_ATTR);
+    document.removeEventListener("click", onClick);
+  };
+  const onClick = (e: Event) => onScreenClick(e, opts, hide);
+  document.addEventListener("click", onClick);
+  return hide;
+}
+
+function onScreenClick(e: Event, opts: HandoffScreenOptions, hide: () => void): void {
+  const target = (e.target as Element | null)?.closest?.(`[${ACTION_ATTR}]`);
+  const action = target?.getAttribute(ACTION_ATTR);
+  if (!action) return;
+
+  if (action === "close") {
+    closeTab();
+    return;
+  }
+
+  if (action === "retry") {
+    // Explicitly user-driven, so no auto marker: the desktop applies a clicked
+    // link unconditionally.
+    openDesktop();
+    return;
+  }
+
+  if (action === "always") {
+    writeHandoffMirror(false);
+    if (opts.booted) opts.onAlways?.();
+    // Only the running app can reach the server with the preference; park it
+    // for whoever boots next.
+    else {
+      try {
+        sessionStorage.setItem(HANDOFF_PERSIST_KEY, "1");
+      } catch {}
+    }
+  }
+
+  // Both "browser" and "always" mean: use the browser for this page. Recorded
+  // for the tab so the gate honors it on a reload too, which would otherwise
+  // bounce straight back to the app. A reload is a navigation the gate declines
+  // twice over (its type is "reload", and the skip names this url).
+  skipHandoffForUrl(currentUrl());
+  if (opts.booted) hide();
+  else window.location.reload();
+}
+
+// The page has been handed to the app, so the tab has nothing left to show.
+// Browsers let a script close a tab that holds a single document (the shape
+// every clicked or cmd-clicked link produces) but refuse for a tab with
+// history; then the screen owns up and shows the shortcut instead.
+function closeTab(): void {
+  const root = document.documentElement;
+  const isMac = /Mac|iPhone|iPad/.test(navigator.platform || "");
+  for (const el of Array.from(document.querySelectorAll(`[${MODIFIER_ATTR}]`))) {
+    el.textContent = isMac ? "⌘" : "Ctrl";
+  }
+  root.setAttribute(HANDOFF_KEEP_ATTR, "");
+  window.close();
+}
+
 /**
  * Share pages that boot standalone (src/shareBoot.tsx) instead of the app:
  * /share/message|doc|plan/<token>. /share/<token> is NOT one — it resolves to
@@ -328,45 +499,66 @@ export function isStandaloneSharePath(path: string): boolean {
   return /^\/share\/(message|doc|plan)\/[^/]+\/?$/.test(path);
 }
 
+/**
+ * The inlined pre-boot entry point. `appPreloadUrls` are the module chunks the
+ * app entry will dynamically import; injecting them here keeps a normal load
+ * exactly as parallel as it was before the entry was split, while a handoff
+ * skips them entirely and fetches nothing.
+ *
+ * A background tab that would hand off once looked at (a cmd-clicked link, or
+ * a link opened from another app before the window has focus) is held: no
+ * preload, no boot, until the user looks at it within the arm window — then it
+ * hands off with the app never having run — or the window lapses and it boots
+ * as a normal tab.
+ */
 export function runPreBootHandoff(appPreloadUrls: string[], sharePreloadUrls: string[] = []): void {
   if (typeof window === "undefined" || typeof document === "undefined") return;
 
-  let handoff = false;
+  let verdict: PreBootVerdict = "boot";
   try {
-    handoff = shouldAttemptPreBootHandoff({
-      mirror: readLocal(HANDOFF_MIRROR_KEY),
-      isDesktopShell: isDesktopShell(),
-      isTopWindow: window.top === window.self,
-      foreground: isForegroundTab(),
-      host: window.location.host,
-      freshNavigation: isFreshNavigation(),
-      path: window.location.pathname,
-      search: window.location.search,
-      skippedUrl: readSkippedUrl(),
-    });
+    verdict = preBootVerdict(readPreBootContext());
   } catch {}
 
-  if (!handoff) {
+  const preload = () =>
     preloadApp(isStandaloneSharePath(window.location.pathname) ? sharePreloadUrls : appPreloadUrls);
+
+  if (verdict === "boot") {
+    preload();
     return;
   }
 
+  if (verdict === "handoff") {
+    takeOverBoot();
+    return;
+  }
+
+  (window as any)[HANDOFF_HOLD_FLAG] = new Promise<boolean>((resolve) => {
+    armForegroundHandoff(
+      () => {
+        let go = false;
+        try {
+          go = shouldAttemptPreBootHandoff(readPreBootContext());
+        } catch {}
+        if (!go) return false;
+        takeOverBoot();
+        resolve(true);
+        return true;
+      },
+      () => {
+        preload();
+        resolve(false);
+      },
+    );
+  });
+}
+
+function takeOverBoot(): void {
   (window as any)[HANDOFF_PENDING_FLAG] = true;
-  document.documentElement.setAttribute(HANDOFF_SCREEN_ATTR, "");
-
-  // Delegated from `document`, which exists right now — the buttons are parsed
-  // later, and waiting for DOMContentLoaded would never work: launching the
-  // protocol interrupts the document load, so that event may never fire.
-  document.addEventListener("click", onScreenClick);
-
+  showHandoffScreen({ booted: false });
   // Yield to the parser so the escape-hatch markup is in the DOM before the
   // protocol launch interrupts the load. The document is a few kilobytes, so
   // this costs about a millisecond.
   setTimeout(() => openDesktop({ auto: true }), 0);
-}
-
-function openDesktop(opts?: { auto?: boolean }): void {
-  window.location.href = buildDesktopDeepLink(currentUrl(), opts);
 }
 
 function preloadApp(urls: string[]): void {
@@ -379,32 +571,4 @@ function preloadApp(urls: string[]): void {
     link.href = href;
     document.head.appendChild(link);
   }
-}
-
-function onScreenClick(e: Event): void {
-  const target = (e.target as Element | null)?.closest?.(`[${ACTION_ATTR}]`);
-  const action = target?.getAttribute(ACTION_ATTR);
-  if (!action) return;
-
-  if (action === "retry") {
-    // Explicitly user-driven, so no auto marker: the desktop applies a clicked
-    // link unconditionally.
-    openDesktop();
-    return;
-  }
-
-  if (action === "always") {
-    writeHandoffMirror(false);
-    // Only the running app can reach the server with the preference; park it.
-    try {
-      sessionStorage.setItem(HANDOFF_PERSIST_KEY, "1");
-    } catch {}
-  }
-
-  // Both "browser" and "always" mean: use the browser for this page. Reloading
-  // is what starts the app — the entry module may never have run, and a reload
-  // is a navigation the gate declines twice over (its type is "reload", and the
-  // skip below names this url).
-  skipHandoffForUrl(currentUrl());
-  window.location.reload();
 }
