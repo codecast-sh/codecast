@@ -2,8 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { measureLoopHold } from "../test-helpers/loopHold.js";
 import {
   collectCapabilityInventory,
+  ensureCapabilityInventoryFresh,
   markCapabilityPayloadSent,
   pendingCapabilityPayload,
   resetCapabilityHeartbeatState,
@@ -11,13 +13,18 @@ import {
 
 afterEach(() => resetCapabilityHeartbeatState());
 
-function fakeHome(): string {
+function fakeHome(extraSkills = 0): string {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-hb-"));
   fs.mkdirSync(path.join(home, ".claude", "skills", "deploy"), { recursive: true });
   fs.writeFileSync(
     path.join(home, ".claude", "skills", "deploy", "SKILL.md"),
     "---\nname: deploy\ndescription: ship it\n---\n",
   );
+  for (let i = 0; i < extraSkills; i++) {
+    const dir = path.join(home, ".claude", "skills", `skill-${i}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "SKILL.md"), `---\nname: skill-${i}\ndescription: number ${i}\n---\n`);
+  }
   return home;
 }
 
@@ -64,4 +71,26 @@ describe("ride gating", () => {
     // With the same hash marked sent and the floor not yet due, nothing rides.
     expect(pendingCapabilityPayload()).toBeUndefined();
   });
+});
+
+// The daemon's beat kicks the scan and reads the result on a LATER beat. The
+// scan is async now (one directory read per loop turn), so the payload lands
+// after a few turns, with the hash the sync scan computes for the same tree.
+describe("background collection", () => {
+  test("ensureCapabilityInventoryFresh lands the async scan as the pending payload without holding the loop", async () => {
+    const home = fakeHome(300);
+    // Timed from the beat's call, not from the first poll: the scan starts
+    // synchronously inside ensure, so a sync scan would hold the loop here.
+    const { ticks, maxGapMs } = await measureLoopHold(async () => {
+      ensureCapabilityInventoryFresh(home);
+      expect(pendingCapabilityPayload()).toBeUndefined();
+      const deadline = Date.now() + 5000;
+      while (!pendingCapabilityPayload() && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 1));
+      }
+    }, 1);
+    expect(pendingCapabilityPayload()?.hash).toBe(collectCapabilityInventory(home).hash);
+    expect(ticks).toBeGreaterThanOrEqual(2);
+    expect(maxGapMs).toBeLessThan(100);
+  }, 15_000);
 });

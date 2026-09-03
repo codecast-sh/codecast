@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import * as path from "path";
 import * as fs from "fs";
 import { Database } from "bun:sqlite";
+import { timeSyncFs } from "./slowSync.js";
 
 export interface CursorSessionEvent {
   sessionId: string;
@@ -131,10 +132,10 @@ export class CursorWatcher extends EventEmitter {
     this.emit("ready");
 
     this.pollInterval = setInterval(() => {
-      this.pollWorkspaces(workspaceStoragePath);
+      void this.pollWorkspaces(workspaceStoragePath);
     }, this.pollFrequencyMs);
 
-    setImmediate(() => this.pollWorkspaces(workspaceStoragePath));
+    setImmediate(() => { void this.pollWorkspaces(workspaceStoragePath); });
   }
 
   stop(): void {
@@ -144,36 +145,46 @@ export class CursorWatcher extends EventEmitter {
     }
   }
 
-  private pollWorkspaces(workspaceStoragePath: string): void {
+  // A poll that is still running when the next tick fires is skipped, so a
+  // slow disk makes polls sparser instead of stacking them.
+  private pollInFlight = false;
+
+  /** One pass over workspaceStorage: stat every workspace DB off the loop,
+   *  open only the ones that moved. Public so a test can drive one pass. */
+  async pollWorkspaces(workspaceStoragePath: string): Promise<void> {
+    if (this.pollInFlight) return;
+    this.pollInFlight = true;
     try {
-      const workspaceDirs = fs.readdirSync(workspaceStoragePath);
+      await this.pollWorkspacesOnce(workspaceStoragePath);
+    } finally {
+      this.pollInFlight = false;
+    }
+  }
+
+  private async pollWorkspacesOnce(workspaceStoragePath: string): Promise<void> {
+    try {
+      const workspaceDirs = await fs.promises.readdir(workspaceStoragePath);
       if (this.isFirstPoll) {
         console.log(`[CursorWatcher] Found ${workspaceDirs.length} workspace directories`);
       }
 
-      // Build list of workspaces with their db paths and mtimes
+      // Build list of workspaces with their db paths and mtimes. Stats are
+      // batched so a machine with hundreds of workspaces does not serialize
+      // two syscalls per workspace behind each other's latency.
       const workspaces: { hash: string; dbPath: string; mtime: number }[] = [];
-
-      for (const workspaceHash of workspaceDirs) {
-        const dbPath = path.join(
-          workspaceStoragePath,
-          workspaceHash,
-          "state.vscdb"
-        );
-
-        if (!fs.existsSync(dbPath)) {
-          continue;
-        }
-
-        try {
-          let mtime = fs.statSync(dbPath).mtimeMs;
-          // In WAL mode a write lands in state.vscdb-wal first; the main file's
-          // mtime only moves on checkpoint.
-          try { mtime = Math.max(mtime, fs.statSync(`${dbPath}-wal`).mtimeMs); } catch {}
-          workspaces.push({ hash: workspaceHash, dbPath, mtime });
-        } catch {
-          // Skip files we can't stat
-        }
+      const statMtime = async (workspaceHash: string) => {
+        const dbPath = path.join(workspaceStoragePath, workspaceHash, "state.vscdb");
+        // A missing DB (ENOENT) skips the workspace; so does any other stat error.
+        const main = await fs.promises.stat(dbPath).catch(() => null);
+        if (!main) return;
+        // In WAL mode a write lands in state.vscdb-wal first; the main file's
+        // mtime only moves on checkpoint.
+        const wal = await fs.promises.stat(`${dbPath}-wal`).catch(() => null);
+        workspaces.push({ hash: workspaceHash, dbPath, mtime: Math.max(main.mtimeMs, wal?.mtimeMs ?? 0) });
+      };
+      const STAT_BATCH = 16;
+      for (let i = 0; i < workspaceDirs.length; i += STAT_BATCH) {
+        await Promise.all(workspaceDirs.slice(i, i + STAT_BATCH).map(statMtime));
       }
 
       // Sort by mtime descending (newest first) on first poll
@@ -185,7 +196,7 @@ export class CursorWatcher extends EventEmitter {
       for (const workspace of workspaces) {
         if (this.dbMtimes.get(workspace.hash) === workspace.mtime) continue;
         try {
-          this.checkWorkspaceForChanges(workspace.hash, workspace.dbPath);
+          await this.checkWorkspaceForChanges(workspace.hash, workspace.dbPath);
           this.dbMtimes.set(workspace.hash, workspace.mtime);
           // Reset error count on success
           this.workspaceErrorCounts.delete(workspace.hash);
@@ -213,13 +224,11 @@ export class CursorWatcher extends EventEmitter {
     }
   }
 
-  private getWorkspaceFolderPath(workspaceStorageDir: string): string | null {
+  private async getWorkspaceFolderPath(workspaceStorageDir: string): Promise<string | null> {
     const workspaceJsonPath = path.join(workspaceStorageDir, "workspace.json");
     try {
-      if (!fs.existsSync(workspaceJsonPath)) {
-        return null;
-      }
-      const content = fs.readFileSync(workspaceJsonPath, "utf-8");
+      // A workspace without the file (ENOENT) has no folder to name.
+      const content = await fs.promises.readFile(workspaceJsonPath, "utf-8");
       const data = JSON.parse(content);
 
       // workspace.json contains { "folder": "file:///path/to/folder" }
@@ -245,63 +254,55 @@ export class CursorWatcher extends EventEmitter {
     }
   }
 
-  private checkWorkspaceForChanges(workspaceHash: string, dbPath: string): void {
-    let db: Database | null = null;
-    try {
-      db = new Database(dbPath, { readonly: true });
-
-      const tableExists = db
-        .query<{ name: string }, []>(
-          "SELECT name FROM sqlite_master WHERE type='table' AND name='ItemTable'"
-        )
-        .get();
-
-      if (!tableExists) {
-        return;
-      }
-
-      const maxRowIdResult = db
-        .query<{ maxRowId: number | null }, []>(
-          "SELECT MAX(rowid) as maxRowId FROM ItemTable WHERE key = 'workbench.panel.aichat.view.aichat.chatdata'"
-        )
-        .get();
-
-      const maxRowId = maxRowIdResult?.maxRowId ?? 0;
-
-      const state = this.workspaceStates.get(workspaceHash);
-
-      // Get actual workspace folder path from workspace.json
-      const workspaceStorageDir = path.dirname(dbPath);
-      const actualPath = this.getWorkspaceFolderPath(workspaceStorageDir) || workspaceHash;
-
-      if (!state) {
-        this.workspaceStates.set(workspaceHash, {
-          lastRowId: maxRowId,
-          lastCheck: Date.now(),
-        });
-        if (maxRowId > 0) {
-          console.log(`[CursorWatcher] Emitting session for ${workspaceHash} (${actualPath}), maxRowId=${maxRowId}`);
-          this.emit("session", {
-            sessionId: workspaceHash,
-            workspacePath: actualPath,
-            dbPath,
-            eventType: "add",
-          });
-        }
-      } else if (maxRowId > state.lastRowId) {
-        state.lastRowId = maxRowId;
-        state.lastCheck = Date.now();
-        this.emit("session", {
-          sessionId: workspaceHash,
-          workspacePath: actualPath,
-          dbPath,
-          eventType: "change",
-        });
-      }
-    } finally {
-      if (db) {
+  // bun:sqlite is synchronous, so the open plus two queries is the one block
+  // of sync work this watcher keeps; it is timed under its own name so a slow
+  // disk names the workspace DB, not the poll.
+  private readChatMaxRowId(dbPath: string): number | null {
+    return timeSyncFs("cursorWatcher.sqlite", dbPath, () => {
+      const db = new Database(dbPath, { readonly: true });
+      try {
+        const tableExists = db
+          .query<{ name: string }, []>(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='ItemTable'"
+          )
+          .get();
+        if (!tableExists) return null;
+        const maxRowIdResult = db
+          .query<{ maxRowId: number | null }, []>(
+            "SELECT MAX(rowid) as maxRowId FROM ItemTable WHERE key = 'workbench.panel.aichat.view.aichat.chatdata'"
+          )
+          .get();
+        return maxRowIdResult?.maxRowId ?? 0;
+      } finally {
         db.close();
       }
+    });
+  }
+
+  private async checkWorkspaceForChanges(workspaceHash: string, dbPath: string): Promise<void> {
+    const maxRowId = this.readChatMaxRowId(dbPath);
+    if (maxRowId === null) return;
+
+    const state = this.workspaceStates.get(workspaceHash);
+    const emitting = !state ? maxRowId > 0 : maxRowId > state.lastRowId;
+    if (!state) {
+      this.workspaceStates.set(workspaceHash, { lastRowId: maxRowId, lastCheck: Date.now() });
+    } else if (emitting) {
+      state.lastRowId = maxRowId;
+      state.lastCheck = Date.now();
     }
+    if (!emitting) return;
+
+    // Get actual workspace folder path from workspace.json; only an emit needs it.
+    const actualPath = (await this.getWorkspaceFolderPath(path.dirname(dbPath))) || workspaceHash;
+    if (!state) {
+      console.log(`[CursorWatcher] Emitting session for ${workspaceHash} (${actualPath}), maxRowId=${maxRowId}`);
+    }
+    this.emit("session", {
+      sessionId: workspaceHash,
+      workspacePath: actualPath,
+      dbPath,
+      eventType: state ? "change" : "add",
+    });
   }
 }

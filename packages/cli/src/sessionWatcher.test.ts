@@ -2,7 +2,8 @@ import { describe, test, expect, afterEach } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { SessionWatcher, isTestProjectDir, isWorkflowAgentTranscript, watchFilter, type SessionEvent } from "./sessionWatcher.js";
+import { SessionWatcher, isTestProjectDir, isWorkflowAgentTranscript, watchFilter, watchDirFilter, type SessionEvent } from "./sessionWatcher.js";
+import { RecursiveWatcher } from "./recursiveWatcher.js";
 
 function tmpDir(prefix: string): string {
   return path.join(
@@ -266,7 +267,7 @@ describe("SessionWatcher", () => {
 
   test("emits workflow agent transcripts as sessions, skips the run journal", async () => {
     const root = tmpDir("sw-wf-agent");
-    const wfDir = path.join(root, "proj1", "host-session-uuid", "subagents", "workflows", "wf_run123");
+    const wfDir = path.join(root, "proj1", "6f1c2a3b-4d5e-4f60-8a9b-0c1d2e3f4a5b", "subagents", "workflows", "wf_run123");
     fs.mkdirSync(wfDir, { recursive: true });
 
     const events: SessionEvent[] = [];
@@ -300,5 +301,79 @@ describe("SessionWatcher", () => {
     watcher.start();
     watcher.start(); // should be no-op
     watcher.stop();
+  });
+
+  const UUID = "6f1c2a3b-4d5e-4f60-8a9b-0c1d2e3f4a5b";
+
+  test("start() resolves only after the existing recent files were emitted", async () => {
+    const root = tmpDir("sw-primed");
+    const projectDir = path.join(root, "projhash");
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, "s1.jsonl"), "{}\n");
+    fs.writeFileSync(path.join(projectDir, "s2.jsonl"), "{}\n");
+
+    const events: SessionEvent[] = [];
+    const watcher = new SessionWatcher(root);
+    cleanups.push(() => { watcher.stop(); fs.rmSync(root, { recursive: true, force: true }); });
+    watcher.on("session", (e) => events.push(e));
+    await watcher.start();
+    expect(events.map((e) => e.sessionId).sort()).toEqual(["s1", "s2"]);
+    // A second start() is a no-op that still answers with the primed promise.
+    await watcher.start();
+    await watcher.whenPrimed();
+  });
+
+  test("priming never opens tool-results or memory dirs, and still finds workflow agent transcripts", async () => {
+    const root = tmpDir("sw-dirfilter");
+    const sess = path.join(root, "slug", UUID);
+    fs.mkdirSync(path.join(sess, "tool-results"), { recursive: true });
+    fs.mkdirSync(path.join(root, "slug", "memory"), { recursive: true });
+    fs.mkdirSync(path.join(sess, "subagents", "workflows", "wf_1"), { recursive: true });
+    fs.writeFileSync(path.join(sess, "tool-results", "x.jsonl"), "{}\n");
+    fs.writeFileSync(path.join(root, "slug", "memory", "x.jsonl"), "{}\n");
+    fs.writeFileSync(path.join(sess, "subagents", "workflows", "wf_1", "agent-a.jsonl"), "{}\n");
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+
+    // The wrapper hides the walk, so probe the same RecursiveWatcher shape the
+    // wrapper builds: every file the walk stats names the dir it had to read.
+    const visited: string[] = [];
+    const probe = new RecursiveWatcher({
+      path: root,
+      filter: (rel) => { visited.push(path.dirname(rel)); return watchFilter(rel); },
+      dirFilter: watchDirFilter,
+      maxDepth: 6,
+      callback: () => {},
+    });
+    cleanups.push(() => probe.stop());
+    probe.start();
+    await probe.whenPrimed();
+    probe.stop();
+    expect(visited.some((d) => d.split(path.sep).includes("tool-results"))).toBe(false);
+    expect(visited.some((d) => d.split(path.sep).includes("memory"))).toBe(false);
+
+    const events: SessionEvent[] = [];
+    const watcher = new SessionWatcher(root);
+    cleanups.push(() => watcher.stop());
+    watcher.on("session", (e) => events.push(e));
+    await watcher.start();
+    expect(events.map((e) => e.sessionId)).toEqual(["agent-a"]);
+  });
+
+  test("watchDirFilter admits exactly the dirs that can hold a syncable file", () => {
+    const j = (...p: string[]) => p.join(path.sep);
+    expect(watchDirFilter("any-slug")).toBe(true);
+    expect(watchDirFilter(j("slug", UUID))).toBe(true);
+    expect(watchDirFilter(j("slug", "memory"))).toBe(false);
+    expect(watchDirFilter(j("slug", ".timelines"))).toBe(false);
+    expect(watchDirFilter(j("slug", UUID, "subagents"))).toBe(true);
+    expect(watchDirFilter(j("slug", UUID, "workflows"))).toBe(true);
+    expect(watchDirFilter(j("slug", UUID, "tool-results"))).toBe(false);
+    expect(watchDirFilter(j("slug", UUID, "session-memory"))).toBe(false);
+    expect(watchDirFilter(j("slug", UUID, "subagents", "workflows"))).toBe(true);
+    expect(watchDirFilter(j("slug", UUID, "subagents", "other"))).toBe(false);
+    expect(watchDirFilter(j("slug", UUID, "workflows", "wf_1"))).toBe(false);
+    expect(watchDirFilter(j("slug", UUID, "subagents", "workflows", "wf_1"))).toBe(true);
+    expect(watchDirFilter(j("slug", UUID, "subagents", "workflows", "other"))).toBe(false);
+    expect(watchDirFilter(j("slug", UUID, "subagents", "workflows", "wf_1", "deeper"))).toBe(false);
   });
 });

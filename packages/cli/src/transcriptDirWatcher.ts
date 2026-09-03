@@ -9,7 +9,8 @@ import { EventEmitter } from "events";
 import * as path from "path";
 import * as fs from "fs";
 import { RecursiveWatcher } from "./recursiveWatcher.js";
-import type { WalkFile } from "./fsWalk.js";
+import { dirFilterByDepth, type WalkFile } from "./fsWalk.js";
+import { CLAUDE_UUID_RE } from "./resumeCommand.js";
 import { AGENT_CLIENTS, type AgentClientId } from "@codecast/shared/contracts";
 
 export interface TranscriptDirEvent {
@@ -40,6 +41,9 @@ export interface TranscriptDirWatcherConfig {
   extractProjectHash?: (filePath: string) => string;
   /** Recursive-watch depth cap (codex used 4; gemini unbounded). */
   maxDepth?: number;
+  /** Whether the walk enters a directory, by its path relative to basePath.
+   *  Prunes sibling trees a client keeps next to its transcripts. */
+  dirFilter?: (rel: string) => boolean;
   debounceMs?: number;
 }
 
@@ -54,7 +58,9 @@ export interface TranscriptDirWatcherEvents {
  *  satisfy it, so `registerJsonlDirWatcher` can drive either. */
 export interface DirEventWatcher {
   on<K extends keyof TranscriptDirWatcherEvents>(event: K, listener: TranscriptDirWatcherEvents[K]): this;
-  start(): void;
+  /** May resolve when priming completes; a caller that only needs the watch
+   *  open ignores the value. */
+  start(): void | Promise<void>;
   stop(): void;
 }
 
@@ -72,8 +78,9 @@ export class TranscriptDirWatcher extends EventEmitter {
     this.cfg = cfg;
   }
 
-  start(): void {
-    if (this.watcher) return;
+  /** Resolves once the priming walk has emitted the pre-existing files. */
+  start(): Promise<void> {
+    if (this.watcher) return this.watcher.whenPrimed();
 
     if (!fs.existsSync(this.cfg.basePath)) {
       fs.mkdirSync(this.cfg.basePath, { recursive: true });
@@ -82,6 +89,7 @@ export class TranscriptDirWatcher extends EventEmitter {
     this.watcher = new RecursiveWatcher({
       path: this.cfg.basePath,
       filter: this.cfg.watchFilter,
+      dirFilter: this.cfg.dirFilter,
       callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
       onExisting: (files) => this.emitExistingFilesSorted(files),
       maxDepth: this.cfg.maxDepth,
@@ -91,6 +99,11 @@ export class TranscriptDirWatcher extends EventEmitter {
     this.watcher.on("error", (err: Error) => this.emit("error", err));
     this.watcher.on("ready", () => this.emit("ready"));
     this.watcher.start();
+    return this.watcher.whenPrimed();
+  }
+
+  whenPrimed(): Promise<void> {
+    return this.watcher ? this.watcher.whenPrimed() : Promise.resolve();
   }
 
   // Files the watcher's priming walk found (one walk serves both), narrowed by
@@ -159,12 +172,6 @@ export function decodePiCwdSlug(slug: string): string {
   const inner = slug.replace(/^--/, "").replace(/--$/, "");
   return inner ? `/${inner.replace(/-/g, "/")}` : "/";
 }
-
-// A grok session dir is named by the session's FULL uuid; anything else in an
-// encoded-cwd dir (`.cwd`, `*.lock`, `*.tmp`, `session_search.sqlite` at the
-// root) is cruft the watcher must refuse. Anchored full-match on purpose — the
-// dir name flows into a resume shell command (see extractSessionId's contract).
-const GROK_SESSION_DIR_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Encode a working directory into grok's session-directory name, verbatim to
@@ -237,8 +244,11 @@ export function transcriptDirWatcherConfig(
         // crafted name) must be refused rather than tracked under raw dir text,
         // which would become the session_id and, unescaped, a resume-command
         // injection vector (the same guard as pi's filename rule).
-        return GROK_SESSION_DIR_UUID_RE.test(dirname) ? dirname : null;
+        return CLAUDE_UUID_RE.test(dirname) ? dirname : null;
       },
+      // Enter a cwd dir and a session uuid dir only; `.cwd` and friends are
+      // files, and any other dir at depth 2 cannot hold a session.
+      dirFilter: dirFilterByDepth(() => true, (seg) => CLAUDE_UUID_RE.test(seg)),
       maxDepth: 3,
       debounceMs: 100,
     };
@@ -261,6 +271,7 @@ export function transcriptDirWatcherConfig(
         // session_id and, unescaped, a resume-command injection vector).
         return match ? match[1] : null;
       },
+      // No dirFilter: maxDepth 2 already stops the walk at the slug dirs.
       maxDepth: 2,
       debounceMs: 100,
     };
@@ -276,6 +287,9 @@ export function transcriptDirWatcherConfig(
         const match = filename.match(CODEX_UUID_SUFFIX_RE);
         return match ? match[1] : filename;
       },
+      // Rollouts live under sessions/YYYY/MM/DD. Anything else at the root
+      // (leftover `watcher-test-*` dirs, an editor's scratch dir) is skipped.
+      dirFilter: dirFilterByDepth((seg) => /^\d{4}$/.test(seg), (seg) => /^\d{2}$/.test(seg), (seg) => /^\d{2}$/.test(seg)),
       maxDepth: 4,
       debounceMs: 100,
     };
@@ -293,6 +307,10 @@ export function transcriptDirWatcherConfig(
       const chatsIdx = parts.lastIndexOf("chats");
       return chatsIdx > 0 ? parts[chatsIdx - 1] : "";
     },
+    // Layout is <project-hash>/chats/<id>.json; a project dir also holds
+    // checkpoints and other state that never carry a transcript.
+    dirFilter: dirFilterByDepth(() => true, (seg) => seg === "chats"),
+    maxDepth: 3,
     debounceMs: 200,
   };
 }

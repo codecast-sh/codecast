@@ -15,6 +15,37 @@ const supportsRecursiveWatch = process.platform === "darwin" || process.platform
 // warm, so this cadence is a few percent of one core while sessions stream.
 const DEFAULT_RESCAN_INTERVAL_MS = 2_000;
 
+/** Whether `relDir` and every ancestor of it pass `dirFilter`. */
+export function dirAllowedUnder(dirFilter: (relativeDirPath: string) => boolean, relDir: string): boolean {
+  if (!relDir || relDir === ".") return true;
+  let prefix = "";
+  for (const seg of relDir.split(path.sep)) {
+    prefix = prefix ? `${prefix}${path.sep}${seg}` : seg;
+    if (!dirFilter(prefix)) return false;
+  }
+  return true;
+}
+
+/**
+ * The chokidar `ignored` predicate for a dirFilter. chokidar asks it for
+ * files as well as directories, and for a file it asks BEFORE it has a stat.
+ * A dirFilter only knows directories, so a path is judged by the directory
+ * it sits in unless chokidar says it is a directory itself. Feeding a file
+ * path straight into the dirFilter refused every transcript (a claude
+ * `<slug>/<uuid>.jsonl` is not a session dir), so on Linux the watchers
+ * saw only directory events and ingest fell back to the watchdog sweep.
+ */
+export function chokidarIgnored(
+  watchPath: string,
+  dirFilter: (relativeDirPath: string) => boolean,
+): (target: string, stats?: fs.Stats) => boolean {
+  return (target, stats) => {
+    const rel = path.relative(watchPath, target);
+    if (!rel || rel.startsWith("..")) return false;
+    return !dirAllowedUnder(dirFilter, stats?.isDirectory() ? rel : path.dirname(rel));
+  };
+}
+
 export class RecursiveWatcher extends EventEmitter {
   private fsWatcher: fs.FSWatcher | null = null;
   private chokidarWatcher: ChokidarWatcher | null = null;
@@ -103,13 +134,7 @@ export class RecursiveWatcher extends EventEmitter {
   // pruned, so events from rejected subtrees still arrive and must be ignored
   // the same way the walk ignores them. Mirrors chokidar's `ignored` below.
   private isDirAllowed(relDir: string): boolean {
-    if (!relDir || relDir === ".") return true;
-    let prefix = "";
-    for (const seg of relDir.split(path.sep)) {
-      prefix = prefix ? `${prefix}${path.sep}${seg}` : seg;
-      if (!this.dirFilter(prefix)) return false;
-    }
-    return true;
+    return dirAllowedUnder(this.dirFilter, relDir);
   }
 
   private startFsWatch(): void {
@@ -265,11 +290,7 @@ export class RecursiveWatcher extends EventEmitter {
       depth: this.maxDepth,
       // Unlike the native path, chokidar CAN be told not to descend — which
       // matters more here, since it opens a real watch per directory.
-      ignored: (target: string) => {
-        const rel = path.relative(this.watchPath, target);
-        if (!rel || rel.startsWith("..")) return false;
-        return !this.isDirAllowed(rel);
-      },
+      ignored: chokidarIgnored(this.watchPath, this.dirFilter),
       awaitWriteFinish: {
         stabilityThreshold: this.debounceMs,
         pollInterval: Math.max(20, this.debounceMs / 2),
