@@ -1602,7 +1602,12 @@ function isMemberCandidate(s: InboxSession): boolean {
 // this render index. The activity term is separate from sessionsWakeSig on
 // purpose: the sidebar's wake signature must stay heartbeat-blind, while
 // membership genuinely depends on activity time at minute grain.
-const membershipTimeSig = makeCollectionSig<InboxSession>((s) => String(Math.floor((s.updated_at ?? 0) / 60_000)));
+// The stamps membership reads ride the key too (workingSetRowOf reads the
+// STAMPS, while the structural signature reads the pinned flag and the sort
+// rank), so a gesture that moves only a stamp can never leave membership
+// serving the previous selection.
+const membershipTimeSig = makeCollectionSig<InboxSession>((s) =>
+  `${Math.floor((s.updated_at ?? 0) / 60_000)}|${s.inbox_pinned_at ?? ""}|${s.inbox_dismissed_at ?? ""}|${s.inbox_stashed_at ?? ""}|${s.inbox_killed_at ?? ""}`);
 let _membershipKey: string | null = null;
 let _membershipVal: InboxMembership | null = null;
 export function computeInboxMembership(
@@ -2701,6 +2706,10 @@ function sameTally(a: PlacedInbox["tally"], b: PlacedInbox["tally"]): boolean {
 // previous call's; clearing the slot memo keeps assertions on fresh refs.
 export function __resetInboxPlacementCacheForTests(): void {
   _placedMemo.clear();
+  _membershipKey = null;
+  _membershipVal = null;
+  _visibleKey = null;
+  _visibleVal = null;
 }
 // Dev-only parity throttle (assertPlacementParity below).
 let _lastParityCheckAt = 0;
