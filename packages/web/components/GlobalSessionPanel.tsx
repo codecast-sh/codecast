@@ -514,12 +514,13 @@ export function SignInCta({
 
 // When several sessions are parked on an API-error banner at once (the classic
 // "the whole fleet hit the Max usage limit together"), surface ONE fleet-level
-// action instead of N per-card errors: send "continue" to them all. Signed-out
-// sessions are the exception — their processes hold a dead token, so the
-// restart path (requestAccountSwitch with no profile, which degrades to
-// kill + continue; see convex/accountSwitch.ts) reaches them. Account
-// switching itself lives in settings/auto-switch, not in this banner. Own
-// component so its account query stays out of the hot panel render.
+// action instead of N per-card errors: send "continue" to them all, on a
+// choice of account. One mutation (requestAccountSwitch; see
+// convex/accountSwitch.ts) decides per session whether a message reaches it
+// or it must be killed and resumed first (signed out, or pinned to another
+// account's setup-token). Account switching itself lives in
+// settings/auto-switch, not in this banner. Own component so its account
+// query stays out of the hot panel render.
 function BlockedSessionsBanner({
   blocked,
   onOpen,
