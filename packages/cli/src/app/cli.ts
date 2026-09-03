@@ -198,7 +198,6 @@ async function withPage<T>(target: AppTarget, fn: (at: Attached) => Promise<T>):
 
 async function navigate(at: Attached, url: string): Promise<void> {
   await at.conn.send("Page.enable", {}, at.sessionId, 5000);
-  await at.conn.send("Page.bringToFront", {}, at.sessionId, 5000).catch(() => {});
   await at.conn.send("Page.navigate", { url }, at.sessionId, 10_000);
   await at.conn.waitFor((ev) => ev.method === "Page.loadEventFired" && ev.sessionId === at.sessionId, 20_000).catch(() => {});
 }
@@ -212,7 +211,6 @@ async function navigate(at: Attached, url: string): Promise<void> {
  */
 async function go(at: Attached, target: AppTarget, path: string, reload?: boolean): Promise<"in-app" | "load" | "load-after-bounce"> {
   if (!reload) {
-    await at.conn.send("Page.bringToFront", {}, at.sessionId, 5000).catch(() => {});
     const r = await evalJson<{ ok: boolean }>(at, `(() => {
       const root = document.getElementById("root");
       if (!root || root.children.length === 0) return { ok: false };

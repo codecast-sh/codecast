@@ -68,6 +68,10 @@ export type PendingEntry = {
   // intentionally distinct from `ts`, which is only the local lock freshness
   // clock and may be sampled a millisecond later by the middleware.
   hideAck?: number;
+  // An exclude planted by a scope revocation purge carries the scope key it
+  // was purged for, so a rejoin can lift exactly those (the rows are gone, so
+  // nothing else can name them).
+  scope?: string;
 };
 
 export type OutboxEntry = {

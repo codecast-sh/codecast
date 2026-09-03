@@ -16,7 +16,7 @@ import {
   STATUS_TRUST_TTL_MS,
   HEARTBEAT_ALIVE_MS,
 } from "./inboxFilters";
-import { digestProjection, inboxEpoch, INBOX_FACT_FIELDS, INBOX_PROJECTION_VERSION, type InboxBucket } from "@codecast/shared/contracts";
+import { digestProjection, inboxEpoch, INBOX_FACT_FIELDS, INBOX_PROJECTION_VERSION, deriveLiveAt, rowLiveDeadlines, computeBucketStale, placeProjectableRow, rollupParentIdOf, type InboxBucket } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
 
 // The server half of sync-convergence (docs/architecture/sync-convergence.md):
@@ -595,5 +595,72 @@ describe("inboxForCLI path — the same placement, tallied from the stamps", () 
     expect(counts.total).toBe(5);
     expect(rows.find((r) => r.id === "conversations_q")).toMatchObject({ bucket: "questions", below_fold: false });
     expect(rows.find((r) => r.id === "conversations_old")).toMatchObject({ below_fold: true });
+  });
+});
+
+
+// The replica's live derivation IS the server's (ct-47609, sync-convergence
+// C1/C2): over the facts an overlay row ships, the shared deriveLiveAt at the
+// epoch reproduces the row's live fields exactly, and the shared deadline
+// list plus computeBucketStale reproduce the row's time flip. Whatever the
+// server stamps, a replica holding the same facts computes the same thing at
+// the same instants.
+describe("the replica's live derivation is the server's", () => {
+  test("deriveLiveAt at the epoch equals the shipped live fields; rowLiveDeadlines + computeBucketStale equal the shipped flip", async () => {
+    const tables = {
+      conversations: [
+        conv("graced", { updated_at: EPOCH - 30_000, message_count: 6 }),
+        conv("decay", { updated_at: EPOCH - 2 * H, message_count: 40 }),
+        conv("unanswered", { updated_at: EPOCH - 2 * MIN, message_count: 12, last_message_role: "user" }),
+        conv("parent", { updated_at: EPOCH - 10 * MIN, message_count: 9 }),
+        conv("child", { is_subagent: true, parent_conversation_id: "conversations_parent", updated_at: EPOCH - 2 * MIN, message_count: 4 }),
+        conv("waiting", { updated_at: EPOCH - 3 * H, message_count: 20 }),
+        conv("done", { updated_at: EPOCH - 5 * H, message_count: 30, thread_state_status: "done" }),
+        conv("dead", { updated_at: EPOCH - 3 * MIN, message_count: 7 }),
+        conv("own", { updated_at: EPOCH - MIN, message_count: 3 }),
+      ],
+      managed_sessions: [
+        { _id: "ms_graced", user_id: ME, conversation_id: "conversations_graced", last_heartbeat: EPOCH - 5_000, agent_status: "idle", agent_status_updated_at: EPOCH - 30_000 },
+        { _id: "ms_decay", user_id: ME, conversation_id: "conversations_decay", last_heartbeat: EPOCH - 5_000, agent_status: "working", agent_status_updated_at: EPOCH - 2 * H },
+        { _id: "ms_parent", user_id: ME, conversation_id: "conversations_parent", last_heartbeat: EPOCH - 5_000, agent_status: "idle", agent_status_updated_at: EPOCH - 10 * MIN },
+        { _id: "ms_child", user_id: ME, conversation_id: "conversations_child", last_heartbeat: EPOCH - 5_000, agent_status: "working", agent_status_updated_at: EPOCH - 2 * MIN },
+        { _id: "ms_waiting", user_id: ME, conversation_id: "conversations_waiting", last_heartbeat: EPOCH - 5_000, agent_status: "waiting", agent_status_updated_at: EPOCH - 3 * H, open_tasks: [{ id: "t1" }], open_tasks_at: EPOCH - 4 * MIN },
+        { _id: "ms_done", user_id: ME, conversation_id: "conversations_done", last_heartbeat: EPOCH - 5 * H, agent_status: "done", agent_status_updated_at: EPOCH - 5 * H },
+        { _id: "ms_dead", user_id: ME, conversation_id: "conversations_dead", last_heartbeat: EPOCH - 4 * MIN, agent_status: "working", agent_status_updated_at: EPOCH - 3 * MIN },
+        { _id: "ms_own", user_id: ME, conversation_id: "conversations_own", last_heartbeat: EPOCH - 1000, agent_status: "permission_blocked", agent_status_updated_at: EPOCH - MIN },
+      ],
+    };
+    const { liveness } = await computeSessionsLiveness({ db: db(tables) }, ME as any);
+    let checkedLive = 0;
+    let checkedFlip = 0;
+    for (const [cid, row] of Object.entries<any>(liveness)) {
+      const conv = tables.conversations.find((c: any) => c._id === cid)!;
+      const facts = { ...conv, ...row };
+      const live = deriveLiveAt(facts, EPOCH);
+      expect({ agent_status: live.agent_status, is_idle: live.is_idle, is_unresponsive: live.is_unresponsive, awaiting_input: live.awaiting_input, is_connected: live.daemon_alive })
+        .toEqual({ agent_status: row.agent_status, is_idle: row.is_idle, is_unresponsive: row.is_unresponsive, awaiting_input: row.awaiting_input, is_connected: row.is_connected });
+      checkedLive++;
+      // The flip: members whose asking cannot change with time (false, and an
+      // ask only ever drops) and that ride no lead.
+      if (row.bucket === undefined || row.asking || rollupParentIdOf(conv)) continue;
+      const stale = computeBucketStale(
+        {
+          deadlines: rowLiveDeadlines(facts),
+          placeAt: (t) => placeProjectableRow({ ...facts, ...deriveLiveAt(facts, t) }, false, t),
+          current: row.bucket,
+        },
+        EPOCH,
+      );
+      expect(stale).toEqual({ bucket_stale_at: row.bucket_stale_at, stale_bucket: row.stale_bucket });
+      checkedFlip++;
+    }
+    expect(checkedLive).toBeGreaterThanOrEqual(8);
+    expect(checkedFlip).toBeGreaterThanOrEqual(5);
+    expect(liveness.conversations_graced).toMatchObject({ agent_status_updated_at: EPOCH - 30_000, last_role_is_user: false, is_idle: false });
+    expect(liveness.conversations_parent.is_idle).toBe(false);
+    expect(liveness.conversations_parent.producing_until).toBeGreaterThan(EPOCH);
+    expect(liveness.conversations_unanswered).toMatchObject({ last_role_is_user: true, agent_status: null });
+    expect(liveness.conversations_decay).toMatchObject({ agent_status: "idle", is_idle: true });
+    expect(liveness.conversations_dead).toMatchObject({ agent_status: "stopped", is_connected: false });
   });
 });

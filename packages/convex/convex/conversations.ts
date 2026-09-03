@@ -22,6 +22,8 @@ import {
   WORKING_SET_RECENCY_MS,
   BLOCKED_BANNER_KINDS,
   placeProjectableRow,
+  deriveLiveAt,
+  rowLiveDeadlines,
   rowLastTurnAllowsPark,
   INBOX_FACT_FIELDS,
   INBOX_PROJECTION_VERSION,
@@ -43,7 +45,7 @@ import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from ".
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, requireSessionCommandTarget } from "./daemonCommandUtils";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, formatAgentSwitchNotice, findModelOption } from "@codecast/shared/contracts";
-import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, isUserDormant, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
+import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, isUserDormant, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
@@ -7908,6 +7910,7 @@ async function enrichInboxSessionRow(
   const pinned = !!conv.inbox_pinned_at;
   const dismissed = !!conv.inbox_dismissed_at;
   const stashed = !!conv.inbox_stashed_at;
+  let producingUntil: number | null = null;
 
   // Stop trusting a frozen "active" status once the conversation has gone quiet
   // past the trust TTL — otherwise a daemon re-asserting a stale "working" over
@@ -8012,17 +8015,8 @@ async function enrichInboxSessionRow(
     // subagent that finished but whose daemon keeps heartbeating used to pin its
     // parent in "working" forever. We pass the child's agent_status already
     // coerced for heartbeat staleness, the same coercion the parent gets below.
-    if (isIdle && children.some((c: any) => {
-      const cid = c._id.toString();
-      return subagentKeepsParentWorking({
-        isSubagent: !!c.is_subagent,
-        convStatus: c.status,
-        updatedAt: c.updated_at,
-        isLive: maps.liveConvIds.has(cid),
-        agentStatus: trustedAgentStatus(maps.agentStatusMap.get(cid), c.updated_at, now, maps.liveConvIds.has(cid)),
-        now,
-      });
-    })) {
+    producingUntil = producingUntilOf(children, maps);
+    if (isIdle && producingUntil != null && now < producingUntil) {
       isIdle = false;
     }
     for (const c of children) {
@@ -8103,6 +8097,14 @@ async function enrichInboxSessionRow(
     thread_state_status: conv.thread_state_status ?? null,
     is_idle: isIdle,
     awaiting_input: awaitingInput,
+    // The is_idle inputs, on the enriched row too (the CLI and liveness-on
+    // clients), so every channel that carries is_idle carries what derived it.
+    agent_status_updated_at: maps.agentStatusUpdatedAtMap.get(conv._id.toString()) ?? null,
+    last_heartbeat: maps.lastHeartbeatMap.get(conv._id.toString()) ?? null,
+    last_role_is_user: activity.lastRoleIsUser,
+    auq_open: awaitingInput,
+    daemon_alive_until: daemonAliveUntil(maps, conv._id.toString(), conv.updated_at),
+    producing_until: producingUntil,
     is_unresponsive: isUnresponsive,
     is_connected: !!daemonAlive,
     has_pending: hasPending,
@@ -8882,6 +8884,14 @@ type LivenessFields = {
   // run the armed-trigger/loop park rule without the message body the server's
   // probe covered (sync-convergence C1).
   last_turn_allows_park: boolean;
+  // The is_idle inputs (ct-47609), so a replica re-derives idleness,
+  // responsiveness and the status trust at its own clock (shared deriveLiveAt).
+  agent_status_updated_at: number | null;
+  last_heartbeat: number | null;
+  last_role_is_user: boolean;
+  auq_open: boolean;
+  daemon_alive_until: number | null;
+  producing_until: number | null;
 };
 
 // The projection stamps (sync-convergence C1/C3): the row's placement, its
@@ -9171,52 +9181,80 @@ type LivenessRowReads = {
   auqOpen: boolean;
 };
 
-// Lightweight twin of enrichInboxSessionRow's derivations, pure over the reads:
-// trustedAgentStatus / deriveSessionActivity / the AUQ answer /
-// subagentKeepsParentWorking, so the overlay never drifts from the bundled row.
+// The instant after which the daemon behind this row no longer counts as
+// alive, before the stopped override (deriveLiveAt applies that from the
+// status): the row's own heartbeat window, or the user's most recent daemon
+// vouching for a recently active conversation. Pure in the maps, so the same
+// value ships at every execution over the same data.
+function daemonAliveUntil(maps: Pick<InboxSessionMaps, "lastHeartbeatMap" | "latestHeartbeat">, cid: string, updatedAt: number): number | null {
+  const hb = maps.lastHeartbeatMap.get(cid);
+  const own = hb !== undefined ? hb + HEARTBEAT_ALIVE_MS : null;
+  const user = maps.latestHeartbeat !== undefined
+    ? Math.min(maps.latestHeartbeat + USER_DAEMON_ALIVE_MS, updatedAt + CONV_DAEMON_ALIVE_MS)
+    : null;
+  if (own == null) return user;
+  if (user == null) return own;
+  return Math.max(own, user);
+}
+
+// The instant after which no child keeps this parent producing. "A child is
+// producing" (childKeepsParentWorking) only ever turns false as time passes
+// (a grace lapses, a heartbeat dies, a status decays), so its flip is the
+// largest child deadline at which the predicate still held one instant
+// before. Evaluated through the predicate itself — never a re-derived
+// formula — so the fact cannot disagree with the rule.
+function producingUntilOf(children: any[], maps: InboxSessionMaps): number | null {
+  if (children.length === 0) return null;
+  const producing = (t: number) => children.some((c: any) => childKeepsParentWorking(c, maps, t));
+  let until: number | null = null;
+  for (const c of children) {
+    const chb = maps.lastHeartbeatMap.get(c._id.toString());
+    const candidates = [
+      c.updated_at + SUBAGENT_PRODUCING_GRACE_MS,
+      c.updated_at + STATUS_TRUST_TTL_MS,
+      c.updated_at + HEARTBEAT_ALIVE_MS,
+      chb !== undefined ? chb + HEARTBEAT_ALIVE_MS : null,
+    ];
+    for (const d of candidates) {
+      if (d == null || (until != null && d <= until)) continue;
+      if (producing(d - 1)) until = d;
+    }
+  }
+  return until;
+}
+
+// The overlay row's live fields at instant `now`: the row's FACTS (pure in the
+// doc, the maps and the probe reads — no clock) fed through the SHARED
+// deriveLiveAt. The same call a replica makes over the shipped facts, so the
+// stamp, the time flip (placeAt at each deadline) and the replica's render
+// are one function of (facts, t) — sync-convergence C1/C2, ct-47609.
 function deriveLivenessAt(
   conv: any,
   maps: InboxSessionMaps,
   reads: LivenessRowReads,
-  producing: (now: number) => boolean,
+  producingUntil: number | null,
   now: number,
 ): LivenessFields {
   const cid = conv._id.toString();
-  const hasPending = !!conv.has_pending_messages;
-  const live = isLiveAt(maps, cid, now);
-  const agentStatus = trustedAgentStatus(maps.agentStatusMap.get(cid), conv.updated_at, now, live, verifiedWaitingFor(maps, cid, now));
-  const daemonAlive = agentStatus === "stopped"
-    ? false
-    : live || (userDaemonAliveAt(maps, now) && (now - conv.updated_at) < CONV_DAEMON_ALIVE_MS);
-
-  const activity = deriveSessionActivity({
-    agentStatus,
-    agentStatusUpdatedAt: maps.agentStatusUpdatedAtMap.get(cid),
-    lastMessageRole: reads.lastMsgRole,
-    lastMessagePreview: reads.lastUserMessage,
-    hasPending,
+  const openTasks = maps.openTasksMap.get(cid);
+  const facts = {
     status: conv.status,
-    updatedAt: conv.updated_at,
-    daemonAlive,
-    now,
-  });
-  let isIdle = activity.isIdle;
-  const isUnresponsive = activity.isUnresponsive;
-
-  // An open AskUserQuestion poll is the agent blocking on the user — it belongs in
-  // "needs input", never "working". Same !isIdle gate as enrichInboxSessionRow.
-  let awaitingInput = false;
-  if (!isIdle && conv.message_count > 0 && reads.auqOpen) {
-    awaitingInput = true;
-    isIdle = true; // blocked on the user, not actively working
-  }
-
-  // Keep an idle parent in "working" only while a subagent child is genuinely
-  // PRODUCING (see subagentKeepsParentWorking). Never for dismissed/stashed rows.
-  if (isIdle && !conv.inbox_dismissed_at && !conv.inbox_stashed_at && conv.message_count > 0 && producing(now)) {
-    isIdle = false;
-  }
-
+    updated_at: conv.updated_at,
+    message_count: conv.message_count ?? 0,
+    has_pending_messages: !!conv.has_pending_messages,
+    inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
+    inbox_stashed_at: conv.inbox_stashed_at ?? null,
+    agent_status: maps.agentStatusMap.get(cid) ?? null,
+    agent_status_updated_at: maps.agentStatusUpdatedAtMap.get(cid) ?? null,
+    last_heartbeat: maps.lastHeartbeatMap.get(cid) ?? null,
+    daemon_alive_until: daemonAliveUntil(maps, cid, conv.updated_at),
+    producing_until: producingUntil,
+    last_role_is_user: lastRoleIsUserOf(reads.lastMsgRole, reads.lastUserMessage),
+    auq_open: reads.auqOpen,
+    open_tasks: openTasks?.tasks ?? null,
+    open_tasks_at: openTasks?.at ?? null,
+  };
+  const live = deriveLiveAt(facts, now);
   return {
     // Every fact is EXPLICIT, null when there is none (C1: facts have one
     // writer). Convex drops an undefined key from the payload, and a replica
@@ -9224,21 +9262,27 @@ function deriveLivenessAt(
     // execution's value forever — a "stopped" from the day the daemon died
     // outlived the managed row and filed a declared-done session under Needs
     // Input on every replica while this stamp said done (prod, 2026-09-01).
-    agent_status: agentStatus ?? null,
-    is_idle: isIdle,
-    is_unresponsive: isUnresponsive,
-    awaiting_input: awaitingInput,
-    is_connected: !!daemonAlive,
+    agent_status: live.agent_status,
+    is_idle: live.is_idle,
+    is_unresponsive: live.is_unresponsive,
+    awaiting_input: live.awaiting_input,
+    is_connected: live.daemon_alive,
     tmux_session: maps.tmuxSessionMap.get(cid) ?? null,
     permission_mode: maps.permissionModeMap.get(cid) ?? null,
     agent_started_at: maps.agentStartedAtMap.get(cid) ?? null,
-    open_tasks: maps.openTasksMap.get(cid)?.tasks ?? null,
-    open_tasks_at: maps.openTasksMap.get(cid)?.at ?? null,
-    message_count: conv.message_count ?? 0,
+    open_tasks: facts.open_tasks,
+    open_tasks_at: facts.open_tasks_at,
+    message_count: facts.message_count,
     updated_at: conv.updated_at,
     // reads.lastUserMessage is the row's preview with the probed fallback for
     // un-backfilled rows — exactly the input the park rule needs (C1).
     last_turn_allows_park: rowLastTurnAllowsPark({ last_message_preview: reads.lastUserMessage }),
+    agent_status_updated_at: facts.agent_status_updated_at,
+    last_heartbeat: facts.last_heartbeat,
+    last_role_is_user: facts.last_role_is_user,
+    auq_open: facts.auq_open,
+    daemon_alive_until: facts.daemon_alive_until,
+    producing_until: facts.producing_until,
   };
 }
 
@@ -9262,7 +9306,7 @@ async function readLivenessRowInputs(ctx: any, conv: any, maps: InboxSessionMaps
     }
   }
   const reads: LivenessRowReads = { lastMsgRole, lastUserMessage, auqOpen: false };
-  const base = deriveLivenessAt(conv, maps, reads, () => false, now);
+  const base = deriveLivenessAt(conv, maps, reads, null, now);
   if (!base.is_idle && conv.message_count > 0) {
     if (lastMsg === undefined) lastMsg = await newestMessage(ctx, conv._id);
     reads.auqOpen = isOpenAskUserQuestion(lastMsg);
@@ -9270,39 +9314,6 @@ async function readLivenessRowInputs(ctx: any, conv: any, maps: InboxSessionMaps
   return reads;
 }
 
-// Every instant at which one of this row's time terms crosses its threshold
-// (sync-convergence C2): the idle grace, the heartbeat window, the trust TTL,
-// the daemon-alive windows, the open-task freshness, and each child's
-// producing grace and status decay. computeBucketStale re-places the row at
-// each and keeps the first that moves it.
-function rowTimeDeadlines(conv: any, maps: InboxSessionMaps, cid: string, children: any[]): Array<number | null> {
-  const hb = maps.lastHeartbeatMap.get(cid);
-  const openTasksAt = maps.openTasksMap.get(cid)?.at;
-  const statusAt = maps.agentStatusUpdatedAtMap.get(cid);
-  const deadlines: Array<number | null> = [
-    conv.updated_at + AGENT_IDLE_GRACE_MS,
-    conv.updated_at + HEARTBEAT_ALIVE_MS,
-    conv.updated_at + STATUS_TRUST_TTL_MS,
-    conv.updated_at + CONV_DAEMON_ALIVE_MS,
-    statusAt !== undefined ? statusAt + AGENT_IDLE_GRACE_MS : null,
-    hb !== undefined ? hb + HEARTBEAT_ALIVE_MS : null,
-    maps.latestHeartbeat !== undefined ? maps.latestHeartbeat + USER_DAEMON_ALIVE_MS : null,
-    openTasksAt !== undefined ? openTasksAt + OPEN_TASKS_FRESH_MS : null,
-    // An armed /loop parks the row (isArmedLoopHome) until its wakeup goes
-    // overdue past the grace — that passing must un-park the bucket.
-    conv.loop_state?.status === "armed" ? conv.loop_state.wakeup_at + LOOP_OVERDUE_GRACE_MS : null,
-  ];
-  for (const c of children) {
-    const chb = maps.lastHeartbeatMap.get(c._id.toString());
-    deadlines.push(
-      c.updated_at + SUBAGENT_PRODUCING_GRACE_MS,
-      c.updated_at + STATUS_TRUST_TTL_MS,
-      c.updated_at + HEARTBEAT_ALIVE_MS,
-      chb !== undefined ? chb + HEARTBEAT_ALIVE_MS : null,
-    );
-  }
-  return deadlines;
-}
 
 // Build the {convId: liveness + projection stamps} overlay for the user's inbox
 // window, plus the projection envelope (sync-convergence C1). Reuses the shared
@@ -9345,8 +9356,7 @@ export async function computeSessionsLiveness(
   // Phase 1 — the per-row reads, concurrently (one await depth, not one per row).
   const reads = await Promise.all(shownConvs.map((conv) => readLivenessRowInputs(ctx, conv, maps, now)));
 
-  const producingFor = (cid: string) => (t: number) =>
-    (childrenByParent.get(cid) ?? []).some((c: any) => childKeepsParentWorking(c, maps, t));
+  const producingUntilFor = (cid: string): number | null => producingUntilOf(childrenByParent.get(cid) ?? [], maps);
 
   // Phase 2 — foreign-run parents whose children are invisible to the pool:
   // the budget goes to the most recently updated idle ones, and overflow is
@@ -9356,8 +9366,9 @@ export async function computeSessionsLiveness(
     if (conv.user_id.toString() === uid) return;
     if (conv.inbox_dismissed_at || conv.inbox_stashed_at || !(conv.message_count > 0)) return;
     const cid = conv._id.toString();
-    const base = deriveLivenessAt(conv, maps, reads[i], () => false, now);
-    if (base.is_idle && !producingFor(cid)(now)) foreignCandidates.push({ conv, i });
+    const base = deriveLivenessAt(conv, maps, reads[i], null, now);
+    const pu = producingUntilFor(cid);
+    if (base.is_idle && !(pu != null && now < pu)) foreignCandidates.push({ conv, i });
   });
   foreignCandidates.sort((a, b) => b.conv.updated_at - a.conv.updated_at);
   if (foreignCandidates.length > FOREIGN_SCAN_BUDGET) truncated.add("foreign_scan");
@@ -9381,17 +9392,20 @@ export async function computeSessionsLiveness(
   const entries: Array<[string, InboxBucket, boolean]> = [];
   shownConvs.forEach((conv, i) => {
     const cid = conv._id.toString();
-    const producing = producingFor(cid);
+    const producingUntil = producingUntilFor(cid);
     const askingFor = (lv: LivenessFields) => ownAsk(lv, conv) || pendingDecisionIds.has(cid) || askingParents.has(cid);
     const placeAt = (t: number): InboxPlacement => {
-      const lvAt = deriveLivenessAt(conv, maps, reads[i], producing, t);
+      const lvAt = deriveLivenessAt(conv, maps, reads[i], producingUntil, t);
       return placeConversationRow(conv, lvAt, askingFor(lvAt), reads[i].lastUserMessage, t);
     };
-    const lv = deriveLivenessAt(conv, maps, reads[i], producing, now);
+    const lv = deriveLivenessAt(conv, maps, reads[i], producingUntil, now);
     const asking = askingFor(lv);
     const placement = placeConversationRow(conv, lv, asking, reads[i].lastUserMessage, now);
     const stale = computeBucketStale(
-      { deadlines: rowTimeDeadlines(conv, maps, cid, childrenByParent.get(cid) ?? []), placeAt, current: placement.bucket },
+      // The shared deadline list over the SHIPPED facts: the replica's
+      // recompute scheduler reads the same list, so no time term exists on
+      // one side only (C2).
+      { deadlines: rowLiveDeadlines({ ...conv, ...lv }), placeAt, current: placement.bucket },
       now,
     );
     liveness[cid] = {
@@ -9443,7 +9457,7 @@ export async function computeSessionsLiveness(
         lastUserMessage: c.last_message_preview || null,
         auqOpen,
       };
-      liveness[cid] = deriveLivenessAt(c, maps, childReads, () => false, now);
+      liveness[cid] = deriveLivenessAt(c, maps, childReads, null, now);
     }
   }
 
