@@ -17,6 +17,9 @@ import { useInboxStore, useTrackedStore, sessionsWakeSig, isAgentActive, sortSes
 import { feedCoverMetaKey, newestTs, oldestTs, planFeedCatchup, walkStep, FEED_CATCHUP_PAGE_LIMIT, FEED_CATCHUP_MAX_PAGES } from "../lib/feedCatchup";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { ExternalEventRow } from "./feed/ExternalEventRow";
+import { gitEventToExternalEvent, type GitEventRow } from "../lib/externalEvents";
+import { useGitEvents, gitEventsNewestFirst } from "../hooks/useSyncGitEvents";
 import { FolderGit2 } from "lucide-react";
 import type { CSSProperties } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -351,9 +354,31 @@ function RollupHeader({ convs, compact }: {
   );
 }
 
-function DaySection({ date, convs, showActor, onNavigate, compact, projectColors, onProjectFilter }: {
+// A day holds two kinds of rows: the sessions it always held, and the team's
+// git events from the same day. `ts` is what the two are ordered by.
+type FeedEntry =
+  | { kind: "conv"; ts: number; conv: Conversation }
+  | { kind: "git"; ts: number; event: GitEventRow };
+
+// Place the git rows among the sessions by time WITHOUT reordering the
+// sessions. Their order comes from the stable-order hook and from the inbox
+// sort, and both must survive: a git row only takes a slot between two
+// sessions it sits between in time.
+function mergeDayEntries(convEntries: FeedEntry[], gitEntries: FeedEntry[]): FeedEntry[] {
+  if (gitEntries.length === 0) return convEntries;
+  const out: FeedEntry[] = [];
+  let gi = 0;
+  for (const conv of convEntries) {
+    while (gi < gitEntries.length && gitEntries[gi].ts >= conv.ts) out.push(gitEntries[gi++]);
+    out.push(conv);
+  }
+  while (gi < gitEntries.length) out.push(gitEntries[gi++]);
+  return out;
+}
+
+function DaySection({ date, entries, showActor, onNavigate, compact, projectColors, onProjectFilter }: {
   date: string;
-  convs: Conversation[];
+  entries: FeedEntry[];
   showActor: boolean;
   onNavigate?: (id: string) => void;
   compact?: boolean;
@@ -362,6 +387,11 @@ function DaySection({ date, convs, showActor, onNavigate, compact, projectColors
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const label = formatDate(date);
+
+  const convs = useMemo(
+    () => entries.flatMap((e) => (e.kind === "conv" ? [e.conv] : [])),
+    [entries],
+  );
 
   const { projects, people, active } = useMemo(() => {
     const projSet = new Set<string>();

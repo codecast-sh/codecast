@@ -50,6 +50,35 @@ export interface CloudHost {
   address?: string;
   /** Stop the machine after this long with nothing using it. 0 disables. */
   idleStopMinutes?: number;
+  /** The codecast device id of the daemon on the box, learned over SSH the
+   * first time a session is placed there (cloud/prepare.ts). Lets the daemon
+   * map a wake request (a device id) back to an instance it can boot. */
+  deviceId?: string;
+}
+
+/**
+ * The registry entry for a host argument: an instance id, or the default
+ * Linux host when none is named. Throws with the registration recipe when
+ * nothing matches — a silent "first host" pick would boot the wrong machine.
+ */
+export function resolveCloudHost(hostArg?: string): CloudHost {
+  const hosts = readHosts();
+  const pick = hostArg
+    ? hosts.find((h) => h.id === hostArg)
+    : hosts.find((h) => h.provider === "aws") ?? hosts[0];
+  if (!pick) {
+    throw new Error(
+      hostArg
+        ? `no cloud host ${hostArg} is registered (cast hosts ls)`
+        : "no cloud host is registered — cast hosts add <instance-id> --key <pem>, then cast hosts provision",
+    );
+  }
+  return pick;
+}
+
+/** The registered host whose daemon is this device, if we have learned it. */
+export function hostForDevice(deviceId: string): CloudHost | undefined {
+  return readHosts().find((h) => h.deviceId === deviceId);
 }
 
 function registryPath(): string {
@@ -123,15 +152,40 @@ function aws(args: string[], region: string): any {
  * and the resulting HostGone advice ("remove it with hosts rm") would have
  * had the user delete a perfectly good registration.
  */
+function describeInstance(host: CloudHost): any {
+  const r = aws(["ec2", "describe-instances", "--instance-ids", host.id], host.region);
+  return r?.Reservations?.[0]?.Instances?.[0];
+}
+
 export function hostState(host: CloudHost): { state: HostState; address?: string } {
   if (host.provider !== "aws") return { state: "running", address: host.address };
-  const r = aws(["ec2", "describe-instances", "--instance-ids", host.id], host.region);
-  const inst = r?.Reservations?.[0]?.Instances?.[0];
+  const inst = describeInstance(host);
   if (!inst) return { state: "missing" };
   const name = inst.State?.Name;
   const state: HostState =
     name === "running" ? "running" : name === "stopped" ? "stopped" : name === "terminated" ? "missing" : "pending";
   return { state, address: inst.PublicIpAddress };
+}
+
+/**
+ * What the bill is made of: the instance type it runs as, and every GiB
+ * attached to it. A stopped instance still answers both, which is the point —
+ * its disk is the only thing it is still costing, and that is exactly what a
+ * person wants to see before deciding to keep it registered.
+ */
+export function describeHostHardware(host: CloudHost): { instanceType?: string; volumeGiB?: number } {
+  if (host.provider !== "aws") return {};
+  const inst = describeInstance(host);
+  if (!inst) return {};
+  const vols = aws(
+    ["ec2", "describe-volumes", "--filters", `Name=attachment.instance-id,Values=${host.id}`],
+    host.region,
+  );
+  const sizes: number[] = (vols?.Volumes ?? []).map((v: any) => Number(v.Size) || 0);
+  return {
+    instanceType: inst.InstanceType,
+    ...(sizes.length ? { volumeGiB: sizes.reduce((a, b) => a + b, 0) } : {}),
+  };
 }
 
 /**

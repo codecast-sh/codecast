@@ -169,6 +169,48 @@ export function continueNeedsRestart(
   return conv.cc_account !== continueTargetPin(device, now);
 }
 
+/** Whether a parked session's banner says anything about the device's ACTIVE
+ * login. A session pinned to a profile with another identity ran on THAT
+ * account's setup-token: its limit is that account's limit. The active
+ * login may have all the headroom in the world and the recovery loop must
+ * not wait on its windows for a park it never caused — the restart that
+ * corrects the pin (continueNeedsRestart) un-parks the session at once. A
+ * pin the device's inventory cannot resolve, or one with no recorded
+ * identity, is treated the same way: it is not the active account, and the
+ * restart replaces it with a pin that is. Unpinned sessions and remotes (a
+ * pushed credential, never a pin) run on the active login. */
+export function parkedOnActiveAccount(
+  conv: { cc_account?: string | null },
+  device:
+    | { is_remote?: boolean; cc_accounts?: { active_email?: string; profiles: Array<{ name: string; email?: string }> } }
+    | undefined,
+): boolean {
+  if (!conv.cc_account || device?.is_remote === true) return true;
+  const pinned = device?.cc_accounts?.profiles.find((p) => p.name === conv.cc_account);
+  const activeEmail = device?.cc_accounts?.active_email;
+  return !!pinned?.email && !!activeEmail && pinned.email === activeEmail;
+}
+
+/** The pin a RESUME of this conversation must source. The daemon reads the
+ * row's `cc_account` at every resume, so a pin that cannot serve the session
+ * would be re-sourced forever unless it is corrected on the row. A resume of
+ * a session parked on a limit or auth banner IS a continue — whoever caused
+ * it (a hand-typed message, the delivery rail's repair ladder, the recovery
+ * loop) — so it carries the same rule the banner's continue applies:
+ * restart-worthy pins are rewritten to the device's continue target. Any
+ * other resume keeps the pin as recorded. */
+export function resumePinFor(
+  conv: { pending_api_error?: boolean | null; pending_api_error_kind?: string | null; cc_account?: string | null },
+  device: ContinueDevice | undefined,
+  now: number,
+): string | undefined {
+  const parked =
+    conv.pending_api_error === true &&
+    (conv.pending_api_error_kind === "limit" || conv.pending_api_error_kind === "auth");
+  if (parked && continueNeedsRestart(conv, device, now)) return continueTargetPin(device, now);
+  return conv.cc_account ?? undefined;
+}
+
 // Auto-switch bookkeeping, stored on the primary device row. `attempts` is the
 // per-incident memory that stops the loop from re-trying an account that
 // already parked sessions this window; `exhausted_at` is the UI's "every
@@ -363,8 +405,19 @@ export type AutoSwitchDecision =
  *     With switching off only the active account's windows are consulted —
  *     another account's reset can't help a session that will never move.
  *
- * All of that reads parks and snapshots as facts about the ACTIVE account,
- * which holds only while the account hasn't changed hands. `activeSince`
+ * All of that reads parks and snapshots as facts about the ACTIVE account.
+ * Parks on sessions pinned to ANOTHER account's setup-token are not
+ * (parkedOnActiveAccount): the caller passes the newest park that does
+ * implicate the active login as `activeParkedAt`, null when none does. With
+ * no such park there is nothing to wait out — those sessions un-park the
+ * moment they are restarted on the active login (the continue rewrites their
+ * pin), so the free continue needs only an active account that is not
+ * itself known to be spent. (2026-09-03: a workflow session pinned to an
+ * account whose weekly window was pegged sat "waiting" on the active
+ * account's session reset, hours away, while that account had 40% headroom —
+ * and every hand-typed continue re-sourced the same pegged token.)
+ *
+ * The active-account reading holds only while the account hasn't changed hands. `activeSince`
  * (the device's activation stamp) corrects for a change: a snapshot fetched
  * before it says nothing about the current login, so the loop WAITS for the
  * post-switch probe rather than switching away on stale meters; and parks
@@ -376,6 +429,10 @@ export type AutoSwitchDecision =
 export function decideAutoSwitch(input: {
   now: number;
   parkedAt: number; // newest limit-park among the blocked conversations
+  // Newest park among the sessions that ran on the ACTIVE account (unpinned,
+  // or pinned to its own token). null = every park belongs to another
+  // account's pin; omitted = every park is the active account's (parkedAt).
+  activeParkedAt?: number | null;
   activeEmail?: string;
   activeSince?: number; // when the active account last changed on the device
   profiles: AutoSwitchProfile[];
@@ -406,13 +463,19 @@ export function decideAutoSwitch(input: {
   }
   const sessionResetAt = active?.usage?.session?.resets_at;
   const lastContinue = lastAttemptAt(AUTO_SWITCH_CONTINUE_KEY);
-  const windowRolledSincePark = !!sessionResetAt && sessionResetAt > parkedAt && sessionResetAt <= now;
-  const parksPredateActivation = activeSince !== undefined && activeSince > parkedAt;
+  const activeParkedAt = input.activeParkedAt === undefined ? parkedAt : input.activeParkedAt;
+  // No park implicates the active account: its meters are the only evidence
+  // needed, and a pegged one is caught by isUsageExhausted below.
+  const noParkOnActive = activeParkedAt === null;
+  const windowRolledSincePark =
+    !noParkOnActive && !!sessionResetAt && sessionResetAt > activeParkedAt && sessionResetAt <= now;
+  const parksPredateActivation = !noParkOnActive && activeSince !== undefined && activeSince > activeParkedAt;
   const settledProbeShowsHeadroom =
-    activeFetchedAt >= (parksPredateActivation ? activeSince : parkedAt + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS);
+    !noParkOnActive &&
+    activeFetchedAt >= (parksPredateActivation ? activeSince : activeParkedAt + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS);
   if (
     !input.activeDead &&
-    (windowRolledSincePark || settledProbeShowsHeadroom) &&
+    (noParkOnActive || windowRolledSincePark || settledProbeShowsHeadroom) &&
     !isUsageExhausted(active?.usage, now) &&
     (!lastContinue || lastContinue < parkedAt)
   ) {
