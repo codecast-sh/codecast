@@ -607,7 +607,7 @@ export async function conversationHasLiveSession(
 export async function performSessionSend(
   ctx: { db: any },
   authUserId: Id<"users">,
-  args: { to: string; from?: string; body: string; client_id?: string }
+  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean }
 ): Promise<{
   message_id: Id<"pending_messages">;
   to_short_id: string;
@@ -632,6 +632,14 @@ export async function performSessionSend(
 
   const isCrossUser = target.user_id.toString() !== authUserId.toString();
   const senderUser = isCrossUser ? await ctx.db.get(authUserId) : null;
+
+  // A raw send is the text as typed — the rail the web's model/effort picker
+  // rides for `/model <alias>` — so it reads to the agent as its own user's
+  // input. Own sessions only: unwrapped text in a teammate's session would be
+  // indistinguishable from something they typed.
+  if (args.raw && isCrossUser) {
+    throw new Error("--raw sends only into your own sessions (a teammate's session always gets the attributed wrapper)");
+  }
 
   // Sending into an UNOWNED teammate session claims it: the sender joins the
   // owner set, so the thread follows them (inbox presence, idle/error
@@ -679,7 +687,7 @@ export async function performSessionSend(
   }
 
   const messageId = await enqueuePendingMessage(ctx, target, authUserId, {
-    content: formatSessionMessage(fromShortId, body, fromName),
+    content: args.raw ? body : formatSessionMessage(fromShortId, body, fromName),
     client_id: args.client_id,
     // Only a cross-user send needs the failure-feedback channel. A self-send keeps the original
     // never-drop semantics (your own busy session will get it when it's idle).
@@ -707,6 +715,7 @@ export const sendSessionMessage = mutation({
     body: v.string(),
     client_id: v.optional(v.string()),
     api_token: v.optional(v.string()),
+    raw: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
