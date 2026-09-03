@@ -233,6 +233,46 @@ describe("makeChangeTrackedDb — dual emission through the interceptor", () => 
     ]);
   });
 
+  test("a tracked insert without a stored workspace key is stamped at the chokepoint (review)", async () => {
+    const { db } = makeFakeDb();
+    const tdb = makeChangeTrackedDb(db, makeSyncAckCollector());
+    const id = await tdb.insert("docs", { user_id: "users:1", title: "raw insert site" });
+    const row = await db.get(id);
+    expect(row.workspace).toBe("user:users:1");
+    // Conversations have no workspace key by design (CLAUDE.md: two axes).
+    const cid = await tdb.insert("conversations", { user_id: "users:1", title: "c" });
+    expect((await db.get(cid)).workspace).toBeUndefined();
+  });
+
+  test("a stale routing-era upsert in a team scope the row no longer fans to is flipped to a delete on the next write", async () => {
+    const { db, actions } = makeFakeDb();
+    const tdb = makeChangeTrackedDb(db, makeSyncAckCollector());
+    // Private inside a team: routed to teams:x, readable only by its owner.
+    const id = await tdb.insert("tasks", { user_id: "users:1", team_id: "teams:x", workspace: "user:users:1", title: "t" });
+    expect(actions(teamScopeKey("teams:x"))).toHaveLength(0);
+    // A row minted before cargo, when fan-out followed team_id.
+    await db.insert("sync_actions", { scope_key: "team:teams:x", position: 1, entity_type: "tasks", entity_id: String(id), op: "upsert", ts: 1 });
+    const tdb2 = makeChangeTrackedDb(db, makeSyncAckCollector());
+    await tdb2.patch(id, { title: "t2" });
+    const stale = actions(teamScopeKey("teams:x"));
+    expect(stale).toHaveLength(1);
+    expect(stale[0].op).toBe("delete");
+    expect(stale[0].patch).toBeUndefined();
+    // Idempotent: a second write leaves the tombstone alone.
+    const tdb3 = makeChangeTrackedDb(db, makeSyncAckCollector());
+    await tdb3.patch(id, { title: "t3" });
+    expect(actions(teamScopeKey("teams:x")).map((r) => r.op)).toEqual(["delete"]);
+  });
+
+  test("a current team scope's upsert is never flipped", async () => {
+    const { db, actions } = makeFakeDb();
+    const tdb = makeChangeTrackedDb(db, makeSyncAckCollector());
+    const id = await tdb.insert("tasks", { user_id: "users:1", team_id: "teams:x", workspace: "team:teams:x", title: "t" });
+    const tdb2 = makeChangeTrackedDb(db, makeSyncAckCollector());
+    await tdb2.patch(id, { title: "t2" });
+    expect(actions(teamScopeKey("teams:x")).map((r) => r.op)).toEqual(["upsert"]);
+  });
+
   test("patch that moves team emits revocation in the departed team scope", async () => {
     const { db, actions } = makeFakeDb();
     const tdb = makeChangeTrackedDb(db, makeSyncAckCollector());
@@ -488,8 +528,14 @@ describe("mergeCargo (coalesce merge, E2)", () => {
     expect(applyTo(applyTo(applyTo({}, steps[0]), steps[1]), steps[2])).toEqual({ x: 3 });
   });
   test("a full cargo replaces whatever came before (including a prior partial)", () => {
+    // The accumulated unset names ride along: a reader whose base still holds
+    // `b` must learn it is gone, and a full patch cannot say so by itself.
     expect(mergeCargo({ patch: { a: 1 }, unset: ["b"], partial: true }, { patch: { c: 3 }, full: true }))
-      .toEqual({ patch: { c: 3 }, full: true });
+      .toEqual({ patch: { c: 3 }, full: true, unset: ["b"] });
+  });
+  test("a full cargo drops carried unset names its own patch re-sets (review)", () => {
+    expect(mergeCargo({ patch: { a: 1 }, unset: ["b", "d"] }, { patch: { b: 2 }, full: true }))
+      .toEqual({ patch: { b: 2 }, full: true, unset: ["d"] });
   });
   test("partial is sticky even when the next cargo carries a patch (review blocker)", () => {
     const m = mergeCargo({ partial: true }, { patch: { b: 2 } });

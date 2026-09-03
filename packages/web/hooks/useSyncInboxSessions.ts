@@ -1,7 +1,8 @@
 import { useRef, useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, InboxSession, classifySession, isSub, DISMISS_RECONCILE_WINDOW_MS, visualOrderViewSig } from "../store/inboxStore";
+import { useInboxStore, InboxSession, classifySession, isSub, isConvexId, visualOrderViewSig } from "../store/inboxStore";
+import { WORKING_SET_RECENCY_MS } from "@codecast/shared/contracts";
 import { warmVisibleSessions } from "./inboxWarm";
 import { toast } from "sonner";
 import { soundIdle } from "../lib/sounds";
@@ -11,25 +12,25 @@ import { useEnsureDispatch } from "./useEnsureDispatch";
 import { useLiveInboxSessions, applyLiveInboxIds, LIST_INBOX_SESSIONS_ARGS } from "./useLiveInboxSessions";
 import { onSyncWake } from "./syncWake";
 import { useWatchEffect } from "./useWatchEffect";
-import { bootEagerArmed, cancelReconcileCrawl, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
-import { collectGhostSweepCandidates, collectHiddenResurrectionSuspects } from "./ghostSweep";
+import { cancelReconcileCrawl, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
+import { collectGhostSweepCandidates } from "./ghostSweep";
+import { applyEntityIds, emptyIdsByCollection } from "./useSyncChangeFeed";
 
-// Background reconcile for the inbox session list. The live listInboxSessions
+// The completeness floor for the inbox session list. The live listInboxSessions
 // subscription returns only the ~200 most-recently-updated sessions, so idle ones
-// sink below that window and are absent from a cold cache. This crawl pages EVERY
-// inbox session once and overlays them into the never-prune sessions cache, so the
-// completeness floor isn't the live window's recency cap. Per-session enrichment
-// (message read + children + plan/task gets) is heavy, so pages stay small — a big
-// page times out the UDF. Throttle/incremental semantics mirror the tasks crawl.
-// The completeness crawl only backfills the shared recency horizon (the
-// server's scan window and the working-set selection read the same constant);
-// older sessions stay reachable via search/open.
-const SESSIONS_CRAWL_WINDOW_MS = DISMISS_RECONCILE_WINDOW_MS;
-const SESSIONS_RECONCILE_PAGE_SIZE = 75;
-const SESSIONS_RECONCILE_PAGE_DELAY_MS = 60;
-const SESSIONS_RECONCILE_THROTTLE_MS = 30 * 60 * 1000;
-const BOOT_OUTBOX_DRAIN_POLL_MS = 250;
-// Ghost-sweep policy (age floors + candidate selection) lives in ./ghostSweep
+// sink below that window and are absent from a cold cache. The floor pages EVERY
+// inbox session in the shared recency horizon once into the never-prune sessions
+// cache (older sessions stay reachable via search/open). Per-session enrichment
+// (message read + children + plan/task gets) is heavy, so pages stay small — a
+// big page times out the UDF. Cut once per cold or resynced cache; from then on
+// the sync log is the only healer (see the floor effect below).
+const SESSIONS_FLOOR_WINDOW_MS = WORKING_SET_RECENCY_MS;
+const SESSIONS_FLOOR_PAGE_SIZE = 75;
+const SESSIONS_FLOOR_PAGE_DELAY_MS = 60;
+// The stub sweep's cadence: a timer plus the wake bus, because timers freeze
+// while a window is backgrounded. Purely local cruft cleanup — no server call.
+const STUB_SWEEP_INTERVAL_MS = 30 * 60 * 1000;
+// Stub-sweep policy (age floors + candidate selection) lives in ./ghostSweep
 // so the selection is unit-testable without this hook's React/Convex imports.
 
 
@@ -94,12 +95,16 @@ export function inboxCrawlWsKey(principalId: string | null | undefined): string 
   return principalId ? `inbox:${principalId}` : "skip";
 }
 
-export function hiddenCrawlReady(
-  bootEagerPrincipal: string | null,
-  sessWsKey: string,
-  durableOutboxDrained: boolean,
-): boolean {
-  return sessWsKey !== "skip" && bootEagerPrincipal === sessWsKey && bootEagerArmed(durableOutboxDrained);
+// The floor's second half, pure: the cached rows a complete floor did not
+// return. A recut floor cannot carry what left the inbox scan while this
+// client was away (a killed row is out of it, a deleted row is gone), so
+// these are re-read by id through the authorized byIds path: returned rows
+// land with their hidden stamps, omitted ids are gone or foreign and prune.
+export function floorProbeIds(cached: Iterable<string>, returned: Iterable<string>): string[] {
+  const seen = new Set(returned);
+  const out: string[] = [];
+  for (const id of cached) if (isConvexId(id) && !seen.has(id)) out.push(id);
+  return out;
 }
 
 export function useSyncInboxSessions() {
@@ -327,229 +332,90 @@ export function useSyncInboxSessions() {
     store.redrivePendingMessages();
     store.resumePostCreateSessionIntents();
   }, [hydrated]);
-  // The module-scope crawl state is keyed by this value. The inbox is not a
-  // shared workspace: account A's completion mark must not throttle account B,
-  // and no crawl may begin before Convex has identified the active principal.
+  // THE COMPLETENESS FLOOR — once per cold or resynced cache, never on a
+  // timer or a wake. It pages every session in the horizon into the cache and
+  // stamps backfilledAt (the digest compare's cold-replica gate). Everything
+  // after it rides the sync log: every hide, restore, pin, rename and delete
+  // is a log action, so there is no set to re-crawl and nothing to reconcile.
+  // The watermark clears when the log can no longer prove the gap — retention
+  // passed this client's cursor, or a cursor never existed — in the applier's
+  // resync path (clearCrawlMetaForScope), and the floor is recut here.
+  //
+  // Cut after the applier stamped the scope cursors (E8 / D9): a floor
+  // queried before the stamp can miss writes that commit between its query
+  // and the heads capture. Keyed by the principal: account A's floor must
+  // not stand in for account B's.
   const sessWsKey = inboxCrawlWsKey(currentUser?._id?.toString());
-  // eslint-disable-next-line no-restricted-syntax -- cleanup keyed to the principal; cancels in-flight crawls on wsKey change
-  useEffect(() => () => {
-    cancelReconcileCrawl("sessions");
-    cancelReconcileCrawl("dismissed");
-    cancelReconcileCrawl("stashed");
-  }, [sessWsKey]);
-  const [reconcileNonce, setReconcileNonce] = useState(0);
+  const floorKey = syncMetaKey("sessions", sessWsKey);
+  const floorStamped = useInboxStore((s) => !!s.syncMeta[floorKey]?.backfilledAt);
+  const logStamped = useInboxStore((s) => s.syncLogStampedAt !== null);
+  // eslint-disable-next-line no-restricted-syntax -- cleanup keyed to the principal; cancels an in-flight floor on wsKey change
+  useEffect(() => () => cancelReconcileCrawl("sessions"), [sessWsKey]);
   useEffect(() => {
-    const id = setInterval(() => setReconcileNonce((n) => n + 1), SESSIONS_RECONCILE_THROTTLE_MS);
-    // Timers freeze while a tab/window (or the whole app) is backgrounded, so
-    // a sleeping client misses its ticks exactly while it accumulates
-    // staleness — the "ghost cards after wake" vector. Re-tick on wake: the
-    // crawls behind this nonce are durably throttled per wsKey (a bump inside
-    // the window is a no-op) and the ghost sweep costs nothing when it finds
-    // no candidates. The wake arrives on the platform-neutral syncWake bus —
-    // useSyncCore wires DOM visibility/focus on web, StoreSyncBridge wires
-    // AppState "active" on mobile — replacing the document-gated listener
-    // that never re-ticked on iOS.
-    const offWake = onSyncWake(() => setReconcileNonce((n) => n + 1));
-    return () => {
-      clearInterval(id);
-      offWake();
-    };
-  }, []);
-  useEffect(() => {
-    if (!hydrated || sessWsKey === "skip") return;
-    // Incremental top-up after a full backfill; the FIRST pass seeds since=now-30d
-    // so the completeness floor only pulls the last 30 days (older sessions stay
-    // accessible via search/open). This MUST be a single stable value for the whole
-    // crawl — it becomes the paginated index lower bound, and a wall-clock value
-    // recomputed per page would make each page a different query (InvalidCursor).
-    const meta = useInboxStore.getState().syncMeta[syncMetaKey("sessions", sessWsKey)];
-    const crawlSince = meta?.backfilledAt ? meta.cursor : Date.now() - SESSIONS_CRAWL_WINDOW_MS;
+    if (!hydrated || sessWsKey === "skip" || floorStamped || !logStamped) return;
+    // ONE stable lower bound for the whole floor — it becomes the paginated
+    // index bound, and a wall-clock value recomputed per page would make each
+    // page a different query (InvalidCursor).
+    const floorSince = Date.now() - SESSIONS_FLOOR_WINDOW_MS;
+    const cached = Object.keys(useInboxStore.getState().sessions);
     runReconcileCrawl({
       namespace: "sessions",
       wsKey: sessWsKey,
-      throttleMs: SESSIONS_RECONCILE_THROTTLE_MS,
-      pageDelayMs: SESSIONS_RECONCILE_PAGE_DELAY_MS,
+      // The durable watermark (floorStamped) is the gate; the runner's own
+      // throttle must not hold a recut floor back.
+      throttleMs: 0,
+      pageDelayMs: SESSIONS_FLOOR_PAGE_DELAY_MS,
       maxPages: 200,
       fetchPage: async (cursor) => {
         const page: any = await convex.query(api.conversations.listInboxSessionsPaginated, {
-          ...(crawlSince !== undefined ? { since: crawlSince } : {}),
-          paginationOpts: { numItems: SESSIONS_RECONCILE_PAGE_SIZE, cursor },
+          since: floorSince,
+          paginationOpts: { numItems: SESSIONS_FLOOR_PAGE_SIZE, cursor },
         });
         return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
       },
       // syncTable("sessions") is isDelta/never-prune (SYNC_REGISTRY) — additive overlay.
       onPage: (rows) => useInboxStore.getState().syncTable("sessions", rows as unknown as InboxSession[]),
-      onComplete: (all) => useInboxStore.getState().syncTable("sessions", all as unknown as InboxSession[]),
+      onComplete: async (all) => {
+        useInboxStore.getState().syncTable("sessions", all as unknown as InboxSession[]);
+        // The warm-cache probe (floorProbeIds): only a cache that had rows
+        // before this floor can hold one the floor did not return. Safe on a
+        // resumed (partial) floor too — byIds answers with the truth for every
+        // id, so the only cost of a wider probe is reads.
+        const stale = floorProbeIds(cached, all.map((r: any) => String(r._id)));
+        if (stale.length) await applyEntityIds(convex, { ...emptyIdsByCollection(), sessions: stale });
+      },
     });
-  }, [convex, sessWsKey, reconcileNonce, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [convex, sessWsKey, hydrated, floorStamped, logStamped]);
 
-  // GHOST SWEEP — the sessions cache is never-prune, so a conversation
-  // hard-deleted server-side (cleanup.gcEmptyConversations sweeps abandoned
-  // blank "New Session" rows after 24h) would leave a permanent ghost card.
-  // Collect cached blank rows old enough for the GC (empty, our own, no local
-  // pending state) and VERIFY against the server which still exist; only
-  // confirmed-gone ids are pruned (the planted excludes are sticky, so a wrong
-  // local delete would blind this client to a live session — verify-then-prune
-  // makes that impossible). Runs post-hydration and on the reconcile tick;
-  // normally finds zero candidates and costs nothing.
-  const lastGhostSweepRef = useRef(0);
+  // THE STUB SWEEP — local cruft only. An optimistic create that never landed
+  // server-side exists in this cache alone; a stub the user typed into is a
+  // stuck message and is re-created instead. Server-side deletions are not
+  // this sweep's job: a hard delete is a sync-log delete action, and the log
+  // applier prunes the row on authorized absence (useSyncChangeFeed).
+  const [sweepNonce, setSweepNonce] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setSweepNonce((n) => n + 1), STUB_SWEEP_INTERVAL_MS);
+    const offWake = onSyncWake(() => setSweepNonce((n) => n + 1));
+    return () => {
+      clearInterval(id);
+      offWake();
+    };
+  }, []);
+  const lastSweepRef = useRef(0);
   useEffect(() => {
     if (!hydrated) return;
-    // Wake events can bump the nonce in bursts (cmd-tab flurries); one
-    // existence probe a minute is plenty for a sweep that exists to catch
-    // hard-deleted rows.
-    if (Date.now() - lastGhostSweepRef.current < 60 * 1000) return;
-    lastGhostSweepRef.current = Date.now();
+    // Wake events can bump the nonce in bursts (cmd-tab flurries).
+    if (Date.now() - lastSweepRef.current < 60 * 1000) return;
+    lastSweepRef.current = Date.now();
     const store = useInboxStore.getState();
-    const { stubs, candidates, strandedStubs } = collectGhostSweepCandidates(store);
+    const { stubs, strandedStubs } = collectGhostSweepCandidates(store);
     if (stubs.length) store.pruneGhostSessions(stubs);
     // Stranded stubs the user typed into: re-create + re-send so a "New Session"
     // whose create was given up (offline/outage/rate-limit) stops being a
     // permanently stuck ghost. Idempotent server-side, so a stub mid outbox
     // replay just resolves to the same row.
     for (const stubId of strandedStubs) store.healStrandedStub(stubId).catch(() => {});
-    if (!candidates.length) return;
-    convex.query(api.conversations.existingConversationIds, { ids: candidates })
-      .then((existing: string[]) => {
-        const exists = new Set(existing);
-        const gone = candidates.filter((id) => !exists.has(id));
-        if (gone.length) useInboxStore.getState().pruneGhostSessions(gone);
-      })
-      .catch(() => {});
-  }, [convex, reconcileNonce, hydrated]);
-
-  // A COMPLETE reconcile's clear pass un-hides every local row absent from the
-  // server's hidden set — correct for cross-device restores, catastrophic for
-  // conversations hard-deleted server-side (their absence means GONE; un-hiding
-  // resurrects a ghost the user can never dismiss again, because dispatch drops
-  // patches on missing docs). Disambiguate BEFORE applying: verify the
-  // would-be-cleared set's existence and prune confirmed-gone ids (same
-  // verify-then-prune contract as the ghost sweep), then run the reconcile —
-  // its clear pass now only touches rows that really exist. Suspects are empty
-  // in the steady state, so this normally adds no server traffic. On a failed
-  // verify (offline/transient) we still apply: a ghost may transiently
-  // resurrect, and the next crawl re-verifies.
-  const applyHiddenReconcileVerified = useCallback(async (
-    rows: Array<{ _id: string }>,
-    complete: boolean,
-    field: "inbox_dismissed_at" | "inbox_stashed_at",
-    apply: (rows: Array<{ _id: string }>, final: boolean) => void,
-    isCurrent: () => boolean,
-  ) => {
-    if (!isCurrent()) return;
-    if (complete) {
-      const suspects = collectHiddenResurrectionSuspects(
-        useInboxStore.getState(),
-        field,
-        new Set(rows.map((r) => r._id)),
-      );
-      if (suspects.length) {
-        try {
-          const existing: string[] = await convex.query(api.conversations.existingConversationIds, { ids: suspects });
-          if (!isCurrent()) return;
-          const exists = new Set(existing);
-          const gone = suspects.filter((id) => !exists.has(id));
-          if (gone.length) useInboxStore.getState().pruneGhostSessions(gone);
-        } catch {}
-      }
-    }
-    if (!isCurrent()) return;
-    apply(rows, complete);
-  }, [convex]);
-
-  // BOOT OUTBOX GATE — holds the hidden-set crawls until the durable outbox has
-  // replayed and verified empty. Without it, a hide the user made offline is
-  // still parked in the outbox while the crawl asks the server for the hidden
-  // set, and the CLEAR pass un-hides it — see bootEagerArmed.
-  // Polled rather than subscribed: _hasBootOutboxDrained is a
-  // plain accessor injected by mutativeMiddleware, not reactive store state.
-  const [bootEagerPrincipal, setBootEagerPrincipal] = useState<string | null>(null);
-  // eslint-disable-next-line no-restricted-syntax -- polled outbox-drain gate; effect manages its own interval
-  useEffect(() => {
-    if (!hydrated || sessWsKey === "skip" || bootEagerPrincipal === sessWsKey) return;
-    const check = () => {
-      const drained = !!(useInboxStore.getState() as any)._hasBootOutboxDrained?.();
-      if (!bootEagerArmed(drained)) return;
-      setBootEagerPrincipal(sessWsKey);
-      clearInterval(id);
-    };
-    const id = setInterval(check, BOOT_OUTBOX_DRAIN_POLL_MS);
-    check();
-    return () => clearInterval(id);
-  }, [hydrated, sessWsKey, bootEagerPrincipal]);
-
-  // DISMISS RECONCILE — durable cross-device dismiss/un-dismiss propagation.
-  // The live listInboxSessions channel only reaches a CONNECTED client, and the
-  // session crawl above can't carry a dismiss (dismiss doesn't move updated_at,
-  // and the crawl skips dismissed rows). So a device asleep at dismiss time never
-  // learns, and the never-prune cache keeps the session active forever. This
-  // lightweight crawl pages the CURRENT dismissed set keyed on inbox_dismissed_at
-  // ({_id, ts} only — cheap) and overlays it via applyDismissedReconcile: SET on
-  // each page, SET + CLEAR on completion. Full scan (no `since`) — a dismiss-only
-  // write has no updated_at watermark to resume from, and the set is small.
-  useEffect(() => {
-    // The durable throttle is not a safe fallback while the outbox is replaying:
-    // a cold/expired watermark would still launch the CLEAR pass immediately.
-    const durableOutboxDrained = !!(useInboxStore.getState() as any)._hasBootOutboxDrained?.();
-    if (!hydrated || !hiddenCrawlReady(bootEagerPrincipal, sessWsKey, durableOutboxDrained)) return;
-    // STABLE window bound for the WHOLE crawl — computed once here, never inside
-    // the server handler. The lite queries range-scan their index from this lower
-    // bound; a per-page Date.now() would shift the range so each continuation
-    // cursor is InvalidCursor, capping the crawl at its first page (~500 rows)
-    // and leaving a heavy account's older dismisses unreconciled — they then
-    // resurface on other tabs/devices. Mirrors the sessions crawl's `crawlSince`.
-    // Must equal the server's INBOX_DISMISSED_WINDOW_MS.
-    const hiddenSince = Date.now() - DISMISS_RECONCILE_WINDOW_MS;
-    runReconcileCrawl({
-      namespace: "dismissed",
-      wsKey: sessWsKey,
-      throttleMs: SESSIONS_RECONCILE_THROTTLE_MS,
-      // The first run after a page load ignores the durable watermark:
-      // this crawl is the only healer for cross-device dismisses, so honoring it
-      // left a reloading client staring at resurrected killed sessions for up to
-      // the full 30 minutes. The effect-level gate above prevents any pre-replay
-      // CLEAR pass; once here, the bypass is always armed.
-      bootEager: true,
-      isCurrent: () => !!(useInboxStore.getState() as any)._hasBootOutboxDrained?.(),
-      pageDelayMs: SESSIONS_RECONCILE_PAGE_DELAY_MS,
-      maxPages: 50,
-      fetchPage: async (cursor) => {
-        const page: any = await convex.query(api.conversations.listDismissedSessionsLite, {
-          since: hiddenSince,
-          paginationOpts: { numItems: 1000, cursor },
-        });
-        return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
-      },
-      onPage: (rows) => useInboxStore.getState().applyDismissedReconcile(rows as any, false),
-      // CLEAR (un-dismiss propagation) runs ONLY on a provably-complete crawl:
-      // `complete` is false if the crawl stopped at maxPages, so a truncated set
-      // can never wrongly un-dismiss the un-fetched tail.
-      onComplete: (all, complete, isCurrent) => applyHiddenReconcileVerified(all as any, complete, "inbox_dismissed_at",
-        (rows, final) => useInboxStore.getState().applyDismissedReconcile(rows as any, final), isCurrent),
-    });
-    // Stashed twin — same mechanics, keyed on inbox_stashed_at.
-    runReconcileCrawl({
-      namespace: "stashed",
-      wsKey: sessWsKey,
-      throttleMs: SESSIONS_RECONCILE_THROTTLE_MS,
-      bootEager: true,
-      isCurrent: () => !!(useInboxStore.getState() as any)._hasBootOutboxDrained?.(),
-      pageDelayMs: SESSIONS_RECONCILE_PAGE_DELAY_MS,
-      maxPages: 50,
-      fetchPage: async (cursor) => {
-        const page: any = await convex.query(api.conversations.listStashedSessionsLite, {
-          since: hiddenSince,
-          paginationOpts: { numItems: 1000, cursor },
-        });
-        return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
-      },
-      onPage: (rows) => useInboxStore.getState().applyStashedReconcile(rows as any, false),
-      onComplete: (all, complete, isCurrent) => applyHiddenReconcileVerified(all as any, complete, "inbox_stashed_at",
-        (rows, final) => useInboxStore.getState().applyStashedReconcile(rows as any, final), isCurrent),
-    });
-    // bootEagerPrincipal settling re-fires this effect to run the first pass; the
-    // crawls' own in-session doneAt keeps later re-fires from double-crawling.
-  }, [convex, sessWsKey, reconcileNonce, hydrated, bootEagerPrincipal]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sweepNonce, hydrated]);
 
   return { activeSessions: inboxSessions };
 }

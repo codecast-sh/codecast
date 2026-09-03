@@ -128,19 +128,25 @@ so pages must apply in fetch order. For each range action, in position order, th
 store's sync actions only (replication invariant 4):
 
 1. `delete` → collect for the E5 verification batch, unless the replica does not hold the
-   id (nothing to prune, no probe).
+   id (nothing to prune, no probe). For sessions "hold" means any of the three twins —
+   the inbox row, the conversation meta, the message list — since an open per view
+   conversation can exist without an inbox row and the prune clears all three.
 2. `full` → `clearFeedExcludes` + `syncTable(coll, [row], isDelta)`.
-3. patch, base present → `applyCargoFields` → the engine's `applySyncPatch` (review
+3. full, no base, sessions → `byIds` only: an inbox row needs its triage stamps and
+   liveness facts (the projection strips both from cargo), and a stamp less seed would
+   render as a blank card for a round trip. Other collections seed from the full cargo
+   and refetch for enrichment.
+4. patch, base present → `applyCargoFields` → the engine's `applySyncPatch` (review
    blocker): it visits ONLY the locks for fields the patch or `unset` names, so a lock on an
    omitted field — a local clear is a lock with value undefined — survives; a named field's
    lock wins until its value echoes; an `unset` echoes an undefined valued lock. The
    collection's strip list applies here as on every channel. Only the collection itself is
    written — the `conversations` meta twin has its own feeders.
-4. patch, base absent → collect for the `byIds` batch (out of window row).
-5. `partial` or a patch touching `ENRICH_TRIGGER_FIELDS[coll]` → also collect for a
+5. patch, base absent → collect for the `byIds` batch (out of window row).
+6. `partial` or a patch touching `ENRICH_TRIGGER_FIELDS[coll]` → also collect for a
    `byIds` refetch (re enrichment), after applying the raw fields so the visible change is
    instant and the joins catch up a round trip later.
-6. Sessions/conversations: strip `INBOX_FACT_FIELDS` from every patch before applying —
+7. Sessions/conversations: strip `INBOX_FACT_FIELDS` from every patch before applying —
    the liveness overlay is the single fact writer (convergence C1).
 
 The applier counts, per run, patches applied directly vs ids sent to `byIds`, shows the
@@ -170,8 +176,36 @@ on the liveness overlay; conversation patches DO apply through the log (so `byId
 the sessions hot path), and window retirement is filed as a follow up gated on pl-484.
 
 Each retirement is measured: WebSocket bytes per write for the collection before and after
-(the wsframes harness), and the E6 direct/refetch ratio. A retirement that does not move
-the bytes is reverted, not kept.
+(`scripts/perf/ws-bytes.mjs`, a CDP frame meter that reassembles `TransitionChunk` parts
+so the large pushes it exists to measure are attributed), and the E6 direct/refetch ratio.
+A retirement that does not move the bytes is reverted, not kept.
+
+**Measured (2026-09-02, dev web against prod convex, the host tab, 60 s, several agent
+sessions writing).** After retirement the tasks, docs, plans and projects list queries no
+longer appear on the socket at steady state at all; `syncLog:getRange` carried 29 KB in 24
+calls; a CLI task status flip applied directly with one project count refetch and no task
+or plan refetch. What remains is the sessions surface: `listInboxSessions` 29.8 MB in 17
+pushes (1.75 MB each) and `sessionsLiveness` 10.5 MB in 50 pushes, 97 percent of all bytes.
+That is the pl-484 gated follow up (ct-47800), and this number is why it is next.
+
+**The floor's contract (review).** `useBootstrapCollection` is the one shot floor:
+
+- It waits for `syncLogStampedAt`, which the applier sets after its first heads pass stamped
+  every scope cursor (D9). A floor queried BEFORE the stamp can miss a write that commits
+  between the floor's query and the heads capture; after it, such a write has a position
+  above the cursor and replays.
+- It applies its rows exactly once per (collection, args) per page session, however many
+  mounts share the key. A remount after the floor landed re applies nothing: the snapshot
+  is older than the patches that arrived since, and re overlaying it would revert them.
+- A failed fetch is forgotten, so the next mount retries.
+
+**Joined counts on projects.** A project row carries `task_counts`, `plan_count`,
+`active_plan_count` and `doc_count`, joined by the server from other rows, so no patch on
+the project ever moves them. The applier therefore refetches a HELD project whenever a
+member change can change a count (a task or plan status change, a create, a delete, a
+project move; `projectCountTouched`), and the projects collection compares `task_counts`
+by content (`deepFields`) — the engine's identity reuse skips object fields, so without
+that the refetched row would land as a no op.
 
 ### E9 — Rollout and compat
 
@@ -188,7 +222,11 @@ but no coalesced row, so after re enabling both the rows' cargo and every client
 lie. Ops must run `packages/convex/run.sh syncLogPrune:markResyncAll` once after re enabling
 (the wrapper does deploy.sh's env dance; a bare `npx convex run` targets the local dev backend): it sets every scope's
 floor to its head, so every client takes the D7 resync path (drop cursor, full cold
-backfill) instead of trusting its base.
+backfill) instead of trusting its base. It bumps a synthetic position first so a client
+that was fully caught up (cursor equal to the old head) falls below the floor too, and
+the head change wakes open tabs. Rows at or below a floor are unreachable by every reader,
+so the retention walk reaps them regardless of age (otherwise a sweep's rows would sit
+below the floor forever and trip the retention alarm).
 
 ### E10 — Validation
 

@@ -3,6 +3,7 @@ import { create as mutativeCreate } from "mutative";
 import { groupPatchesByTable } from "../mutativeMiddleware";
 import {
   chipBucketFilters,
+  chipProjectFilters,
   chipMatchesSession,
   computeManualSortKey,
   computeReorderUpdates,
@@ -112,9 +113,7 @@ describe("orderSections bucket filter", () => {
       bucketByConv,
     });
     expect(bucketExcluded.map((s) => s._id)).toEqual([idB]);
-    const projectExcluded = orderSections(sessions, new Set(), "codecast", undefined, {
-      filterExclude: true,
-    });
+    const projectExcluded = orderSections(sessions, new Set(), [{ id: "codecast", path: null, exclude: true }]);
     expect(projectExcluded.map((s) => s._id)).toEqual([idB]);
   });
 
@@ -142,8 +141,9 @@ describe("chipMatchesSession exclude mode", () => {
     expect(chipMatchesSession(outBucket, { bucketFilters: [{ id: "bucket1", exclude: true }], bucketByConv })).toBe(true);
     const inProj = session(convexId("p1"), { project_path: "/x/codecast" });
     const outProj = session(convexId("p2"), { project_path: "/x/other" });
-    expect(chipMatchesSession(inProj, { projectFilter: "codecast", exclude: true, bucketByConv })).toBe(false);
-    expect(chipMatchesSession(outProj, { projectFilter: "codecast", exclude: true, bucketByConv })).toBe(true);
+    const hideCodecast = [{ id: "codecast", path: null, exclude: true }];
+    expect(chipMatchesSession(inProj, { projectFilters: hideCodecast, bucketByConv })).toBe(false);
+    expect(chipMatchesSession(outProj, { projectFilters: hideCodecast, bucketByConv })).toBe(true);
   });
 
   it("mid-create stubs pass the bucket chips in both polarities", () => {
@@ -400,6 +400,97 @@ describe("toggleBucketFilterTerm (shift-click filter list)", () => {
     store.setActiveProjectFilter("codecast", "/x/codecast");
     expect(filters()).toEqual([]);
     expect(useInboxStore.getState().extraBucketFilters).toEqual([]);
+  });
+});
+
+describe("toggleProjectFilterTerm (shift-click on project chips)", () => {
+  const resetFilters = () => {
+    useInboxStore.setState({
+      activeBucketFilter: null,
+      extraBucketFilters: [],
+      activeProjectFilter: null,
+      activeProjectPath: null,
+      extraProjectFilters: [],
+      chipFilterExclude: false,
+      pending: {},
+    });
+  };
+  beforeEach(resetFilters);
+  afterEach(resetFilters);
+  const filters = () => chipProjectFilters(useInboxStore.getState());
+
+  it("the first term behaves like a plain/alt click, clearing the label axis", () => {
+    const store = useInboxStore.getState();
+    store.toggleBucketFilterTerm("b1", false);
+    store.toggleBucketFilterTerm("b2", true);
+    store.toggleProjectFilterTerm("web", "/x/web", false);
+    const st = useInboxStore.getState();
+    expect(st.activeProjectFilter).toBe("web");
+    expect(st.activeProjectPath).toBe("/x/web");
+    expect(st.activeBucketFilter).toBeNull();
+    expect(st.extraBucketFilters).toEqual([]);
+    expect(filters()).toEqual([{ id: "web", path: "/x/web", exclude: false }]);
+  });
+
+  it("appends, flips, removes, and promotes exactly like the label list", () => {
+    const store = useInboxStore.getState();
+    store.toggleProjectFilterTerm("web", "/x/web", false);
+    store.toggleProjectFilterTerm("cli", "/x/cli", false);
+    store.toggleProjectFilterTerm("docs", "/x/docs", true);
+    expect(filters()).toEqual([
+      { id: "web", path: "/x/web", exclude: false },
+      { id: "cli", path: "/x/cli", exclude: false },
+      { id: "docs", path: "/x/docs", exclude: true },
+    ]);
+    store.toggleProjectFilterTerm("cli", "/x/cli", true);
+    expect(filters()[1]).toEqual({ id: "cli", path: "/x/cli", exclude: true });
+    // Removing the head promotes the first extra, path and polarity included.
+    store.toggleProjectFilterTerm("web", "/x/web", false);
+    const st = useInboxStore.getState();
+    expect(st.activeProjectFilter).toBe("cli");
+    expect(st.activeProjectPath).toBe("/x/cli");
+    expect(st.chipFilterExclude).toBe(true);
+    expect(st.extraProjectFilters).toEqual([{ id: "docs", path: "/x/docs", exclude: true }]);
+    store.toggleProjectFilterTerm("cli", "/x/cli", true);
+    store.toggleProjectFilterTerm("docs", "/x/docs", true);
+    expect(filters()).toEqual([]);
+    expect(useInboxStore.getState().chipFilterExclude).toBe(false);
+  });
+
+  it("a plain click collapses the list; a label click clears it; history restores it whole", () => {
+    const store = useInboxStore.getState();
+    store.toggleProjectFilterTerm("web", "/x/web", false);
+    store.toggleProjectFilterTerm("cli", "/x/cli", false);
+    store.setActiveProjectFilter("cli", "/x/cli");
+    expect(filters()).toEqual([{ id: "cli", path: "/x/cli", exclude: false }]);
+    store.toggleProjectFilterTerm("web", "/x/web", false);
+    store.setActiveBucketFilter("b1");
+    expect(filters()).toEqual([]);
+    expect(useInboxStore.getState().extraProjectFilters).toEqual([]);
+    store.setActiveProjectFilter("web", "/x/web", true, [{ id: "cli", path: "/x/cli", exclude: false }]);
+    expect(filters()).toEqual([
+      { id: "web", path: "/x/web", exclude: true },
+      { id: "cli", path: "/x/cli", exclude: false },
+    ]);
+    store.setActiveProjectFilter(null, null, false, [{ id: "cli", path: "/x/cli", exclude: false }]);
+    expect(useInboxStore.getState().extraProjectFilters).toEqual([]);
+  });
+
+  it("a multi-project include list is a union; the matcher is the label matcher", () => {
+    const bucketByConv = {} as Record<string, string | undefined>;
+    const web = session(convexId("w"), { project_path: "/x/web" });
+    const cli = session(convexId("c"), { project_path: "/x/cli" });
+    const docs = session(convexId("d"), { project_path: "/x/docs" });
+    const terms = [
+      { id: "web", path: "/x/web", exclude: false },
+      { id: "cli", path: "/x/cli", exclude: false },
+    ];
+    expect(chipMatchesSession(web, { projectFilters: terms, bucketByConv })).toBe(true);
+    expect(chipMatchesSession(cli, { projectFilters: terms, bucketByConv })).toBe(true);
+    expect(chipMatchesSession(docs, { projectFilters: terms, bucketByConv })).toBe(false);
+    const hideBoth = terms.map((t) => ({ ...t, exclude: true }));
+    expect(chipMatchesSession(web, { projectFilters: hideBoth, bucketByConv })).toBe(false);
+    expect(chipMatchesSession(docs, { projectFilters: hideBoth, bucketByConv })).toBe(true);
   });
 });
 

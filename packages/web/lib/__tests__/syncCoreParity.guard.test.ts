@@ -119,8 +119,6 @@ const SESSION_REPLICA_CHANNELS = [
   "conversations.teamSessionsLiveness",
   "conversations.listInboxSessionsPaginated",
   "conversations.getInboxSessionsByIds",
-  "conversations.listDismissedSessionsLite",
-  "conversations.listStashedSessionsLite",
   "syncLog.getHeads",
   "syncLog.getRange",
   "sessionDecisions.listForUser",

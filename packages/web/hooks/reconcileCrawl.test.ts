@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "../store/inboxStore";
-import { bootEagerArmed, cancelReconcileCrawl, crawlThrottledAt, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
-import { hiddenCrawlReady, inboxCrawlWsKey } from "./useSyncInboxSessions";
+import { cancelReconcileCrawl, crawlThrottledAt, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
+import { inboxCrawlWsKey } from "./useSyncInboxSessions";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -41,32 +41,6 @@ describe("crawlThrottledAt", () => {
   });
 });
 
-// The eager crawl's CLEAR pass un-hides rows the server's hidden set omits, so
-// running it before the durable outbox replays can resurrect a kill the user made
-// offline: the parked dispatch hasn't reached the server, and the pending field
-// lock that would have protected the row is released as stale after 5 minutes.
-// The durable throttle used to mask this by skipping the boot crawl entirely.
-describe("bootEagerArmed", () => {
-  it("holds the bypass while the outbox still has an unreplayed boot backlog", () => {
-    expect(bootEagerArmed(false)).toBe(false);
-  });
-
-  it("arms as soon as the boot drain reports every parked entry attempted", () => {
-    expect(bootEagerArmed(true)).toBe(true);
-  });
-
-  it("never arms a crawl against an unreplayed durable outbox", () => {
-    expect(bootEagerArmed(false)).toBe(false);
-  });
-
-  it("composes with the throttle once armed", () => {
-    // The hook holds the crawl entirely while unarmed. Once armed, the persisted
-    // watermark is ignored and the crawl runs.
-    const armed = bootEagerArmed(false);
-    expect(crawlThrottledAt(NOW, THROTTLE, 0, NOW - 60_000, armed)).toBe(true);
-    expect(crawlThrottledAt(NOW, THROTTLE, 0, NOW - 60_000, bootEagerArmed(true))).toBe(false);
-  });
-});
 
 // The predicate can be right while the option is unplumbed, so exercise the real
 // crawl: boot-eager must page despite a fresh persisted watermark, then throttle.
@@ -346,39 +320,4 @@ describe("inbox principal crawl keys", () => {
     }
   });
 
-  it("rechecks durable outbox readiness after a previously armed principal wakes", () => {
-    const key = inboxCrawlWsKey("account-a");
-    expect(hiddenCrawlReady(key, key, true)).toBe(true);
-    // A later failed/offline enqueue reopens the durable outbox; a wake must
-    // not use the old principal latch to launch a hidden-set CLEAR crawl.
-    expect(hiddenCrawlReady(key, key, false)).toBe(false);
-  });
-
-  it("does not complete a hidden CLEAR after the durable outbox reopens", async () => {
-    const namespace = `hidden-outbox-fence-${Math.random()}`;
-    let durableOutboxDrained = true;
-    let releaseFetch: (() => void) | null = null;
-    let clearCalls = 0;
-    runReconcileCrawl({
-      namespace,
-      wsKey: inboxCrawlWsKey("account-a"),
-      throttleMs: THROTTLE,
-      pageDelayMs: 0,
-      maxPages: 1,
-      isCurrent: () => durableOutboxDrained,
-      fetchPage: () => new Promise((resolve) => {
-        releaseFetch = () => resolve({ rows: [], isDone: true, continueCursor: null });
-      }),
-      onPage: () => {},
-      onComplete: () => { clearCalls++; },
-    });
-    await delay(10);
-    // A failed/offline enqueue makes the durable queue non-empty before this
-    // crawl can run its CLEAR phase.
-    durableOutboxDrained = false;
-    releaseFetch?.();
-    await delay(30);
-
-    expect(clearCalls).toBe(0);
-  });
 });

@@ -42,20 +42,20 @@ export type DeclaredInboxOverlay = (typeof DECLARED_INBOX_OVERLAYS)[number];
 // lie. This is the `revive` overlay's bound.
 export const BLOCKED_REVIVE_TTL_MS = 120_000;
 
-// How long a hide/un-hide field override keeps outranking the server's
-// authoritative hidden set. The override exists to protect an IN-FLIGHT local
-// change; its dispatch settles within seconds. Past this, a disagreement with
-// the reconcile crawl means the value was overturned elsewhere (another
-// device, or a server-side restore) — and since hidden rows leave the live
-// channel, no echo will ever arrive to clear the override. Without this
-// release the originating device pins the row hidden FOREVER (ct-36973).
-// This is the `triage_gesture` overlay's bound.
+// How long a triage field override keeps outranking authoritative rows. The
+// override exists to protect an IN-FLIGHT local change; its dispatch settles
+// within seconds, and its acknowledgement retires it at the write's log
+// position (stampSyncAck / retireAckedPending). This bound covers the lock
+// with no acknowledgement to come — a bridge-planted retained value, a write
+// superseded elsewhere before its echo — which would otherwise re-assert its
+// value over every authoritative row forever (ct-36973). This is the
+// `triage_gesture` overlay's bound.
 export const HIDDEN_OVERRIDE_SETTLE_MS = 5 * 60 * 1000;
 
 // The triage fields whose in-flight pending locks make a row overlay-affected:
-// exactly the coupled set the hide/pin gestures stamp (see
-// applyHiddenReconcileInDraft's retire list, plus the park/defer twins that
-// move a row between rest buckets).
+// exactly the coupled set the hide/pin gestures stamp (hideSessionInDraft and
+// the gesture bridge), plus the park/defer twins that move a row between rest
+// buckets.
 export const TRIAGE_PENDING_FIELDS = [
   "inbox_dismissed_at",
   "inbox_stashed_at",

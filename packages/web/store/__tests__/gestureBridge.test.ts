@@ -871,8 +871,8 @@ describe("gesture bridge ordering guards", () => {
         useInboxStore.getState().applyGestureBridge({ kind: "hide", mode, ids: [REAL_A], ts: 900 });
         let state = useInboxStore.getState();
         expect(state.sessions[REAL_A][hiddenField]).toBe(900);
-        expect(state.pending[`sessions:${REAL_A}:inbox_pinned_at`]).toEqual({ type: "field", value: null, ts: 900, hideAck: 900 });
-        expect(state.pending[`conversations:${REAL_A}:inbox_pinned_at`]).toEqual({ type: "field", value: null, ts: 900, hideAck: 900 });
+        expect(state.pending[`sessions:${REAL_A}:inbox_pinned_at`]).toEqual({ type: "field", value: null, ts: 900 });
+        expect(state.pending[`conversations:${REAL_A}:inbox_pinned_at`]).toEqual({ type: "field", value: null, ts: 900 });
 
         // The late pin is older than the hide's pin-clear tombstone.
         useInboxStore.getState().applyGestureBridge({ kind: "pin", id: REAL_A, pinned: true, pinnedAt: 500, ts: 500 });
@@ -883,82 +883,42 @@ describe("gesture bridge ordering guards", () => {
         expect(enqueued).toEqual([]);
         expect(dispatched).toEqual([]);
 
-        // A stale hidden-reconcile page cannot retire the coupled locks.
-        if (mode === "kill") {
-          useInboxStore.getState().applyDismissedReconcile([{ _id: REAL_A, inbox_dismissed_at: 500 }], false);
-        } else {
-          useInboxStore.getState().applyStashedReconcile([{ _id: REAL_A, inbox_stashed_at: 500 }], false);
-        }
-        expect(useInboxStore.getState().pending[`conversations:${REAL_A}:inbox_pinned_at`]).toBeDefined();
-
-        // Hidden rows never reach normal sessions sync. Their one-field
-        // reconcile acknowledgement retires every lock from this hide transition.
-        if (mode === "kill") {
-          useInboxStore.getState().applyDismissedReconcile([{ _id: REAL_A, inbox_dismissed_at: 900 }], false);
-        } else {
-          useInboxStore.getState().applyStashedReconcile([{ _id: REAL_A, inbox_stashed_at: 900 }], false);
-        }
+        // The sender's dispatch acknowledgement, bridged: every lock on a
+        // field the write dispatched — the pin tombstone and its is_pinned
+        // twin included — retires at the write's log position (the applier's
+        // cursor has passed it here). The barrier lock on the hidden field the
+        // gesture did NOT dispatch keeps its retained value until the row's
+        // next echo carries it.
+        const other = mode === "kill" ? "inbox_stashed_at" : "inbox_dismissed_at";
+        useInboxStore.getState().syncTable("syncMeta", { "synclog:v1:user:me": { cursor: 10 } }, { kind: "singleton" });
+        useInboxStore.getState().applyGestureBridge({
+          kind: "ack", sentAt: 950, ts: 950, ack: [{ scope_key: "user:me", position: 7 }],
+          patches: { conversations: { [REAL_A]: { [hiddenField]: 900, inbox_pinned_at: null, inbox_stash_hidden: null } } },
+        });
         const pending = useInboxStore.getState().pending;
         for (const coll of ["sessions", "conversations"]) {
-          expect(pending[`${coll}:${REAL_A}:inbox_dismissed_at`]).toBeUndefined();
-          expect(pending[`${coll}:${REAL_A}:inbox_stashed_at`]).toBeUndefined();
+          expect(pending[`${coll}:${REAL_A}:${hiddenField}`]).toBeUndefined();
           expect(pending[`${coll}:${REAL_A}:inbox_pinned_at`]).toBeUndefined();
+          expect(pending[`${coll}:${REAL_A}:${other}`]).toMatchObject({ type: "field", ts: 900 });
         }
+        expect(pending[`sessions:${REAL_A}:is_pinned`]).toBeUndefined();
 
-        // With the hidden acknowledgement retired, a later authoritative pin is
-        // no longer overwritten by the old null tombstone on either twin.
+        // With the locks retired, a later authoritative pin is no longer
+        // overwritten by the old null tombstone on either twin; the barrier
+        // lock retires on this echo of its retained value.
         useInboxStore.getState().syncTable("sessions", [session(REAL_A, { is_pinned: true, [hiddenField]: 900, inbox_pinned_at: 1_000 } as any)]);
         useInboxStore.getState().syncRecord("conversations", REAL_A, { _id: REAL_A, [hiddenField]: 900, inbox_pinned_at: 1_000 });
         state = useInboxStore.getState();
         expect(state.sessions[REAL_A].is_pinned).toBe(true);
         expect(state.sessions[REAL_A].inbox_pinned_at).toBe(1_000);
         expect(state.conversations[REAL_A].inbox_pinned_at).toBe(1_000);
+        expect(state.pending[`sessions:${REAL_A}:${other}`]).toBeUndefined();
       }
     } finally {
       Date.now = originalNow;
     }
   });
 
-  it("a local hide uses its visible timestamp as the hidden-reconcile acknowledgement anchor", () => {
-    seed({
-      sessions: { [REAL_A]: session(REAL_A, { is_pinned: true, inbox_pinned_at: 100 } as any) },
-      conversations: { [REAL_A]: { _id: REAL_A, inbox_pinned_at: 100 } },
-    });
-    const originalNow = Date.now;
-    let calls = 0;
-    Date.now = () => (++calls === 1 ? 1_001 : 1_002);
-    try {
-      // hideSessionInDraft samples 1001 for the durable dismiss value; the
-      // middleware samples 1002 separately for local lock freshness.
-      useInboxStore.getState().killSession(REAL_A);
-      let state = useInboxStore.getState();
-      expect(state.sessions[REAL_A].inbox_dismissed_at).toBe(1_001);
-      expect(state.pending[`sessions:${REAL_A}:inbox_pinned_at`]).toMatchObject({
-        type: "field", value: null, ts: 1_002, hideAck: 1_001,
-      });
-      expect(state.pending[`conversations:${REAL_A}:inbox_pinned_at`]).toMatchObject({
-        type: "field", value: null, ts: 1_002, hideAck: 1_001,
-      });
-
-      useInboxStore.getState().applyDismissedReconcile([{ _id: REAL_A, inbox_dismissed_at: 1_000 }], false);
-      expect(useInboxStore.getState().pending[`conversations:${REAL_A}:inbox_pinned_at`]).toBeDefined();
-
-      // A newer hide supersedes the local transition. Its acknowledgement
-      // anchor must not be retired by the older operation's eventual echo.
-      useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "kill", ids: [REAL_A], ts: 1_003 });
-      useInboxStore.getState().applyDismissedReconcile([{ _id: REAL_A, inbox_dismissed_at: 1_001 }], false);
-      expect(useInboxStore.getState().pending[`conversations:${REAL_A}:inbox_pinned_at`]).toMatchObject({ hideAck: 1_003 });
-
-      useInboxStore.getState().applyDismissedReconcile([{ _id: REAL_A, inbox_dismissed_at: 1_003 }], false);
-      state = useInboxStore.getState();
-      for (const coll of ["sessions", "conversations"]) {
-        expect(state.pending[`${coll}:${REAL_A}:inbox_dismissed_at`]).toBeUndefined();
-        expect(state.pending[`${coll}:${REAL_A}:inbox_pinned_at`]).toBeUndefined();
-      }
-    } finally {
-      Date.now = originalNow;
-    }
-  });
 
   it("an undo pin with an older pinnedAt still orders after delayed hide or stash", () => {
     for (const [mode, hiddenField] of [["kill", "inbox_dismissed_at"], ["stash", "inbox_stashed_at"]] as const) {
@@ -1197,8 +1157,8 @@ describe("gesture bridge receiver is local-only", () => {
     useInboxStore.getState().applyGestureBridge({ kind: "hide", mode: "kill", ids: [REAL_A], ts: 500 });
 
     const p = useInboxStore.getState().pending;
-    expect(p[`sessions:${REAL_A}:inbox_dismissed_at`]).toEqual({ type: "field", value: 500, ts: 500, hideAck: 500 });
-    expect(p[`conversations:${REAL_A}:inbox_dismissed_at`]).toEqual({ type: "field", value: 500, ts: 500, hideAck: 500 });
+    expect(p[`sessions:${REAL_A}:inbox_dismissed_at`]).toEqual({ type: "field", value: 500, ts: 500 });
+    expect(p[`conversations:${REAL_A}:inbox_dismissed_at`]).toEqual({ type: "field", value: 500, ts: 500 });
   });
 
   // THE regression test for the field-lock defect. A sessions crawl already in

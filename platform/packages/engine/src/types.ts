@@ -117,6 +117,14 @@ export type SyncOpts = {
   // every push. List such a field here to exclude it from the version key. Safe
   // to omit — a mistake here only costs an extra render, never a dropped update.
   ignoreFields?: string[];
+  // Non-scalar fields the identity reuse must compare by CONTENT. The version
+  // key skips objects and arrays (a live push re-sends every row as fresh
+  // objects, so reference compare would churn every identity and content
+  // compare of every nested value would cost a stringify per row per push).
+  // That skip assumes a nested change always comes with a scalar change; a
+  // server-joined field (a project's task counts, derived from other rows)
+  // breaks the assumption and would be dropped. Name such fields here.
+  deepFields?: string[];
   // Fields owned by a separate overlay channel, not the base payload. On a base
   // sync these keep their previous (overlay-set) value rather than being
   // clobbered by the base's null — so the base list and the overlay can write

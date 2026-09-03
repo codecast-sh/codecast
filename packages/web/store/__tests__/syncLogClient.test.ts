@@ -307,3 +307,84 @@ describe("applyLogPage: a delete for an id the replica does not hold needs no by
     expect((useInboxStore.getState().syncMeta as any)[scopeMetaKey("team:T")].cursor).toBe(1);
   });
 });
+
+describe("applyLogPage: review findings (sessions twins, seeds, project counts)", () => {
+  const { catchUpScope, scopeMetaKey, catchUp } = require("../../hooks/useSyncChangeFeed");
+  const scripted = (pages: any[]) => {
+    const calls: any[] = [];
+    return { calls, query: async (_fn: any, args: any) => { calls.push(args); return pages.shift(); } };
+  };
+  const base = (extra: any) => ({
+    syncMeta: { [scopeMetaKey("user:u1")]: { cursor: 0 } },
+    pending: {},
+    syncLogApplyStats: { direct: 0, refetch: 0 },
+    ...extra,
+  });
+
+  test("a delete for a conversation held only as a per-view twin still gets the absence probe", async () => {
+    useInboxStore.setState(base({ sessions: {}, conversations: { c1: { _id: "c1", title: "open in a tab" } }, messages: { c1: [] } }) as any);
+    const convex = scripted([
+      { actions: [{ position: 1, entity_type: "conversations", entity_id: "c1", op: "delete" }], nextFrom: 1, hasMore: false },
+      { sessions: [] }, // authorized absence
+    ]);
+    await catchUpScope(convex, { scope_key: "user:u1", position: 1, floor: 0 }, new Set());
+    expect(convex.calls).toHaveLength(2);
+    expect(convex.calls[1].ids).toEqual(["c1"]);
+    const s = useInboxStore.getState() as any;
+    expect(s.conversations.c1).toBeUndefined();
+    expect(s.messages.c1).toBeUndefined();
+  });
+
+  test("a full sessions cargo with no base is never seeded (a card needs its stamps): byIds only", async () => {
+    useInboxStore.setState(base({ sessions: {}, conversations: {}, messages: {} }) as any);
+    const convex = scripted([
+      { actions: [{ position: 1, entity_type: "conversations", entity_id: "c2", op: "upsert", full: true, patch: { title: "new" } }], nextFrom: 1, hasMore: false },
+      { sessions: [{ _id: "c2", title: "new", bucket: "needs_input", status: "active" }] },
+    ]);
+    await catchUpScope(convex, { scope_key: "user:u1", position: 1, floor: 0 }, new Set());
+    expect(convex.calls).toHaveLength(2);
+    expect(useInboxStore.getState().syncLogApplyStats).toEqual({ direct: 0, refetch: 1 });
+    expect((useInboxStore.getState() as any).sessions.c2.title).toBe("new");
+  });
+
+  test("a task status change refetches its held project so the joined counts move", async () => {
+    useInboxStore.setState(base({
+      tasks: { t1: { _id: "t1", title: "a", status: "open", project_id: "p1" } },
+      projects: { p1: { _id: "p1", name: "P", task_counts: { total: 1, done: 0, in_progress: 0 } } },
+    }) as any);
+    const convex = scripted([
+      { actions: [{ position: 1, entity_type: "tasks", entity_id: "t1", op: "upsert", patch: { status: "done" } }], nextFrom: 1, hasMore: false },
+      [{ _id: "p1", name: "P", task_counts: { total: 1, done: 1, in_progress: 0 } }], // projects.webGetByIds
+    ]);
+    await catchUpScope(convex, { scope_key: "user:u1", position: 1, floor: 0 }, new Set());
+    expect(convex.calls).toHaveLength(2);
+    expect(convex.calls[1].ids).toEqual(["p1"]);
+    const s = useInboxStore.getState() as any;
+    expect(s.tasks.t1.status).toBe("done"); // the patch applied directly
+    expect(s.projects.p1.task_counts.done).toBe(1);
+  });
+
+  test("a title edit refetches nothing, and an unheld project is never fetched", async () => {
+    useInboxStore.setState(base({
+      tasks: { t1: { _id: "t1", title: "a", status: "open", project_id: "p1" }, t2: { _id: "t2", status: "open", project_id: "p9" } },
+      projects: { p1: { _id: "p1", name: "P" } },
+    }) as any);
+    const convex = scripted([
+      { actions: [
+        { position: 1, entity_type: "tasks", entity_id: "t1", op: "upsert", patch: { title: "b" } },
+        { position: 2, entity_type: "tasks", entity_id: "t2", op: "upsert", patch: { status: "done" } },
+      ], nextFrom: 2, hasMore: false },
+    ]);
+    await catchUpScope(convex, { scope_key: "user:u1", position: 2, floor: 0 }, new Set());
+    expect(convex.calls).toHaveLength(1);
+  });
+
+  test("catchUp stamps syncLogStampedAt once every scope cursor is stamped, and never on an empty heads list", async () => {
+    useInboxStore.setState({ syncMeta: {}, syncLogStampedAt: null, syncLogLag: {} } as any);
+    await catchUp(scripted([{ heads: [] }]));
+    expect(useInboxStore.getState().syncLogStampedAt).toBeNull();
+    await catchUp(scripted([{ heads: [{ scope_key: "user:u1", position: 7, floor: 0 }] }]));
+    expect(useInboxStore.getState().syncLogStampedAt).not.toBeNull();
+    expect((useInboxStore.getState().syncMeta as any)[scopeMetaKey("user:u1")].cursor).toBe(7);
+  });
+});

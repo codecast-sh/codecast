@@ -79,7 +79,15 @@ export type GestureMessage =
   // drops only the inbox row: markKilling removes the card for a session the
   // server still has (killed, marked completed), so a receiver that also
   // dropped conversations[id] would blind itself to a live conversation.
-  | { kind: "forget"; ids: string[]; scope?: "session-row" | "all"; ts: number };
+  | { kind: "forget"; ids: string[]; scope?: "session-row" | "all"; ts: number }
+  // A dispatch acknowledgement (sync-log-migration D8): the log positions the
+  // sender's write landed at, keyed by the table-grouped patches it sent.
+  // Sibling windows hold mirrored locks for the same write — planted by a
+  // hide/pin/fields message above, or by the host from the sender's
+  // replicated rows — and retire them at the same position the sender does,
+  // instead of waiting for a value echo that a later remote write may never
+  // deliver (a restore right after a kill).
+  | { kind: "ack"; patches: Record<string, unknown>; ack: Array<{ scope_key: string; position: number }>; sentAt: number; ts: number };
 
 type Envelope = GestureMessage & {
   v: 1;
@@ -179,6 +187,10 @@ function isGestureMessage(data: unknown): data is Envelope {
     return Array.isArray(e.ids);
   }
   if (e.kind === "restore") return Array.isArray(e.ids);
+  if (e.kind === "ack") {
+    return !!e.patches && typeof e.patches === "object" && typeof e.sentAt === "number" &&
+      Array.isArray(e.ack) && e.ack.every((a) => a && typeof a.scope_key === "string" && typeof a.position === "number");
+  }
   return false;
 }
 

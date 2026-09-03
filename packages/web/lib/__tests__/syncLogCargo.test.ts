@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ENRICH_TRIGGER_FIELDS, planCargoApply } from "../syncLogCargo";
+import { ENRICH_TRIGGER_FIELDS, planCargoApply, projectCountTouched } from "../syncLogCargo";
 
 // Pure adapter from raw log cargo to store row fields (sync-log-cargo E6/E7).
 
@@ -76,5 +76,32 @@ describe("planCargoApply — sessions adapter", () => {
     expect(planCargoApply("sessions", { patch: { status: "active" } }, {}).refetch).toBe(false);
     expect(planCargoApply("sessions", { patch: { status: "completed" } }, {}).refetch).toBe(false);
     expect(planCargoApply("sessions", { patch: { title: "x" } }, {}).refetch).toBe(false);
+  });
+});
+
+describe("projectCountTouched — which held projects a member change can re-count", () => {
+  const t = (op: string, patch?: any, unset?: string[]) => ({ op, patch, unset });
+  test("a title edit moves no count", () => {
+    expect(projectCountTouched("tasks", t("upsert", { title: "x" }), { project_id: "p1", status: "open" })).toEqual([]);
+  });
+  test("a task status change re-counts its project; a doc status change does not", () => {
+    expect(projectCountTouched("tasks", t("upsert", { status: "done" }), { project_id: "p1", status: "open" })).toEqual(["p1"]);
+    expect(projectCountTouched("plans", t("upsert", { status: "done" }), { project_id: "p1", status: "active" })).toEqual(["p1"]);
+    expect(projectCountTouched("docs", t("upsert", { status: "done" }), { project_id: "p1", status: "open" })).toEqual([]);
+  });
+  test("a re-shipped unchanged status (coalesced cargo) moves no count", () => {
+    expect(projectCountTouched("tasks", t("upsert", { status: "open", title: "y" }), { project_id: "p1", status: "open" })).toEqual([]);
+  });
+  test("a create, a delete and an unset each touch the one project they name", () => {
+    expect(projectCountTouched("tasks", t("upsert", { project_id: "p2", status: "open" }), undefined)).toEqual(["p2"]);
+    expect(projectCountTouched("docs", t("delete"), { project_id: "p1" })).toEqual(["p1"]);
+    expect(projectCountTouched("tasks", t("upsert", {}, ["project_id"]), { project_id: "p1" })).toEqual(["p1"]);
+  });
+  test("a project move touches both sides", () => {
+    expect(projectCountTouched("tasks", t("upsert", { project_id: "p2" }), { project_id: "p1", status: "open" }).sort()).toEqual(["p1", "p2"]);
+  });
+  test("projects and sessions never trigger", () => {
+    expect(projectCountTouched("projects", t("upsert", { status: "x" }), { status: "y" })).toEqual([]);
+    expect(projectCountTouched("sessions", t("delete"), { project_id: "p1" })).toEqual([]);
   });
 });

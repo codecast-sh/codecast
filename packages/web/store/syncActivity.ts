@@ -60,10 +60,28 @@ export function syncInflightCount(): number {
   return _inflight.range + _inflight.crawl + _inflight.poll;
 }
 
+/** Test seam: the simulation keeps one activity clock per window and swaps it with the window. */
+export function __setSyncActivityForTests(lastApplyMono: number, applySeq: number): void {
+  _lastApplyMono = lastApplyMono;
+  _applySeq = applySeq;
+}
+
 export function __resetSyncActivityForTests(): void {
   _lastApplyMono = Number.NEGATIVE_INFINITY;
   _applySeq = 0;
   _inflight.range = 0;
   _inflight.crawl = 0;
   _inflight.poll = 0;
+}
+
+// Read-only view for drivers (`cast app wait-settle`, the dev console). Always
+// on, like `__syncReplication`: a driver against a production build has no
+// store handle, and this is the one signal that says catch-up is quiet.
+if (typeof window !== "undefined") {
+  (window as any).__syncActivity = {
+    inflight: () => ({ ..._inflight, total: syncInflightCount() }),
+    applySeq: () => _applySeq,
+    lastApplyMono: () => _lastApplyMono,
+    now: monotonicNow,
+  };
 }

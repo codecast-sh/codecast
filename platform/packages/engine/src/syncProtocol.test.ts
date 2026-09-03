@@ -182,6 +182,20 @@ describe("exclude / include lifecycle", () => {
   });
 });
 
+describe("identity reuse and nested fields", () => {
+  it("a change to a nested object alone is swallowed by identity reuse unless the field is deep", () => {
+    const prev = { p: { _id: "p", name: "P", task_counts: { total: 1, done: 0 } } } as any;
+    const incoming = [{ _id: "p", name: "P", task_counts: { total: 1, done: 1 } }] as any;
+    const plain = applySyncTable("projects", incoming, {}, prev, { isDelta: true });
+    expect(plain.table.p).toBe(prev.p); // the documented skip: object fields are not versioned
+    const deep = applySyncTable("projects", incoming, {}, prev, { isDelta: true, deepFields: ["task_counts"] });
+    expect(deep.table.p).toBe(incoming[0]);
+    // Equal content keeps the identity even though the push minted a fresh object.
+    const same = applySyncTable("projects", [{ _id: "p", name: "P", task_counts: { total: 1, done: 0 } }] as any, {}, prev, { isDelta: true, deepFields: ["task_counts"] });
+    expect(same.table.p).toBe(prev.p);
+  });
+});
+
 describe("delta vs snapshot semantics", () => {
   it("drops rows absent from a snapshot and keeps them in a delta", () => {
     const prev = { a: row("a"), b: row("b") };

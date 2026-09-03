@@ -520,12 +520,12 @@ describe("telemetry (C7)", () => {
 
   it("inbox_digest_version_skew fires once per distinct payload version", () => {
     const h = harness();
-    const skew = withSlot(cleanState(), { v: 3 });
+    const skew = withSlot(cleanState(), { v: INBOX_PROJECTION_VERSION + 1 });
     h.comparer.tick(skew);
     h.comparer.tick(skew);
     expect(h.events.filter((e) => e.event === "inbox_digest_version_skew")).toHaveLength(1);
-    expect(h.events[0].props).toMatchObject({ payload_v: 3, client_v: INBOX_PROJECTION_VERSION });
-    h.comparer.tick(withSlot(cleanState(), { v: 4 }));
+    expect(h.events[0].props).toMatchObject({ payload_v: INBOX_PROJECTION_VERSION + 1, client_v: INBOX_PROJECTION_VERSION });
+    h.comparer.tick(withSlot(cleanState(), { v: INBOX_PROJECTION_VERSION + 2 }));
     expect(h.events.filter((e) => e.event === "inbox_digest_version_skew")).toHaveLength(2);
     expect(h.comparer.counters().skips.version_skew).toBe(3);
   });

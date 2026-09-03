@@ -113,10 +113,11 @@ export function useEnsureDispatch() {
           const unwrap = (res: any) => {
             if (res && typeof res === "object" && "__syncAckV1" in res) {
               const ack = res.__syncAckV1;
-              // Followers never stamp sync-log cursors: syncMeta replicates from the
-              // host, and a self-stamped position could run ahead of what this
-              // window actually applied (docs/architecture/sync-host.md).
-              if (Array.isArray(ack) && ack.length && patches && useInboxStore.getState().syncRole !== "follower") {
+              // Every window stamps its own locks, the host and a follower alike:
+              // the follower never stamps a CURSOR (syncMeta replicates from the
+              // host, docs/architecture/sync-host.md), and the replicated cursor
+              // advancing is what retires its acked locks (syncReplication).
+              if (Array.isArray(ack) && ack.length && patches) {
                 useInboxStore.getState().stampSyncAck(patches, ack, sentAt);
               }
               return res.result;

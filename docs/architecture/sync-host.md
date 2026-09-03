@@ -70,12 +70,30 @@ All messages carry `{hostId, seq}`. Followers track `lastSeq`; a gap or a new
   replicated key. Applied through the same row path as live updates; identical
   rows no-op via the engine's identity-reuse bails.
 - `update` (host → all): the teed row updates.
-- `mut` (follower → host): the follower's own action patches, same row shape.
-  The host applies them bare (no pending entries) and its tee rebroadcasts.
-  Only the ORIGIN window holds pending protection for a write; everyone else
-  converges on the server echo. A stale feed push can briefly revert a peer's
-  view of the write in the gap before the echo — the same window that exists
-  today between windows, just shorter.
+- `mut` (follower → host): the follower's own action writes. A row the action
+  EDITED ships as exactly the fields it wrote (`fields`, from the action's
+  patches, with the action time); a row it created or replaced ships whole.
+  The host lands the fields on its own copy under the same field locks the
+  follower holds (`applyReplicatedFields`) and its tee rebroadcasts; a whole
+  row merges through `syncTable` with every lock the host already held on it
+  carried across the merge (`protectReplicatedWrite`), because the row's
+  value echo would otherwise retire the gesture bridge's lock a moment after
+  it was planted. So the origin window and its host both hold protection for
+  the write, and a stale feed push on the host cannot revert it before the
+  server echo. A whole-row overlay of a follower's copy would put the host's
+  fresher fields back a step (the follower's copy is a replication hop
+  behind), which is why edits ship as fields.
+- `ack` (gesture bridge, origin → siblings): the sync-log positions the
+  origin's dispatch landed at, with the dispatched patches. Sibling windows
+  stamp the same acknowledgement onto their mirrored locks, and the mirrored
+  lock retires at the same position the origin's does — a later remote write
+  (a restore right after a kill) must not wait for a value echo that never
+  comes.
+- `sessionsProjection` rides `update` as a whole value (REPLICATED_EPHEMERAL_KEYS):
+  only the host subscribes to the liveness overlay, and a follower without the
+  slot buckets rows by the client-only sweep and disagrees with its host. The
+  follower re-stamps the slot's receipt clock on arrival (`performance.now()`
+  is per window).
 
 Follower boot: hydrate from IDB read-only, subscribe and buffer, `hello`,
 apply snapshot, replay buffered updates past the snapshot seq.
@@ -94,9 +112,12 @@ Promotion (a follower wins the lock): flip `syncRole` to host in the store —
 the feeder gate is reactive, so subscriptions mount; wire `_setIDBWrite` and
 the storage-health callback; start serving snapshots. `syncMeta` (the change
 feed cursors) replicates from the host, so a promoted follower resumes the
-sync log from where the dead host stopped; followers therefore must not stamp
-sync acks themselves (`stampSyncAck` no-ops as follower) or their own cursor
-writes could run ahead of what they actually applied.
+sync log from where the dead host stopped. Followers never stamp a CURSOR of
+their own (it would run ahead of what they applied), but they do stamp their
+own write acknowledgements onto their locks: the host tees in commit order and
+stamps the cursor after a page's rows, so when the replicated cursor reaches a
+position the rows through it have already landed, and the follower retires its
+acked locks at that moment (`retireAckedPending` on the replicated `syncMeta`).
 
 ## Writes
 

@@ -77,14 +77,19 @@ export function makeFakeDb(tables: Record<string, any[]>) {
       // which is what every test written before ordering existed assumes.
       let direction: "asc" | "desc" | null = null;
       const predicates: FilterExpr[] = [];
-      // Every time-ordered index in this schema is keyed on one of these, so
-      // ordering by it is what `order()` means here. Rows without one keep
-      // insertion order (the sort is stable). `last_activity_at` comes first:
-      // the tables that have it (thread_reads) index on it, and their
-      // `updated_at` moves on every mark-read — ordering by that would shuffle
-      // the Threads inbox whenever a row was touched.
+      // A range bound on an index field names that index's sort key (a real
+      // index orders by the field its range constrains — the dismissed and
+      // stashed windows order by their stamp, not by updated_at). With no
+      // range, every time-ordered index in this schema is keyed on one of
+      // these, so ordering by it is what `order()` means here. Rows without
+      // one keep insertion order (the sort is stable). `last_activity_at`
+      // comes first: the tables that have it (thread_reads) index on it, and
+      // their `updated_at` moves on every mark-read — ordering by that would
+      // shuffle the Threads inbox whenever a row was touched.
+      let rangeKey: string | null = null;
       const timeKey = (row: any) =>
-        row.last_activity_at ?? row.created_at ?? row.timestamp ?? row.updated_at ?? null;
+        rangeKey ? (row[rangeKey] ?? null)
+          : row.last_activity_at ?? row.created_at ?? row.timestamp ?? row.updated_at ?? null;
       const apply = () => {
         const rows = (tables[table] ?? [])
           .filter((r) => filters.every(([f, v]) => r[f] === v))
@@ -115,10 +120,10 @@ export function makeFakeDb(tables: Record<string, any[]>) {
             // one where the unread count is the channel's entire history.
             const q: any = {
               eq(field: string, val: any) { filters.push([field, val]); return q; },
-              gte(f: string, v: any) { predicates.push(op("gte", filterBuilder.field(f), v)); return q; },
-              gt(f: string, v: any) { predicates.push(op("gt", filterBuilder.field(f), v)); return q; },
-              lte(f: string, v: any) { predicates.push(op("lte", filterBuilder.field(f), v)); return q; },
-              lt(f: string, v: any) { predicates.push(op("lt", filterBuilder.field(f), v)); return q; },
+              gte(f: string, v: any) { rangeKey = f; predicates.push(op("gte", filterBuilder.field(f), v)); return q; },
+              gt(f: string, v: any) { rangeKey = f; predicates.push(op("gt", filterBuilder.field(f), v)); return q; },
+              lte(f: string, v: any) { rangeKey = f; predicates.push(op("lte", filterBuilder.field(f), v)); return q; },
+              lt(f: string, v: any) { rangeKey = f; predicates.push(op("lt", filterBuilder.field(f), v)); return q; },
             };
             fn(q);
           }

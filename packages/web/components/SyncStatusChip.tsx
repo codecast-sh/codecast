@@ -4,10 +4,11 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useInboxStore } from "../store/inboxStore";
 
-// A healthy cold-open sync settles in a few seconds. If a scope is still
-// loading past this, the backend is genuinely slow (or stalled) — surface that
-// as a distinct amber state rather than an indefinite, identical-looking spin.
-const STALL_MS = 10_000;
+// A healthy cold-open sync settles in a few seconds, and a catch-up after
+// hours away replays its backlog in well under twenty. Past this the backend
+// is genuinely slow (or stalled) — surface that as a distinct amber state
+// rather than an indefinite, identical-looking spin.
+const STALL_MS = 20_000;
 
 // Human names for the store scopes the panel lists. liveLoading uses the first
 // three; the reconcile crawl also reports the dismiss/stash sweeps.
@@ -15,26 +16,29 @@ const SCOPE_LABELS: Record<string, string> = {
   sessions: "Sessions",
   tasks: "Tasks",
   docs: "Docs",
+  projects: "Projects",
   dismissed: "Dismissed sessions",
   stashed: "Stashed sessions",
 };
 const scopeLabel = (scope: string) => SCOPE_LABELS[scope] ?? scope;
 
 /**
- * Header pill that lights while the app is pulling fresh data from the
+ * Header status dot that lights while the app is pulling fresh data from the
  * server — the cold-open "data syncing in" phase you see right after the desktop
- * app has been closed for a while. Hovering it expands a panel that breaks the
- * sync down per scope, including the background backfill's row counts.
+ * app has been closed for a while. It occupies a fixed slot in every state and
+ * never renders text, so the header layout is identical whether it is idle,
+ * syncing or stalled. Hovering it expands a panel that carries the detail: how
+ * many scopes are caught up, the per-scope state, and the background
+ * backfill's row counts.
  *
- * Visibility is driven by `liveLoading` — the first-payload state of the LIVE
- * subscriptions (inbox sessions, docs, tasks). It deliberately does NOT key off
- * `syncProgress` (the background reconcile crawl): that crawl pages through
- * every row at a throttled pace and can run for minutes, which kept this
- * indicator lit ~forever. Tracking the live first load instead bounds the pill
- * to a single round-trip — it lights while any scope hasn't delivered yet and
- * clears once they have. Warm in-app navigation never flips it on, because
- * those subscriptions stay resolved after the first load. The crawl only feeds
- * the hover DETAIL, never the pill's visibility.
+ * Visibility: the dot lights for a cold first load (a live subscription still
+ * owed its first payload into an empty collection) and for a stall (a sync log
+ * catch-up that has dragged past STALL_MS). It deliberately stays dark for the
+ * routine case — a warm cache replaying a handful of incoming changes, which
+ * takes well under a second and happens several times a minute in a busy
+ * team. It never keys off `syncProgress` (the background reconcile crawl),
+ * which pages every row at a throttled pace for minutes and kept the old pill
+ * lit ~forever. The crawl only feeds the hover DETAIL.
  *
  * Color carries the health signal: cyan for a normal sync, amber once it drags
  * past STALL_MS so a genuinely slow backend looks different from a quick one.
@@ -88,27 +92,36 @@ export function selectSyncing(s: SyncSelectorState): boolean {
   const { settled, total } = selectSyncSummary(s);
   return total > 0 && settled < total;
 }
+// The first-load case on its own: a live subscription still owed its first
+// payload into a collection with no cached rows. This is the only routine
+// state the dot shows — the screen is genuinely empty until it lands.
+export function selectColdLoad(s: SyncSelectorState): boolean {
+  return Object.entries(s.liveLoading).some(([scope, loading]) => loading && collectionIsCold(s, scope));
+}
 
 export function SyncStatusChip() {
   // Subscribe to stable primitives only: `liveLoading` / `syncProgress` get a
   // new object identity on every crawl page write (~2/s while a backfill runs),
-  // and this chip is always mounted in the header. Deriving booleans/strings in
-  // the selector keeps Object.is stable so the chip only re-renders when the
-  // rendered text actually changes. The full objects are read inside the hover
-  // panel, which mounts only while hovered.
+  // and this chip is always mounted in the header. Deriving booleans in the
+  // selector keeps Object.is stable so the chip only re-renders when its state
+  // actually changes. The full objects are read inside the hover panel, which
+  // mounts only while hovered.
+  // `syncing` covers every catch-up, including the sub-second replay of a single
+  // incoming change on a warm cache — that happens several times a minute in a
+  // busy team and is the sync working, not news. It only arms the stall timer.
+  // The dot itself lights for a cold first load, or once a catch-up has dragged
+  // past STALL_MS.
   const syncing = useInboxStore((s) => selectSyncing(s));
-  const scopeSummary = useInboxStore((s) => {
-    const { settled, total } = selectSyncSummary(s);
-    return total <= 1 ? "" : ` ${settled}/${total}`;
-  });
+  const coldLoad = useInboxStore((s) => selectColdLoad(s));
   const [stalled, setStalled] = useState(false);
-  // Mirror DaemonStatusChip: render nothing until mounted so SSR markup and the
-  // first client render agree (no hydration mismatch).
+  // Mirror DaemonStatusChip: paint the store-driven dot only once mounted so
+  // SSR markup and the first client render agree (no hydration mismatch). The
+  // slot itself always renders, so the header never reflows around it.
   const [mounted, setMounted] = useState(false);
   useMountEffect(() => setMounted(true));
 
   // Hover panel with a short close grace timer, same as AccountUsageChip: a
-  // diagonal pointer path can briefly exit the pill on its way into the panel,
+  // diagonal pointer path can briefly exit the dot on its way into the panel,
   // and an instant close makes that read as a dropped hover.
   const [open, setOpen] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -133,29 +146,31 @@ export function SyncStatusChip() {
     return () => clearTimeout(t);
   }, [syncing]);
 
-  if (!mounted || !syncing) return null;
-
-  const color = stalled ? "var(--sol-yellow)" : "var(--sol-cyan)";
+  // A fixed 16px slot in every state. The dot never carries text, so nothing
+  // next to it shifts when sync starts, ticks through scopes, or settles: the
+  // only thing that changes is the dot's color and its pulse ring.
+  const active = mounted && (coldLoad || stalled);
+  const color = !active ? "var(--sol-text-dim)" : stalled ? "var(--sol-yellow)" : "var(--sol-cyan)";
   return (
-    <div className="relative hidden md:block" onMouseEnter={openNow} onMouseLeave={closeSoon}>
-      <div
-        className="flex items-center gap-1.5 px-2 py-0.5 rounded-full select-none cursor-default transition-all duration-300"
-        style={{
-          background: `color-mix(in srgb, ${color} 12%, transparent)`,
-          border: `1px solid color-mix(in srgb, ${color} 28%, transparent)`,
-          boxShadow: `0 0 10px color-mix(in srgb, ${color} 12%, transparent)`,
-        }}
-      >
-        <Loader2 className="w-3 h-3 animate-spin" style={{ color }} />
+    <div
+      className="relative hidden md:flex h-7 w-4 flex-shrink-0 items-center justify-center cursor-default"
+      onMouseEnter={openNow}
+      onMouseLeave={closeSoon}
+      aria-label={!active ? "Up to date" : stalled ? "Sync is slow" : "Syncing"}
+    >
+      <span className="relative flex h-2 w-2">
+        {active && (
+          <span
+            className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-40"
+            style={{ background: color }}
+          />
+        )}
         <span
-          className="text-[11px] font-mono font-bold tabular-nums whitespace-nowrap"
-          style={{ color }}
-        >
-          {stalled ? "sync slow" : "syncing"}
-          {scopeSummary}
-        </span>
-      </div>
-      {open && <SyncDetailPanel stalled={stalled} color={color} />}
+          className="relative inline-flex h-2 w-2 rounded-full transition-colors duration-300"
+          style={{ background: color, opacity: active ? 1 : 0.3 }}
+        />
+      </span>
+      {open && mounted && <SyncDetailPanel syncing={syncing} stalled={stalled} color={color} />}
     </div>
   );
 }
@@ -163,8 +178,10 @@ export function SyncStatusChip() {
 // Hover detail: the only consumer of the churning `liveLoading` / `syncProgress`
 // objects. Mounted solely while the pill is hovered, so their per-page identity
 // churn costs nothing the rest of the time.
-function SyncDetailPanel({ stalled, color }: { stalled: boolean; color: string }) {
+function SyncDetailPanel({ syncing, stalled, color }: { syncing: boolean; stalled: boolean; color: string }) {
   const liveLoading = useInboxStore((s) => s.liveLoading);
+  const settled = useInboxStore((s) => selectSyncSummary(s).settled);
+  const total = useInboxStore((s) => selectSyncSummary(s).total);
   const syncProgress = useInboxStore((s) => s.syncProgress);
   const syncLogLag = useInboxStore((s) => s.syncLogLag);
   const applyStats = useInboxStore((s) => s.syncLogApplyStats);
@@ -187,23 +204,30 @@ function SyncDetailPanel({ stalled, color }: { stalled: boolean; color: string }
     .sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
   return (
     <div className="absolute right-0 top-full z-50 pt-1.5">
-      <div className="w-[260px] rounded-md border bg-popover text-popover-foreground shadow-md">
-        <div className="border-b border-sol-border/60 px-3 py-2 text-xs font-semibold text-sol-text">
-          {stalled ? "Sync is taking longer than usual" : "Syncing the latest data"}
+      <div className="w-[300px] rounded-md border bg-popover text-popover-foreground shadow-md">
+        <div className="flex items-center gap-2 border-b border-sol-border/60 px-3 py-2 text-xs font-semibold text-sol-text">
+          <span className="whitespace-nowrap">
+            {!syncing ? "Up to date" : stalled ? "Sync is slow" : "Syncing the latest data"}
+          </span>
+          {syncing && total > 1 && (
+            <span className="ml-auto shrink-0 whitespace-nowrap tabular-nums font-normal text-sol-text-dim">
+              {settled}/{total} caught up
+            </span>
+          )}
         </div>
         <div className="px-3 py-2 space-y-1.5">
           {(applyStats.direct > 0 || applyStats.refetch > 0) && (
             <div className="flex items-center gap-2 text-xs">
-              <span className="text-sol-text">Log applied directly</span>
-              <span className="ml-auto tabular-nums text-sol-text-dim">
-                {applyStats.direct.toLocaleString()} / refetched {applyStats.refetch.toLocaleString()}
+              <span className="whitespace-nowrap text-sol-text">Log applied</span>
+              <span className="ml-auto whitespace-nowrap tabular-nums text-sol-text-dim">
+                {applyStats.direct.toLocaleString()} direct · {applyStats.refetch.toLocaleString()} refetched
               </span>
             </div>
           )}
           {behind.map(([scope, lag]) => (
                 <div key={scope} className="flex items-center gap-2 text-xs">
-                  <span className="text-sol-text">{logScopeLabel(scope)}</span>
-                  <span className="ml-auto flex items-center gap-1.5 tabular-nums text-sol-text-dim">
+                  <span className="whitespace-nowrap text-sol-text">{logScopeLabel(scope)}</span>
+                  <span className="ml-auto flex items-center gap-1.5 whitespace-nowrap tabular-nums text-sol-text-dim">
                     <Loader2 className="w-3 h-3 animate-spin" style={{ color }} />
                     {lag.toLocaleString()} change{lag === 1 ? "" : "s"} behind
                   </span>

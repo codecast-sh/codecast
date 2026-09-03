@@ -37,6 +37,7 @@ export function applySyncTable<T extends { _id: string }>(
   opts?: {
     isDelta?: boolean;
     ignoreFields?: readonly string[];
+    deepFields?: readonly string[];
     // Readonly on purpose: the sessions preserve list derives from the shared
     // INBOX_FACT_FIELDS `as const` tuple. The engine only iterates the list,
     // so the cast below is sound.
@@ -47,6 +48,7 @@ export function applySyncTable<T extends { _id: string }>(
   return engineApplySyncTable(tableName, incoming, pending, prev, {
     ...opts,
     ignoreFields: opts?.ignoreFields as string[] | undefined,
+    deepFields: opts?.deepFields as string[] | undefined,
     preserveFields: opts?.preserveFields as string[] | undefined,
     optionalClearFields: OPTIONAL_INBOX_TIMESTAMPS,
   });

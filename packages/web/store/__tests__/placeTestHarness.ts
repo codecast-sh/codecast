@@ -23,6 +23,7 @@ import {
   __resetInboxPlacementCacheForTests,
   type InboxSession,
   type PlacedInbox,
+  type ProjectFilterTerm,
 } from "../inboxStore";
 
 export type PlaceHarnessOpts = {
@@ -176,21 +177,19 @@ export function placeSections(
 export function orderSections(
   sessions: Record<string, InboxSession>,
   queued: Set<string> = new Set(),
-  projectFilter: string | null = null,
+  projectFilters: readonly ProjectFilterTerm[] | null = null,
   pendingSendIds: ReadonlySet<string> = new Set(),
   opts: PlaceHarnessOpts & {
     bucketFilters?: readonly any[];
     bucketByConv?: Record<string, string | undefined>;
-    filterExclude?: boolean;
     collapsedSections?: Record<string, boolean>;
     yourMove?: boolean;
   } = {},
 ): InboxSession[] {
   const placed = placeSections(sessions, queued, pendingSendIds, opts);
-  return visualOrderSessions(placed, projectFilter, {
+  return visualOrderSessions(placed, projectFilters ?? undefined, {
     bucketFilters: opts.bucketFilters,
     bucketByConv: opts.bucketByConv,
-    filterExclude: opts.filterExclude,
     collapsedSections: opts.collapsedSections,
     yourMove: opts.yourMove,
   });
