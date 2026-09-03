@@ -88,6 +88,16 @@ async function getSnapshot(path: string): Promise<string | null> {
   }
 }
 
+/**
+ * How many marketing routes have a prerendered snapshot, for /api/health.
+ * 0 means the prerender step failed and every crawler is getting the bare SPA
+ * shell — the exact silent outage that ran for a week when the SSR build lost
+ * its path aliases. Reuses the manifest the middleware already caches.
+ */
+export async function prerenderedRouteCount(): Promise<number> {
+  return (await loadSnapshotPaths())?.size ?? 0;
+}
+
 // --- Meta-only unfurl pages --------------------------------------------------
 
 function ogHtml(meta: { title: string; description: string; url: string; image?: string; type?: string }) {
