@@ -98,6 +98,7 @@ async function connect() {
   setStatus("connecting", `127.0.0.1:${cfg.port}`);
   const nonce = randomHex(32);
   let proven = false;
+  hostProven = false;
 
   sock.onopen = async () => {
     send({
@@ -122,6 +123,7 @@ async function connect() {
       if (msg.op !== "welcome") return;
       if (sameHex(msg.proof, await hmacHex(cfg.token, nonce))) {
         proven = true;
+        hostProven = true;
         resetRetries();
         setStatus("connected", `127.0.0.1:${cfg.port}`);
       } else {
@@ -144,6 +146,7 @@ async function connect() {
   sock.onclose = (e) => {
     if (ws !== sock) return;
     ws = null;
+    hostProven = false;
     // 4401 is the "bad token" close, from either side — retrying the same
     // token is noise. Our own close already set a more specific status.
     if (status.state === "bad-token") {
@@ -164,7 +167,13 @@ async function connect() {
   };
 }
 
+// Until the host has proved it holds the token, the only thing it hears is
+// our hello: not a tab title, not a URL, not an event. A squatter on the
+// port learns nothing about this browser.
+let hostProven = false;
+
 function send(msg) {
+  if (!hostProven && msg.op !== "hello") return;
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 

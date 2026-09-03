@@ -490,7 +490,7 @@ async function bridgeExtras(bridgePort, token, ext, cdpPort, pageUrl) {
   const border = await borderState();
   check(
     "bridge: border overlay present in the group colour and transparent to hit tests",
-    border.present && border.color === "rgb(26, 115, 232)" && border.pointer === "none" && border.hit === false,
+    border.present && String(border.color).toLowerCase() === "#1a73e8" && border.pointer === "none" && border.hit === false,
     JSON.stringify(border),
   );
 
