@@ -48,8 +48,10 @@ mock.module("../errorToast", () => ({
 const analytics = await import("../analytics");
 
 describe("codecast's analytics configuration reaches the package", () => {
-  test("initAnalytics passes the Vite env values, the platform and the app name", () => {
-    analytics.initAnalytics();
+  test("loads the SDKs on init and passes the app configuration", async () => {
+    expect(count(phCalls, "init")).toBe(0);
+    expect(count(sentryCalls, "init")).toBe(0);
+    await analytics.initAnalytics();
 
     const [key, options] = last(phCalls, "init") as [string, Record<string, unknown>];
     expect(key).toBe("phc_test_key");
@@ -73,7 +75,8 @@ describe("codecast's analytics configuration reaches the package", () => {
     expect(sentryOptions.initialScope.tags).toEqual({ platform: "web", app: "codecast" });
   });
 
-  test("identify uses the id the caller passes — the Convex users._id", () => {
+  test("identify uses the id the caller passes — the Convex users._id", async () => {
+    await analytics.initAnalytics();
     analytics.identifyUser("users:abc123", { email: "a@b.c" });
     expect(last(phCalls, "identify")).toEqual(["users:abc123", { email: "a@b.c" }]);
     expect(last(sentryCalls, "setUser")).toEqual([{ id: "users:abc123", email: "a@b.c" }]);
@@ -83,7 +86,8 @@ describe("codecast's analytics configuration reaches the package", () => {
 describe("error toasts read the cause chain", () => {
   let handlers: Record<string, (e: any) => void>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await analytics.initAnalytics();
     handlers = {};
     toasts.length = 0;
     for (const k of Object.keys(sentryCalls)) delete sentryCalls[k];

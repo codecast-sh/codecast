@@ -199,7 +199,7 @@ const SettingsTeam = lazy(() => import("@/app/settings/team/page"));
 const SettingsTeamCreate = lazy(() => import("@/app/settings/team/create/page"));
 const SettingsTeamJoin = lazy(() => import("@/app/settings/team/join/page"));
 const SettingsNotifications = lazy(() => import("@/app/settings/notifications/page"));
-const SettingsIntegrationsGithub = lazy(() => import("@/app/settings/integrations/github-app/page"));
+const SettingsIntegrations = lazy(() => import("@/app/settings/integrations/page"));
 const SettingsDesktop = lazy(() => import("@/app/settings/desktop/page"));
 
 /**
@@ -305,7 +305,7 @@ export const ROUTES: RouteEntry[] = [
 
   // -- Code review --
   { path: "commit/:owner/:repo/:sha", component: cast(CommitView), layout: "codeReview", fullWidth: true },
-  { path: "pr/:owner/:repo/:number", component: cast(PrView), layout: "codeReview", fullWidth: true },
+  { path: "pr/:owner/:repo/:number", component: cast(PrView), layout: "codeReview", tab: "/pr/:owner/:repo/:number", fullWidth: true },
   { path: "review/:id", component: cast(ReviewView), layout: "codeReview" },
   { path: "review/batch", component: cast(ReviewBatch), layout: "codeReview" },
 

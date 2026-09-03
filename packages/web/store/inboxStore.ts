@@ -155,7 +155,7 @@ export type CreateModalKind = 'task' | 'plan' | 'doc' | 'chat' | 'huddle';
 // Imported for internal use AND re-exported so the many call sites that import
 // `isConvexId` from the store keep working.
 import { isConvexId } from "../lib/entityLinks";
-import { pathOnMyMachines, type MachineCandidate } from "../lib/machinePicker";
+import { pathOnMyMachines, wakesOnUse, type MachineCandidate } from "../lib/machinePicker";
 import { conversationTabPath } from "../lib/pathLabel";
 import { healTabPaths, isNonTabRoute, shellTabPath } from "../lib/tabRoutes";
 import {
@@ -181,6 +181,7 @@ export { isConvexId };
 export { resolveAssigneeInfo, resolveSessionAuthor, computePlanProgress, mergeLiveTasks } from "../lib/liveEntities";
 import { deriveDocDisplayTitle, isForeignSession } from "../lib/liveEntities";
 import { DEFAULT_SETTINGS_SECTION, type SettingsSectionId } from "../lib/settingsSections";
+import { activeWorkspaceKey } from "../lib/workspaceScope";
 import type { PendingComment } from "../lib/quoteFormat";
 import type { Comment as CommentRow } from "../lib/commentThread";
 import { pushInboxViewHistory, isApplyingViewHistory, sameInboxView, type InboxViewSnapshot } from "../lib/inboxViewHistory";
@@ -424,6 +425,15 @@ export type ProjectItem = {
   updated_at: number;
 };
 
+export type PrStatus = {
+  pr_id: string;
+  repository: string;
+  number: number;
+  title?: string;
+  state: string;
+  at: number;
+};
+
 export type InboxSession = {
   _id: string;
   session_id: string;
@@ -593,6 +603,11 @@ export type InboxSession = {
   active_task?: TaskRef;
   worktree_name?: string | null;
   worktree_branch?: string | null;
+  // "Run in the cloud", before the host has it: the row is parked on the cloud
+  // device while a local daemon prepares the host and acquires its worktree
+  // there (cloud_spawn). Cleared by cloud.placeConversation, so its absence is
+  // the honest "this session is placed and running".
+  cloud_placement?: "pending" | null;
   workflow_run_id?: string | null;
   is_workflow_primary?: boolean;
   workflow_run_status?: string | null;
@@ -608,6 +623,10 @@ export type InboxSession = {
   // the shared classifier's structural-dormancy input (placeProjectableRow),
   // read off the row instead of agent_tasks. Absent reads as "none".
   armed_trigger_kind?: string | null;
+  // The pull request this session shepherds, folded onto the row by the server
+  // so a card can show its state without reading pull_requests. `state` is the
+  // shepherd state (review_pending, ci_red, behind, approved, merged, ...).
+  pr_status?: PrStatus | null;
   // Harness /loop state (server-folded from ScheduleWakeup / wakeup-fire
   // messages; see convex/loopState.ts). An armed loop rows this session into
   // the inbox trigger set like an armed trigger. Never "stopped" here — the
@@ -2311,6 +2330,10 @@ export function sessionStructuralSig(s: InboxSession): string {
     // row as DORMANT in the shared placement (placeInboxRows). Both change on
     // rare data writes (arm/cancel, a new turn), never on heartbeats.
     s.armed_trigger_kind || "",
+    // The PR chip on the card: its state is what the reader acts on, so a
+    // change of state must wake the card. The rest of pr_status cannot change
+    // without it (a new PR carries a new number and a new state).
+    s.pr_status ? `${s.pr_status.number}:${s.pr_status.state}` : "",
     rowLastTurnAllowsPark(s) ? 1 : 0,
     // Row thumbnail (inbox_image_thumbs pref). Changes only when a NEW image
     // lands in the session — never on heartbeats — so folding it in is cheap
@@ -4207,6 +4230,11 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   currentConversation: CurrentConversationContext;
   isolatedWorktreeMode: boolean;
   setIsolatedWorktreeMode: (val: boolean) => void;
+  // "Run in the cloud" for the next session: the same ephemeral, global shape as
+  // the isolated toggle. A cloud session is always an isolated worktree, but on
+  // the host — so this flag replaces `isolated` at create rather than joining it.
+  cloudSessionMode: boolean;
+  setCloudSessionMode: (val: boolean) => void;
 
   // -- Unified command palette --
   palette: { open: boolean; targets: any[]; targetType: 'task' | 'doc' | 'plan' | 'session' | null; initialMode: string; initialQuery?: string; pick?: PalettePick };
@@ -4316,7 +4344,7 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => void;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
-  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string }) => Promise<any>;
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
   // the LIVE stub row (the new-session pickers write it via updateSessionProject /
   // setConversationAgent) rather than a begin-time closure. This is what makes a
@@ -4875,7 +4903,12 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   publishToDirectory: (opts: { conversation_id: string; title: string; description?: string; tags?: string[] }) => Promise<any>;
   moveDoc: (id: string, parentId?: string, sortOrder?: number) => Promise<any>;
   updatePlan: (shortId: string, fields: { title?: string; goal?: string; acceptance_criteria?: string[]; status?: string; task_ids?: string[]; context_pointers?: Array<{ label: string; path_or_url: string }> }) => void;
-  updateProject: (id: string, fields: { title?: string; description?: string; status?: string; color?: string; icon?: string }) => void;
+  updateProject: (id: string, fields: { title?: string; description?: string; status?: string; color?: string; icon?: string; target_date?: number | null }) => void;
+
+  // -- Issue sync sources (docs/architecture/issue-sync.md S1.3) --
+  addIssueSyncSource: (opts: { provider: "linear" | "github"; kind: "linear_project" | "linear_team" | "github_repo"; external_id: string; external_key?: string; name: string; url?: string; project_id?: string; project_name?: string }) => Promise<any>;
+  updateIssueSyncSource: (id: string, fields: { status?: "active" | "paused"; delegate_label?: string; delegate_assignee?: string; auto_spawn?: boolean; push_new_tasks?: boolean }) => void;
+  removeIssueSyncSource: (id: string) => void;
 
   addTaskComment: (shortId: string, text: string, commentType?: string, imageIds?: string[]) => Promise<any>;
   updateDoc: (id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[] }) => void;
@@ -6225,7 +6258,10 @@ function mountedPathname(draft: Draft): string | undefined {
   // Tab paths keep their query (/inbox?s=…); the surface helpers want the bare
   // pathname, as usePathname reports it.
   if (tab) return tab.path.split("?")[0];
-  return typeof window !== "undefined" ? window.location.pathname : undefined;
+  // React Native defines `window` but not `window.location` (same trap as
+  // stampedTabPath): a bare typeof check passes and the property read throws,
+  // which took down the mobile inbox on every label/project chip tap.
+  return typeof window !== "undefined" ? window.location?.pathname : undefined;
 }
 
 // One chip filter changed: record it for Back, and if the focused session just
@@ -6904,6 +6940,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   currentConversation: {},
   isolatedWorktreeMode: false,
+  cloudSessionMode: false,
 
   palette: { open: false, targets: [], targetType: null, initialMode: 'root' },
 
@@ -7938,7 +7975,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),
 
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string }) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const existing = this.sessions[sessionId];
@@ -7971,6 +8008,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
       ...(opts.stable_mode || existing?.stable_mode ? { stable_mode: opts.stable_mode ?? existing?.stable_mode } : {}),
       ...(opts.stable_exclude?.length || existing?.stable_exclude?.length
         ? { stable_exclude: opts.stable_exclude ?? existing?.stable_exclude }
+        : {}),
+      // A cloud session's owner is the host from t=0, so the header names the
+      // machine it will run on while the local daemon is still preparing it.
+      // The server insert stamps the same pair; placeConversation clears the
+      // placement once the host actually has the worktree.
+      ...(opts.cloud_device_id
+        ? { owner_device_id: opts.cloud_device_id, cloud_placement: "pending" as const }
         : {}),
     } as InboxSession;
     nextSession._launchSnapshot = launchSnapshotFromRow(nextSession);
@@ -8010,6 +8054,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // coin flip. The selection is now deterministic and always stamped, so
     // there is nothing left to second-guess.
     const targetDeviceId = cur?.target_device_id as string | null | undefined;
+    // "Run in the cloud": the session is created parked on a machine that boots
+    // itself when work arrives, and a local daemon prepares the host. Prefer the
+    // machine the picker stamped (the toggle selects the cloud host, so this is
+    // normally the same device); fall back to the first cloud host on the roster
+    // so the toggle still works if the stamp never landed. No cloud host in the
+    // roster means the toggle could not have been shown — create locally.
+    const cloudDevice = s.cloudSessionMode
+      ? (s.machineRoster.find((d) => d.device_id === targetDeviceId && wakesOnUse(d))
+        ?? s.machineRoster.find(wakesOnUse))
+      : undefined;
     return s.createSession({
       agent_type: agentType,
       project_path: projectPath,
@@ -8021,7 +8075,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
         : {}),
       ...(modelKey !== "default" ? { model: modelKey } : {}),
       ...(cur?.effort ? { effort: cur.effort } : {}),
-      ...(s.isolatedWorktreeMode ? { isolated: true } : {}),
+      // A cloud session's worktree is made on the HOST, by the daemon that
+      // prepares it — so `isolated` (which asks a local daemon to make one
+      // here) must not ride along with it.
+      ...(cloudDevice ? { cloud_device_id: cloudDevice.device_id } : {}),
+      ...(s.isolatedWorktreeMode && !cloudDevice ? { isolated: true } : {}),
       // Stable-context prefs stamped on the stub by the new-session context
       // picker (setStableContextPrefs) — same lifecycle as model/effort.
       ...(cur?.stable_mode ? { stable_mode: cur.stable_mode } : {}),
@@ -9140,6 +9198,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.isolatedWorktreeMode = val;
   }),
 
+  setCloudSessionMode: action(function (this: Draft, val: boolean) {
+    this.cloudSessionMode = val;
+  }),
+
   clearCurrentConversation: action(function (this: Draft) {
     this.currentConversation = {};
   }),
@@ -9660,6 +9722,52 @@ const inboxStoreConfig = (set: any, get: any) => ({
   updateProject: action(function (this: Draft, id: string, fields: Record<string, any>) {
     const project = (this.projects as any)[id] ?? Object.values(this.projects).find((p: any) => p._id === id);
     if (project) Object.assign(project, fields, { updated_at: Date.now() });
+  }),
+
+  // ── Issue sync sources (docs/architecture/issue-sync.md S1.3, S9) ────────
+  //
+  // The integrations page paints every one of these locally and hands the real
+  // write to the matching dispatch side effect, which delegates to the
+  // issueSync mutations (they own access checks, the project create and the
+  // provider webhook registration — none of it is re-derived here).
+  //
+  // The add stub carries the viewer's workspace key so it renders through the
+  // useWorkspaceCollection boundary immediately. `issueSync.addSource` takes no
+  // client key, so nothing supersedes the stub by id; the next listSources
+  // snapshot carries the real row and drops the stub (the collection syncs in
+  // snapshot mode, so absence IS removal).
+  addIssueSyncSource: asyncAction(function (this: Draft, opts: any) {
+    const stubId = `temp_iss_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const teamId = this.clientState.ui?.active_team_id;
+    const userId = this.currentUser?._id ? String(this.currentUser._id) : null;
+    (this.issueSyncSources as any)[stubId] = {
+      _id: stubId,
+      provider: opts.provider,
+      kind: opts.kind,
+      external_id: opts.external_id,
+      external_key: opts.external_key,
+      name: opts.name,
+      url: opts.url,
+      project_id: opts.project_id,
+      project_name: opts.project_name ?? opts.name,
+      team_id: teamId,
+      workspace: activeWorkspaceKey(teamId, userId) ?? undefined,
+      status: "active",
+      auto_spawn: false,
+      push_new_tasks: false,
+      delegate_label: "agent",
+      created_at: Date.now(),
+      updated_at: Date.now(),
+    };
+  }),
+
+  updateIssueSyncSource: action(function (this: Draft, id: string, fields: Record<string, any>) {
+    const source = (this.issueSyncSources as any)[id];
+    if (source) Object.assign(source, fields, { updated_at: Date.now() });
+  }),
+
+  removeIssueSyncSource: action(function (this: Draft, id: string) {
+    delete (this.issueSyncSources as any)[id];
   }),
 
   // Local-first create: an optimistic stub renders the row instantly (the

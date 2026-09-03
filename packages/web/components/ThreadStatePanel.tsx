@@ -5,6 +5,7 @@ import { Pin, ChevronDown, X } from "lucide-react";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
+import { PrStatusChip } from "./PrStatusChip";
 import { threadStateView, THREAD_STATE_STATUS_META, type ThreadStateView } from "../lib/threadState";
 import { FormattedSummary } from "./FormattedSummary";
 
@@ -44,6 +45,11 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
   // coarse ticker the panel would keep claiming "just now" for hours.
   const now = useCoarseNow(30_000);
   const collapsed = useInboxStore((s) => s.clientState?.ui?.thread_state_collapsed === true);
+  // The pull request this session shepherds. It sits in the same seam above the
+  // composer because it answers the same question the pinned state does: what
+  // is this session waiting on. The field only changes when the shepherd
+  // rewrites it, so subscribing to it directly does not follow row churn.
+  const prStatus = useInboxStore((s) => s.sessions[conversationId]?.pr_status ?? null);
 
   // Long states expand in place instead of scrolling inside the panel: the body
   // clamps at a readable height, and when the text runs past it a "Show all"
@@ -70,7 +76,16 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
     messageCount ?? 0,
     now,
   );
-  if (!view) return null;
+  if (!view) {
+    if (!prStatus) return null;
+    return (
+      <div className="relative z-20 bg-sol-bg pt-1.5">
+        <div className="mx-auto conv-col px-2 sm:px-4 pb-1.5 flex items-center">
+          <PrStatusChip status={prStatus} size="panel" />
+        </div>
+      </div>
+    );
+  }
 
   const tone = TONE[view.freshness];
   // The declared status owns the bar when present — it is the semantic signal;
@@ -157,6 +172,7 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
                 <span className={`text-[10px] shrink-0 ml-auto ${tone.meta}`}>{view.provenance}</span>
               )}
             </button>
+            <PrStatusChip status={prStatus} size="panel" className="shrink-0" />
             <div className="flex items-center shrink-0">
               {canClear && (
                 <button

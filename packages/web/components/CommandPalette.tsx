@@ -196,7 +196,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Claude Accounts", path: "/settings/claude-accounts", icon: "settings", keywords: "account switch login oauth", secondary: true },
   { label: "Sync & Privacy", path: "/settings/sync", icon: "settings", keywords: "projects sharing private", secondary: true },
   { label: "Devices", path: "/settings/devices", icon: "cpu", keywords: "machines daemons keys cli hosts", secondary: true },
-  { label: "Integrations", path: "/settings/integrations", icon: "link", keywords: "github slack webhooks connect", secondary: true },
+  { label: "Integrations", path: "/settings/integrations", icon: "link", keywords: "slack github linear google gmail notion connect oauth apps webhooks issues sync", secondary: true },
   { label: "Provider Keys", path: "/settings/provider-keys", icon: "settings", keywords: "api keys openrouter anthropic openai", secondary: true },
   { label: "Notifications", path: "/settings/notifications", icon: "settings", keywords: "push email digest mentions mute", secondary: true },
   { label: "Sounds", path: "/settings/sounds", icon: "settings", keywords: "audio volume mute chime walkie", secondary: true },

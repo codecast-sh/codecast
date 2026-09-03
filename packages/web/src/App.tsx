@@ -118,7 +118,7 @@ const SettingsTeam = lazy(() => import("@/app/settings/team/page"));
 const SettingsTeamCreate = lazy(() => import("@/app/settings/team/create/page"));
 const SettingsTeamJoin = lazy(() => import("@/app/settings/team/join/page"));
 const SettingsNotifications = lazy(() => import("@/app/settings/notifications/page"));
-const SettingsIntegrationsGithub = lazy(() => import("@/app/settings/integrations/github-app/page"));
+const SettingsIntegrations = lazy(() => import("@/app/settings/integrations/page"));
 const SettingsDesktop = lazy(() => import("@/app/settings/desktop/page"));
 
 function E({ name, children }: { name: string; children: ReactNode }) {

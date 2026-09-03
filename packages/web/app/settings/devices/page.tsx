@@ -12,6 +12,7 @@ import { Input } from "../../../components/ui/input";
 import { SettingsLinkRow, SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { DevicePanelHeader } from "../../../components/settings/DevicePanelHeader";
 import { useDevices, deviceDisplayName, DeviceDot, type Device } from "../../../components/DeviceBadge";
+import { describeDeviceFreeze } from "../../../lib/daemonHealthCopy";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { Bot } from "lucide-react";
 
@@ -225,6 +226,19 @@ function SshHostField({
   );
 }
 
+// The loop freeze budget for one machine. The wording and the rule for when to
+// show anything at all come from daemonHealthCopy, so this and the header chip
+// never drift.
+function DeviceFreezeLine({ d }: { d: Device }) {
+  const freeze = describeDeviceFreeze(d);
+  if (!freeze) return null;
+  return (
+    <div className="mt-1 text-[11px] font-mono truncate" style={{ color: `var(${freeze.colorVar})` }}>
+      {freeze.text}
+    </div>
+  );
+}
+
 function DeviceRow({ d }: { d: Device }) {
   const accent = d.is_remote ? "text-sol-violet" : /linux/i.test(d.platform) ? "text-sol-orange" : "text-sol-blue";
   return (
@@ -243,6 +257,7 @@ function DeviceRow({ d }: { d: Device }) {
             </span>
             <span className="font-mono opacity-60">{d.device_id.slice(0, 12)}</span>
           </div>
+          <DeviceFreezeLine d={d} />
           {(d.git_plane?.length ?? 0) > 0 && (
             <ul className="mt-2 space-y-1">
               {d.git_plane!.map((r) => (

@@ -97,10 +97,11 @@ Rules the CLI enforces in real mode:
 - The session's tab opens in the background. Focus stays where you had it.
 - `cast browser stop` closes the session's tab. The reaper closes it the
   same way when the session ends.
-- `grant`, `eval` and `login` drive the clone only: the extension cannot
-  grant site permissions in your Chrome, and the other two have no real mode
-  path yet. Asked for the real Chrome, they refuse before anything opens a
-  tab there.
+- `grant` and `login` drive the clone only: the extension cannot grant site
+  permissions in your Chrome, and your Chrome already holds your logins.
+  Asked for the real Chrome, they refuse before anything opens a tab there.
+  `eval` runs in both: it is one `Runtime.evaluate` on the tab's debugger
+  session, which the extension forwards like any other command.
 
 ## What you see while a session drives a tab
 
