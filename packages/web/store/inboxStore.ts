@@ -32,8 +32,9 @@ import {
 // definition — the applier (useSyncChangeFeed) persists cursors under it and
 // stampSyncAck's immediate-retire branch reads it; a second spelling would
 // silently break the retire race it exists for.
+const SYNC_LOG_META_PREFIX = "synclog:v1:";
 export function syncLogScopeMetaKey(scopeKey: string): string {
-  return `synclog:v1:${scopeKey}`;
+  return `${SYNC_LOG_META_PREFIX}${scopeKey}`;
 }
 
 // Reverse of the registry's storeKey→server-table dispatch map, for stamping
@@ -4366,11 +4367,25 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   // synclog_apply metric: how many actions applied directly vs went to byIds.
   syncLogApplyStats: { direct: number; refetch: number };
   noteSyncLogApply: (direct: number, refetch: number) => void;
-  // Set once the applier has captured heads and stamped every scope cursor
-  // this page session. The bootstrap floors wait for it (sync-log-cargo E8 /
-  // D9): a floor cut BEFORE the cursor is stamped can miss writes that commit
-  // between the floor's query and the heads capture. Ephemeral.
-  syncLogStampedAt: number | null;
+  // Scope keys whose log cursor the applier stamped THIS page session (value:
+  // when). The bootstrap floors wait for the scopes their args resolve to
+  // (sync-log-cargo E8 / D9): a floor cut before its scope's cursor is stamped
+  // can miss a write that commits between the floor's query and the heads
+  // capture. Per scope, not global: a membership acquired mid-session has no
+  // cursor until the next heads pass, and a global flag would let its floor
+  // through early (review). Dropped with the cursor (clearSyncMeta). Ephemeral.
+  syncLogScopeStamps: Record<string, number>;
+  stampSyncLogScope: (scopeKey: string) => void;
+  // Bumped when the floors' contract is voided for the page session — a
+  // retention resync restamped a cursor at a later head, a team scope was
+  // (re)added — so every mounted one-shot floor recuts. Monotonic across a
+  // sign-out (clearProtectedInboxMemory), so a floor cut for the previous
+  // principal can never apply into the next one's store. Ephemeral.
+  syncLogFloorEpoch: number;
+  bumpSyncLogFloorEpoch: () => void;
+  // Lift the excludes purgeTeamScopeRows planted for one scope (a rejoin): the
+  // recut floor's rows would otherwise be dropped by every delta merge.
+  liftScopeExcludes: (scopeKey: string) => void;
 
   // -- Generic sync --
   syncTable: (field: string, incoming: any, opts?: SyncOpts) => void;
@@ -7492,16 +7507,26 @@ const inboxStoreConfig = (set: any, get: any) => ({
       for (const [id, row] of Object.entries(rows)) {
         if (row?.workspace === wsKey) {
           delete rows[id];
-          this.pending[`${coll}:${id}`] = { type: "exclude", ts: now };
+          // Tagged with the scope so a rejoin can lift exactly these
+          // (liftScopeExcludes); the rows are gone, so nothing else can name them.
+          this.pending[`${coll}:${id}`] = { type: "exclude", ts: now, scope: wsKey };
         }
       }
     }
   }),
 
+  liftScopeExcludes: sync(function (this: Draft, scopeKey: string) {
+    for (const [key, entry] of Object.entries(this.pending)) {
+      if ((entry as any)?.type === "exclude" && (entry as any).scope === scopeKey) delete this.pending[key];
+    }
+  }),
+
   // Drop a syncMeta key outright (recordSyncMeta only advances). Used for log
-  // cursor resets: scope revocation and retention resync.
+  // cursor resets: scope revocation and retention resync. A scope cursor's
+  // page-session stamp goes with it: the floors must wait for the restamp.
   clearSyncMeta: sync(function (this: Draft, key: string) {
     delete this.syncMeta[key];
+    if (key.startsWith(SYNC_LOG_META_PREFIX)) delete this.syncLogScopeStamps[key.slice(SYNC_LOG_META_PREFIX.length)];
   }),
 
   applyCargoFields: sync(function (
@@ -9515,7 +9540,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
   liveLoading: {},
   syncLogLag: {},
   syncLogApplyStats: { direct: 0, refetch: 0 },
-  syncLogStampedAt: null,
+  syncLogScopeStamps: {},
+  stampSyncLogScope: (scopeKey: string) => {
+    if (scopeKey in useInboxStore.getState().syncLogScopeStamps) return;
+    set((s: any) => ({ syncLogScopeStamps: { ...s.syncLogScopeStamps, [scopeKey]: Date.now() } }));
+  },
+  syncLogFloorEpoch: 0,
+  bumpSyncLogFloorEpoch: () => set((s: any) => ({ syncLogFloorEpoch: s.syncLogFloorEpoch + 1 })),
   mentionIndex: { tasks: {}, docs: {}, plans: {} },
   docs: {},
   plans: {},
@@ -10901,6 +10932,11 @@ export function clearProtectedInboxMemory(): void {
   // already mirrored to localStorage; no server or principal data is retained.
   reset.clientState = { ui: readCriticalUiPrefs() as ClientUI };
   reset.clientStateInitialized = false;
+  // Monotonic through the reset: a bootstrap floor still in flight for the
+  // old principal fences on the epoch it was cut at and must not apply into
+  // this cleared store, and the next sign-in's floors must never resolve to
+  // the old principal's already-applied entries.
+  reset.syncLogFloorEpoch = (state.syncLogFloorEpoch ?? 0) + 1;
   useInboxStore.setState(reset);
   _idbHydrating.clear();
 }
