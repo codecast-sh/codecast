@@ -414,9 +414,11 @@ export function claudeTranscriptModel(conversationModel: string | null | undefin
 // the session STARTED on and reverted mid-session /model switches on every
 // resume. The ANSI escapes around the name arrive JSON-escaped (literal
 // `\u001b[1m` text) in raw transcript bytes; match the raw ESC byte too for
-// pre-parsed content. "Default" means the user's saved default — no override.
+// pre-parsed content. Newer Claude Code builds quote the name in backticks
+// instead ("Set model to `Opus 5` and saved…"); the same slot takes either.
+// "Default" means the user's saved default — no override.
 const MODEL_ALIAS_RE =
-  /"model"\s*:\s*"(?:claude-)?(opus|sonnet|haiku|fable)\b|<local-command-stdout>Set model to (?:(?:\\u001b|\x1b)\[\d+m)*(opus|sonnet|haiku|fable|default)/gi;
+  /"model"\s*:\s*"(?:claude-)?(opus|sonnet|haiku|fable)\b|<local-command-stdout>Set model to (?:(?:\\u001b|\x1b)\[\d+m|`)*(opus|sonnet|haiku|fable|default)/gi;
 export function claudeModelAlias(jsonlContent: string): string | null {
   let last: string | null = null;
   MODEL_ALIAS_RE.lastIndex = 0;
@@ -481,7 +483,7 @@ function lastFlagFromFileWindows(jsonlPath: string, scan: (content: string) => s
 // JSON-escaped-or-raw ANSI wrapping as model switch lines. "auto" clears the
 // override (resume with no flag = the user's saved default).
 const EFFORT_LEVEL_RE =
-  /<local-command-stdout>[^<]*?(?:Set effort level to (?:(?:\\u001b|\x1b)\[\d+m)*(low|medium|high|xhigh|max|auto)\b|with (?:(?:\\u001b|\x1b)\[\d+m)*(low|medium|high|xhigh|max)(?:(?:\\u001b|\x1b)\[\d+m)* effort)/gi;
+  /<local-command-stdout>[^<]*?(?:Set effort level to (?:(?:\\u001b|\x1b)\[\d+m|`)*(low|medium|high|xhigh|max|auto)\b|with (?:(?:\\u001b|\x1b)\[\d+m|`)*(low|medium|high|xhigh|max)(?:(?:\\u001b|\x1b)\[\d+m|`)* effort)/gi;
 export function claudeEffortLevel(jsonlContent: string): string | null {
   let last: string | null = null;
   EFFORT_LEVEL_RE.lastIndex = 0;
