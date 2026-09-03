@@ -35,8 +35,10 @@ export type PageCtx = EngineOptions & { session: string };
 export async function connectToTab(o: PageCtx): Promise<
   { conn: CdpConnection; sessionId: string; url: string } | { error: string; hint?: string }
 > {
-  const state = readState();
-  if (!state) return { error: "no managed browser is running", hint: "cast browser start" };
+  // A real session carries the bridge's browser socket (engineBrowserFor);
+  // the managed clone is found through its state file.
+  const state = o.cdp ? null : readState();
+  if (!o.cdp && !state) return { error: "no managed browser is running", hint: "cast browser start" };
   // The tab listing rides the engine daemon and can transiently answer empty
   // right after another command; one short retry absorbs that.
   let tab = null as { targetId: string; url?: string } | null | undefined;
@@ -51,9 +53,11 @@ export async function connectToTab(o: PageCtx): Promise<
   if (!tab?.targetId) {
     return { error: "this session has no tab", hint: "cast browser open <url> first" };
   }
-  const conn = state.wsUrl
-    ? await CdpConnection.connect(state.wsUrl, 8000)
-    : await CdpConnection.fromPort(state.port, 8000);
+  const conn = o.cdp
+    ? await CdpConnection.connect(o.cdp, 8000)
+    : state!.wsUrl
+      ? await CdpConnection.connect(state!.wsUrl, 8000)
+      : await CdpConnection.fromPort(state!.port, 8000);
   try {
     const { sessionId } = await conn.send<{ sessionId: string }>("Target.attachToTarget", {
       targetId: tab.targetId,
