@@ -8,7 +8,8 @@ import {
 } from "./jsonlGenerator.js";
 import { AGENT_CLIENTS, type AgentClientId } from "@codecast/shared/contracts";
 
-export const CLAUDE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { CLAUDE_UUID_RE } from "./syncScope.js";
+export { CLAUDE_UUID_RE };
 
 // opencode session ids are `ses_` followed by base62 — the ONLY shape a real id
 // takes (verified against a live ~/.local/share/opencode/opencode.db: all 37 rows

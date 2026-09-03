@@ -51,6 +51,15 @@ const Questions = lazyPage("@/app/questions/page", () => import("@/app/questions
 // The Threads inbox: every conversation the viewer is in, one page.
 const Threads = lazyPage("@/app/threads/page", () => import("@/app/threads/page"));
 const AdminDaemonLogs = lazyPage("@/app/admin/daemon-logs/page", () => import("@/app/admin/daemon-logs/page"));
+// Code review pages open in the shell like any other detail view.
+const PrView = lazyPage("@/app/pr/[owner]/[repo]/[number]/page", () => import("@/app/pr/[owner]/[repo]/[number]/page"));
+const CommitView = lazyPage("@/app/commit/[owner]/[repo]/[sha]/page", () => import("@/app/commit/[owner]/[repo]/[sha]/page"));
+// Browsing a repository. The file path a tree or blob is showing rides in the
+// query string (`?path=`), so every route here is a fixed set of segments.
+const RepoIndex = lazyPage("@/app/repo/page", () => import("@/app/repo/page"));
+const RepoHistory = lazyPage("@/app/repo/[owner]/[name]/page", () => import("@/app/repo/[owner]/[name]/page"));
+const RepoTree = lazyPage("@/app/repo/[owner]/[name]/tree/[ref]/page", () => import("@/app/repo/[owner]/[name]/tree/[ref]/page"));
+const RepoBlob = lazyPage("@/app/repo/[owner]/[name]/blob/[ref]/page", () => import("@/app/repo/[owner]/[name]/blob/[ref]/page"));
 
 type RouteEntry = {
   pattern: RegExp;
@@ -77,6 +86,11 @@ const ROUTES: RouteEntry[] = [
   // reconciles beside the project's list instead of navigating away from it.
   { pattern: /^\/projects\/([^/]+)\/([^/]+)$/, paramNames: ["id", "taskId"], component: ProjectDetail },
   { pattern: /^\/projects\/([^/]+)$/, paramNames: ["id"], component: ProjectDetail },
+  { pattern: /^\/pr\/([^/]+)\/([^/]+)\/([^/]+)$/, paramNames: ["owner", "repo", "number"], component: PrView },
+  { pattern: /^\/commit\/([^/]+)\/([^/]+)\/([^/]+)$/, paramNames: ["owner", "repo", "sha"], component: CommitView },
+  { pattern: /^\/repo\/([^/]+)\/([^/]+)\/tree\/([^/]+)$/, paramNames: ["owner", "name", "ref"], component: RepoTree },
+  { pattern: /^\/repo\/([^/]+)\/([^/]+)\/blob\/([^/]+)$/, paramNames: ["owner", "name", "ref"], component: RepoBlob },
+  { pattern: /^\/repo\/([^/]+)\/([^/]+)$/, paramNames: ["owner", "name"], component: RepoHistory },
   // Same component as the bare route, so opening a channel reconciles in place
   // instead of remounting the whole surface and losing the scroll position.
   { pattern: /^\/chat\/([^/]+)$/, paramNames: ["channelId"], component: Chat },
@@ -102,6 +116,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/sessions$/, paramNames: [], component: Sessions },
   { pattern: /^\/anchor$/, paramNames: [], component: Anchor },
   { pattern: /^\/team$/, paramNames: [], component: Team },
+  { pattern: /^\/repo$/, paramNames: [], component: RepoIndex },
   { pattern: /^\/search$/, paramNames: [], component: Search },
   { pattern: /^\/files$/, paramNames: [], component: Vault },
   { pattern: /^\/vault$/, paramNames: [], component: Vault }, // permanent pre-rename alias for /files

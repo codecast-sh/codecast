@@ -151,6 +151,27 @@ export async function canAccessPullRequest(
   return await isTeamMember(ctx, userId, pullRequest.team_id);
 }
 
+/**
+ * A commit is readable through whichever provenance it has.
+ *
+ * A commit written from a session transcript carries conversation_id, and the
+ * session decides who may read it. A commit that arrived by webhook or backfill
+ * has no session, so it falls back to the team the GitHub App is installed for.
+ * Neither path is a guess: the row records which one applies, and a commit with
+ * neither is readable by nobody.
+ */
+export async function canAccessCommit(
+  ctx: AccessCtx & { db: any },
+  userId: Id<"users">,
+  commit: { conversation_id?: Id<"conversations">; team_id?: Id<"teams"> },
+): Promise<boolean> {
+  if (commit.conversation_id) {
+    const conversation = await ctx.db.get(commit.conversation_id);
+    if (conversation && (await canAccessConversation(ctx, userId, conversation))) return true;
+  }
+  return commit.team_id ? await isTeamMember(ctx, userId, commit.team_id) : false;
+}
+
 /** Resolve the membership row or fail closed for an explicitly requested team. */
 export async function requireTeamMembership(
   ctx: AccessCtx,

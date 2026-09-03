@@ -11,7 +11,10 @@ export const ENTITY_TYPE = v.union(
   v.literal("plan"),
   v.literal("conversation"),
   v.literal("artifact"),
-  v.literal("chat_channel")
+  v.literal("chat_channel"),
+  // A machine, for the daemon loop freeze alert. Nothing subscribes to a device:
+  // the alert goes to its owner through direct_recipient_id.
+  v.literal("device")
 );
 
 export const NOTIFICATION_TYPE = v.union(
@@ -42,7 +45,9 @@ export const NOTIFICATION_TYPE = v.union(
   // An ordinary channel line, emitted only to members whose per-channel notify
   // level is "all" (chat.ts gates it). For everyone else plain chatter stays
   // unread state with no row and no push.
-  v.literal("chat_post")
+  v.literal("chat_post"),
+  // The daemon on one machine spent more than its budget frozen in the last hour.
+  v.literal("daemon_overloaded")
 );
 
 export const PREFERENCE_MAP: Record<string, string> = {
@@ -74,6 +79,10 @@ export const PREFERENCE_MAP: Record<string, string> = {
   chat_dm: "mention",
   chat_added: "chat_activity",
   chat_post: "chat_activity",
+  // A frozen daemon delays deliveries and echoes, which is what session_error
+  // already means to a reader. Riding that key keeps the alert under a mute
+  // switch that exists rather than inventing one with no settings row.
+  daemon_overloaded: "session_error",
 };
 
 function isNotificationEnabled(
