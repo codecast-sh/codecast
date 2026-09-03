@@ -8,7 +8,7 @@
  * nothing.
  */
 
-import { deviceDisplayName } from "@codecast/shared/contracts";
+import { deviceDisplayName, localTmuxAttachCommand, sshTmuxAttachCommand } from "@codecast/shared/contracts";
 
 export type SessionMachine = {
   device_id: string;
@@ -34,8 +34,9 @@ export type SessionMachine = {
  * the REMOTE shell re-parses, so it needs its own outer quoting — double
  * quotes, since the inner single quotes are already spent.
  *
- * `-t` is load-bearing: ssh allocates a TTY only when asked, and tmux without
- * one exits immediately with "open terminal failed: not a terminal".
+ * The ssh shape itself (TTY flag, PATH prefix, quoting) lives in
+ * @codecast/shared/contracts (sshTmuxAttachCommand) so the CLI's post-move
+ * hint prints the identical command.
  *
  * ssh_host is pre-validated server-side against an allowlist (sanitizeSshHost
  * in convex/devices.ts), so it cannot close a quote or chain a command here.
@@ -44,13 +45,13 @@ export function attachCommand(
   tmuxSession: string,
   machine: SessionMachine | null | undefined,
 ): string | null {
-  const local = `tmux attach -t '${tmuxSession}'`;
+  const local = localTmuxAttachCommand(tmuxSession);
   // Unknown machine (no owner_device_id, or the device row is gone): keep the
   // pre-existing local form rather than silently withholding the pane name.
   if (!machine) return local;
   if (!machine.is_mine) return null;
   if (!machine.ssh_host) return local;
-  return `ssh ${machine.ssh_host} -t "${local}"`;
+  return sshTmuxAttachCommand(machine.ssh_host, tmuxSession);
 }
 
 /**
