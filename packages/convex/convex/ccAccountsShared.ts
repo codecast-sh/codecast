@@ -135,6 +135,40 @@ export function activeTokenProfile(
   return accounts?.active_email ? tokenBackedProfile(accounts, { email: accounts.active_email }, now) : undefined;
 }
 
+type ContinueDevice = {
+  is_remote?: boolean;
+  cc_session_tokens?: boolean;
+  cc_accounts?: Parameters<typeof activeTokenProfile>[0];
+};
+
+/** The pin a session continued "on this account" (no switch) must carry on
+ * this device: the profile covering the machine's current login when
+ * per-session tokens are on and it has a live token, otherwise none (the
+ * session follows the keychain). Remotes run a pushed credential and never
+ * pin. */
+export function continueTargetPin(device: ContinueDevice | undefined, now: number): string | undefined {
+  if (!device || device.is_remote === true || device.cc_session_tokens !== true) return undefined;
+  return activeTokenProfile(device.cc_accounts, now);
+}
+
+/** Whether a plain "continue" can reach a blocked session, or the session
+ * must be killed and resumed first. A message retries the process as it is;
+ * it cannot change the account that process is bound to. Two bindings are
+ * fixed at launch: an expired login (auth banner) and a per-session
+ * setup-token (`cc_account`, read from the env at process start). A session
+ * pinned to any account other than the one this device pins to now would
+ * re-source the wrong token on a plain continue, and again on every resume
+ * until the pin is corrected. */
+export function continueNeedsRestart(
+  conv: { pending_api_error_kind?: string | null; cc_account?: string | null },
+  device: ContinueDevice | undefined,
+  now: number,
+): boolean {
+  if (conv.pending_api_error_kind === "auth") return true;
+  if (!conv.cc_account || device?.is_remote === true) return false;
+  return conv.cc_account !== continueTargetPin(device, now);
+}
+
 // Auto-switch bookkeeping, stored on the primary device row. `attempts` is the
 // per-incident memory that stops the loop from re-trying an account that
 // already parked sessions this window; `exhausted_at` is the UI's "every
