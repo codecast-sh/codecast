@@ -95,6 +95,11 @@ const EVENT_SHORTHANDS: Record<string, { event_type: string; action?: string }> 
   pr_opened: { event_type: "pull_request", action: "opened" },
   pr_merged: { event_type: "pull_request", action: "closed" },
   push: { event_type: "push" },
+  issue_opened: { event_type: "issues", action: "opened" },
+  issue_assigned: { event_type: "issues", action: "assigned" },
+  issue_labeled: { event_type: "issues", action: "labeled" },
+  issue_closed: { event_type: "issues", action: "closed" },
+  issue_commented: { event_type: "issue_comment", action: "created" },
 };
 
 function eventLabel(filter?: { event_type: string; action?: string }): string {

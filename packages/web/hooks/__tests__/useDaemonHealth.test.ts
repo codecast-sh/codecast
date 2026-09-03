@@ -9,9 +9,13 @@ import {
   RESTART_SETTLE_MS,
   OVERLOADED_FREEZE_MS,
   isDegradedDaemonHealth,
+  blocksDelivery,
+  sigCell,
   worstDaemonHealth,
   ROSTER_CONSIDER_MS,
+  OVERLOADED_HOUR_MS,
 } from "../useDaemonHealth";
+import { describeDaemonHealth, describeDeviceFreeze } from "../../lib/daemonHealthCopy";
 
 const NOW = 1_000_000_000_000;
 
@@ -145,6 +149,120 @@ describe("computeDaemonHealth: quiet / restarting / overloaded", () => {
     expect(computeDaemonHealth(light, NOW).kind).toBe("ok");
   });
 
+  it("is overloaded when the trailing hour is over the SLO even if the minute is quiet", () => {
+    // A machine that freezes hard every few minutes reads as fine in any one
+    // minute, which is exactly the case the hour tier exists for.
+    const bursty = {
+      daemon_last_seen: NOW - 1000,
+      daemon_loop_freeze_ms: 0,
+      daemon_loop_freeze_1h_ms: 215_000,
+      daemon_loop_freeze_max_ms: 42_000,
+      daemon_loop_freeze_top: "walk@recursiveWatcher.ts:138 60%",
+    };
+    expect(computeDaemonHealth(bursty, NOW)).toEqual({
+      kind: "overloaded",
+      freezeMs: 0,
+      hourMs: 215_000,
+      maxMs: 42_000,
+      topCause: "walk@recursiveWatcher.ts:138 60%",
+    });
+    const quietHour = { daemon_last_seen: NOW - 1000, daemon_loop_freeze_1h_ms: OVERLOADED_HOUR_MS - 5_000 };
+    expect(computeDaemonHealth(quietHour, NOW).kind).toBe("ok");
+  });
+
+  // The hour total is a record of the last sixty minutes, so a machine that
+  // froze at breakfast carries it until lunch. Reporting it over a live backlog
+  // would hide the count of waiting messages for that whole hour, and because
+  // the hour tier alone does not block delivery the backlog would go unnamed on
+  // every surface.
+  it("a live sync backlog outranks the hour tier, and still blames the daemon", () => {
+    const both = {
+      daemon_last_seen: NOW - 1000,
+      daemon_loop_freeze_ms: 0,
+      daemon_loop_freeze_1h_ms: 215_000,
+      daemon_pending_sync_count: 40,
+      daemon_pending_sync_messages: 40,
+      daemon_pending_sync_conversations: 3,
+      daemon_oldest_pending_ms: 10 * 60_000,
+    };
+    const health = computeDaemonHealth(both, NOW);
+    expect(health).toEqual({
+      kind: "sync_stalled",
+      pending: 40,
+      messages: 40,
+      conversations: 3,
+      stalledMs: 10 * 60_000,
+    });
+    expect(blocksDelivery(health)).toBe(true);
+  });
+
+  it("a freeze happening right now outranks the backlog it causes", () => {
+    const frozenNow = {
+      daemon_last_seen: NOW - 1000,
+      daemon_loop_freeze_ms: 31_000,
+      daemon_loop_freeze_1h_ms: 215_000,
+      daemon_pending_sync_count: 40,
+      daemon_oldest_pending_ms: 10 * 60_000,
+    };
+    expect(computeDaemonHealth(frozenNow, NOW)).toEqual({
+      kind: "overloaded",
+      freezeMs: 31_000,
+      hourMs: 215_000,
+    });
+  });
+
+  it("names the top cause when the hour tier fired, and keeps the minute wording otherwise", () => {
+    const hourTier = describeDaemonHealth({
+      kind: "overloaded",
+      freezeMs: 0,
+      hourMs: 215_000,
+      maxMs: 42_000,
+      topCause: "walk@recursiveWatcher.ts:138 60%",
+    });
+    expect(hourTier?.label).toBe("daemon under load");
+    expect(hourTier?.detail).toContain("215s in the last hour");
+    expect(hourTier?.detail).toContain("worst freeze 42s");
+    expect(hourTier?.detail).toContain("Top cause: walk@recursiveWatcher.ts:138 60%");
+
+    const minuteTier = describeDaemonHealth({ kind: "overloaded", freezeMs: 31_000 });
+    expect(minuteTier?.detail).toContain("31s of the last minute");
+
+    // Both tiers at once. This is the only verdict the note on a stuck message
+    // renders, so it has to keep the live sentence; the hour follows it.
+    const bothTiers = describeDaemonHealth({
+      kind: "overloaded",
+      freezeMs: 31_000,
+      hourMs: 215_000,
+      maxMs: 42_000,
+      topCause: "walk@recursiveWatcher.ts:138 60%",
+    });
+    expect(bothTiers?.detail).toContain("31s of the last minute");
+    expect(bothTiers?.detail).toContain("215s in the last hour");
+    expect(bothTiers?.detail).toContain("Top cause: walk@recursiveWatcher.ts:138 60%");
+  });
+
+  it("the devices page line names the hour, the worst freeze and the cause", () => {
+    expect(
+      describeDeviceFreeze({
+        online: true,
+        loop_freeze_1h_ms: 215_000,
+        loop_freeze_max_ms: 42_000,
+        loop_freeze_top: "walk@recursiveWatcher.ts:138 60%",
+      }),
+    ).toEqual({
+      text: "frozen 215s/h, worst 42s · walk@recursiveWatcher.ts:138 60%",
+      colorVar: "--sol-orange",
+    });
+    // Under the bar the machine still reports, dimly rather than in alarm.
+    expect(describeDeviceFreeze({ online: true, loop_freeze_1h_ms: 30_000 })?.colorVar).toBe("--sol-text-dim");
+    // A machine that has reported no freeze shows no line at all.
+    expect(describeDeviceFreeze({ online: true })).toBeNull();
+    expect(describeDeviceFreeze({ online: true, loop_freeze_1h_ms: 0 })).toBeNull();
+    // A machine that stopped beating keeps its last number to itself: it says
+    // nothing about how that machine is doing now.
+    expect(describeDeviceFreeze({ online: false, loop_freeze_1h_ms: 215_000 })).toBeNull();
+  });
+
   it("silence outranks a fresh boot or load (those need a live beat to mean anything)", () => {
     const h = computeDaemonHealth(
       { daemon_last_seen: NOW - QUIET_AFTER_MS, daemon_started_at: NOW - 10_000, daemon_loop_freeze_ms: 50_000 },
@@ -175,11 +293,45 @@ describe("computeDaemonHealth: quiet / restarting / overloaded", () => {
     expect(isDegradedDaemonHealth({ kind: "offline", tier: "warn", offlineMs: 1 })).toBe(true);
     expect(isDegradedDaemonHealth({ kind: "sync_stalled", pending: 1, messages: 1, conversations: 1, stalledMs: 1 })).toBe(true);
   });
+
+  // The hour tier reports an SLO, not a live symptom. Letting it decide the
+  // delivery verdict hid the stuck-message note and its kill & restart button
+  // for a whole hour after two minutes of freeze anywhere inside it.
+  it("the hour tier alone does not blame the daemon for a late message", () => {
+    const hourOnly = { kind: "overloaded" as const, freezeMs: 0, hourMs: 200_000, maxMs: 40_000 };
+    expect(isDegradedDaemonHealth(hourOnly)).toBe(true);
+    expect(blocksDelivery(hourOnly)).toBe(false);
+    // A minute the loop really is frozen in still does.
+    expect(blocksDelivery({ kind: "overloaded", freezeMs: OVERLOADED_FREEZE_MS })).toBe(true);
+    expect(blocksDelivery({ kind: "quiet", quietMs: 1 })).toBe(true);
+    expect(blocksDelivery({ kind: "offline", tier: "warn", offlineMs: 1 })).toBe(true);
+    expect(blocksDelivery({ kind: "ok" })).toBe(false);
+  });
 });
 
 // Health is judged PER MACHINE from the device roster. The user-doc fields are
 // last-writer across daemons, so with a laptop and a remote Mac both beating,
 // the laptop's silence was masked by the Mac's heartbeats.
+// The roster signature is one string: fields joined with "|", rows with
+// newlines, decoded back by position. A machine label or a top cause carrying
+// either character would shift every field after it, on every device in the
+// roster.
+describe("sigCell", () => {
+  it("strips the separators the roster decode reads by position", () => {
+    expect(sigCell("walk@recursiveWatcher.ts:138 60%")).toBe("walk@recursiveWatcher.ts:138 60%");
+    expect(sigCell("a|b")).toBe("a b");
+    expect(sigCell("two\nlines")).toBe("two lines");
+    expect(sigCell("carriage\r\nreturn")).toBe("carriage return");
+  });
+
+  it("writes an empty cell for nothing and keeps a real zero", () => {
+    expect(sigCell(null)).toBe("");
+    expect(sigCell(undefined)).toBe("");
+    expect(sigCell(false)).toBe("");
+    expect(sigCell(0)).toBe("0");
+  });
+});
+
 describe("worstDaemonHealth", () => {
   const laptop = { device_id: "a", label: "MacBook", last_seen: NOW - QUIET_AFTER_MS };
   const cloud = { device_id: "b", label: "Cloud Mac", last_seen: NOW - 1000 };
@@ -212,5 +364,37 @@ describe("worstDaemonHealth", () => {
     const fresh = { device_id: "e", label: "Fresh", last_seen: NOW - 1000, daemon_started_at: NOW - 5000 };
     expect(worstDaemonHealth([fresh, busy], NOW)?.kind).toBe("overloaded");
     expect(worstDaemonHealth([fresh, busy, laptop], NOW)?.kind).toBe("quiet");
+  });
+
+  // The same ordering computeDaemonHealth applies inside one machine, applied
+  // across machines. The hour total sticks for a full hour where a live freeze
+  // lasts about a minute, so ranking it above a stuck queue would leave the
+  // header chip saying "daemon under load" while 40 messages sat unnamed on
+  // another machine for the rest of that hour.
+  it("puts a machine with a stuck queue ahead of one that only missed the hour SLO", () => {
+    const hourOnly = { device_id: "g", label: "MacBook", last_seen: NOW - 1000, loop_freeze_ms: 0, loop_freeze_1h_ms: 215_000 };
+    const backlog = {
+      device_id: "h",
+      label: "Studio",
+      last_seen: NOW - 1000,
+      pending_sync_count: 40,
+      pending_sync_messages: 40,
+      pending_sync_conversations: 3,
+      oldest_pending_ms: 10 * 60_000,
+    };
+    expect(worstDaemonHealth([hourOnly, backlog], NOW)).toEqual({
+      kind: "sync_stalled",
+      pending: 40,
+      messages: 40,
+      conversations: 3,
+      stalledMs: 10 * 60_000,
+      device: "Studio",
+    });
+    // The hour tier still outranks a healthy machine, so the chip does report
+    // it when nothing louder is happening.
+    expect(worstDaemonHealth([hourOnly, cloud], NOW)?.kind).toBe("overloaded");
+    // And a freeze happening right now still outranks the stuck queue.
+    const frozenNow = { ...hourOnly, loop_freeze_ms: 40_000 };
+    expect(worstDaemonHealth([frozenNow, backlog], NOW)?.kind).toBe("overloaded");
   });
 });

@@ -72,6 +72,7 @@ export function registerWorkspaceCommand(program: Command): void {
     .option("--skip-setup", "Skip install/generate/migrate commands")
     .option("--skip-hooks", "Skip before-create/after-create hooks")
     .option("--skip-pool", "Bypass warm pool — force fresh setup")
+    .option("--json", "Print the workspace as one JSON line (what `cast spawn --cloud` reads over SSH)")
     .action(
       async (
         name: string,
@@ -81,6 +82,7 @@ export function registerWorkspaceCommand(program: Command): void {
           skipSetup?: boolean;
           skipHooks?: boolean;
           skipPool?: boolean;
+          json?: boolean;
         },
       ) => {
         const repoRoot = findRepoRoot();
@@ -100,6 +102,15 @@ export function registerWorkspaceCommand(program: Command): void {
           });
           const ws = r.workspace;
           const tag = r.created ? "created" : "attached";
+          if (opts.json) {
+            console.log(JSON.stringify({
+              name: ws.name, path: ws.path, branch: ws.branch, state: ws.state,
+              ports: ws.ports, created: r.created,
+              contract: ws.contract ? { ok: ws.contract.ok, failures: ws.contract.checks.filter((c) => !c.ok) } : null,
+            }));
+            if (ws.contract && !ws.contract.ok) process.exit(2);
+            return;
+          }
           console.log(`${tag}: ${ws.name}`);
           console.log(`  path:    ${ws.path}`);
           console.log(`  branch:  ${ws.branch}`);

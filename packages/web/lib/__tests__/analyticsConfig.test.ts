@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
-// lib/analytics.ts is now codecast's configuration of @platform/analytics/web:
+// lib/analytics.ts is now codecast's configuration of @platform/analytics/web-runtime:
 // the wiring moved to the package, the Vite env values and the "codecast" app
 // name stayed here. This locks that mapping, and the error reading the package
 // takes from us — the toast, the dedupe key and the Sentry event all name the
@@ -24,7 +24,7 @@ const record =
 const last = (calls: Calls, name: string) => (calls[name] ?? []).at(-1);
 const count = (calls: Calls, name: string) => (calls[name] ?? []).length;
 
-mock.module("posthog-js", () => ({
+mock.module("posthog-js/dist/module.slim.js", () => ({
   default: {
     init: record(phCalls, "init"),
     register: record(phCalls, "register"),
@@ -33,11 +33,13 @@ mock.module("posthog-js", () => ({
     capture: record(phCalls, "capture"),
   },
 }));
+mock.module("posthog-js/dist/extension-bundles.js", () => ({
+  AnalyticsExtensions: {},
+}));
 mock.module("@sentry/react", () => ({
   init: record(sentryCalls, "init"),
   setUser: record(sentryCalls, "setUser"),
   captureException: record(sentryCalls, "captureException"),
-  browserTracingIntegration: () => ({ name: "BrowserTracing" }),
 }));
 
 const toasts: Array<[string, string]> = [];
@@ -48,8 +50,16 @@ mock.module("../errorToast", () => ({
 const analytics = await import("../analytics");
 
 describe("codecast's analytics configuration reaches the package", () => {
-  test("initAnalytics passes the Vite env values, the platform and the app name", () => {
-    analytics.initAnalytics();
+  test("keeps the browser SDK behind the idle initialization boundary", async () => {
+    const source = await Bun.file(`${import.meta.dir}/../analytics.ts`).text();
+    expect(source).not.toContain('from "@platform/analytics/web-runtime"');
+    expect(source).toContain('import("@platform/analytics/web-runtime")');
+  });
+
+  test("loads the SDKs on init and passes the app configuration", async () => {
+    expect(count(phCalls, "init")).toBe(0);
+    expect(count(sentryCalls, "init")).toBe(0);
+    await analytics.initAnalytics();
 
     const [key, options] = last(phCalls, "init") as [string, Record<string, unknown>];
     expect(key).toBe("phc_test_key");
@@ -73,7 +83,8 @@ describe("codecast's analytics configuration reaches the package", () => {
     expect(sentryOptions.initialScope.tags).toEqual({ platform: "web", app: "codecast" });
   });
 
-  test("identify uses the id the caller passes — the Convex users._id", () => {
+  test("identify uses the id the caller passes — the Convex users._id", async () => {
+    await analytics.initAnalytics();
     analytics.identifyUser("users:abc123", { email: "a@b.c" });
     expect(last(phCalls, "identify")).toEqual(["users:abc123", { email: "a@b.c" }]);
     expect(last(sentryCalls, "setUser")).toEqual([{ id: "users:abc123", email: "a@b.c" }]);
@@ -83,7 +94,8 @@ describe("codecast's analytics configuration reaches the package", () => {
 describe("error toasts read the cause chain", () => {
   let handlers: Record<string, (e: any) => void>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await analytics.initAnalytics();
     handlers = {};
     toasts.length = 0;
     for (const k of Object.keys(sentryCalls)) delete sentryCalls[k];

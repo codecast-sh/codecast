@@ -22,7 +22,9 @@ export function SettingsRedirect({ hit }: { hit: SettingsPathHit }) {
   useWatchEffect(() => {
     useInboxStore.getState().openSettingsModal(hit.section);
     const home = activeTeamId ? "/team/activity" : "/inbox";
-    navigate(home + (hit.search ? `?${hit.search}` : ""), { replace: true });
+    // Keep the fragment: OAuth connectors return with their confirm token
+    // after the # and the integrations panel reads it once it mounts.
+    navigate(home + (hit.search ? `?${hit.search}` : "") + window.location.hash, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

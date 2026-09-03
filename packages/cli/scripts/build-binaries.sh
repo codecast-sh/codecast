@@ -33,7 +33,7 @@ for target in "${targets[@]}"; do
     outfile="$OUTPUT_DIR/codecast-$target"
   fi
 
-  bun build src/index.ts --compile --target="bun-$target" --minify --sourcemap --outfile="$outfile"
+  bun build src/main.ts --compile --target="bun-$target" --minify --sourcemap --outfile="$outfile"
 
   echo "  -> $outfile"
 done

@@ -42,7 +42,7 @@ export type ErrorClass = "network" | "overload" | "permanent" | "retry";
 
 export function parseRateLimitDelay(error: string): number | null {
   const match = error.match(/wait (\d+) seconds/i);
-  if (match) return parseInt(match[1], 10) * 1000 + 1000;
+  if (match?.[1]) return parseInt(match[1], 10) * 1000 + 1000;
   if (error.toLowerCase().includes("rate limit")) return 15000;
   return null;
 }

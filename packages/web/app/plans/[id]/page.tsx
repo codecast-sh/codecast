@@ -19,6 +19,7 @@ import {
   OrchestrationTab,
   StartWorkflowButton,
   DriveRoundIndicator,
+  PlanExternalEvents,
   PLAN_STATUS_CONFIG,
 } from "../../../components/PlanDetailPanel";
 import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
@@ -360,6 +361,8 @@ export default function PlanDetailPage() {
               <PlanTaskSection planShortId={plan.short_id} tasks={liveTasks || []} sessions={plan.sessions || []} />
 
               <EntryTimeline entries={plan.comments} />
+
+              <PlanExternalEvents planId={plan._id} />
             </>
           ) : (
             <OrchestrationTab tasks={liveTasks || []} sessions={plan.sessions || []} />

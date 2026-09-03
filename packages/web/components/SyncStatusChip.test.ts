@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { selectColdLoad, selectSyncing, selectSyncSummary } from "./SyncStatusChip";
+import { selectColdLoad, selectSyncFlags, selectSyncing, selectSyncSummary } from "./SyncStatusChip";
 import { useInboxStore } from "../store/inboxStore";
 
 // Regression coverage for the header sync chip. The bug: the chip read
@@ -118,5 +118,14 @@ describe("selectColdLoad (what the dot shows without a stall)", () => {
 
   it("stays dark for a live refresh into a warm collection", () => {
     expect(selectColdLoad({ ...warm, liveLoading: { sessions: true, docs: true } })).toBe(false);
+  });
+});
+
+describe("selectSyncFlags", () => {
+  it("encodes syncing and cold-load state as one stable primitive", () => {
+    expect(selectSyncFlags({ liveLoading: {} })).toBe(0);
+    expect(selectSyncFlags({ liveLoading: { sessions: true }, sessions: {} })).toBe(3);
+    expect(selectSyncFlags({ liveLoading: { sessions: true }, sessions: { one: {} } })).toBe(0);
+    expect(selectSyncFlags({ liveLoading: {}, syncLogLag: { "user:u": 1 } })).toBe(1);
   });
 });

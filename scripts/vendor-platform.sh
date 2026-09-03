@@ -36,9 +36,13 @@ fi
 echo "vendored $(echo "$PACKAGES" | wc -w | tr -d ' ') packages from $SRC: $(echo $PACKAGES)"
 
 # bun materializes file: deps as COPIES under node_modules/.bun, and keeps
-# serving the copy after the mirror changes; vite then caches the old module
-# graph on top of that. Purge both and reinstall, so the next build and the
-# running dev server see the mirror that was just written.
-rm -rf "$ROOT"/node_modules/.bun/@platform+* "$ROOT"/packages/web/node_modules/.vite
+# serving the copy after the mirror changes; vite then pre-bundles the old copy
+# into packages/web/node_modules/.vite and serves that. Purge the copies and
+# reinstall, then purge the vite cache. The cache goes last: a running dev
+# server (plugins/depsCacheGuard.ts) restarts itself when the cache disappears,
+# and it must rebuild against a finished node_modules, not one bun is still
+# writing.
+rm -rf "$ROOT"/node_modules/.bun/@platform+*
 (cd "$ROOT" && bun install --silent)
+rm -rf "$ROOT"/packages/web/node_modules/.vite
 echo "re-materialized the @platform copies and cleared the vite cache"

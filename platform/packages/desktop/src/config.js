@@ -113,6 +113,14 @@ function resolveDesktopConfig(input) {
       fail("menu.navItems entries need { label, path } with an app-relative path");
     }
   }
+  // An app's own entries in the application menu: { label, action(api) },
+  // or { type: "separator" }. The action gets the shell API at click time.
+  const appItems = Array.isArray(menu.appItems) ? menu.appItems : [];
+  for (const item of appItems) {
+    if (!item || (item.type !== "separator" && (typeof item.label !== "string" || typeof item.action !== "function"))) {
+      fail("menu.appItems entries need { label, action } or { type: \"separator\" }");
+    }
+  }
   const helpLinks = Array.isArray(menu.helpLinks) ? menu.helpLinks : [];
   for (const item of helpLinks) {
     if (!item || typeof item.label !== "string" || !isHttpsUrl(item.url)) {
@@ -130,6 +138,47 @@ function resolveDesktopConfig(input) {
 
   const window = c.window || {};
   const localHost = urls.local ? hostOf(urls.local) : null;
+
+  // The offline copy of the site (webCache.js). Off unless asked for: it
+  // intercepts every http(s) request of the session to serve the app host.
+  const web = c.web || {};
+  if (web.cache !== undefined && typeof web.cache !== "boolean") fail("web.cache must be a boolean");
+  if (web.manifestPath !== undefined && (typeof web.manifestPath !== "string" || !web.manifestPath.startsWith("/"))) {
+    fail("web.manifestPath must be an app-relative path");
+  }
+  if (web.seedDir !== undefined && web.seedDir !== null && typeof web.seedDir !== "string") fail("web.seedDir must be a path");
+  const passthrough = Array.isArray(web.passthrough) ? web.passthrough : [];
+  for (const p of passthrough) {
+    if (typeof p !== "string" || !p.startsWith("/")) fail("web.passthrough entries must be app-relative path prefixes");
+  }
+
+  // URL schemes beyond the app's own. A mail app registers mailto: here; the
+  // bundle lists it (electron-builder template `extraProtocols`) and the
+  // shell can ask the OS to make the app its handler.
+  const extraProtocols = Array.isArray(c.extraProtocols) ? c.extraProtocols : [];
+  for (const p of extraProtocols) {
+    if (!p || typeof p.scheme !== "string" || !/^[a-z][a-z0-9+.-]*$/i.test(p.scheme)) fail("extraProtocols entries need a valid scheme");
+    if (p.menuLabel !== undefined && typeof p.menuLabel !== "string") fail(`extraProtocols.${p.scheme}.menuLabel must be a string`);
+  }
+  // App defined IPC: `ipc.handlers` are invokable from any window as
+  // bridge.call(name, ...args), registered under "app:<name>" so they can
+  // never shadow the shell's own channels. Each handler gets the arguments
+  // the renderer passed, then the shell API. `ipc.events` names the channels
+  // main may push with api.emit(name, payload); the bridge subscribes to
+  // exactly those, so a renderer cannot listen on arbitrary channels.
+  const ipc = c.ipc || {};
+  const handlers = ipc.handlers || {};
+  for (const k of Object.keys(handlers)) {
+    if (!/^[a-zA-Z][\w-]*$/.test(k)) fail(`ipc.handlers.${k}: names are word characters`);
+    if (typeof handlers[k] !== "function") fail(`ipc.handlers.${k} must be a function`);
+  }
+  const events = Array.isArray(ipc.events) ? ipc.events : [];
+  for (const k of events) if (typeof k !== "string" || !/^[a-zA-Z][\w-]*$/.test(k)) fail("ipc.events entries are word characters");
+  const hooks = c.hooks || {};
+  for (const k of Object.keys(hooks)) {
+    if (typeof hooks[k] !== "function") fail(`hooks.${k} must be a function`);
+  }
+  if (c.downloadUrls !== undefined && typeof c.downloadUrls !== "function") fail("downloadUrls must be a function (url) => boolean");
   const trustedHosts = new Set([hostOf(urls.prod), ...(c.trustedHosts || [])].filter(Boolean));
   if (localHost) trustedHosts.add(localHost);
 
@@ -164,7 +213,33 @@ function resolveDesktopConfig(input) {
       minHeight: window.minHeight || 600,
       backgroundColor: window.backgroundColor || "#002b36",
       trafficLightPosition: window.trafficLightPosition || { x: 16, y: 12 },
+      // Size and position persist in settings.json across launches.
+      rememberBounds: window.rememberBounds !== false,
     },
+    web: {
+      cache: web.cache === true,
+      manifestPath: web.manifestPath || "/release.json",
+      seedDir: web.seedDir || null,
+      passthrough,
+      checkIntervalMs: web.checkIntervalMs ?? 15 * 60 * 1000,
+      // How long a launch waits for the manifest check before painting
+      // whatever copy it has. Offline fails fast; a slow link paints stale
+      // and reloads into the new release when it lands.
+      startupTimeoutMs: web.startupTimeoutMs ?? 6000,
+    },
+    extraProtocols: extraProtocols.map((p) => ({
+      scheme: p.scheme,
+      name: p.name || p.scheme,
+      // Claim the scheme on the first launch of a packaged build (macOS shows
+      // its own confirmation) — the moment a mail app asks to be the default.
+      claimOnFirstRun: p.claimOnFirstRun === true,
+      menuLabel: p.menuLabel || null,
+    })),
+    hooks: { onReady: hooks.onReady || null },
+    ipc: { handlers: { ...handlers }, events: [...events] },
+    // URLs the page opens (target=_blank, window.open) that are downloads,
+    // not pages: saved by the shell instead of handed to the browser.
+    downloadUrls: c.downloadUrls || null,
     menu: {
       navItems,
       helpLinks,
@@ -172,6 +247,7 @@ function resolveDesktopConfig(input) {
       // "New Session" entries (tray, dock, File menu, palette hand-off) call the
       // web's `events.newSession` global. null removes them for apps without one.
       newSessionLabel: menu.newSessionLabel === null ? null : (menu.newSessionLabel || "New Session"),
+      appItems,
       dockItems: Array.isArray(menu.dockItems) ? menu.dockItems : navItems.slice(0, 2),
     },
     palette: palette
