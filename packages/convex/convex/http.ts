@@ -3496,6 +3496,7 @@ http.route({
         event_filter: body.event_filter,
         mode: body.mode,
         agent_type: body.agent_type,
+        model: body.model,
         project_path: body.project_path,
         max_runtime_ms: body.max_runtime_ms,
       });

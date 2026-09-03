@@ -7,6 +7,7 @@ import { hasTmux } from "./tmux.js";
 import { deviceId, isRemoteDevice } from "./remote/device.js";
 import { spawnAgentTmux } from "./delivery/spawnAgentTmux.js";
 import { type Config, getAgentArgs } from "./config/types.js";
+import { appendModelEffortFlags, resolvePrintModelAlias } from "./launchCommand.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const _execAsync = promisify(exec);
@@ -61,6 +62,69 @@ interface TaskSchedulerConfig {
   syncService: SyncService;
   config: Config;
   log: (msg: string, level?: "debug" | "info" | "warn" | "error") => void;
+}
+
+/** The binary and flags a spawned run launches with. Pure — the safe-mode
+ *  fences, the configured args, the per-trigger model pin and the session id
+ *  are all decided here, so they are testable without tmux or a real agent. */
+export function buildRunLaunch(
+  task: any,
+  config: Config,
+): { agentBin: string; extraAgentArgs: string[]; runSessionUuid?: string } {
+  const agentType = task.agent_type || "claude";
+  // Build agent command args (will be passed to the script, which quotes them via "$(cat promptFile)")
+  let extraAgentArgs: string[] = [];
+  let agentBin: string;
+  // Assigned for claude runs so completion can link the run's conversation back
+  // to the task. `claude --session-id <uuid>` writes <uuid>.jsonl, which the
+  // daemon syncs into a conversation keyed by session_id=<uuid>. Left undefined
+  // for codex (different session scheme).
+  let runSessionUuid: string | undefined;
+  if (agentType === "codex") {
+    agentBin = "codex";
+    const extraArgs = getAgentArgs(config, "codex");
+    if (extraArgs) {
+      extraAgentArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
+    }
+    if (!extraAgentArgs.some(a => a.includes("--full-auto") || a.includes("--ask-for-approval") || a.includes("--dangerously-bypass"))) {
+      extraAgentArgs.push("--dangerously-bypass-approvals-and-sandbox");
+    }
+  } else {
+    agentBin = "claude";
+    extraAgentArgs.push("--dangerously-skip-permissions");
+    // Safe mode is fenced in three layers, strongest first: the file-mutation
+    // tools are removed outright; SAFE_MODE_DENY_RULES block the
+    // state-changing shell commands (deny rules bind even under
+    // --dangerously-skip-permissions); and the mandate covers what neither can
+    // pattern-match. Anything not "apply" fences — fail closed on a bad value.
+    if (task.mode !== "apply") {
+      extraAgentArgs.push("--disallowedTools", "Edit", "Write", "NotebookEdit", ...SAFE_MODE_DENY_RULES);
+      extraAgentArgs.push("--append-system-prompt", SAFE_MODE_MANDATE);
+    }
+    const extraArgs = getAgentArgs(config, "claude");
+    if (extraArgs) {
+      const skip = new Set(["--dangerously-skip-permissions"]);
+      const extra = extraArgs.split(/\s+/).filter(Boolean);
+      for (const arg of extra) {
+        if (!skip.has(arg) && !extraAgentArgs.includes(arg)) extraAgentArgs.push(arg);
+      }
+    }
+    // Only auto-assign if the operator didn't pin one via agent_args.claude.
+    if (!extraAgentArgs.includes("--session-id")) {
+      runSessionUuid = crypto.randomUUID();
+      extraAgentArgs.push("--session-id", runSessionUuid);
+    }
+  }
+
+  // Per-trigger model pin (`cast trigger add --model`), resolved and appended
+  // after the configured flags exactly like `cast spawn --model` — the last
+  // occurrence wins in both CLIs, so the trigger's choice beats any default.
+  const launchClient = agentType === "codex" ? "codex" : "claude";
+  appendModelEffortFlags(extraAgentArgs, {
+    agentType: launchClient,
+    modelAlias: resolvePrintModelAlias(launchClient, task.model),
+  });
+  return { agentBin, extraAgentArgs, runSessionUuid };
 }
 
 export class TaskScheduler {
@@ -232,49 +296,7 @@ export class TaskScheduler {
     const promptFile = `/tmp/codecast-task-${shortId}.txt`;
     fs.writeFileSync(promptFile, prompt);
 
-    // Build agent command args (will be passed to the script, which quotes them via "$(cat promptFile)")
-    let extraAgentArgs: string[] = [];
-    let agentBin: string;
-    // Assigned for claude runs so completion can link the run's conversation back
-    // to the task. `claude --session-id <uuid>` writes <uuid>.jsonl, which the
-    // daemon syncs into a conversation keyed by session_id=<uuid>. Left undefined
-    // for codex (different session scheme).
-    let runSessionUuid: string | undefined;
-    if (agentType === "codex") {
-      agentBin = "codex";
-      const extraArgs = getAgentArgs(this.config, "codex");
-      if (extraArgs) {
-        extraAgentArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
-      }
-      if (!extraAgentArgs.some(a => a.includes("--full-auto") || a.includes("--ask-for-approval") || a.includes("--dangerously-bypass"))) {
-        extraAgentArgs.push("--dangerously-bypass-approvals-and-sandbox");
-      }
-    } else {
-      agentBin = "claude";
-      extraAgentArgs.push("--dangerously-skip-permissions");
-      // Safe mode is fenced in three layers, strongest first: the file-mutation
-      // tools are removed outright; SAFE_MODE_DENY_RULES block the
-      // state-changing shell commands (deny rules bind even under
-      // --dangerously-skip-permissions); and the mandate covers what neither can
-      // pattern-match. Anything not "apply" fences — fail closed on a bad value.
-      if (task.mode !== "apply") {
-        extraAgentArgs.push("--disallowedTools", "Edit", "Write", "NotebookEdit", ...SAFE_MODE_DENY_RULES);
-        extraAgentArgs.push("--append-system-prompt", SAFE_MODE_MANDATE);
-      }
-      const extraArgs = getAgentArgs(this.config, "claude");
-      if (extraArgs) {
-        const skip = new Set(["--dangerously-skip-permissions"]);
-        const extra = extraArgs.split(/\s+/).filter(Boolean);
-        for (const arg of extra) {
-          if (!skip.has(arg) && !extraAgentArgs.includes(arg)) extraAgentArgs.push(arg);
-        }
-      }
-      // Only auto-assign if the operator didn't pin one via agent_args.claude.
-      if (!extraAgentArgs.includes("--session-id")) {
-        runSessionUuid = crypto.randomUUID();
-        extraAgentArgs.push("--session-id", runSessionUuid);
-      }
-    }
+    const { agentBin, extraAgentArgs, runSessionUuid } = buildRunLaunch(task, this.config);
 
     // Write a shell script so the target shell (inside tmux) handles all quoting/expansion,
     // rather than relying on the outer exec shell to expand $(cat ...). This avoids issues

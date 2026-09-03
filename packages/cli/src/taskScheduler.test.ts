@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { TaskScheduler } from "./taskScheduler.js";
+import { TaskScheduler, buildRunLaunch } from "./taskScheduler.js";
 import { deviceId } from "./remote/device.js";
 
 /**
@@ -188,5 +188,33 @@ describe("wake-time self-knowledge", () => {
     await scheduler.poll();
     expect(calls.injected).toEqual(["conv123"]);
     expect(calls.prompts[0]).not.toContain("STASHED");
+  });
+});
+
+describe("spawned run launch flags", () => {
+  it("pins the trigger's model after the configured flags, so it wins", () => {
+    const { agentBin, extraAgentArgs } = buildRunLaunch(
+      { ...spawnTask("t1"), mode: "apply", model: "opus" },
+      { agent_args: { claude: "--model fable" } } as any,
+    );
+    expect(agentBin).toBe("claude");
+    const last = extraAgentArgs.lastIndexOf("--model");
+    expect(extraAgentArgs[last + 1]).toBe("opus");
+    expect(extraAgentArgs.indexOf("--model")).toBeLessThan(last);
+  });
+
+  it("launches on the agent's saved default when no model is pinned", () => {
+    const { extraAgentArgs } = buildRunLaunch({ ...spawnTask("t1"), mode: "apply" }, {} as any);
+    expect(extraAgentArgs).not.toContain("--model");
+  });
+
+  it("uses codex's -m for a codex trigger", () => {
+    const { agentBin, extraAgentArgs } = buildRunLaunch(
+      { ...spawnTask("t1"), agent_type: "codex", model: "gpt-5.3-codex" },
+      {} as any,
+    );
+    expect(agentBin).toBe("codex");
+    expect(extraAgentArgs).toContain("-m");
+    expect(extraAgentArgs[extraAgentArgs.indexOf("-m") + 1]).toBe("gpt-5.3-codex");
   });
 });

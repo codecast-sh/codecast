@@ -208,6 +208,7 @@ interface NewTaskArgs {
   created_by_session_uuid?: string;
   project_path?: string;
   agent_type?: string;
+  model?: string;
   created_device_id?: string;
   schedule_type: "once" | "recurring" | "event";
   run_at?: number;
@@ -249,6 +250,7 @@ async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) 
     created_by_session_uuid: args.created_by_session_uuid,
     project_path: args.project_path,
     agent_type: args.agent_type || "claude",
+    model: args.model || undefined,
     created_device_id: args.created_device_id,
     schedule_type: args.schedule_type,
     run_at,
@@ -310,6 +312,7 @@ export const createTask = mutation({
     created_by_conversation_id: v.optional(v.string()),
     project_path: v.optional(v.string()),
     agent_type: v.optional(v.string()),
+    model: v.optional(v.string()),
     created_device_id: v.optional(v.string()),
     schedule_type: v.union(v.literal("once"), v.literal("recurring"), v.literal("event")),
     run_at: v.optional(v.number()),
@@ -1305,6 +1308,7 @@ export const webCreate = mutation({
     })),
     mode: v.optional(v.string()),
     agent_type: v.optional(v.string()),
+    model: v.optional(v.string()),
     project_path: v.optional(v.string()),
     max_runtime_ms: v.optional(v.number()),
   },
@@ -1378,6 +1382,7 @@ type TaskUpdateArgs = {
   event_filter?: { event_type: string; action?: string; repository?: string };
   mode?: string;
   agent_type?: string;
+  model?: string;
   project_path?: string;
   max_runtime_ms?: number;
 };
@@ -1394,6 +1399,7 @@ const EDITABLE_FIELDS = [
   "event_filter",
   "mode",
   "agent_type",
+  "model",
   "project_path",
   "max_runtime_ms",
 ] as const;
@@ -1408,6 +1414,7 @@ function snapshotEditable(task: Doc<"agent_tasks">) {
     event_filter: task.event_filter,
     mode: task.mode,
     agent_type: task.agent_type,
+    model: task.model,
     project_path: task.project_path,
     max_runtime_ms: task.max_runtime_ms,
   };
@@ -1440,6 +1447,8 @@ export async function applyTaskUpdate(
   }
   if (args.mode !== undefined) patch.mode = args.mode === "apply" ? "apply" : "propose";
   if (args.agent_type !== undefined) patch.agent_type = args.agent_type || "claude";
+  // "" or "default" clears the pin — the run goes back to the agent's saved default.
+  if (args.model !== undefined) patch.model = args.model && args.model !== "default" ? args.model : undefined;
   if (args.project_path !== undefined) patch.project_path = args.project_path || undefined;
   if (args.max_runtime_ms !== undefined) patch.max_runtime_ms = args.max_runtime_ms;
 
@@ -1510,6 +1519,7 @@ const TASK_UPDATE_ARG_VALIDATORS = {
   })),
   mode: v.optional(v.string()),
   agent_type: v.optional(v.string()),
+  model: v.optional(v.string()),
   project_path: v.optional(v.string()),
   max_runtime_ms: v.optional(v.number()),
 };

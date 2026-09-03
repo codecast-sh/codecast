@@ -2451,6 +2451,12 @@ export default defineSchema({
     created_by_session_uuid: v.optional(v.string()),
     project_path: v.optional(v.string()),
     agent_type: v.optional(v.string()),
+    // Picker key for the model a SPAWNED run launches on (`opus`, `sonnet`,
+    // or a codex model id) — resolved to the client's launch flag by the
+    // daemon, same table as `cast spawn --model`. Absent = the agent's saved
+    // default. Inline runs ignore it: they inject into a session that already
+    // has a model.
+    model: v.optional(v.string()),
     // Device that created the task (CLI `cast trigger add`). When set, only
     // that device's scheduler may claim it. Absent on web-created/legacy tasks,
     // which fall back to checkout-existence eligibility.
@@ -2556,6 +2562,7 @@ export default defineSchema({
       })),
       mode: v.union(v.literal("propose"), v.literal("apply")),
       agent_type: v.optional(v.string()),
+      model: v.optional(v.string()),
       project_path: v.optional(v.string()),
       max_runtime_ms: v.optional(v.number()),
     }),
