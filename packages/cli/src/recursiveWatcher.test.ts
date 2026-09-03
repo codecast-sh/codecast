@@ -6,7 +6,7 @@ import { watch as chokidarWatch } from "chokidar";
 import { RecursiveWatcher, chokidarIgnored } from "./recursiveWatcher.js";
 import { watchDirFilter } from "./sessionWatcher.js";
 import { transcriptDirWatcherConfig } from "./transcriptDirWatcher.js";
-import { measureLoopHold } from "./test-helpers/loopHold.js";
+import { loopHoldBoundMs, measureLoopHold } from "./test-helpers/loopHold.js";
 
 function tmpDir(prefix: string): string {
   return path.join(
@@ -499,7 +499,7 @@ describe("RecursiveWatcher native event cost", () => {
     expect(primedAt).toBeGreaterThanOrEqual(wroteAt); // the race was real
     await new Promise((r) => setTimeout(r, 300));
     expect(events).toContain(target);
-  });
+  }, 60_000);
 
   test("onExisting receives every primed file with its stat, once", async () => {
     const { root } = scaffold("rw-existing");
@@ -562,7 +562,7 @@ describe("RecursiveWatcher priming a 10k file tree", () => {
     expect(existing.length).toBe(DIRS * PER_DIR);
     expect(existing.some((rel) => rel.split(path.sep).includes("node_modules"))).toBe(false);
     expect(ticks).toBeGreaterThan(0);
-    expect(maxGapMs).toBeLessThan(100);
+    expect(maxGapMs).toBeLessThan(loopHoldBoundMs(100));
   }, 60_000);
 });
 

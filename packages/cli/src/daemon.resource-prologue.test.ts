@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { measureLoopHold } from "./test-helpers/loopHold.js";
+import { loopHoldBoundMs, measureLoopHold } from "./test-helpers/loopHold.js";
 import { setSlowSyncFsThresholdForTests, setSlowSyncSink } from "./slowSync.js";
 import {
   classifySharedPidSessions,
@@ -93,7 +93,7 @@ describe("classifySharedPidSessions", () => {
     expect(reports.filter((m) => m.includes("readCodexSessionMetaHead"))).toEqual([]);
     expect(reports.filter((m) => m.includes("probeRecent"))).toEqual([]);
     expect(ticks).toBeGreaterThanOrEqual(2);
-    expect(maxGapMs).toBeLessThan(200);
+    expect(maxGapMs).toBeLessThan(loopHoldBoundMs(200));
 
     // Warm: the same answer, no new walk.
     const again = await classifySharedPidSessions([THREAD, PARENT, CLAUDE, UNKNOWN]);

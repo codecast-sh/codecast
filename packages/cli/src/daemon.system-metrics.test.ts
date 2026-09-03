@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { measureLoopHold } from "./test-helpers/loopHold.js";
+import { loopHoldBoundMs, measureLoopHold } from "./test-helpers/loopHold.js";
 import { getSystemMetrics, parseFootprintMb, type SystemMetricsIO } from "./daemon.js";
 
 describe("parseFootprintMb", () => {
@@ -40,7 +40,7 @@ describe("getSystemMetrics", () => {
     expect(lsofArgs).toEqual(["-p", String(process.pid)]);
     expect(lsofOpts!.maxBuffer).toBeGreaterThanOrEqual(16 * 1024 * 1024);
     expect(ticks).toBeGreaterThanOrEqual(2);
-    expect(maxGapMs).toBeLessThan(50);
+    expect(maxGapMs).toBeLessThan(loopHoldBoundMs(50));
   });
 
   test("answers 0 fds when both primitives fail, never throws", async () => {

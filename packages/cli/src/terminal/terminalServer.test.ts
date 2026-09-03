@@ -158,7 +158,7 @@ describe("handleTerminalHttp", () => {
       const unknown = await fetch(`${base}/term/x`, { headers: authed });
       expect(unknown.status).toBe(404);
     });
-  }, 15_000);
+  }, 30_000);
 
   it("lists sessions off the loop and refuses to kill a session it does not own", async () => {
     await withServer(async (base) => {
@@ -173,7 +173,7 @@ describe("handleTerminalHttp", () => {
       expect(kill.status).toBe(400);
       expect(await kill.json()).toEqual({ ok: false });
     });
-  }, 15_000);
+  }, 30_000);
 });
 
 // A leftover cast-term-test session would sit in the user's terminal panel

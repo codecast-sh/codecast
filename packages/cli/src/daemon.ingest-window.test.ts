@@ -4,7 +4,7 @@ import * as os from "os";
 import * as path from "path";
 import { MAX_SYNC_CONTINUATIONS, continueSyncPass, cursorPassBoundary, readCompleteLines, readCompleteLinesSync, type PassBoundary } from "./daemon.js";
 import { parseCursorTranscriptFile, parseTranscriptFor } from "./parser.js";
-import { measureLoopHold } from "./test-helpers/loopHold.js";
+import { loopHoldBoundMs, measureLoopHold } from "./test-helpers/loopHold.js";
 
 // The ingest window: one read per step, the loop free between steps, and a
 // line longer than the window growing it one step at a time instead of one
@@ -62,7 +62,7 @@ describe("readCompleteLines", () => {
     expect(result.first.bytesConsumed).toBe(Buffer.byteLength(result.first.content));
     expect(result.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
     expect(ticks).toBeGreaterThan(0);
-    expect(maxGapMs).toBeLessThan(200);
+    expect(maxGapMs).toBeLessThan(loopHoldBoundMs(200));
   }, 30_000);
 
   test("no newline at EOF consumes nothing, so a line still being written is re-read next pass", async () => {

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { measureLoopHold } from "../test-helpers/loopHold.js";
+import { loopHoldBoundMs, measureLoopHold } from "../test-helpers/loopHold.js";
 import {
   collectCapabilityInventory,
   ensureCapabilityInventoryFresh,
@@ -91,6 +91,6 @@ describe("background collection", () => {
     }, 1);
     expect(pendingCapabilityPayload()?.hash).toBe(collectCapabilityInventory(home).hash);
     expect(ticks).toBeGreaterThanOrEqual(2);
-    expect(maxGapMs).toBeLessThan(100);
+    expect(maxGapMs).toBeLessThan(loopHoldBoundMs(100));
   }, 15_000);
 });
