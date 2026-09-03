@@ -65,6 +65,8 @@ const IN_SHELL_ROOT_SEGMENTS = new Set([
   "projects", "workflows", "routines", "triggers", "schedules", "sessions", "anchor", "team", "config", "calls",
   // Standalone shell pages (own <Route>, not in TabContent)
   "explore", "timeline", "windows", "orchestration", "roadmap", "cli",
+  // The repository index (its history, source and commit pages are deeper paths)
+  "repo",
 ]);
 
 export function isNonTabRoute(path: string): boolean {

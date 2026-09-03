@@ -2,13 +2,11 @@
 // conversation view. Parses the three mutually-exclusive timing flags the CLI accepts
 // (`--every`, `--on`, `--in`) directly from the command args.
 
-// Display labels for `--on <event>` triggers (mirrors EVENT_SHORTHANDS in the CLI).
-export const TRIGGER_EVENT_LABELS: Record<string, string> = {
-  pr_comment: "PR comment",
-  pr_opened: "PR opened",
-  pr_merged: "PR merged",
-  push: "push",
-};
+// The labels and the vocabulary they describe are shared with the CLI, so a new
+// `--on` event shows up here without a second edit. Re-exported because this
+// module is where the trigger surfaces already look for them.
+import { TRIGGER_EVENT_LABELS, triggerEventLabel } from "@codecast/shared/contracts";
+export { TRIGGER_EVENT_LABELS, triggerEventLabel };
 
 // Compact duration for countdowns and intervals: "45s", "12m", "2h 30m", "3d 4h".
 export function fmtDuration(ms: number): string {
@@ -59,8 +57,9 @@ export function describeTaskCadence(task: {
     return `every ${fmtDuration(task.interval_ms)}`;
   }
   if (task.schedule_type === "event") {
-    const ev = task.event_filter?.event_type;
-    return ev ? `on ${TRIGGER_EVENT_LABELS[ev] ?? ev.replace(/_/g, " ")}` : "on event";
+    // triggerEventLabel reverse-maps a raw webhook filter too, so an old
+    // trigger armed on "pull_request" reads as words rather than a field name.
+    return task.event_filter ? `on ${triggerEventLabel(task.event_filter)}` : "on event";
   }
   return "one-time";
 }
@@ -111,7 +110,7 @@ export function parseTriggerCadence(args: string): string | null {
   const every = grab("every");
   if (every && isDuration(every)) return `every ${humanizeDurationToken(every)}`;
   const on = grab("on");
-  if (on) return `on ${TRIGGER_EVENT_LABELS[on] ?? on.replace(/_/g, " ")}`;
+  if (on) return `on ${triggerEventLabel(on)}`;
   const delay = grab("in");
   if (delay && isDuration(delay)) return `in ${humanizeDurationToken(delay)}`;
   return "now";

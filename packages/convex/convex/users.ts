@@ -1,4 +1,5 @@
 import { mutation, query, internalMutation, internalQuery } from "./functions";
+import { wakeDevicesFor } from "./cloud";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
@@ -12,6 +13,7 @@ import { verifyApiToken } from "./apiTokens";
 import { hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, profilePublicSessionVisible } from "./privacy";
 import { canAccessTask, canAccessDoc } from "./lib/access";
+import { canReleaseCommandClaim, commandVisibleToClaimer, decideCommandClaim } from "./lib/daemonCommandClaim";
 import { stripMessageTags, isUserMessageNoise, fetchUserSendDays, type SendDayRow } from "./lib/userSend";
 import { ccAccountsValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
@@ -284,6 +286,11 @@ export const daemonHeartbeat = mutation({
     pid: v.number(),
     autostart_enabled: v.optional(v.boolean()),
     has_tmux: v.optional(v.boolean()),
+    // Random per daemon process. Identifies WHICH daemon on a device is asking,
+    // so a command another daemon already claimed is not handed out twice. Never
+    // stored on the devices row: it changes on every restart, and the roster
+    // change detector would then churn on every bounce.
+    boot_id: v.optional(v.string()),
     local_project_roots: v.optional(v.array(v.string())),
     pending_sync_count: v.optional(v.number()),
     oldest_pending_ms: v.optional(v.number()),
@@ -291,6 +298,13 @@ export const daemonHeartbeat = mutation({
     pending_sync_conversations: v.optional(v.number()),
     daemon_started_at: v.optional(v.number()),
     loop_freeze_ms: v.optional(v.number()),
+    // The loop freeze budget: blocked ms over the trailing hour, the worst
+    // single freeze, and the stacks it was in. These live on the device row
+    // only. Their twins on the user doc keep whatever the last machine to beat
+    // wrote, which would mask one machine's trouble behind another's beats.
+    loop_freeze_1h_ms: v.optional(v.number()),
+    loop_freeze_max_ms: v.optional(v.number()),
+    loop_freeze_top: v.optional(v.string()),
     // Device identity (remote/device.ts). When present, upsert a per-device
     // row so multiple machines don't clobber each other's project roots.
     device_id: v.optional(v.string()),
@@ -476,6 +490,9 @@ export const daemonHeartbeat = mutation({
         // value a newer one wrote — same rule as backlogFieldsPatch.
         ...(args.daemon_started_at !== undefined ? { daemon_started_at: args.daemon_started_at } : {}),
         ...(args.loop_freeze_ms !== undefined ? { loop_freeze_ms: args.loop_freeze_ms } : {}),
+        ...(args.loop_freeze_1h_ms !== undefined ? { loop_freeze_1h_ms: args.loop_freeze_1h_ms } : {}),
+        ...(args.loop_freeze_max_ms !== undefined ? { loop_freeze_max_ms: args.loop_freeze_max_ms } : {}),
+        ...(args.loop_freeze_top !== undefined ? { loop_freeze_top: args.loop_freeze_top } : {}),
         ...(args.pending_sync_count !== undefined ? { pending_sync_count: args.pending_sync_count } : {}),
         ...(args.oldest_pending_ms !== undefined ? { oldest_pending_ms: args.oldest_pending_ms } : {}),
         ...(args.pending_sync_messages !== undefined ? { pending_sync_messages: args.pending_sync_messages } : {}),
@@ -495,6 +512,8 @@ export const daemonHeartbeat = mutation({
           : {}),
         ...(args.device_hostname !== undefined ? { hostname: args.device_hostname } : {}),
         ...(args.is_remote_device !== undefined ? { is_remote: args.is_remote_device } : {}),
+        // The device is awake: whatever asked for it has been answered.
+        ...((existingDevice as any)?.wake_requested_at !== undefined ? { wake_requested_at: undefined } : {}),
         ...(args.local_project_roots !== undefined
           ? { local_project_roots: args.local_project_roots }
           : {}),
@@ -568,12 +587,13 @@ export const daemonHeartbeat = mutation({
     // commands (status/restart, or sessions with no resolvable owner) broadcast to
     // all daemons. Rollout-safe: a daemon that doesn't identify itself (pre-routing
     // CLI) sees everything, so new sessions still start before the fleet upgrades.
-    const visibleCommands =
+    const visibleCommands = (
       args.device_id === undefined
         ? pendingCommands
         : pendingCommands.filter(
             (c) => c.target_device_id === undefined || c.target_device_id === args.device_id,
-          );
+          )
+    ).filter((c) => commandVisibleToClaimer(c, args.boot_id, args.device_id, now));
 
     // Reuse the doc read above for the return payload — these fields are sticky
     // (untouched by the heartbeat patch), so the pre-patch snapshot is correct and
@@ -598,12 +618,26 @@ export const daemonHeartbeat = mutation({
       .withIndex("by_key", (q) => q.eq("key", "capabilities_mode"))
       .unique();
 
+    // Cloud hosts asleep with work waiting (cloud.requestRemoteWake). Only a
+    // LOCAL daemon gets the list — it holds the host registry and the SSH key
+    // — and the device's own beat above already cleared its stamp.
+    const wakeDevices = args.is_remote_device
+      ? []
+      : wakeDevicesFor(
+          await ctx.db
+            .query("devices")
+            .withIndex("by_user_id", (q) => q.eq("user_id", auth.userId))
+            .collect(),
+          now,
+        );
+
     return {
       commands: visibleCommands.map((c) => ({
         id: c._id,
         command: c.command,
         args: c.args,
       })),
+      wake_devices: wakeDevices,
       sync_mode: user?.sync_mode ?? "all",
       sync_projects: user?.sync_projects ?? [],
       cc_session_tokens: sessionTokensEnabled,
@@ -624,6 +658,60 @@ export const daemonHeartbeat = mutation({
       capability_desired_revision: (user as any)?.capability_revision ?? 0,
       capabilities_mode: (globalCapMode?.value as string | undefined) ?? (user as any)?.capabilities_mode ?? "dry",
     };
+  },
+});
+
+export const claimDaemonCommand = mutation({
+  args: {
+    api_token: v.string(),
+    command_id: v.id("daemon_commands"),
+    boot_id: v.string(),
+    // The machine the claimer runs on. Optional so a daemon that predates this
+    // still claims; without it the lease falls back to contending with every
+    // holder, which is the old user wide behaviour.
+    device_id: v.optional(v.string()),
+    // Drop a hold this process is still carrying. A daemon releases what it
+    // claimed but never executed on the way out, so a restart does not strand
+    // a resume or a kill for the whole grace window.
+    release: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) {
+      return { claimed: false, reason: "unauthorized" };
+    }
+
+    const command = await ctx.db.get(args.command_id);
+    if (!command || command.user_id !== auth.userId) {
+      return { claimed: false, reason: "not_found" };
+    }
+
+    const claimer = { bootId: args.boot_id, deviceId: args.device_id };
+    const now = Date.now();
+
+    if (args.release) {
+      if (!canReleaseCommandClaim(command, claimer)) {
+        return { claimed: false, released: false, reason: "not_holder" };
+      }
+      await ctx.db.patch(args.command_id, {
+        claimed_by: undefined,
+        claimed_at: undefined,
+        claimed_device: undefined,
+      });
+      return { claimed: false, released: true };
+    }
+
+    const decision = decideCommandClaim(command, claimer, now);
+    if (decision !== "grant") {
+      return { claimed: false, reason: decision };
+    }
+
+    await ctx.db.patch(args.command_id, {
+      claimed_by: args.boot_id,
+      claimed_at: now,
+      claimed_device: args.device_id,
+    });
+    return { claimed: true };
   },
 });
 
@@ -3389,6 +3477,10 @@ export const getMyPendingCommands = query({
     // the real-time twin of the heartbeat poll's routing filter. Optional for
     // backward compat: a daemon that omits it only sees untargeted commands.
     device_id: v.optional(v.string()),
+    // The polling daemon's boot id. A command another daemon on this device has
+    // already claimed is withheld until its lease lapses. Optional for backward
+    // compat, exactly like device_id: a daemon that omits it sees everything.
+    boot_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -3414,6 +3506,7 @@ export const getMyPendingCommands = query({
           c.target_device_id === undefined ||
           c.target_device_id === args.device_id,
       )
+      .filter((c) => commandVisibleToClaimer(c, args.boot_id, args.device_id, now))
       .map((c) => ({
         id: c._id,
         command: c.command,
