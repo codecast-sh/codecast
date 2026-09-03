@@ -29,7 +29,7 @@ import {
   tokenMatches,
   type TerminalServerOptions,
 } from "../terminal/terminalServer.js";
-import { tmuxRun } from "../tmux.js";
+import { tmuxRunAsync } from "../tmux.js";
 import { cdpWatchEngine, type FrameSource, type WatchEngine } from "./watchSource.js";
 
 export { resolveOwnedTab as resolveWatchTarget } from "./watchSource.js";
@@ -69,23 +69,25 @@ interface WatchHello {
  * Owner keys this session may appear under in tabsBySession (see owner.ts):
  * the session uuid via detection or env, or the tmux pane the agent runs in.
  */
-export function ownerCandidates(
+export async function ownerCandidates(
   hello: Pick<WatchHello, "session_uuid" | "tmux_session">,
-  paneIdFor: (tmux: string) => string | null,
-): string[] {
+  paneIdFor: (tmux: string) => Promise<string | null>,
+): Promise<string[]> {
   const keys: string[] = [];
   if (hello.session_uuid) {
     keys.push(`session:${hello.session_uuid}`, `env:${hello.session_uuid}`);
   }
   if (hello.tmux_session && /^[a-zA-Z0-9_.:-]+$/.test(hello.tmux_session)) {
-    const pane = paneIdFor(hello.tmux_session);
+    const pane = await paneIdFor(hello.tmux_session);
     if (pane) keys.push(`pane:${pane}`);
   }
   return keys;
 }
 
-function tmuxPaneId(tmuxSession: string): string | null {
-  const r = tmuxRun(["display-message", "-p", "-t", tmuxSession, "-F", "#{pane_id}"]);
+// The hello runs on the daemon's loop, so the pane lookup is the async tmux
+// twin: a sync display-message held the loop for the whole spawn.
+async function tmuxPaneId(tmuxSession: string): Promise<string | null> {
+  const r = await tmuxRunAsync(["display-message", "-p", "-t", tmuxSession, "-F", "#{pane_id}"]);
   if (r.status !== 0) return null;
   const pane = r.stdout.trim();
   return /^%\d+$/.test(pane) ? pane : null;
@@ -93,7 +95,7 @@ function tmuxPaneId(tmuxSession: string): string | null {
 
 export interface WatchServerDeps {
   engine: WatchEngine;
-  paneIdFor(tmuxSession: string): string | null;
+  paneIdFor(tmuxSession: string): Promise<string | null>;
 }
 
 export function attachWatchServer(
@@ -197,17 +199,21 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: Watc
       });
     }
 
-    candidates = ownerCandidates(hello, deps.paneIdFor);
-    const resolved = engine.resolveTab(candidates);
-    if ("error" in resolved) {
-      return fail(
-        resolved.error,
-        resolved.error === "no-browser"
-          ? "no managed browser is running on this machine"
-          : "this session has not driven a browser tab",
-      );
-    }
-    void open(resolved.tabId, true);
+    void ownerCandidates(hello, deps.paneIdFor).then((keys) => {
+      if (closed) return; // the viewer left during the pane lookup
+      candidates = keys;
+      const resolved = engine.resolveTab(candidates);
+      if ("error" in resolved) {
+        fail(
+          resolved.error,
+          resolved.error === "no-browser"
+            ? "no managed browser is running on this machine"
+            : "this session has not driven a browser tab",
+        );
+        return;
+      }
+      void open(resolved.tabId, true);
+    });
   });
 
   async function open(tabId: string, first: boolean): Promise<void> {

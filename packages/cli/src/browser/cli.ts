@@ -59,8 +59,7 @@ import { provisionCredentials } from "./credentials.js";
 import { bridgeEndpoint } from "./bridge/host.js";
 import { registerBridgeCommands, targetFlags } from "./bridge/commands.js";
 import {
-  isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge,
-  resolveRealTarget, withRealPage,
+  isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge, resolveRealTarget, withRealPage, realModeHint,
 } from "./bridge/real.js";
 import { startRemoteBrowser, stopRemoteBrowser } from "./remote.js";
 import { loadRemoteHost, type RemoteHost } from "../remote/session-move.js";
@@ -713,7 +712,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         // what was asked for, and if it left the allowlist, say so loudly.
         const landed = auditLanding({ url: snap.url, tab: targetId, session: me(), via: "open", policy });
         if (landed) console.log(`${WARN} ${landed}`);
-        const signIn = signInLandingNote(snap.url, keepsOwnLogin);
+        const signIn = signInLandingNote(snap.url, keepsOwnLogin, realModeHint(me()));
         if (signIn) console.log(`${WARN} ${signIn}`);
         console.log(fmt.muted(`  ${tabLine(targetId, "next: cast browser snapshot")}`));
         await emitAutoShot(page, o.shot);
@@ -730,12 +729,10 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     ["back", "Go back in history", "back"],
     ["forward", "Go forward in history", "forward"],
   ] as const) {
-    br.command(name)
+    targetFlags(br.command(name))
       .description(desc)
       .option("--no-shot", "Skip the automatic screenshot")
       .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
       .action(async (o: { shot?: boolean; tab?: string }) => {
         await act(o, async (page) => {
           const hist = await page.conn.send<any>("Page.getNavigationHistory", {}, page.sessionId);
@@ -753,13 +750,11 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       });
   }
 
-  br.command("reload")
+  targetFlags(br.command("reload"))
     .description("Reload the page")
     .option("--hard", "Bypass the cache")
     .option("--no-shot", "Skip the automatic screenshot")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (o: { hard?: boolean; shot?: boolean; tab?: string }) => {
       await act(o, async (page) => {
         await page.conn.send("Page.reload", { ignoreCache: !!o.hard }, page.sessionId);
@@ -887,15 +882,13 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
 
   // -------------------------------------------------------------- perception
 
-  br.command("snapshot")
+  targetFlags(br.command("snapshot"))
     .alias("snap")
     .description("Print the page as an accessibility tree with #eNN refs to act on")
     .option("--interactive", "Only clickable/typable elements — much cheaper")
     .option("--max-chars <n>", "Truncate beyond this many characters", "40000")
     .option("--no-frames", "Skip child frames")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (o: { interactive?: boolean; maxChars: string; frames: boolean; tab?: string }) => {
       await act(o, async (page) => {
         const snap = await snapshotPage(page, {
@@ -913,11 +906,9 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       });
     });
 
-  br.command("find <text>")
+  targetFlags(br.command("find <text>"))
     .description("Find refs whose accessible name matches")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (text: string, o: { tab?: string }) => {
       await act(o, async (page) => {
         const snap = await snapshotPage(page);
@@ -937,11 +928,9 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       });
     });
 
-  br.command("text")
+  targetFlags(br.command("text"))
     .description("Print the page's visible text (for reading, not acting)")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .option("--max-chars <n>", "Truncate beyond this", "20000")
     .action(async (o: { tab?: string; maxChars: string }) => {
       await act(o, async (page) => {
@@ -952,7 +941,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       });
     });
 
-  br.command("shot")
+  targetFlags(br.command("shot"))
     .description("Screenshot the page")
     .option("--full", "Whole scroll height, not just the viewport")
     .option("--ref <n>", "Just this element (does not combine with --viewports)")
@@ -963,8 +952,6 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--no-inline", "Do not show the image in the conversation")
     .option("--jpeg", "JPEG instead of PNG — much smaller for photos")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (o: { full?: boolean; ref?: string; out?: string; viewports?: string; share?: boolean; alt?: string; jpeg?: boolean; inline?: boolean; tab?: string; real?: boolean; clone?: boolean }) => {
       await act(o, async (page, state) => {
         if (o.viewports) {
@@ -1036,7 +1023,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     await emitAutoShot(page, shotFlag);
   }
 
-  br.command("click <ref>")
+  targetFlags(br.command("click <ref>"))
     .description("Click an element by ref")
     .option("--force", "Click even if something is on top of it")
     .option("--right", "Right click")
@@ -1044,8 +1031,6 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
     .option("--no-shot", "Skip the automatic screenshot")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (ref: string, o: { force?: boolean; right?: boolean; double?: boolean; shot?: boolean; tab?: string }) => {
       await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
@@ -1059,13 +1044,11 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       });
     });
 
-  br.command("click-at <x> <y>")
+  targetFlags(br.command("click-at <x> <y>"))
     .description("Click raw viewport coordinates (escape hatch when no ref fits)")
     .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
     .option("--no-shot", "Skip the automatic screenshot")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (x: string, y: string, o: { shot?: boolean; tab?: string }) => {
       await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
@@ -1075,7 +1058,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       });
     });
 
-  br.command("type <ref> <text>")
+  targetFlags(br.command("type <ref> <text>"))
     .description("Type into a field")
     .option("--clear", "Replace what is there")
     .option("--submit", "Press Enter afterwards")
@@ -1084,8 +1067,6 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
     .option("--no-shot", "Skip the automatic screenshot")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (ref: string, text: string, o: any) => {
       await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
@@ -1099,13 +1080,11 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       });
     });
 
-  br.command("press <key>")
+  targetFlags(br.command("press <key>"))
     .description('Press a key: Enter, Escape, Tab, ArrowDown, "cmd+a", "/"')
     .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
     .option("--no-shot", "Skip the automatic screenshot")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (key: string, o: { shot?: boolean; tab?: string }) => {
       await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
@@ -1115,11 +1094,9 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       });
     });
 
-  br.command("hover <ref>")
+  targetFlags(br.command("hover <ref>"))
     .description("Hover an element (reveals menus and tooltips)")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (ref: string, o: { tab?: string }) => {
       await act(o, async (page) => {
         const pt = await hover(page, refOf(ref));
@@ -1127,11 +1104,9 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       });
     });
 
-  br.command("focus <ref>")
+  targetFlags(br.command("focus <ref>"))
     .description("Focus an element without clicking it")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (ref: string, o: { tab?: string }) => {
       await act(o, async (page) => {
         await focus(page, refOf(ref));
@@ -1139,13 +1114,11 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       });
     });
 
-  br.command("select <ref> <value>")
+  targetFlags(br.command("select <ref> <value>"))
     .description("Choose an option in a <select>")
     .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
     .option("--no-shot", "Skip the automatic screenshot")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (ref: string, value: string, o: { shot?: boolean; tab?: string }) => {
       await act(o, async (page) => {
         const before = await snapshotPage(page, { maxChars: 1 });
@@ -1160,12 +1133,10 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   // runs. Both forms are accepted anyway — the amount is read from the raw argv
   // when commander has swallowed it — because the obvious thing an agent types
   // should not be an error.
-  br.command("scroll [amount]")
+  targetFlags(br.command("scroll [amount]"))
     .description("Scroll the page (default one screen). Use --up, or a negative amount, to go up")
     .option("--up", "Scroll up instead of down")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .allowUnknownOption(true)
     .action(async (amount: string | undefined, o: { up?: boolean; tab?: string }) => {
       const negative = process.argv.find((a) => /^-\d+$/.test(a));
@@ -1182,12 +1153,10 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       });
     });
 
-  br.command("viewport [size]")
+  targetFlags(br.command("viewport [size]"))
     .description("Resize the page, or emulate a device: desktop, laptop, wide, tablet, mobile, mobile-small")
     .option("--reset", "Back to the real window size")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (size: string | undefined, o: { reset?: boolean; tab?: string }) => {
       await act(o, async (page) => {
         if (o.reset || size === "reset") {
@@ -1230,12 +1199,10 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       });
     });
 
-  br.command("upload <ref> <files...>")
+  targetFlags(br.command("upload <ref> <files...>"))
     .description("Attach files to a file input, with no OS picker")
     .option("--no-shot", "Skip the automatic screenshot")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (ref: string, files: string[], o: { shot?: boolean; tab?: string }) => {
       const abs = files.map((f) => path.resolve(f));
       for (const f of abs) if (!fs.existsSync(f)) die(`no such file: ${f}`);
@@ -1246,12 +1213,10 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       });
     });
 
-  br.command("eval <expression>")
+  targetFlags(br.command("eval <expression>"))
     .description("Run JavaScript in the page and print the result")
     .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (expression: string, o: { tab?: string }) => {
       await act(o, async (page) => {
         const v = await evaluate(page, expression);
@@ -1259,7 +1224,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       });
     });
 
-  br.command("wait")
+  targetFlags(br.command("wait"))
     .description("Wait for the page to settle, or for text to appear")
     .option("--text <s>", "Wait until this text is on the page")
     .option("--ref <n>", "Wait until this element exists")
@@ -1267,8 +1232,6 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--timeout <ms>", "Give up after this", "15000")
     .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (o: { text?: string; ref?: string; ms?: string; timeout: string; tab?: string; capture: boolean; real?: boolean; clone?: boolean }) => {
       await act(o, async (page) => {
         const timeout = parseInt(o.timeout, 10);
@@ -1305,14 +1268,12 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       });
     });
 
-  br.command("do [steps...]")
+  targetFlags(br.command("do [steps...]"))
     .description("Run several steps in one go — much faster than separate commands")
     .option("--keep-going", "Carry on after a step fails")
     .option("--no-capture", "Skip the automatic failure context (console, network, screenshot)")
     .option("--no-shot", "Skip the automatic screenshots after page-changing steps")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .addHelpText(
       "after",
       `
@@ -1446,14 +1407,12 @@ A step with no ref uses whatever the last \`find\` matched.`,
 
   // -------------------------------------------------------------- diagnostics
 
-  br.command("console")
+  targetFlags(br.command("console"))
     .description("What the page logged")
     .option("--errors", "Errors and warnings only")
     .option("--clear", "Empty the buffer instead of printing it")
     .option("-n <count>", "How many lines", "50")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (o: any) => {
       await act(o, async (page) => {
         if (o.clear) {
@@ -1489,11 +1448,9 @@ A step with no ref uses whatever the last \`find\` matched.`,
       });
     });
 
-  br.command("dialogs")
+  targetFlags(br.command("dialogs"))
     .description("Modal dialogs the page tried to open (answered without blocking)")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (o: { tab?: string }) => {
       await act(o, async (page) => {
         const rec = await readRecording(page);
@@ -1510,13 +1467,11 @@ A step with no ref uses whatever the last \`find\` matched.`,
       });
     });
 
-  br.command("network")
+  targetFlags(br.command("network"))
     .description("What the page requested")
     .option("--failed", "Only failures and 4xx/5xx")
     .option("-n <count>", "How many rows", "40")
     .option("--tab <id>", "Act on a specific tab")
-    .option("--real", "Act on your real Chrome through the cast bridge extension")
-    .option("--clone", "Act on the managed cloned browser (overrides `target real`)")
     .action(async (o: any) => {
       await act(o, async (page) => {
         const rec = await readRecording(page);

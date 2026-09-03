@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { pinnedTabBrowser, readBoundTarget, sessionDaemonPid, sessionTabGroupTitle, writeBoundTarget } from "./pinnedTab.js";
+import {
+  pinnedTabBrowser, readBoundTarget, sessionDaemonPid, sessionTabGroup, sessionTabGroupColor, sessionTabGroupTitle, writeBoundTarget,
+} from "./pinnedTab.js";
 import { writeBridgeState } from "./bridge/host.js";
 import { testBridgeHost } from "./bridge/host.testutil.js";
 
@@ -77,8 +79,9 @@ describe("pinnedTabBrowser", () => {
     try {
       expect(await pinnedTabBrowser("env-1234567890-real")).toEqual({
         endpoint: { port: host.port, token: host.token },
-        create: { url: "about:blank", background: true, castGroup: { title: "cast 1234567", color: "blue" } },
+        create: { url: "about:blank", background: true, castGroup: sessionTabGroup("env-1234567890-real") },
       });
+      expect(sessionTabGroup("env-1234567890-real").title).toBe("cast 1234567");
     } finally {
       await host.close();
     }
@@ -102,7 +105,24 @@ describe("sessionTabGroupTitle", () => {
   test("names the group after the session id, with or without the real suffix", () => {
     expect(sessionTabGroupTitle("env-941b0bbd-1234-real")).toBe("cast 941b0bb");
     expect(sessionTabGroupTitle("session-941b0bbd")).toBe("cast 941b0bb");
-    expect(sessionTabGroupTitle("pane--12-real")).toBe("cast pane--1");
     expect(sessionTabGroupTitle("default")).toBe("cast default");
+  });
+
+  test("a tmux pane is named as a pane, never as a bare number that looks like a session id", () => {
+    expect(sessionTabGroupTitle("pane--12-real")).toBe("cast pane 12");
+    expect(sessionTabGroupTitle("pane--12")).toBe("cast pane 12");
+  });
+});
+
+describe("sessionTabGroupColor", () => {
+  test("is stable for a session, the same in both modes, and never grey", () => {
+    const c = sessionTabGroupColor("env-941b0bbd-1234");
+    expect(sessionTabGroupColor("env-941b0bbd-1234-real")).toBe(c);
+    expect(c).not.toBe("grey");
+  });
+
+  test("spreads sessions over the palette", () => {
+    const seen = new Set(Array.from({ length: 40 }, (_, i) => sessionTabGroupColor(`env-session-${i}`)));
+    expect(seen.size).toBeGreaterThan(4);
   });
 });
