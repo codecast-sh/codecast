@@ -73,6 +73,7 @@ export const APP_SURFACES: AppSurface[] = [
   settings("settings/accounts", "linked accounts"),
   settings("settings/claude-accounts", "Claude accounts"),
   settings("settings/team", "team settings"),
+  settings("settings/integrations", "integrations"),
   settings("settings/notifications", "notification settings"),
   settings("settings/desktop", "desktop settings"),
 ];

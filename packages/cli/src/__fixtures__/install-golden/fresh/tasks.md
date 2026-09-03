@@ -68,6 +68,7 @@ cast task ls -p "<project>"                 # Tasks in one project (ID, short ID
 cast task create "Title" --project "<name>" # File a new task under a project
 cast task update <id> --project "<name>"    # File an existing task (--project '' unfiles it)
 cast task start/done/comment <id>           # Task lifecycle
+cast task start <id> --spawn                # Claim it AND hand it to a fresh agent session
 cast task update <id> -t "..." -d "..."     # Keep title/description matching what you're actually doing (-s for status)
 cast task create "Title" -t task -p high    # Create task (internal to agent work by default)
 cast task create "Title" --plan <plan_id>   # Create task bound to plan
@@ -104,6 +105,8 @@ cast doc grep <id> '<text>'                 # search inside one doc (grep '^#' =
 cast doc search "<title>"                    # search doc TITLES across the corpus
 cast doc delete <id> --yes                  # permanently delete a doc you created
 ```
+
+A task can be backed by a Linear or GitHub issue. `cast task show` prints that issue's identifier (`LIN-123`, `owner/repo#482`) and its link, and `cast task ls` prints the identifier beside the title. The sync runs both ways: your `cast task comment` posts to the issue and `cast task done` closes it, so working the task in codecast is working the issue.
 <!-- /codecast-work -->
 
 ## Referencing objects

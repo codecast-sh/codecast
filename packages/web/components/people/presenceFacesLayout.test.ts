@@ -3,7 +3,7 @@ import {
   CHROME_WIDTH,
   FACES_PADDING,
   FACE_GAP,
-  HOVER_ROWS,
+  ROW_GAP,
 } from "../../lib/calls/faceCrop";
 import { buildWall, type Wall } from "./peopleWallLayout";
 import {
@@ -11,6 +11,8 @@ import {
   OVERLAY_FACE_PX,
   overlayFaces,
   overlayWindowSize,
+  PRESENCE_CARD,
+  PRESENCE_CARD_ACTIONS,
 } from "./presenceFacesLayout";
 
 // A wall shaped by hand: N present faces and M gone ones, ids in order.
@@ -75,10 +77,14 @@ describe("overlayWindowSize", () => {
     expect(overlayWindowSize([56, 44], { hovered: true }).width).toBe(short.width);
   });
 
-  it("hovering adds the slot and the chrome below the circles", () => {
+  it("hovering adds the card below the circles, and a clicked face the taller card", () => {
     const rest = overlayWindowSize([44]);
     const hovered = overlayWindowSize([44], { hovered: true });
-    expect(hovered.height).toBe(rest.height + HOVER_ROWS);
+    expect(hovered.height).toBe(rest.height + ROW_GAP + PRESENCE_CARD);
+    // The actions keep the card open whether or not the pointer is in it.
+    const actions = overlayWindowSize([44], { actions: true });
+    expect(actions.height).toBe(rest.height + ROW_GAP + PRESENCE_CARD_ACTIONS);
+    expect(overlayWindowSize([44], { hovered: true, actions: true }).height).toBe(actions.height);
   });
 
   it("hovering never lets the chrome clip", () => {

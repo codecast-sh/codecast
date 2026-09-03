@@ -39,6 +39,8 @@ import { DaemonStatusChip } from "./DaemonStatusChip";
 import { AccountUsageChip } from "./AccountUsageChip";
 import { AnchorChip, AnchorPanel } from "./anchor/AnchorPanel";
 import { useSyncAnchors } from "../hooks/useSyncAnchors";
+import { useSyncTeamExternalEvents } from "../hooks/useSyncExternalEvents";
+import { useSyncIssueSyncSources } from "../hooks/useSyncIssueSyncSources";
 import { useIsSyncHost, useSyncReplication } from "../hooks/useSyncRole";
 import { useEnsureDispatch } from "../hooks/useEnsureDispatch";
 import { SyncStatusChip } from "./SyncStatusChip";
@@ -237,6 +239,13 @@ function HostFeeders() {
   // The anchors collection feeds the header chip, the slide-over, the inbox's
   // anchor marks and chat's DM naming — one subscription for the whole shell.
   useSyncAnchors();
+  // The team's git activity: the team feed reads it, and so does any page that
+  // wants recent events without opening a scope of its own.
+  useSyncTeamExternalEvents();
+  // Imported Linear/GitHub containers. Small, workspace-wide and read by the
+  // integrations panel and any project surface that shows where its tasks
+  // came from — one subscription rather than one per opened card.
+  useSyncIssueSyncSources();
   return null;
 }
 

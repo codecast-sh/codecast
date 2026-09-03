@@ -95,6 +95,9 @@ import { ComposerSuggestion, ComposerSuggestionHandle } from "./ComposerSuggesti
 import { ReviewComposerContext } from "./reviewContext";
 import { CommentDock } from "./comments/CommentDock";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
+import { useSyncConversationExternalEvents, useExternalEvents, externalEventsOldestFirst } from "../hooks/useSyncExternalEvents";
+import { ExternalEventRow } from "./feed/ExternalEventRow";
+import { externalEventRowToExternalEvent, type ExternalEventRecord } from "../lib/externalEvents";
 import { parseTriggerCadence, fmtDuration, fmtClock } from "./triggerCadence";
 import { TriggerPromptView } from "./TriggerPromptView";
 import { CollapsibleBody, ExpandableLine } from "./CollapsibleBody";
@@ -227,7 +230,7 @@ import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useTeamFeature } from "../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
-import { useDevices, useDeviceMoveStatus, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, type Device } from "./DeviceBadge";
+import { useDevices, useDeviceMoveStatus, DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, deviceWakesOnUse, type Device } from "./DeviceBadge";
 import { defaultMachineId, dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection, resolveScopedProjects } from "../lib/machinePicker";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
@@ -1090,7 +1093,13 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     if (!sess) return undefined;
     return { _id: sess._id, project_path: sess.project_path, git_root: sess.git_root, owner_device_id: sess.owner_device_id, target_device_id: sess.target_device_id };
   }));
-  const isolated = useInboxStore((s) => s.isolatedWorktreeMode);
+  const isolatedToggle = useInboxStore((s) => s.isolatedWorktreeMode);
+  const cloudMode = useInboxStore((s) => s.cloudSessionMode);
+  // A cloud session always runs in its own worktree — on the HOST. So the
+  // isolated toggle reads as on while cloud mode is, but the flag itself is
+  // never written from here: turning cloud off must not strand the user with an
+  // isolated setting they never chose.
+  const isolated = isolatedToggle || cloudMode;
   const convCommand = useInboxStore((s) => s.convCommand);
 
   // --- machine row --------------------------------------------------------
@@ -1147,7 +1156,12 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // would land on a machine that can't cd into its own project path. (Previously
   // the same list was safe because an unstamped session could be re-routed to
   // whichever machine actually held the checkout.)
-  const scopedDeviceId = scopeProjectsToDeviceId;
+  // Cloud mode is the one case where the folder list must NOT follow the
+  // selected machine: the host has no checkout of its own — it clones whichever
+  // repo you pick — so scoping the list at it would offer an empty row. Null
+  // scoping falls back to the union across your own machines, which is the
+  // honest set of repos a host can be told to fetch.
+  const scopedDeviceId = cloudMode ? null : scopeProjectsToDeviceId;
   // The unscoped query stays mounted regardless — it's the shared subscription
   // that keeps the store's recentProjects cache (which the other pickers read)
   // warm. The scoped one deliberately never feeds that cache.
@@ -1347,14 +1361,17 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     convCommand(convexId, "reconfigureSession", {
       project_path: trimmed,
       git_root: trimmed,
-      isolated: (forceIsolated ?? isolated) || undefined,
+      // A cloud session's worktree is made on the HOST by the daemon that
+      // prepares it. Asking the local daemon for one here would make a second,
+      // unused worktree on this machine and route the session at it.
+      isolated: cloudMode ? undefined : (forceIsolated ?? isolated) || undefined,
       ...(targetDeviceId ? { target_device_id: targetDeviceId } : {}),
     }).catch((err) => {
       if (isParkedDispatchError(err)) return;
       if (prevPath) useInboxStore.getState().updateSessionProject(convexId!, prevPath);
       toast.error(err instanceof Error ? err.message : "Failed to switch project");
     });
-  }, [storeSession, conversation._id, convCommand, currentPath, isolated, scopedDeviceId]);
+  }, [storeSession, conversation._id, convCommand, currentPath, isolated, cloudMode, scopedDeviceId]);
 
   // Picking a machine moves the (still blank) session there right away rather
   // than waiting on a folder pick the user may never make. That reconfigure only
@@ -1375,6 +1392,23 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     const remapped = d.local_project_roots?.find((r) => repoName(r) === repoName(currentPath)) ?? currentPath;
     handleSwitch(remapped, undefined, d.device_id);
   }, [currentPath, handleSwitch, updateClientUI]);
+
+  // The cloud host to offer, if the user has one. Only the first: one cloud box
+  // per account is the shape the product has, and choosing among several belongs
+  // in the machine row, which already lists them.
+  const cloudHost = useMemo(() => machineChips.find(deviceWakesOnUse) ?? null, [machineChips]);
+
+  // "Run in the cloud" points the machine selection at the host through
+  // pickedDeviceId ONLY — deliberately not handleMachinePick, whose job is to
+  // remember an explicit pick as the standing default for later sessions. A mode
+  // toggle must not repoint every future new session at the cloud box. It also
+  // fires no reconfigure: the host's worktree is made when the daemon places the
+  // row, not by switching a still-local session's folder.
+  const toggleCloudMode = useCallback(() => {
+    const turningOn = !cloudMode;
+    useInboxStore.getState().setCloudSessionMode(turningOn);
+    setPickedDeviceId(turningOn ? (cloudHost?.device_id ?? null) : null);
+  }, [cloudMode, cloudHost]);
 
   // Stamp the selection on the stub row so it rides the deferred create — the
   // machine shown in the row is the machine it runs on, whether or not the user
@@ -1642,20 +1676,37 @@ function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
 
         <button
           onClick={() => {
+            if (cloudMode) return;
             const turningOn = !isolated;
             useInboxStore.getState().setIsolatedWorktreeMode(turningOn);
             if (turningOn && currentPath) {
               handleSwitch(currentPath, true);
             }
           }}
-          className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
-          title="Create session in an isolated git worktree"
+          disabled={cloudMode}
+          className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors disabled:cursor-default disabled:hover:text-sol-text-dim"
+          title={cloudMode
+            ? "A cloud session always gets its own worktree, made on the host"
+            : "Create session in an isolated git worktree"}
         >
           <span className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${isolated ? "bg-sol-cyan/30" : "bg-sol-bg-alt"}`}>
             <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${isolated ? "left-3.5 bg-sol-cyan" : "left-0.5 bg-sol-text-dim"}`} />
           </span>
           <span className={isolated ? "text-sol-cyan" : ""}>isolated worktree</span>
         </button>
+
+        {cloudHost && (
+          <button
+            onClick={toggleCloudMode}
+            className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
+            title={`Run this session on ${deviceDisplayName(cloudHost)}, in its own worktree there. The host boots itself when the session starts.`}
+          >
+            <span className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${cloudMode ? "bg-sol-violet/30" : "bg-sol-bg-alt"}`}>
+              <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${cloudMode ? "left-3.5 bg-sol-violet" : "left-0.5 bg-sol-text-dim"}`} />
+            </span>
+            <span className={cloudMode ? "text-sol-violet" : ""}>run in the cloud</span>
+          </button>
+        )}
 
         {!picking && recentProjects.length > 0 && (
           <button
@@ -12393,11 +12444,15 @@ function settleTimelineItemAtOffset(
 
 const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"];
 
-// The body is a plain function (not the forwardRef callback itself) so the dev
-// wrapper below can size the element tree each pass returns.
+// The forwardRef render function itself. Never call it as a plain function
+// from another component: its hooks would then run on the caller's fiber, and
+// Fast Refresh signs the caller, whose own hook list never changes, so an edit
+// that adds a hook here keeps the fiber and crashes on the shifted hook slot
+// ("Should have a queue"). The dev sizing happens inside the body instead.
 const ConversationViewInner = (
   function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, targetNonce, isJumpingToTarget, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
   devRenderCount("ConversationView2");
+  const renderStart = performance.now();
   const fallbackStickyContent = useMemo(() => stickyPromptContent(rawFallbackStickyContent), [rawFallbackStickyContent]);
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, _setUserScrolled] = useState(false);
@@ -12703,7 +12758,16 @@ const ConversationViewInner = (
   // Pipe this conversation's comment thread into the inbox cache once; the dock
   // and the inline per-message threads all read from the store.
   useConversationCommentsSync(conversation?._id?.toString());
+  // Git activity for this conversation: the feeder subscribes, the store keeps
+  // the rows, and the timeline memo below reads them. Same shape as comments.
+  useSyncConversationExternalEvents(conversation?._id?.toString());
   const effectiveConversationId = conversation?._id;
+  const convIdForEvents = conversation?._id?.toString();
+  const externalEventsWhere = useMemo(
+    () => (convIdForEvents ? (e: ExternalEventRecord) => e.conversation_id === convIdForEvents : () => false),
+    [convIdForEvents],
+  );
+  const conversationExternalEvents = useExternalEvents(externalEventsWhere, externalEventsOldestFirst);
 
   const handleSendInlineMessage = useCallback(async (content: string) => {
     if (!conversation || !effectiveConversationId) return;
@@ -13316,7 +13380,8 @@ const ConversationViewInner = (
   type TimelineItem =
     | { type: 'message'; data: Message; timestamp: number }
     | { type: 'commit'; data: Commit; timestamp: number }
-    | { type: 'pull_request'; data: PullRequest; timestamp: number };
+    | { type: 'pull_request'; data: PullRequest; timestamp: number }
+    | { type: 'external_event'; data: ExternalEventRecord; timestamp: number };
 
   // Pending messages: read directly so they ALWAYS render, regardless of what
   // setMessages/mergeMessages/buildCompositeTimeline do to the server message arrays.
@@ -13341,6 +13406,7 @@ const ConversationViewInner = (
       messages,
       commits,
       pullRequests,
+      conversationExternalEvents,
     ) as TimelineItem[];
     // Guaranteed render: append any pending messages not already in the timeline.
     // This is the ONLY merge point — the store never mixes pending into messages[].
@@ -13386,7 +13452,7 @@ const ConversationViewInner = (
     }
     if (toAdd.length === 0) return base;
     return [...base, ...toAdd.map((m: any) => ({ type: 'message' as const, data: m, timestamp: m.timestamp }))];
-  }, [messages, commits, pullRequests, pendingMsgs, serverPending, pendingConvId]);
+  }, [messages, commits, pullRequests, conversationExternalEvents, pendingMsgs, serverPending, pendingConvId]);
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
 
@@ -14150,6 +14216,7 @@ const ConversationViewInner = (
   const rowKeys = useMemo(() => uniqueRowKeys(timeline.map((item) => {
     if (item.type === 'message') return messageRowKey(item.data as Message);
     if (item.type === 'commit') return `commit-${(item.data as any).sha || (item.data as any)._id}`;
+    if (item.type === 'external_event') return `git-${(item.data as any)._id}`;
     return `pr-${(item.data as any)._id}`;
   })), [timeline]);
   const getItemKey = useCallback((index: number) => rowKeys[index] ?? index, [rowKeys]);
@@ -14181,6 +14248,10 @@ const ConversationViewInner = (
     if (cachedHeight !== undefined) return cachedHeight;
 
     if (item.type === 'commit') return 80;
+    // A git event is one line plus its pill row. Everything below this point
+    // reads item.data as a Message, so a non-message type must return here.
+    if (item.type === 'external_event') return 44;
+    if (item.type === 'pull_request') return 120;
 
     const msg = item.data as Message;
     // Compact: a collapsed turn is one card on the first assistant message; the
@@ -15831,6 +15902,19 @@ const ConversationViewInner = (
       );
     }
 
+    if (item.type === 'external_event') {
+      const row = item.data as ExternalEventRecord;
+      return (
+        <div key={row._id} className="mx-auto conv-col px-2 sm:px-4 py-0.5">
+          <ExternalEventRow
+            event={externalEventRowToExternalEvent(row)}
+            density="transcript"
+            omitRefs={["session_id"]}
+          />
+        </div>
+      );
+    }
+
     const msg = item.data as Message;
     if (msg.role === "system") {
       return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} timestamp={msg.timestamp} messageUuid={msg.message_uuid} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
@@ -16083,7 +16167,7 @@ const ConversationViewInner = (
     />
   ) : null;
 
-  return (
+  const el = (
     <HighlightContext.Provider value={highlightQuery}>
     <FilePathContext.Provider value={filePathCtx}>
     <CastBrowserRowContext.Provider value={browserRowMap}>
@@ -17052,7 +17136,7 @@ const ConversationViewInner = (
               const item = timeline[virtualItem.index];
               const content = renderItem(item, virtualItem.index);
               const isSearchDimmed = highlightQuery && allMatchingMessageIds.length > 0 && item.type === 'message' && !allMatchingMessageIds.includes((item.data as Message)._id);
-              const itemId = item.type === 'message' ? (item.data as Message)._id : item.type === 'commit' ? `commit-${(item.data as any).sha || (item.data as any)._id}` : `pr-${(item.data as any)._id}`;
+              const itemId = item.type === 'message' ? (item.data as Message)._id : item.type === 'commit' ? `commit-${(item.data as any).sha || (item.data as any)._id}` : item.type === 'external_event' ? `git-${(item.data as any)._id}` : `pr-${(item.data as any)._id}`;
               const isNew = newItemIdsRef.current.has(itemId);
               const isForkSelected = forkSelectionIdx !== null && forkSelectionIdx === virtualItem.index;
               const isBelowForkSelection = forkSelectionIdx !== null && virtualItem.index > forkSelectionIdx;
@@ -17387,17 +17471,12 @@ const ConversationViewInner = (
     </FilePathContext.Provider>
     </HighlightContext.Provider>
   );
+  devCountElements("ConversationView2", el, performance.now() - renderStart);
+  return el;
 }
 );
 
 // memo: the parents (InboxConversation, ConversationDiffLayout) re-run several
 // times per session switch on their own hooks; without memo every one of those
 // passes re-ran this 5k-line body (measured 44 body executions per switch).
-export const ConversationView = memo(forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView(props, ref) {
-    const t0 = performance.now();
-    const el = ConversationViewInner(props, ref);
-    devCountElements("ConversationView2", el, performance.now() - t0);
-    return el;
-  },
-));
+export const ConversationView = memo(forwardRef<ConversationViewHandle, ConversationViewProps>(ConversationViewInner));

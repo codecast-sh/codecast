@@ -27,6 +27,7 @@ import { buildTaskGroups, isValidTaskGroup, parseTaskGroup, taskGroupDropUpdates
 import { boardOrderedStatuses, statusByKey, statusVisual, statusWriteFields, taskStatusKey, taskStatusOf, useTeamTaskStatusList } from "../../lib/taskStatuses";
 import type { TeamTaskStatus } from "@codecast/shared/tasks";
 import { LabelChips } from "../../components/LabelChips";
+import { IssueLink } from "../../components/tasks/IssueLink";
 import { toast } from "sonner";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
@@ -171,6 +172,7 @@ export function TaskRow({ task, state, triageMode, onTriage, indent = 0, hiddenD
         )}
       </button>
       <span className="text-xs font-mono text-sol-text-dim w-16 flex-shrink-0 cq-hide-compact">{task.short_id}</span>
+      {task.external && <IssueLink external={task.external} className="cq-hide-compact" />}
       {state.isEditing ? (
         <input
           autoFocus
@@ -379,6 +381,7 @@ function TaskMiniCard({ task }: { task: TaskItem }) {
     <div className="flex items-center gap-2 rounded-md border border-sol-border/40 bg-sol-bg-alt/40 px-2.5 py-1.5 min-w-0">
       <StatusIcon className={`w-3.5 h-3.5 flex-shrink-0 ${status.color}`} />
       <span className="text-xs font-mono text-sol-text-dim flex-shrink-0">{task.short_id}</span>
+      {task.external && <IssueLink external={task.external} />}
       <span className="text-xs text-sol-text truncate">{task.title}</span>
     </div>
   );
@@ -508,6 +511,7 @@ function KanbanCard({
       <div className="flex items-start justify-between gap-2 mb-2">
         <span className="flex items-center gap-1.5 min-w-0 text-[10px] font-mono text-sol-text-dim leading-none mt-0.5">
           {task.short_id}
+          {task.external && <IssueLink external={task.external} />}
           {parentChip && (
             <span className="flex items-center gap-0.5 min-w-0 opacity-80" title={`Subtask of ${parentChip.short_id}: ${parentChip.title}`}>
               <CornerDownRight className="w-2.5 h-2.5 flex-shrink-0" />
