@@ -19,7 +19,7 @@ const TEAM = "session-7406f3cf";
 const AGENT = "fm-sending-3";
 const LEAD_SESSION = "7406f3cf-0cba-4555-89f4-9de07bb99d35";
 const LEAD_CONV = "convLeadJx788p3";
-const TEAMMATE_SESSION = "73995615-0374-48cc-bde5-6f834db00515";
+const TEAMMATE_SESSION = "7e57a0e0-0000-4000-8000-0000000e5e1d";
 const TEAMMATE_CONV = "convTeammateJx7akcgc";
 
 function teammateLine(uuid: string, parentUuid: string | null, role: "user" | "assistant", cwd: string, ts: string): string {
@@ -82,7 +82,13 @@ describe("teammate lead link survives a create that fell to the retry queue", ()
         return async () => undefined;
       },
     }) as unknown as SyncService;
-    const retryQueue = { add: () => "op-id" } as unknown as RetryQueue;
+    const retryQueue = new Proxy({} as Record<string, unknown>, {
+      get: (_t, prop) => {
+        if (prop === "add") return () => "op-id";
+        if (prop === "hasPendingConversation") return () => false;
+        return () => undefined;
+      },
+    }) as unknown as RetryQueue;
     const conversationCache: Record<string, string> = { [LEAD_SESSION]: LEAD_CONV };
     const pendingMessages: Record<string, unknown[]> = {};
 
