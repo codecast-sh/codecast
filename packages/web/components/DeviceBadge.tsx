@@ -8,7 +8,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
@@ -56,6 +57,11 @@ export type Device = {
   }>;
   /** The device's PUBLIC git key — pasteable into GitHub to grant repo access. */
   git_pubkey?: string;
+  /** Loop-freeze SLO for this machine: blocked ms in the last hour, the worst
+   * single freeze, and the stacks it was in (devices.listDevices). */
+  loop_freeze_1h_ms?: number;
+  loop_freeze_max_ms?: number;
+  loop_freeze_top?: string;
   online: boolean;
 };
 
@@ -174,13 +180,18 @@ export function useForeignOwnerDevice(
   conversationId: string | null | undefined,
   needed: boolean,
 ): ForeignOwnerDevice | null | undefined {
-  const res = useQuery(
+  // No-throw: this is a fallback lookup for a name we may simply not get, so a
+  // backend failure resolves to "nothing to resolve" — never a throw into the
+  // caller's ErrorBoundary. Errors return null rather than undefined so callers
+  // stop waiting on a lookup that will not arrive.
+  const { data: res, error } = useQueryNoThrow(
     api.devices.ownerDeviceDisplay,
     needed && conversationId
       ? { conversation_id: conversationId as Id<"conversations"> }
       : "skip",
   );
   if (!needed || !conversationId) return null;
+  if (error) return null;
   if (res === undefined) return undefined; // loading
   if (!res) return null;
   return { ...res, local_project_roots: [] };
@@ -423,12 +434,15 @@ export function useDeviceMoveStatus(conversationId: string | undefined): {
     return () => clearInterval(t);
   }, [entry]);
 
-  const progressRaw = useQuery(
+  // No-throw: restart progress is a live decoration on a restart the user
+  // already triggered. Losing it degrades the readout to idle; throwing would
+  // take down the surface mid-restart, exactly when it is being watched.
+  const { data: progressRaw } = useQueryNoThrow(
     api.conversations.getRestartProgress,
     entry && !entry.error && conversationId && isConvexId(conversationId)
       ? { conversation_id: conversationId }
       : "skip",
-  ) as RestartProgressRow[] | null | undefined;
+  ) as { data: RestartProgressRow[] | null | undefined };
 
   const status = useMemo(() => {
     const idle = {

@@ -1,29 +1,53 @@
 /*
  * The idle presence overlay's own marks, layered over faces.css (the glass,
- * the chrome pill) and people.css (the face keys, the rings, the refusal).
+ * the chrome buttons) and people.css (the face keys, the rings, the refusal).
  *
  * Everything here follows the floating-faces law: a circle is the person and
  * nothing else, and anything the surface says beyond the circles appears only
- * under the pointer. The wall's floating label is the one thing the overlay
- * OVERRIDES rather than inherits — a label wider than its face would hang
- * outside the window's glass, so faces describe themselves into the slot
- * above the chrome instead (useDescribeSlot).
+ * under the pointer. What it says arrives on ONE card under the row — the
+ * pointed face's name and activity, the clicked face's three actions, and the
+ * window's own controls as the card's footer.
+ *
+ * The card is paper: warm off-white, a hairline, a short shadow. It is drawn
+ * from fixed colours rather than theme tokens on purpose. It floats over
+ * whatever the person is working in — a dark editor, a white document, a
+ * video call — and a card that changed with the app's theme would sometimes
+ * be the one dark thing on a light screen. Paper reads as a card on any
+ * backdrop, the way a system notification does. (The window is transparent,
+ * so a blur behind it is not available: nothing here relies on one.)
+ *
+ * The wall's floating label is the one thing the overlay OVERRIDES rather
+ * than inherits — a label wider than its face would hang outside the window's
+ * glass, so faces describe themselves into the card instead (useDescribeSlot).
  */
 
 /* No toasts on the glass. The app-wide Toaster mounts in every window, but
    this one floats over the person's work and lets clicks through — a toast
    here is an unreachable card hovering over somebody's editor. Errors this
    window produces surface where the action lands (the main window's DM, the
-   refusal slot), not here. Scoped to the html class the page sets, since the
+   refusal line), not here. Scoped to the html class the page sets, since the
    toaster is a sibling of the overlay root, not a child. */
 .faces-overlay-window [data-sonner-toaster] {
   display: none;
 }
 
+.presence-faces {
+  --paper: #fcfbf7;
+  --paper-deep: #f3f0e8;
+  --paper-foot: #f6f3ec;
+  --ink: #1e1c19;
+  --ink-soft: #5f5a51;
+  --ink-faint: #8d877b;
+  --hairline: rgba(30, 28, 25, 0.13);
+  --hairline-strong: rgba(30, 28, 25, 0.22);
+  --wash: rgba(30, 28, 25, 0.06);
+  --wash-strong: rgba(30, 28, 25, 0.1);
+}
+
 .presence-row {
   display: flex;
   /* Bottom-aligned, not centred: a row of mixed sizes reads as people
-     standing on one floor, and the hover band opens directly under it. */
+     standing on one floor, and the card opens directly under it. */
   align-items: flex-end;
   justify-content: center;
   gap: 8px; /* FACE_GAP — the same gap the call circles keep */
@@ -34,7 +58,7 @@
   flex: none;
 }
 
-/* The wall's floating label, off. The slot above the chrome carries the words. */
+/* The wall's floating label, off. The card carries the words. */
 .presence-faces .people-face-label {
   display: none;
 }
@@ -52,19 +76,18 @@
 /* A CIRCLE NEEDS AN EDGE. These faces float over whatever the person is
    working in, so a dark avatar on a dark editor — or a light one on a light
    document — dissolves into the background and the row reads as a smear
-   rather than as people. The `+N` pebble beside them has carried a hairline
-   since it was drawn; the faces went without one.
+   rather than as people.
 
    Two rings, not one: a light hairline so the disc holds its shape against a
    dark backdrop, and a dark halo just outside it so it still holds against a
-   light one. Both are drawn from theme tokens rather than fixed colours, and
-   both sit on the avatar element the ask ring uses, so a face being asked to
-   talk simply stacks its orange ring outside these. */
+   light one. Fixed colours, like the card, for the same reason: the backdrop
+   is not the app. Both sit on the avatar element the ask ring uses, so a face
+   being asked to talk simply stacks its orange ring outside these. */
 .presence-faces .people-face-av,
 .presence-faces .presence-me > * {
   box-shadow:
-    0 0 0 1.5px color-mix(in srgb, var(--sol-text) 30%, transparent),
-    0 0 0 3px color-mix(in srgb, #000 32%, transparent);
+    0 0 0 1.5px rgba(255, 255, 255, 0.85),
+    0 0 0 3px rgba(20, 18, 14, 0.28);
   border-radius: 999px;
 }
 
@@ -72,8 +95,8 @@
    hairline instead of replacing it, so the circle keeps its shape. */
 .presence-faces .people-face-seat[data-ask] .people-face-av {
   box-shadow:
-    0 0 0 1.5px color-mix(in srgb, var(--sol-text) 30%, transparent),
-    0 0 0 3.5px color-mix(in srgb, var(--sol-orange) 75%, transparent);
+    0 0 0 1.5px rgba(255, 255, 255, 0.85),
+    0 0 0 3.5px color-mix(in srgb, var(--sol-orange) 80%, transparent);
 }
 
 /* The empty state: your own face, draggable, quiet. */
@@ -83,79 +106,230 @@
   cursor: default;
 }
 
-/* The +N chip: the offline fold's handle, drawn like a face-shaped pebble. */
+/* The +N chip: the offline fold's handle, a pebble of the same paper. */
 .presence-chip {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--sol-bg) 82%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sol-text) 14%, transparent);
-  backdrop-filter: blur(6px);
-  color: var(--sol-text-muted);
+  background: var(--paper);
+  box-shadow:
+    0 0 0 1px var(--hairline-strong),
+    0 1px 3px rgba(20, 18, 14, 0.18);
+  color: var(--ink-soft);
   font-family: var(--font-mono);
   font-size: 9px;
+  font-weight: 600;
   cursor: pointer;
+  transition: color 120ms ease, box-shadow 120ms ease;
 }
 .presence-chip:hover {
-  color: var(--sol-text);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sol-text) 28%, transparent);
+  color: var(--ink);
+  box-shadow:
+    0 0 0 1px rgba(30, 28, 25, 0.38),
+    0 1px 3px rgba(20, 18, 14, 0.18);
 }
 
-/* The slot: name and activity line, in the band the window grows on hover,
-   sitting above the chrome. The dark plate matches the call circles' name
-   pill — this text sits over whatever application is underneath. */
-.presence-desc {
-  position: absolute;
-  left: 50%;
-  bottom: calc(8px + 34px + 4px); /* FACES_PADDING + CHROME_HEIGHT + ROW_GAP */
-  transform: translateX(-50%);
+/* ── The card ──────────────────────────────────────────────────────────── */
+
+/* In flow under the row, never absolutely positioned: an absolute box hung
+   from `left: 50%` gets half the window as its shrink-to-fit width, which is
+   what cut "Samvit Ramadan" to "Samvit Ramad" and stacked three buttons into
+   a column. Here the card is as wide as its contents, never narrower than the
+   toolbar, never wider than the glass.
+
+   HEIGHTS ARE PINNED — 82px, 118px with the actions row (a 48px or 84px
+   head over a 34px footer) — and mirrored in
+   presenceFacesLayout.ts (PRESENCE_CARD, PRESENCE_CARD_ACTIONS), which is
+   what sizes the window to hold them. Change both or the card is cut off. */
+.presence-card {
+  position: relative;
+  box-sizing: border-box;
+  margin-top: 4px; /* ROW_GAP */
+  width: max-content;
+  min-width: 290px; /* CHROME_WIDTH */
+  max-width: 100%;
+  height: 82px;
   display: flex;
-  align-items: baseline;
-  gap: 6px;
-  max-width: calc(100vw - 16px);
-  padding: 2px 8px;
-  border-radius: 999px;
-  /* SOLID. Over a dark editor the old translucent plate vanished. */
-  background: #101418;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  flex-direction: column;
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-deep) 100%);
+  /* A hairline, a hair of light along the top edge, and a shadow short
+     enough to stay inside the window's 8px margin — on a transparent window
+     a clipped shadow is a straight edge in mid-air. */
+  box-shadow:
+    0 0 0 1px var(--hairline-strong),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 2px 6px rgba(20, 18, 14, 0.2);
+  color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.4;
-  white-space: nowrap;
   overflow: hidden;
+  opacity: 0;
+  transform: translateY(3px) scale(0.985);
+  transform-origin: 50% 0;
+  transition: opacity 150ms ease, transform 180ms cubic-bezier(0.2, 0.8, 0.3, 1);
   pointer-events: none;
 }
-.presence-desc-name {
+.presence-card[data-actions] {
+  height: 118px;
+}
+.faces-window--hover .presence-card {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+/* The head: who, and what they are doing. Fixed height so the footer never
+   moves between the legend, a name, and a name with its actions. */
+.presence-card-head {
   flex: none;
-  max-width: 45%;
+  box-sizing: border-box;
+  height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 14px;
+  max-width: 100%;
+  overflow: hidden;
+}
+.presence-card[data-actions] .presence-card-head {
+  height: 84px;
+  gap: 8px;
+}
+/* Full width, centred contents: the name's cap below is a share of the CARD,
+   not of a row shrink-wrapped around the name — which would cap the name
+   against itself and cut a name that had room to spare. */
+.presence-card-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  overflow: hidden;
+}
+.presence-card-name {
+  flex: none;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  white-space: nowrap;
+}
+/* Beside a name the activity line yields — the name is who the card is
+   about — but a name alone never truncates: over the actions it has the
+   card's full width. */
+.presence-card-row .presence-card-name {
+  max-width: 72%;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: rgba(255, 255, 255, 0.94);
-  font-weight: 600;
 }
-.presence-desc-line {
+.presence-card-line {
   min-width: 0;
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* A refusal is feedback, and half a reason is not feedback (people.css made
-   the wall's line wrap for the same sentence). The name yields — the person
-   pressed this face a moment ago and knows whose it is — and the reason
-   wraps whole, the pill growing upward from its anchored bottom. */
-.presence-desc[data-refused] {
-  white-space: normal;
-  text-align: center;
-  border-radius: 10px;
+/* The line's tone class is the wall's (cyan active, yellow idle, red busy)
+   and those accents read on paper. The two neutral tones are theme greys —
+   this window's document carries the dark theme — so on paper they are ink. */
+.presence-card-line.text-sol-text-muted {
+  color: var(--ink-soft);
 }
-.presence-desc[data-refused] .presence-desc-name {
+.presence-card-line.text-sol-text-dim {
+  color: var(--ink-faint);
+}
+.presence-card-hint {
+  font-size: 9.5px;
+  line-height: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+/* A refusal is feedback, and half a reason is not feedback. The name yields
+   — the person pressed this face a moment ago and knows whose it is — so
+   the reason has the card's whole width. */
+.presence-card[data-refused] .presence-card-name {
   display: none;
 }
-.presence-desc[data-refused] .presence-desc-line {
-  overflow: visible;
-  text-overflow: clip;
+.presence-card[data-refused] .presence-card-line {
+  max-width: 100%;
+}
+
+/* The three actions, on paper. The shared buttons take their fill and edge
+   from the app's surface tokens; here the surface is the card. */
+.presence-card .face-action {
+  height: 28px;
+  padding: 0 12px;
+  background: #fff;
+  border-color: var(--hairline-strong);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(20, 18, 14, 0.08);
+}
+.presence-card .face-action:hover:not(:disabled) {
+  background: #fff;
+  border-color: rgba(30, 28, 25, 0.4);
+  box-shadow: 0 2px 5px rgba(20, 18, 14, 0.14);
+}
+.presence-card .face-action-talk:not(:disabled) {
+  color: var(--walkie-tx);
+  border-color: color-mix(in srgb, var(--walkie-tx) 50%, transparent);
+}
+.presence-card .face-action-ring:not(:disabled) {
+  color: var(--sol-violet);
+  border-color: color-mix(in srgb, var(--sol-violet) 45%, transparent);
+}
+.presence-card .face-action-talk-on {
+  box-shadow: none;
+}
+.presence-card .face-actions-reason {
+  font-size: 10px;
+}
+
+/* The footer: the window's own controls, on a slightly deeper band with a
+   rule above it. The buttons are the ones faces.css draws for the call
+   circles; here they sit IN the card rather than in a floating pill, so the
+   pill's positioning, plate and fade are all switched off. */
+.presence-card .faces-chrome {
+  position: static;
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
+  flex: none;
+  justify-content: center;
+  gap: 4px;
+  padding: 3px 4px;
+  border-radius: 0;
+  background: var(--paper-foot);
+  box-shadow: inset 0 1px 0 var(--hairline);
+  transition: none;
+}
+.presence-card .faces-btn {
+  color: var(--ink-soft);
+}
+.presence-card .faces-btn:hover {
+  background: var(--wash);
+  color: var(--ink);
+}
+.presence-card .faces-btn:active {
+  background: var(--wash-strong);
+}
+.presence-card .faces-btn--on {
+  color: var(--sol-cyan);
+}
+.presence-card .faces-btn--alert {
+  color: var(--sol-red);
+}
+.presence-card .faces-btn--alert:hover {
+  background: color-mix(in srgb, var(--sol-red) 12%, transparent);
+  color: var(--sol-red);
 }
 
 /* The grip only moves the window; a pressed-button flash would say it does
@@ -167,47 +341,9 @@
   cursor: grabbing;
 }
 
-/* The slot is two lines now: the name and its activity, then the gesture.
-   The legend alone when nothing is pointed at — the window is hovered, so
-   the person is looking for what to do. */
-.presence-desc {
-  flex-direction: column;
-  align-items: center;
-  gap: 1px;
-  border-radius: 10px;
-}
-.presence-desc-row {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  max-width: 100%;
-  overflow: hidden;
-}
-.presence-desc-gesture {
-  font-size: 10px;
-  letter-spacing: 0.05em;
-  color: rgba(255, 255, 255, 0.72);
-}
-.presence-desc-legend {
-  padding: 4px 10px;
-}
-
-/* The actions in the slot: the same three buttons the wall draws, on the
-   slot's plate, with the person's name above them. */
-.presence-desc-actions {
-  pointer-events: auto;
-}
-.presence-desc-actions .face-action {
-  background: #1b2127;
-  border-color: rgba(255, 255, 255, 0.28);
-  color: #fff;
-}
-.presence-desc-actions .face-action-talk:not(:disabled) { color: var(--walkie-tx); }
-.presence-desc-actions .face-action-ring:not(:disabled) { color: #c8b6ff; }
-/* Over the actions the name has the plate's full width; the clamp that keeps
-   a hover line to one row must not cut "Member A." to "Me…". */
-.presence-desc-actions .presence-desc-name {
-  max-width: none;
-  overflow: visible;
-  text-overflow: clip;
+@media (prefers-reduced-motion: reduce) {
+  .presence-card,
+  .presence-chip {
+    transition: none;
+  }
 }

@@ -11,7 +11,9 @@ import {
   isDegradedDaemonHealth,
   worstDaemonHealth,
   ROSTER_CONSIDER_MS,
+  OVERLOADED_HOUR_MS,
 } from "../useDaemonHealth";
+import { describeDaemonHealth, describeDeviceFreeze } from "../../lib/daemonHealthCopy";
 
 const NOW = 1_000_000_000_000;
 
@@ -143,6 +145,62 @@ describe("computeDaemonHealth: quiet / restarting / overloaded", () => {
     expect(computeDaemonHealth(busy, NOW)).toEqual({ kind: "overloaded", freezeMs: 31_000 });
     const light = { daemon_last_seen: NOW - 1000, daemon_loop_freeze_ms: OVERLOADED_FREEZE_MS - 1 };
     expect(computeDaemonHealth(light, NOW).kind).toBe("ok");
+  });
+
+  it("is overloaded when the trailing hour is over the SLO even if the minute is quiet", () => {
+    // A machine that freezes hard every few minutes reads as fine in any one
+    // minute, which is exactly the case the hour tier exists for.
+    const bursty = {
+      daemon_last_seen: NOW - 1000,
+      daemon_loop_freeze_ms: 0,
+      daemon_loop_freeze_1h_ms: 215_000,
+      daemon_loop_freeze_max_ms: 42_000,
+      daemon_loop_freeze_top: "walk@recursiveWatcher.ts:138 60%",
+    };
+    expect(computeDaemonHealth(bursty, NOW)).toEqual({
+      kind: "overloaded",
+      freezeMs: 0,
+      hourMs: 215_000,
+      maxMs: 42_000,
+      topCause: "walk@recursiveWatcher.ts:138 60%",
+    });
+    const quietHour = { daemon_last_seen: NOW - 1000, daemon_loop_freeze_1h_ms: OVERLOADED_HOUR_MS - 5_000 };
+    expect(computeDaemonHealth(quietHour, NOW).kind).toBe("ok");
+  });
+
+  it("names the top cause when the hour tier fired, and keeps the minute wording otherwise", () => {
+    const hourTier = describeDaemonHealth({
+      kind: "overloaded",
+      freezeMs: 0,
+      hourMs: 215_000,
+      maxMs: 42_000,
+      topCause: "walk@recursiveWatcher.ts:138 60%",
+    });
+    expect(hourTier?.label).toBe("daemon under load");
+    expect(hourTier?.detail).toContain("215s in the last hour");
+    expect(hourTier?.detail).toContain("worst freeze 42s");
+    expect(hourTier?.detail).toContain("Top cause: walk@recursiveWatcher.ts:138 60%");
+
+    const minuteTier = describeDaemonHealth({ kind: "overloaded", freezeMs: 31_000 });
+    expect(minuteTier?.detail).toContain("31s of the last minute");
+  });
+
+  it("the devices page line names the hour, the worst freeze and the cause", () => {
+    expect(
+      describeDeviceFreeze({
+        loop_freeze_1h_ms: 215_000,
+        loop_freeze_max_ms: 42_000,
+        loop_freeze_top: "walk@recursiveWatcher.ts:138 60%",
+      }),
+    ).toEqual({
+      text: "frozen 215s/h, worst 42s · walk@recursiveWatcher.ts:138 60%",
+      colorVar: "--sol-orange",
+    });
+    // Under the bar the machine still reports, dimly rather than in alarm.
+    expect(describeDeviceFreeze({ loop_freeze_1h_ms: 30_000 })?.colorVar).toBe("--sol-text-dim");
+    // A machine that has reported no freeze shows no line at all.
+    expect(describeDeviceFreeze({})).toBeNull();
+    expect(describeDeviceFreeze({ loop_freeze_1h_ms: 0 })).toBeNull();
   });
 
   it("silence outranks a fresh boot or load (those need a live beat to mean anything)", () => {

@@ -10,13 +10,14 @@
 
 import { useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { KeyRound, TimerReset, Zap, ZapOff } from "lucide-react";
 import { ClaudeIcon, OpenAIIcon } from "./BrandIcons";
 import { Switch } from "./ui/switch";
 import { useCoarseNow } from "../hooks/useCoarseNow";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useAccountRecoveryToggles } from "../hooks/useAccountRecoveryToggles";
 import { useTrackedStore } from "../store/inboxStore";
 import { exhaustionBannerCopy, isExhaustionCurrent, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
@@ -83,7 +84,10 @@ function ProviderSegment({
 }
 
 export function AccountUsageChip() {
-  const data = useQuery(api.accountSwitch.listAccountProfiles, {});
+  // No-throw: the chip lives in always-mounted chrome, so a backend that can't
+  // serve this must cost the chip, not the surface hosting it. Undefined reads
+  // as "no accounts yet", which the render below already handles.
+  const { data } = useQueryNoThrow(api.accountSwitch.listAccountProfiles, {});
   const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
   const router = useRouter();
   const now = useCoarseNow(30_000);

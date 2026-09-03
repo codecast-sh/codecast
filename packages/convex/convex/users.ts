@@ -291,6 +291,13 @@ export const daemonHeartbeat = mutation({
     pending_sync_conversations: v.optional(v.number()),
     daemon_started_at: v.optional(v.number()),
     loop_freeze_ms: v.optional(v.number()),
+    // The loop freeze budget: blocked ms over the trailing hour, the worst
+    // single freeze, and the stacks it was in. These live on the device row
+    // only. Their twins on the user doc keep whatever the last machine to beat
+    // wrote, which would mask one machine's trouble behind another's beats.
+    loop_freeze_1h_ms: v.optional(v.number()),
+    loop_freeze_max_ms: v.optional(v.number()),
+    loop_freeze_top: v.optional(v.string()),
     // Device identity (remote/device.ts). When present, upsert a per-device
     // row so multiple machines don't clobber each other's project roots.
     device_id: v.optional(v.string()),
@@ -476,6 +483,9 @@ export const daemonHeartbeat = mutation({
         // value a newer one wrote — same rule as backlogFieldsPatch.
         ...(args.daemon_started_at !== undefined ? { daemon_started_at: args.daemon_started_at } : {}),
         ...(args.loop_freeze_ms !== undefined ? { loop_freeze_ms: args.loop_freeze_ms } : {}),
+        ...(args.loop_freeze_1h_ms !== undefined ? { loop_freeze_1h_ms: args.loop_freeze_1h_ms } : {}),
+        ...(args.loop_freeze_max_ms !== undefined ? { loop_freeze_max_ms: args.loop_freeze_max_ms } : {}),
+        ...(args.loop_freeze_top !== undefined ? { loop_freeze_top: args.loop_freeze_top } : {}),
         ...(args.pending_sync_count !== undefined ? { pending_sync_count: args.pending_sync_count } : {}),
         ...(args.oldest_pending_ms !== undefined ? { oldest_pending_ms: args.oldest_pending_ms } : {}),
         ...(args.pending_sync_messages !== undefined ? { pending_sync_messages: args.pending_sync_messages } : {}),

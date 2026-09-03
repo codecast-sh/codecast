@@ -101,6 +101,7 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
     case "chat_reply": return { name: "comments", color: Theme.accent };
     case "chat_here": return { name: "bullhorn", color: Theme.orange };
     case "chat_post": return { name: "hashtag", color: Theme.cyan };
+    case "daemon_overloaded": return { name: "hourglass-half", color: Theme.orange };
     default: return { name: "bell", color: Theme.textMuted };
   }
 }

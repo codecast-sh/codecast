@@ -1641,6 +1641,24 @@ export default defineSchema({
     // daemons alive one machine's trouble is masked by the other's beats.
     daemon_started_at: v.optional(v.number()),
     loop_freeze_ms: v.optional(v.number()),
+    // The same measure over the trailing hour, plus the worst single freeze and
+    // the stacks it was in. This is the loop freeze budget the daemonLogs cron
+    // alerts on and the devices settings page shows. Rounded by the daemon (1h
+    // to 5s, max to 1s) so a beat that changed nothing else does not rewrite
+    // the row and churn the roster.
+    loop_freeze_1h_ms: v.optional(v.number()),
+    loop_freeze_max_ms: v.optional(v.number()),
+    loop_freeze_top: v.optional(v.string()),
+    // Debounce state for the aggregated "daemon overloaded" notification
+    // (daemonLogs.checkDeviceLoopFreeze). One write per incident, not per tick.
+    // Cleared as soon as the hour total falls back under the bar, so the next
+    // incident on the same machine announces itself.
+    freeze_notify_state: v.optional(v.object({
+      last_notified_at: v.number(),
+      // Hour total covered by that notification; only a HIGHER total is a fresh
+      // incident worth announcing again.
+      last_hour_ms: v.number(),
+    })),
     pending_sync_count: v.optional(v.number()),
     oldest_pending_ms: v.optional(v.number()),
     pending_sync_messages: v.optional(v.number()),
@@ -2157,7 +2175,11 @@ export default defineSchema({
       v.literal("chat_dm"),
       // Someone added you to a private channel or a group message.
       v.literal("chat_added"),
-      v.literal("chat_post")
+      v.literal("chat_post"),
+      // One machine's daemon event loop froze past the budget in the last hour
+      // (daemonLogs.checkDeviceLoopFreeze). Entity is the device, not a session:
+      // the whole machine is late, not one conversation.
+      v.literal("daemon_overloaded")
     ),
     actor_user_id: v.optional(v.id("users")),
     // Display identity for actors without an account (an anonymous artifact
@@ -2172,7 +2194,8 @@ export default defineSchema({
       v.literal("plan"),
       v.literal("conversation"),
       v.literal("artifact"),
-      v.literal("chat_channel")
+      v.literal("chat_channel"),
+      v.literal("device")
     )),
     entity_id: v.optional(v.string()),
     // The exact chat message a chat notification points at. entity_id names the
@@ -3992,7 +4015,10 @@ export default defineSchema({
       // ever appear, `emit` re-checks team membership for a chat_channel entity
       // and both membership-removal paths (`teams.removeMember` and
       // `teams.removeFromTeam`) delete the rows of a departing member.
-      v.literal("chat_channel")
+      v.literal("chat_channel"),
+      // Device alerts go straight to the machine's owner, so nothing subscribes
+      // to a device either. Present for the same reason: one shape.
+      v.literal("device")
     ),
     entity_id: v.string(),
     reason: v.union(
