@@ -25,6 +25,19 @@ describe("shouldSelfHeal", () => {
   test("never restarts twice — already-healing wins regardless of staleness", () => {
     expect(shouldSelfHeal(10 * 60 * 60 * 1000, true)).toBe(false);
   });
+
+  // A wake from hibernate shows hours of wall staleness with the loop clock
+  // barely moved. On 2026-09-02 a 2234s wall gap restarted a daemon whose
+  // timers were fine, so staleness is now the smaller of the two clocks.
+  test("a wake from hibernate does not restart a healthy daemon", () => {
+    expect(shouldSelfHeal(2_234_000, false, THRESHOLD, 800)).toBe(false);
+  });
+
+  test("a genuinely dead timer still restarts, wake or no wake", () => {
+    expect(shouldSelfHeal(2_234_000, false, THRESHOLD, 2_234_000)).toBe(true);
+    // Loop time past the bar counts even when the wall gap is shorter.
+    expect(shouldSelfHeal(THRESHOLD + 1, false, THRESHOLD, THRESHOLD + 1)).toBe(true);
+  });
 });
 
 describe("buildLaunchdKickstartCommand", () => {

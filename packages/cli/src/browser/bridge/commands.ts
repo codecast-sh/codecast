@@ -15,11 +15,11 @@ import type { Command } from "commander";
 import { fmt, icons } from "../../colors.js";
 import { spawn } from "../../proc.js";
 import {
-  bridgeStatePath, bridgeStatus, bridgeWsUrl, ensureBridgeConfig, ensureBridgeHost, isHostAlive, probeHost, readBridgeState,
+  bridgeHostLogPath, bridgeStatePath, bridgeWsUrl, ensureBridgeConfig, ensureBridgeHost, probeHost, readBridgeState,
   rotateBridgeToken, runBridgeHost, stopBridgeHost, waitForExtension, type BridgeHostStatus,
 } from "./host.js";
 import { bridgePairingUrl } from "./protocol.js";
-import { explicitTarget, extensionReady, setStickyTarget, stickyTarget } from "./real.js";
+import { connectRealBridge, explicitTarget, extensionReady, setStickyTarget, stickyTarget } from "./real.js";
 
 const OK = `${fmt.success(icons.check)}`;
 const BAD = `${fmt.error(icons.cross)}`;
@@ -174,25 +174,26 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
         console.log(`${fmt.muted(icons.dot)} not set up — \`cast browser extension setup\``);
         return;
       }
-      if (!(await isHostAlive(state))) {
-        console.log(`${WARN} bridge host is not running on 127.0.0.1:${state.port} (it auto-starts on first use)`);
-        return;
-      }
+      // The extension can only prove itself to a running host, so a host that
+      // is not running is started and given a moment to be found, the same as
+      // for a verb (real.ts connectRealBridge): "host not running" would be a
+      // fact about this process, not an answer about the extension.
+      let bridge;
       let s;
-      let proven;
       try {
-        proven = await ensureBridgeHost();
-        s = await bridgeStatus(proven);
+        ({ bridge, status: s } = await connectRealBridge());
       } catch (err) {
         die((err as Error).message);
       }
-      console.log(`${OK} host up on 127.0.0.1:${state.port}`);
+      console.log(`${OK} host up on 127.0.0.1:${state.port}${bridge.started ? " (started just now; its log is " + bridgeHostLogPath() + ")" : ""}`);
       if (s.extensionConnected) {
         console.log(connectedLine(s));
+      } else if (state.extensionSeenAt) {
+        console.log(`${WARN} extension not connected — it was paired before, so check Chrome is running with the extension enabled (reload it at chrome://extensions), or re-run \`cast browser extension setup\``);
       } else {
         console.log(`${WARN} extension not connected — run \`cast browser extension setup\`; it hands the extension the current token`);
       }
-      console.log(fmt.muted(`  CDP endpoint for any engine: ${bridgeWsUrl(proven).replace(proven.token, "<token>")} (token in ${bridgeStatePath()})`));
+      console.log(fmt.muted(`  CDP endpoint for any engine: ${bridgeWsUrl(bridge).replace(bridge.token, "<token>")} (token in ${bridgeStatePath()})`));
     });
 
   ext

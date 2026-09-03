@@ -1,217 +1,207 @@
-import { useState } from "react";
-import { useQuery } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
-import { useParams } from "next/navigation";
+// One commit.
+//
+// The page answers two questions at once: what changed, and who inside
+// codecast made it happen. The diff is the body; the header carries the join
+// (the session that wrote it, the tasks it names, the pull request it belongs
+// to) so a commit is never just a stranger's sha.
+//
+// The page's accent is the commit itself: green when it mostly added, red when
+// it mostly removed, yellow when it rewrote about as much as it kept.
+import { useCallback, useMemo, useState, type RefCallback } from "react";
 import Link from "next/link";
+import { useParams, useSearchParams } from "next/navigation";
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  ExternalLink,
+  GitBranch,
+  GitCommitHorizontal,
+} from "lucide-react";
 import { AuthGuard } from "../../../../../components/AuthGuard";
+import { CommentAvatar } from "../../../../../components/comments/CommentAvatar";
 import { DashboardLayout } from "../../../../../components/DashboardLayout";
-import { FileDiffLayout, DiffFile } from "../../../../../components/FileDiffLayout";
+import { FileDiffLayout, type DiffFile, type FileLineThreads } from "../../../../../components/FileDiffLayout";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
-import { GitCommit, ExternalLink, User, Calendar, ArrowLeft, Copy, Check, ChevronLeft, ChevronRight } from "lucide-react";
+import { PRLineThread } from "../../../../../components/pr/PRThread";
+import { CommitLinks } from "../../../../../components/repo/CommitLinks";
 import { Button } from "../../../../../components/ui/button";
-import { cn, copyToClipboard } from "../../../../../lib/utils";
+import { useCodeComments, useSyncRefCodeComments } from "../../../../../hooks/useSyncCodeComments";
+import { useAttributedSession, useLineComments } from "../../../../../hooks/useLineComments";
+import { useCoarseNow } from "../../../../../hooks/useCoarseNow";
+import { useEnsureCommitFiles } from "../../../../../hooks/useRepoBrowse";
+import {
+  useCommit,
+  useCommits,
+  usePullRequest,
+  useSyncCommit,
+  useSyncCommits,
+  useSyncPullRequest,
+} from "../../../../../hooks/useSyncTimeline";
 import { useTitlebarHead } from "../../../../../hooks/useTitlebarHead";
+import type { CodeCommentRow } from "../../../../../lib/prView";
+import {
+  commitBalanceAccent,
+  repoHistoryHref,
+  repoTreeHref,
+  splitCommitMessage,
+} from "../../../../../lib/repoView";
+import { copyToClipboard, relTimeShort } from "../../../../../lib/utils";
+import "../../../../../components/repo/repo.css";
 
-function formatDate(timestamp: number): string {
-  return new Date(timestamp).toLocaleDateString("en-US", {
-    weekday: "short",
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function DiffStatsBar({ additions, deletions }: { additions: number; deletions: number }) {
-  const total = additions + deletions;
-  if (total === 0) return null;
-
-  const addPct = Math.round((additions / total) * 100);
-  const maxBars = 5;
-  const addBars = Math.round((additions / total) * maxBars);
-  const delBars = maxBars - addBars;
-
+function ShaCopy({ sha }: { sha: string }) {
+  const [copied, setCopied] = useState(false);
   return (
-    <div className="flex items-center gap-1" title={`+${additions} / -${deletions}`}>
-      {Array.from({ length: addBars }).map((_, i) => (
-        <div key={`add-${i}`} className="w-2 h-2 rounded-sm bg-sol-green" />
-      ))}
-      {Array.from({ length: delBars }).map((_, i) => (
-        <div key={`del-${i}`} className="w-2 h-2 rounded-sm bg-sol-red" />
-      ))}
-    </div>
+    <button
+      type="button"
+      onClick={async () => {
+        await copyToClipboard(sha);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+      className="flex items-center gap-1.5 font-mono text-[12px] rounded px-1.5 py-0.5 transition-colors hover:bg-sol-bg-alt/60"
+      style={{ color: "var(--repo-accent)" }}
+      title={copied ? "Copied" : `Copy ${sha}`}
+    >
+      {sha.slice(0, 7)}
+      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3 opacity-60" />}
+    </button>
   );
 }
 
-function CopyButton({ text, className }: { text: string; className?: string }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    await copyToClipboard(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
+/** How the change is balanced, as a short bar. Same colours as the accent. */
+function BalanceBar({ additions, deletions }: { additions: number; deletions: number }) {
+  const total = additions + deletions;
+  if (total === 0) return null;
+  const addPct = Math.round((additions / total) * 100);
   return (
-    <button
-      onClick={handleCopy}
-      className={cn(
-        "p-1 rounded hover:bg-sol-bg-alt/50 transition-colors",
-        className
-      )}
-      title={copied ? "Copied!" : "Copy to clipboard"}
-    >
-      {copied ? (
-        <Check className="w-3 h-3 text-sol-green" />
-      ) : (
-        <Copy className="w-3 h-3 text-sol-text-dim" />
-      )}
-    </button>
+    <span className="inline-flex h-1.5 w-16 overflow-hidden rounded-full bg-sol-red/60" title={`+${additions} / -${deletions}`}>
+      <span className="h-full bg-sol-green" style={{ width: `${addPct}%` }} />
+    </span>
   );
 }
 
 function CommitHeader({
   commit,
   repository,
-  adjacentCommits,
+  neighbours,
+  headRef,
 }: {
-  commit: {
-    sha: string;
-    message: string;
-    author_name: string;
-    author_email: string;
-    timestamp: number;
-    files_changed: number;
-    insertions: number;
-    deletions: number;
-  };
+  commit: any;
   repository: string;
-  adjacentCommits?: { prev?: string; next?: string };
+  neighbours: { older?: string; newer?: string };
+  headRef?: RefCallback<HTMLElement>;
 }) {
-  const shortSha = commit.sha.substring(0, 7);
-  const commitLines = commit.message.split("\n");
-  const commitTitle = commitLines[0];
-  const commitBody = commitLines.slice(1).join("\n").trim();
-  const githubUrl = `https://github.com/${repository}/commit/${commit.sha}`;
-  const [owner, repo] = repository.split("/");
+  const now = useCoarseNow(60_000);
+  const { subject, body } = splitCommitMessage(commit.message);
 
   return (
-    <div className="px-4 py-3 border-b border-sol-border bg-sol-bg-alt/30">
+    <header ref={headRef} className="repo-band border-b border-sol-border/60 px-4 py-3 shrink-0">
       <div className="flex items-start gap-3">
-        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-sol-violet to-sol-violet/80 flex items-center justify-center shrink-0">
-          <GitCommit className="w-5 h-5 text-white" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0 flex-1">
-              <h2 className="text-base font-semibold text-sol-text leading-snug">
-                {commitTitle}
-              </h2>
-              {commitBody && (
-                <pre className="mt-2 text-sm text-sol-text-muted whitespace-pre-wrap font-sans max-h-24 overflow-y-auto">
-                  {commitBody}
-                </pre>
-              )}
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              {adjacentCommits?.prev && (
-                <Link href={`/commit/${owner}/${repo}/${adjacentCommits.prev}`}>
-                  <Button variant="ghost" size="sm" className="h-8 px-2" title="Previous commit">
-                    <ChevronLeft className="w-4 h-4" />
-                  </Button>
-                </Link>
-              )}
-              {adjacentCommits?.next && (
-                <Link href={`/commit/${owner}/${repo}/${adjacentCommits.next}`}>
-                  <Button variant="ghost" size="sm" className="h-8 px-2" title="Next commit">
-                    <ChevronRight className="w-4 h-4" />
-                  </Button>
-                </Link>
-              )}
-              <a
-                href={githubUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+        <GitCommitHorizontal className="w-5 h-5 mt-1 shrink-0" style={{ color: "var(--repo-accent)" }} />
+        <div className="min-w-0 flex-1">
+          <h1
+            className="repo-rise font-serif text-[22px] leading-tight text-sol-text"
+            style={{ ["--d" as string]: "0ms" }}
+          >
+            {subject}
+          </h1>
+          {body && (
+            <pre className="repo-rise mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap text-[12px] leading-relaxed text-sol-text-muted" style={{ ["--d" as string]: "40ms" }}>
+              {body}
+            </pre>
+          )}
+
+          <div
+            className="repo-rise mt-2.5 flex items-center gap-3 flex-wrap text-[11px] text-sol-text-dim"
+            style={{ ["--d" as string]: "80ms" }}
+          >
+            <ShaCopy sha={commit.sha} />
+            <span className="flex items-center gap-1.5">
+              <CommentAvatar
+                name={commit.author_login || commit.author_name || "?"}
+                image={commit.author_avatar_url}
+                size={18}
+              />
+              <span className="text-sol-text-muted">{commit.author_login || commit.author_name}</span>
+            </span>
+            <span title={new Date(commit.timestamp).toLocaleString()}>
+              {relTimeShort(commit.timestamp, now)}
+            </span>
+            {commit.branch && (
+              <Link
+                href={repoHistoryHref(repository, commit.branch)}
+                className="flex items-center gap-1 hover:text-sol-text transition-colors"
               >
-                <Button variant="outline" size="sm" className="h-8">
-                  <ExternalLink className="w-3 h-3 mr-1.5" />
-                  GitHub
-                </Button>
-              </a>
-            </div>
+                <GitBranch className="w-3 h-3" />
+                {commit.branch}
+              </Link>
+            )}
+            <span className="flex items-center gap-1.5">
+              <span className="text-sol-green">+{commit.insertions ?? 0}</span>
+              <span className="text-sol-red">-{commit.deletions ?? 0}</span>
+              <BalanceBar additions={commit.insertions ?? 0} deletions={commit.deletions ?? 0} />
+              <span>
+                {commit.files_changed ?? 0} {commit.files_changed === 1 ? "file" : "files"}
+              </span>
+            </span>
           </div>
 
-          <div className="flex items-center gap-4 mt-3 text-xs text-sol-text-muted flex-wrap">
-            <div className="flex items-center gap-1">
-              <code className="font-mono text-sol-violet bg-sol-violet/10 px-1.5 py-0.5 rounded">
-                {shortSha}
-              </code>
-              <CopyButton text={commit.sha} />
-            </div>
-            <div className="flex items-center gap-1">
-              <User className="w-3 h-3" />
-              <span>{commit.author_name}</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <Calendar className="w-3 h-3" />
-              <span>{formatDate(commit.timestamp)}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-sol-green font-medium">+{commit.insertions}</span>
-              <span className="text-sol-red font-medium">-{commit.deletions}</span>
-              <DiffStatsBar additions={commit.insertions} deletions={commit.deletions} />
-              <span className="text-sol-text-dim">
-                ({commit.files_changed} {commit.files_changed === 1 ? "file" : "files"})
-              </span>
-            </div>
+          <div className="repo-rise mt-2" style={{ ["--d" as string]: "120ms" }}>
+            <CommitLinks repository={repository} joins={commit} />
           </div>
         </div>
+
+        <div className="flex items-center gap-1 shrink-0">
+          {neighbours.newer && (
+            <Link href={`/commit/${repository}/${neighbours.newer}`} title="Newer commit">
+              <Button variant="ghost" size="sm" className="h-7 px-1.5">
+                <ChevronLeft className="w-4 h-4" />
+              </Button>
+            </Link>
+          )}
+          {neighbours.older && (
+            <Link href={`/commit/${repository}/${neighbours.older}`} title="Older commit">
+              <Button variant="ghost" size="sm" className="h-7 px-1.5">
+                <ChevronRight className="w-4 h-4" />
+              </Button>
+            </Link>
+          )}
+          <Link href={repoTreeHref(repository, commit.sha)}>
+            <Button variant="outline" size="sm" className="h-7">
+              Browse tree
+            </Button>
+          </Link>
+          <a
+            href={`https://github.com/${repository}/commit/${commit.sha}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <Button variant="outline" size="sm" className="h-7">
+              <ExternalLink className="w-3 h-3 mr-1.5" />
+              GitHub
+            </Button>
+          </a>
+        </div>
       </div>
-    </div>
+    </header>
   );
 }
 
-function CommitContent() {
-  const params = useParams();
-  const owner = params.owner as string;
-  const repo = params.repo as string;
-  const sha = params.sha as string;
-  const repository = `${owner}/${repo}`;
-
-  const commit = useQuery(api.commits.getCommitBySha, { sha });
-  const repoCommits = useQuery(
-    api.commits.getCommitsByRepository,
-    commit?.repository ? { repository: commit.repository, limit: 50 } : "skip"
-  );
-
-  const adjacentCommits = (() => {
-    if (!repoCommits || !commit) return undefined;
-    const idx = repoCommits.findIndex((c) => c.sha === commit.sha);
-    if (idx === -1) return undefined;
-    return {
-      prev: idx < repoCommits.length - 1 ? repoCommits[idx + 1].sha : undefined,
-      next: idx > 0 ? repoCommits[idx - 1].sha : undefined,
-    };
-  })();
-
-  if (commit === undefined) {
-    return <LoadingSkeleton />;
-  }
-
-  if (!commit) {
-    return (
-      <div className="h-full flex flex-col items-center justify-center text-sol-text-muted">
-        <GitCommit className="w-12 h-12 mb-4 opacity-30" />
-        <h2 className="text-lg font-medium mb-2">Commit not found</h2>
-        <p className="text-sm mb-4">
-          The commit <code className="font-mono text-sol-violet">{sha.substring(0, 7)}</code> was
-          not found in our database.
-        </p>
-        <p className="text-xs text-sol-text-dim mb-4">
-          Try syncing your GitHub repositories from the timeline.
-        </p>
+function CommitNotFound({ repository, sha }: { repository: string; sha: string }) {
+  return (
+    <div className="h-full flex flex-col items-center justify-center text-sol-text-muted px-6 text-center">
+      <GitCommitHorizontal className="w-10 h-10 mb-3 opacity-30" />
+      <h2 className="text-base font-medium mb-1">Commit not found</h2>
+      <p className="text-[13px] mb-4">
+        <code className="font-mono text-sol-violet">{sha.slice(0, 7)}</code> in{" "}
+        <code className="font-mono">{repository}</code> is not in this workspace.
+      </p>
+      <div className="flex items-center gap-2">
+        <Link href={repoHistoryHref(repository)}>
+          <Button variant="outline">Browse the history</Button>
+        </Link>
         <a
           href={`https://github.com/${repository}/commit/${sha}`}
           target="_blank"
@@ -219,14 +209,138 @@ function CommitContent() {
         >
           <Button variant="outline">
             <ExternalLink className="w-4 h-4 mr-2" />
-            View on GitHub
+            GitHub
           </Button>
         </a>
       </div>
-    );
+    </div>
+  );
+}
+
+/**
+ * A commit whose row carries no patches.
+ *
+ * A commit that arrived by webhook has its message and counts but no diff, so
+ * the page fetches the files once. The store row updates itself when they land,
+ * which is why this component can simply say what it is doing and then say what
+ * it found.
+ */
+function CommitWithoutFiles({ repository, sha }: { repository: string; sha: string }) {
+  const fetchFiles = useEnsureCommitFiles(repository, sha, true);
+
+  return (
+    <div className="h-full flex flex-col items-center justify-center px-6 text-center text-sol-text-muted">
+      {fetchFiles.pending ? (
+        <p className="text-[13px]">Reading this commit's diff from GitHub.</p>
+      ) : (
+        <>
+          <p className="text-[13px] mb-1">
+            {fetchFiles.error
+              ? "The diff for this commit could not be read."
+              : "This commit changed no files we can show."}
+          </p>
+          <p className="text-[12px] text-sol-text-dim mb-4 max-w-md leading-relaxed">
+            {fetchFiles.error
+              ? fetchFiles.error.message
+              : "A merge commit with no combined diff looks like this, and so does a commit whose files GitHub no longer serves."}
+          </p>
+          <a
+            href={`https://github.com/${repository}/commit/${sha}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <Button variant="outline">
+              <ExternalLink className="w-4 h-4 mr-2" />
+              See it on GitHub
+            </Button>
+          </a>
+        </>
+      )}
+    </div>
+  );
+}
+
+function CommitContent({
+  repository,
+  sha,
+  headRef,
+}: {
+  repository: string;
+  sha: string;
+  headRef: RefCallback<HTMLElement>;
+}) {
+  // Local first: the row may already be in the store from the timeline lane.
+  // This feeder refreshes it and fills in what the lane leaves out.
+  const feed = useSyncCommit(sha);
+  useSyncCommits({ repository, limit: 100 });
+  const commit = useCommit(sha);
+
+  const repoCommits = useCommits(useCallback((c: any) => c.repository === repository, [repository]));
+  const neighbours = useMemo(() => {
+    const index = repoCommits.findIndex((c: any) => c.sha === sha);
+    if (index === -1) return {};
+    return {
+      newer: index > 0 ? repoCommits[index - 1].sha : undefined,
+      older: index < repoCommits.length - 1 ? repoCommits[index + 1].sha : undefined,
+    };
+  }, [repoCommits, sha]);
+
+  // A comment on a commit that is part of an OPEN pull request belongs on that
+  // review too, so it mirrors. On any other commit it stays here: GitHub would
+  // file it against a review that nobody is reading.
+  useSyncPullRequest(commit?.pr_number ? { repository, number: commit.pr_number } : "skip");
+  const pr = usePullRequest(repository, commit?.pr_number ?? -1);
+
+  const searchParams = useSearchParams();
+  const conversationId = useAttributedSession(searchParams.get("session"));
+
+  useSyncRefCodeComments(repository, sha);
+  const comments = useCodeComments(
+    useCallback((c: CodeCommentRow) => c.repository === repository && c.ref === sha, [repository, sha]),
+  );
+
+  const lineComments = useLineComments({
+    repository,
+    ref: sha,
+    comments,
+    mirror: pr?.state === "open",
+    conversationId,
+  });
+
+  const lineThreads: FileLineThreads = useMemo(
+    () => ({
+      threadsFor: (filename) => lineComments.threadsByFile.get(filename),
+      render: (filename, line, items) => (
+        <PRLineThread
+          comments={items as CodeCommentRow[]}
+          authed={lineComments.authed}
+          onReply={(content) =>
+            lineComments.post({
+              file_path: filename,
+              line_number: line,
+              side: "RIGHT",
+              content,
+              parent_id: (items as CodeCommentRow[])[0]?._id,
+              ...(pr?.state === "open" ? { pull_request_id: pr._id } : {}),
+            })
+          }
+          onResolve={(resolved) => lineComments.setThreadResolved(items as CodeCommentRow[], resolved)}
+          onClose={lineComments.closeComposer}
+        />
+      ),
+      onComment: (filename, line) => {
+        if (line !== undefined) lineComments.openComposer(filename, line);
+      },
+    }),
+    [lineComments, pr],
+  );
+
+  if (!commit) {
+    if (!feed.ready && !feed.error) return <LoadingSkeleton />;
+    return <CommitNotFound repository={repository} sha={sha} />;
   }
 
-  const files: DiffFile[] = (commit.files || []).map((f) => ({
+  const files: DiffFile[] = (commit.files ?? []).map((f: any) => ({
     filename: f.filename,
     status: f.status,
     additions: f.additions,
@@ -235,40 +349,28 @@ function CommitContent() {
     patch: f.patch,
   }));
 
-  if (files.length === 0) {
-    return (
-      <div className="h-full flex flex-col">
-        <CommitHeader commit={commit} repository={repository} adjacentCommits={adjacentCommits} />
-        <div className="flex-1 flex items-center justify-center text-sol-text-muted">
-          <div className="text-center">
-            <GitCommit className="w-12 h-12 mx-auto mb-3 opacity-30" />
-            <p>No file changes in this commit</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="h-full flex flex-col">
-      <CommitHeader commit={commit} repository={repository} adjacentCommits={adjacentCommits} />
+    <div
+      className="repo-page h-full flex flex-col"
+      style={{
+        ["--repo-accent" as string]: commitBalanceAccent(
+          commit.insertions ?? 0,
+          commit.deletions ?? 0,
+        ),
+      }}
+    >
+      <CommitHeader
+        commit={commit}
+        repository={repository}
+        neighbours={neighbours}
+        headRef={headRef}
+      />
       <div className="flex-1 min-h-0">
-        <FileDiffLayout
-          files={files}
-          sidebarHeader={
-            commit.conversation_id ? (
-              <div className="px-3 py-2 border-b border-sol-border/50">
-                <Link
-                  href={`/conversation/${commit.conversation_id}`}
-                  className="text-xs text-sol-yellow hover:underline flex items-center gap-1.5"
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow" />
-                  View coding session
-                </Link>
-              </div>
-            ) : undefined
-          }
-        />
+        {files.length === 0 ? (
+          <CommitWithoutFiles repository={repository} sha={commit.sha} />
+        ) : (
+          <FileDiffLayout files={files} lineThreads={lineThreads} />
+        )}
       </div>
     </div>
   );
@@ -276,38 +378,15 @@ function CommitContent() {
 
 export default function CommitPage() {
   const params = useParams();
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
-  const owner = params.owner as string;
-  const repo = params.repo as string;
+  const titlebarRef = useTitlebarHead<HTMLElement>();
+  const repository = `${params.owner as string}/${params.repo as string}`;
   const sha = params.sha as string;
 
   return (
     <AuthGuard>
       <DashboardLayout>
-        <div className="h-[calc(100vh-56px)] flex flex-col">
-          <div ref={titlebarRef} className="px-4 py-2 border-b border-sol-border bg-sol-bg flex items-center gap-3">
-            <Link href="/timeline">
-              <Button variant="ghost" size="sm" className="h-8">
-                <ArrowLeft className="w-4 h-4 mr-1" />
-                Timeline
-              </Button>
-            </Link>
-            <div className="flex items-center gap-1.5 text-sm text-sol-text-muted">
-              <a
-                href={`https://github.com/${owner}/${repo}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-mono hover:text-sol-violet transition-colors"
-              >
-                {owner}/{repo}
-              </a>
-              <span className="text-sol-text-dim">/</span>
-              <span className="font-mono text-sol-text-dim">{sha.substring(0, 7)}</span>
-            </div>
-          </div>
-          <div className="flex-1 min-h-0">
-            <CommitContent />
-          </div>
+        <div className="h-[calc(100vh-56px)]">
+          <CommitContent repository={repository} sha={sha} headRef={titlebarRef} />
         </div>
       </DashboardLayout>
     </AuthGuard>

@@ -8,12 +8,14 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { deviceDisplayName, deviceKindLabel } from "@codecast/shared/contracts";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { wakesOnUse } from "../lib/machinePicker";
 import { useSyncDevices } from "../hooks/useSyncDevices";
 import type { RestartPhase, RestartProgressRow, RestartStage } from "../hooks/useSessionRestart";
 import {
@@ -56,8 +58,26 @@ export type Device = {
   }>;
   /** The device's PUBLIC git key — pasteable into GitHub to grant repo access. */
   git_pubkey?: string;
+  /** The loop freeze budget for this machine: blocked ms in the last hour, the
+   * worst single freeze, and the stacks it was in (devices.listDevices). */
+  loop_freeze_1h_ms?: number;
+  loop_freeze_max_ms?: number;
+  loop_freeze_top?: string;
   online: boolean;
 };
+
+/**
+ * One device off the persisted roster, WITHOUT mounting the feeder. For dense
+ * lists (a session card per row) where useDevices() would mount the roster
+ * query once per row; the shared feeder elsewhere keeps the roster live. The
+ * selector returns the roster's own object, so it is Object.is-stable between
+ * roster pushes.
+ */
+export function useRosterDevice(deviceId: string | null | undefined): Device | undefined {
+  return useInboxStore((s) =>
+    deviceId ? (s.machineRoster as Device[]).find((d) => d.device_id === deviceId) : undefined,
+  );
+}
 
 /**
  * Can this device be woken by a move? True for the cloud Linux class: an EC2
@@ -66,7 +86,7 @@ export type Device = {
  * and a laptop can only be opened by a human.
  */
 export function deviceWakesOnUse(d: Device): boolean {
-  return d.is_remote && /linux/i.test(d.platform);
+  return wakesOnUse(d);
 }
 
 /** Naming lives in the shared contract so web and mobile agree; re-exported so
@@ -174,13 +194,18 @@ export function useForeignOwnerDevice(
   conversationId: string | null | undefined,
   needed: boolean,
 ): ForeignOwnerDevice | null | undefined {
-  const res = useQuery(
+  // No-throw: this is a fallback lookup for a name we may simply not get, so a
+  // backend failure resolves to "nothing to resolve" — never a throw into the
+  // caller's ErrorBoundary. Errors return null rather than undefined so callers
+  // stop waiting on a lookup that will not arrive.
+  const { data: res, error } = useQueryNoThrow(
     api.devices.ownerDeviceDisplay,
     needed && conversationId
       ? { conversation_id: conversationId as Id<"conversations"> }
       : "skip",
   );
   if (!needed || !conversationId) return null;
+  if (error) return null;
   if (res === undefined) return undefined; // loading
   if (!res) return null;
   return { ...res, local_project_roots: [] };
@@ -423,12 +448,15 @@ export function useDeviceMoveStatus(conversationId: string | undefined): {
     return () => clearInterval(t);
   }, [entry]);
 
-  const progressRaw = useQuery(
+  // No-throw: restart progress is a live decoration on a restart the user
+  // already triggered. Losing it degrades the readout to idle; throwing would
+  // take down the surface mid-restart, exactly when it is being watched.
+  const { data: progressRaw } = useQueryNoThrow(
     api.conversations.getRestartProgress,
     entry && !entry.error && conversationId && isConvexId(conversationId)
       ? { conversation_id: conversationId }
       : "skip",
-  ) as RestartProgressRow[] | null | undefined;
+  ) as { data: RestartProgressRow[] | null | undefined };
 
   const status = useMemo(() => {
     const idle = {

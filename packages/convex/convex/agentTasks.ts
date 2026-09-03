@@ -213,13 +213,13 @@ interface NewTaskArgs {
   schedule_type: "once" | "recurring" | "event";
   run_at?: number;
   interval_ms?: number;
-  event_filter?: { event_type: string; action?: string; repository?: string };
+  event_filter?: { event_type: string; action?: string; repository?: string; pr_number?: number };
   mode?: string;
   max_runtime_ms?: number;
   max_retries?: number;
 }
 
-async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) {
+export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) {
   if (args.schedule_type === "recurring" && !args.interval_ms) {
     throw new Error("interval_ms required for recurring tasks");
   }
@@ -321,6 +321,7 @@ export const createTask = mutation({
       event_type: v.string(),
       action: v.optional(v.string()),
       repository: v.optional(v.string()),
+      pr_number: v.optional(v.number()),
     })),
     mode: v.optional(v.string()),
     max_runtime_ms: v.optional(v.number()),
@@ -1305,6 +1306,7 @@ export const webCreate = mutation({
       event_type: v.string(),
       action: v.optional(v.string()),
       repository: v.optional(v.string()),
+      pr_number: v.optional(v.number()),
     })),
     mode: v.optional(v.string()),
     agent_type: v.optional(v.string()),
@@ -1379,7 +1381,7 @@ type TaskUpdateArgs = {
   schedule_type?: "once" | "recurring" | "event";
   run_at?: number;
   interval_ms?: number;
-  event_filter?: { event_type: string; action?: string; repository?: string };
+  event_filter?: { event_type: string; action?: string; repository?: string; pr_number?: number };
   mode?: string;
   agent_type?: string;
   model?: string;
@@ -1516,6 +1518,7 @@ const TASK_UPDATE_ARG_VALIDATORS = {
     event_type: v.string(),
     action: v.optional(v.string()),
     repository: v.optional(v.string()),
+    pr_number: v.optional(v.number()),
   })),
   mode: v.optional(v.string()),
   agent_type: v.optional(v.string()),
@@ -1611,6 +1614,11 @@ export const matchTaskTriggers = internalMutation({
     event_type: v.string(),
     action: v.optional(v.string()),
     repository: v.optional(v.string()),
+    // Set by the derived PR events (pr_check_failed, pr_approved and the rest),
+    // which are always about one pull request. A trigger that names a pr_number
+    // fires only for that PR; one that does not still fires for every PR in the
+    // repository, which is what the raw GitHub event shorthands rely on.
+    pr_number: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const tasks = await ctx.db
@@ -1624,6 +1632,7 @@ export const matchTaskTriggers = internalMutation({
       if (task.event_filter.event_type !== args.event_type) continue;
       if (task.event_filter.action && task.event_filter.action !== args.action) continue;
       if (task.event_filter.repository && task.event_filter.repository !== args.repository) continue;
+      if (task.event_filter.pr_number != null && task.event_filter.pr_number !== args.pr_number) continue;
 
       await ctx.db.patch(task._id, { run_at: Date.now() });
       matched++;

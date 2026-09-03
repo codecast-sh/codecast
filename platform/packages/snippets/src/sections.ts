@@ -75,7 +75,7 @@ export function findOwnedSections(text: string, spec: SectionSpec): OwnedBlock[]
   // Outermost first so callers can cut back to front without shifting offsets,
   // and drop any block nested inside another.
   found.sort((a, b) => a.start - b.start);
-  return found.filter((b, i) => i === 0 || b.start >= found[i - 1].end);
+  return found.filter((b, i) => i === 0 || b.start >= found[i - 1]!.end);
 }
 
 /**
@@ -92,11 +92,12 @@ export function findOwnedSections(text: string, spec: SectionSpec): OwnedBlock[]
 function replaceOwnedBlocks(text: string, blocks: OwnedBlock[], body: string | null): string {
   let out = text;
   for (let i = blocks.length - 1; i >= 0; i--) {
-    const after = out.slice(blocks[i].end);
+    const block = blocks[i]!;
+    const after = out.slice(block.end);
     // The block's end swallowed whatever blank lines separated it from the next
     // section, so re-emit exactly one, and none at end of file.
     const insert = body !== null && i === 0 ? (after === "" ? body : body + "\n") : "";
-    let head = out.slice(0, blocks[i].start);
+    let head = out.slice(0, block.start);
     // A block's window covers the blank lines BELOW it, never the one above.
     // Remove a block that ended the file and that blank line is orphaned: the
     // file ends "last line\n\n", and re-enabling the snippet then appends onto
