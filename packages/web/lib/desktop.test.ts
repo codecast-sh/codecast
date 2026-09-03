@@ -8,6 +8,7 @@ import {
   shouldApplyAutoDeepLink,
   shouldAttemptPreBootHandoff,
   conversationIdFromPath,
+  isDesktopShell,
   HANDOFF_MIRROR_DEV,
   type HandoffContext,
   type PreBootHandoffContext,
@@ -272,6 +273,7 @@ describe("desktop window role", () => {
       anyInCall: false,
       peopleWindow: false,
       callPanel: false,
+      facesOverlay: false,
     });
   });
 
@@ -518,6 +520,37 @@ describe("the call panel's route", () => {
       expect(canPopOutCall()).toBe(true);
     } finally {
       g.window = prev;
+    }
+  });
+});
+
+// The bridge is the one thing that can go missing inside the app: 1.1.100's
+// preload threw before exposing it, and every surface that asked "am I in the
+// desktop?" with that global answered "no" — which sent window.open, and with
+// it the people window, out to Chrome. This asks the user agent instead.
+describe("isDesktopShell", () => {
+  const realNav = globalThis.navigator;
+  const setUserAgent = (ua: string) =>
+    Object.defineProperty(globalThis, "navigator", { value: { userAgent: ua }, configurable: true });
+  const restore = () =>
+    Object.defineProperty(globalThis, "navigator", { value: realNav, configurable: true });
+
+  test("sees the shell through a dead preload", () => {
+    setUserAgent("Mozilla/5.0 (Macintosh) Codecast/1.1.100 Chrome/140 Electron/38.0.0 Safari/537.36");
+    try {
+      expect((globalThis as any).window?.__CODECAST_ELECTRON__).toBeUndefined();
+      expect(isDesktopShell()).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  test("a plain browser is still a browser", () => {
+    setUserAgent("Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36");
+    try {
+      expect(isDesktopShell()).toBe(false);
+    } finally {
+      restore();
     }
   });
 });

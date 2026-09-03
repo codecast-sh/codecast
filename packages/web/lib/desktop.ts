@@ -364,6 +364,23 @@ export function isDesktop(): boolean {
   return isElectron();
 }
 
+// Am I inside the desktop app AT ALL — asked of the browser, not of the bridge.
+//
+// isElectron() is the right question wherever the bridge is the thing being
+// used: no bridge, no verb to call. It is the WRONG question for "is there a
+// shell around me", because the global is exactly what goes missing when the
+// preload fails. Build 1.1.100 shipped a preload that required a module under a
+// sandboxed renderer; it threw, __CODECAST_ELECTRON__ never existed, and every
+// caller believed it was in a browser — so window.open, which Electron hands to
+// shell.openExternal, popped surfaces of the app out into CHROME.
+//
+// Electron stamps its own token into the user agent, and no preload can take
+// that away. lib/desktopHandoff.ts carries the same two lines on purpose: that
+// file is inlined into <head> before any bundle exists and may import nothing.
+export function isDesktopShell(): boolean {
+  return isElectron() || (typeof navigator !== "undefined" && / Electron\//.test(navigator.userAgent));
+}
+
 // This renderer is a DETACHED TAB WINDOW — one dashboard surface broken out
 // into its own OS window (main.js createTabWindow, flagged via preload argv).
 // Such a window renders its route directly with no tab shell of its own, and
@@ -820,14 +837,21 @@ export {
   skipHandoffForUrl,
   readSkippedUrl,
   takePendingPreferBrowser,
-  handoffTookOverBoot,
+  preBootVerdict,
+  bootAfterHandoffGate,
+  openDesktop,
+  armForegroundHandoff,
+  showHandoffScreen,
   runPreBootHandoff,
+  ARM_WINDOW_MS,
   HANDOFF_MIRROR_KEY,
   HANDOFF_MIRROR_DEV,
   HANDOFF_SKIP_KEY,
   HANDOFF_PERSIST_KEY,
   type HandoffContext,
   type PreBootHandoffContext,
+  type PreBootVerdict,
+  type HandoffScreenOptions,
 } from "./desktopHandoff";
 
 // The conversation a root-relative in-app path points at, or null for any
