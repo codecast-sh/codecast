@@ -1295,7 +1295,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             isActive={isPages}
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
-            simpleHide
             icon={<Globe className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
           />
         </div>
