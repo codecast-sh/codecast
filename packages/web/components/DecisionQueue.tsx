@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 // the stepper through DecisionStepperContext.
 import { InboxConversation } from "../app/inbox/QueuePageClient";
 import { useDecisionQueue, DecisionStepperContext, type DecisionStepper } from "../hooks/useDecisionQueue";
+import { useInboxStore } from "../store/inboxStore";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 
 // One decision at a time, full width, keyboard driven: answer and it advances;
@@ -61,6 +62,21 @@ export function DecisionQueue({ onExit, initialConversationId }: { onExit?: () =
     onExit,
     item: current.source === "decide" ? undefined : current,
   } : null, [current, position, queue.length, advance, onSkip, onExit]);
+
+  // Keep the rail's highlight on the question you are reading. Off the inbox
+  // the rail highlights sidePanelSessionId (sessionFocusKind → "panel"), and
+  // that pointer opens nothing on its own — it is purely the highlight — so
+  // publishing the queue's current item is exactly "light up this card". The
+  // `?s=` anchor cannot do this job: answering advances the queue without
+  // touching the URL, and the highlight has to follow the advance.
+  const currentId = current?.conversationId;
+  useEffect(() => {
+    if (!currentId) return;
+    const store = useInboxStore.getState();
+    // selectPanelSession toggles the pointer off when handed the id it already
+    // holds (the panel's click-to-exit gesture), so only write on a change.
+    if (store.sidePanelSessionId !== currentId) store.selectPanelSession(currentId);
+  }, [currentId]);
 
   if (!current || !stepper) return <QueueEmpty resolved={resolvedCount} onExit={onExit} />;
 
