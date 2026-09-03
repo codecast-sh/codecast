@@ -1,15 +1,35 @@
 {
   "manifest_version": 3,
-  "name": "Cast Browser Bridge",
+  "name": "Codecast",
+  "short_name": "Codecast",
   "version": "0.1.0",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw46Qcb9BYV9TSDQdsCiMwljPrj8xuWm/68v3WQ6St89FVeq4mEziHfpuokT+SxhCWh+4rq2eOD+jTFCgYHAMu5B6VRnaV3Ik9jugMYF8LHPwwKSOjnXGIKenlJDQ9VbA/cpSr9dPfhj0cd5pt3mElFEkTO/PS99ueOeq3pOX+xwUembbsaqZfyn7HtT4dpq8hivTN0+XbPl1pEsw0rZ6pe95neJi/JDl80F470U0VzsKNQIZCDbI08YHaYFBOtfkOmxiM3FJmZkLpiCBU2RwwWw95LsEOP/1aE1uF8ItC2KDlLtNQ3Rk0RNTU1BMLs3AXE59KCIShbr2LSLhKEaEBQIDAQAB",
-  "description": "Lets the cast CLI drive tabs in this Chrome over a token-authenticated localhost bridge. Driven tabs show Chrome's debugging banner and a badge.",
-  "permissions": ["debugger", "tabs", "tabGroups", "storage", "alarms"],
+  "description": "Lets codecast agents open their own tabs in this Chrome, in a tab group named after the session, over a token authenticated localhost bridge. Chrome shows its debugging notice on driven tabs.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "permissions": [
+    "debugger",
+    "tabs",
+    "tabGroups",
+    "storage",
+    "alarms"
+  ],
   "background": {
     "service_worker": "background.js"
   },
   "options_page": "options.html",
   "action": {
-    "default_title": "Cast Browser Bridge — not connected"
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    },
+    "default_title": "Codecast: not connected",
+    "default_popup": "popup.html"
   }
 }

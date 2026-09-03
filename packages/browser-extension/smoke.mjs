@@ -18,8 +18,10 @@
  *   4. the product path — `cast browser target real` and then the plain
  *      verbs (open, snapshot, click, shot, tabs, stop) on the engine driver,
  *      with the CLI's own state isolated from the machine's. Asserts the tab
- *      landed in a group named for the session, the overlay is in the DOM but
- *      not in the screenshot, and `stop` closes the tab.
+ *      landed in a group named for the session, a second tab from
+ *      `open --new-tab` joins that group, the overlay is in the DOM but not
+ *      in the screenshot, the reaper closes the tab of a session that ended,
+ *      and `stop` closes the session's own tab.
  *
  * Before any of that, the handshake: the real extension is pointed at a
  * squatter that answers like a host but cannot prove the token, and must
@@ -28,16 +30,19 @@
  *
  * It launches a SEPARATE Chrome with a scratch profile (never your running
  * browser) and loads the extension unpacked. One piece of scaffolding: the
- * scratch Chrome gets a temporary CDP port used ONLY to paste the token into
- * the extension's storage — the step a human does by hand in the options
- * page — and, in part 4, to look at the driven page from outside the bridge
- * (is the overlay there, does a capture that skips the bridge show it). The
- * verbs under test never touch that port; the bridge runs on its own port and
- * neither client knows the CDP one exists.
+ * scratch Chrome gets a temporary CDP port used ONLY to pair the extension
+ * the way `cast browser extension setup` does (open the options page with
+ * the token in the URL fragment, which the page reads and clears) and, in
+ * part 4, to look at the driven page from outside the bridge (is the overlay
+ * there, does a capture that skips the bridge show it). The verbs under test
+ * never touch that port; the bridge runs on its own port and neither client
+ * knows the CDP one exists.
  *
  * Run:  bun packages/browser-extension/smoke.mjs
  * Env:  SMOKE_HEADED=1 to watch it happen in a visible window.
  *       SMOKE_ENGINE=/path/to/agent-browser to pick the engine binary.
+ *       SMOKE_SEED_TOKEN=1 to write the token into extension storage directly
+ *       instead of pairing through the URL (a fallback, not the product path).
  */
 
 import { spawn, execSync } from "node:child_process";
@@ -47,6 +52,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
+import { BRIDGE_EXTENSION_ID, bridgePairingUrl, targetIdOfTab } from "../cli/src/browser/bridge/protocol.ts";
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
 const extDir = path.join(repoRoot, "packages/browser-extension");
@@ -242,6 +248,7 @@ async function extensionContext(cdpPort) {
   const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
   return {
     cdp,
+    extId,
     /** Evaluate an expression (a promise is awaited) and return its value. */
     async eval(expression) {
       const r = await cdp.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sessionId);
@@ -252,6 +259,7 @@ async function extensionContext(cdpPort) {
   };
 }
 
+/** The fallback pairing: write the token into extension storage directly. */
 async function seedToken(ext, token, bridgePort) {
   const expr = `chrome.storage.local.set({ bridge: { token: ${JSON.stringify(token)}, port: ${bridgePort} } })
     .then(() => chrome.runtime.sendMessage({ op: "reconnect" }))
@@ -259,10 +267,36 @@ async function seedToken(ext, token, bridgePort) {
   const evalDeadline = Date.now() + 15_000;
   for (;;) {
     const v = await ext.eval(expr).catch(() => null);
-    if (v === "seeded") return;
+    if (v === "seeded") return { hash: "", stored: true };
     if (Date.now() > evalDeadline) throw new Error("seeding via options page failed");
     await new Promise((r2) => setTimeout(r2, 500)); // page may still be booting
   }
+}
+
+/**
+ * The product pairing: open the options page with the token in the URL
+ * fragment, exactly the URL `cast browser extension setup` hands to Chrome,
+ * and wait for options.js to read it, store it and clear the address bar.
+ * Returns what was observed so the caller can assert both halves.
+ */
+async function pair(ext, token, bridgePort) {
+  if (process.env.SMOKE_SEED_TOKEN) return seedToken(ext, token, bridgePort);
+  const url = bridgePairingUrl({ token, port: bridgePort });
+  const { targetId } = await ext.cdp.send("Target.createTarget", { url, background: true });
+  const { sessionId } = await ext.cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  const deadline = Date.now() + 15_000;
+  let hash = null;
+  let stored = false;
+  while (Date.now() < deadline) {
+    const r = await ext.cdp.send("Runtime.evaluate", { expression: "location.hash", returnByValue: true }, sessionId).catch(() => null);
+    hash = r?.result?.value ?? hash;
+    const b = await ext.eval(`chrome.storage.local.get("bridge").then((v) => v.bridge || null)`).catch(() => null);
+    stored = !!b && b.token === token && b.port === bridgePort;
+    if (hash === "" && stored) break;
+    await sleep(250);
+  }
+  await ext.cdp.send("Target.closeTarget", { targetId }).catch(() => {});
+  return { hash, stored };
 }
 
 /** The extension's own view of its connection, as the options page reads it. */
@@ -309,7 +343,7 @@ async function handshake(ext, token, bridgePort) {
     },
   });
   try {
-    await seedToken(ext, token, squatPort);
+    await pair(ext, token, squatPort);
     const st = await waitForExtState(ext, "bad-token");
     await sleep(500);
     check("handshake: the extension sent its hello to the squatter", hellos >= 1, `hellos=${hellos}`);
@@ -319,7 +353,7 @@ async function handshake(ext, token, bridgePort) {
     squatter.stop(true);
   }
 
-  await seedToken(ext, "f".repeat(64), bridgePort);
+  await pair(ext, "f".repeat(64), bridgePort);
   const wrong = await waitForExtState(ext, "bad-token");
   check("handshake: the real host turns away an extension with the wrong token", wrong?.state === "bad-token", JSON.stringify(wrong));
   const status = await cast(["browser", "extension", "status"]);
@@ -400,9 +434,20 @@ async function chromePage(cdpPort, url) {
   };
 }
 
-/** The bridge shows a border pixel as a strong blue; a page pixel is white. */
-const isBluePixel = (px) => px[2] > 200 && px[0] < 100;
+/** A page pixel is white; a border pixel is the group's colour, as the
+ *  overlay's computed style names it (`rgb(r, g, b)`). */
 const isWhitePixel = (px) => px[0] > 200 && px[1] > 200 && px[2] > 200;
+const isPixelOf = (px, rgb) => {
+  const want = (rgb || "").match(/\d+/g)?.map(Number);
+  return !!want && want.length === 3 && want.every((c, i) => Math.abs(c - px[i]) <= 24);
+};
+
+/**
+ * The group indicator's frames (background.js DOT_FRAMES / DONE_FRAME): dots
+ * padded to a fixed width with punctuation spaces, then a checkmark.
+ */
+const DOT_FRAME = /^(.*) \.{1,3}\u2008{0,2}$/;
+const DONE_FRAME = " ✓";
 
 /**
  * What only the bridge adds on top of CDP, exercised as a raw client the way
@@ -423,7 +468,7 @@ async function bridgeExtras(bridgePort, token, ext, cdpPort, pageUrl) {
   check("bridge: background create is not the active tab", created.active === false, JSON.stringify(created));
   const groupInfo = await ext.eval(
     `chrome.tabGroups.query({ title: ${JSON.stringify(group.title)} }).then(async (gs) => ({
-      count: gs.length, color: gs[0]?.color, tabs: gs[0] ? (await chrome.tabs.query({ groupId: gs[0].id })).map((t) => t.id) : [] }))`,
+      count: gs.length, id: gs[0]?.id, color: gs[0]?.color, tabs: gs[0] ? (await chrome.tabs.query({ groupId: gs[0].id })).map((t) => t.id) : [] }))`,
   );
   check(
     "bridge: both creates on one socket share one group with the title and colour",
@@ -441,20 +486,24 @@ async function bridgeExtras(bridgePort, token, ext, cdpPort, pageUrl) {
     JSON.stringify(border),
   );
 
-  // A slow command: the group title should cycle dots meanwhile, then show a checkmark.
+  // A slow command: the group title should cycle dots meanwhile (they start
+  // 300 ms into the span), then show a checkmark 600 ms after the last call
+  // ends. The group is found by its title once and read by id after, since
+  // its title is the thing changing.
   const slow = bridge.send("Runtime.evaluate", { expression: "new Promise((r) => setTimeout(r, 1500))", awaitPromise: true }, sessionId);
   const titles = new Set();
-  const groupTitle = () => ext.eval(`chrome.tabGroups.query({ color: "blue" }).then((gs) => gs[0]?.title)`);
+  const groupTitle = () => ext.eval(`chrome.tabGroups.get(${groupInfo.id}).then((g) => g.title)`);
   for (let i = 0; i < 12; i++) {
     titles.add(await groupTitle());
     await sleep(100);
   }
   await slow;
-  const withDots = [...titles].filter((t) => /^cast smoke\.{1,3}$/.test(t));
+  const withDots = [...titles].filter((t) => DOT_FRAME.test(t) && t.startsWith("cast smoke "));
   check("bridge: group title animates while a command is in flight", withDots.length >= 2, JSON.stringify([...titles]));
-  await sleep(150);
+  check("bridge: every dot frame has the same width", withDots.every((t) => t.length === withDots[0].length), JSON.stringify(withDots));
+  await sleep(900);
   const afterwards = await groupTitle();
-  check("bridge: checkmark after the command", afterwards === "cast smoke ✓", JSON.stringify(afterwards));
+  check("bridge: checkmark once the span has been quiet", afterwards === "cast smoke" + DONE_FRAME, JSON.stringify(afterwards));
   // The plain title is what the host is told, never a frame of the animation.
   const listed = await fetch(`http://127.0.0.1:${bridgePort}/json/list?token=${token}`).then((r) => r.json());
   check("bridge: /json/list carries no group", listed.every((t) => !("group" in t) && !("castGroup" in t)), JSON.stringify(listed).slice(0, 200));
@@ -472,7 +521,7 @@ async function bridgeExtras(bridgePort, token, ext, cdpPort, pageUrl) {
   // makes the white corner through the bridge a real result.
   const outside = await chromePage(cdpPort, pageUrl + "?again");
   const rawPx = outside ? await outside.topLeftPixel() : [];
-  check("bridge: a capture that skips the bridge shows the border", isBluePixel(rawPx), `pixel ${rawPx.join(",")}`);
+  check("bridge: a capture that skips the bridge shows the border", isPixelOf(rawPx, border.color), `pixel ${rawPx.join(",")} vs ${border.color}`);
 
   const shot = await bridge.send("Page.captureScreenshot", { format: "png" }, sessionId);
   const px = pngTopLeftPixel(Buffer.from(shot.data, "base64"));
@@ -480,7 +529,7 @@ async function bridgeExtras(bridgePort, token, ext, cdpPort, pageUrl) {
   check("bridge: screenshot through the bridge hides the border", isWhitePixel(px), `pixel ${px.join(",")}`);
   check("bridge: border visible again after the screenshot", restored.present && restored.visibility === "visible", JSON.stringify(restored));
 
-  await sleep(3200);
+  await sleep(4000);
   check("bridge: plain title restored a few seconds after", (await groupTitle()) === "cast smoke", JSON.stringify(await groupTitle()));
 
   await bridge.send("Target.detachFromTarget", { sessionId });
@@ -530,7 +579,7 @@ function cliEnv(engineBinary) {
  * while the session drives it, the CLI's own `shot` shows no border, and
  * `stop` closes the tab.
  */
-async function cliRealMode(engineBinary, ext, cdpPort, pageUrl, token) {
+async function cliRealMode(engineBinary, ext, cdpPort, pageUrl, token, bridgePort) {
   const e = cliEnv(engineBinary);
   const cli = (args) => cast(args, { env: e });
   const url = pageUrl + "cli"; // its own URL, so earlier parts' tabs never match
@@ -540,7 +589,8 @@ async function cliRealMode(engineBinary, ext, cdpPort, pageUrl, token) {
       if (!t) return { tabs: 0 };
       const g = t.groupId >= 0 ? await chrome.tabGroups.get(t.groupId) : null;
       const members = g ? (await chrome.tabs.query({ groupId: g.id })).length : 0;
-      return { tabs: tabs.length, active: t.active, title: g?.title ?? null, color: g?.color ?? null, members };
+      const groupIds = [...new Set(tabs.map((x) => x.groupId))];
+      return { tabs: tabs.length, active: t.active, title: g?.title ?? null, color: g?.color ?? null, members, groupIds, urls: tabs.map((x) => x.url) };
     })`);
 
   const target = await cli(["browser", "target", "real"]);
@@ -563,11 +613,40 @@ async function cliRealMode(engineBinary, ext, cdpPort, pageUrl, token) {
 
   const grouped = await groupTitleOf();
   check(
-    "cli: the tab sits in one group named for the session",
-    grouped.tabs === 1 && typeof grouped.title === "string" && grouped.title.startsWith("cast ") && grouped.title.includes(CLI_SESSION_ID.slice(0, 7)),
+    "cli: the tab sits in one group named for the session, in a colour that is not grey",
+    grouped.tabs === 1 && typeof grouped.title === "string" && grouped.title.startsWith("cast ") && grouped.title.includes(CLI_SESSION_ID.slice(0, 7)) &&
+      typeof grouped.color === "string" && grouped.color !== "grey",
     JSON.stringify(grouped),
   );
   check("cli: the daemon adopted the pinned tab (one tab in the group)", grouped.members === 1, JSON.stringify(grouped));
+
+  // A second tab from the daemon's own Target.createTarget must land in the
+  // same group: the host keys the group by client socket, and the daemon
+  // never sends castGroup itself.
+  const second = await cli(["browser", "open", "--new-tab", url + "?two"]);
+  const both = await groupTitleOf();
+  check(
+    "cli: open --new-tab puts the second tab in the same group (members === 2)",
+    second.code === 0 && both.tabs === 2 && both.groupIds.length === 1 && both.members === 2,
+    `${second.all.slice(0, 200)} / ${JSON.stringify(both)}`,
+  );
+  // Back to one tab so the rest of the checks read the first page. The
+  // daemon binds to the tab it just opened, so switch to the first tab by
+  // the id the footer printed, then close the second by its id (the bridge
+  // id is the tab id in hex, see protocol.ts); the session keeps a bound tab
+  // throughout.
+  const firstId = /tab ([0-9A-F]{8})/.exec(open.all)?.[1];
+  const back = firstId ? await cli(["browser", "tab", firstId]) : { code: 1, all: "no tab id in the open footer" };
+  const secondTabId = await ext.eval(`chrome.tabs.query({ url: ${JSON.stringify(url + "?two")} }).then((ts) => ts[0]?.id ?? null)`);
+  const closedSecond = secondTabId === null
+    ? { code: 1, all: "no second tab" }
+    : await cli(["browser", "tab", "close", targetIdOfTab(secondTabId)]);
+  const one = await groupTitleOf();
+  check(
+    "cli: tab <id> then tab close <id> leaves the first tab bound and alone in the group",
+    back.code === 0 && closedSecond.code === 0 && one.tabs === 1 && one.urls[0] === url,
+    `${back.all.slice(0, 120)} / ${closedSecond.all.slice(0, 120)} / ${JSON.stringify(one)}`,
+  );
 
   const outside = await chromePage(cdpPort, url);
   const border = outside ? await outside.borderState() : null;
@@ -588,17 +667,37 @@ async function cliRealMode(engineBinary, ext, cdpPort, pageUrl, token) {
   const px = shotOk ? pngTopLeftPixel(fs.readFileSync(shotOut)) : [];
   check("cli: the screenshot has no border (edge pixel is the page, not blue)", shotOk && isWhitePixel(px), `pixel ${px.join(",")}`);
   const rawPx = outside ? await outside.topLeftPixel() : [];
-  check("cli: a capture that skips the bridge shows the border (control)", isBluePixel(rawPx), `pixel ${rawPx.join(",")}`);
+  check("cli: a capture that skips the bridge shows the border (control)", isPixelOf(rawPx, border?.color), `pixel ${rawPx.join(",")} vs ${border?.color}`);
   const after = outside ? await outside.borderState() : null;
   check("cli: overlay visible again after the shot", !!after?.present && after.visibility === "visible", JSON.stringify(after));
 
   const tabs = await cli(["browser", "tabs"]);
   check("cli: tabs lists the tab and says it is the real Chrome", tabs.code === 0 && tabs.all.includes(url) && /real Chrome/.test(tabs.all), tabs.all.slice(0, 300));
 
+  // A session that ended: its tab still open in the real Chrome, its tab
+  // binding on disk, no daemon (no .pid file), and nothing to prove its agent
+  // alive, so it falls to the idle rule; the binding is backdated past it.
+  // `stop` reaps by force, and must close that tab and remove the file.
+  const endedUrl = url + "?ended";
+  const endedKey = "env-ended-real";
+  const raw = await Cdp.connect(bridgePort, token);
+  const ended = await raw.send("Target.createTarget", { url: endedUrl, background: true, castGroup: { title: "cast ended", color: "red" } });
+  raw.ws.close();
+  const endedFile = path.join(engineHome, `${endedKey}.target`);
+  fs.writeFileSync(endedFile, JSON.stringify({ targetId: ended.targetId, url: "about:blank", pinned: true }));
+  const staleAt = (Date.now() - 3 * 60 * 60 * 1000) / 1000;
+  fs.utimesSync(endedFile, staleAt, staleAt);
+
   const stop = await cli(["browser", "stop"]);
   await sleep(500);
   const left = await groupTitleOf();
   check("cli: stop closes the tab", stop.code === 0 && left.tabs === 0, `${stop.all.slice(0, 200)} / ${JSON.stringify(left)}`);
+  const endedLeft = await ext.eval(`chrome.tabs.query({ url: ${JSON.stringify(endedUrl)} }).then((ts) => ts.length)`);
+  check(
+    "cli: the reaper closed the tab of a session that ended and removed its binding",
+    /closed 1 abandoned tab/.test(stop.all) && endedLeft === 0 && !fs.existsSync(endedFile),
+    `${stop.all.slice(0, 200)} / tabs left ${endedLeft}, file ${fs.existsSync(endedFile) ? "present" : "gone"}`,
+  );
   const groupsLeft = grouped.title
     ? await ext.eval(`chrome.tabGroups.query({ title: ${JSON.stringify(grouped.title)} }).then((gs) => gs.length)`)
     : null;
@@ -679,12 +778,15 @@ async function main() {
   }
   check("scratch Chrome launched with extension", true);
 
-  // 4. The handshake against a squatter and with a wrong token, then seed the
-  //    real token (the by-hand options-page step, automated).
+  // 4. The extension carries the ID the CLI's pairing URL is built for, then
+  //    the handshake against a squatter and with a wrong token, then the
+  //    product pairing: the options page opened with the token in its
+  //    fragment stores it and clears the address bar.
   const ext = await extensionContext(cdpPort);
+  check("the scratch Chrome gave the extension the ID the CLI expects", ext.extId === BRIDGE_EXTENSION_ID, `${ext.extId} vs ${BRIDGE_EXTENSION_ID}`);
   await handshake(ext, token, bridgePort);
-  await seedToken(ext, token, bridgePort);
-  check("token seeded into extension storage", true);
+  const paired = await pair(ext, token, bridgePort);
+  check("pairing URL: the options page stored the token and cleared the fragment", paired.stored && paired.hash === "", JSON.stringify(paired));
 
   // 5. Extension connects to the host. Every status output along the way is
   //    also the proof that status masks the token.
@@ -798,7 +900,7 @@ async function main() {
   await engine(ab, ["--cdp", cdpUrl, "close"]);
 
   // 9. The product path: the CLI on the engine driver, in sticky real mode.
-  await cliRealMode(ab, ext, cdpPort, pageUrl, token);
+  await cliRealMode(ab, ext, cdpPort, pageUrl, token, bridgePort);
   await ext.close();
 }
 

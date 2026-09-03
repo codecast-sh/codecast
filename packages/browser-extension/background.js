@@ -1,11 +1,11 @@
 /**
- * Cast Browser Bridge — MV3 service worker.
+ * Codecast browser bridge: the MV3 service worker.
  *
  * Connects OUT to the cast bridge host on localhost (an extension cannot
- * listen), proves it holds the token the user paired in the options page and
- * makes the host prove the same back (below), and executes the small op set
- * the cast CLI sends: tab management, chrome.debugger attach/detach, and raw
- * CDP commands per tab.
+ * listen), proves it holds the token the human paired through the options
+ * page and makes the host prove the same back (below), and executes the small
+ * op set the cast CLI sends: tab management, chrome.debugger attach/detach,
+ * and raw CDP commands per tab.
  *
  * The token never goes on the wire. Any local account can bind the bridge
  * port while no host is running, and a socket that merely opened proves
@@ -13,27 +13,35 @@
  * HMAC(token, "ext:" + nonce), the host answers HMAC(token, nonce), and not
  * one op is executed before that answer checks out. A host that cannot
  * answer is treated like a bad token: the socket is closed and the retry
- * alarm stays quiet until the human re-pairs.
+ * alarm stays quiet until the human runs setup again.
  *
  * Visibility is a feature, not an accident: chrome.debugger shows Chrome's own
  * "is debugging this browser" banner for as long as a tab is attached, and we
- * add three signals of our own. A red CAST badge per driven tab. A Chrome tab
- * group per session (the host asks for it on tabs.create) whose title gains
- * cycling dots while a command runs and a checkmark for a moment after. And a
- * thin border in the group's colour around the driven page, injected through
- * the debugger session so it needs no host permission and no content script;
- * it is hidden for every screenshot so captures stay clean. Detaching removes
- * the badge and the border; the group empties itself when its tabs close.
+ * add signals of our own. A Chrome tab group per session (the host asks for
+ * it on tabs.create) whose title shows cycling dots while a session works and
+ * a checkmark for a moment after; the extension remembers the groups it made
+ * and never touches one the human made. A thin border in the group's colour
+ * around the driven page, injected through the debugger session so it needs
+ * no host permission and no content script; hidden for every screenshot so
+ * captures stay clean, and kept alive by a heartbeat so a cancelled banner or
+ * a crashed host cannot leave it behind. A CAST badge on the extension icon
+ * for the driven tab, which Chrome shows only when the icon is pinned.
+ * Detaching removes the badge and the border; the group empties itself when
+ * its tabs close.
  *
  * The open WebSocket keeps this service worker alive (Chrome 116+), helped by
- * the host's application-level pings every 20s. A chrome.alarms tick is the
- * backstop that reconnects after the worker is ever torn down.
+ * the host's application-level pings every 20s. A dropped socket is retried
+ * after 1 s, 2 s and 5 s while the worker is awake; a chrome.alarms tick is
+ * the backstop that reconnects after the worker is ever torn down.
  */
+
+// The colour table and the status vocabulary shared with the options page and the popup.
+importScripts("status.js");
 
 const PROTOCOL = 4;
 
 let ws = null;
-let status = { state: "no-config", detail: "no token saved yet" };
+let status = { state: "no-config", detail: "not paired yet" };
 const attached = new Set(); // tabIds we hold a debugger session on
 
 // --------------------------------------------------------------------------
@@ -47,23 +55,40 @@ async function getConfig() {
 
 function setStatus(state, detail) {
   status = { state, detail: detail || "" };
-  const connected = state === "connected";
-  chrome.action.setTitle({ title: `Cast Browser Bridge — ${state}${detail ? `: ${detail}` : ""}` });
+  chrome.action.setTitle({ title: `Codecast: ${state}${detail ? `, ${detail}` : ""}` });
   // A global badge only when something is wrong, so "working" is quiet.
   if (state === "bad-token") {
     chrome.action.setBadgeText({ text: "ERR" });
     chrome.action.setBadgeBackgroundColor({ color: "#b71c1c" });
-  } else if (!connected) {
-    chrome.action.setBadgeText({ text: "" });
   } else {
     chrome.action.setBadgeText({ text: "" });
   }
 }
 
+/** Quick retries after a drop, while the worker is awake; the alarm takes over after. */
+const RETRY_MS = [1000, 2000, 5000];
+let retries = 0;
+let retryTimer = null;
+
+function scheduleRetry() {
+  if (retryTimer || retries >= RETRY_MS.length) return;
+  const delay = RETRY_MS[retries++];
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    connect();
+  }, delay);
+}
+
+function resetRetries() {
+  clearTimeout(retryTimer);
+  retryTimer = null;
+  retries = 0;
+}
+
 async function connect() {
   const cfg = await getConfig();
   if (!cfg || !cfg.token || !cfg.port) {
-    setStatus("no-config", "open options and paste the token from `cast browser extension setup`");
+    setStatus("no-config", "not paired yet; run `cast browser extension setup` in a terminal");
     return;
   }
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
@@ -97,11 +122,12 @@ async function connect() {
       if (msg.op !== "welcome") return;
       if (sameHex(msg.proof, await hmacHex(cfg.token, nonce))) {
         proven = true;
+        resetRetries();
         setStatus("connected", `127.0.0.1:${cfg.port}`);
       } else {
         // Close first, then set the status: the close handler reads it.
         sock.close(4401, "host could not prove the token");
-        setStatus("bad-token", "the host on that port could not prove it holds the token — is something else on it? re-run `cast browser extension setup`");
+        setStatus("bad-token", "the host on that port could not prove it holds the token; run `cast browser extension setup` again");
       }
       return;
     }
@@ -123,9 +149,10 @@ async function connect() {
     if (status.state === "bad-token") {
       /* keep it */
     } else if (e.code === 4401) {
-      setStatus("bad-token", "the host rejected the token — re-run `cast browser extension setup` and paste the new one");
+      setStatus("bad-token", "the host rejected the token; run `cast browser extension setup` again, it hands this extension the current token");
     } else {
-      setStatus("disconnected", "host closed or unreachable; will retry");
+      setStatus("disconnected", "the bridge host is not running; it starts with the next `cast browser` command in real mode");
+      scheduleRetry();
     }
     // Losing the host means nobody can detach us later; release every tab so
     // the human's browser is not left wearing debugger banners forever.
@@ -139,6 +166,19 @@ async function connect() {
 
 function send(msg) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+/** Drop the current socket and connect afresh, with the retry ladder reset. */
+function reconnect() {
+  if (ws) {
+    try {
+      ws.close();
+    } catch {}
+    ws = null;
+  }
+  resetRetries();
+  status = { state: "disconnected", detail: "" };
+  connect();
 }
 
 // --------------------------------------------------------------------------
@@ -181,14 +221,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return false;
   }
   if (msg && msg.op === "reconnect") {
-    if (ws) {
-      try {
-        ws.close();
-      } catch {}
-      ws = null;
-    }
-    status = { state: "disconnected", detail: "" };
-    connect();
+    reconnect();
     sendResponse({ ok: true });
     return false;
   }
@@ -196,22 +229,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 // Exposed for the smoke script, which seeds storage over CDP and reconnects.
-globalThis.__castReconnect = () => {
-  if (ws) {
-    try {
-      ws.close();
-    } catch {}
-    ws = null;
-  }
-  status = { state: "disconnected", detail: "" };
-  connect();
-};
+globalThis.__castReconnect = reconnect;
 
 // --------------------------------------------------------------------------
 // Ops
 // --------------------------------------------------------------------------
 
 async function handle(m) {
+  await groupsLoaded;
   switch (m.op) {
     case "ping":
       return { version: chrome.runtime.getManifest().version, protocol: PROTOCOL };
@@ -250,7 +275,7 @@ async function handle(m) {
 
     case "cdp": {
       if (!attached.has(m.tabId)) await attachTab(m.tabId);
-      const groupId = await groupOfTab(m.tabId);
+      const groupId = await ownedGroupOf(m.tabId);
       beginWork(groupId);
       const screenshot = m.method === "Page.captureScreenshot";
       try {
@@ -295,7 +320,7 @@ function detachAll() {
   for (const tabId of [...attached]) detachTab(tabId);
 }
 
-/** Per-tab badge on top of Chrome's own debugging banner. */
+/** Per-tab badge on the extension icon (visible when the icon is pinned). */
 function markDriven(tabId, on) {
   chrome.action.setBadgeText({ tabId, text: on ? "CAST" : "" }).catch(() => {});
   if (on) {
@@ -304,9 +329,11 @@ function markDriven(tabId, on) {
   }
 }
 
-/** The tab shape the host turns into CDP TargetInfo. */
+/** The tab shape the host turns into CDP TargetInfo. A group is reported
+ *  only when this extension created it: the host adopts the group of a tab
+ *  a client attaches to, and a group the human made must never be adopted. */
 function describeTab(t) {
-  const g = groups.get(t.groupId);
+  const g = ownedGroups.has(t.groupId) ? groups.get(t.groupId) : null;
   return {
     tabId: t.id,
     url: t.url || "",
@@ -319,13 +346,33 @@ function describeTab(t) {
 }
 
 // --------------------------------------------------------------------------
-// Tab groups: one per session, title animated while a command runs
+// Tab groups: one per session, title animated while the session works
 // --------------------------------------------------------------------------
 
 const NO_GROUP = -1; // chrome.tabGroups.TAB_GROUP_ID_NONE
 const groups = new Map(); // groupId → chrome.tabGroups.TabGroup (title as Chrome shows it)
 const tabGroupOf = new Map(); // tabId → groupId, kept current by tab events
-const indicators = new Map(); // groupId → { title, inflight, ticker, restore, dots }
+const indicators = new Map(); // groupId → indicator state (beginWork)
+
+/**
+ * Groups this extension created. Everything that touches a group (the
+ * animated title, the border colour, what the host is told) is limited to
+ * these, so a group the human made is never renamed, animated or handed to a
+ * session. Persisted in session storage: a service worker restart must not
+ * make us forget which groups are ours, and a browser restart (which empties
+ * session storage) also drops every group id, so nothing stale survives.
+ */
+const ownedGroups = new Set();
+const groupsLoaded = chrome.storage.session
+  .get("ownedGroups")
+  .then(({ ownedGroups: ids }) => {
+    for (const id of ids || []) ownedGroups.add(id);
+  })
+  .catch(() => {});
+
+function persistOwnedGroups() {
+  chrome.storage.session.set({ ownedGroups: [...ownedGroups] }).catch(() => {});
+}
 
 async function refreshGroups() {
   groups.clear();
@@ -333,21 +380,24 @@ async function refreshGroups() {
 }
 refreshGroups().catch(() => {});
 
-/** The title without our dots or checkmark, so the host never sees an animation frame. */
-function plainTitle(groupId, g) {
-  const ind = indicators.get(groupId);
-  return ind ? ind.title : g.title || "";
-}
-
 /**
- * Put a fresh tab in the named group, joining a group with the same title in
- * the same window when one exists so a session's tabs share one group.
+ * Put a fresh tab in the named group, joining a group of ours with the same
+ * title in the same window when one exists so a session's tabs share one
+ * group. A group the human happened to name the same way is not ours to
+ * join.
  */
 async function placeInGroup(tab, group) {
-  const existing = (await chrome.tabGroups.query({ windowId: tab.windowId, title: group.title }))[0];
+  // Match on the plain title we keep, never on what Chrome shows right now:
+  // a session's group is mid animation exactly when its daemon opens a
+  // second tab, and a query by the animated title would start a new group.
+  const existing = [...groups.values()].find(
+    (g) => ownedGroups.has(g.id) && g.windowId === tab.windowId && plainTitle(g.id, g) === group.title,
+  );
   const groupId = await chrome.tabs.group({ tabIds: [tab.id], ...(existing ? { groupId: existing.id } : {}) });
   tabGroupOf.set(tab.id, groupId);
   if (!existing) {
+    ownedGroups.add(groupId);
+    persistOwnedGroups();
     const g = await chrome.tabGroups.update(groupId, { title: group.title, color: group.color });
     groups.set(groupId, g);
   }
@@ -361,61 +411,124 @@ async function groupOfTab(tabId) {
   return tabGroupOf.get(tabId);
 }
 
-function setGroupTitle(groupId, title) {
-  chrome.tabGroups.update(groupId, { title }).catch(() => {});
+/** The tab's group when it is one of ours, else NO_GROUP. */
+async function ownedGroupOf(tabId) {
+  const groupId = await groupOfTab(tabId);
+  return ownedGroups.has(groupId) ? groupId : NO_GROUP;
 }
 
-/** A command started on a tab in this group: show cycling dots on the title. */
+/**
+ * The indicator's frames, all the same width: the dots are padded with
+ * punctuation spaces (the width of a period in most fonts), so the tab strip
+ * does not shift on every frame. One regular expression names every frame,
+ * for the two places that must strip one off a title.
+ */
+const DOT_FRAMES = [" .  ", " .. ", " ..."];
+const DONE_FRAME = " ✓";
+const FRAME_SUFFIX = /( \.{1,3} {0,2}| ✓)$/;
+const plainOf = (title) => (title || "").replace(FRAME_SUFFIX, "");
+
+/** The title without our dots or checkmark, so the host never sees a frame. */
+function plainTitle(groupId, g) {
+  const ind = indicators.get(groupId);
+  return ind ? ind.title : plainOf(g.title);
+}
+
+/** Resolves when Chrome has applied the title; errors (a closed group) are swallowed. */
+function setGroupTitle(groupId, title) {
+  return chrome.tabGroups.update(groupId, { title }).catch(() => {});
+}
+
+/**
+ * Work is shown per span, not per CDP call. The engine sends its calls a
+ * millisecond apart, so per call the dots never appeared and a checkmark
+ * flashed after every verb; measured against a snapshot, five flips inside
+ * 20 ms. A span opens on the first call and stays open while calls keep
+ * arriving within QUIET_MS of each other; the dots start once the span has
+ * run for START_MS (a verb that finishes sooner shows no dots at all), and
+ * the span ends, with a checkmark for DONE_MS, only after QUIET_MS with no
+ * call in flight. A call landing during the checkmark opens a new span.
+ */
+const START_MS = 300;
+const QUIET_MS = 600;
+const DONE_MS = 3000;
+const FRAME_MS = 300;
+
 function beginWork(groupId) {
   if (groupId === NO_GROUP || groupId === undefined) return;
   let ind = indicators.get(groupId);
   if (!ind) {
-    ind = { title: (groups.get(groupId) || {}).title || "", inflight: 0, ticker: null, restore: null, dots: 0 };
+    // The seed is the plain title: `groups` may hold a frame of ours.
+    ind = { title: plainOf((groups.get(groupId) || {}).title), inflight: 0, open: false, frame: 0, startTimer: null, ticker: null, quietTimer: null, doneTimer: null };
     indicators.set(groupId, ind);
   }
-  if (ind.restore) {
-    clearTimeout(ind.restore);
-    ind.restore = null;
+  clearTimeout(ind.quietTimer);
+  ind.quietTimer = null;
+  if (ind.doneTimer) {
+    clearTimeout(ind.doneTimer);
+    ind.doneTimer = null;
   }
-  if (ind.inflight++ === 0) {
-    ind.ticker = setInterval(() => {
-      ind.dots = (ind.dots % 3) + 1;
-      setGroupTitle(groupId, ind.title + ".".repeat(ind.dots));
-    }, 300);
-    setGroupTitle(groupId, ind.title + ".");
-    ind.dots = 1;
+  ind.inflight++;
+  if (!ind.open) {
+    ind.open = true;
+    ind.startTimer = setTimeout(() => {
+      ind.startTimer = null;
+      ind.frame = 0;
+      setGroupTitle(groupId, ind.title + DOT_FRAMES[0]);
+      ind.ticker = setInterval(() => {
+        ind.frame = (ind.frame + 1) % DOT_FRAMES.length;
+        setGroupTitle(groupId, ind.title + DOT_FRAMES[ind.frame]);
+      }, FRAME_MS);
+    }, START_MS);
   }
 }
 
-/** The last in-flight command finished: plain title with a checkmark, then plain. */
 function endWork(groupId) {
   const ind = indicators.get(groupId);
   if (!ind) return;
   if (--ind.inflight > 0) return;
+  ind.quietTimer = setTimeout(() => closeSpan(groupId, ind), QUIET_MS);
+}
+
+/** The span is over: plain title with a checkmark, then plain. The indicator
+ *  is dropped only after Chrome has applied the plain title, so a call that
+ *  lands in between never seeds a new indicator from the checkmark frame. */
+function closeSpan(groupId, ind) {
+  ind.quietTimer = null;
+  ind.open = false;
+  clearTimeout(ind.startTimer);
   clearInterval(ind.ticker);
+  ind.startTimer = null;
   ind.ticker = null;
-  setGroupTitle(groupId, ind.title + " ✓");
-  ind.restore = setTimeout(() => {
-    indicators.delete(groupId);
-    setGroupTitle(groupId, ind.title);
-  }, 3000);
+  setGroupTitle(groupId, ind.title + DONE_FRAME);
+  ind.doneTimer = setTimeout(async () => {
+    ind.doneTimer = null;
+    await setGroupTitle(groupId, ind.title);
+    if (indicators.get(groupId) === ind && !ind.open) indicators.delete(groupId);
+  }, DONE_MS);
+}
+
+function dropIndicator(groupId) {
+  const ind = indicators.get(groupId);
+  if (!ind) return;
+  clearTimeout(ind.startTimer);
+  clearInterval(ind.ticker);
+  clearTimeout(ind.quietTimer);
+  clearTimeout(ind.doneTimer);
+  indicators.delete(groupId);
 }
 
 chrome.tabGroups.onCreated.addListener((g) => groups.set(g.id, g));
 chrome.tabGroups.onUpdated.addListener((g) => {
   groups.set(g.id, g);
-  // A title change from the human sticks; our own animation frames do not.
+  // A title change from the human sticks; our own frames do not.
   const ind = indicators.get(g.id);
-  if (ind && g.title !== ind.title && !/^(.*?)(\.{1,3}| ✓)$/.test(g.title)) ind.title = g.title;
+  if (ind && g.title !== ind.title && !FRAME_SUFFIX.test(g.title)) ind.title = g.title;
 });
 chrome.tabGroups.onRemoved.addListener((g) => {
   groups.delete(g.id);
-  const ind = indicators.get(g.id);
-  if (ind) {
-    clearInterval(ind.ticker);
-    clearTimeout(ind.restore);
-    indicators.delete(g.id);
-  }
+  dropIndicator(g.id);
+  if (ownedGroups.delete(g.id)) persistOwnedGroups();
 });
 
 // --------------------------------------------------------------------------
@@ -429,35 +542,34 @@ chrome.tabGroups.onRemoved.addListener((g) => {
  * at all. The DOM itself is shared, so a hostile page can still hide or
  * remove the element; what it loses is the timing signal. The element id is
  * random per attach, so no stylesheet written in advance can target it.
+ *
+ * The frame lives on a lease. Every BEAT_MS this worker writes a timestamp
+ * into the world of each attached tab, and the page side script hides the
+ * frame once LEASE_MS pass with no fresh timestamp. Detaching removes the
+ * frame outright; the lease covers the paths that cannot: the human pressing
+ * Cancel on Chrome's banner (the session is gone before we can act) and a
+ * host or worker that died.
  */
 const WORLD = "cast-browser-bridge";
+const BEAT_MS = 3000;
+const LEASE_MS = 8000;
 const borderScripts = new Map(); // tabId → Page.addScriptToEvaluateOnNewDocument identifier
 const borderIds = new Map(); // tabId → this attach's element id
 const worlds = new Map(); // tabId → executionContextId of our isolated world in the top frame
-
-/** Hex for chrome.tabGroups.Color, matched by eye to Chrome's own group swatches. */
-const GROUP_COLOR_HEX = {
-  grey: "#5f6368",
-  blue: "#1a73e8",
-  red: "#d93025",
-  yellow: "#f9ab00",
-  green: "#188038",
-  pink: "#d01884",
-  purple: "#a142f4",
-  cyan: "#007b83",
-  orange: "#fa903e",
-};
 
 /**
  * The page-side script. Fixed, inset, pointer-events none, so it never takes
  * a click and never answers elementFromPoint (the driver's click checks use
  * that). Top frame only. Runs before the document has an element on a fresh
- * navigation, so it waits for one when it must.
+ * navigation, so it waits for one when it must. `__castBeat` is the lease:
+ * set at mount, refreshed by the worker, checked once a second.
  */
 function borderSource(id, color) {
   return `(() => {
     if (window !== window.top) return;
     const ID = ${JSON.stringify(id)};
+    const LEASE_MS = ${LEASE_MS};
+    globalThis.__castBeat = Date.now();
     const mount = () => {
       const root = document.documentElement;
       if (!root) return false;
@@ -472,12 +584,17 @@ function borderSource(id, color) {
         "border:3px solid ${color};margin:0;padding:0;background:transparent;";
       return true;
     };
+    const lease = () => {
+      const el = document.getElementById(ID);
+      if (el) el.style.display = Date.now() - (globalThis.__castBeat || 0) > LEASE_MS ? "none" : "block";
+    };
     if (!mount()) document.addEventListener("DOMContentLoaded", mount, { once: true });
+    if (!globalThis.__castLease) globalThis.__castLease = setInterval(lease, 1000);
   })();`;
 }
 
 async function borderColor(tabId) {
-  const g = groups.get(await groupOfTab(tabId));
+  const g = groups.get(await ownedGroupOf(tabId));
   return GROUP_COLOR_HEX[g && g.color] || "#c62828";
 }
 
@@ -548,6 +665,14 @@ async function setBorderVisible(tabId, visible) {
   ).catch(() => {});
 }
 
+// The lease heartbeat: one evaluate per attached tab, straight to the
+// debugger (not through the `cdp` op, so it never counts as work).
+setInterval(() => {
+  for (const tabId of attached) {
+    if (borderIds.has(tabId)) evalInWorld(tabId, "globalThis.__castBeat = Date.now()").catch(() => {});
+  }
+}, BEAT_MS);
+
 // --------------------------------------------------------------------------
 // Debugger and tab plumbing
 // --------------------------------------------------------------------------
@@ -560,7 +685,8 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   }
 });
 
-// The user can cancel via Chrome's banner; keep our books straight when they do.
+// The user can cancel via Chrome's banner; keep our books straight when they
+// do. The border cannot be removed (the session is gone); its lease hides it.
 chrome.debugger.onDetach.addListener((source) => {
   if (source.tabId && attached.has(source.tabId)) {
     attached.delete(source.tabId);
