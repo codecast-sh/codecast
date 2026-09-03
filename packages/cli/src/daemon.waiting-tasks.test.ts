@@ -801,7 +801,7 @@ describe("hook path off the loop: async readers and the persist chain", () => {
     const hop = handle.indexOf("persistHookStatus(sessionId, settle)");
     expect(hop).toBeGreaterThan(0);
     expect(handle.indexOf("return true;")).toBeGreaterThan(hop);
-    const callback = blockAt(src, src.indexOf("hookServer = startHookServer(", main)).text;
+    const callback = blockAt(src, src.indexOf("setHookStatusSink(", main)).text;
     expect(callback).toContain("const deferred = handleStatusData(sessionId, data);");
     expect(callback).toContain("if (!deferred) persistHookStatus(sessionId, data);");
   });

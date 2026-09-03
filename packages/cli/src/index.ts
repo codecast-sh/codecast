@@ -6,11 +6,16 @@ import { detectJsPackageManager } from "./workspace/detect.js";
 import { repoRootFor } from "./gitPlane.js";
 import { scrubAgentEnv } from "./agentEnv.js";
 import { registerRemoteCommand } from "./remote/cli.js";
-import { registerPublishCommand } from "./publish.js";
+import { registerCloudCommand } from "./cloud/cli.js";
+import { registerHostsCommand } from "./hosts/cli.js";
+import { registerPublishCommand, missingRouteError } from "./publish.js";
+import type { LoopFreezeState } from "./loopFreezeState.js";
 import { registerCapabilityCommand } from "./capabilities/cli.js";
 import { registerDecideCommand } from "./decideCommand.js";
 import { registerImageCommand } from "./imageCommand.js";
 import { registerStateCommand, warnIfThreadStateStale } from "./stateCommand.js";
+import { registerIntegrationsCommand } from "./integrations.js";
+import { registerPrCommand } from "./prCommand.js";
 import { registerSwitchCommand } from "./switchCommand.js";
 import { buildTaskStartBody } from "./taskClaim.js";
 import { chatSendOrigin, sessionIdFromEnv } from "./sessionIdentity.js";
@@ -75,13 +80,14 @@ import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPa
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion} from "./update.js";
 import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
-import { expandStdinArgs, readStdinBody } from "./sendBody.js";
+import { isStableContextFastPath as isStableContextFastPathArgv, runFastPath } from "./fastPath.js";
+import { expandCommandStdinDashes, readStdinBody, rejectBareDash, stdinText } from "./sendBody.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 import { getAllSyncRecords, findUnsyncedFiles, readOldestUnsyncedTimestamp } from "./syncLedger.js";
-import { isTestScratchPath } from "./syncScope.js";
+import { isClaudeTranscriptOutOfWatchScope, isTestScratchPath } from "./syncScope.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
 import {
   getLastReconciliation,
@@ -158,9 +164,7 @@ import { resolveOwnTarget } from "./ownTarget.js";
 import { resolveCurrentConversationId } from "./linkResolve.js";
 
 const program = new Command();
-const isStableContextFastPath =
-  process.argv[2] === "stable-context" &&
-  (process.argv.length === 3 || (process.argv.length === 5 && process.argv[3] === "--client"));
+const isStableContextFastPath = isStableContextFastPathArgv(process.argv);
 
 // Get the real cwd - CODECAST_CWD is set by the dev wrapper script
 // to preserve the original directory when running via bun run
@@ -501,6 +505,8 @@ interface DaemonState {
   watchdogRestarts?: number;
   /** macOS App Data (TCC) outcome for Cursor's data dir (written by the daemon). */
   cursorAccess?: "granted" | "denied";
+  /** Loop freeze budget written by the daemon's 30s monitor tick (see LoopFreezeLedger). */
+  loopFreeze?: LoopFreezeState;
   /** Stamped on every daemon state write — lets `--wait` tell a fresh state file from a stale one. */
   timestamp?: number;
 }
@@ -1249,6 +1255,9 @@ function getStuckSyncs(): StuckSync[] {
     // Files the sync loop refuses to sync (test-scratch transcripts) are never
     // actionable here — skip them defensively.
     if (isTestScratchPath(filePath)) continue;
+    // A ledger row the live watcher would never advance (e.g. a workflow run's
+    // journal.jsonl an older sweep synced) is not a wedge either.
+    if (isClaudeTranscriptOutOfWatchScope(filePath)) continue;
     // Codex rollouts started by codecast are synced live by the app-server path,
     // which never advances the transcript-file ledger. The watchdog's stale scan
     // already skips them; without the same skip here they always read as stuck
@@ -1426,10 +1435,15 @@ function showStatus(): void {
       row("Queue", fmt.muted("empty"));
     }
 
-    try {
-      const fdCount = execSync(`lsof -p ${pid} 2>/dev/null | wc -l`, { encoding: "utf-8" }).trim();
-      row("File handles", fmt.number(parseInt(fdCount, 10) || 0));
-    } catch {
+    // -n -P: no reverse DNS or port-name lookups for the daemon's sockets. Each
+    // lookup can stall for seconds; without the flags this one call took 30s of a
+    // 31s `cast status` (2026-09-03). lsof exits non-zero on any warning, so the
+    // output decides, not the status.
+    const lsof = spawnSync("lsof", ["-n", "-P", "-p", String(pid)], { encoding: "utf-8", timeout: 5000 });
+    const fdLines = (lsof.stdout || "").split("\n").filter(Boolean).length;
+    if (fdLines > 0) {
+      row("File handles", fmt.number(fdLines - 1)); // minus the header row
+    } else {
       row("File handles", fmt.muted("unavailable"));
     }
   } else if (!daemonSupportedOnPlatform()) {
@@ -2116,17 +2130,6 @@ async function promptTeamSelection(config: Config): Promise<void> {
   }
 }
 
-
-// CLI shim over the shared '-'-to-stdin convention (sendBody.ts): expand '-'
-// arguments to the stdin body, exiting with the usage error instead of throwing.
-function expandStdinPromptArgs(args: string[]): string[] {
-  try {
-    return expandStdinArgs(args);
-  } catch (err) {
-    console.error((err as Error).message);
-    process.exit(1);
-  }
-}
 
 // Every codecast-owned section in an agent instruction file is described by
 // the shared catalog (@codecast/shared/contracts/snippets.ts — one table with
@@ -2896,11 +2899,15 @@ program
 
 registerWorkspaceCommand(program);
 registerRemoteCommand(program);
+registerCloudCommand(program);
+registerHostsCommand(program);
 registerPublishCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerCapabilityCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerDecideCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerImageCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerStateCommand(program, { getCliEndpoint, detectCurrentSessionId });
+registerIntegrationsCommand(program, { getCliEndpoint, detectCurrentSessionId, resolveProjectId });
+registerPrCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerSwitchCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerBrowserCommand(program, { getCliEndpoint, detectCurrentSessionId });
 registerAppCommand(program, { getCliEndpoint, detectCurrentSessionId });
@@ -2943,11 +2950,11 @@ program
     "  EOF"
   )
   .argument("<session_id>", "Target session short ID (e.g. jx7c6zk)")
-  .argument("<text>", "Message text; '-' reads it from stdin (heredoc-friendly for multi-line markdown)")
+  .argument("<text>", stdinText("Message text"))
   .option("--from <id>", "Override sender session (default: detect current session)")
   .option("--raw", "Deliver the text exactly as typed, without the session-message wrapper — for the agent's own slash commands (/model opus, /effort high). Own sessions only.")
   .action(async (sessionId: string, text: string, options: any) => {
-    const body = expandStdinPromptArgs([text ?? ""])[0];
+    const body = text ?? "";
     if (!body.trim()) {
       console.error("Message text is empty");
       process.exit(1);
@@ -3695,7 +3702,7 @@ withVaultOption(
       "  EOF"
     )
     .argument("<path>", "Note path or name")
-    .option("-c, --content <text>", "Note body (\\n and \\t are unescaped)")
+    .option("-c, --content <text>", stdinText("Note body (\\n and \\t are unescaped)"))
     .option("--content-file <path>", "Read the body from a file")
     .option("--force", "Overwrite an existing note")
     .option("--json", "Output as JSON"),
@@ -3740,10 +3747,10 @@ withVaultOption(
       "  cast vault edit Sleep --prepend '> Reviewed 2026-08-03'"
     )
     .argument("<path>", "Note path or name")
-    .option("--old <text>", "Text to find (must be unique in the note)")
-    .option("--new <text>", "Replacement text")
-    .option("--append <text>", "Add to the end, after a blank line")
-    .option("--prepend <text>", "Add to the start, before a blank line")
+    .option("--old <text>", stdinText("Text to find (must be unique in the note)"))
+    .option("--new <text>", stdinText("Replacement text"))
+    .option("--append <text>", stdinText("Add to the end, after a blank line"))
+    .option("--prepend <text>", stdinText("Add to the start, before a blank line"))
     .option("--json", "Output as JSON"),
 ).action(async (notePath: string, options: any) =>
   runVault(async () => {
@@ -4764,6 +4771,29 @@ program
     }
   });
 
+const daemonCmd = program
+  .command("daemon")
+  .description("Manage the background daemon's local identity");
+
+daemonCmd
+  .command("rotate-token")
+  .description(
+    "Replace the terminal token the daemon keeps in ~/.codecast/loopback-identity.json\n\n" +
+    "The token authorizes the loopback WebSocket that the web's integrated terminal\n" +
+    "and the browser watch panel connect to. It survives restarts, so rotate it if a\n" +
+    "copy of that file may have leaked. The daemon restarts to pick the new one up;\n" +
+    "open terminal panels reconnect on their next probe."
+  )
+  .action(async () => {
+    // Imported lazily: no other cast command should pay for this module.
+    const { rotateIdentityToken, identityFile } = await import("./loopbackIdentity.js");
+    const rotated = rotateIdentityToken(CONFIG_DIR);
+    console.log(`New terminal token ${rotated.token.slice(0, 8)}... written to ${identityFile(CONFIG_DIR)}`);
+    stopDaemon();
+    startDaemon();
+    console.log("Daemon restarted. Open terminal panels reconnect on their next probe.");
+  });
+
 program
   .command("welcome", { hidden: true })
   .description("Show welcome message")
@@ -5225,6 +5255,35 @@ program
       if (retryOps.length > 3) {
         console.log(`      ${fmt.muted(`... and ${retryOps.length - 3} more`)}`);
       }
+    }
+    console.log("");
+
+    // Event loop freeze budget. A frozen loop delays every delivery and echo,
+    // so a late message reads as "the daemon was blocked", not "the session
+    // dropped it". The daemon writes this on its 30s monitor tick.
+    const freezeState = readDaemonState()?.loopFreeze;
+    console.log(`  ${fmt.muted("Event Loop")}`);
+    if (!freezeState) {
+      row("Freeze (1h)", fmt.muted("not reported yet"), 2);
+    } else {
+      const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+      const hour = freezeState.hourMs;
+      row(
+        "Freeze (1h)",
+        (hour > 0 ? fmt.warning(secs(hour)) : fmt.success("0s")) +
+          fmt.muted(` across ${freezeState.hourCount} freeze${freezeState.hourCount === 1 ? "" : "s"}`),
+        2,
+      );
+      row("Worst freeze", fmt.value(secs(freezeState.hourMaxMs)), 2);
+      // The stack sampler is darwin only, so an empty string is expected on Linux.
+      row("Top cause", freezeState.top ? fmt.value(freezeState.top) : fmt.muted("not sampled"), 2);
+      row(
+        "Since boot",
+        fmt.value(secs(freezeState.bootMs)) +
+          fmt.muted(` across ${freezeState.bootCount} freeze${freezeState.bootCount === 1 ? "" : "s"}`),
+        2,
+      );
+      row("Measured", fmt.muted(formatRelativeTime(freezeState.at)), 2);
     }
     console.log("");
 
@@ -9956,7 +10015,7 @@ program
   .option("--project <path>", "Filter by project path (use . for current)")
   .option("--search <query>", "Search decisions by title")
   .option("--tags <tags>", "Filter by tags (comma-separated)")
-  .option("--reason <text>", "Rationale for the decision (required for add)")
+  .option("--reason <text>", stdinText("Rationale for the decision (required for add)"))
   .option("-n, --limit <n>", "Number of results", "20")
   .option("-p, --page <n>", "Page number", "1")
   .action(async (action, titleOrId, options) => {
@@ -10090,8 +10149,8 @@ program
   )
   .argument("[action]", "Action: add, show, search, delete, or omit to list")
   .argument("[name-or-query]", "Pattern name for add/show/delete, or search query")
-  .option("--description <text>", "Description for the pattern (required for add)")
-  .option("--content <text>", "Content/code for the pattern (required for add)")
+  .option("--description <text>", stdinText("Description for the pattern (required for add)"))
+  .option("--content <text>", stdinText("Content/code for the pattern (required for add)"))
   .option("--tags <tags>", "Tags (comma-separated)")
   .option("--session <id>", "Source session ID")
   .option("--range <range>", "Source message range (e.g., 15:25)")
@@ -10524,12 +10583,13 @@ program
     "  cast fork                                                 # legacy: one unseeded fork\n" +
     "  cast fork -s abc1234 --from 15 --resume                   # fork another session, open it locally"
   )
-  .argument("[directions...]", "One seed prompt per branch; '-' reads a prompt from stdin (several '-' split stdin on lines containing only ---)")
+  .argument("[directions...]", stdinText("One seed prompt per branch", { many: true }))
   .option("-s, --session <id>", "Conversation to fork (default: current session)")
   .option("--at <line>", "Fork at message line N (cast read numbering); default: just before the latest user message, so the fork request stays out of the branches")
   .option("--tip", "Fork at the very end instead, keeping everything including the latest user message — use when forking on your own initiative, where there is no fork request to strip")
   .option("--from <index>", "Alias for --at (back-compat)")
   .option("--label <name>", "File each branch under this label instead of the parent's (created if new; branches inherit the parent label by default)")
+  .option("--cloud [host]", "Run each branch in its own worktree on the cloud host (seeded forks only); [host] = a registered instance id")
   .option("--json", "Machine-readable output")
   .option("--resume", "Open forked conversation in Claude/Codex after creating (single, unseeded fork only)")
   .option("--as <agent>", "Agent to resume with (claude or codex)")
@@ -10554,7 +10614,7 @@ program
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
-    const directions: string[] = expandStdinPromptArgs(rawDirections ?? []).map((d) => d.trim()).filter(Boolean);
+    const directions: string[] = (rawDirections ?? []).map((d) => d.trim()).filter(Boolean);
     let id: string | undefined = options.session;
 
     // Back-compat: the old `cast fork <id>` took the conversation as the first
@@ -10657,9 +10717,61 @@ program
     // `cast send` uses. Each lands in the inbox as its own session. The seed is
     // the direction verbatim — the branch just receives its next instruction;
     // keeping it ignorant of the fan-out is what keeps branches independent.
+    if (options.cloud && directions.length === 0) {
+      console.error("--cloud needs seeded branches: cast fork --cloud \"<direction>\" [...]");
+      process.exit(1);
+    }
+    // --cloud: same preparation as `cast spawn --cloud`, then each branch is
+    // created ALREADY pointed at its worktree on the host (owner = the host's
+    // device, project_path = the worktree), so the seed below lands there and
+    // the deferred resume rebuilds the branch from the server copy on the
+    // host. The parent's checkout on this machine is what gets synced.
+    let cloud: { prepared: import("./cloud/prepare.js").PreparedHost } | null = null;
+    if (options.cloud) {
+      let localGitRoot = process.cwd();
+      try {
+        localGitRoot = execSync("git rev-parse --show-toplevel", { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] }).trim();
+      } catch {}
+      const say = (m: string) => { if (!options.json) console.log(`  ${m}`); };
+      try {
+        const { prepareCloudHost, waitForDeviceOnline } = await import("./cloud/prepare.js");
+        const { convexClient } = await import("./remote/cli.js");
+        const prepared = await prepareCloudHost({
+          hostArg: typeof options.cloud === "string" ? options.cloud : undefined,
+          localGitRoot,
+          onProgress: say,
+        });
+        const cc = await convexClient();
+        await waitForDeviceOnline(cc.client, cc.api, cc.token, prepared.deviceId, say);
+        cloud = { prepared };
+      } catch (err) {
+        console.error(`Cloud host not ready: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+    }
+
     if (directions.length > 0) {
-      const roster: { short_id: string; conversation_id: string; direction: string; seeded: boolean }[] = [];
+      const roster: { short_id: string; conversation_id: string; direction: string; seeded: boolean; worktree?: string }[] = [];
       for (const direction of directions) {
+        let cloudPlacement: Record<string, unknown> = {};
+        let worktreeName: string | undefined;
+        if (cloud) {
+          const { acquireRemoteWorkspace, freshWorktreeName } = await import("./cloud/prepare.js");
+          const name = freshWorktreeName();
+          if (!options.json) console.log(`  acquiring worktree ${name} on ${cloud.prepared.cloud.id}`);
+          try {
+            const ws = acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name);
+            worktreeName = ws.name;
+            cloudPlacement = {
+              cloud_device_id: cloud.prepared.deviceId,
+              cloud_project_path: ws.path,
+              cloud_worktree: { name: ws.name, branch: ws.branch, path: ws.path },
+            };
+          } catch (err) {
+            console.error(`Fork failed for "${direction}": ${err instanceof Error ? err.message : String(err)}`);
+            process.exit(1);
+          }
+        }
         // session_id = per-branch idempotency key: forkFromMessage collapses any
         // retry/redelivery carrying the same key onto the one existing row, which
         // is what makes retries safe here (a fork POST that times out may have
@@ -10670,7 +10782,7 @@ program
         const response = await cliFetch(`${siteUrl}/cli/fork`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ api_token: config.auth_token, conversation_id: id, message_uuid: messageUuid, session_id: forkKey, direction }),
+          body: JSON.stringify({ api_token: config.auth_token, conversation_id: id, message_uuid: messageUuid, session_id: forkKey, direction, ...cloudPlacement }),
         }, { retries: 2 });
         if (!response.ok) {
           const body = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
@@ -10690,7 +10802,7 @@ program
           });
           seeded = seedResp.ok;
         } catch {}
-        roster.push({ short_id: newShortId, conversation_id: result.conversation_id, direction, seeded });
+        roster.push({ short_id: newShortId, conversation_id: result.conversation_id, direction, seeded, worktree: worktreeName });
       }
 
       let labelResult: { createdLabel: boolean; failures: number } | null = null;
@@ -10849,7 +10961,7 @@ program
     "  EOF\n\n" +
     "To run a prompt, wait, and print the result (no inbox card), use `cast exec`."
   )
-  .argument("<prompts...>", "One task per session; '-' reads a prompt from stdin (several '-' split stdin on lines containing only ---)")
+  .argument("<prompts...>", stdinText("One task per session", { many: true }))
   .option("-C, --dir <path>", "Working directory (default: current project)")
     .option("--agent <type>", "Agent: claude (default), codex, cursor, gemini, opencode, pi, grok", "claude")
   .option("--subagent [parent]", "Nest under a parent session as a subagent row (default parent: the session running this command)")
@@ -10857,7 +10969,9 @@ program
   .option("--effort <level>", "Reasoning effort (claude: low|medium|high|max; varies by agent)")
   .option("--account <name>", "Claude account profile to run on, without switching the machine's login (needs: cast accounts token <name>)")
   .option("--isolated", "Give each session its own git worktree")
+  .option("--worktree <name>", "Name the worktree (implies --isolated; one task only)")
   .option("--device <name>", "Machine to start on (label or device id, e.g. nose); falls back to an online machine with the repo if it's offline")
+  .option("--cloud [host]", "Run each task in its own worktree on the cloud host (wakes it, syncs the repo + gitignored files over SSH); [host] = a registered instance id")
   .option("--label <name>", "File each spawned session under a label (created if new)")
   .option("--json", "Machine-readable output")
   .action(async (rawPrompts: string[], options: any) => {
@@ -10868,7 +10982,7 @@ program
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
-    const prompts = expandStdinPromptArgs(rawPrompts ?? []).map((p) => p.trim()).filter(Boolean);
+    const prompts = (rawPrompts ?? []).map((p) => p.trim()).filter(Boolean);
     if (prompts.length === 0) {
       console.error("Give at least one task: cast spawn \"<task>\"");
       process.exit(1);
@@ -10907,8 +11021,69 @@ program
       }
     }
 
-    const roster: { short_id: string; conversation_id: string; prompt: string; parent_short_id?: string }[] = [];
+    if (options.worktree && prompts.length > 1) {
+      console.error("--worktree names ONE worktree; spawn a single task with it, or drop it and let each task get its own");
+      process.exit(1);
+    }
+    if (options.cloud && options.device) {
+      console.error("--cloud already picks the machine; drop --device");
+      process.exit(1);
+    }
+
+    // --cloud: the host is prepared ONCE (wake, refresh the checkout, copy the
+    // manifest's gitignored files), then every task acquires its own worktree
+    // there with the host's `cast ws acquire`, so N tasks get N worktrees with
+    // ports the host itself allocated. The row is created only after the
+    // worktree exists, pointed straight at it — no interim state a daemon could
+    // misread. See cloud/prepare.ts.
+    const say = (m: string) => { if (!options.json) console.log(`  ${c.dim}${m}${c.reset}`); };
+    let cloud: { prepared: import("./cloud/prepare.js").PreparedHost } | null = null;
+    if (options.cloud) {
+      const { prepareCloudHost, waitForDeviceOnline } = await import("./cloud/prepare.js");
+      const { convexClient } = await import("./remote/cli.js");
+      try {
+        const prepared = await prepareCloudHost({
+          hostArg: typeof options.cloud === "string" ? options.cloud : undefined,
+          localGitRoot: gitRoot,
+          onProgress: say,
+        });
+        const cc = await convexClient();
+        await waitForDeviceOnline(cc.client, cc.api, cc.token, prepared.deviceId, say);
+        cloud = { prepared };
+      } catch (err) {
+        console.error(`Cloud host not ready: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+    }
+
+    const roster: { short_id: string; conversation_id: string; prompt: string; parent_short_id?: string; worktree?: string; ports?: Record<string, number> }[] = [];
     for (const prompt of prompts) {
+      let placement: Record<string, unknown> = {};
+      let worktree: { name: string; ports: Record<string, number> } | undefined;
+      if (cloud) {
+        const { acquireRemoteWorkspace, freshWorktreeName } = await import("./cloud/prepare.js");
+        const name = options.worktree || freshWorktreeName();
+        say(`acquiring worktree ${name} on ${cloud.prepared.cloud.id} (install runs there)`);
+        let ws: import("./cloud/prepare.js").RemoteWorkspace;
+        try {
+          ws = acquireRemoteWorkspace(cloud.prepared.host, cloud.prepared.repoPath, name);
+        } catch (err) {
+          console.error(`Spawn failed for "${promptGist(prompt)}": ${err instanceof Error ? err.message : String(err)}`);
+          process.exit(1);
+        }
+        worktree = { name: ws.name, ports: ws.ports };
+        placement = {
+          device: cloud.prepared.deviceId,
+          project_path: ws.path,
+          git_root: ws.path,
+          worktree_name: ws.name,
+          worktree_branch: ws.branch,
+          worktree_path: ws.path,
+          privacy_path: gitRoot,
+        };
+      } else if (options.worktree) {
+        placement = { isolated: true, worktree_name: options.worktree };
+      }
       const resp = await cliFetch(`${siteUrl}/cli/spawn`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -10921,9 +11096,10 @@ program
           model: options.model,
           effort: options.effort,
           cc_account: options.account,
-          isolated: options.isolated || undefined,
+          isolated: (options.isolated && !cloud) || undefined,
           device: options.device,
           parent_session: parentSession,
+          ...placement,
         }),
       });
       if (!resp.ok) {
@@ -10932,7 +11108,7 @@ program
         process.exit(1);
       }
       const result = await resp.json() as any;
-      roster.push({ short_id: result.short_id, conversation_id: result.conversation_id, prompt, parent_short_id: result.parent_short_id });
+      roster.push({ short_id: result.short_id, conversation_id: result.conversation_id, prompt, parent_short_id: result.parent_short_id, worktree: worktree?.name, ports: worktree?.ports });
     }
 
     let labelResult: { createdLabel: boolean; failures: number } | null = null;
@@ -10941,11 +11117,17 @@ program
     }
 
     if (options.json) {
-      console.log(JSON.stringify({ dir, agent: agentType, label: options.label ?? null, parent: roster[0]?.parent_short_id ?? null, sessions: roster }, null, 2));
+      console.log(JSON.stringify({
+        dir, agent: agentType, label: options.label ?? null, parent: roster[0]?.parent_short_id ?? null,
+        cloud: cloud ? { host: cloud.prepared.cloud.id, device_id: cloud.prepared.deviceId, repo: cloud.prepared.repoPath } : null,
+        sessions: roster,
+      }, null, 2));
       return;
     }
 
-    const dirNote = dir.replace(process.env.HOME || "~", "~");
+    const dirNote = cloud
+      ? `${cloud.prepared.host.user}@${cloud.prepared.cloud.id}:${cloud.prepared.repoPath}`
+      : dir.replace(process.env.HOME || "~", "~");
     const labelNote = options.label
       ? ` ${c.dim}·${c.reset} filed under ${c.yellow}${options.label}${c.reset}${labelResult?.createdLabel ? ` ${c.dim}(new label)${c.reset}` : ""}`
       : "";
@@ -10957,7 +11139,10 @@ program
       `${c.dim}${dirNote}${c.reset} — ${placement}${labelNote}`
     );
     for (const s of roster) {
-      console.log(`  ${c.cyan}${s.short_id}${c.reset}  ${promptGist(s.prompt)}`);
+      const wt = s.worktree
+        ? `  ${c.yellow}${s.worktree}${c.reset}${Object.keys(s.ports ?? {}).length ? c.dim + " " + Object.entries(s.ports!).map(([n, p]) => `${n}=${p}`).join(" ") + c.reset : ""}`
+        : "";
+      console.log(`  ${c.cyan}${s.short_id}${c.reset}${wt}  ${promptGist(s.prompt)}`);
     }
     if (labelResult?.failures) {
       console.log(`  ${c.yellow}!${c.reset} ${c.dim}${labelResult.failures} session${labelResult.failures === 1 ? "" : "s"} not filed — retry with cast label set ${options.label} <id>${c.reset}`);
@@ -11723,7 +11908,32 @@ const EVENT_SHORTHANDS: Record<string, { event_type: string; action?: string }> 
   pr_opened: { event_type: "pull_request", action: "opened" },
   pr_merged: { event_type: "pull_request", action: "closed" },
   push: { event_type: "push" },
+  // Issue events. Linear and GitHub both normalize into these names, so one
+  // trigger covers an issue wherever it lives (docs/architecture/issue-sync.md S7).
+  issue_opened: { event_type: "issues", action: "opened" },
+  issue_assigned: { event_type: "issues", action: "assigned" },
+  issue_labeled: { event_type: "issues", action: "labeled" },
+  issue_closed: { event_type: "issues", action: "closed" },
+  issue_commented: { event_type: "issue_comment", action: "created" },
+  // Derived pull request events. The backend fires these by name (firePrTrigger
+  // / fireTrigger), so the filter is the name itself with no action: a trigger
+  // waits for "the checks went red" rather than decoding a webhook payload.
+  pr_check_failed: { event_type: "pr_check_failed" },
+  pr_checks_green: { event_type: "pr_checks_green" },
+  pr_behind: { event_type: "pr_behind" },
+  pr_conflict: { event_type: "pr_conflict" },
+  pr_ready: { event_type: "pr_ready" },
+  pr_review: { event_type: "pr_review" },
+  pr_approved: { event_type: "pr_approved" },
+  pr_changes_requested: { event_type: "pr_changes_requested" },
+  pr_review_requested: { event_type: "pr_review_requested" },
+  pr_synchronize: { event_type: "pr_synchronize" },
+  pr_closed: { event_type: "pr_closed" },
 };
+
+// The help text for --on is generated, so adding a shorthand above is the only
+// edit an agent reading `cast trigger add -h` needs.
+const EVENT_NAMES = Object.keys(EVENT_SHORTHANDS).join(", ");
 
 // ── Anchors ──────────────────────────────────────────────────────────────────
 // A standing agent member: one per personal workspace, one per team. It owns a
@@ -11839,7 +12049,7 @@ anchor
 anchor
   .command("wake")
   .description("Send a message to an anchor (auto-resumes it if dormant)")
-  .argument("<message>", "What to tell the anchor")
+  .argument("<message>", stdinText("What to tell the anchor"))
   .option("--team [id]", "Target the team anchor (default: your personal anchor)")
   .action(async (message: string, options: any) => {
     const config = readConfig();
@@ -11977,9 +12187,9 @@ anchor
   .option("--team <name|id>", "Team whose roster resolves --dm handles / --chat #names (a team anchor uses its own team)")
   .option("--personal", "Speak as your personal anchor (default when not run from inside an anchor session)")
   .option("--json", "Machine-readable output")
-  .argument("<text>", "Message text; '-' reads it from stdin (heredoc-friendly)")
+  .argument("<text>", stdinText("Message text"))
   .action(async (rawText: string, options: any) => {
-    const text = expandStdinPromptArgs([rawText ?? ""])[0];
+    const text = rawText ?? "";
     if (!text.trim()) {
       console.error("Message text is empty");
       process.exit(1);
@@ -12119,7 +12329,7 @@ chat
   .description("Create a channel")
   .argument("<name>", "Channel name (normalized to a slug)")
   .option("--team <name|id>", "Team to create it in (default: your active team)")
-  .option("--topic <text>", "Channel topic")
+  .option("--topic <text>", stdinText("Channel topic"))
   .action(async (name: string, options: any) => {
     // A WRITE resolves its workspace here and sends it explicitly. Letting the
     // server fall back to users.active_team_id is how `cast chat new` once put
@@ -12191,12 +12401,12 @@ chat
 chat
   .command("send")
   .description("Post to a channel, or reply on a thread")
-  .argument("<text>", "Message text; '-' reads it from stdin (heredoc-friendly)")
+  .argument("<text>", stdinText("Message text"))
   .requiredOption("--channel <id>", "Channel id")
   .option("--thread <root_id>", "Reply on this thread instead of the channel")
   .option("--json", "Machine-readable output")
   .action(async (text: string, options: any) => {
-    const body = expandStdinPromptArgs([text ?? ""])[0];
+    const body = text ?? "";
     if (!body.trim()) {
       console.error("Message text is empty");
       process.exit(1);
@@ -12231,12 +12441,12 @@ chat
   .command("reply")
   .description("Fill the placeholder the anchor was woken for, or pass on it (run by the anchor)")
   .argument("<message_id>", "The placeholder id from the wake prompt")
-  .argument("[text]", "Your reply; '-' reads it from stdin (heredoc-friendly). Omit with --pass")
+  .argument("[text]", stdinText("Your reply, omitted with --pass"))
   .option("--status <status>", "'done' (default), 'error' to report a turn you could not finish, or 'passed'")
   .option("--pass", "Stay quiet: the line was not for you. Closes the placeholder without a word")
   .action(async (messageId: string, text: string | undefined, options: any) => {
     const passing = !!options.pass || options.status === "passed";
-    const body = passing ? "" : expandStdinPromptArgs([text ?? ""])[0];
+    const body = passing ? "" : (text ?? "");
     if (!passing && !body.trim()) {
       console.error("Reply text is empty (or pass with --pass)");
       process.exit(1);
@@ -12357,11 +12567,11 @@ const trigger = program
 trigger
   .command("add")
   .description("Set a new trigger")
-  .argument("<prompt>", "Instruction for the agent when the trigger fires; '-' reads it from stdin (heredoc-friendly for multi-line markdown)")
+  .argument("<prompt>", stdinText("Instruction for the agent when the trigger fires"))
   .option("--in <duration>", "Run after delay (e.g., 30m, 2h, 1d)")
   .option("--every <duration>", "Run on interval (e.g., 4h, 1d)")
-  .option("--on <event>", "Run on event (pr_comment, pr_opened, pr_merged, push)")
-  .option("--title <title>", "Short title (defaults to first 60 chars of prompt)")
+  .option("--on <event>", `Run on event (${EVENT_NAMES})`)
+  .option("--title <title>", stdinText("Short title (defaults to first 60 chars of prompt)"))
   .option("--context <mode>", "Context capture: 'current' to grab running session")
   .option("--safe", "Read-only: a spawned run gets write tools removed and state-changing commands blocked. A run that continues an existing session inherits that session's rules instead.")
   .option("--mode <mode>", "Agent mode: apply (default, can act) or propose (read-only). Prefer --safe.")
@@ -12373,7 +12583,7 @@ trigger
   .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. Runs stay associated: each one links back to this trigger at the top of its conversation.")
   .option("--thread", "Post results back to the current conversation thread")
   .action(async (prompt, options) => {
-    prompt = expandStdinPromptArgs([prompt])[0].trim();
+    prompt = prompt.trim();
     if (!prompt) {
       console.error("Empty prompt");
       process.exit(1);
@@ -12651,7 +12861,7 @@ trigger
   .command("complete")
   .description("Mark a running trigger as completed (called by the agent)")
   .argument("<id>", "Trigger ID (full or last 8 chars)")
-  .option("--summary <text>", "Summary of what was done")
+  .option("--summary <text>", stdinText("Summary of what was done"))
   .option("--needs-attention", "Flag the run for the user: it stays in the inbox instead of folding into the trigger's history, and a stashed/killed session is pulled back into the queue")
   .action(async (id, options) => {
     const config = readConfig();
@@ -12737,11 +12947,11 @@ trigger
   .alias("edit")
   .description("Edit a trigger in place. Every effective edit is versioned and audited — see 'cast trigger history'.")
   .argument("<id>", "Trigger ID (tr-42, full id, or last 8 chars)")
-  .option("--prompt <prompt>", "New prompt; '-' reads it from stdin (heredoc-friendly for multi-line markdown)")
-  .option("--title <title>", "New title")
+  .option("--prompt <prompt>", stdinText("New prompt"))
+  .option("--title <title>", stdinText("New title"))
   .option("--in <duration>", "Reschedule as a one-shot after delay (e.g., 30m, 2h, 1d)")
   .option("--every <duration>", "Reschedule on an interval (e.g., 4h, 1d)")
-  .option("--on <event>", "Reschedule on an event (pr_comment, pr_opened, pr_merged, push)")
+  .option("--on <event>", `Reschedule on an event (${EVENT_NAMES})`)
   .option("--safe", "Read-only: a spawned run gets write tools removed and state-changing commands blocked")
   .option("--mode <mode>", "Agent mode: apply (can act) or propose (read-only). Prefer --safe.")
   .option("--project <path>", "Project path for agent cwd")
@@ -12766,7 +12976,7 @@ trigger
     // absent field as "keep", and records exactly what changed.
     const body: any = { api_token: config.auth_token };
     if (options.prompt !== undefined) {
-      const prompt = expandStdinPromptArgs([options.prompt])[0].trim();
+      const prompt = options.prompt.trim();
       if (!prompt) {
         console.error("Empty prompt");
         process.exit(1);
@@ -13175,6 +13385,12 @@ async function resolveChatChannelId(ref: string, teamId?: string): Promise<strin
 }
 
 async function cliPost(urlPath: string, body: Record<string, any>): Promise<any> {
+  try {
+    rejectBareDash(body);
+  } catch (err) {
+    console.error(`Error: ${(err as Error).message}`);
+    process.exit(1);
+  }
   const { siteUrl, apiToken } = getCliEndpoint();
   // Bound the call with a timeout so a slow/contended backend can't hang the CLI
   // forever. No auto-retry here: cliPost serves mutating endpoints too, and a
@@ -13189,7 +13405,8 @@ async function cliPost(urlPath: string, body: Record<string, any>): Promise<any>
   try {
     result = JSON.parse(text);
   } catch {
-    console.error(`API error (${response.status}): ${text.slice(0, 200)}`);
+    const missing = missingRouteError(urlPath, response.status);
+    console.error(missing ? `Error: ${missing}` : `API error (${response.status}): ${text.slice(0, 200)}`);
     process.exit(1);
   }
   if (result?.error) {
@@ -13349,6 +13566,15 @@ function printJson(value: unknown): void {
   }
 }
 
+// A task backed by a Linear or GitHub issue carries `external` (server
+// authored, docs/architecture/issue-sync.md S1.1). Every list that prints a
+// task prints its provider identifier, so "LIN-123" and "owner/repo#482" are
+// findable from the CLI without opening the task.
+function externalTag(t: any): string {
+  const id = t?.external?.identifier;
+  return id ? ` ${c.dim}${id}${c.reset}` : "";
+}
+
 function formatWorkItem(t: any, verbose = false, indent = 0): string {
   const icon = STATUS_ICONS[t.status] || "?";
   const pcolor = PRIORITY_COLORS[t.priority] || "";
@@ -13362,7 +13588,7 @@ function formatWorkItem(t: any, verbose = false, indent = 0): string {
   // Subtasks indent under their parent, with a guide so the nesting survives
   // the eye scanning a long list.
   const pad = indent > 0 ? `${"  ".repeat(indent)}${c.dim}└ ${c.reset}` : "";
-  let line = `  ${pad}${icon} ${c.cyan}${t.short_id}${c.reset} ${t.title}${pri}${assignee}${labels}${blocked}${origin}`;
+  let line = `  ${pad}${icon} ${c.cyan}${t.short_id}${c.reset} ${t.title}${externalTag(t)}${pri}${assignee}${labels}${blocked}${origin}`;
   if (verbose && t.description) {
     line += `\n    ${"  ".repeat(indent)}${c.dim}${t.description.slice(0, 120)}${c.reset}`;
   }
@@ -13608,8 +13834,8 @@ const work = program
 work
   .command("create")
   .description("Create a new work item")
-  .argument("<title>", "Task title")
-  .option("-d, --description <text>", "Description")
+  .argument("<title>", stdinText("Task title, or one title per line for a bulk decomposition"))
+  .option("-d, --description <text>", stdinText("Description"))
   .option("-t, --type <type>", "Type: task, feature, bug, chore", "task")
   .option("-p, --priority <level>", "Priority: urgent, high, medium, low", "medium")
   .option("--project <ref>", "Project ID, short ID, or title substring")
@@ -13622,14 +13848,12 @@ work
   .option("--human", "Put the task on the human's board — for work the human must see and manage (rare)")
   .option("--from-meeting", "This task came out of a meeting with people in it, not from your own work")
   .action(async (title: string, options: any) => {
-    // Bulk decomposition: `cast task create --parent ct-x -` reads one subtask
-    // title per line from stdin (heredoc-friendly, the fork/spawn convention),
-    // so a whole decomposition is one command instead of N round-trips.
-    const titles = title === "-"
-      ? expandStdinPromptArgs([title])[0].split("\n").map((s) => s.trim()).filter(Boolean)
-      : [title];
+    // Bulk decomposition: `cast task create --parent ct-x -` gives one subtask
+    // title per line (a title never spans lines), so a whole decomposition is
+    // one command instead of N round-trips.
+    const titles = title.split("\n").map((s) => s.trim()).filter(Boolean);
     if (titles.length === 0) {
-      console.error("No titles given on stdin");
+      console.error("No title given");
       process.exit(1);
     }
 
@@ -13760,6 +13984,11 @@ async function printTaskShow(t: any, options: any) {
     console.log(`  ${c.dim}Project:${c.reset} ${projLabel}`);
   }
   if (t.plan) console.log(`  ${c.dim}Plan:${c.reset} ${c.cyan}${t.plan.short_id}${c.reset} ${c.dim}${t.plan.title}${c.reset}`);
+  if (t.external?.identifier) {
+    const synced = t.external.synced_at ? ` ${c.dim}synced ${formatRelativeTime(t.external.synced_at)}${c.reset}` : "";
+    console.log(`  ${c.dim}Issue:${c.reset} ${c.cyan}${t.external.identifier}${c.reset} ${c.dim}${t.external.url || ""}${c.reset}${synced}`);
+    if (t.external.last_error) console.log(`  ${c.yellow}sync error: ${t.external.last_error}${c.reset}`);
+  }
   if (t.description) console.log(`\n  ${t.description}`);
   if (t.acceptance_criteria?.length) {
     console.log(`\n  ${c.bold}Acceptance Criteria${c.reset}`);
@@ -13818,7 +14047,10 @@ work
   .command("start")
   .description("Start working on a task (set in_progress)")
   .argument("<short_id>", "Task short ID")
-  .action(async (shortId: string) => {
+  .option("--spawn", "Also hand the task to a fresh agent session (the server spawns it, so this works from any shell)")
+  .option("--agent <type>", "Agent type for --spawn: claude (default) or codex")
+  .option("--message <text>", stdinText("First message for the spawned session (default: the task's own brief)"))
+  .action(async (shortId: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     const result = await cliPost("/cli/work/update", buildTaskStartBody(shortId, sessionId));
     console.log(`${c.green}ok${c.reset} Started ${c.cyan}${shortId}${c.reset}`);
@@ -13831,6 +14063,18 @@ work
         console.log(`${c.dim}Session bound to plan ${result.plan_id}${c.reset}`);
       } catch {}
     }
+    // The server owns the spawn (it shares spawnSessionForTask with the board's
+    // assign-to-agent action), so --spawn needs no local session and no daemon
+    // of its own — docs/architecture/issue-sync.md S7.
+    if (options.spawn) {
+      const spawnBody: Record<string, any> = { short_id: shortId };
+      if (options.agent) spawnBody.agent_type = options.agent;
+      if (options.message) spawnBody.initial_message = options.message;
+      const spawned = await cliPost("/cli/work/spawn", spawnBody);
+      const link = `${readConfig()?.web_url || WEB_URL}/conversation/${spawned.conversationId}`;
+      console.log(`${c.green}ok${c.reset} spawned ${c.cyan}${spawned.sessionId}${c.reset} for ${c.cyan}${shortId}${c.reset}`);
+      console.log(`  ${c.dim}${link}${c.reset}`);
+    }
     await warnIfThreadStateStale({ getCliEndpoint, detectCurrentSessionId });
   });
 
@@ -13838,8 +14082,8 @@ work
   .command("done")
   .description("Mark a task as done")
   .argument("<short_id>", "Task short ID")
-  .option("-m, --message <text>", "Completion comment")
-  .option("--concerns <text>", "Mark done with concerns")
+  .option("-m, --message <text>", stdinText("Completion comment"))
+  .option("--concerns <text>", stdinText("Mark done with concerns"))
   .option("--cascade", "Also close this task's open subtasks")
   .option("--only-parent", "Close just this task, leaving open subtasks in place")
   .action(async (shortId: string, options: any) => {
@@ -13870,7 +14114,7 @@ work
   .command("drop")
   .description("Drop/cancel a task")
   .argument("<short_id>", "Task short ID")
-  .option("-m, --message <text>", "Reason for dropping")
+  .option("-m, --message <text>", stdinText("Reason for dropping"))
   .option("--cascade", "Also drop this task's open subtasks")
   .option("--only-parent", "Drop just this task, leaving open subtasks in place")
   .action(async (shortId: string, options: any) => {
@@ -13895,8 +14139,8 @@ work
   .argument("<short_id>", "Task short ID")
   .option("-s, --status <status>", "New status")
   .option("-p, --priority <level>", "New priority")
-  .option("-t, --title <title>", "New title")
-  .option("-d, --description <text>", "New description")
+  .option("-t, --title <title>", stdinText("New title"))
+  .option("-d, --description <text>", stdinText("New description"))
   .option("--assignee <name>", "New assignee")
   .option("--labels <labels>", "Comma-separated labels")
   .option("--project <ref>", "Project ID, short ID, or title substring")
@@ -13932,11 +14176,10 @@ work
   .command("comment")
   .description("Add a comment to a task")
   .argument("<short_id>", "Task short ID")
-  .argument("<text>", "Comment text; '-' reads it from stdin (heredoc-friendly)")
+  .argument("<text>", stdinText("Comment text"))
   .option("-t, --type <type>", "Comment type: note, progress, blocker, review", "note")
   .option("-a, --author <name>", "Override comment author (default: auto-detect)")
   .action(async (shortId: string, text: string, options: any) => {
-    text = expandStdinPromptArgs([text])[0];
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: shortId, text, comment_type: options.type };
     if (sessionId) {
@@ -14190,14 +14433,19 @@ const projectCmd = program
 projectCmd
   .command("create")
   .description("Create a project")
-  .argument("<title>", "Project title")
-  .option("-d, --description <text>", "Description")
+  .argument("<title>", stdinText("Project title"))
+  .option("-d, --description <text>", stdinText("Description"))
   .option("--labels <labels>", "Comma-separated labels")
   .option("--path <dir>", "Project path used for workspace/team resolution (default: cwd)")
+  .option("--deadline <date>", "Target date (YYYY-MM-DD; 'none' clears) — drives the burndown deadline")
   .action(async (title: string, options: any) => {
     const body: Record<string, any> = { title, project_path: options.path || getRealCwd() };
     if (options.description) body.description = options.description;
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
+    if (options.deadline) {
+      const deadline = parseDeadlineDate(options.deadline);
+      if (deadline !== null) body.target_date = deadline;
+    }
     const result = await cliPost("/cli/projects/create", body);
     console.log(`${c.green}ok${c.reset} Created project ${c.cyan}${result.id}${c.reset}: ${title}`);
     const created = await tryCliPost("/cli/projects/get", { id: result.id });
@@ -14249,7 +14497,7 @@ projectCmd
       console.log(`\n  ${c.bold}Tasks (${p.tasks.length})${c.reset}`);
       for (const t of p.tasks) {
         const ticon = STATUS_ICONS[t.status] || "?";
-        console.log(`  ${ticon} ${c.cyan}${t.short_id}${c.reset} ${t.title} ${c.dim}${t.status}${c.reset}`);
+        console.log(`  ${ticon} ${c.cyan}${t.short_id}${c.reset} ${t.title}${externalTag(t)} ${c.dim}${t.status}${c.reset}`);
       }
     } else {
       console.log(fmt.muted("\n  No tasks bound to this project."));
@@ -14261,22 +14509,204 @@ projectCmd
   .command("update")
   .description("Update a project")
   .argument("<id>", "Project ID or title substring")
-  .option("--title <text>", "New title")
-  .option("--description <text>", "New description")
+  .option("--title <text>", stdinText("New title"))
+  .option("--description <text>", stdinText("New description"))
   .option("--status <status>", "New status: planning, active, paused, done")
   .option("--labels <labels>", "Comma-separated labels (replaces existing)")
+  .option("--deadline <date>", "Target date (YYYY-MM-DD; 'none' clears) — drives the burndown deadline")
   .action(async (ref: string, options: any) => {
     const body: Record<string, any> = { id: await resolveProjectId(ref) };
     if (options.title) body.title = options.title;
     if (options.description !== undefined) body.description = options.description;
     if (options.status) body.status = options.status;
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
+    if (options.deadline) body.target_date = parseDeadlineDate(options.deadline);
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to update — pass --title, --description, --status, or --labels");
+      console.error("Nothing to update — pass --title, --description, --status, --labels, or --deadline");
       process.exit(1);
     }
     await cliPost("/cli/projects/update", body);
     console.log(`${c.green}ok${c.reset} Updated project ${c.cyan}${body.id}${c.reset}`);
+  });
+
+// "2026-09-26" → ms at local end-of-day, so a deadline includes its own day.
+// "none" clears the deadline (the server treats null as "remove the field").
+function parseDeadlineDate(text: string): number | null {
+  if (text.trim().toLowerCase() === "none") return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text.trim());
+  const fail = (): never => {
+    console.error(`Invalid deadline "${text}" — use YYYY-MM-DD, or "none" to clear`);
+    process.exit(1);
+  };
+  if (!m) return fail();
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const date = new Date(y, mo - 1, d, 23, 59, 59);
+  // Date() rolls invalid dates over (Feb 30 → Mar 2); a deadline someone
+  // mistyped should error, not silently move.
+  if (date.getFullYear() !== y || date.getMonth() !== mo - 1 || date.getDate() !== d) return fail();
+  return date.getTime();
+}
+
+// "7d" / "24h" / "2w" → a timestamp that far in the past.
+function parseSinceWindow(text: string): number {
+  const m = /^(\d+)([hdw])$/.exec(text.trim());
+  if (!m) {
+    console.error(`Invalid --since "${text}" — use forms like 24h, 7d, 2w`);
+    process.exit(1);
+  }
+  const unitMs = { h: 3_600_000, d: 86_400_000, w: 604_800_000 }[m[2] as "h" | "d" | "w"];
+  return Date.now() - Number(m[1]) * unitMs;
+}
+
+const UPDATE_KIND_BADGE: Record<string, string> = { digest: " [digest]", update: "" };
+
+projectCmd
+  .command("post")
+  .description("Post an update to a project's Updates feed")
+  .argument("<id>", "Project ID or title substring")
+  .argument("[body]", stdinText("Update body (markdown)"))
+  .option("-t, --title <text>", stdinText("Title for the update"))
+  .option("--digest", "Mark this post as an automated digest (agent roll-up)")
+  .action(async (ref: string, bodyArg: string | undefined, options: any) => {
+    // '-' was already expanded from stdin before the action ran. Without a body
+    // argument, read piped stdin, but never block a TTY waiting for input.
+    const text = bodyArg !== undefined
+      ? bodyArg
+      : process.stdin.isTTY ? "" : readStdinBody();
+    if (!text || !text.trim()) {
+      console.error("Empty update body — pass text or '-' with a heredoc");
+      process.exit(1);
+    }
+    const body: Record<string, any> = {
+      id: await resolveProjectId(ref),
+      body: text,
+    };
+    if (options.title) body.title = options.title;
+    if (options.digest) body.kind = "digest";
+    const sessionId = detectCurrentSessionId();
+    if (sessionId) body.conversation_id = sessionId;
+    const result = await cliPost("/cli/projects/post", body);
+    console.log(`${c.green}ok${c.reset} Posted ${c.cyan}${result.short_id}${c.reset} to the project's Updates feed`);
+  });
+
+projectCmd
+  .command("updates")
+  .description("Read a project's Updates feed (posts + comments)")
+  .argument("<id>", "Project ID or title substring")
+  .option("-n, --limit <n>", "Max updates to show", "20")
+  .option("--json", "Output as JSON")
+  .action(async (ref: string, options: any) => {
+    const id = await resolveProjectId(ref);
+    const rows = await cliPost("/cli/projects/updates", { id });
+    if (!Array.isArray(rows)) {
+      console.error("Project not found");
+      process.exit(1);
+    }
+    if (options.json) {
+      printJson(rows);
+      return;
+    }
+    const shown = rows.slice(0, parseInt(options.limit, 10) || 20);
+    if (shown.length === 0) {
+      console.log(fmt.muted("No updates yet. Post one with: cast project post <id> <body>"));
+      return;
+    }
+    for (const u of shown) {
+      const when = formatRelativeTime(u.created_at);
+      const badge = UPDATE_KIND_BADGE[u.kind] ?? "";
+      const title = u.title ? ` ${c.bold}${u.title}${c.reset}` : "";
+      console.log(`${c.cyan}${u.short_id ?? ""}${c.reset}${title}${c.yellow}${badge}${c.reset} ${c.dim}· ${u.author} · ${when}${c.reset}`);
+      console.log(u.body.split("\n").map((l: string) => `  ${l}`).join("\n"));
+      for (const cm of u.comments ?? []) {
+        console.log(`    ${c.dim}↳${c.reset} ${cm.author} ${c.dim}(${formatRelativeTime(cm.created_at)})${c.reset}: ${cm.text}`);
+      }
+      console.log();
+    }
+    if (rows.length > shown.length) {
+      console.log(fmt.muted(`  … ${rows.length - shown.length} older (raise -n to see more)`));
+    }
+  });
+
+projectCmd
+  .command("comment")
+  .description("Comment on a project update (address it by its pu-N id)")
+  .argument("<update_id>", "Update short ID, e.g. pu-12")
+  .argument("<text>", stdinText("Comment text"))
+  .action(async (updateRef: string, text: string, _options: any) => {
+    if (!text || !text.trim()) {
+      console.error("Empty comment");
+      process.exit(1);
+    }
+    const body: Record<string, any> = { short_id: updateRef, text };
+    const sessionId = detectCurrentSessionId();
+    if (sessionId) body.conversation_id = sessionId;
+    await cliPost("/cli/projects/comment-update", body);
+    console.log(`${c.green}ok${c.reset} Comment added to ${c.cyan}${updateRef}${c.reset}`);
+  });
+
+const TIMELINE_GLYPHS: Record<string, [string, string]> = {
+  project_created: ["◈", c.cyan],
+  update_posted: ["✦", c.yellow],
+  update_comment: ["↳", c.dim],
+  task_created: ["+", c.blue],
+  task_status: ["→", c.green],
+  task_comment: ["·", c.dim],
+  plan_created: ["◆", c.magenta],
+  plan_entry: ["▸", c.magenta],
+  doc_created: ["▤", c.cyan],
+};
+
+function timelineEventLine(e: any): string {
+  const [glyph, color] = TIMELINE_GLYPHS[e.type] ?? ["·", c.dim];
+  const when = `${c.dim}${formatRelativeTime(e.ts)}${c.reset}`;
+  const who = e.actor ? `${e.actor} ` : "";
+  // Older rows may predate short ids — fall back to the title, never print "undefined".
+  const taskRef = e.task?.short_id ?? e.task?.title ?? "a task";
+  const planRef = e.plan?.short_id ?? e.plan?.title ?? "a plan";
+  let what: string;
+  switch (e.type) {
+    case "project_created": what = "created the project"; break;
+    case "update_posted": what = `posted ${e.update?.short_id ?? "an update"}${e.update?.title ? `: ${e.update.title}` : ""}`; break;
+    case "update_comment": what = `commented on ${e.update?.short_id ?? "an update"}: ${e.text}`; break;
+    case "task_created": what = `created ${taskRef} ${e.task?.short_id ? e.task?.title ?? "" : ""}`.trimEnd(); break;
+    case "task_status": what = `${taskRef} ${e.old_value ? `${e.old_value} → ` : ""}${e.new_value} ${c.dim}(${e.task?.title})${c.reset}`; break;
+    case "task_comment": what = `on ${taskRef}: ${e.text}`; break;
+    case "plan_created": what = `created plan ${planRef} ${e.plan?.short_id ? e.plan?.title ?? "" : ""}`.trimEnd(); break;
+    case "plan_entry": what = `${e.entry_type} on ${planRef}: ${e.text}`; break;
+    case "doc_created": what = `created doc "${e.doc?.title}"`; break;
+    default: what = e.type;
+  }
+  return `  ${color}${glyph}${c.reset} ${who}${what} ${when}`;
+}
+
+projectCmd
+  .command("timeline")
+  .description("A project's merged activity feed: updates, task changes, comments")
+  .argument("<id>", "Project ID or title substring")
+  .option("-n, --limit <n>", "Max events", "60")
+  .option("--since <window>", "Only events in this window (24h, 7d, 2w)")
+  .option("--json", "Output as JSON")
+  .action(async (ref: string, options: any) => {
+    const id = await resolveProjectId(ref);
+    const body: Record<string, any> = { id, limit: parseInt(options.limit, 10) || 60 };
+    if (options.since) body.since = parseSinceWindow(options.since);
+    const events = await cliPost("/cli/projects/timeline", body);
+    if (!Array.isArray(events)) {
+      console.error("Project not found");
+      process.exit(1);
+    }
+    if (options.json) {
+      printJson(events);
+      return;
+    }
+    if (events.length === 0) {
+      console.log(fmt.muted("No activity in this window."));
+      return;
+    }
+    for (const e of events) console.log(timelineEventLine(e));
+    if (events.length === body.limit) {
+      console.log(fmt.muted(`  … showing the ${events.length} most recent (raise -n for more)`));
+    }
   });
 
 // --- Plans ---
@@ -14310,8 +14740,8 @@ const doc = program
 doc
   .command("create")
   .description("Create a new document. The title is the document's first heading: content that opens with one keeps it as the title.")
-  .argument("<title>", "Document title (written in as the first heading when the content has none)")
-  .option("-c, --content <text>", "Document content (markdown); '-' reads it from stdin (heredoc-friendly)")
+  .argument("<title>", stdinText("Document title (written in as the first heading when the content has none)"))
+  .option("-c, --content <text>", stdinText("Document content (markdown)"))
   .option("--content-file <path>", "Read content from file ('-' for stdin)")
   .option("-t, --type <type>", "Document type (note, plan, insight, decision, runbook)", "note")
   .option("-l, --labels <labels>", "Comma-separated labels")
@@ -14323,9 +14753,7 @@ doc
         ? readStdinBody()
         : fs.readFileSync(options.contentFile, "utf-8");
     } else if (options.content) {
-      body.content = options.content === "-"
-        ? readStdinBody()
-        : options.content.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+      body.content = options.content.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
     } else {
       body.content = "";
     }
@@ -14465,11 +14893,10 @@ doc
   .command("comment")
   .description("Add a comment to a document")
   .argument("<id>", "Document ID")
-  .argument("<text>", "Comment text; '-' reads it from stdin (heredoc-friendly)")
+  .argument("<text>", stdinText("Comment text"))
   .option("-t, --type <type>", "Comment type: note, progress, decision, discovery, reference, blocker", "note")
   .option("-a, --author <name>", "Override comment author")
   .action(async (id: string, text: string, options: any) => {
-    text = expandStdinPromptArgs([text])[0];
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { id, content: text, type: options.type };
     if (sessionId) body.session_id = sessionId;
@@ -14482,11 +14909,11 @@ doc
   .command("edit")
   .description("Patch a document's content (find & replace)")
   .argument("<id>", "Document ID")
-  .option("--old <text>", "Text to find in the document")
-  .option("--new <text>", "Replacement text")
-  .option("--content <text>", "Full content replacement")
+  .option("--old <text>", stdinText("Text to find in the document"))
+  .option("--new <text>", stdinText("Replacement text"))
+  .option("--content <text>", stdinText("Full content replacement"))
   .option("--content-file <path>", "Full content from file")
-  .option("--title <text>", "Update title (rewrites the document's first heading)")
+  .option("--title <text>", stdinText("Update title (rewrites the document's first heading)"))
   .option("-t, --type <type>", "Change document type")
   .action(async (id: string, options: any) => {
     if (options.old && options.new !== undefined) {
@@ -14623,11 +15050,11 @@ const plan = program
 plan
   .command("create")
   .description("Create a new plan")
-  .argument("<title>", "Plan title")
-  .option("-g, --goal <text>", "Plan goal")
-  .option("-b, --body <text>", "Plan body (short text)")
+  .argument("<title>", stdinText("Plan title"))
+  .option("-g, --goal <text>", stdinText("Plan goal"))
+  .option("-b, --body <text>", stdinText("Plan body"))
   .option("--body-file <path>", "Plan body from file (for longer content; '-' for stdin)")
-  .option("-a, --acceptance <criteria>", "Acceptance criterion (repeatable)", (val: string, prev: string[]) => prev.concat([val]), [] as string[])
+  .option("-a, --acceptance <criteria>", stdinText("Acceptance criterion (repeatable)"), (val: string, prev: string[]) => prev.concat([val]), [] as string[])
   .option("--from-session", "Promote from current session")
   .option("--project <ref>", "Project ID, short ID, or title substring")
   .option("-t, --template <name>", "Use a workflow template (plan-implement-verify, implement-review-fix, full-lifecycle)")
@@ -14638,7 +15065,7 @@ plan
     if (options.bodyFile) {
       body.body = options.bodyFile === "-" ? readStdinBody() : fs.readFileSync(options.bodyFile, "utf-8");
     } else if (options.body) {
-      body.body = expandStdinPromptArgs([options.body])[0];
+      body.body = options.body;
     }
     if (options.acceptance?.length) body.acceptance_criteria = options.acceptance;
     if (options.project) body.project_id = await resolveProjectId(options.project);
@@ -14904,10 +15331,10 @@ plan
   .command("update")
   .description("Update plan or log progress")
   .argument("<plan_id>", "Plan short ID")
-  .option("--log <entry>", "Add progress log entry")
-  .option("--goal <text>", "Update goal")
-  .option("--title <text>", "Update title")
-  .option("-b, --body <text>", "Update body (short text)")
+  .option("--log <entry>", stdinText("Add progress log entry"))
+  .option("--goal <text>", stdinText("Update goal"))
+  .option("--title <text>", stdinText("Update title"))
+  .option("-b, --body <text>", stdinText("Update body"))
   .option("--body-file <path>", "Update body from file (for longer content; '-' for stdin)")
   .action(async (planId: string, options: any) => {
     const sessionId = detectCurrentSessionId();
@@ -14921,7 +15348,7 @@ plan
     if (options.bodyFile) {
       bodyContent = options.bodyFile === "-" ? readStdinBody() : fs.readFileSync(options.bodyFile, "utf-8");
     } else if (options.body) {
-      bodyContent = expandStdinPromptArgs([options.body])[0];
+      bodyContent = options.body;
     }
     if (options.goal || options.title || bodyContent !== undefined) {
       const body: Record<string, any> = { short_id: planId };
@@ -14967,15 +15394,14 @@ plan
   .command("comment")
   .description("Add a comment to a plan")
   .argument("<plan_id>", "Plan short ID")
-  .argument("<text>", "Comment text; '-' reads it from stdin (heredoc-friendly)")
+  .argument("<text>", stdinText("Comment text"))
   .option("-t, --type <type>", "Comment type: progress, decision, discovery, reference, blocker, note", "progress")
   .option("-d, --decision", "Shorthand for --type decision")
   .option("-f, --finding", "Shorthand for --type discovery")
   .option("--ref <path_or_url>", "Add a reference pointer (sets type to reference)")
-  .option("-r, --rationale <why>", "Rationale (for decisions)")
+  .option("-r, --rationale <why>", stdinText("Rationale (for decisions)"))
   .option("-a, --author <name>", "Override comment author")
   .action(async (planId: string, text: string, options: any) => {
-    text = expandStdinPromptArgs([text])[0];
     const sessionId = detectCurrentSessionId();
     let type = options.type;
     if (options.decision) type = "decision";
@@ -17061,7 +17487,7 @@ const workflow = program
 workflow
   .command("run <file>")
   .description("Run a workflow file")
-  .option("-g, --goal <text>", "Override the workflow goal")
+  .option("-g, --goal <text>", stdinText("Override the workflow goal"))
   .option("--dry-run", "Validate and print the workflow without executing")
   .option("--auto-approve", "Skip human gate prompts, auto-select first option")
   .option("--task <short_id>", "Bind workflow to a task (injects task context)")
@@ -17289,7 +17715,7 @@ workflow
 workflow
   .command("create <name>")
   .description("Create a new workflow template")
-  .option("-g, --goal <text>", "Workflow goal")
+  .option("-g, --goal <text>", stdinText("Workflow goal"))
   .action(async (name: string, options: any) => {
     const fs = await import("fs");
     const path = await import("path");
@@ -17535,6 +17961,15 @@ if (process.argv.length <= 2) {
 
 // Log all CLI commands
 program.hook('preAction', (thisCommand, actionCommand) => {
+  // The '-'-to-stdin convention (sendBody.ts) for every option and positional
+  // described with stdinText(): expanded here, once, so no action handler
+  // reads stdin for '-' itself and a documented '-' always works.
+  try {
+    expandCommandStdinDashes(actionCommand);
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exit(1);
+  }
   const cmdName = actionCommand.name();
   const args = actionCommand.args?.join(' ') || '';
   if (process.env.DEBUG_CLI) {
@@ -17551,22 +17986,10 @@ program.hook('preAction', (thisCommand, actionCommand) => {
 // <git args…>`. The git argv carries flags commander would mis-parse, and this
 // runs on every :Gblame, so bypass commander (and its daemon/alias side
 // effects) entirely and stream the rewritten blame straight out.
-if (isStableContextFastPath) {
-  // Bypass Commander, preAction logging/daemon startup, alias repair, env
-  // autobinding, and every other global CLI side effect. Hook stdout must be
-  // exactly one stable-context block (or empty).
-  runStableContextHook(readConfig(), parseStableHookClient(process.argv[4])).catch(() => {});
-} else if (process.argv[2] === "_disclaimed") {
-  // Agent-launch wrapper (see disclaim.ts): exec the rest of argv as a TCC
-  // self-responsible process so privacy prompts name the agent, not codecast.
-  // Bypasses Commander and every global CLI side effect — this runs in the
-  // hot path of every agent spawn.
-  import("./disclaim.js")
-    .then(({ runDisclaimed }) => runDisclaimed(process.argv.slice(3)))
-    .catch((err) => {
-      console.error(err instanceof Error ? err.message : String(err));
-      process.exit(127);
-    });
+if (runFastPath(process.argv)) {
+  // Hot-path verbs (`_disclaimed`, the stable-context hook) — see fastPath.ts.
+  // main.ts normally claims these before this file ever loads; this call only
+  // serves wrapper scripts that still point at index.ts.
 } else if (process.argv[2] === "__fugitive_blame@@") {
   import("./blame.js")
     .then(({ runFugitiveBlame }) => runFugitiveBlame(process.argv.slice(3), readConfig() ?? {}))

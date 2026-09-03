@@ -2484,6 +2484,8 @@ describe("inboxStore.beginOptimisticSession", () => {
       pending: {},
       currentConversation: {},
       isolatedWorktreeMode: false,
+      cloudSessionMode: false,
+      machineRoster: [],
     });
   });
 
@@ -2743,6 +2745,39 @@ describe("inboxStore.beginOptimisticSession", () => {
       const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
       await done;
       expect(calls[0].isolated).toBeUndefined();
+    });
+
+    // "Run in the cloud" reaches the create as cloud_device_id — the field that
+    // parks the row on the host and hands a local daemon the preparation. It
+    // REPLACES isolated rather than joining it: the worktree is made on the host,
+    // so asking a local daemon for one too would make a second, unused one.
+    it("createSessionFromStub forwards cloud_device_id when the cloud toggle is on", async () => {
+      useInboxStore.setState({
+        sessions: { stub1: { _id: "stub1", session_id: "stub1", project_path: "/repo", git_root: "/repo", agent_type: "claude_code", updated_at: 1, message_count: 0, is_idle: true, has_pending: false } as InboxSession },
+        isolatedWorktreeMode: true,
+        cloudSessionMode: true,
+        machineRoster: [
+          { device_id: "laptop", is_remote: false, online: true, last_seen: 2, platform: "darwin" },
+          { device_id: "cloud-linux", is_remote: true, online: false, last_seen: 1, platform: "linux" },
+        ],
+      });
+      const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await done;
+      expect(calls[0]).toMatchObject({ cloud_device_id: "cloud-linux", project_path: "/repo", session_id: "stub1" });
+      expect(calls[0].isolated).toBeUndefined();
+    });
+
+    it("createSessionFromStub omits cloud_device_id when no machine wakes on use", async () => {
+      useInboxStore.setState({
+        sessions: { stub1: { _id: "stub1", session_id: "stub1", project_path: "/repo", git_root: "/repo", agent_type: "claude_code", updated_at: 1, message_count: 0, is_idle: true, has_pending: false } as InboxSession },
+        isolatedWorktreeMode: true,
+        cloudSessionMode: true,
+        machineRoster: [{ device_id: "laptop", is_remote: false, online: true, last_seen: 2, platform: "darwin" }],
+      });
+      const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await done;
+      expect(calls[0].cloud_device_id).toBeUndefined();
+      expect(calls[0].isolated).toBe(true);
     });
 
     // The in-app new session (Ctrl+N) self-heals its stub through

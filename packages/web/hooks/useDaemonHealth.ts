@@ -20,10 +20,22 @@ export const QUIET_AFTER_MS = 5 * ONE_MIN_MS;
 
 // After a (re)start the daemon recovers sessions, re-attaches watchers and
 // sweeps transcripts before deliveries and echoes flow at normal speed. Show
-// "restarted, catching up" for this long after the reported boot time. A
-// restart is a routine event (every upgrade, every `cast restart`), so the
-// window covers the recovery itself and not much more.
-export const RESTART_SETTLE_MS = 45 * 1000;
+// "restarted, catching up" until the daemon says it is past that, rather than
+// for a fixed stretch of time.
+//
+// The evidence is in the beat itself. The boot beat carries daemon_started_at
+// and a last_seen stamped a second or two later, and the server then throttles
+// last_seen to one write per 45 to 50 seconds (HEARTBEAT_WRITE_THROTTLE_MS in
+// convex/users.ts, DEVICE_WRITE_THROTTLE_MS for the device row). So a last_seen
+// well past the boot stamp can only come from a LATER beat, which is the proof
+// the daemon came back and is beating normally. Anything within this grace of
+// the boot stamp is still the boot beat.
+export const RESTART_BEAT_GRACE_MS = 20 * 1000;
+
+// A daemon that booted and then died would otherwise pin the chip on
+// "restarting" forever, so the evidence expires. Offline and quiet outrank
+// restarting anyway; this only bounds the gap before they take over.
+export const RESTART_CEILING_MS = 2 * ONE_MIN_MS;
 
 // The daemon reports how many ms its event loop was blocked in the trailing
 // minute (freezes of 5s or more). A busy machine (a build, a big transcript
@@ -31,6 +43,12 @@ export const RESTART_SETTLE_MS = 45 * 1000;
 // spent frozen are deliveries and transcript sync visibly delayed — call that
 // "under load".
 export const OVERLOADED_FREEZE_MS = 30 * 1000;
+
+// The same idea over an hour, and the SLO the server alerts on: a machine that
+// spent more than two minutes of the last hour frozen is under load even when
+// the current minute happens to be quiet. Mirrors LOOP_FREEZE_ALERT_MS in
+// convex/daemonLogs.ts.
+export const OVERLOADED_HOUR_MS = 120 * 1000;
 
 // The retry backlog must persist past this before we call it a stall. A few
 // failed ops that clear within a couple of minutes are normal transient
@@ -88,6 +106,9 @@ export interface DaemonHealthInput {
   daemon_pending_sync_conversations?: number | null;
   daemon_started_at?: number | null;
   daemon_loop_freeze_ms?: number | null;
+  daemon_loop_freeze_1h_ms?: number | null;
+  daemon_loop_freeze_max_ms?: number | null;
+  daemon_loop_freeze_top?: string | null;
 }
 
 export type DaemonHealth =
@@ -101,7 +122,9 @@ export type DaemonHealth =
   | { kind: "restarting"; sinceMs: number }
   // Alive and beating, but its event loop was blocked for `freezeMs` of the
   // last minute — deliveries and echoes are delayed, not lost.
-  | { kind: "overloaded"; freezeMs: number }
+  // `hourMs`, `maxMs` and `topCause` are present only when the hour tier fired,
+  // so the object stays exactly {kind, freezeMs} on the minute tier.
+  | { kind: "overloaded"; freezeMs: number; hourMs?: number; maxMs?: number; topCause?: string }
   // `pending` is the logical op count; `messages`/`conversations` are the honest
   // backlog depth so the chip can say "syncing N messages across M convos".
   | { kind: "sync_stalled"; pending: number; messages: number; conversations: number; stalledMs: number };
@@ -113,14 +136,30 @@ export type DaemonHealth =
 export const isDegradedDaemonHealth = (h: DaemonHealth): boolean =>
   h.kind === "offline" || h.kind === "quiet" || h.kind === "restarting" || h.kind === "overloaded" || h.kind === "sync_stalled";
 
+// Narrower than degraded: the states in which a message is late RIGHT NOW.
+// The hour tier reports an SLO, not a live symptom — a machine that froze for
+// two minutes at breakfast is fine by lunch — so it colours the header chip but
+// must not hide the note that says a message is stuck, or the kill and restart
+// button on it, for the rest of the hour. Everything else that degrades still
+// does.
+export const blocksDelivery = (h: DaemonHealth): boolean =>
+  isDegradedDaemonHealth(h) && !(h.kind === "overloaded" && h.freezeMs < OVERLOADED_FREEZE_MS);
+
 // Severity order for picking the machine worth talking about when several
 // daemons report: an unreachable daemon outranks a busy one, which outranks
 // one that is merely fresh from a restart or behind on sync.
+//
+// "overloaded" splits by liveness, the same rule computeDaemonHealth applies
+// within one machine. A loop blocked in the last minute is the loudest thing
+// short of a silent daemon. An hour total on its own is a record: it lasts a
+// full hour where the minute tier lasts about a minute, so ranking it above a
+// live sync backlog would hide a real stuck queue on another machine for the
+// rest of that hour. It sorts below sync_stalled and above ok.
 export function daemonHealthSeverity(h: DaemonHealth): number {
   switch (h.kind) {
     case "offline": return h.tier === "severe" ? 7 : h.tier === "alert" ? 6 : 5;
     case "quiet": return 4;
-    case "overloaded": return 3;
+    case "overloaded": return h.freezeMs >= OVERLOADED_FREEZE_MS ? 3 : 0.5;
     case "restarting": return 2;
     case "sync_stalled": return 1;
     default: return 0;
@@ -135,6 +174,9 @@ export interface DaemonDeviceRow {
   last_seen?: number | null;
   daemon_started_at?: number | null;
   loop_freeze_ms?: number | null;
+  loop_freeze_1h_ms?: number | null;
+  loop_freeze_max_ms?: number | null;
+  loop_freeze_top?: string | null;
   pending_sync_count?: number | null;
   oldest_pending_ms?: number | null;
   pending_sync_messages?: number | null;
@@ -149,6 +191,9 @@ export function deviceHealthInput(d: DaemonDeviceRow): DaemonHealthInput {
     daemon_last_seen: d.last_seen,
     daemon_started_at: d.daemon_started_at,
     daemon_loop_freeze_ms: d.loop_freeze_ms,
+    daemon_loop_freeze_1h_ms: d.loop_freeze_1h_ms,
+    daemon_loop_freeze_max_ms: d.loop_freeze_max_ms,
+    daemon_loop_freeze_top: d.loop_freeze_top,
     daemon_pending_sync_count: d.pending_sync_count,
     daemon_oldest_pending_ms: d.oldest_pending_ms,
     daemon_pending_sync_messages: d.pending_sync_messages,
@@ -207,18 +252,38 @@ export function computeDaemonHealth(
   if (tier) return { kind: "offline", tier, offlineMs };
   if (offlineMs >= QUIET_AFTER_MS) return { kind: "quiet", quietMs: offlineMs };
 
-  // Beating, but freshly booted: it is still recovering sessions and watchers.
+  // Beating, but the beat we hold IS the boot beat: it is still recovering
+  // sessions and watchers. The next beat clears this, not a timer.
   const startedAt = user?.daemon_started_at ?? 0;
-  if (startedAt > 0 && now - startedAt < RESTART_SETTLE_MS) {
+  if (startedAt > 0 && lastSeen - startedAt < RESTART_BEAT_GRACE_MS && now - startedAt < RESTART_CEILING_MS) {
     return { kind: "restarting", sinceMs: Math.max(0, now - startedAt) };
   }
 
-  // Beating, but its loop spent a chunk of the last minute frozen.
+  // Beating, but its loop spent a chunk of the last minute frozen, or a chunk
+  // of the last hour. The hour tier catches a machine that freezes hard every
+  // few minutes, which the minute window shows only while a freeze sits inside
+  // it.
   const freezeMs = user?.daemon_loop_freeze_ms ?? 0;
-  if (freezeMs >= OVERLOADED_FREEZE_MS) return { kind: "overloaded", freezeMs };
+  const hourMs = user?.daemon_loop_freeze_1h_ms ?? 0;
+  const hourTier = hourMs >= OVERLOADED_HOUR_MS;
+  const maxMs = user?.daemon_loop_freeze_max_ms ?? 0;
+  const topCause = user?.daemon_loop_freeze_top || "";
+  const hourFields = hourTier
+    ? { hourMs, ...(maxMs > 0 ? { maxMs } : {}), ...(topCause ? { topCause } : {}) }
+    : {};
+
+  // The minute tier outranks a sync backlog: the loop is blocked right now, so
+  // the backlog is a symptom of it.
+  if (freezeMs >= OVERLOADED_FREEZE_MS) return { kind: "overloaded", freezeMs, ...hourFields };
 
   // Daemon is online (fresh heartbeat) but data may not be flowing. Surface a
   // sustained retry backlog as a distinct "sync stalled" state.
+  //
+  // This sits ABOVE the hour tier on purpose. The hour total is a record of the
+  // last sixty minutes, and a machine that froze for two minutes at breakfast
+  // carries it until lunch. Reporting it over a live backlog would hide the
+  // count of waiting messages for that whole hour, which is the half a person
+  // can act on.
   const pending = user?.daemon_pending_sync_count ?? 0;
   const oldest = user?.daemon_oldest_pending_ms ?? 0;
   if (pending > 0 && oldest >= SYNC_STALL_AFTER_MS) {
@@ -230,6 +295,10 @@ export function computeDaemonHealth(
       stalledMs: oldest,
     };
   }
+
+  // Nothing is late right now, but the hour missed its SLO. This colours the
+  // header chip and names the top cause.
+  if (hourTier) return { kind: "overloaded", freezeMs, ...hourFields };
 
   return { kind: "ok" };
 }
@@ -306,7 +375,15 @@ const ROSTER_SIG_FIELDS: Array<keyof DaemonDeviceRow> = [
   "device_id", "label", "last_seen", "daemon_started_at", "loop_freeze_ms",
   "pending_sync_count", "oldest_pending_ms", "pending_sync_messages", "pending_sync_conversations",
   "is_remote",
+  // Appended at the END on purpose: the decode below reads by index, so a new
+  // field inserted anywhere else silently shifts every other one.
+  "loop_freeze_1h_ms", "loop_freeze_max_ms", "loop_freeze_top",
 ];
+
+// One cell of the roster signature: never empty of meaning, never carrying a
+// separator. Exported so the decode's contract can be tested directly.
+export const sigCell = (v: unknown): string =>
+  v === null || v === undefined || v === false ? "" : String(v).replace(/[|\n\r]+/g, " ");
 
 // Health of the daemon on `deviceId` (a session's owner_device_id), or — with
 // no device named — the worst machine in the roster. Falls back to the
@@ -318,7 +395,13 @@ export function useDaemonHealth(deviceId?: string | null): FleetDaemonHealth {
   // reasons this hook does not care about.
   const rosterSig = useInboxStore((s) => {
     const rows = (s.machineRoster ?? []) as DaemonDeviceRow[];
-    return rows.map((d) => ROSTER_SIG_FIELDS.map((f) => (d[f] === true ? "1" : d[f] || "")).join("|")).join("\n");
+    // The separators are stripped from every field on the way in. The decode
+    // below reads by position, so one row carrying a "|" or a newline in a
+    // string field (a machine label, a top cause) would misread every OTHER
+    // device in the roster, not only its own.
+    return rows
+      .map((d) => ROSTER_SIG_FIELDS.map((f) => (d[f] === true ? "1" : sigCell(d[f]))).join("|"))
+      .join("\n");
   });
   const roster = useMemo<DaemonDeviceRow[]>(() => {
     if (!rosterSig) return [];
@@ -330,6 +413,8 @@ export function useDaemonHealth(deviceId?: string | null): FleetDaemonHealth {
         loop_freeze_ms: num(4), pending_sync_count: num(5), oldest_pending_ms: num(6),
         pending_sync_messages: num(7), pending_sync_conversations: num(8),
         is_remote: v[9] === "1",
+        loop_freeze_1h_ms: num(10), loop_freeze_max_ms: num(11),
+        loop_freeze_top: v[12] || undefined,
       };
     });
   }, [rosterSig]);

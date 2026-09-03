@@ -41,9 +41,9 @@ export const PERSISTENCE_AVAILABLE = typeof window !== "undefined";
 // declared schema against what is actually on disk (adds tables and indexes,
 // drops removed tables) rather than replaying a version ladder — so the old
 // twelve-step ladder that restated the whole schema per step is gone.
-export const CACHE_SCHEMA_VERSION = 23;
+export const CACHE_SCHEMA_VERSION = 26;
 export const CACHE_SCHEMA_SIGNATURE =
-  "agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|capabilityBindings:_id|capabilityState:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|comments:_id|commits:_id|docDetails:_id|docs:_id|managedSessions:_id|messageFeed:_id, timestamp|pageThreads:_id|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|savedViews:_id|sessionDecisions:_id|sessions:_id|tasks:_id|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|workflowRuns:_id, workflow_id|workflows:_id";
+  "agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|capabilityBindings:_id|capabilityState:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|codeComments:_id, pull_request_id, repository, file_path, created_at|comments:_id|commits:_id|docDetails:_id|docs:_id|externalEvents:_id, team_id, conversation_id, pr_id, task_id, repository, created_at|issueSyncSources:_id, project_id|managedSessions:_id|messageFeed:_id, timestamp|pageThreads:_id|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|savedViews:_id|sessionDecisions:_id|sessions:_id|tasks:_id|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|workflowRuns:_id, workflow_id|workflows:_id";
 
 const SYSTEM_TABLES = {
   meta: "key",
@@ -574,6 +574,10 @@ function deleteDatabaseWithTimeout(name: string): Promise<void> {
 
 // Sign-out purge: drop every locally persisted row (collections, messages,
 // meta, parked outbox). The caller owns navigation/reload afterwards.
+/** Dexie writes only the diffed rows and lands them itself; nothing is held
+ *  back. The native engine schedules whole-blob writes and drains them here. */
+export async function flushPersistence(): Promise<void> {}
+
 export async function purgeLocalCache(): Promise<void> {
   _pendingMsgWrites.clear();
   lastPersisted.clear();

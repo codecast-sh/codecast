@@ -447,6 +447,10 @@ describe("isApiErrorBanner", () => {
     expect(isApiErrorBanner("You've hit your session limit · resets 11:30pm (America/New_York)")).toBe(true);
     expect(isApiErrorBanner("You've hit your session limit")).toBe(true);
     expect(isApiErrorBanner("You've hit your monthly spend limit · raise it at claude.ai/settings/usage")).toBe(true);
+    // Org-billed form (2026-09-03): an apostrophe between "your" and "limit".
+    // Unrecognized, the park is never stamped, so a resume re-sources the
+    // spent account's setup-token instead of the account the device moved to.
+    expect(isApiErrorBanner("You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage?from=cc_cli_limit_message · your session limit resets 7:40pm (America/New_York)")).toBe(true);
     expect(isApiErrorBanner("You’ve hit your weekly limit · resets 3am (America/New_York)")).toBe(true); // curly apostrophe
     expect(isApiErrorBanner("Claude usage limit reached. Your limit will reset at 3am (America/New_York).")).toBe(true);
     // Sentence-shaped spend-limit variant, admitted by its /usage-credits tail.
@@ -487,6 +491,7 @@ describe("isApiErrorBanner", () => {
   test("classifies banner kinds for the badge label", () => {
     expect(classifyApiErrorBanner("Please run /login · API Error: 401 Invalid authentication credentials")).toBe("auth");
     expect(classifyApiErrorBanner("You've hit your session limit · resets 11:30pm (America/New_York)")).toBe("limit");
+    expect(classifyApiErrorBanner("You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage?from=cc_cli_limit_message · your session limit resets 7:40pm (America/New_York)")).toBe("limit");
     expect(classifyApiErrorBanner("You've hit your monthly spend limit. Run /usage-credits to manage your limit and keep using Fable 5 or switch models to continue this chat.")).toBe("limit");
     expect(classifyApiErrorBanner("API Error: 529 Overloaded")).toBe("error");
     expect(classifyApiErrorBanner("All good, deploy finished.")).toBe(null);
