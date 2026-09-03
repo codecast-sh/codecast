@@ -174,3 +174,15 @@ export function isUsageLimitDialog(
 export function blockedContinueClientId(conversationId: string, at: number): string {
   return `continue-blocked-${conversationId}-${Math.floor(at / 60_000)}`;
 }
+
+// Claude Code's no-op assistant row. When a prompt reaches the CLI and no
+// model call follows — the resume hook's "Continue from where you left off."
+// landing on a session still parked at a limit, or a turn the model declined
+// — the CLI writes a `<synthetic>` assistant row with this exact text, at the
+// same timestamp as the prompt. It is not a real turn: it says nothing about
+// whether a park lifted, and the timeline renders it as nothing. One
+// predicate so the park flag (isRealTurn) and the web agree on the row.
+export const NO_RESPONSE_STUB = "No response requested.";
+export function isNoResponseStub(content: string | null | undefined): boolean {
+  return (content ?? "").trim() === NO_RESPONSE_STUB;
+}
