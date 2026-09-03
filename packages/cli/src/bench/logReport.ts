@@ -78,11 +78,14 @@ export function parsePsSnapshot(ts: number, message: string): PsSnapshotEvent | 
   return m ? { ts, args: m[1], tookMs: Number(m[2]), lines: Number(m[3]) } : null;
 }
 
-export interface SlowSpawnEvent { ts: number; kind: string; blockedMs: number; command: string }
-const SPAWN_RE = /^\[SLOW-SYNC-SPAWN\] (\w+) blocked the event loop (\d+)ms: (.*)$/;
+// One line shape serves both tags (slowSync.ts): `tag` tells a spawn from a
+// filesystem hold, `kind` names the wrapper, `command` carries the detail.
+export interface SlowSpawnEvent { ts: number; tag: SlowSyncTag; kind: string; blockedMs: number; command: string }
+export type SlowSyncTag = "SLOW-SYNC-SPAWN" | "SLOW-SYNC-FS";
+const SPAWN_RE = /^\[(SLOW-SYNC-SPAWN|SLOW-SYNC-FS)\] ([\w.]+) blocked the event loop (\d+)ms: (.*)$/;
 export function parseSlowSpawn(ts: number, message: string): SlowSpawnEvent | null {
   const m = SPAWN_RE.exec(message);
-  return m ? { ts, kind: m[1], blockedMs: Number(m[2]), command: m[3] } : null;
+  return m ? { ts, tag: m[1] as SlowSyncTag, kind: m[2], blockedMs: Number(m[3]), command: m[4] } : null;
 }
 
 const START_RE = /^\[LIFECYCLE\] daemon_start: v(\S+) PID=(\d+)/;
@@ -187,6 +190,8 @@ export interface LogReport {
   };
   psSnapshot: { n: number; meanMs: number | null; maxMs: number | null; buckets: HistogramBucket[] };
   slowSpawn: { n: number; groups: SpawnGroup[] };
+  // Sync filesystem holds, grouped by the wrapper that reported them.
+  slowFs: { n: number; groups: SpawnGroup[] };
   boots: BootRow[];
 }
 
@@ -200,6 +205,7 @@ export function buildLogReport(
   const freezes: Array<LoopFreezeEvent & { kind: FreezeKind }> = [];
   const ps: PsSnapshotEvent[] = [];
   const spawns: SlowSpawnEvent[] = [];
+  const fsHolds: SlowSpawnEvent[] = [];
   const boots: BootRow[] = [];
   let linesRead = 0;
 
@@ -214,9 +220,9 @@ export function buildLogReport(
     } else if (message.startsWith("[PS-SNAPSHOT]")) {
       const ev = parsePsSnapshot(ts, message);
       if (ev) ps.push(ev);
-    } else if (message.startsWith("[SLOW-SYNC-SPAWN]")) {
+    } else if (message.startsWith("[SLOW-SYNC-")) {
       const ev = parseSlowSpawn(ts, message);
-      if (ev) spawns.push(ev);
+      if (ev) (ev.tag === "SLOW-SYNC-FS" ? fsHolds : spawns).push(ev);
     } else if (message.startsWith("[LIFECYCLE] daemon_start")) {
       const m = START_RE.exec(message);
       if (m) boots.push({ startedAt: new Date(ts).toISOString(), version: m[1], pid: Number(m[2]), listeningAt: null, blackoutMs: null });
@@ -246,13 +252,10 @@ export function buildLogReport(
     if (tag) lastLogCounts.set(tag, (lastLogCounts.get(tag) ?? 0) + 1);
   }
 
-  const spawnGroups = new Map<string, number[]>();
-  for (const s of spawns) {
-    const key = s.command.split(/\s+/)[0] ?? s.command;
-    const arr = spawnGroups.get(key) ?? [];
-    arr.push(s.blockedMs);
-    spawnGroups.set(key, arr);
-  }
+  // Spawns group by their program; filesystem holds by the wrapper, since
+  // their detail is a path that differs on every line.
+  const spawnGroups = groupHolds(spawns, (s) => s.command.split(/\s+/)[0] ?? s.command);
+  const fsGroups = groupHolds(fsHolds, (s) => s.kind);
 
   const psTook = ps.map((p) => p.tookMs);
   return {
@@ -275,14 +278,22 @@ export function buildLogReport(
       maxMs: psTook.length ? Math.max(...psTook) : null,
       buckets: histogram(psTook, PS_SNAPSHOT_EDGES_MS),
     },
-    slowSpawn: {
-      n: spawns.length,
-      groups: [...spawnGroups.entries()]
-        .map(([command, ms]) => ({ command, count: ms.length, meanMs: mean(ms), maxMs: Math.max(...ms) }))
-        .sort((a, b) => b.count - a.count),
-    },
+    slowSpawn: { n: spawns.length, groups: spawnGroups },
+    slowFs: { n: fsHolds.length, groups: fsGroups },
     boots,
   };
+}
+
+function groupHolds(events: SlowSpawnEvent[], keyOf: (e: SlowSpawnEvent) => string): SpawnGroup[] {
+  const groups = new Map<string, number[]>();
+  for (const e of events) {
+    const arr = groups.get(keyOf(e)) ?? [];
+    arr.push(e.blockedMs);
+    groups.set(keyOf(e), arr);
+  }
+  return [...groups.entries()]
+    .map(([command, ms]) => ({ command, count: ms.length, meanMs: mean(ms), maxMs: Math.max(...ms) }))
+    .sort((a, b) => b.count - a.count);
 }
 
 function topCounted(counts: Map<string, number>, top: number): CountedEntry[] {

@@ -113,6 +113,9 @@ describe("buildLogReport", () => {
     "[2026-08-28T13:20:23.023Z] [SLOW-SYNC-SPAWN] spawnSync blocked the event loop 1034ms: lsappinfo front",
     "[2026-08-28T16:48:02.205Z] [SLOW-SYNC-SPAWN] spawnSync blocked the event loop 1037ms: lsappinfo front",
     "[2026-08-28T16:52:56.187Z] [SLOW-SYNC-SPAWN] execSync blocked the event loop 2527ms: git remote get-url origin",
+    "[2026-08-28T16:53:10.000Z] [SLOW-SYNC-FS] walkDirsSync blocked the event loop 310ms: /Users/x/.claude/projects",
+    "[2026-08-28T16:53:40.000Z] [SLOW-SYNC-FS] walkDirsSync blocked the event loop 290ms: /Users/x/.codex/sessions",
+    "[2026-08-28T16:54:00.000Z] [SLOW-SYNC-FS] cursorWatcher.pollWorkspaces blocked the event loop 1200ms: /Users/x/Library/Application Support/Cursor/User/workspaceStorage",
     "[2026-08-28T11:54:59.008Z] [PS-SNAPSHOT] ps aux took 2521ms (926 lines)",
     "[2026-08-28T12:50:43.477Z] [PS-SNAPSHOT] ps aux took 8606ms (1007 lines)",
     FREEZE_SWEEP,
@@ -125,7 +128,7 @@ describe("buildLogReport", () => {
 
   test("totals per hour, sleep excluded, histograms, spawn groups and boot pairing", () => {
     const report = buildLogReport(lines, { sinceMs: Date.parse("2026-08-28T00:00:00Z"), sleepWindows: [] });
-    expect(report.linesRead).toBe(12);
+    expect(report.linesRead).toBe(15);
     expect(report.freezes.rawCount).toBe(4);
     expect(report.freezes.sleepCount).toBe(1);
     expect(report.freezes.freezeCount).toBe(3);
@@ -153,6 +156,9 @@ describe("buildLogReport", () => {
     expect(report.slowSpawn.n).toBe(3);
     expect(report.slowSpawn.groups[0]).toEqual({ command: "lsappinfo", count: 2, meanMs: 1036, maxMs: 1037 });
     expect(report.slowSpawn.groups[1].command).toBe("git");
+    expect(report.slowFs.n).toBe(3);
+    expect(report.slowFs.groups[0]).toEqual({ command: "walkDirsSync", count: 2, meanMs: 300, maxMs: 310 });
+    expect(report.slowFs.groups[1]).toEqual({ command: "cursorWatcher.pollWorkspaces", count: 1, meanMs: 1200, maxMs: 1200 });
 
     expect(report.boots).toEqual([
       { startedAt: "2026-08-28T13:16:37.952Z", version: "1.1.113", pid: 22124, listeningAt: "2026-08-28T13:16:46.256Z", blackoutMs: 8304 },

@@ -1,5 +1,20 @@
 import * as fs from "fs";
 import * as path from "path";
+import { timeSyncFs } from "./slowSync.js";
+
+/**
+ * A dirFilter from one rule per depth: rule[0] judges a top level dir by its
+ * name, rule[1] a dir one level down, and so on; a dir deeper than the last
+ * rule is refused. Each rule sees the segment it judges and the whole split
+ * path, so a rule may look at the ancestors.
+ */
+export function dirFilterByDepth(...rules: Array<(seg: string, parts: string[]) => boolean>): (relativeDirPath: string) => boolean {
+  return (relativeDirPath) => {
+    const parts = relativeDirPath.split(path.sep);
+    const rule = rules[parts.length - 1];
+    return rule ? rule(parts[parts.length - 1], parts) : false;
+  };
+}
 
 export interface WalkFile {
   path: string;
@@ -105,7 +120,9 @@ export function walkDirsSync(root: string, opts: WalkOptions, onDir: (files: Wal
     onDir(files);
     for (const sub of subdirs) walkDir(sub, depth);
   };
-  walkDir(root, 0);
+  // Every remaining synchronous tree walk comes through here, so this one
+  // timer names all of them when the disk is slow.
+  timeSyncFs("walkDirsSync", root, () => walkDir(root, 0));
 }
 
 /**

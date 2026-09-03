@@ -12,7 +12,7 @@ import { snapshotProcessTable } from "../processTable.js";
 import { tmuxRun } from "../tmux.js";
 import { fmt } from "../colors.js";
 import type { Config } from "../config/types.js";
-import { buildLogReport, readSleepWindows, type LogReport } from "./logReport.js";
+import { type SpawnGroup, buildLogReport, readSleepWindows, type LogReport } from "./logReport.js";
 import { readLoopbackIdentity, localAuthHeaders, runRouteProbes, type LoopLagResult, type LatencyProbeResult } from "./probes.js";
 import { runLoadBench, type LoadResult } from "./load.js";
 import type { LatencySummary } from "./stats.js";
@@ -155,6 +155,8 @@ function* readDaemonLogLines(configDir: string): Generator<string> {
 // ── markdown ──────────────────────────────────────────────────────────────────
 
 const ms = (v: number | null | undefined) => (v === null || v === undefined ? "-" : `${Math.round(v)}ms`);
+const holdRow = (h: { n: number; groups: SpawnGroup[] }) =>
+  `n=${h.n}; ${h.groups.map((g) => `${g.command} x${g.count} (mean ${ms(g.meanMs)}, max ${ms(g.maxMs)})`).join("; ") || "-"}`;
 const lat = (s: LatencySummary) => `n=${s.n} p50=${ms(s.p50)} p90=${ms(s.p90)} p99=${ms(s.p99)} max=${ms(s.max)} over1s=${s.over1s}`;
 
 function table(title: string, rows: Array<[string, string]>): string {
@@ -191,7 +193,8 @@ export function renderMarkdown(r: BenchReport): string {
     ["top stacks", f.topStacks.map((s) => `${s.key} x${s.count}`).join("; ") || "-"],
     ["top last log", f.topLastLog.map((s) => `${s.key} x${s.count}`).join("; ") || "-"],
     ["PS-SNAPSHOT", `n=${o.log.psSnapshot.n} mean=${ms(o.log.psSnapshot.meanMs)} max=${ms(o.log.psSnapshot.maxMs)}; ${o.log.psSnapshot.buckets.map((b) => `${b.label}: ${b.count}`).join(", ")}`],
-    ["SLOW-SYNC-SPAWN", `n=${o.log.slowSpawn.n}; ${o.log.slowSpawn.groups.map((g) => `${g.command} x${g.count} (mean ${ms(g.meanMs)}, max ${ms(g.maxMs)})`).join("; ") || "-"}`],
+    ["SLOW-SYNC-SPAWN", holdRow(o.log.slowSpawn)],
+    ["SLOW-SYNC-FS", holdRow(o.log.slowFs)],
     ["boots (blackout)", o.log.boots.map((b) => `${b.startedAt.slice(5, 19)} v${b.version}: ${b.blackoutMs === null ? "no listen line" : `${Math.round(b.blackoutMs / 1000)}s`}`).join("; ") || "-"],
   ]));
   if (r.load) {

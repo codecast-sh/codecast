@@ -230,13 +230,16 @@ async function handleOp(
   const target = scoped(vault, op?.path ?? null);
   if (!target) return sendJson(res, 400, headers, { error: "bad path" });
 
+  // One stat answers "does it exist" and "what is it"; null when it is absent.
+  const statOrNull = (p: string) => fsp.stat(p).catch(() => null);
+  const targetStat = await statOrNull(target.abs);
+
   // Code files are READ-ONLY, and a rename or a trash is a write. They became
   // visible so the tree tells the truth about the folder; nothing here may
   // move or destroy them. Directories are exempt: a folder is not a code file,
   // and reorganising folders is an ordinary vault operation whatever they hold.
   if (op.op === "rename" || op.op === "delete") {
-    const stat = fs.existsSync(target.abs) ? fs.statSync(target.abs) : null;
-    if (stat?.isFile() && !isVaultDocumentPath(target.rel)) {
+    if (targetStat?.isFile() && !isVaultDocumentPath(target.rel)) {
       return sendJson(res, 400, headers, { error: "read-only" });
     }
   }
@@ -245,7 +248,7 @@ async function handleOp(
     // Hand the path to the platform's file manager (or its default app). The
     // path is already confined to the vault by scoped(); argv is passed as an
     // ARRAY with no shell, so a filename can never be read as a command.
-    if (!fs.existsSync(target.abs)) return sendJson(res, 404, headers, { error: "not found" });
+    if (!targetStat) return sendJson(res, 404, headers, { error: "not found" });
     const { cmd, args } = revealCommand(process.platform, target.abs, op.mode ?? "reveal");
     try {
       const child = spawn(cmd, args, { stdio: "ignore", detached: true });
@@ -264,7 +267,7 @@ async function handleOp(
 
   if (op.op === "create") {
     if (!isVaultDocumentPath(target.rel)) return sendJson(res, 400, headers, { error: "bad path" });
-    if (fs.existsSync(target.abs)) return sendJson(res, 409, headers, { error: "exists" });
+    if (targetStat) return sendJson(res, 409, headers, { error: "exists" });
     await fsp.mkdir(path.dirname(target.abs), { recursive: true });
     await fsp.writeFile(target.abs, op.content ?? "");
     const stat = await fsp.stat(target.abs);
@@ -274,14 +277,13 @@ async function handleOp(
   if (op.op === "rename") {
     const dest = scoped(vault, op.to ?? null);
     if (!dest) return sendJson(res, 400, headers, { error: "bad path" });
-    if (!fs.existsSync(target.abs)) return sendJson(res, 404, headers, { error: "not found" });
+    if (!targetStat) return sendJson(res, 404, headers, { error: "not found" });
     // "exists" must not block a case-only rename ("notes" → "Notes"): on the
-    // case-insensitive filesystems macOS ships, existsSync(dest) is true
+    // case-insensitive filesystems macOS ships, the destination exists
     // because dest IS the source. Same-inode means same entry — let it through.
-    if (fs.existsSync(dest.abs)) {
-      const same =
-        fs.statSync(target.abs).ino === fs.statSync(dest.abs).ino &&
-        target.abs.toLowerCase() === dest.abs.toLowerCase();
+    const destStat = await statOrNull(dest.abs);
+    if (destStat) {
+      const same = targetStat.ino === destStat.ino && target.abs.toLowerCase() === dest.abs.toLowerCase();
       if (!same) return sendJson(res, 409, headers, { error: "exists" });
     }
     await fsp.mkdir(path.dirname(dest.abs), { recursive: true });
@@ -291,7 +293,7 @@ async function handleOp(
   }
 
   if (op.op === "delete") {
-    if (!fs.existsSync(target.abs)) return sendJson(res, 404, headers, { error: "not found" });
+    if (!targetStat) return sendJson(res, 404, headers, { error: "not found" });
     try {
       moveToTrash(vault.root, target.abs);
     } catch {

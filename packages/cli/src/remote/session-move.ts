@@ -19,7 +19,7 @@
  *     refreshToken, but copy a FRESH credential at move time.
  */
 
-import { execFileSync, execSync, spawn } from "../proc.js";
+import { execFileSync, execSync, keychainReadAsync, spawn } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -410,23 +410,40 @@ export async function gitPullWorktree(
 // Auth: copy a FRESH credential to the remote
 // --------------------------------------------------------------------------
 
+// The keychain item CC writes its login to on macOS.
+const CC_CREDENTIAL_ARGS = ["find-generic-password", "-s", "Claude Code-credentials", "-w"];
+// The file form (Linux / older CC). $HOME over os.homedir(): bun caches the
+// latter at startup, breaking $HOME-sandboxed tests; real environments always
+// have HOME set.
+function credentialFile(): string {
+  return path.join(process.env.HOME || os.homedir(), ".claude", ".credentials.json");
+}
+
 /**
  * Read the current CC credential. On macOS it lives in the Keychain (service
  * "Claude Code-credentials"); falls back to the file form (Linux / older CC).
  */
 export function readLocalCredential(): string | null {
   try {
-    return execFileSync(
-      "security",
-      ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
-      { encoding: "utf-8" },
-    ).trim();
+    return execFileSync("security", CC_CREDENTIAL_ARGS, { encoding: "utf-8" }).trim();
   } catch {
-    // $HOME over os.homedir(): bun caches the latter at startup, breaking
-    // $HOME-sandboxed tests; real environments always have HOME set.
-    const f = path.join(process.env.HOME || os.homedir(), ".claude", ".credentials.json");
+    const f = credentialFile();
     if (!fs.existsSync(f)) return null;
     return fs.readFileSync(f, "utf-8");
+  }
+}
+
+/**
+ * The same read for the daemon's timers: the keychain call runs off the loop
+ * with a timeout. A `security` call takes tens of milliseconds on an idle
+ * machine and seconds on a loaded one, and the credential tick asks every
+ * minute.
+ */
+export async function readLocalCredentialAsync(): Promise<string | null> {
+  try {
+    return await keychainReadAsync(CC_CREDENTIAL_ARGS);
+  } catch {
+    return fs.promises.readFile(credentialFile(), "utf-8").catch(() => null);
   }
 }
 
@@ -454,7 +471,14 @@ export interface CredentialPushOutcome {
  * the active store.
  */
 export function readPushableCredential(): { cred: string | null; reason?: string } {
-  const cred = readLocalCredential();
+  return gatePushableCredential(readLocalCredential());
+}
+
+export async function readPushableCredentialAsync(): Promise<{ cred: string | null; reason?: string }> {
+  return gatePushableCredential(await readLocalCredentialAsync());
+}
+
+function gatePushableCredential(cred: string | null): { cred: string | null; reason?: string } {
   const health = credentialHealth(cred);
   if (!health.pushable) return { cred: null, reason: health.reason ?? "no credential" };
   return { cred: cred! };
@@ -478,7 +502,7 @@ export function copyCredentialToRemote(host: RemoteHost): CredentialPushOutcome 
  * wedged ssh can't leak.
  */
 export async function copyCredentialToRemoteAsync(host: RemoteHost): Promise<CredentialPushOutcome> {
-  const gate = readPushableCredential();
+  const gate = await readPushableCredentialAsync();
   if (!gate.cred) return { pushed: false, reason: gate.reason };
   const cred = gate.cred;
   await new Promise<void>((resolve, reject) => {

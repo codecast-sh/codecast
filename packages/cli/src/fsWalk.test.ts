@@ -2,7 +2,8 @@ import { describe, test, expect, afterEach } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { walkFiles, listFilesByMtime } from "./fsWalk.js";
+import { walkFiles, listFilesByMtime, walkDirs, walkDirsSync } from "./fsWalk.js";
+import { setSlowSyncFsThresholdForTests, setSlowSyncSink } from "./slowSync.js";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -87,4 +88,31 @@ describe("listFilesByMtime", () => {
     expect(files[0].rel).toBe(path.join("a", "one.jsonl"));
     expect(files[files.length - 1].rel).toBe("top.jsonl");
   });
+});
+
+// The sync walker is the one that can hold the loop, so it is the one that
+// reports; the async twin never enters the sink. Threshold zero makes any
+// walk of the fixture report, so the report proves which twin ran.
+describe("SLOW-SYNC-FS sink", () => {
+  test("walkDirsSync reports once, walkDirs reports nothing", async () => {
+    const root = scaffold();
+    const seen: string[] = [];
+    setSlowSyncSink((m) => seen.push(m));
+    setSlowSyncFsThresholdForTests(0);
+    try {
+      let syncFiles = 0;
+      walkDirsSync(root, {}, (files) => { syncFiles += files.length; });
+      expect(syncFiles).toBe(6);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toMatch(new RegExp(`^\\[SLOW-SYNC-FS\\] walkDirsSync blocked the event loop \\d+ms: ${root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+
+      let asyncFiles = 0;
+      await walkDirs(root, {}, (files) => { asyncFiles += files.length; });
+      expect(asyncFiles).toBe(6);
+      expect(seen).toHaveLength(1);
+    } finally {
+      setSlowSyncFsThresholdForTests(null);
+      setSlowSyncSink(null);
+    }
+  }, 15_000);
 });

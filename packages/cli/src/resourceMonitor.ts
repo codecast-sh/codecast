@@ -1,8 +1,5 @@
-import { execFile } from "./proc.js";
+import { execFileAsync } from "./proc.js";
 import { shortId } from "./sessionProcessMatcher.js";
-import { promisify } from "util";
-
-const execFileAsync = promisify(execFile);
 
 export interface ProcessInfo {
   pid: number;

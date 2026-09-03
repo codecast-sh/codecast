@@ -56,9 +56,9 @@ export function getLastReconciliation(): LastReconciliation | null {
   return loadLastReconciliation();
 }
 
-function countMessagesInFile(filePath: string): number {
+async function countMessagesInFile(filePath: string): Promise<number> {
   try {
-    const content = fs.readFileSync(filePath, "utf-8");
+    const content = await fs.promises.readFile(filePath, "utf-8");
     const messages = parseSessionFile(content);
     return messages.length;
   } catch {
@@ -207,7 +207,7 @@ export async function performReconciliation(
   // Compare each file
   for (const file of filesToCheck) {
     const sessionId = extractSessionIdFromPath(file.path);
-    const localCount = countMessagesInFile(file.path);
+    const localCount = await countMessagesInFile(file.path);
     const backendData = backendMap.get(sessionId);
 
     result.checked++;
