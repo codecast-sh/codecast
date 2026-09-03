@@ -63,7 +63,7 @@ function ProviderSegment({
   title: string;
 }) {
   return (
-    <span className="flex items-center gap-1.5" style={{ opacity: stub ? 0.4 : 1 }} title={title}>
+    <span className="flex items-center gap-1.5" style={{ opacity: stub ? 0.4 : 1 }} aria-label={title}>
       {icon}
       {!stub && (
         <span className="tb-squeeze-1 max-w-[88px] truncate font-mono text-[11px] font-bold" style={{ color: tone }}>

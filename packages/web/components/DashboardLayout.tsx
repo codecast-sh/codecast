@@ -152,28 +152,29 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
   if (working.length === 0) return null;
   const activeAgentCount = working.length;
   return (
-    <button
-      onClick={() => {
-        const store = useInboxStore.getState();
-        if (!selectSessionRailOpen(store)) store.toggleSidePanel();
-        if (working[0]) openSession(working[0]._id);
-      }}
-      className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-full cursor-pointer select-none transition-all duration-300"
-      style={{
-        background: 'color-mix(in srgb, var(--sol-green) 12%, transparent)',
-        border: '1px solid color-mix(in srgb, var(--sol-green) 20%, transparent)',
-        boxShadow: '0 0 10px color-mix(in srgb, var(--sol-green) 12%, transparent)',
-      }}
-      title={`${activeAgentCount} agent${activeAgentCount !== 1 ? 's' : ''} running`}
-    >
-      <span className="relative flex h-2 w-2">
-        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-40" style={{ animationDuration: '1.5s' }} />
-        <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
-      </span>
-      <span className="text-[11px] font-mono font-bold tabular-nums" style={{ color: 'var(--sol-green)' }}>
-        {activeAgentCount}
-      </span>
-    </button>
+    <ShortcutTooltip label={`${activeAgentCount} agent${activeAgentCount !== 1 ? 's' : ''} running`}>
+      <button
+        onClick={() => {
+          const store = useInboxStore.getState();
+          if (!selectSessionRailOpen(store)) store.toggleSidePanel();
+          if (working[0]) openSession(working[0]._id);
+        }}
+        className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-full cursor-pointer select-none transition-all duration-300"
+        style={{
+          background: 'color-mix(in srgb, var(--sol-green) 12%, transparent)',
+          border: '1px solid color-mix(in srgb, var(--sol-green) 20%, transparent)',
+          boxShadow: '0 0 10px color-mix(in srgb, var(--sol-green) 12%, transparent)',
+        }}
+      >
+        <span className="relative flex h-2 w-2">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-40" style={{ animationDuration: '1.5s' }} />
+          <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
+        </span>
+        <span className="text-[11px] font-mono font-bold tabular-nums" style={{ color: 'var(--sol-green)' }}>
+          {activeAgentCount}
+        </span>
+      </button>
+    </ShortcutTooltip>
   );
 });
 
