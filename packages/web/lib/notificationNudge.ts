@@ -1,15 +1,19 @@
 // Policy for the "turn on desktop notifications" nudge.
 //
-// The nudge is deliberately pushy: notifications off means messages from real
-// people silently vanish, which is the worst failure mode a team app has. So a
-// dismiss only snoozes it, and a person messaging you while banners can't show
-// cancels the snooze on the spot — that miss is exactly the cost the nudge
-// exists to prevent, and the moment it happens is the moment the case for
-// enabling is strongest.
+// Notifications off means messages from real people silently vanish, which is
+// the worst failure mode a team app has. So a dismiss only snoozes it, and a
+// PERSON messaging you while banners can't show can bring it back early —
+// that miss is exactly the cost the nudge exists to prevent. But a dismiss
+// has to mean something: the early return waits until the snooze has held for
+// a day, and agent or work-item notifications never cut a snooze short — they
+// arrive constantly in a busy team and would make the banner permanent.
 
 import type { PermissionReadiness } from "./osPermissions";
 
 export const NUDGE_SNOOZE_MS = 3 * 24 * 60 * 60 * 1000;
+// A person's missed message re-surfaces a snoozed nudge only once the snooze
+// is at least this old.
+export const NUDGE_MISS_OVERRIDE_AFTER_MS = 24 * 60 * 60 * 1000;
 
 export type NotificationMiss = {
   at: number;
@@ -34,10 +38,15 @@ export function decideNotificationNudge(args: {
 }): NudgeVerdict {
   const { readiness, snoozedAt, miss, now } = args;
   if (readiness !== "ask" && readiness !== "off") return { show: false };
-  // A miss AFTER the last dismiss re-surfaces the banner no matter how fresh
-  // the snooze is; dismissing again waits for the next miss (or expiry).
-  if (miss && miss.at > snoozedAt) return { show: true, escalated: true, miss };
-  if (snoozedAt > 0 && now - snoozedAt < NUDGE_SNOOZE_MS) return { show: false };
+  const snoozed = snoozedAt > 0 && now - snoozedAt < NUDGE_SNOOZE_MS;
+  // A miss after the last dismiss escalates the copy. It cuts the snooze short
+  // only when a person wrote it and the snooze has already held for a day;
+  // dismissing again waits for the next such miss (or expiry).
+  if (miss && miss.at > snoozedAt) {
+    const overrides = miss.fromPerson && now - snoozedAt >= NUDGE_MISS_OVERRIDE_AFTER_MS;
+    if (!snoozed || overrides) return { show: true, escalated: true, miss };
+  }
+  if (snoozed) return { show: false };
   return { show: true, escalated: false };
 }
 

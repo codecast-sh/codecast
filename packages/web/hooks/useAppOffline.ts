@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
 
-// How long the WebSocket must stay down before we call it "disconnected".
-// Covers the normal boot handshake and transient reconnects so consumers
-// never flash on a healthy load. navigator.onLine === false is definitive
-// and skips the grace period.
-const DISCONNECT_GRACE_MS = 5_000;
+// How long the connection must stay down before we call it "disconnected".
+// Covers the normal boot handshake, a reconnect after a laptop wake, and the
+// few seconds a Wi-Fi handoff or VPN toggle drops the OS's online flag —
+// all of which resolve on their own and must not flash a banner. The same
+// grace applies to navigator.onLine: the browser flips it false for a moment
+// on every network change, so it is a hint, not a verdict.
+const DISCONNECT_GRACE_MS = 8_000;
 
 /**
  * Is this client running from local cache right now? True when the OS
@@ -29,7 +31,7 @@ export function useAppOffline(): { offline: boolean; online: boolean } {
   const wsDown = !wsConnected;
 
   const [online, setOnline] = useState(() => navigator.onLine);
-  const [wsDownLong, setWsDownLong] = useState(false);
+  const [downLong, setDownLong] = useState(false);
 
   useEffect(() => {
     const sync = () => setOnline(navigator.onLine);
@@ -41,14 +43,15 @@ export function useAppOffline(): { offline: boolean; online: boolean } {
     };
   }, []);
 
+  const down = wsDown || !online;
   useEffect(() => {
-    if (!wsDown) {
-      setWsDownLong(false);
+    if (!down) {
+      setDownLong(false);
       return;
     }
-    const t = setTimeout(() => setWsDownLong(true), DISCONNECT_GRACE_MS);
+    const t = setTimeout(() => setDownLong(true), DISCONNECT_GRACE_MS);
     return () => clearTimeout(t);
-  }, [wsDown]);
+  }, [down]);
 
-  return { offline: !online || (wsDown && wsDownLong), online };
+  return { offline: down && downLong, online };
 }

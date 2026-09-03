@@ -10,22 +10,27 @@ export const OFFLINE_ALERT_AFTER_MS = ONE_HOUR_MS;
 export const OFFLINE_SEVERE_AFTER_MS = ONE_DAY_MS;
 
 // A healthy daemon beats every 30s and the server writes daemon_last_seen at
-// most every 50s, so a live daemon is never more than ~80s stale. Past 3 min it
-// has missed several beats: it is frozen, restarting, or asleep. That is worth
-// a chip well before the 10-minute "offline" banner — this is the window in
-// which a sent message sits unechoed and the user has no idea why.
-export const QUIET_AFTER_MS = 3 * ONE_MIN_MS;
+// most every 50s, so a live daemon is never more than ~80s stale. A throttled
+// background tab, a skipped write cycle and a brief laptop nap each add a
+// minute or two on top without anything being wrong, so the chip waits five
+// minutes: by then it has missed many beats and is frozen, restarting, or
+// asleep. Still well before the 10-minute "offline" banner — this is the
+// window in which a sent message sits unechoed and the user has no idea why.
+export const QUIET_AFTER_MS = 5 * ONE_MIN_MS;
 
-// After a (re)start the daemon spends a minute or more recovering sessions,
-// re-attaching watchers and sweeping transcripts before deliveries and echoes
-// flow at normal speed. Show "restarted, catching up" for this long after the
-// reported boot time.
-export const RESTART_SETTLE_MS = 2 * ONE_MIN_MS;
+// After a (re)start the daemon recovers sessions, re-attaches watchers and
+// sweeps transcripts before deliveries and echoes flow at normal speed. Show
+// "restarted, catching up" for this long after the reported boot time. A
+// restart is a routine event (every upgrade, every `cast restart`), so the
+// window covers the recovery itself and not much more.
+export const RESTART_SETTLE_MS = 45 * 1000;
 
 // The daemon reports how many ms its event loop was blocked in the trailing
-// minute (freezes of 5s or more). Past this share of the minute, deliveries and
-// transcript sync are visibly delayed — call it "under load".
-export const OVERLOADED_FREEZE_MS = 10 * 1000;
+// minute (freezes of 5s or more). A busy machine (a build, a big transcript
+// sweep) freezes it for a few seconds routinely; only once half the minute was
+// spent frozen are deliveries and transcript sync visibly delayed — call that
+// "under load".
+export const OVERLOADED_FREEZE_MS = 30 * 1000;
 
 // The retry backlog must persist past this before we call it a stall. A few
 // failed ops that clear within a couple of minutes are normal transient
@@ -46,9 +51,11 @@ const SLEEP_JUMP_MS = 2 * TICK_MS;
 // gap — suppress the offline verdict for one recovery cycle. The currentUser
 // subscription that feeds `daemon_last_seen` can stall while we're suspended;
 // useRecoveryPoll re-fetches the true value within ~10-15s of resuming, so this
-// just covers the visual gap before that lands. A genuinely dead daemon stays
-// stale past the grace and the banner returns; a healthy one never flashes.
-const OBSERVE_GRACE_MS = 30 * 1000;
+// just covers the visual gap before that lands, plus one full heartbeat cycle
+// so a daemon that is itself waking from the same sleep gets to check in. A
+// genuinely dead daemon stays stale past the grace and the banner returns; a
+// healthy one never flashes.
+const OBSERVE_GRACE_MS = 60 * 1000;
 
 export type OfflineTier = "warn" | "alert" | "severe";
 
