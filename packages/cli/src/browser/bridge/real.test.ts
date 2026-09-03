@@ -79,7 +79,8 @@ describe("sticky target", () => {
     expect(extensionReady()).toBe(false);
     expect(isRealMode({}, "session:a")).toBe(true);
     expect(isRealMode({}, "session:b")).toBe(false);
-    expect(explicitTarget("session:b")).toBe("clone");
+    // A clone default is never written: the session moves over when the extension comes.
+    expect(explicitTarget("session:b")).toBeNull();
   });
 
   test("a dead host never makes the real Chrome the default", () => {
