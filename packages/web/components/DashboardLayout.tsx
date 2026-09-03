@@ -39,6 +39,8 @@ import { DaemonStatusChip } from "./DaemonStatusChip";
 import { AccountUsageChip } from "./AccountUsageChip";
 import { AnchorChip, AnchorPanel } from "./anchor/AnchorPanel";
 import { useSyncAnchors } from "../hooks/useSyncAnchors";
+import { useSyncTeamExternalEvents } from "../hooks/useSyncExternalEvents";
+import { useSyncIssueSyncSources } from "../hooks/useSyncIssueSyncSources";
 import { useIsSyncHost, useSyncReplication } from "../hooks/useSyncRole";
 import { useEnsureDispatch } from "../hooks/useEnsureDispatch";
 import { SyncStatusChip } from "./SyncStatusChip";
@@ -237,6 +239,13 @@ function HostFeeders() {
   // The anchors collection feeds the header chip, the slide-over, the inbox's
   // anchor marks and chat's DM naming — one subscription for the whole shell.
   useSyncAnchors();
+  // The team's git activity: the team feed reads it, and so does any page that
+  // wants recent events without opening a scope of its own.
+  useSyncTeamExternalEvents();
+  // Imported Linear/GitHub containers. Small, workspace-wide and read by the
+  // integrations panel and any project surface that shows where its tasks
+  // came from — one subscription rather than one per opened card.
+  useSyncIssueSyncSources();
   return null;
 }
 
@@ -442,6 +451,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const isOnProjectsPage = pathname === "/projects" || (pathname?.startsWith("/projects/") ?? false);
   const isOnWindowsPage = pathname === "/windows";
   const isOnCrosstalkPage = pathname === "/crosstalk";
+  // Browsing a repository: the index, its history, its source and its blame all
+  // own the whole canvas.
+  const isOnRepoPage = pathname === "/repo" || (pathname?.startsWith("/repo/") ?? false);
   // Settings is a modal-like surface, not a working surface — selecting a session
   // there means "I'm done configuring, take me to it", not "peek beside". Keyed off
   // the real router URL because `pathname` lies here (returns the carried tab route).
@@ -449,7 +461,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // isFullWidthRoute folds in the self-contained full-bleed pages (sessions,
   // admin) so the non-tab path matches the tab shell; the inbox check stays
   // explicit because it is source-aware, not just path-based.
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnCallsPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnCallsPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isOnRepoPage || isFullWidthRoute(pathname ?? "");
 
   // The teammate comment rail is a conversation-scoped overlay, so its header
   // toggle only makes sense when a conversation is actually on screen.

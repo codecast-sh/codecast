@@ -39,6 +39,10 @@ const AUTH_BANNER_RE =
 //   "You've hit your session limit · resets 11:30pm (America/New_York)"
 //   "You've hit your session limit"
 //   "You've hit your monthly spend limit · raise it at claude.ai/settings/usage"
+//   "You've hit your org's monthly spend limit · ask your admin to raise it at
+//    claude.ai/settings/usage?from=cc_cli_limit_message · your session limit
+//    resets 7:40pm (America/New_York)" (the org-billed form carries an
+//    apostrophe between "your" and "limit")
 //   "You've hit your monthly spend limit. Run /usage-credits to manage your
 //    limit and keep using Fable 5 or switch models to continue this chat."
 //   "You've reached your Fable 5 limit. Run /usage-credits to continue or
@@ -49,7 +53,7 @@ const AUTH_BANNER_RE =
 // admitted only by their "Run /usage-credits" tail — a CLI slash-command
 // reference prose doesn't produce in that position.
 const LIMIT_BANNER_RE =
-  /^(?:you['’]ve (?:hit|reached) your [\w -]{1,40}limit(?:\s*[·∙][^\n]*|\.\s*run \/usage-credits\b[^\n]*)?|claude (?:ai )?usage limit reached\b[^\n]*)$/i;
+  /^(?:you['’]ve (?:hit|reached) your [\w '’-]{1,40}limit(?:\s*[·∙][^\n]*|\.\s*run \/usage-credits\b[^\n]*)?|claude (?:ai )?usage limit reached\b[^\n]*)$/i;
 
 // Generic provider failure. No status code ("API Error: Connection closed
 // mid-response. The response above may be incomplete.", "API Error:

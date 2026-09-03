@@ -13,7 +13,7 @@ import {
   CHROME_WIDTH,
   FACES_PADDING,
   FACE_GAP,
-  HOVER_ROWS,
+  ROW_GAP,
 } from "../../lib/calls/faceCrop";
 import type { Wall, WallFace, WallTier } from "./peopleWallLayout";
 
@@ -58,22 +58,33 @@ export function overlayFaces<T>(
 }
 
 /**
+ * The card under the circles, in px, while the pointer is in the window.
+ *
+ * One card carries everything the overlay says beyond the faces: the pointed
+ * face's name and activity (or the one-line legend), the clicked face's three
+ * actions, and the window's own controls as its footer. The window has to
+ * reserve exactly this much under the circles, so the numbers are pinned here
+ * AND in presenceFaces.css (`.presence-card` heights) — the stylesheet draws
+ * the card, this file sizes the glass, and a card taller than the glass is a
+ * card cut off at the bottom.
+ */
+export const PRESENCE_CARD = 82;
+/** The card with a clicked face's Talk, Ring and Message row in it. */
+export const PRESENCE_CARD_ACTIONS = 118;
+
+/**
  * How big the window has to be to hold these circles.
  *
  * The same contract as the call circles' `facesWindowSize`: the circles'
  * bounds plus the 8px the rings need, nothing else — every pixel of this
  * window that is not a circle is a transparent rectangle over somebody's
- * work. Hovering adds the description pill and the chrome below the circles,
+ * work. Hovering adds the card below the circles,
  * and widens the window where the chrome is wider than the row; away from the
  * pointer it reserves nothing.
  *
  * `px` includes every seat — faces and the overflow chip — so the window and
  * the row can never disagree about what a seat costs.
  */
-/** How much taller the band is while a clicked face's three actions are in
- *  the slot: a row of buttons under the name. */
-export const ACTIONS_ROW = 36;
-
 export function overlayWindowSize(
   px: number[],
   opts?: { hovered?: boolean; actions?: boolean },
@@ -87,10 +98,9 @@ export function overlayWindowSize(
   // window shrank, the circles slid back, and the loop read as a flicker. The
   // extra width at rest is transparent, click-through glass: it costs nothing.
   const width = Math.max(row, CHROME_WIDTH);
+  const card = opts?.actions ? PRESENCE_CARD_ACTIONS : opts?.hovered ? PRESENCE_CARD : 0;
   return {
     width: Math.round(width + FACES_PADDING * 2),
-    height: Math.round(
-      tallest + (opts?.hovered || opts?.actions ? HOVER_ROWS : 0) + (opts?.actions ? ACTIONS_ROW : 0) + FACES_PADDING * 2,
-    ),
+    height: Math.round(tallest + (card ? ROW_GAP + card : 0) + FACES_PADDING * 2),
   };
 }

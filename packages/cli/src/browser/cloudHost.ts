@@ -50,6 +50,35 @@ export interface CloudHost {
   address?: string;
   /** Stop the machine after this long with nothing using it. 0 disables. */
   idleStopMinutes?: number;
+  /** The codecast device id of the daemon on the box, learned over SSH the
+   * first time a session is placed there (cloud/prepare.ts). Lets the daemon
+   * map a wake request (a device id) back to an instance it can boot. */
+  deviceId?: string;
+}
+
+/**
+ * The registry entry for a host argument: an instance id, or the default
+ * Linux host when none is named. Throws with the registration recipe when
+ * nothing matches — a silent "first host" pick would boot the wrong machine.
+ */
+export function resolveCloudHost(hostArg?: string): CloudHost {
+  const hosts = readHosts();
+  const pick = hostArg
+    ? hosts.find((h) => h.id === hostArg)
+    : hosts.find((h) => h.provider === "aws") ?? hosts[0];
+  if (!pick) {
+    throw new Error(
+      hostArg
+        ? `no cloud host ${hostArg} is registered (cast hosts ls)`
+        : "no cloud host is registered — cast hosts add <instance-id> --key <pem>, then cast hosts provision",
+    );
+  }
+  return pick;
+}
+
+/** The registered host whose daemon is this device, if we have learned it. */
+export function hostForDevice(deviceId: string): CloudHost | undefined {
+  return readHosts().find((h) => h.deviceId === deviceId);
 }
 
 function registryPath(): string {
@@ -114,6 +143,11 @@ function aws(args: string[], region: string): any {
   }
 }
 
+function describeInstance(host: CloudHost): any {
+  const r = aws(["ec2", "describe-instances", "--instance-ids", host.id], host.region);
+  return r?.Reservations?.[0]?.Instances?.[0];
+}
+
 /**
  * What the provider says about this machine right now.
  *
@@ -125,13 +159,50 @@ function aws(args: string[], region: string): any {
  */
 export function hostState(host: CloudHost): { state: HostState; address?: string } {
   if (host.provider !== "aws") return { state: "running", address: host.address };
-  const r = aws(["ec2", "describe-instances", "--instance-ids", host.id], host.region);
-  const inst = r?.Reservations?.[0]?.Instances?.[0];
-  if (!inst) return { state: "missing" };
+  const inst = describeInstance(host);
+  return inst ? instanceFacts(inst) : { state: "missing" };
+}
+
+function instanceFacts(inst: any): { state: HostState; address?: string } {
   const name = inst.State?.Name;
   const state: HostState =
     name === "running" ? "running" : name === "stopped" ? "stopped" : name === "terminated" ? "missing" : "pending";
   return { state, address: inst.PublicIpAddress };
+}
+
+/**
+ * Everything `cast hosts ls` needs about one machine, in as few AWS calls as
+ * it can be had: state and address and the bill, from a single
+ * describe-instances plus one describe-volumes.
+ *
+ * The call count is the point. Measured from a laptop on a slow route, each
+ * AWS call took forty to seventy seconds, so asking three times what could be
+ * asked twice is a minute of a person waiting for a listing. `hostState` stays
+ * separate and cheap for the hot paths (waking, moving a session) that need
+ * the state and nothing else.
+ *
+ * A volumes call that fails only costs the disk size: the rest of the answer
+ * still returns, and the caller prints the size as unknown.
+ */
+export function inspectHost(host: CloudHost): {
+  state: HostState;
+  address?: string;
+  instanceType?: string;
+  volumeGiB?: number;
+} {
+  if (host.provider !== "aws") return { state: "running", address: host.address };
+  const inst = describeInstance(host);
+  if (!inst) return { state: "missing" };
+  let volumeGiB: number | undefined;
+  try {
+    const vols = aws(
+      ["ec2", "describe-volumes", "--filters", `Name=attachment.instance-id,Values=${host.id}`],
+      host.region,
+    );
+    const sizes: number[] = (vols?.Volumes ?? []).map((v: any) => Number(v.Size) || 0);
+    if (sizes.length) volumeGiB = sizes.reduce((a, b) => a + b, 0);
+  } catch { /* the disk size is the only field this loses */ }
+  return { ...instanceFacts(inst), instanceType: inst.InstanceType, ...(volumeGiB === undefined ? {} : { volumeGiB }) };
 }
 
 /**
@@ -194,7 +265,7 @@ export class HostGone extends Error {
   constructor(host: CloudHost) {
     super(
       `host ${host.id} no longer exists (terminated, or deleted outside codecast).\n` +
-        `  Remove it with: cast browser hosts rm ${host.id}`,
+        `  Remove it with: cast hosts rm ${host.id}`,
     );
     this.name = "HostGone";
   }

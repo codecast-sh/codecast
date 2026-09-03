@@ -9,6 +9,7 @@ import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettin
 import { capabilityTables } from "./capabilitiesSchema";
 import { googleOAuthTables } from "./googleOAuthSchema";
 import { oauthConnectorTables } from "./oauthConnectorsSchema";
+import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } from "./issueSyncSchema";
 
 // Derived from the single source of truth in @codecast/shared/contracts so the
 // schema, validators, the CLI daemon, and the browser store can never drift.
@@ -270,6 +271,19 @@ export default defineSchema({
     // (device-agnostic commands like status/restart, or sessions whose owner
     // can't be resolved yet).
     target_device_id: v.optional(v.string()),
+    // Exclusive lease, held by one daemon PROCESS on one DEVICE. Two daemons
+    // can share a device (a launchd instance and a self spawned one, or both
+    // sides of an upgrade) and both poll this queue, so without a claim both
+    // execute every command. The first writer wins and holds for CLAIM_GRACE_MS
+    // (lib/daemonCommandClaim.ts); a claimer that died holding one releases it
+    // when the lease lapses.
+    //
+    // claimed_device is what keeps a broadcast a broadcast: an untargeted row
+    // (kill_session, an admin restart) is meant for every machine, so a hold
+    // from another device is not a hold at all.
+    claimed_by: v.optional(v.string()),
+    claimed_at: v.optional(v.number()),
+    claimed_device: v.optional(v.string()),
   }).index("by_user_pending", ["user_id", "executed_at"]),
 
   teams: defineTable({
@@ -590,6 +604,12 @@ export default defineSchema({
     plan_ids: v.optional(v.array(v.id("plans"))),
     worktree_name: v.optional(v.string()),
     worktree_branch: v.optional(v.string()),
+    // Set on a row the web created for the cloud host BEFORE a local daemon has
+    // prepared the host and acquired its worktree (cloud_spawn). While pending
+    // no daemon may deliver into the row: the host would resume a session with
+    // no checkout, and a laptop would claim it for itself. Cleared by
+    // cloud.placeConversation together with the real start.
+    cloud_placement: v.optional(v.literal("pending")),
     worktree_path: v.optional(v.string()),
     worktree_status: v.optional(v.union(
       v.literal("active"),
@@ -611,6 +631,17 @@ export default defineSchema({
     // read per execution. Absent = "none". Semantic (not churn), so it rides
     // the sync log.
     armed_trigger_kind: v.optional(v.union(v.literal("none"), v.literal("standing"), v.literal("once"))),
+    // The pull request this session shepherds, folded for the inbox card and
+    // the thread state panel. Single writer: prShepherd.refreshConversationPrStatus.
+    // state mirrors pull_requests.shepherd_state.
+    pr_status: v.optional(v.object({
+      pr_id: v.id("pull_requests"),
+      repository: v.string(),
+      number: v.number(),
+      title: v.optional(v.string()),
+      state: v.string(),
+      at: v.number(),
+    })),
     // Harness /loop state, folded from the message stream at ingest (see
     // loopState.ts): the agent scheduled its own wakeup (ScheduleWakeup) or is
     // mid-wakeup-turn. Lets the inbox trigger set treat a self-pacing loop
@@ -1641,11 +1672,38 @@ export default defineSchema({
     // daemons alive one machine's trouble is masked by the other's beats.
     daemon_started_at: v.optional(v.number()),
     loop_freeze_ms: v.optional(v.number()),
+    // The same measure over the trailing hour, plus the worst single freeze and
+    // the stacks it was in. This is the loop freeze budget the daemonLogs cron
+    // alerts on and the devices settings page shows. Rounded by the daemon (1h
+    // to 5s, max to 1s) so a beat that changed nothing else does not rewrite
+    // the row and churn the roster.
+    loop_freeze_1h_ms: v.optional(v.number()),
+    loop_freeze_max_ms: v.optional(v.number()),
+    loop_freeze_top: v.optional(v.string()),
+    // Debounce state for the aggregated "daemon overloaded" notification
+    // (daemonLogs.checkDeviceLoopFreeze). One write per incident, not per tick.
+    // Dropped once the hour total has stayed under the bar past
+    // FREEZE_NOTIFY_COOLDOWN_MS, which is what lets the next real incident on
+    // this machine announce itself. Not on the first dip: a machine hovering at
+    // the bar crosses it every other tick, and clearing on the dip would let it
+    // reset its own debounce and alert every ten minutes.
+    freeze_notify_state: v.optional(v.object({
+      last_notified_at: v.number(),
+      // Hour total covered by that notification; only a HIGHER total is a fresh
+      // incident worth announcing again.
+      last_hour_ms: v.number(),
+    })),
     pending_sync_count: v.optional(v.number()),
     oldest_pending_ms: v.optional(v.number()),
     pending_sync_messages: v.optional(v.number()),
     pending_sync_conversations: v.optional(v.number()),
     is_remote: v.optional(v.boolean()),
+    // Set when work was queued for a REMOTE device that is offline (a cloud
+    // host that put itself to sleep). Local daemons read it off the heartbeat
+    // (users.heartbeat → wake_devices) and boot the host; a heartbeat from the
+    // device itself clears it. Never set for a local device — nothing can wake
+    // a closed laptop.
+    wake_requested_at: v.optional(v.number()),
     local_project_roots: v.optional(v.array(v.string())),
     // Git-plane health per repo with live sessions on this device (gitPlane.ts),
     // heartbeat-reported: is origin a real rendezvous URL, does fetch succeed,
@@ -1789,6 +1847,17 @@ export default defineSchema({
     deletions: v.number(),
     repository: v.optional(v.string()),
     pr_number: v.optional(v.number()),
+    // GitHub provenance for commits that arrive by webhook or backfill (the
+    // transcript path sets conversation_id instead). team_id is the access
+    // fallback for a commit with no session: members of the installing team
+    // may read it. branch is the ref the push landed on; task_ids are the
+    // ct- ids parsed from the message and branch (lib/gitRefs).
+    team_id: v.optional(v.id("teams")),
+    branch: v.optional(v.string()),
+    author_login: v.optional(v.string()),
+    author_avatar_url: v.optional(v.string()),
+    pr_id: v.optional(v.id("pull_requests")),
+    task_ids: v.optional(v.array(v.id("tasks"))),
     files: v.optional(v.array(v.object({
       filename: v.string(),
       status: v.string(),
@@ -1801,7 +1870,9 @@ export default defineSchema({
     .index("by_conversation_id", ["conversation_id"])
     .index("by_timestamp", ["timestamp"])
     .index("by_sha", ["sha"])
-    .index("by_repository", ["repository"]),
+    .index("by_repository", ["repository"])
+    .index("by_repository_timestamp", ["repository", "timestamp"])
+    .index("by_team_timestamp", ["team_id", "timestamp"]),
 
   // Per-edit file changes materialized at message ingest (materializeFileChanges
   // in messages.ts). Lets the diff viewer show the full session diff without
@@ -1890,15 +1961,73 @@ export default defineSchema({
     created_at: v.number(),
     updated_at: v.number(),
     merged_at: v.optional(v.number()),
+    closed_at: v.optional(v.number()),
+    // Live state mirrored from GitHub by the webhook processors and the merge
+    // state refresh (githubWebhooks / prShepherd). Every field is optional so
+    // rows that predate it stay valid.
+    head_sha: v.optional(v.string()),
+    base_sha: v.optional(v.string()),
+    draft: v.optional(v.boolean()),
+    author_avatar_url: v.optional(v.string()),
+    // GitHub's mergeable / mergeable_state ("clean", "behind", "dirty",
+    // "blocked", "unstable", "unknown", "draft"). behind_by is the compare
+    // API's count of base commits the head lacks.
+    mergeable: v.optional(v.union(v.boolean(), v.null())),
+    mergeable_state: v.optional(v.string()),
+    behind_by: v.optional(v.number()),
+    merge_state_checked_at: v.optional(v.number()),
+    // "approved" | "changes_requested" | "review_required" | "none"
+    review_decision: v.optional(v.string()),
+    requested_reviewers: v.optional(v.array(v.string())),
+    unresolved_review_count: v.optional(v.number()),
+    // One entry per check run or commit status context on head_sha, keyed by
+    // name. checks_state folds them: "none" | "pending" | "success" | "failure".
+    checks: v.optional(v.array(v.object({
+      name: v.string(),
+      status: v.string(),
+      conclusion: v.optional(v.string()),
+      url: v.optional(v.string()),
+      updated_at: v.number(),
+      external_id: v.optional(v.string()),
+    }))),
+    checks_state: v.optional(v.string()),
+    // Reasons that piled up since the last wake was DELIVERED. Several events
+    // often land while the shepherd is mid-run, and the newest is rarely the
+    // most urgent, so they are kept until the prompt is built and the headline
+    // is chosen by severity. Cleared once the wake is handed over.
+    shepherd_pending_reasons: v.optional(v.array(v.string())),
+    // ct- ids parsed from title, body and head_ref.
+    task_ids: v.optional(v.array(v.id("tasks"))),
+    // Shepherd: the session that owns this PR until it merges. One standing
+    // agent_tasks row (shepherd_task_id) is woken with a prompt built from the
+    // fields above. shepherd_state is the folded status the inbox card shows:
+    // "review_pending" | "changes_requested" | "ci_pending" | "ci_red" |
+    // "behind" | "conflicts" | "approved" | "ready" | "merged" | "closed".
+    shepherd_conversation_id: v.optional(v.id("conversations")),
+    shepherd_enabled: v.optional(v.boolean()),
+    shepherd_task_id: v.optional(v.id("agent_tasks")),
+    shepherd_state: v.optional(v.string()),
+    shepherd_state_at: v.optional(v.number()),
+    shepherd_last_wake_at: v.optional(v.number()),
+    shepherd_last_wake_reason: v.optional(v.string()),
+    shepherd_wake_count: v.optional(v.number()),
   })
     .index("by_team_id", ["team_id"])
     .index("by_github_pr_id", ["github_pr_id"])
     .index("by_repository", ["repository"])
+    .index("by_repository_number", ["repository", "number"])
+    .index("by_shepherd_conversation", ["shepherd_conversation_id"])
     .index("by_updated_at", ["updated_at"]),
 
   reviews: defineTable({
     pull_request_id: v.id("pull_requests"),
-    reviewer_user_id: v.id("users"),
+    // Optional since reviews now also arrive by webhook from reviewers who
+    // have no codecast account; those carry author_github_username instead.
+    reviewer_user_id: v.optional(v.id("users")),
+    author_github_username: v.optional(v.string()),
+    github_review_id: v.optional(v.number()),
+    commit_sha: v.optional(v.string()),
+    html_url: v.optional(v.string()),
     state: v.union(
       v.literal("pending"),
       v.literal("approved"),
@@ -1910,18 +2039,48 @@ export default defineSchema({
   })
     .index("by_pull_request", ["pull_request_id"])
     .index("by_reviewer", ["reviewer_user_id"])
-    .index("by_pull_request_state", ["pull_request_id", "state"]),
+    .index("by_pull_request_state", ["pull_request_id", "state"])
+    .index("by_github_review_id", ["github_review_id"]),
 
+  // Code comments: a comment anchored to a file (and optionally a line range)
+  // in a repository. Historically PR review comments only; now also comments
+  // left on the source browser and on commit pages, with or without a PR.
+  // A comment is a codecast object: it records the session, task, plan or doc
+  // it was made from, and is mirrored to GitHub (github_comment_id) when the
+  // file sits in an open PR.
   review_comments: defineTable({
     review_id: v.optional(v.id("reviews")),
-    pull_request_id: v.id("pull_requests"),
+    pull_request_id: v.optional(v.id("pull_requests")),
+    repository: v.optional(v.string()),
+    // Commit sha or branch the comment was made against.
+    ref: v.optional(v.string()),
     file_path: v.optional(v.string()),
     line_number: v.optional(v.number()),
+    line_end: v.optional(v.number()),
+    // "LEFT" (old side of a diff) | "RIGHT". Absent = the file as it is at ref.
+    side: v.optional(v.string()),
+    parent_id: v.optional(v.id("review_comments")),
+    conversation_id: v.optional(v.id("conversations")),
+    task_id: v.optional(v.id("tasks")),
+    plan_id: v.optional(v.id("plans")),
+    doc_id: v.optional(v.id("docs")),
+    author_kind: v.optional(v.union(v.literal("user"), v.literal("agent"), v.literal("github"))),
+    author_avatar_url: v.optional(v.string()),
+    resolved_at: v.optional(v.number()),
+    resolved_by: v.optional(v.id("users")),
+    client_id: v.optional(v.string()),
+    github_review_id: v.optional(v.number()),
+    html_url: v.optional(v.string()),
     content: v.string(),
     resolved: v.boolean(),
     created_at: v.number(),
     updated_at: v.optional(v.number()),
     github_comment_id: v.optional(v.number()),
+    // The FIRST comment of the thread this one replies to (GitHub's
+    // comment.in_reply_to_id). A review thread is a conversation, and whether it
+    // is still outstanding depends on who spoke last in it, not on the comment
+    // that opened it. Absent means this comment opened its own thread.
+    github_in_reply_to_id: v.optional(v.number()),
     codecast_origin: v.optional(v.boolean()),
     author_github_username: v.optional(v.string()),
     author_user_id: v.optional(v.id("users")),
@@ -1929,7 +2088,114 @@ export default defineSchema({
     .index("by_review", ["review_id"])
     .index("by_review_resolved", ["review_id", "resolved"])
     .index("by_pull_request", ["pull_request_id"])
-    .index("by_github_comment_id", ["github_comment_id"]),
+    .index("by_github_comment_id", ["github_comment_id"])
+    .index("by_repository_file", ["repository", "file_path"])
+    .index("by_conversation", ["conversation_id"])
+    .index("by_task", ["task_id"])
+    .index("by_parent", ["parent_id"]),
+
+  // External activity as first class events: one row per commit, push, PR
+  // change, review, check result, merge, merge-state change, code comment,
+  // or issue change (GitHub issues, Linear). Written only by
+  // externalEvents.record (deduped by dedupe_key). Every event names the
+  // codecast objects it belongs to so it can be rendered inline in the
+  // transcript, the team feed and the task, plan and project timelines by
+  // one component. Access follows the PR/commit rule: team membership, or
+  // access to the linked conversation.
+  external_events: defineTable({
+    team_id: v.id("teams"),
+    // github | linear | codecast
+    source: v.string(),
+    // owner/name for git events; absent for issue trackers without a repo.
+    repository: v.optional(v.string()),
+    // Git kinds: commit | push | pr_opened | pr_synchronize | pr_review
+    // | pr_review_comment | pr_check | pr_merged | pr_closed | pr_reopened
+    // | pr_behind | pr_conflict | pr_ready | pr_review_requested
+    // | pr_ready_for_review | pr_draft | pr_edited | code_comment
+    // Issue kinds (issue sync): issue_opened | issue_assigned | issue_closed
+    // | issue_reopened | issue_commented | issue_status | issue_edited
+    kind: v.string(),
+    actor_login: v.optional(v.string()),
+    actor_avatar_url: v.optional(v.string()),
+    actor_user_id: v.optional(v.id("users")),
+    title: v.string(),
+    summary: v.optional(v.string()),
+    url: v.optional(v.string()),
+    sha: v.optional(v.string()),
+    branch: v.optional(v.string()),
+    pr_id: v.optional(v.id("pull_requests")),
+    pr_number: v.optional(v.number()),
+    commit_id: v.optional(v.id("commits")),
+    comment_id: v.optional(v.id("review_comments")),
+    // The external issue this event is about (issue sync).
+    issue: v.optional(v.object({
+      provider: v.string(),
+      key: v.string(),
+      url: v.optional(v.string()),
+      title: v.optional(v.string()),
+    })),
+    conversation_id: v.optional(v.id("conversations")),
+    // task_id is the first linked task (indexed); task_ids is the full set.
+    task_id: v.optional(v.id("tasks")),
+    task_ids: v.optional(v.array(v.id("tasks"))),
+    plan_ids: v.optional(v.array(v.id("plans"))),
+    project_ids: v.optional(v.array(v.id("projects"))),
+    meta: v.optional(v.object({
+      status: v.optional(v.string()),
+      conclusion: v.optional(v.string()),
+      check_name: v.optional(v.string()),
+      review_state: v.optional(v.string()),
+      file_path: v.optional(v.string()),
+      line_number: v.optional(v.number()),
+      additions: v.optional(v.number()),
+      deletions: v.optional(v.number()),
+      files_changed: v.optional(v.number()),
+      commit_count: v.optional(v.number()),
+      behind_by: v.optional(v.number()),
+      mergeable_state: v.optional(v.string()),
+      base_ref: v.optional(v.string()),
+      head_ref: v.optional(v.string()),
+      pr_state: v.optional(v.string()),
+      shepherd_state: v.optional(v.string()),
+    })),
+    dedupe_key: v.string(),
+    created_at: v.number(),
+  })
+    .index("by_team_created", ["team_id", "created_at"])
+    .index("by_repository_created", ["repository", "created_at"])
+    .index("by_pr_created", ["pr_id", "created_at"])
+    .index("by_conversation_created", ["conversation_id", "created_at"])
+    .index("by_task_created", ["task_id", "created_at"])
+    .index("by_issue_key", ["issue.key", "created_at"])
+    .index("by_dedupe_key", ["dedupe_key"]),
+
+  // Read-through cache of repository content fetched with the GitHub App
+  // token for the source browser and history pages: branch lists, trees,
+  // blobs, commit logs and blame. Keyed by (repository, kind, ref, path).
+  // Rows are re-fetched when older than their kind's TTL (repos.ts) and never
+  // synced to the client store; the pages read them per view.
+  repo_cache: defineTable({
+    team_id: v.id("teams"),
+    repository: v.string(),
+    // branches | tree | blob | log | blame | compare
+    kind: v.string(),
+    ref: v.string(),
+    path: v.string(),
+    // Resolved commit sha for ref (a branch name resolves to its tip).
+    sha: v.optional(v.string()),
+    // JSON payload for structured kinds; raw text for blobs.
+    content: v.string(),
+    size: v.optional(v.number()),
+    truncated: v.optional(v.boolean()),
+    etag: v.optional(v.string()),
+    fetched_at: v.number(),
+  })
+    .index("by_key", ["repository", "kind", "ref", "path"])
+    .index("by_team_fetched", ["team_id", "fetched_at"])
+    // Pruning asks one question across every team: what has not been read in a
+    // week. by_team_fetched cannot answer it without walking the teams, so the
+    // sweep gets an index of its own and reads only rows it is going to delete.
+    .index("by_fetched", ["fetched_at"]),
 
   team_activity_events: defineTable({
     team_id: v.id("teams"),
@@ -2157,7 +2423,11 @@ export default defineSchema({
       v.literal("chat_dm"),
       // Someone added you to a private channel or a group message.
       v.literal("chat_added"),
-      v.literal("chat_post")
+      v.literal("chat_post"),
+      // One machine's daemon event loop froze past the budget in the last hour
+      // (daemonLogs.checkDeviceLoopFreeze). Entity is the device, not a session:
+      // the whole machine is late, not one conversation.
+      v.literal("daemon_overloaded")
     ),
     actor_user_id: v.optional(v.id("users")),
     // Display identity for actors without an account (an anonymous artifact
@@ -2172,7 +2442,8 @@ export default defineSchema({
       v.literal("plan"),
       v.literal("conversation"),
       v.literal("artifact"),
-      v.literal("chat_channel")
+      v.literal("chat_channel"),
+      v.literal("device")
     )),
     entity_id: v.optional(v.string()),
     // The exact chat message a chat notification points at. entity_id names the
@@ -2387,6 +2658,10 @@ export default defineSchema({
     }))),
     suspended_at: v.optional(v.number()),
     installed_by_user_id: v.optional(v.id("users")),
+    // Health stamps read by the integrations page. issue-sync.md S1.5.
+    last_webhook_at: v.optional(v.number()),
+    last_sync_at: v.optional(v.number()),
+    last_error: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -2473,6 +2748,7 @@ export default defineSchema({
       event_type: v.string(),
       action: v.optional(v.string()),
       repository: v.optional(v.string()),
+      pr_number: v.optional(v.number()),
     })),
 
     mode: v.union(v.literal("propose"), v.literal("apply")),
@@ -2559,6 +2835,7 @@ export default defineSchema({
         event_type: v.string(),
         action: v.optional(v.string()),
         repository: v.optional(v.string()),
+        pr_number: v.optional(v.number()),
       })),
       mode: v.union(v.literal("propose"), v.literal("apply")),
       agent_type: v.optional(v.string()),
@@ -3016,6 +3293,9 @@ export default defineSchema({
     last_comment_at: v.optional(v.number()),
     updated_at: v.number(),
     closed_at: v.optional(v.number()),
+    // Provider twin: a Linear issue or a GitHub issue backing this task.
+    // Server authored only. docs/architecture/issue-sync.md S1.1.
+    external: v.optional(taskExternalValidator),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_status", ["user_id", "status"])
@@ -3033,6 +3313,9 @@ export default defineSchema({
     .index("by_workflow_run", ["workflow_run_id"])
     .index("by_assignee_status", ["assignee", "status"])
     .index("by_assignee_updated", ["assignee", "updated_at"])
+    // The provider twin lookup: every inbound issue event resolves its task
+    // through this one index. issue-sync.md S1.1.
+    .index("by_external", ["external.provider", "external.id"])
     .searchIndex("search_tasks_v2", {
       searchField: "title",
       filterFields: ["user_id", "project_id", "status"],
@@ -3098,10 +3381,15 @@ export default defineSchema({
       v.literal("note")
     ),
     image_storage_ids: v.optional(v.array(v.string())),
+    // Provider twin of this comment (Linear comment / GitHub issue comment).
+    // Set when pulled from the provider or once a pushed comment gets its id
+    // back. docs/architecture/issue-sync.md S1.2, S4.
+    external: v.optional(taskCommentExternalValidator),
     created_at: v.number(),
   })
     .index("by_task_id", ["task_id"])
-    .index("by_task_created", ["task_id", "created_at"]),
+    .index("by_task_created", ["task_id", "created_at"])
+    .index("by_external", ["external.provider", "external.id"]),
 
   task_history: defineTable({
     task_id: v.id("tasks"),
@@ -3992,7 +4280,10 @@ export default defineSchema({
       // ever appear, `emit` re-checks team membership for a chat_channel entity
       // and both membership-removal paths (`teams.removeMember` and
       // `teams.removeFromTeam`) delete the rows of a departing member.
-      v.literal("chat_channel")
+      v.literal("chat_channel"),
+      // Device alerts go straight to the machine's owner, so nothing subscribes
+      // to a device either. Present for the same reason: one shape.
+      v.literal("device")
     ),
     entity_id: v.string(),
     reason: v.union(
@@ -4449,6 +4740,8 @@ export default defineSchema({
   })
     .index("by_channel_user", ["channel_id", "user_id"])
     .index("by_channel_updated", ["channel_id", "updated_at"]),
+
+  ...issueSyncTables,
 
 }, {
   // The `messages` table is in the millions of rows, and the default

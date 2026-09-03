@@ -11,7 +11,7 @@
 // (2026-08-14: 165 orphan claudes / 56GB; 2026-08-20: 290 processes, 10 orphan
 // teammates / 5GB plus 267 idle login shells pushing `ps aux` past 20s).
 
-import { execFileSync, spawnSync } from "./proc.js";
+import { execFileAsync, execFileSync, spawnSync } from "./proc.js";
 import { isRecognizedAgentComm } from "./sessionProcessMatcher.js";
 import { CLAUDE_VERSIONED_BINARY_RE } from "./stableClaudeBinary.js";
 
@@ -33,16 +33,40 @@ export function parseProcessTable(stdout: string): ProcRow[] {
   return procs;
 }
 
+const PS_ARGS = ["-axww", "-o", "pid=,ppid=,command="];
+const PS_OPTS = { encoding: "utf-8" as const, maxBuffer: 64 * 1024 * 1024 };
+
+/** How long to wait for `ps`. The default is generous because a doctor sweep
+ *  would rather wait than miss an orphan fleet; on this laptop `ps aux` has run
+ *  to 26s under load. An interactive caller passes something shorter: an empty
+ *  table costs it one sweep, a stall costs the user the whole command. */
+const PS_TIMEOUT_MS = 30_000;
+
+export interface ProcessTableOptions {
+  /** Milliseconds before `ps` is abandoned and the table comes back empty. */
+  timeout?: number;
+}
+
 /** The live process table (pid, ppid, full command line). Empty on failure. */
-export function snapshotProcessTable(): ProcRow[] {
+export function snapshotProcessTable(opts: ProcessTableOptions = {}): ProcRow[] {
   try {
     return parseProcessTable(
-      execFileSync("ps", ["-axww", "-o", "pid=,ppid=,command="], {
-        encoding: "utf-8",
-        maxBuffer: 64 * 1024 * 1024,
-        timeout: 30_000,
-      }) as string,
+      execFileSync("ps", PS_ARGS, { ...PS_OPTS, timeout: opts.timeout ?? PS_TIMEOUT_MS }) as string,
     );
+  } catch {
+    return [];
+  }
+}
+
+/** The same snapshot off the event loop. The daemon uses this one: a `ps` that
+ *  runs for seconds under load must never be the thing holding the loop. */
+export async function snapshotProcessTableAsync(opts: ProcessTableOptions = {}): Promise<ProcRow[]> {
+  try {
+    const { stdout } = await execFileAsync("ps", PS_ARGS, {
+      ...PS_OPTS,
+      timeout: opts.timeout ?? PS_TIMEOUT_MS,
+    });
+    return parseProcessTable(String(stdout));
   } catch {
     return [];
   }
@@ -81,6 +105,46 @@ export function isAgentCommand(command: string): boolean {
   // interpreters (node/bun) are too generic for a whole-tree count
   if (/^(node|bun|deno)$/.test(base)) return false;
   return isRecognizedAgentComm(base);
+}
+
+/** Program names that can be argv0 of a daemon. Anything else naming `_daemon`
+ *  or a daemon file is talking ABOUT the daemon, not running it. */
+const DAEMON_ARGV0_RE = /^(codecast|cast|bun|node|deno)(\.exe)?$/;
+
+/**
+ * Is this command line a codecast daemon? Matches all three install shapes:
+ * source (`bun .../packages/cli/src/daemon.ts _daemon`), built JS
+ * (`node .../dist/daemon.js`) and the compiled binary (`codecast -- _daemon`).
+ *
+ * Two tests keep the neighbours out, and both are load bearing because the
+ * split brain sweep KILLS what this matches. The program has to be one of ours
+ * or an interpreter, which rejects `nginx: master ... -g daemon off;`. And the
+ * daemon token has to sit in the first argument position, which rejects every
+ * cast command that merely mentions it: `cast send jx7c6zk restart the _daemon
+ * now` and `cast blame packages/cli/src/daemon.ts` are ordinary commands, and
+ * ps flattens quoting so a message body is just more argv tokens.
+ *
+ * It also deliberately misses `codecast _watchdog` and the worker shape
+ * `codecast _worker <kind>`: those are meant to live.
+ */
+export function isDaemonCommand(command: string): boolean {
+  const argv = command.trim().split(/\s+/).filter((t) => t.length > 0);
+  if (argv.length < 2) return false;
+  const argv0 = argv[0].split("/").pop() ?? "";
+  if (!DAEMON_ARGV0_RE.test(argv0)) return false;
+  // Interpreter flags (`bun --smol`, `node --enable-source-maps`), the argument
+  // separator, and bun's own `run` subcommand sit before the entry point;
+  // nothing else may. `bun run x/daemon.ts` executes the file in this process,
+  // so it is a daemon like any other shape.
+  const rest = /^(bun|deno)(\.exe)?$/.test(argv0) && argv[1] === "run" ? argv.slice(2) : argv.slice(1);
+  const first = rest.find((t) => t !== "--" && !t.startsWith("-"));
+  if (!first) return false;
+  return first === "_daemon" || first.endsWith("/daemon.ts") || first.endsWith("/daemon.js");
+}
+
+/** Pids of every other daemon process on this machine. */
+export function findOtherDaemonPids(procs: ProcRow[], selfPid = process.pid): number[] {
+  return procs.filter((p) => p.pid !== selfPid && isDaemonCommand(p.command)).map((p) => p.pid);
 }
 
 export interface StaleTmuxServer {

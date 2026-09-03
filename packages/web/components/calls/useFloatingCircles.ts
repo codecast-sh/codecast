@@ -75,9 +75,11 @@ export function useFloatingCircles(opts: {
       const r = el.getBoundingClientRect();
       if (r.width > 0) regions.push({ kind: "circle", cx: r.left + r.width / 2, cy: r.top + r.height / 2, r: r.width / 2 });
     }
-    const chrome = root.querySelector<HTMLElement>("[data-chrome-hit]");
-    if (chrome) {
-      const r = chrome.getBoundingClientRect();
+    // EVERY chrome region, not the first: the overlay draws its card and its
+    // controls as separate hit rects, and a toolbar left out of this list is
+    // a toolbar the person clicks straight through into the app beneath.
+    for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-chrome-hit]"))) {
+      const r = el.getBoundingClientRect();
       if (r.width > 0) regions.push({ kind: "rect", x: r.left, y: r.top, width: r.width, height: r.height });
     }
     regionsRef.current = regions;
