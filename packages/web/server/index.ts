@@ -5,8 +5,8 @@ import { Hono } from "hono";
 import { readFile, stat } from "fs/promises";
 import { extname, join } from "path";
 import { createRequire } from "module";
-import { botMetaMiddleware } from "./bot-meta";
-import { registerShareRoutes, getShellHtml } from "./share";
+import { botMetaMiddleware, prerenderedRouteCount } from "./bot-meta";
+import { registerShareRoutes, getShellHtml, shareSsrReady } from "./share";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json");
@@ -99,12 +99,19 @@ const BINARIES: Record<string, string> = {
 const MAC_DMG_URL = "https://dl.codecast.sh/desktop/Codecast-1.1.102-arm64.dmg";
 const MAC_DMG_VERSION = "1.1.102";
 
-app.get("/api/health", (c) =>
+app.get("/api/health", async (c) =>
   c.json({
     status: "ok",
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
     version: pkg.version,
+    // false = share pages are on the payload-only fallback (SSR bundle absent
+    // from the build). Not fatal, but it should never be false in prod.
+    share_ssr: await shareSsrReady(),
+    // 0 = the marketing prerender failed, so search and AI crawlers are getting
+    // the empty SPA shell. The build fails open on purpose (SEO must never block
+    // a deploy), which is why the number is reported here instead.
+    prerender_routes: await prerenderedRouteCount(),
   })
 );
 
