@@ -248,7 +248,13 @@ export function evaluateInboxCompare(state: InboxCompareState, ctx: InboxCompare
     }
     if (droppedFacts(id)) continue;
     const stamp = stamps[id];
-    if (local.bucket !== stamp.bucket) diff.bucket_deltas.push(id);
+    if (local.bucket !== stamp.bucket) {
+      diff.bucket_deltas.push(id);
+      if (process.env.SIM_TRACE) {
+        const a: any = adapted.get(id) ?? {};
+        console.info("[inboxDigest] delta", JSON.stringify({ id: id.slice(0, 8), stamp: stamp.bucket, stamp_ws: stamp.work_state, local: local.bucket, local_ws: local.work_state, asking: stamp.asking, epoch: slot.epoch, adapted: { agent_status: a.agent_status, is_idle: a.is_idle, awaiting: a.awaiting_input, verdict: a.settle_verdict, thread: a.thread_state_status, killed: a.inbox_killed_at, pinned: a.inbox_pinned_at, dormant_at: a.inbox_dormant_at, armed: a.armed_trigger_kind, has_pending: a.has_pending_messages, updated_at: a.updated_at, msgs: a.message_count } }));
+      }
+    }
     else if (local.below_fold !== stamp.below_fold) diff.fold_deltas.push(id);
   }
   for (const id of proj.placements.keys()) {
@@ -410,6 +416,7 @@ export function createInboxDigestComparer(io: InboxDigestComparerIO): InboxDiges
 
   function onConfirmedDrift(outcome: Extract<InboxCompareOutcome, { kind: "diff" }>, t: number): void {
     counters.mismatches++;
+    if (process.env.SIM_TRACE) console.info("[inboxDigest] drift", JSON.stringify(outcome.diff));
     if (outcome.set_digest !== lastDriftDigest) {
       lastDriftDigest = outcome.set_digest;
       io.track("inbox_drift", {
