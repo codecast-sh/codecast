@@ -61,7 +61,7 @@ import {
   WorkspaceUnresolved,
   type Workspace,
 } from "./resolveWorkspace.js";
-import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, writeAccountToken, removeAccountToken, accountTokenInfo } from "./ccAccounts.js";
+import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, writeAccountToken, removeAccountToken, accountTokenInfo, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
@@ -4449,6 +4449,56 @@ program
   .description("Show the active Claude account's usage-limit windows (5h session, 7d) and what a limit hit means for sessions here")
   .option("--json", "machine-readable report")
   .action(runUsageCommand);
+
+accountsCmd
+  .command("verify")
+  .description(
+    "Check what each saved profile REALLY holds\n\n" +
+    "The index records the account a profile was saved AS; this asks each stored\n" +
+    "credential which account it belongs to. They diverge when a switch leaves a\n" +
+    "stale identity in ~/.claude.json — one login then gets re-saved under other\n" +
+    "profiles' names. --fix drops duplicate copies and relabels the rest."
+  )
+  .option("--fix", "repair what it finds (drop duplicate credentials, relabel mislabeled profiles)")
+  .option("--json", "machine-readable report")
+  .action(async (options: any) => {
+    let rows: ProfileAudit[];
+    try {
+      rows = options.fix ? await repairProfileIdentities() : await auditProfileIdentities();
+    } catch (err) {
+      console.error(err instanceof CcAccountError ? err.message : String(err));
+      process.exit(1);
+      return;
+    }
+    if (options.json) {
+      console.log(JSON.stringify(rows, null, 2));
+      return;
+    }
+    if (rows.length === 0) {
+      console.log(`${c.dim}No saved profiles.${c.reset}`);
+      return;
+    }
+    for (const r of rows) {
+      const mark =
+        r.verdict === "ok" ? `${c.green}✓${c.reset}` :
+        r.verdict === "unverifiable" ? `${c.dim}?${c.reset}` : `${c.red}✗${c.reset}`;
+      const detail =
+        r.verdict === "ok" ? `${c.dim}${r.actual_email ?? ""}${c.reset}` :
+        r.verdict === "unverifiable" ? `${c.dim}${r.reason ?? "could not verify"}${c.reset}` :
+        `${c.yellow}holds ${r.actual_email ?? r.actual_uuid ?? "another account"}${c.reset}` +
+          (r.verdict === "duplicate" ? `${c.dim} (already saved under its own name)${c.reset}` : "");
+      const repaired = r.repair ? ` ${c.dim}→ ${r.repair}${c.reset}` : "";
+      console.log(`${mark} ${c.cyan}${r.name.padEnd(16)}${c.reset} ${detail}${repaired}`);
+    }
+    const bad = rows.filter((r) => r.verdict === "mislabeled" || r.verdict === "duplicate");
+    if (bad.length > 0 && !options.fix) {
+      console.log(`\n${c.dim}Repair with:${c.reset} cast accounts verify --fix`);
+      console.log(`${c.dim}Then log into each emptied account once (claude /login) and:${c.reset} cast accounts save <name>`);
+    } else if (bad.some((r) => r.repair === "dropped-credential")) {
+      console.log(`\n${c.dim}Emptied profiles need one login each:${c.reset} claude /login ${c.dim}then${c.reset} cast accounts save <name>`);
+    }
+    await publishAccountsInventory();
+  });
 
 accountsCmd
   .command("usage")
