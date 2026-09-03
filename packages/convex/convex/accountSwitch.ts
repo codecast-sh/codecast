@@ -36,6 +36,8 @@ import {
   STALE_FLAG_AFTER_MS,
   tokenBackedProfile,
   activeTokenProfile,
+  continueTargetPin,
+  continueNeedsRestart,
 } from "./ccAccountsShared";
 import { deliverSessionNotificationToParties } from "./notifications";
 
@@ -137,17 +139,26 @@ export const continueAllBlocked = mutation({
       };
     }
 
-    // Same shared client_id the web paints its optimistic bubble with, so a
-    // racing CLI run, a double-click, and the browser's own copy all collapse
-    // into one send.
-    const at = Date.now();
-    for (const conv of blocked) {
-      await enqueuePendingMessage(ctx, conv, userId, {
-        content: "continue",
-        client_id: blockedContinueClientId(conv._id, at),
-      });
-    }
-    return { continued: blocked.length, subagents: subagentCount, total_blocked: totalBlocked };
+    // The no-switch revive: a plain continue for every session a message can
+    // reach, a kill + resume (with its account pin corrected) for the ones it
+    // cannot — a session pinned to another account's setup-token would only
+    // re-fail on that account.
+    const now = Date.now();
+    const { online, primary } = await listOnlineDevices(ctx, userId, now);
+    const res = await insertSwitchCommands(ctx, userId, {
+      profile: undefined,
+      blocked,
+      online,
+      primary,
+      continueBlocked: true,
+      now,
+    });
+    return {
+      continued: res.messaged + res.restarted,
+      restarted: res.restarted,
+      subagents: subagentCount,
+      total_blocked: totalBlocked,
+    };
   },
 });
 
@@ -244,6 +255,10 @@ export const requestAccountSwitch = mutation({
     return {
       devices: res.devices,
       conversations: res.routed,
+      // No-switch revives split: sessions a message reaches vs. sessions
+      // killed + resumed first (signed out, or pinned to another account).
+      restarted: res.restarted,
+      messaged: res.messaged,
       subagents: subagentCount,
       total_blocked: totalBlocked,
       unreachable: blocked.length - res.routed - res.unswitchable,
@@ -286,6 +301,10 @@ async function insertSwitchCommands(
 ): Promise<{
   devices: number;
   routed: number;
+  // Of the routed: killed + resumed by a daemon command vs. sent a plain
+  // continue (no-switch revives only; a switch restarts everything).
+  restarted: number;
+  messaged: number;
   unswitchable: number;
   unswitchableDevices: string[];
   commandIds: Id<"daemon_commands">[];
@@ -303,13 +322,33 @@ async function insertSwitchCommands(
     email: opts.email,
   });
 
+  // The plain "continue" for a session that needs no restart: the same
+  // enqueue a hand-typed continue in its composer would make, under the
+  // caller's painted client id when it sent one (the server echo then
+  // replaces that bubble) or the shared minute-bucketed id otherwise (a
+  // racing CLI run and a double-click collapse into one send).
+  let messaged = 0;
+  const sendContinue = async (conv: Doc<"conversations">) => {
+    await enqueuePendingMessage(ctx, conv, userId, {
+      content: "continue",
+      client_id: opts.continueClientIds?.[conv._id] ?? blockedContinueClientId(conv._id, opts.now),
+    });
+    messaged++;
+  };
+
   const groups = new Map<string, Doc<"conversations">[]>();
   for (const conv of opts.blocked) {
     const owner =
       conv.owner_device_id && onlineById.has(conv.owner_device_id)
         ? conv.owner_device_id
         : opts.primary?.device_id;
-    if (!owner) continue;
+    if (!owner) {
+      // No daemon to execute a restart. A plain continue still has a home —
+      // the delivery rail holds it until a daemon comes back — so the
+      // no-switch revive queues it rather than dropping the session.
+      if (!switchRequested && opts.continueBlocked) await sendContinue(conv);
+      continue;
+    }
     const list = groups.get(owner) ?? [];
     list.push(conv);
     groups.set(owner, list);
@@ -341,6 +380,7 @@ async function insertSwitchCommands(
 
   const commandIds: Id<"daemon_commands">[] = [];
   let routed = 0;
+  let restarted = 0;
   let unswitchable = 0;
   const unswitchableDevices: string[] = [];
   for (const [deviceId, convs] of groups) {
@@ -369,17 +409,36 @@ async function insertSwitchCommands(
       }
     }
     routed += convs.length;
-    // Per-session tokens on this device: re-pin the revived sessions to the
-    // target account's token so their resume sources it — or clear a stale
-    // pin when the target has no token, because a session left pinned to the
-    // (exhausted) outgoing account would re-source it on resume and undo the
-    // switch. A plain continue on the current account leaves pins alone.
-    if (switchRequested && !isRemote && device?.cc_session_tokens === true) {
-      const pin = tokenBackedProfile(device.cc_accounts, { profile: localProfile }, opts.now);
-      for (const c of convs) {
+    // A switch restarts every session (the keychain swap invalidates the
+    // token each process holds). A plain continue on the current account
+    // restarts only the sessions a message cannot reach: signed-out ones,
+    // and ones pinned to another account's setup-token — the rest get the
+    // message a hand-typed continue would send.
+    const restart = switchRequested
+      ? convs
+      : convs.filter((c) => continueNeedsRestart(c, device, opts.now));
+    if (!switchRequested && opts.continueBlocked) {
+      for (const c of convs) if (!restart.includes(c)) await sendContinue(c);
+    }
+    // The pin the restarted sessions resume under. Per-session tokens on
+    // this device: the target account's token (the switch target, or the
+    // machine's current login for a plain continue) — or no pin when that
+    // account has no token, because a session left pinned to the exhausted
+    // account would re-source it on resume and undo the revive. The daemon
+    // reads the pin from the row at resume, so it is corrected here, before
+    // the kill command exists.
+    if (!isRemote) {
+      const pin = switchRequested
+        ? device?.cc_session_tokens === true
+          ? tokenBackedProfile(device.cc_accounts, { profile: localProfile }, opts.now)
+          : undefined
+        : continueTargetPin(device, opts.now);
+      for (const c of restart) {
         if ((c.cc_account ?? undefined) !== pin) await ctx.db.patch(c._id, { cc_account: pin });
       }
     }
+    if (restart.length === 0 && !(switchRequested && !isRemote)) continue;
+    restarted += restart.length;
     commandIds.push(
       await ctx.db.insert("daemon_commands", {
         user_id: userId,
@@ -388,13 +447,13 @@ async function insertSwitchCommands(
           // Remotes never swap locally — their credential arrives via the
           // primary's push. They only recycle their blocked sessions.
           profile: isRemote ? undefined : localProfile,
-          conversation_ids: convs.map((c) => c._id),
-          session_ids: Object.fromEntries(convs.map((c) => [c._id, c.session_id])),
+          conversation_ids: restart.map((c) => c._id),
+          session_ids: Object.fromEntries(restart.map((c) => [c._id, c.session_id])),
           continue_blocked: opts.continueBlocked,
           ...(opts.continueClientIds
             ? {
                 client_ids: Object.fromEntries(
-                  convs
+                  restart
                     .map((c) => [c._id, opts.continueClientIds![c._id]] as const)
                     .filter(([, clientId]) => !!clientId),
                 ),
@@ -406,7 +465,7 @@ async function insertSwitchCommands(
       }),
     );
   }
-  return { devices: commandIds.length, routed, unswitchable, unswitchableDevices, commandIds };
+  return { devices: commandIds.length, routed, restarted, messaged, unswitchable, unswitchableDevices, commandIds };
 }
 
 // The recovery nudge for remote Macs: they run a COPY of the primary's
@@ -1152,15 +1211,22 @@ export const autoSwitchCheck = internalMutation({
     }
 
     if (decision.action === "continue") {
+      // Same no-switch revive the banner uses: a message where one can
+      // reach the session, a restart (pin corrected) where it cannot.
       const bucket = Math.floor(now / 60_000);
-      for (const conv of limitBlocked) {
-        await enqueuePendingMessage(ctx, conv, args.user_id, {
-          content: "continue",
-          client_id: `auto-switch-continue-${conv._id}-${bucket}`,
-        });
-      }
+      const res = await insertSwitchCommands(ctx, args.user_id, {
+        profile: undefined,
+        blocked: limitBlocked,
+        online,
+        primary,
+        continueBlocked: true,
+        now,
+        continueClientIds: Object.fromEntries(
+          limitBlocked.map((conv) => [conv._id, `auto-switch-continue-${conv._id}-${bucket}`]),
+        ),
+      });
       await recordAction("continue", AUTO_SWITCH_CONTINUE_KEY);
-      return { acted: "continue", conversations: limitBlocked.length };
+      return { acted: "continue", conversations: limitBlocked.length, restarted: res.restarted };
     }
 
     if (decision.action === "switch") {
