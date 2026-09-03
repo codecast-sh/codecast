@@ -154,7 +154,42 @@ function createOsPermissions({ electron, bundleId, notifications = loadNotificat
     if (url) shell.openExternal(url);
   }
 
-  return { getAll, request, openSettings };
+  // Deliver a notification through the modern API. Once this process has
+  // read its permission above, macOS drops everything Electron's legacy
+  // `Notification` sends, silently — so this is the only path that reaches
+  // the human. Returns false when the addon cannot post (not macOS, no
+  // binary, outside a bundle); the caller falls back to the legacy class,
+  // which still works in a process that never touched the modern API.
+  const clickHandlers = new Map();
+  let activateWired = false;
+  function notify(title, body, onClick) {
+    if (!mac || !notifications || typeof notifications.post !== "function") return false;
+    try {
+      if (!activateWired && typeof notifications.onActivate === "function") {
+        notifications.onActivate((id) => {
+          const handler = clickHandlers.get(id);
+          clickHandlers.delete(id);
+          if (handler) {
+            try { handler(); } catch {}
+          }
+        });
+        activateWired = true;
+      }
+      // Never asked: raise the prompt, then post anyway (the answer lands in
+      // Notification Center, and a later notification benefits).
+      if (readNotificationState() === "ask") {
+        try { notifications.requestAuthorization(); } catch {}
+      }
+      const id = notifications.post(String(title), String(body));
+      if (!id) return false;
+      if (onClick) clickHandlers.set(id, onClick);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  return { getAll, request, openSettings, notify };
 }
 
 module.exports = {

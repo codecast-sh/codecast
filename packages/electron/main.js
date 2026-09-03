@@ -72,7 +72,14 @@ const { createOsPermissions } = require("./osPermissions");
 
 let notificationRefs = [];
 
+// Set once osPermissions exists (below): the modern-API path. macOS refuses
+// Electron's legacy `Notification` from any process that has spoken to
+// UNUserNotificationCenter — this one does, at boot, to read its permission —
+// and it refuses silently, so the legacy class is only a fallback for a
+// process that never touched the modern API.
+let modernNotify = null;
 function showNativeNotification(title, body, onClick) {
+  if (modernNotify && modernNotify(title, body, onClick)) return;
   if (!Notification.isSupported()) return;
   const notif = new Notification({ title, body, silent: false, urgency: "critical" });
   if (onClick) notif.on("click", onClick);
@@ -758,6 +765,9 @@ let callWindowSize = "panel";
 let appIsQuitting = false;
 app.on("before-quit", () => {
   appIsQuitting = true;
+  // A staged update installs on the way out. Quitting is the human's own
+  // restart; a staged bundle left behind would wait for a click nobody makes.
+  applyStagedUpdateOnQuit();
 });
 
 function loadCallPanelState() {
@@ -2387,7 +2397,7 @@ async function runDesktopUpdateCheck(opts) {
     emitUpdateStatus({ status: "ready", version });
     showNativeNotification(
       `Codecast ${version} is ready`,
-      "Click to restart and install the update.",
+      "Click to restart and install now; otherwise it installs when you next quit.",
       () => installUpdateAndRestart(),
     );
   } catch (e) {
@@ -2403,12 +2413,10 @@ async function runDesktopUpdateCheck(opts) {
 }
 
 // Apply the staged update: a detached helper waits for THIS process to exit,
-// swaps the bundle via two atomic renames, clears quarantine, then relaunches
-// us in the FOREGROUND. Quitting ourselves is what lets the rename succeed.
+// swaps the bundle via two atomic renames, clears quarantine, then (when asked)
+// relaunches us in the FOREGROUND. Our own exit is what lets the rename succeed.
 let updateInstallTriggered = false;
-function installUpdateAndRestart() {
-  if (updateInstallTriggered || !stagedUpdate) return;
-  updateInstallTriggered = true;
+function spawnUpdateSwap({ relaunch }) {
   const { incomingPath, bundlePath } = stagedUpdate;
   const oldPath = path.join(path.dirname(bundlePath), ".Codecast.app.old");
   const pid = process.pid;
@@ -2419,14 +2427,29 @@ function installUpdateAndRestart() {
     `mv ${sh(bundlePath)} ${sh(oldPath)} && mv ${sh(incomingPath)} ${sh(bundlePath)} || { mv ${sh(oldPath)} ${sh(bundlePath)} 2>/dev/null; exit 1; }`,
     `/usr/bin/xattr -dr com.apple.quarantine ${sh(bundlePath)} 2>/dev/null`,
     `rm -rf ${sh(oldPath)}`,
-    `/usr/bin/open ${sh(bundlePath)}`,
+    ...(relaunch ? [`/usr/bin/open ${sh(bundlePath)}`] : []),
   ].join("\n");
   try {
     spawn("/bin/sh", ["-c", script], { detached: true, stdio: "ignore" }).unref();
   } catch (e) {
     console.error("update swap helper failed to spawn:", e?.message);
   }
+}
+
+// "Restart now": swap and come straight back.
+function installUpdateAndRestart() {
+  if (updateInstallTriggered || !stagedUpdate) return;
+  updateInstallTriggered = true;
+  spawnUpdateSwap({ relaunch: true });
   app.quit();
+}
+
+// The human quit on their own: swap on the way out and stay quit. The next
+// launch, whenever they choose it, is the new version.
+function applyStagedUpdateOnQuit() {
+  if (updateInstallTriggered || !stagedUpdate) return;
+  updateInstallTriggered = true;
+  spawnUpdateSwap({ relaunch: false });
 }
 
 // IPC handlers
@@ -2463,6 +2486,7 @@ const osPermissions = createOsPermissions({
   electron: { systemPreferences, desktopCapturer, shell },
   bundleId: app.isPackaged ? "sh.codecast.desktop" : "com.github.Electron",
 });
+modernNotify = osPermissions.notify;
 ipcMain.handle("get-os-permissions", () => osPermissions.getAll());
 ipcMain.handle("request-os-permission", (_e, kind) => osPermissions.request(String(kind)));
 ipcMain.handle("open-os-permission-settings", (_e, kind) => osPermissions.openSettings(String(kind)));

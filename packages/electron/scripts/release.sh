@@ -19,11 +19,19 @@ export AWS_DEFAULT_REGION=auto
 : "${R2_ENDPOINT:?Missing R2_ENDPOINT}"
 
 R2_BUCKET="codecast"
-BUMP_TYPE="${1:-patch}"
-if [[ ! "$BUMP_TYPE" =~ ^(patch|minor|major)$ ]]; then
-  echo "Usage: ./scripts/release.sh [patch|minor|major]"
-  exit 1
-fi
+# --no-git: build, upload and set the floor, but leave the version bump and
+# the web download pointer uncommitted. For a shared checkout where the web
+# server file carries someone else's in-flight edits, or a worktree whose
+# push must be one controlled step: the caller commits and pushes by hand.
+BUMP_TYPE="patch"
+NO_GIT=0
+for arg in "$@"; do
+  case "$arg" in
+    patch|minor|major) BUMP_TYPE="$arg" ;;
+    --no-git) NO_GIT=1 ;;
+    *) echo "Usage: ./scripts/release.sh [patch|minor|major] [--no-git]"; exit 1 ;;
+  esac
+done
 
 OLD_VERSION=$(jq -r '.version' package.json)
 # Bump via jq (not `npm version`): npm walks up to the bun workspace root and
@@ -121,10 +129,12 @@ for f in "Codecast-${NEW_VERSION}-arm64-mac.zip" "Codecast-${NEW_VERSION}-arm64.
   curl -so /dev/null --max-time 300 -w "    $f: %{speed_download} B/s\n" "https://dl.codecast.sh/desktop/$f" || echo "    $f: prewarm failed (non-fatal)"
 done
 
-# NOTE: releases do NOT force the fleet to update — clients are prompted in-app
-# (Update now / Later) and otherwise update on next quit. To push a specific
-# version to everyone (quit+relaunch even while open), run it deliberately:
-#   cast desktop-force-update <version>
+# Every release is the fleet's floor, as CLI releases are: daemons apply it
+# within five minutes, quitting and relaunching an open app (the same lever
+# as `cast desktop-force-update`). Non-fatal — the artifacts are already
+# live, and a missed floor is set by hand.
+echo "  Setting the fleet floor to $NEW_VERSION..."
+cast desktop-force-update "$NEW_VERSION" || echo "    floor not set (non-fatal): run cast desktop-force-update $NEW_VERSION"
 
 echo ""
 echo "[4/4] Updating web download URL and committing..."
@@ -133,9 +143,13 @@ sed -i '' "s|Codecast-${OLD_VERSION}-arm64.dmg|Codecast-${NEW_VERSION}-arm64.dmg
 sed -i '' "s|MAC_DMG_VERSION = \"${OLD_VERSION}\"|MAC_DMG_VERSION = \"${NEW_VERSION}\"|g" "$WEB_SERVER"
 
 cd "$REPO_ROOT"
-git add packages/electron/package.json packages/web/server/index.ts
-git commit -m "chore(electron): bump desktop to v${NEW_VERSION}"
-git push origin main
+if [ "$NO_GIT" = "1" ]; then
+  echo "  --no-git: commit packages/electron/package.json and the MAC_DMG lines of packages/web/server/index.ts, then push"
+else
+  git add packages/electron/package.json packages/web/server/index.ts
+  git commit -m "chore(electron): bump desktop to v${NEW_VERSION}"
+  git push origin main
+fi
 
 echo ""
 echo "=== Desktop v$NEW_VERSION released ==="

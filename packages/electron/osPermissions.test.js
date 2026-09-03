@@ -30,10 +30,69 @@ test("the built addon answers from inside an app bundle and never throws outside
   } catch {
     return;
   }
-  assert.deepEqual(Object.keys(addon).sort(), ["authorizationStatus", "requestAuthorization"]);
+  assert.deepEqual(Object.keys(addon).sort(), ["authorizationStatus", "onActivate", "post", "requestAuthorization"]);
   assert.equal(addon.authorizationStatus(), -1);
   assert.equal(addon.requestAuthorization(), undefined);
+  assert.equal(addon.post("title", "body"), null);
+  assert.equal(addon.onActivate(() => {}), undefined);
 });
+
+// Every notification the app shows goes through the modern API once the
+// addon can post: macOS drops the legacy class from a process that has read
+// its permission (2026-09-03: an update staged at 11:58 and its "ready"
+// notification was denied the same second, "can't mix modern clients with
+// legacy clients"). A click reaches exactly the handler of the notification
+// clicked, once.
+test("notify posts through the addon and routes a click to its own handler", () => {
+  const posted = [];
+  let activate = null;
+  let asked = 0;
+  const addon = {
+    authorizationStatus: () => 2,
+    requestAuthorization: () => { asked++; },
+    post: (title, body) => { posted.push({ title, body }); return `id-${posted.length}`; },
+    onActivate: (cb) => { activate = cb; },
+  };
+  const p = createOsPermissions({ electron: stubElectron(), bundleId: APP, notifications: addon });
+  const clicks = [];
+  assert.equal(p.notify("A", "first", () => clicks.push("a")), true);
+  assert.equal(p.notify("B", "second", () => clicks.push("b")), true);
+  assert.equal(p.notify("C", "no handler"), true);
+  assert.deepEqual(posted.map((x) => x.title), ["A", "B", "C"]);
+  assert.equal(asked, 0, "already authorized: no prompt");
+  activate("id-2");
+  activate("id-2");
+  activate("id-3");
+  assert.deepEqual(clicks, ["b"]);
+});
+
+test("notify prompts first when never asked, and reports false when nothing can post", () => {
+  let asked = 0;
+  const addon = {
+    authorizationStatus: () => 0,
+    requestAuthorization: () => { asked++; },
+    post: () => "id",
+    onActivate: () => {},
+  };
+  const p = createOsPermissions({ electron: stubElectron(), bundleId: APP, notifications: addon });
+  assert.equal(p.notify("t", "b"), true);
+  assert.equal(asked, 1);
+  // No addon, or an addon built before `post` existed: the caller falls back.
+  assert.equal(createOsPermissions({ electron: stubElectron(), bundleId: APP, notifications: null }).notify("t", "b"), false);
+  const old = { authorizationStatus: () => 2, requestAuthorization: () => {} };
+  assert.equal(createOsPermissions({ electron: stubElectron(), bundleId: APP, notifications: old }).notify("t", "b"), false);
+  // A post that returns nothing (outside a bundle) is not a delivery.
+  const mute = { ...addon, post: () => null };
+  assert.equal(createOsPermissions({ electron: stubElectron(), bundleId: APP, notifications: mute }).notify("t", "b"), false);
+});
+
+function stubElectron() {
+  return {
+    systemPreferences: { getMediaAccessStatus: () => "granted", askForMediaAccess: async () => true },
+    desktopCapturer: { getSources: async () => [] },
+    shell: { openExternal: () => {} },
+  };
+}
 
 test("media status vocabulary maps onto readiness", () => {
   assert.equal(mediaStatusToReadiness("granted"), "granted");
