@@ -299,6 +299,22 @@ describe("makeChangeTrackedDb — dual emission through the interceptor", () => 
     expect(head(userScopeKey("users:1"))?.position).toBe(3);
   });
 
+  test("a member row's patch always carries project_id (sticky cargo), so a replica without the row can name the project", async () => {
+    const { db, actions } = makeFakeDb();
+    const tdb = makeChangeTrackedDb(db, makeSyncAckCollector());
+    const id = await tdb.insert("tasks", { user_id: "users:1", workspace: "user:users:1", status: "open", project_id: "projects:7" });
+    const tdb2 = makeChangeTrackedDb(db, makeSyncAckCollector());
+    await tdb2.patch(id, { status: "done" });
+    const [row] = actions(userScopeKey("users:1"));
+    expect(row.patch).toMatchObject({ status: "done", project_id: "projects:7" });
+    // A row with no project carries none (never a null that would unset one).
+    const bare = await tdb.insert("plans", { user_id: "users:1", workspace: "user:users:1", status: "active" });
+    await makeChangeTrackedDb(db, makeSyncAckCollector()).patch(bare, { status: "done" });
+    const planRow = actions(userScopeKey("users:1")).find((r) => r.entity_id === String(bare));
+    expect(planRow.patch.status).toBe("done");
+    expect("project_id" in planRow.patch).toBe(false);
+  });
+
   test("delete emits a delete action in every visible scope", async () => {
     const { db, actions } = makeFakeDb();
     const tdb = makeChangeTrackedDb(db, makeSyncAckCollector());

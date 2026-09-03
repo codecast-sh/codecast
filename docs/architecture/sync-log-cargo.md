@@ -188,24 +188,48 @@ or plan refetch. What remains is the sessions surface: `listInboxSessions` 29.8 
 pushes (1.75 MB each) and `sessionsLiveness` 10.5 MB in 50 pushes, 97 percent of all bytes.
 That is the pl-484 gated follow up (ct-47800), and this number is why it is next.
 
-**The floor's contract (review).** `useBootstrapCollection` is the one shot floor:
+**The floor's contract (review, pass 3).** `useBootstrapCollection` is the one shot floor:
 
-- It waits for `syncLogStampedAt`, which the applier sets after its first heads pass stamped
-  every scope cursor (D9). A floor queried BEFORE the stamp can miss a write that commits
-  between the floor's query and the heads capture; after it, such a write has a position
-  above the cursor and replays.
-- It applies its rows exactly once per (collection, args) per page session, however many
+- It waits for the scopes its rows fan out from: a personal floor for `user:<viewer>`, a
+  team floor for `user:<viewer>` AND `team:<id>` (a team list also returns rows the viewer
+  holds through their own scope). The applier stamps a scope in `syncLogScopeStamps` after
+  that scope's turn in a heads pass (D9). A floor queried BEFORE its scope's stamp can miss a
+  write that commits between the floor's query and the heads capture; after it, such a
+  write has a position above the cursor and replays. The gate is per scope, not one global
+  flag: a membership acquired mid session has no cursor until the next heads pass, and a
+  global flag would let its floors through early. A stamp drops with its cursor (a
+  revocation, a resync) so the floor waits for the restamp.
+- Each scope's turn is isolated. One scope whose replay fails every run (a range page the
+  server cannot serve) must not stop the other scopes, and must not hold every floor
+  closed; its own cursor is safe either way (a cold scope records the cursor before any
+  await, a warm one keeps its older, lower cursor), so it is stamped whenever it has a
+  cursor after its turn. The legacy bridge drain is guarded the same way.
+- It applies its rows exactly once per (principal, epoch, collection, args), however many
   mounts share the key. A remount after the floor landed re applies nothing: the snapshot
   is older than the patches that arrived since, and re overlaying it would revert them.
+  `syncLogFloorEpoch` bumps when the contract is voided: a retention resync restamped a
+  cursor at a later head, a team scope was (re)added. Every mounted floor recuts; plans
+  and projects have no crawl, so this is their only reload path. The epoch is monotonic
+  through a sign out, and the apply is fenced on the epoch and principal the floor was cut
+  for, so a floor still in flight across a resync or sign out lands nowhere.
+- A rejoin lifts the excludes the revocation purge planted (they carry the scope key),
+  or the recut floor's rows would be dropped by the delta merge.
 - A failed fetch is forgotten, so the next mount retries.
 
 **Joined counts on projects.** A project row carries `task_counts`, `plan_count`,
 `active_plan_count` and `doc_count`, joined by the server from other rows, so no patch on
 the project ever moves them. The applier therefore refetches a HELD project whenever a
 member change can change a count (a task or plan status change, a create, a delete, a
-project move; `projectCountTouched`), and the projects collection compares `task_counts`
+project move; `projectCountTouched`), unconditionally: a project's own patch on the same
+page applies directly and never carries the counts, so it cannot stand in for the refetch
+(`planFeedApply` collapses the duplicate). The projects collection compares `task_counts`
 by content (`deepFields`) — the engine's identity reuse skips object fields, so without
-that the refetched row would land as a no op.
+that the refetched row would land as a no op. Member cargo always carries `project_id`
+(`STICKY_CARGO_FIELDS`, read from the post write document the access stamp already
+memoizes), so a replica that does not hold the member row still learns which held project
+to re count. Two residual holes stay client invisible: the delete of an unheld member (the
+tombstone carries no cargo) and the SOURCE side of an unheld member's project move. Both
+heal on the next change to a held member of that project or on reload.
 
 ### E9 — Rollout and compat
 

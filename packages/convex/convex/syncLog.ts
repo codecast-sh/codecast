@@ -242,6 +242,32 @@ export function mergeCargo(prev: Cargo | null | undefined, next: Cargo): Cargo {
   };
 }
 
+// Fields a member row's cargo always carries, whether or not the write touched
+// them (review): a replica that does not hold the row cannot otherwise learn
+// which HELD project's joined counts a status change moved (buildCargo ships
+// the patched fields only, and a status-only patch never names the project).
+// Read from the post-write document the access stamp already memoizes, so this
+// costs no extra read. A delete tombstone carries no cargo, so the delete and
+// the move of an unheld member stay client-invisible (E8 residuals).
+export const STICKY_CARGO_FIELDS: Record<string, readonly string[]> = {
+  tasks: ["project_id"],
+  plans: ["project_id"],
+  docs: ["project_id"],
+};
+
+async function withStickyFields(extra: ActionExtra): Promise<Cargo> {
+  const cargo = extra.cargo ?? { partial: true };
+  const sticky = extra.table ? STICKY_CARGO_FIELDS[extra.table] : undefined;
+  if (!sticky || !cargo.patch || cargo.full) return cargo;
+  const missing = sticky.filter((f) => !(f in cargo.patch!));
+  if (!missing.length || !extra.fullDoc) return cargo;
+  const doc = await extra.fullDoc();
+  if (!doc) return cargo;
+  const patch = { ...cargo.patch };
+  for (const f of missing) if (doc[f] !== undefined) patch[f] = doc[f];
+  return { ...cargo, patch };
+}
+
 export type ActionExtra = {
   cargo?: Cargo | null;
   // The post-write access stamp. ALWAYS consulted for an upsert (review: a
@@ -370,7 +396,7 @@ export async function appendSyncAction(
         access_owner: undefined, access_key: undefined, access_grants: undefined,
       };
     } else {
-      let merged = mergeCargo(existing, extra.cargo ?? { partial: true });
+      let merged = mergeCargo(existing, await withStickyFields(extra));
       // Self-heal (review): a partial or oversized merged cargo is replaced by
       // a full cargo from the post-write document when that fits, otherwise
       // poisoned to partial-without-patch (the client refetches).

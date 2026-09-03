@@ -107,9 +107,23 @@ describe("purgeTeamScopeRows", () => {
     expect(s.tasks.t1).toBeUndefined();
     expect(s.tasks.t2).toBeDefined();
     expect(s.docs.d1).toBeUndefined();
-    expect(s.pending["tasks:t1"]).toMatchObject({ type: "exclude" });
-    expect(s.pending["docs:d1"]).toMatchObject({ type: "exclude" });
+    expect(s.pending["tasks:t1"]).toMatchObject({ type: "exclude", scope: "team:T" });
+    expect(s.pending["docs:d1"]).toMatchObject({ type: "exclude", scope: "team:T" });
     expect(s.pending["tasks:t2"]).toBeUndefined();
+  });
+
+  test("liftScopeExcludes lifts exactly the purge's excludes for that scope (rejoin)", () => {
+    useInboxStore.setState({
+      tasks: { t1: { _id: "t1", workspace: "team:T" }, t3: { _id: "t3", workspace: "team:U" } },
+      pending: { "docs:pruned": { type: "exclude", ts: 1 } },
+    } as any);
+    useInboxStore.getState().purgeTeamScopeRows("T");
+    useInboxStore.getState().purgeTeamScopeRows("U");
+    useInboxStore.getState().liftScopeExcludes("team:T");
+    const pending = useInboxStore.getState().pending as any;
+    expect(pending["tasks:t1"]).toBeUndefined();
+    expect(pending["tasks:t3"]).toMatchObject({ type: "exclude", scope: "team:U" });
+    expect(pending["docs:pruned"]).toMatchObject({ type: "exclude" }); // an authorized-absence prune is not a purge
   });
 });
 
@@ -312,7 +326,7 @@ describe("applyLogPage: review findings (sessions twins, seeds, project counts)"
   const { catchUpScope, scopeMetaKey, catchUp } = require("../../hooks/useSyncChangeFeed");
   const scripted = (pages: any[]) => {
     const calls: any[] = [];
-    return { calls, query: async (_fn: any, args: any) => { calls.push(args); return pages.shift(); } };
+    return { calls, query: async (_fn: any, args: any) => { calls.push(args); const p = pages.shift(); if (p instanceof Error) throw p; return p; } };
   };
   const base = (extra: any) => ({
     syncMeta: { [scopeMetaKey("user:u1")]: { cursor: 0 } },
@@ -379,12 +393,81 @@ describe("applyLogPage: review findings (sessions twins, seeds, project counts)"
     expect(convex.calls).toHaveLength(1);
   });
 
-  test("catchUp stamps syncLogStampedAt once every scope cursor is stamped, and never on an empty heads list", async () => {
-    useInboxStore.setState({ syncMeta: {}, syncLogStampedAt: null, syncLogLag: {} } as any);
+  test("a project's own patch on the same page never suppresses the count refetch", async () => {
+    useInboxStore.setState(base({
+      tasks: { t1: { _id: "t1", title: "a", status: "open", project_id: "p1" } },
+      projects: { p1: { _id: "p1", name: "P", task_counts: { total: 1, done: 0, in_progress: 0 } } },
+    }) as any);
+    const convex = scripted([
+      { actions: [
+        { position: 1, entity_type: "tasks", entity_id: "t1", op: "upsert", patch: { status: "done" } },
+        { position: 2, entity_type: "projects", entity_id: "p1", op: "upsert", patch: { name: "P2" } },
+      ], nextFrom: 2, hasMore: false },
+      [{ _id: "p1", name: "P2", task_counts: { total: 1, done: 1, in_progress: 0 } }], // projects.webGetByIds
+    ]);
+    await catchUpScope(convex, { scope_key: "user:u1", position: 2, floor: 0 }, new Set());
+    expect(convex.calls).toHaveLength(2);
+    expect(convex.calls[1].ids).toEqual(["p1"]);
+    const s = useInboxStore.getState() as any;
+    expect(s.projects.p1.name).toBe("P2"); // the project's patch applied directly
+    expect(s.projects.p1.task_counts.done).toBe(1); // and the joined counts still refetched
+  });
+
+  test("catchUp stamps each scope after its turn, never on an empty heads list", async () => {
+    useInboxStore.setState({ syncMeta: {}, syncLogScopeStamps: {}, syncLogLag: {} } as any);
     await catchUp(scripted([{ heads: [] }]));
-    expect(useInboxStore.getState().syncLogStampedAt).toBeNull();
+    expect(useInboxStore.getState().syncLogScopeStamps).toEqual({});
     await catchUp(scripted([{ heads: [{ scope_key: "user:u1", position: 7, floor: 0 }] }]));
-    expect(useInboxStore.getState().syncLogStampedAt).not.toBeNull();
+    expect(useInboxStore.getState().syncLogScopeStamps["user:u1"]).toBeDefined();
+    expect(useInboxStore.getState().syncLogScopeStamps["team:T"]).toBeUndefined();
     expect((useInboxStore.getState().syncMeta as any)[scopeMetaKey("user:u1")].cursor).toBe(7);
+  });
+
+  test("one scope's failing replay blocks neither the other scopes nor the floors", async () => {
+    useInboxStore.setState({
+      syncMeta: { [scopeMetaKey("team:T")]: { cursor: 3 } },
+      syncLogScopeStamps: {}, syncLogLag: {}, syncLogFloorEpoch: 0,
+    } as any);
+    await catchUp(scripted([
+      { heads: [{ scope_key: "team:T", position: 9, floor: 0 }, { scope_key: "user:u1", position: 7, floor: 0 }] },
+      new Error("too many system operations"), // team:T's getRange
+    ]));
+    const s = useInboxStore.getState() as any;
+    expect(s.syncMeta[scopeMetaKey("team:T")].cursor).toBe(3); // the warm scope keeps its lower cursor
+    expect(s.syncMeta[scopeMetaKey("user:u1")].cursor).toBe(7); // the cold scope still stamped
+    expect(Object.keys(s.syncLogScopeStamps).sort()).toEqual(["team:T", "user:u1"]);
+    expect(s.syncLogLag).toEqual({ "team:T": 0, "user:u1": 0 });
+  });
+
+  test("a revoked scope loses its stamp with its cursor; a resync and a rejoin recut the floors", async () => {
+    useInboxStore.setState({
+      syncMeta: { [scopeMetaKey("team:T")]: { cursor: 5 } },
+      syncLogScopeStamps: { "team:T": 1 }, syncLogFloorEpoch: 0, pending: {},
+      tasks: { t1: { _id: "t1", workspace: "team:T" } }, plans: { p1: { _id: "p1", workspace: "team:T" } },
+    } as any);
+    // Retention passed the cursor: restamp at head and bump the floor epoch.
+    await catchUpScope(scripted([]), { scope_key: "team:T", position: 50, floor: 10 }, new Set());
+    let s = useInboxStore.getState() as any;
+    expect(s.syncMeta[scopeMetaKey("team:T")].cursor).toBe(50);
+    expect(s.syncLogFloorEpoch).toBe(1);
+    // scope_removed in the (warm) user scope: rows purged, cursor and stamp dropped.
+    useInboxStore.setState({ syncMeta: { ...useInboxStore.getState().syncMeta, [scopeMetaKey("user:u1")]: { cursor: 0 } } } as any);
+    await catchUpScope(scripted([
+      { actions: [{ position: 1, entity_type: "scope", entity_id: "T", op: "scope_removed" }], nextFrom: 1, hasMore: false },
+    ]), { scope_key: "user:u1", position: 1, floor: 0 }, new Set());
+    s = useInboxStore.getState() as any;
+    expect(s.syncMeta[scopeMetaKey("team:T")]).toBeUndefined();
+    expect(s.syncLogScopeStamps["team:T"]).toBeUndefined();
+    expect(s.plans.p1).toBeUndefined();
+    expect(s.pending["plans:p1"]).toMatchObject({ type: "exclude", scope: "team:T" });
+    // scope_added: the purge's excludes lift and the floors recut.
+    useInboxStore.setState({ syncMeta: { [scopeMetaKey("user:u1")]: { cursor: 1 } } } as any);
+    await catchUpScope(scripted([
+      { actions: [{ position: 2, entity_type: "scope", entity_id: "T", op: "scope_added" }], nextFrom: 2, hasMore: false },
+    ]), { scope_key: "user:u1", position: 2, floor: 0 }, new Set());
+    s = useInboxStore.getState() as any;
+    expect(s.pending["plans:p1"]).toBeUndefined();
+    expect(s.pending["tasks:t1"]).toBeUndefined();
+    expect(s.syncLogFloorEpoch).toBe(2);
   });
 });

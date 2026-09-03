@@ -348,7 +348,7 @@ export function useSyncInboxSessions() {
   const sessWsKey = inboxCrawlWsKey(currentUser?._id?.toString());
   const floorKey = syncMetaKey("sessions", sessWsKey);
   const floorStamped = useInboxStore((s) => !!s.syncMeta[floorKey]?.backfilledAt);
-  const logStamped = useInboxStore((s) => s.syncLogStampedAt !== null);
+  const logStamped = useInboxStore((s) => currentUser?._id != null && s.syncLogScopeStamps[`user:${String(currentUser._id)}`] !== undefined);
   // eslint-disable-next-line no-restricted-syntax -- cleanup keyed to the principal; cancels an in-flight floor on wsKey change
   useEffect(() => () => cancelReconcileCrawl("sessions"), [sessWsKey]);
   useEffect(() => {

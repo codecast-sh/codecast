@@ -247,10 +247,13 @@ async function applyLogPage(
         // Cold-start the new team scope: its cursor stamps on the next heads
         // pass, and clearing the workspace backfill marks (ALL wsArgs variants
         // for the scope) makes the crawls run a full backfill when the
-        // workspace becomes active. Rejoin also lifts the revocation purge's
-        // excludes — without this, rows purged on scope_removed would be
-        // dropped by every delta merge after rejoining.
+        // workspace becomes active. The one-shot floors (plans and projects
+        // have no crawl) recut on the epoch bump; a rejoin also lifts the
+        // revocation purge's excludes — without this, rows purged on
+        // scope_removed would be dropped by every delta merge after rejoining.
         store.clearCrawlMetaForScope(`team:${a.entity_id}`);
+        store.liftScopeExcludes(`team:${a.entity_id}`);
+        store.bumpSyncLogFloorEpoch();
         purgedTeams.delete(a.entity_id);
       }
       continue;
@@ -269,7 +272,10 @@ async function applyLogPage(
   let direct = 0;
   const state = useInboxStore.getState();
   // Held project rows whose joined member counts a change on this page can
-  // move; refetched below unless the page already carries the project itself.
+  // move; always refetched below — a project's own patch on the same page
+  // applies directly and never carries the joined counts (review), and
+  // planFeedApply collapses the duplicate when the project is already bound
+  // for byIds.
   const projectIds = new Set<string>();
   for (const a of latest.values()) {
     const coll = ENTITY_COLLECTION[a.entity_type];
@@ -311,9 +317,7 @@ async function applyLogPage(
     direct++;
     if (plan.refetch) byIds.push(a);
   }
-  for (const pid of projectIds) {
-    if (!latest.has(`projects:${pid}`)) byIds.push({ entity_type: "projects", entity_id: pid });
-  }
+  for (const pid of projectIds) byIds.push({ entity_type: "projects", entity_id: pid });
   state.noteSyncLogApply(direct, byIds.length);
   tallyApply(direct, byIds.length);
   if (byIds.length) await applyEntityIds(convex, planFeedApply(byIds));
@@ -366,6 +370,9 @@ export async function catchUpScope(
     // the recut cursor stands on; a lock still holding one would re-assert its
     // value over the floor's rows (found by the multi-window simulation).
     s.retireAckedPending(head.scope_key, head.position);
+    // The one-shot floors stand on the cursor that was just moved: recut them
+    // (after the restamp, so the recut query is above the new cursor).
+    s.bumpSyncLogFloorEpoch();
   };
 
   if (meta?.cursor === undefined) {
@@ -431,21 +438,29 @@ async function drainLegacyBridge(convex: any): Promise<boolean> {
   const legacy = store.syncMeta[LEGACY_META_KEY];
   if (!legacy?.cursor) return true;
   let since = Math.max(0, legacy.cursor - LEGACY_OVERLAP_MS);
-  for (let page = 0; page < LEGACY_MAX_PAGES; page++) {
-    const res: any = await convex.query(api.changeFeed.getChangesSince, {
-      since,
-      limit: LEGACY_FEED_LIMIT,
-      _probe: Date.now(),
-    });
-    if (!res) return false; // retry next run from the checkpointed cursor
-    if (res.changes?.length) {
-      await applyEntityIds(convex, planFeedApply(res.changes));
+  try {
+    for (let page = 0; page < LEGACY_MAX_PAGES; page++) {
+      const res: any = await convex.query(api.changeFeed.getChangesSince, {
+        since,
+        limit: LEGACY_FEED_LIMIT,
+        _probe: Date.now(),
+      });
+      if (!res) return false; // retry next run from the checkpointed cursor
+      if (res.changes?.length) {
+        await applyEntityIds(convex, planFeedApply(res.changes));
+      }
+      if (typeof res.nextSince === "number" && res.nextSince > since) {
+        useInboxStore.getState().recordSyncMeta(LEGACY_META_KEY, { cursor: res.nextSince });
+        since = res.nextSince;
+      }
+      if (!res.hasMore) return true;
     }
-    if (typeof res.nextSince === "number" && res.nextSince > since) {
-      useInboxStore.getState().recordSyncMeta(LEGACY_META_KEY, { cursor: res.nextSince });
-      since = res.nextSince;
-    }
-    if (!res.hasMore) return true;
+  } catch (e) {
+    // An incomplete drain is this function's ordinary contract (the caller
+    // keeps the legacy cursor); a throw here must not escape past the scope
+    // loop and hold every floor closed (review).
+    console.warn("[syncLog] legacy bridge drain failed", e);
+    return false;
   }
   return false; // page cap hit with more remaining — resume next run
 }
@@ -474,24 +489,30 @@ export async function catchUp(convex: any): Promise<void> {
     const cursor = store.syncMeta[scopeMetaKey(head.scope_key)]?.cursor;
     store.setSyncLogLag(head.scope_key, cursor === undefined ? 0 : Math.max(0, head.position - cursor));
   }
-  try {
-    for (const head of heads) {
-      if (head.scope_key.startsWith("team:") && purgedTeams.has(head.scope_key.slice(5))) continue;
+  // Each scope is isolated (review): one scope whose replay fails every run
+  // (a range page the server cannot serve, a poisoned byIds row) must not stop
+  // the others from replaying, and must not hold every floor closed. Its own
+  // cursor stays safe either way — a cold scope records its cursor
+  // synchronously before any await, and a warm scope keeps its older, lower
+  // cursor — so the scope is stamped whenever it has a cursor after its turn.
+  for (const head of heads) {
+    if (head.scope_key.startsWith("team:") && purgedTeams.has(head.scope_key.slice(5))) continue;
+    try {
       await catchUpScope(convex, head, purgedTeams);
+    } catch (e) {
+      console.warn("[syncLog] scope catch-up failed", head.scope_key, e);
+    } finally {
+      // A failed scope must not leave the pill lit forever; the next wake retries.
       useInboxStore.getState().setSyncLogLag(head.scope_key, 0);
     }
-  } finally {
-    // A failed run must not leave the pill lit forever; the next wake retries.
+    // The scope's cursor is stamped at a captured head: from here a bootstrap
+    // floor on it (useBootstrapCollection) can be cut without a hole — a write
+    // that commits after the floor's query has a position above the cursor
+    // and is replayed; one before it is in the floor. A revoked scope has no
+    // cursor (the purge dropped it) and is not stamped.
     const s = useInboxStore.getState();
-    for (const head of heads) s.setSyncLogLag(head.scope_key, 0);
+    if (s.syncMeta[scopeMetaKey(head.scope_key)]?.cursor !== undefined) s.stampSyncLogScope(head.scope_key);
   }
-  // Every scope cursor is stamped at a captured head: from here a bootstrap
-  // floor (useBootstrapCollection) can be cut without a hole — a write that
-  // commits after the floor's query has a position above the cursor and is
-  // replayed; one before it is in the floor. An authenticated viewer always
-  // has at least their user head, so an empty list is an auth blip and the
-  // floors keep waiting for the next run.
-  if (heads.length > 0) useInboxStore.setState({ syncLogStampedAt: Date.now() } as any);
   // Heads-absence sweep (design D5 backstop): a persisted team cursor whose
   // scope getHeads no longer lists is a revoked membership whose scope_removed
   // action we never saw (e.g. retention-pruned while this client was away).
