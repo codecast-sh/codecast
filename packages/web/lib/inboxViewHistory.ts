@@ -21,6 +21,8 @@ export type InboxViewSnapshot = {
   // Shift-added label terms beyond the head chip (store extraBucketFilters),
   // each with its own polarity. Optional: older entries restore as none.
   extras?: Array<{ id: string; exclude: boolean }>;
+  // Shift-added project terms beyond the head chip (store extraProjectFilters).
+  projectExtras?: Array<{ id: string; path: string | null; exclude: boolean }>;
   mode: "grouped" | "recent" | "time" | "bucket";
 };
 
@@ -39,8 +41,10 @@ export function withApplyingViewHistory(fn: () => void) {
   }
 }
 
-// Elementwise: the extras list is ordered (click order), so order counts.
-export function sameBucketExtras(
+// Elementwise: an extras list is ordered (click order), so order counts.
+// Serves both axes — a project term's path is derived from its id, so id +
+// polarity is the whole identity here too.
+export function sameFilterExtras(
   a?: Array<{ id: string; exclude: boolean }>,
   b?: Array<{ id: string; exclude: boolean }>,
 ): boolean {
@@ -50,7 +54,7 @@ export function sameBucketExtras(
 
 export function sameInboxView(a: InboxViewSnapshot, b: InboxViewSnapshot): boolean {
   return a.bucket === b.bucket && a.project === b.project && !!a.exclude === !!b.exclude &&
-    sameBucketExtras(a.extras, b.extras) && a.mode === b.mode;
+    sameFilterExtras(a.extras, b.extras) && sameFilterExtras(a.projectExtras, b.projectExtras) && a.mode === b.mode;
 }
 
 // Push a traversable entry for a view-settings change. The CURRENT entry is

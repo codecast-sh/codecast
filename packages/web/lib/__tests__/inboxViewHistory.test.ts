@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { sameBucketExtras, sameInboxView, withInboxView, type InboxViewSnapshot } from "../inboxViewHistory";
+import { sameFilterExtras, sameInboxView, withInboxView, type InboxViewSnapshot } from "../inboxViewHistory";
 
 const snap = (extra: Partial<InboxViewSnapshot> = {}): InboxViewSnapshot => ({
   bucket: "b1",
@@ -10,10 +10,20 @@ const snap = (extra: Partial<InboxViewSnapshot> = {}): InboxViewSnapshot => ({
   ...extra,
 });
 
+describe("sameInboxView with shift-added project terms", () => {
+  it("a project term added or flipped is a new view; a missing list reads as empty", () => {
+    const base = snap({ bucket: null, project: "web", projectPath: "/x/web" });
+    expect(sameInboxView(base, snap({ bucket: null, project: "web", projectPath: "/x/web", projectExtras: [] }))).toBe(true);
+    const withCli = { ...base, projectExtras: [{ id: "cli", path: "/x/cli", exclude: false }] };
+    expect(sameInboxView(base, withCli)).toBe(false);
+    expect(sameInboxView(withCli, { ...withCli, projectExtras: [{ id: "cli", path: "/x/cli", exclude: true }] })).toBe(false);
+  });
+});
+
 describe("sameInboxView with shift-added label terms", () => {
   it("treats a missing extras list (pre-feature entry) as empty", () => {
     expect(sameInboxView(snap(), snap({ extras: [] }))).toBe(true);
-    expect(sameBucketExtras(undefined, [])).toBe(true);
+    expect(sameFilterExtras(undefined, [])).toBe(true);
   });
 
   it("a term added, removed, flipped, or reordered is a new view", () => {
