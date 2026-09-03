@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
+import { sharedResolve, sharedCss } from "./vite.shared";
 import { execSync } from "node:child_process";
 import { storeHmrPlugin } from "./plugins/storeHmr";
 import { hookRefreshPlugin } from "./plugins/hookRefresh";
@@ -103,22 +104,8 @@ export default defineConfig(({ mode }) => ({
       disable: !process.env.SENTRY_AUTH_TOKEN,
     }),
   ],
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "."),
-      "next/navigation": path.resolve(__dirname, "src/compat/next-navigation.ts"),
-      "next/link": path.resolve(__dirname, "src/compat/next-link.tsx"),
-      // React 19 compat: stable useComposedRefs to prevent infinite re-render loop
-      "@radix-ui/react-compose-refs": path.resolve(__dirname, "src/compat/radix-compose-refs.ts"),
-      // @tiptap/pm v3 dropped the ./collab subpath; @convex-dev/prosemirror-sync still imports it.
-      // The v2 subpath was just a re-export of prosemirror-collab, which remains installed.
-      "@tiptap/pm/collab": "prosemirror-collab",
-    },
-    dedupe: ["convex", "react", "react-dom"],
-  },
-  css: {
-    postcss: "./postcss.config.mjs",
-  },
+  resolve: sharedResolve,
+  css: sharedCss,
   server: {
     port: 3000,
     host: true,

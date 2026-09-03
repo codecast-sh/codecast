@@ -156,6 +156,62 @@ export const COMPARISONS: Comparison[] = [
     ],
   },
   {
+    slug: "codecast-vs-claude-code-remote-control",
+    competitor: "Claude Code Remote Control",
+    competitorUrl: "https://code.claude.com/docs/en/remote-control",
+    title: "Codecast vs Claude Code Remote Control",
+    dek: "Anthropic ships remote control for your own live Claude Code sessions. Codecast records every session your team runs, across four agents, and keeps them after they end.",
+    codecastIs:
+      "Codecast records every coding agent session your team runs — Claude Code, Codex, Cursor, Gemini, on any machine — into one searchable record you can steer, search months later, and trace back to the line of code it wrote.",
+    competitorIs:
+      "Remote Control connects claude.ai/code or the Claude mobile app to a Claude Code session running on your machine. You turn it on for a session with `claude --rc` or `/rc`, execution stays local, and you can read output, send instructions, and answer permission prompts from your phone or another browser.",
+    rows: [
+      {
+        ...SHARED_ROWS.model,
+        competitor: "Connects you to one of your own Claude Code sessions while it runs",
+      },
+      { ...SHARED_ROWS.agents, competitor: "Claude Code" },
+      {
+        dimension: "What gets captured",
+        codecast: "Every session automatically — the daemon watches the history files agents already write",
+        competitor: "The sessions you switch it on for, per session or by enabling it for all of them",
+      },
+      {
+        dimension: "After the session ends",
+        codecast: "The conversation stays: searchable, linkable, and readable by your agents",
+        competitor: "Remote Control is a live connection; it is not a history layer",
+      },
+      { ...SHARED_ROWS.team, competitor: "Your own sessions; a teammate's session is not yours to see or steer" },
+      {
+        ...SHARED_ROWS.memory,
+        competitor: "None across sessions — each session keeps its own context",
+      },
+      { ...SHARED_ROWS.blame, competitor: "Not a goal" },
+      {
+        ...SHARED_ROWS.remote,
+        competitor: "claude.ai/code plus the iOS and Android Claude apps, with push notifications for permission prompts",
+      },
+      {
+        dimension: "Requirements",
+        codecast: "Free for individuals; MIT, and the backend is self-hostable",
+        competitor: "A Pro, Max, Team, or Enterprise plan (API keys are not supported); on Team and Enterprise an owner enables it first",
+      },
+      { ...SHARED_ROWS.oss, competitor: "Closed source, built by Anthropic" },
+    ],
+    whenCompetitor: [
+      "You work alone in Claude Code and want to answer prompts from your phone. Remote Control is official, free with your plan, and goes deeper into the session than anything outside Anthropic can: your MCP servers, file path autocomplete, and live subagent and workflow progress.",
+      "You want one live session mirrored across your terminal, browser, and phone at the same time.",
+    ],
+    whenCodecast: [
+      "Your team runs agents, and you want to see and steer each other's sessions rather than only your own.",
+      "You run more than Claude Code — Codex, Cursor, and Gemini sessions land in the same record.",
+      "You want the sessions to still be there afterward: searchable months later, readable by your agents, and traceable from a line of code back to the conversation that wrote it.",
+      "You do not want to remember to turn anything on — the daemon records every session, including the ones you did not plan to keep.",
+    ],
+    together:
+      "They compose, and many people use both: Remote Control is a live connection to one Claude Code session, and codecast records that same session like any other. Use Anthropic's for the phone, codecast for the team record and the memory.",
+  },
+  {
     slug: "codecast-vs-happy",
     competitor: "Happy",
     competitorUrl: "https://github.com/slopus/happy",

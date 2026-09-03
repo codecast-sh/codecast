@@ -125,9 +125,23 @@ function getRenderer(): Promise<RenderShare | null> {
   if (!rendererPromise) {
     rendererPromise = import(join(SSR_DIR, "share-ssr.mjs"))
       .then((m) => (typeof m.renderShare === "function" ? (m.renderShare as RenderShare) : null))
-      .catch(() => null);
+      .catch((err: unknown) => {
+        // Loud on purpose. The fallback is invisible to visitors (the page
+        // still works, just later), which is how a broken SSR build once went
+        // a week unnoticed. /api/health reports the same state.
+        console.error(
+          "[share] SSR bundle missing or broken (dist-ssr/share-ssr.mjs): share pages fall back to the payload-only shell.",
+          err instanceof Error ? err.message : err,
+        );
+        return null;
+      });
   }
   return rendererPromise;
+}
+
+/** Whether share pages are being server-rendered on this process (for /api/health). */
+export async function shareSsrReady(): Promise<boolean> {
+  return (await getRenderer()) !== null;
 }
 
 /** The plain app shell from the in-memory cache (for the catch-all route). */
