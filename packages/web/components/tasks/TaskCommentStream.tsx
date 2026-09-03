@@ -4,13 +4,14 @@ import { useMutation } from "convex/react";
 import { ArrowUp, ImagePlus, MessageSquare } from "lucide-react";
 import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore } from "../../store/inboxStore";
+import { useInboxStore, type TaskCommentExternal } from "../../store/inboxStore";
 import { compressImage } from "../../lib/compressImage";
 import { formatDateFull, formatRelative } from "../../lib/utils";
 import { useOpenLinkedSession } from "../../hooks/useOpenLinkedSession";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { AgentIcon } from "../ConversationList";
 import { Badge } from "../ui/badge";
+import { APP_LOOK, ISSUE_PROVIDER_NAME } from "../../lib/integrations";
 
 const api = _api as any;
 
@@ -80,7 +81,32 @@ export type TaskCommentRow = {
   comment_type?: string;
   created_at: number;
   session_info?: { agent_type?: string; title?: string } & Record<string, any>;
+  external?: TaskCommentExternal;
 };
+
+/** "from Linear" / "from GitHub": the comment was pulled from, or pushed to,
+ *  the provider (issue-sync S1.2). Links to the provider comment when it has
+ *  a url of its own. */
+function CommentProvenance({ external }: { external: TaskCommentExternal }) {
+  const look = APP_LOOK[external.provider];
+  const Icon = look.icon;
+  const label = `from ${ISSUE_PROVIDER_NAME[external.provider]}`;
+  const inner = (
+    <>
+      <Icon className="w-2.5 h-2.5 flex-shrink-0" style={{ color: look.accent }} />
+      {label}
+    </>
+  );
+  const cls = "inline-flex items-center gap-1 text-[10px] text-sol-text-dim flex-shrink-0";
+  const title = external.author ? `${label}, by ${external.author}` : label;
+  return external.url ? (
+    <a href={external.url} target="_blank" rel="noopener noreferrer" className={`${cls} hover:text-sol-text`} title={title} onClick={(e) => e.stopPropagation()}>
+      {inner}
+    </a>
+  ) : (
+    <span className={cls} title={title}>{inner}</span>
+  );
+}
 
 export function TaskCommentItem({
   comment,
@@ -110,6 +136,7 @@ export function TaskCommentItem({
         {comment.comment_type && comment.comment_type !== "note" && (
           <Badge variant="outline" className="text-[10px] px-1">{comment.comment_type}</Badge>
         )}
+        {comment.external && <CommentProvenance external={comment.external} />}
         <TimeAgo ts={comment.created_at} className="text-[11px] text-gray-400" />
       </div>
       <div className="ml-[26px] border-l-2 border-sol-border/30 pl-3">

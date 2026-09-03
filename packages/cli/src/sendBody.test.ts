@@ -80,3 +80,88 @@ describe("expandStdinArgs", () => {
     );
   });
 });
+
+describe("expandCommandStdinDashes", () => {
+  const { Command } = require("commander");
+  const { expandCommandStdinDashes, stdinText, takesStdinDash } = require("./sendBody");
+
+  function parsed(setup: (cmd: any) => void, argv: string[]) {
+    const program = new Command();
+    program.exitOverride();
+    let seen: { args: any[]; opts: any } | undefined;
+    const cmd = program.command("x");
+    setup(cmd);
+    cmd.action((...actionArgs: any[]) => {
+      const command = actionArgs.pop();
+      const opts = actionArgs.pop();
+      seen = { args: actionArgs, opts };
+      void command;
+    });
+    return { program, cmd, run: () => { program.parse(["node", "cast", "x", ...argv]); return seen!; } };
+  }
+
+  test("stdinText marks a description and takesStdinDash reads the mark", () => {
+    expect(takesStdinDash(stdinText("Description"))).toBe(true);
+    expect(takesStdinDash(stdinText("Prompts", { many: true }))).toBe(true);
+    expect(takesStdinDash("Read content from file ('-' for stdin)")).toBe(false);
+    expect(takesStdinDash(undefined)).toBe(false);
+  });
+
+  test("expands a '-' option value that the help promises (the task create -d - bug)", () => {
+    const t = parsed((cmd) => {
+      cmd.argument("<title>", stdinText("Title")).option("-d, --description <text>", stdinText("Description"));
+      cmd.hook("preAction", (_: any, action: any) => expandCommandStdinDashes(action, () => "line one\nline two\n"));
+    }, ["Swap cards", "-d", "-"]);
+    const seen = t.run();
+    expect(seen.args[0]).toBe("Swap cards");
+    expect(seen.opts.description).toBe("line one\nline two");
+  });
+
+  test("leaves a '-' alone on an option whose help does not promise stdin", () => {
+    let reads = 0;
+    const t = parsed((cmd) => {
+      cmd.argument("<id>").option("--content-file <path>", "Read content from file ('-' for stdin)");
+      cmd.hook("preAction", (_: any, action: any) => expandCommandStdinDashes(action, () => { reads++; return "body"; }));
+    }, ["doc1", "--content-file", "-"]);
+    expect(t.run().opts.contentFile).toBe("-");
+    expect(reads).toBe(0);
+  });
+
+  test("a variadic positional splits stdin on --- lines, one section per '-'", () => {
+    const t = parsed((cmd) => {
+      cmd.argument("[directions...]", stdinText("Directions", { many: true }));
+      cmd.hook("preAction", (_: any, action: any) => expandCommandStdinDashes(action, () => "first brief\n---\nsecond brief\n"));
+    }, ["-", "-"]);
+    expect(t.run().args[0]).toEqual(["first brief", "second brief"]);
+  });
+
+  test("positionals take stdin sections before options, in declared order", () => {
+    const t = parsed((cmd) => {
+      cmd.argument("<title>", stdinText("Title")).option("-d, --description <text>", stdinText("Description"));
+      cmd.hook("preAction", (_: any, action: any) => expandCommandStdinDashes(action, () => "the title\n---\nthe body\n"));
+    }, ["-d", "-", "-"]);
+    const seen = t.run();
+    expect(seen.args[0]).toBe("the title");
+    expect(seen.opts.description).toBe("the body");
+  });
+
+  test("does not touch stdin when nothing is '-'", () => {
+    let reads = 0;
+    const t = parsed((cmd) => {
+      cmd.argument("<text>", stdinText("Text"));
+      cmd.hook("preAction", (_: any, action: any) => expandCommandStdinDashes(action, () => { reads++; return ""; }));
+    }, ["plain"]);
+    expect(t.run().args[0]).toBe("plain");
+    expect(reads).toBe(0);
+  });
+});
+
+describe("rejectBareDash", () => {
+  const { rejectBareDash } = require("./sendBody");
+  test("names the field holding an unexpanded '-'", () => {
+    expect(() => rejectBareDash({ title: "ok", description: "-" })).toThrow(/^description is a bare '-'/);
+  });
+  test("lets ordinary bodies through, including dashes inside text", () => {
+    expect(() => rejectBareDash({ title: "a-b", text: "- bullet\n- bullet", n: 3, tags: ["-"] })).not.toThrow();
+  });
+});

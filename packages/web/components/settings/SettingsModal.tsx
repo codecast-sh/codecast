@@ -22,7 +22,7 @@ const PANELS: Record<SettingsSectionId, React.LazyExoticComponent<React.Componen
   calls: lazy(() => import("../../app/settings/calls/page")),
   team: lazy(() => import("../../app/settings/team/page")),
   sync: lazy(() => import("../../app/settings/sync/page")),
-  integrations: lazy(() => import("../../app/settings/integrations/github-app/page")),
+  integrations: lazy(() => import("../../app/settings/integrations/page")),
   agents: lazy(() => import("../../app/settings/agents/page")),
   "agent-features": lazy(() => import("../../app/settings/agent-features/page")),
   "provider-keys": lazy(() => import("../../app/settings/provider-keys/page")),
@@ -59,7 +59,7 @@ const GROUPS: { label: string; sections: SectionDef[] }[] = [
     sections: [
       { id: "team", label: "Team", icon: Users, desc: "Members, identity and the features your team runs", keywords: "members invite roles icon org statuses" },
       { id: "sync", label: "Sync & Privacy", icon: RefreshCw, desc: "Which projects sync, and who can see them", keywords: "projects sharing visibility private workspace directories" },
-      { id: "integrations", label: "Integrations", icon: Plug, desc: "GitHub app installs and connected services", keywords: "github app repositories install" },
+      { id: "integrations", label: "Integrations", icon: Plug, desc: "Slack, GitHub, Linear, Google and Notion, and the issues they sync", keywords: "slack github linear google gmail notion connect oauth install repositories issues sync apps" },
     ],
   },
   {

@@ -971,6 +971,14 @@ export const listDevices = query({
         // Per-device daemon health (web: useDaemonHealth).
         daemon_started_at: d.daemon_started_at ?? undefined,
         loop_freeze_ms: d.loop_freeze_ms ?? undefined,
+        // Rounded again on the way out. The daemon already rounds before it
+        // beats, and that is what keeps the row itself from churning; this is
+        // the guard for any future writer that sends raw milliseconds, since a
+        // moving number here re-renders every viewer's roster.
+        loop_freeze_1h_ms:
+          d.loop_freeze_1h_ms === undefined ? undefined : Math.round(d.loop_freeze_1h_ms / 5000) * 5000,
+        loop_freeze_max_ms: d.loop_freeze_max_ms ?? undefined,
+        loop_freeze_top: d.loop_freeze_top ?? undefined,
         pending_sync_count: d.pending_sync_count ?? undefined,
         oldest_pending_ms: d.oldest_pending_ms ?? undefined,
         pending_sync_messages: d.pending_sync_messages ?? undefined,

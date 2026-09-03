@@ -9,9 +9,12 @@ import {
   RESTART_SETTLE_MS,
   OVERLOADED_FREEZE_MS,
   isDegradedDaemonHealth,
+  blocksDelivery,
   worstDaemonHealth,
   ROSTER_CONSIDER_MS,
+  OVERLOADED_HOUR_MS,
 } from "../useDaemonHealth";
+import { describeDaemonHealth, describeDeviceFreeze } from "../../lib/daemonHealthCopy";
 
 const NOW = 1_000_000_000_000;
 
@@ -145,6 +148,66 @@ describe("computeDaemonHealth: quiet / restarting / overloaded", () => {
     expect(computeDaemonHealth(light, NOW).kind).toBe("ok");
   });
 
+  it("is overloaded when the trailing hour is over the SLO even if the minute is quiet", () => {
+    // A machine that freezes hard every few minutes reads as fine in any one
+    // minute, which is exactly the case the hour tier exists for.
+    const bursty = {
+      daemon_last_seen: NOW - 1000,
+      daemon_loop_freeze_ms: 0,
+      daemon_loop_freeze_1h_ms: 215_000,
+      daemon_loop_freeze_max_ms: 42_000,
+      daemon_loop_freeze_top: "walk@recursiveWatcher.ts:138 60%",
+    };
+    expect(computeDaemonHealth(bursty, NOW)).toEqual({
+      kind: "overloaded",
+      freezeMs: 0,
+      hourMs: 215_000,
+      maxMs: 42_000,
+      topCause: "walk@recursiveWatcher.ts:138 60%",
+    });
+    const quietHour = { daemon_last_seen: NOW - 1000, daemon_loop_freeze_1h_ms: OVERLOADED_HOUR_MS - 5_000 };
+    expect(computeDaemonHealth(quietHour, NOW).kind).toBe("ok");
+  });
+
+  it("names the top cause when the hour tier fired, and keeps the minute wording otherwise", () => {
+    const hourTier = describeDaemonHealth({
+      kind: "overloaded",
+      freezeMs: 0,
+      hourMs: 215_000,
+      maxMs: 42_000,
+      topCause: "walk@recursiveWatcher.ts:138 60%",
+    });
+    expect(hourTier?.label).toBe("daemon under load");
+    expect(hourTier?.detail).toContain("215s in the last hour");
+    expect(hourTier?.detail).toContain("worst freeze 42s");
+    expect(hourTier?.detail).toContain("Top cause: walk@recursiveWatcher.ts:138 60%");
+
+    const minuteTier = describeDaemonHealth({ kind: "overloaded", freezeMs: 31_000 });
+    expect(minuteTier?.detail).toContain("31s of the last minute");
+  });
+
+  it("the devices page line names the hour, the worst freeze and the cause", () => {
+    expect(
+      describeDeviceFreeze({
+        online: true,
+        loop_freeze_1h_ms: 215_000,
+        loop_freeze_max_ms: 42_000,
+        loop_freeze_top: "walk@recursiveWatcher.ts:138 60%",
+      }),
+    ).toEqual({
+      text: "frozen 215s/h, worst 42s · walk@recursiveWatcher.ts:138 60%",
+      colorVar: "--sol-orange",
+    });
+    // Under the bar the machine still reports, dimly rather than in alarm.
+    expect(describeDeviceFreeze({ online: true, loop_freeze_1h_ms: 30_000 })?.colorVar).toBe("--sol-text-dim");
+    // A machine that has reported no freeze shows no line at all.
+    expect(describeDeviceFreeze({ online: true })).toBeNull();
+    expect(describeDeviceFreeze({ online: true, loop_freeze_1h_ms: 0 })).toBeNull();
+    // A machine that stopped beating keeps its last number to itself: it says
+    // nothing about how that machine is doing now.
+    expect(describeDeviceFreeze({ online: false, loop_freeze_1h_ms: 215_000 })).toBeNull();
+  });
+
   it("silence outranks a fresh boot or load (those need a live beat to mean anything)", () => {
     const h = computeDaemonHealth(
       { daemon_last_seen: NOW - QUIET_AFTER_MS, daemon_started_at: NOW - 10_000, daemon_loop_freeze_ms: 50_000 },
@@ -174,6 +237,20 @@ describe("computeDaemonHealth: quiet / restarting / overloaded", () => {
     expect(isDegradedDaemonHealth({ kind: "overloaded", freezeMs: 1 })).toBe(true);
     expect(isDegradedDaemonHealth({ kind: "offline", tier: "warn", offlineMs: 1 })).toBe(true);
     expect(isDegradedDaemonHealth({ kind: "sync_stalled", pending: 1, messages: 1, conversations: 1, stalledMs: 1 })).toBe(true);
+  });
+
+  // The hour tier reports an SLO, not a live symptom. Letting it decide the
+  // delivery verdict hid the stuck-message note and its kill & restart button
+  // for a whole hour after two minutes of freeze anywhere inside it.
+  it("the hour tier alone does not blame the daemon for a late message", () => {
+    const hourOnly = { kind: "overloaded" as const, freezeMs: 0, hourMs: 200_000, maxMs: 40_000 };
+    expect(isDegradedDaemonHealth(hourOnly)).toBe(true);
+    expect(blocksDelivery(hourOnly)).toBe(false);
+    // A minute the loop really is frozen in still does.
+    expect(blocksDelivery({ kind: "overloaded", freezeMs: OVERLOADED_FREEZE_MS })).toBe(true);
+    expect(blocksDelivery({ kind: "quiet", quietMs: 1 })).toBe(true);
+    expect(blocksDelivery({ kind: "offline", tier: "warn", offlineMs: 1 })).toBe(true);
+    expect(blocksDelivery({ kind: "ok" })).toBe(false);
   });
 });
 

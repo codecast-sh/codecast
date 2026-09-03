@@ -19,18 +19,39 @@ import {
   DropdownMenuContent,
   DropdownMenuSeparator,
 } from "./ui/dropdown-menu";
+import { useShallow } from "zustand/react/shallow";
+import { useInboxStore } from "../store/inboxStore";
 import {
   useDevices,
   useForeignOwnerDevice,
   foreignRunnerNote,
   deviceDisplayName,
   deviceKindLabel,
+  deviceWakesOnUse,
   relativeSeen,
   DeviceIcon,
   DeviceDot,
   RunOnDeviceItems,
 } from "./DeviceBadge";
 import { useOwnersFromStore, OwnerAvatar, OwnerMenuItems } from "./OwnersBadge";
+
+/**
+ * Where this session runs, beyond the device: the worktree it was given, and
+ * whether the cloud host has it yet. Narrow by design — subscribing to the whole
+ * row would re-render the header on every liveness heartbeat (see the wake
+ * signature rules in CLAUDE.md); these two fields change once each, at placement.
+ */
+function useRunLocation(conversationId: string) {
+  return useInboxStore(
+    useShallow((s) => {
+      const row = s.sessions[s.resolveLiveSessionId(conversationId)] ?? s.conversations[conversationId];
+      return {
+        worktree: row?.worktree_name ?? null,
+        preparing: row?.cloud_placement === "pending",
+      };
+    }),
+  );
+}
 
 /** Per-kind accent tint for the device lobe (text+bg only — the pill owns the border).
  *  A foreign machine (a teammate's or the agent box — not in the viewer's own
@@ -84,8 +105,17 @@ export function AssignmentBadge({
       }
     : null;
 
+  const { worktree, preparing } = useRunLocation(conversationId);
+  // A machine that boots itself when work arrives reads differently from a
+  // laptop: "offline" is its resting state, not a problem, so say so instead of
+  // reporting how long ago it was seen.
+  const cloudHost = !!d && deviceWakesOnUse(d);
   const deviceTitle = d
-    ? `Runs on ${deviceDisplayName(d)} (${deviceKindLabel(d)})${own || !foreign ? "" : ` — ${foreignRunnerNote(foreign)}`} — ${d.online ? "online" : `last seen ${relativeSeen(d.last_seen)}`}`
+    ? `Runs on ${deviceDisplayName(d)} (${cloudHost ? "cloud host, wakes on use" : deviceKindLabel(d)})`
+      + `${own || !foreign ? "" : ` — ${foreignRunnerNote(foreign)}`}`
+      + `${cloudHost ? "" : ` — ${d.online ? "online" : `last seen ${relativeSeen(d.last_seen)}`}`}`
+      + `${worktree ? `\nWorktree ${worktree}` : ""}`
+      + `${preparing ? "\nPreparing the host — its worktree is being made now." : ""}`
     : "No device assigned yet — the next message routes to your most-recently-active machine.";
 
   return (
@@ -97,12 +127,25 @@ export function AssignmentBadge({
           className="inline-flex items-stretch rounded-full border border-sol-border/40 overflow-hidden text-[10px] font-medium outline-none transition-colors hover:border-sol-border/80"
         >
           {loaded && (
-            <span className={`inline-flex items-center gap-1 py-0.5 ${compact ? "pl-1.5 pr-1" : "pl-2 pr-1.5 max-w-[150px]"} ${deviceTint(d, !own && !!foreign)}`}>
+            <span className={`inline-flex items-center gap-1 py-0.5 ${compact ? "pl-1.5 pr-1" : `pl-2 pr-1.5 ${worktree || preparing ? "max-w-[260px]" : "max-w-[150px]"}`} ${deviceTint(d, !own && !!foreign)}`}>
               {d ? (
                 <>
                   <DeviceIcon d={d} />
                   {!compact && <span className="truncate">{deviceDisplayName(d)}</span>}
-                  <DeviceDot online={d.online} />
+                  {!compact && worktree && (
+                    <span className="truncate max-w-[70px] font-mono text-[9px] opacity-70">{worktree}</span>
+                  )}
+                  {/* While the host is being prepared there is nothing to be
+                      online about yet — the dot would read as "offline", which is
+                      wrong. Say what is actually happening instead. */}
+                  {preparing ? (
+                    <span className="inline-flex items-center gap-1 whitespace-nowrap animate-pulse">
+                      <span className="w-1.5 h-1.5 rounded-full bg-current opacity-60" />
+                      {!compact && <span className="text-[9px]">preparing cloud host</span>}
+                    </span>
+                  ) : (
+                    <DeviceDot online={d.online} />
+                  )}
                 </>
               ) : (
                 <>
