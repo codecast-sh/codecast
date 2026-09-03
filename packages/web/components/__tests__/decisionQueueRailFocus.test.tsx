@@ -45,7 +45,10 @@ mock.module("../../hooks/useDecisionQueue", () => ({
 }));
 
 // The conversation pane is the whole inbox stage; the queue's job here is the
-// pointer it publishes, not what the pane paints.
+// pointer it publishes, not what the pane paints. Stubbed rather than spread:
+// importing the real module to keep its other exports would drag the entire
+// conversation tree (and its Convex hooks) into the process for nothing. No
+// other test imports it — the one that names it reads it as source text.
 mock.module("../../app/inbox/QueuePageClient", () => ({
   InboxConversation: ({ sessionId }: { sessionId: string }) => (
     <div data-conv={sessionId} />
