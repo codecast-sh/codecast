@@ -10,6 +10,8 @@ import {
   decideAutoSwitch,
   resolveDeviceProfile,
   targetAccountEmail,
+  continueTargetPin,
+  continueNeedsRestart,
   isExhaustionCurrent,
   isUsageExhausted,
   isWindowRolled,
@@ -677,5 +679,58 @@ describe("per-device account resolution", () => {
     expect(targetAccountEmail(macA, { email: "z@x.com", profile: "work" })).toBe("z@x.com");
     expect(targetAccountEmail(oldDaemon, { profile: "work" })).toBeUndefined();
     expect(targetAccountEmail(macA, {})).toBeUndefined();
+  });
+});
+
+// "Continue on this account" must reach a session bound to another account by
+// restarting it, never by a message: the setup-token in its env was read at
+// process start (2026-09-02: 36 sessions pinned to a capped account answered
+// every plain continue with the same limit banner while the machine's login
+// had 85% headroom).
+describe("continueNeedsRestart", () => {
+  const now = 1_000_000;
+  const live = { expires_at: now + 1 };
+  const pinned = {
+    is_remote: false,
+    cc_session_tokens: true,
+    cc_accounts: {
+      active_email: "a@x.com",
+      profiles: [
+        { name: "ashot", email: "a@x.com", token: live },
+        { name: "other", email: "o@x.com", token: live },
+      ],
+    },
+  };
+  const keychainOnly = {
+    ...pinned,
+    cc_accounts: { active_email: "a@x.com", profiles: [{ name: "ashot", email: "a@x.com" }, { name: "other", email: "o@x.com", token: live }] },
+  };
+
+  test("the target pin is the active login's token, none without one, never on a remote", () => {
+    expect(continueTargetPin(pinned, now)).toBe("ashot");
+    expect(continueTargetPin(keychainOnly, now)).toBeUndefined();
+    expect(continueTargetPin({ ...pinned, cc_session_tokens: false }, now)).toBeUndefined();
+    expect(continueTargetPin({ ...pinned, is_remote: true }, now)).toBeUndefined();
+    expect(continueTargetPin(undefined, now)).toBeUndefined();
+  });
+
+  test("a session pinned to another account's token restarts", () => {
+    expect(continueNeedsRestart({ pending_api_error_kind: "limit", cc_account: "other" }, pinned, now)).toBe(true);
+    expect(continueNeedsRestart({ pending_api_error_kind: "limit", cc_account: "other" }, keychainOnly, now)).toBe(true);
+    // The flag off does not protect a pin: the daemon sources it regardless.
+    expect(continueNeedsRestart({ pending_api_error_kind: "limit", cc_account: "other" }, { ...pinned, cc_session_tokens: false }, now)).toBe(true);
+  });
+
+  test("a session already on this account gets a plain message", () => {
+    expect(continueNeedsRestart({ pending_api_error_kind: "limit", cc_account: "ashot" }, pinned, now)).toBe(false);
+    expect(continueNeedsRestart({ pending_api_error_kind: "limit" }, pinned, now)).toBe(false);
+    expect(continueNeedsRestart({ pending_api_error_kind: "limit", cc_account: null }, keychainOnly, now)).toBe(false);
+    expect(continueNeedsRestart({ pending_api_error_kind: "connection", cc_account: "ashot" }, pinned, now)).toBe(false);
+  });
+
+  test("signed-out sessions always restart; remote pins are ignored", () => {
+    expect(continueNeedsRestart({ pending_api_error_kind: "auth" }, pinned, now)).toBe(true);
+    expect(continueNeedsRestart({ pending_api_error_kind: "auth" }, undefined, now)).toBe(true);
+    expect(continueNeedsRestart({ pending_api_error_kind: "limit", cc_account: "other" }, { ...pinned, is_remote: true }, now)).toBe(false);
   });
 });
