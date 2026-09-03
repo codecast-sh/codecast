@@ -2,6 +2,8 @@
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
 import { registerWorkspaceCommand } from "./workspace/cli.js";
+import { detectJsPackageManager } from "./workspace/detect.js";
+import { repoRootFor } from "./gitPlane.js";
 import { scrubAgentEnv } from "./agentEnv.js";
 import { registerRemoteCommand } from "./remote/cli.js";
 import { registerPublishCommand } from "./publish.js";
@@ -16208,59 +16210,63 @@ plan
 
 plan
   .command("verify")
-  .description("Run verification checks on completed tasks")
+  .description("Run the repo's own typecheck, test and lint scripts; exit 1 on any failure")
   .argument("<plan_id>", "Plan short ID")
-  .option("--typecheck", "Run TypeScript type checking")
-  .option("--test", "Run test suite")
-  .option("--lint", "Run linter")
-  .option("--all", "Run all verification checks")
+  .option("--typecheck", "Run the typecheck script")
+  .option("--test", "Run the test script")
+  .option("--lint", "Run the lint script")
+  .option("--all", "Run all three")
   .action(async (planId: string, options: any) => {
     const plan = await cliPost("/cli/plans/get", { short_id: planId });
     if (!plan) { console.error("Plan not found"); process.exit(1); }
 
-    const cwd = getRealCwd();
-    const checks: { name: string; cmd: string; args: string[] }[] = [];
-
-    if (options.all || options.typecheck) {
-      checks.push({ name: "typecheck", cmd: "npx", args: ["tsc", "--noEmit"] });
+    const cwd = (await repoRootFor(getRealCwd())) ?? getRealCwd();
+    const pm = detectJsPackageManager(cwd);
+    if (!pm) {
+      console.error(`No package.json at ${cwd}; nothing to verify`);
+      process.exit(1);
     }
-    if (options.all || options.test) {
-      checks.push({ name: "test", cmd: "npm", args: ["test", "--if-present"] });
-    }
-    if (options.all || options.lint) {
-      checks.push({ name: "lint", cmd: "npx", args: ["eslint", ".", "--max-warnings=0"] });
-    }
+    let scripts: Record<string, string> = {};
+    try {
+      scripts = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf-8")).scripts ?? {};
+    } catch {}
 
-    if (checks.length === 0) {
-      checks.push({ name: "typecheck", cmd: "npx", args: ["tsc", "--noEmit"] });
-    }
+    const wanted = ["typecheck", "test", "lint"].filter((name) =>
+      options.all || options[name] || (!options.typecheck && !options.test && !options.lint && name === "typecheck"),
+    );
 
-    console.log(`\n  ${c.bold}Verifying plan ${planId}${c.reset}\n`);
+    console.log(`\n  ${c.bold}Verifying plan ${planId}${c.reset} ${fmt.muted(`(${pm.name} run …, in ${cwd})`)}\n`);
 
-    let passed = 0, failed = 0;
-    for (const check of checks) {
-      process.stdout.write(`  ${c.dim}${check.name}...${c.reset} `);
-      const result = spawnSync(check.cmd, check.args, {
-        encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], cwd, timeout: 120_000,
+    let passed = 0, failed = 0, skipped = 0;
+    for (const name of wanted) {
+      process.stdout.write(`  ${c.dim}${name}...${c.reset} `);
+      if (!scripts[name]) {
+        console.log(`${c.yellow}skip${c.reset} ${fmt.muted(`no "${name}" script in package.json`)}`);
+        skipped++;
+        continue;
+      }
+      const result = spawnSync(pm.name, ["run", name], {
+        encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], cwd, timeout: 600_000,
       });
       if (result.status === 0) {
         console.log(`${c.green}pass${c.reset}`);
         passed++;
       } else {
         console.log(`${c.red}fail${c.reset}`);
-        const output = (result.stderr || result.stdout || "").trim();
-        if (output) console.log(fmt.muted(`    ${output.split("\n").slice(0, 5).join("\n    ")}`));
+        const output = (result.stderr || result.stdout || result.error?.message || "").trim();
+        if (output) console.log(fmt.muted(`    ${output.split("\n").slice(-12).join("\n    ")}`));
         failed++;
       }
     }
 
-    console.log(`\n  ${passed} passed, ${failed} failed`);
+    console.log(`\n  ${passed} passed, ${failed} failed, ${skipped} skipped`);
     try {
       await cliPost("/cli/plans/log", {
         short_id: planId,
-        entry: `Verification: ${passed} passed, ${failed} failed (${checks.map((ch: any) => ch.name).join(", ")})`,
+        entry: `Verification: ${passed} passed, ${failed} failed, ${skipped} skipped (${wanted.join(", ")})`,
       });
     } catch {}
+    if (failed > 0) process.exit(1);
   });
 
 plan

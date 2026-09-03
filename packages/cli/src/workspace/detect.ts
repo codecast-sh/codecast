@@ -18,6 +18,26 @@ import * as path from "node:path";
 import { DEFAULT_BROWSER } from "./manifest.js";
 import type { WorkspaceManifest } from "./types.js";
 
+export type JsPackageManager = "bun" | "pnpm" | "yarn" | "npm";
+
+/**
+ * The JavaScript package manager a repo uses, chosen by lockfile, with the
+ * install command that respects that lockfile. Null when there is no
+ * package.json at all.
+ */
+export function detectJsPackageManager(
+  repoRoot: string,
+): { name: JsPackageManager; install: string } | null {
+  const has = (rel: string) => fs.existsSync(path.join(repoRoot, rel));
+  if (has("bun.lock") || has("bun.lockb")) return { name: "bun", install: "bun install" };
+  if (has("pnpm-lock.yaml")) return { name: "pnpm", install: "pnpm install --frozen-lockfile" };
+  if (has("yarn.lock")) return { name: "yarn", install: "yarn install --immutable" };
+  if (has("package-lock.json")) return { name: "npm", install: "npm ci" };
+  // No lockfile — fall back to plain `npm install`.
+  if (has("package.json")) return { name: "npm", install: "npm install" };
+  return null;
+}
+
 /** Detect project type and synthesize a default manifest. */
 export function detectProject(repoRoot: string): WorkspaceManifest {
   const has = (rel: string) => fs.existsSync(path.join(repoRoot, rel));
@@ -31,22 +51,10 @@ export function detectProject(repoRoot: string): WorkspaceManifest {
   // JavaScript/TypeScript ecosystem — exactly one install command,
   // chosen by lockfile.
   // ---------------------------------------------------------------------
-  if (has("bun.lock") || has("bun.lockb")) {
-    install.push("bun install");
-    detected = "bun";
-  } else if (has("pnpm-lock.yaml")) {
-    install.push("pnpm install --frozen-lockfile");
-    detected = "pnpm";
-  } else if (has("yarn.lock")) {
-    install.push("yarn install --immutable");
-    detected = "yarn";
-  } else if (has("package-lock.json")) {
-    install.push("npm ci");
-    detected = "npm";
-  } else if (has("package.json")) {
-    // No lockfile — fall back to plain `npm install`.
-    install.push("npm install");
-    detected = "npm";
+  const js = detectJsPackageManager(repoRoot);
+  if (js) {
+    install.push(js.install);
+    detected = js.name;
   }
 
   // ---------------------------------------------------------------------
