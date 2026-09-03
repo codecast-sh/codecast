@@ -46,12 +46,12 @@
   .signal span { color: var(--muted); font-size: 11.5px; line-height: 1.45; }
 
   /* A Chrome tab group chip with the working dots cycling. */
-  .chip { white-space: nowrap; font-size: 11px; color: #fff; background: var(--blue); border-radius: 6px; padding: 0.25em 0.6em; }
+  .chip { white-space: nowrap; font-size: 11px; color: #fff; background: #d93025; border-radius: 6px; padding: 0.25em 0.6em; }
   .chip i { display: inline-block; width: 1.4em; text-align: left; font-style: normal; }
   .chip i::after { content: ""; animation: dots 1.2s steps(3, end) infinite; }
   @keyframes dots { 0% { content: "."; } 33% { content: ".."; } 66% { content: "..."; } }
   /* A page with the coral frame the isolated world draws. */
-  .frame { width: 74px; height: 46px; border-radius: 4px; background: var(--bg-alt); border: 3px solid var(--blue); position: relative; }
+  .frame { width: 74px; height: 46px; border-radius: 4px; background: var(--bg-alt); border: 3px solid #d93025; position: relative; }
   .frame::before { content: ""; position: absolute; inset: 8px 10px auto; height: 4px; border-radius: 2px; background: var(--line); }
   .frame::after { content: ""; position: absolute; inset: 18px 10px 10px; border-radius: 2px; background: color-mix(in srgb, var(--line) 50%, transparent); }
   /* Chrome's own infobar, drawn small. */
@@ -94,8 +94,8 @@
 
   <h1 class="in">Let your agents work in this Chrome.</h1>
   <p class="lede in">
-    A session that needs your real logins opens its own tab here, in a tab group
-    named after it. Everything else stays in the agent browser.
+    A session that needs your real logins opens its own tab here, in the Cast
+    tab group. Everything else stays in the agent browser.
   </p>
 
   <section class="card in" id="status" aria-live="polite">
@@ -112,14 +112,14 @@
     <h2>What you will see while a session drives a tab</h2>
     <div class="signals">
       <div class="signal">
-        <div class="demo"><span class="chip">cast jx76pfw<i></i></span></div>
-        <b>A tab group per session</b>
-        <span>Its title shows dots while a command runs and a check when it lands.</span>
+        <div class="demo"><span class="chip">Cast<i></i></span></div>
+        <b>One Cast tab group</b>
+        <span>Every tab an agent opens here joins it. Dots while a command runs, a check when it lands.</span>
       </div>
       <div class="signal">
         <div class="demo"><div class="frame"></div></div>
-        <b>A thin frame on the page</b>
-        <span>In the group's colour, hidden from every screenshot the agent takes.</span>
+        <b>A frame and a pointer</b>
+        <span>A soft red frame, and a pointer that shows each move and click. Both stay out of the agent's screenshots.</span>
       </div>
       <div class="signal">
         <div class="demo"><span class="bar">"Codecast" started debugging<br>this browser</span></div>
