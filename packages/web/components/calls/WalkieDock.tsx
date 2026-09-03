@@ -227,7 +227,7 @@ export function WalkieBanner() {
       // …and never while the join is being announced: the question this row
       // asks has just been answered, and the dock is a moment away.
       actions={(!strip.tx || strip.rx) && headline === strip.headline && !strip.locked}
-      onMute={() => void setMuted(true)}
+      onMute={() => void setMuted(true, { remember: false })}
       onMuteToggle={() => void setMuted(s.call.muted === false)}
       onStop={() => void endBurst()}
       // THE CALL, AS CIRCLES OVER THE WORK: the founder's picture of a voice
@@ -270,7 +270,7 @@ export function WalkieBanner() {
 function snoozeWalkie(): void {
   const until = Date.now() + SNOOZE_MS;
   useInboxStore.getState().snoozeWalkie(until);
-  void setMuted(true);
+  void setMuted(true, { remember: false });
   shutWalkieDoor();
   toast.custom(() => <WalkieSnoozedNote until={until} />, {
     duration: SNOOZE_NOTE_MS,

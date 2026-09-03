@@ -31,11 +31,9 @@ import { AvatarImg } from "../../lib/avatarCache";
 import {
   getCallTiles,
   getRoom,
-  listDevices,
   setCamera,
   setScreenShare,
   subscribeCallTiles,
-  switchDevice,
   type ParticipantTile, stopTranscribing } from "../../lib/calls/callManager";
 import { humanizeConvexError, parseRoomKey } from "@codecast/shared/contracts";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -49,6 +47,7 @@ import { RoomKnocks } from "./RoomDoor";
 import { HangUpButton, MicButton } from "./CallControls";
 import { CallChatPanel } from "./CallChatPanel";
 import { FeedChip } from "./FeedChip";
+import { DeviceRows } from "./DeviceRows";
 import { faceTrackingNote } from "./useFaceCrop";
 import { openFeedTargetPicker, useAddLiveFeed, useRemoveLiveFeed, type FeedTarget } from "./useCallFeed";
 import { firstName, fmtClock, speakerColor } from "./speakers";
@@ -1272,53 +1271,12 @@ function StageShareButton({ sharing }: { sharing: boolean }) {
 }
 
 function DevicesPopover({ onClose }: { onClose: () => void }) {
-  const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
-  const [outs, setOuts] = useState<MediaDeviceInfo[]>([]);
-  const [cams, setCams] = useState<MediaDeviceInfo[]>([]);
-  useEffect(() => {
-    let alive = true;
-    void Promise.all([
-      listDevices("audioinput"),
-      listDevices("audiooutput"),
-      listDevices("videoinput"),
-    ]).then(([m, o, c]) => {
-      if (!alive) return;
-      setMics(m);
-      setOuts(o);
-      setCams(c);
-    });
-    return () => {
-      alive = false;
-    };
-  }, []);
-  const row = (
-    label: string,
-    devices: MediaDeviceInfo[],
-    kind: "audioinput" | "audiooutput" | "videoinput",
-  ) =>
-    devices.length > 0 && (
-      <label className="block">
-        <span className="text-[10px] uppercase tracking-wide text-sol-text-muted">{label}</span>
-        <select
-          onChange={(e) => void switchDevice(kind, e.target.value)}
-          className="mt-0.5 w-full rounded-md bg-sol-bg px-1.5 py-1 text-[11px] text-sol-text outline-none focus:ring-1 focus:ring-sol-cyan/60"
-        >
-          {devices.map((d) => (
-            <option key={d.deviceId} value={d.deviceId}>
-              {d.label || `${label} ${d.deviceId.slice(0, 4)}`}
-            </option>
-          ))}
-        </select>
-      </label>
-    );
   return (
     <div
       className="absolute bottom-full left-1/2 z-10 mb-3 w-[240px] -translate-x-1/2 space-y-2 rounded-xl bg-sol-bg-alt p-2.5 shadow-2xl ring-1 ring-white/5"
       onMouseLeave={onClose}
     >
-      {row("Microphone", mics, "audioinput")}
-      {row("Speaker", outs, "audiooutput")}
-      {row("Camera", cams, "videoinput")}
+      <DeviceRows compact />
       {/* Not a setting — a fact. The floating circles either follow a face or
           show the middle of the frame, and only this build knows which. */}
       <p className="pt-0.5 text-[10px] leading-snug text-sol-text-muted">{faceTrackingNote()}</p>

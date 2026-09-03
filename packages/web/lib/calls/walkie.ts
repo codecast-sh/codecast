@@ -715,7 +715,7 @@ export function startBurst(channelId: string, roomKey: string): Promise<void> {
       // into this very room (hold-to-reply inside a huddle). The unmute comes
       // first there, because a muted LiveKit track reads as silence and the
       // recorder would keep that silence.
-      if (inRoom(roomKey)) await setMuted(false);
+      if (inRoom(roomKey)) await setMuted(false, { remember: false });
       if (b.done) return;
       // THE TEST IS A PUBLICATION, NOT A SEAT. `inRoom` counts a room still
       // CONNECTING, which is the ordinary shape of an answer into a burst this
@@ -969,7 +969,7 @@ async function abortBurst(b: Burst): Promise<void> {
     burst = null;
     publishSending(null);
   }
-  await setMuted(true);
+  await setMuted(true, { remember: false });
   refresh();
 }
 
@@ -1020,7 +1020,7 @@ async function finishBurst(b: Burst, releasedAt: number): Promise<void> {
   // is still talking, and the key coming up cut them off mid-sentence and left
   // them to discover it.
   if (!burstUpgraded(b)) {
-    await setMuted(true);
+    await setMuted(true, { remember: false });
     // Remembered, because a stamp already in flight may be about to make this
     // the wrong answer — see `mutedByRelease`.
     mutedByRelease = b.roomKey;
@@ -1207,7 +1207,7 @@ export function markWalkieUpgraded(roomKey: string): void {
   // the room the stamp names, so a person who muted themselves stays muted.
   if (mutedByRelease === roomKey && inRoom(roomKey)) {
     mutedByRelease = null;
-    void setMuted(false);
+    void setMuted(false, { remember: false });
   }
   refresh();
 }

@@ -200,6 +200,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Provider Keys", path: "/settings/provider-keys", icon: "settings", keywords: "api keys openrouter anthropic openai", secondary: true },
   { label: "Notifications", path: "/settings/notifications", icon: "settings", keywords: "push email digest mentions mute", secondary: true },
   { label: "Sounds", path: "/settings/sounds", icon: "settings", keywords: "audio volume mute chime walkie", secondary: true },
+  { label: "Calls", path: "/settings/calls", icon: "settings", keywords: "camera microphone mic devices walkie huddle meeting record", secondary: true },
 ];
 
 // Global command rows: each fires the SAME registered handler its keyboard

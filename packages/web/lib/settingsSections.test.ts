@@ -8,6 +8,7 @@ describe("settingsSectionForPath", () => {
     expect(settingsSectionForPath("/settings/accounts")?.section).toBe("accounts");
     expect(settingsSectionForPath("/settings/notifications")?.section).toBe("notifications");
     expect(settingsSectionForPath("/settings/sounds")?.section).toBe("sounds");
+    expect(settingsSectionForPath("/settings/calls")?.section).toBe("calls");
     expect(settingsSectionForPath("/settings/team")?.section).toBe("team");
     expect(settingsSectionForPath("/settings/sync")?.section).toBe("sync");
     expect(settingsSectionForPath("/settings/integrations")?.section).toBe("integrations");

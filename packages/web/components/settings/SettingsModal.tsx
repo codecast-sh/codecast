@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
-  Search, Volume2,
+  Search, Volume2, Video,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -19,6 +19,7 @@ const PANELS: Record<SettingsSectionId, React.LazyExoticComponent<React.Componen
   accounts: lazy(() => import("../../app/settings/accounts/page")),
   notifications: lazy(() => import("../../app/settings/notifications/page")),
   sounds: lazy(() => import("../../app/settings/sounds/page")),
+  calls: lazy(() => import("../../app/settings/calls/page")),
   team: lazy(() => import("../../app/settings/team/page")),
   sync: lazy(() => import("../../app/settings/sync/page")),
   integrations: lazy(() => import("../../app/settings/integrations/github-app/page")),
@@ -49,6 +50,7 @@ const GROUPS: { label: string; sections: SectionDef[] }[] = [
       { id: "general", label: "General", icon: User, desc: "Your profile and how the app looks and behaves", keywords: "profile preferences appearance theme bio timezone username public simple view badges" },
       { id: "notifications", label: "Notifications", icon: Bell, desc: "What reaches you, and on which device", keywords: "push email digest mentions mute presence away" },
       { id: "sounds", label: "Sounds", icon: Volume2, desc: "What this machine says out loud, and how loudly", keywords: "audio volume mute chime cue walkie chat ring quiet" },
+      { id: "calls", label: "Calls", icon: Video, desc: "How a call starts for you: camera, mic, devices, walkie, meetings", keywords: "camera microphone mic mute devices walkie huddle meeting record join" },
       { id: "accounts", label: "Accounts", icon: KeyRound, desc: "Sign-in identities linked to this account", keywords: "github oauth email login delete danger" },
     ],
   },
