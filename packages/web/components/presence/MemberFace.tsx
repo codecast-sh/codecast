@@ -18,8 +18,9 @@ import { useWalkieBurstRoom } from "./useFaceKey";
  * an ACTIVITY, not a presence, so it keeps its violet and stays out of the
  * badge's corner rather than competing for the same eight pixels.
  *
- * `title` defaults to "Ann · Active". Pass "" where the row already says both
- * and a tooltip would only repeat it.
+ * `title` defaults to "Ann · Active". Pass "" where the surface already says
+ * both (a roster row, the header bar's hover card) and a browser balloon on
+ * the face, its presence dot or its huddle chip would only repeat it.
  */
 export function MemberFace({
   member,
@@ -51,6 +52,7 @@ export function MemberFace({
   const burstRoom = useWalkieBurstRoom();
   const inHuddle = showHuddle && memberInHuddle(member, burstRoom);
   const badge = badgeSize ?? (size >= 36 ? "md" : "sm");
+  const silent = title === "";
   return (
     <span className={`relative block shrink-0 ${className}`} style={{ width: size, height: size }}>
       <span
@@ -77,12 +79,12 @@ export function MemberFace({
         state={visual}
         size={badge}
         className="absolute -bottom-0.5 -right-0.5"
-        title={presenceLabel(visual)}
+        title={silent ? undefined : presenceLabel(visual)}
       />
       {inHuddle && (
         <span
           className="absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-sol-bg bg-sol-violet"
-          title="In a huddle"
+          title={silent ? undefined : "In a huddle"}
         >
           <Headphones className="h-2 w-2 text-sol-bg" />
         </span>

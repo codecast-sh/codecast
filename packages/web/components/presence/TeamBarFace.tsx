@@ -83,9 +83,9 @@ export function TeamBarFace({
           onClick={() => router.push(`/team/${member.github_username || id}`)}
           onContextMenu={onContextMenu}
           className="relative block"
-          title={`${name} · you`}
+          aria-label={`${name} (you). Opens your profile.`}
         >
-          <MemberFace member={member} size={32} className={selected ? SELECTED_RING : ""} />
+          <MemberFace member={member} size={32} title="" className={selected ? SELECTED_RING : ""} />
         </button>
         {card}
       </span>
@@ -105,7 +105,6 @@ export function TeamBarFace({
         type="button"
         aria-label={`${name}. Click for Talk, Ring and Message.`}
         aria-expanded={open}
-        title={`${name} — click for Talk, Ring, Message`}
         className="people-face"
         data-tx={key.sending ? "1" : undefined}
         data-rx={talking ? "1" : undefined}
