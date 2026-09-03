@@ -84,6 +84,8 @@ export function MemberFace({
       {inHuddle && (
         <span
           className="absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-sol-bg bg-sol-violet"
+          role="img"
+          aria-label="In a huddle"
           title={silent ? undefined : "In a huddle"}
         >
           <Headphones className="h-2 w-2 text-sol-bg" />

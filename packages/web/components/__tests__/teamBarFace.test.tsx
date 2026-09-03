@@ -147,7 +147,7 @@ describe("the bar shows the flow", () => {
     keyedRooms = [];
     const f = await mountFace();
     expect(keyedRooms[0]).toBe(ROOM);
-    expect(f.key().getAttribute("title")).toBe(`Ann Diaz — click for Talk, Ring, Message`);
+    expect(f.key().getAttribute("aria-label")).toBe(`Ann Diaz. Click for Talk, Ring and Message.`);
     expect(f.key().getAttribute("data-tx")).toBeNull();
     expect(f.key().getAttribute("data-rx")).toBeNull();
     await f.unmount();
