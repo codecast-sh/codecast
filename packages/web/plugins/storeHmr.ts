@@ -35,7 +35,7 @@ import type { Plugin } from "vite";
  */
 
 const PLUGIN_NAME = "codecast-store-hmr";
-const STORE_FILE = "store/inboxStore.ts";
+export const STORE_FILE = "store/inboxStore.ts";
 
 // The action config, verbatim from the module. Everything between these two is
 // rebuilt on a hot swap; everything outside is held by importers.
