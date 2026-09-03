@@ -554,3 +554,301 @@ describe("isDesktopShell", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// The pre-boot runner, end to end under jsdom: the gate reads the mirror and the
+// tab's focus, and either takes the boot over, holds it for a background tab, or
+// lets it proceed. The app entry only ever calls bootAfterHandoffGate.
+// ---------------------------------------------------------------------------
+import { beforeAll, afterAll, beforeEach, afterEach, mock } from "bun:test";
+import { JSDOM, VirtualConsole } from "jsdom";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  preBootVerdict,
+  runPreBootHandoff,
+  bootAfterHandoffGate,
+  showHandoffScreen,
+  armForegroundHandoff,
+  ARM_WINDOW_MS,
+  HANDOFF_MIRROR_KEY,
+  HANDOFF_SKIP_KEY,
+  HANDOFF_PERSIST_KEY,
+} from "./desktop";
+
+describe("preBootVerdict", () => {
+  const PRE: PreBootHandoffContext = {
+    mirror: "1",
+    isDesktopShell: false,
+    isTopWindow: true,
+    foreground: true,
+    host: "codecast.sh",
+    freshNavigation: true,
+    path: "/conversation/jx7c89",
+    search: "",
+    skippedUrl: null,
+  };
+
+  test("hands off a foreground tab that passes the gate", () => {
+    expect(preBootVerdict(PRE)).toBe("handoff");
+  });
+
+  test("holds a background tab whose only blocker is focus — it hands off once looked at", () => {
+    expect(preBootVerdict({ ...PRE, foreground: false })).toBe("hold");
+  });
+
+  test("boots when any permanent blocker applies, foreground or not", () => {
+    expect(preBootVerdict({ ...PRE, mirror: null })).toBe("boot");
+    expect(preBootVerdict({ ...PRE, mirror: null, foreground: false })).toBe("boot");
+    expect(preBootVerdict({ ...PRE, path: "/share/abc", foreground: false })).toBe("boot");
+    expect(preBootVerdict({ ...PRE, isDesktopShell: true })).toBe("boot");
+  });
+});
+
+describe("runPreBootHandoff + bootAfterHandoffGate (jsdom)", () => {
+  const g = globalThis as Record<string, unknown>;
+  const saved: Record<string, PropertyDescriptor | undefined> = {};
+  const GLOBALS = ["window", "document", "localStorage", "sessionStorage", "navigator"];
+  let dom: JSDOM;
+  let focused = true;
+  const realNow = Date.now;
+
+  // The screen markup the gate reveals, straight from the shell so the test
+  // fails if an action attribute is renamed on one side only.
+  const shellBody = () => {
+    const html = readFileSync(join(import.meta.dir, "..", "index.html"), "utf8");
+    return html.slice(html.indexOf('<div id="cc-handoff">'), html.indexOf("<script type=\"module\""));
+  };
+
+  beforeAll(() => {
+    for (const k of GLOBALS) saved[k] = Object.getOwnPropertyDescriptor(g, k);
+  });
+
+  beforeEach(() => {
+    focused = true;
+    dom = new JSDOM(`<!doctype html><html><head></head><body>${shellBody()}</body></html>`, {
+      url: "https://codecast.sh/conversation/jx7c89?m=5",
+      // Swallow jsdom's "not implemented: navigation" for the codecast:// link.
+      virtualConsole: new VirtualConsole(),
+      // Otherwise document.visibilityState is "prerender" and no tab is ever foreground.
+      pretendToBeVisual: true,
+    });
+    const w = dom.window;
+    Object.defineProperty(w.document, "hasFocus", { value: () => focused, configurable: true });
+    for (const [k, v] of Object.entries({
+      window: w,
+      document: w.document,
+      localStorage: w.localStorage,
+      sessionStorage: w.sessionStorage,
+      navigator: w.navigator,
+    })) {
+      Object.defineProperty(g, k, { value: v, configurable: true, writable: true });
+    }
+    w.localStorage.clear();
+    w.sessionStorage.clear();
+  });
+
+  afterEach(async () => {
+    Date.now = realNow;
+    // Lapse any armed hold so its timer doesn't outlive the test, let the
+    // takeover's zero-delay deep link fire while the globals still exist, then
+    // drop the window — bun runs every file in one process.
+    Date.now = () => realNow() + ARM_WINDOW_MS + 1;
+    dom.window.dispatchEvent(new dom.window.Event("focus"));
+    Date.now = realNow;
+    await new Promise((r) => setTimeout(r, 5));
+    dom.window.close();
+  });
+
+  afterAll(() => {
+    for (const k of GLOBALS) {
+      if (saved[k]) Object.defineProperty(g, k, saved[k]!);
+      else delete g[k];
+    }
+  });
+
+  const screenShown = () => dom.window.document.documentElement.hasAttribute("data-cc-handoff");
+  const preloads = () => dom.window.document.querySelectorAll('link[rel="modulepreload"]').length;
+
+  test("no mirror: boots at once and injects the app preload hints", () => {
+    const boot = mock(() => {});
+    runPreBootHandoff(["/assets/boot.js", "/assets/vendor.js"]);
+    bootAfterHandoffGate(boot);
+    expect(boot).toHaveBeenCalledTimes(1);
+    expect(preloads()).toBe(2);
+    expect(screenShown()).toBe(false);
+  });
+
+  test("share pages preload the share graph instead of the app", () => {
+    dom.reconfigure({ url: "https://codecast.sh/share/message/tok" });
+    runPreBootHandoff(["/assets/boot.js"], ["/assets/share.js"]);
+    const hrefs = Array.from(dom.window.document.querySelectorAll('link[rel="modulepreload"]')).map((l) =>
+      l.getAttribute("href"),
+    );
+    expect(hrefs).toEqual(["/assets/share.js"]);
+  });
+
+  test("foreground tab with the mirror: takes the boot over, fetches nothing, shows the screen", () => {
+    dom.window.localStorage.setItem(HANDOFF_MIRROR_KEY, "1");
+    const boot = mock(() => {});
+    runPreBootHandoff(["/assets/boot.js"]);
+    bootAfterHandoffGate(boot);
+    expect(boot).not.toHaveBeenCalled();
+    expect(preloads()).toBe(0);
+    expect(screenShown()).toBe(true);
+  });
+
+  test("background tab with the mirror: holds the boot, then hands off when looked at", async () => {
+    dom.window.localStorage.setItem(HANDOFF_MIRROR_KEY, "1");
+    focused = false;
+    const boot = mock(() => {});
+    runPreBootHandoff(["/assets/boot.js"]);
+    bootAfterHandoffGate(boot);
+    await Promise.resolve();
+    expect(boot).not.toHaveBeenCalled();
+    expect(preloads()).toBe(0);
+    expect(screenShown()).toBe(false);
+
+    focused = true;
+    dom.window.dispatchEvent(new dom.window.Event("focus"));
+    await Promise.resolve();
+    expect(screenShown()).toBe(true);
+    expect(boot).not.toHaveBeenCalled();
+    expect(preloads()).toBe(0);
+  });
+
+  test("a held tab that is looked at only after the arm window boots normally", async () => {
+    dom.window.localStorage.setItem(HANDOFF_MIRROR_KEY, "1");
+    focused = false;
+    const boot = mock(() => {});
+    const t0 = realNow();
+    Date.now = () => t0;
+    runPreBootHandoff(["/assets/boot.js"]);
+    bootAfterHandoffGate(boot);
+
+    Date.now = () => t0 + ARM_WINDOW_MS + 1;
+    focused = true;
+    dom.window.dispatchEvent(new dom.window.Event("focus"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(screenShown()).toBe(false);
+    expect(boot).toHaveBeenCalledTimes(1);
+    expect(preloads()).toBe(1);
+  });
+
+  test("a held tab hands off only on a genuine foreground activation", async () => {
+    dom.window.localStorage.setItem(HANDOFF_MIRROR_KEY, "1");
+    focused = false;
+    const boot = mock(() => {});
+    runPreBootHandoff(["/assets/boot.js"]);
+    bootAfterHandoffGate(boot);
+    // visibilitychange without OS focus (e.g. the tab is shown in a background window)
+    dom.window.document.dispatchEvent(new dom.window.Event("visibilitychange"));
+    await Promise.resolve();
+    expect(screenShown()).toBe(false);
+    expect(boot).not.toHaveBeenCalled();
+  });
+
+  test("a stale-page guard: the entry boots when no gate ran at all", () => {
+    const boot = mock(() => {});
+    bootAfterHandoffGate(boot);
+    expect(boot).toHaveBeenCalledTimes(1);
+  });
+
+  describe("the screen's actions", () => {
+    const click = (action: string) => {
+      const el = dom.window.document.querySelector(`[data-cc-handoff-action="${action}"]`)!;
+      expect(el).not.toBeNull();
+      el.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    };
+
+    test("close: closes the tab; a refused close reveals the keyboard hint with the platform modifier", () => {
+      const close = mock(() => {});
+      dom.window.close = close;
+      Object.defineProperty(dom.window.navigator, "platform", { value: "MacIntel", configurable: true });
+      showHandoffScreen({ booted: true });
+      click("close");
+      expect(close).toHaveBeenCalledTimes(1);
+      const root = dom.window.document.documentElement;
+      expect(root.hasAttribute("data-cc-handoff-kept")).toBe(true);
+      expect(dom.window.document.querySelector("[data-cc-handoff-modifier]")!.textContent).toBe("⌘");
+    });
+
+    test("browser (booted): remembers the page for this tab and hides the screen", () => {
+      showHandoffScreen({ booted: true });
+      click("browser");
+      expect(screenShown()).toBe(false);
+      expect(dom.window.sessionStorage.getItem(HANDOFF_SKIP_KEY)).toBe("/conversation/jx7c89?m=5");
+    });
+
+    test("always (booted): clears the mirror and persists through the app", () => {
+      dom.window.localStorage.setItem(HANDOFF_MIRROR_KEY, "1");
+      const onAlways = mock(() => {});
+      showHandoffScreen({ booted: true, onAlways });
+      click("always");
+      expect(onAlways).toHaveBeenCalledTimes(1);
+      expect(dom.window.localStorage.getItem(HANDOFF_MIRROR_KEY)).toBeNull();
+      expect(dom.window.sessionStorage.getItem(HANDOFF_PERSIST_KEY)).toBeNull();
+      expect(screenShown()).toBe(false);
+    });
+
+    test("always (pre-boot): parks the opt-out for the app that boots next", () => {
+      dom.window.localStorage.setItem(HANDOFF_MIRROR_KEY, "1");
+      showHandoffScreen({ booted: false });
+      click("always");
+      expect(dom.window.localStorage.getItem(HANDOFF_MIRROR_KEY)).toBeNull();
+      expect(dom.window.sessionStorage.getItem(HANDOFF_PERSIST_KEY)).toBe("1");
+      expect(dom.window.sessionStorage.getItem(HANDOFF_SKIP_KEY)).toBe("/conversation/jx7c89?m=5");
+    });
+
+    test("the primary action is Close this tab, Open in browser is secondary", () => {
+      const actions = Array.from(dom.window.document.querySelectorAll("#cc-handoff .actions button")).map((b) => [
+        b.className,
+        b.getAttribute("data-cc-handoff-action"),
+      ]);
+      expect(actions).toEqual([
+        ["primary", "close"],
+        ["secondary", "browser"],
+        ["tertiary", "retry"],
+      ]);
+    });
+  });
+
+  describe("armForegroundHandoff", () => {
+    test("retries on focus until the attempt succeeds, then disarms", () => {
+      let ok = false;
+      const attempt = mock(() => ok);
+      const teardown = armForegroundHandoff(attempt);
+      dom.window.dispatchEvent(new dom.window.Event("focus"));
+      expect(attempt).toHaveBeenCalledTimes(1);
+      ok = true;
+      dom.window.dispatchEvent(new dom.window.Event("focus"));
+      expect(attempt).toHaveBeenCalledTimes(2);
+      dom.window.dispatchEvent(new dom.window.Event("focus"));
+      expect(attempt).toHaveBeenCalledTimes(2);
+      teardown();
+    });
+
+    test("an activation after the arm window lapses the arming instead of attempting", () => {
+      const t0 = realNow();
+      Date.now = () => t0;
+      const attempt = mock(() => true);
+      const onLapse = mock(() => {});
+      armForegroundHandoff(attempt, onLapse);
+      Date.now = () => t0 + ARM_WINDOW_MS + 1;
+      dom.window.dispatchEvent(new dom.window.Event("focus"));
+      expect(attempt).not.toHaveBeenCalled();
+      expect(onLapse).toHaveBeenCalledTimes(1);
+      Date.now = realNow;
+    });
+  });
+});
+
+// The gate only helps if it ships: the plugin that inlines it was once
+// committed without being registered, and every handoff paid for a full boot.
+describe("handoffBoot plugin registration", () => {
+  test("vite.config.ts registers handoffBootPlugin", () => {
+    const cfg = readFileSync(join(import.meta.dir, "..", "vite.config.ts"), "utf8");
+    expect(cfg).toMatch(/handoffBootPlugin\(\)/);
+  });
+});
