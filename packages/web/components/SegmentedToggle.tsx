@@ -27,15 +27,24 @@ export function SegmentedToggle({
   items,
   fullWidth,
   collapse,
+  variant = "box",
 }: {
   value: string;
   onChange: (key: string) => void;
   items: SegmentedItem[];
   fullWidth?: boolean;
   collapse?: boolean;
+  /** `bare`: no container, no fill: the options as text, the active one bright
+   *  and cyan. For hairline surfaces where a bordered tray would float. */
+  variant?: "box" | "bare";
 }) {
+  const bare = variant === "bare";
   const segments = (
-    <div className={`flex items-center h-7 rounded-md border border-sol-border/40 overflow-hidden ${collapse ? "cq-seg-full" : ""} ${fullWidth ? "w-full" : ""}`}>
+    <div
+      className={`flex items-center h-7 ${
+        bare ? "gap-3" : "rounded-md border border-sol-border/40 overflow-hidden"
+      } ${collapse ? "cq-seg-full" : ""} ${fullWidth ? "w-full" : ""}`}
+    >
       {items.map((it, i) => {
         const Icon = it.icon;
         const selected = value === it.key;
@@ -44,10 +53,16 @@ export function SegmentedToggle({
             key={it.key}
             onClick={() => onChange(it.key)}
             aria-pressed={selected}
-            className={`h-full flex items-center justify-center gap-1.5 px-2.5 text-xs transition-colors ${
+            className={`h-full flex items-center justify-center gap-1.5 text-xs transition-colors ${
               fullWidth ? "flex-1" : ""
-            } ${i > 0 ? "border-l border-sol-border/40" : ""} ${
-              selected ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
+            } ${
+              bare
+                ? selected
+                  ? "text-sol-cyan font-medium"
+                  : "text-sol-text-dim hover:text-sol-text"
+                : `px-2.5 ${i > 0 ? "border-l border-sol-border/40" : ""} ${
+                    selected ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
+                  }`
             }`}
           >
             {Icon && <Icon className="w-3.5 h-3.5" />}
