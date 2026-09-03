@@ -56,6 +56,17 @@ function row(id: string, extra: Partial<InboxSession> = {}): InboxSession {
     is_idle: true,
     agent_status: "idle",
     has_pending: false,
+    // A live daemon behind the row, as the overlay ships it (ct-47609): the
+    // replica derives is_idle and the status trust from these facts, so a
+    // "working" row with no heartbeat would read as a dead daemon on both
+    // sides and the deliberate deltas below would vanish.
+    // The heartbeat outlives every epoch these tests advance through (a real
+    // daemon keeps heartbeating; a fixed stamp would die mid-test and both
+    // sides would agree on "stopped").
+    agent_status_updated_at: EPOCH - 10 * MIN,
+    last_heartbeat: EPOCH + H,
+    daemon_alive_until: EPOCH + 2 * H,
+    last_role_is_user: false,
     ...extra,
   } as InboxSession;
 }

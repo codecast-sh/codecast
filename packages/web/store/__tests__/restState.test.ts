@@ -14,15 +14,24 @@ import { orderSections, placeSections } from "./placeTestHarness";
 // A live clock: the chokepoint runs the trust-TTL staleness net against
 // Date.now(), so a fixed past timestamp would file every row as stale/settled.
 const NOW = Date.now();
+// A settled row as the server ships it (ct-47609): a minute of quiet, the
+// last turn the agent's, and — when a status is present — the status change
+// stamped past the idle grace. The replica re-derives is_idle from these facts
+// at its own clock, exactly as the server does at its epoch, so a fixture that
+// claimed is_idle on a row updated milliseconds ago would be a row the server
+// itself could never produce.
+const BASE = NOW - 60_000;
 const mk = (id: string, extra: Partial<InboxSession> = {}): InboxSession => ({
   _id: id,
   session_id: `s-${id}`,
-  updated_at: NOW,
+  updated_at: BASE,
   agent_type: "claude_code",
   message_count: 3,
   is_idle: true,
   has_pending: false,
   last_user_message: "hi",
+  last_role_is_user: false,
+  ...(extra.agent_status ? { agent_status_updated_at: BASE } : {}),
   title: id,
   ...extra,
 });
@@ -113,22 +122,29 @@ describe("placeSections rest sections", () => {
 
   it("orders dormant newest-first, done and needs input oldest-first", () => {
     const { needsInput, done, dormant } = cat({
-      d1: mk("d1", { agent_status: "done", updated_at: NOW - 30 }),
-      d2: mk("d2", { agent_status: "done", updated_at: NOW - 10 }),
-      p1: mk("p1", { agent_status: "dormant", updated_at: NOW - 30 }),
-      p2: mk("p2", { agent_status: "dormant", updated_at: NOW - 10 }),
-      n1: mk("n1", { updated_at: NOW - 30 }),
-      n2: mk("n2", { updated_at: NOW - 10 }),
+      d1: mk("d1", { agent_status: "done", updated_at: BASE - 30 }),
+      d2: mk("d2", { agent_status: "done", updated_at: BASE - 10 }),
+      p1: mk("p1", { agent_status: "dormant", updated_at: BASE - 30 }),
+      p2: mk("p2", { agent_status: "dormant", updated_at: BASE - 10 }),
+      n1: mk("n1", { updated_at: BASE - 30 }),
+      n2: mk("n2", { updated_at: BASE - 10 }),
     });
     expect(ids(done)).toEqual(["d1", "d2"]);
     expect(ids(dormant)).toEqual(["p2", "p1"]);
     expect(ids(needsInput)).toEqual(["n1", "n2"]);
   });
 
-  it("a declared-dormant home quiet for a day stays Dormant — the staleness net says settled, not blocked", () => {
-    const stale = mk("stale", { agent_status: "dormant", updated_at: Date.now() - 24 * 3_600_000 });
+  it("a declared-dormant home quiet for a day stays Dormant while its daemon heartbeats; with the daemon gone it is the human's again", () => {
+    // Declared verdicts skip the quiet-time decay (the agent named its wake),
+    // so a day of silence changes nothing — but the dead-daemon leg still
+    // applies: nobody can deliver the wake, so the row resurfaces. The
+    // replica applies both legs from the replicated heartbeat fact, exactly
+    // as the server does (ct-47609).
+    const stale = mk("stale", { agent_status: "dormant", updated_at: Date.now() - 24 * 3_600_000, last_heartbeat: NOW - 5_000 });
     const { needsInput, dormant } = cat({ stale });
     expect(ids(dormant)).toEqual(["stale"]);
+    const orphaned = mk("orphaned", { agent_status: "dormant", updated_at: Date.now() - 24 * 3_600_000, last_heartbeat: null });
+    expect(ids(cat({ orphaned }).needsInput)).toEqual(["orphaned"]);
     expect(needsInput).toEqual([]);
   });
 
@@ -233,7 +249,7 @@ describe("orderSections with rest sections", () => {
   it("an armed trigger's resting home walks with Dormant, not its own bucket", () => {
     const sessions = {
       n: mk("n"),
-      home: mk("home", { armed_trigger_kind: "standing", last_turn_allows_park: true, updated_at: NOW - 10 }),
+      home: mk("home", { armed_trigger_kind: "standing", last_turn_allows_park: true, updated_at: BASE - 10 }),
       p: mk("p", { agent_status: "dormant" }),
     };
     expect(ids(orderSections(sessions, new Set()))).toEqual(["n", "p", "home"]);

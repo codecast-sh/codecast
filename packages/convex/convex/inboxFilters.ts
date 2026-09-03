@@ -2,7 +2,7 @@ import type { Doc } from "./_generated/dataModel";
 // Single source of truth for the "agent is actively producing" set and the
 // stale-status trust TTL. Re-exported so existing `from "./inboxFilters"`
 // importers (incl. the tests) keep working unchanged.
-import { ACTIVE_AGENT_STATUSES, TRUST_DECAYING_STATUSES, DECLARED_VERDICT_STATUSES, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, WORK_STATES, type WorkState } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, TRUST_DECAYING_STATUSES, DECLARED_VERDICT_STATUSES, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, WORK_STATES, isSessionIdle, type WorkState } from "@codecast/shared/contracts";
 
 export { ACTIVE_AGENT_STATUSES, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, WORK_STATES, type WorkState };
 // The work-state classifier lives in @codecast/shared/contracts/inboxProjection
@@ -94,70 +94,6 @@ export function isViableInboxParent(
 // the inbox's WORKING bucket indefinitely. Past the TTL we stop trusting it (see
 // trustedAgentStatus). AskUserQuestion / permission blocks never reach here as
 // "active" (the caller routes them to needs-input first).
-
-// Collapse a stale "active" status so every consumer agrees on what the agent
-// is doing. The agent_status field is read in three independent places — the
-// web row's isAgentActive short-circuit, the server-computed is_idle
-// (deriveSessionActivity), and classifyWorkState — so coercing once at the
-// enrichment boundary fixes all of them with no downstream duplication.
-//
-// Two independent staleness signals, both non-destructive read-time transforms
-// (the stored managed_sessions.agent_status is untouched):
-//   - heartbeat lapsed AND the conversation quiet for the same window → the
-//     process is gone; its frozen "working" reads as "stopped". Both legs are
-//     required: the heartbeat sender shares the daemon with slow maintenance
-//     passes (tmux health checks, WIP snapshot sweeps), so a busy fleet can
-//     miss heartbeats for minutes while provably alive — syncing messages every
-//     few seconds. Coercing on heartbeat age alone filed every actively-working
-//     session under NEEDS INPUT during such a stall (2026-07-20). Fresh message
-//     traffic is proof of life that vetoes the coercion. Residual gap: a turn
-//     sitting in a long, SILENT tool call (nothing synced for 90s+) during a
-//     heartbeat stall still reads stopped — accepted, because the daemon-side
-//     fix (liveness sends decoupled from slow maintenance passes) makes stalls
-//     rare and the next synced output self-corrects the row.
-//   - conversation quiet past the trust TTL with a live heartbeat → the daemon
-//     lost the turn's idle transition and re-asserts "working" forever; reads as
-//     "idle" (not "stopped") because the fresh heartbeat means the process is
-//     alive — it's finished, not dead.
-// Any later message bumps conv.updated_at, so a genuinely long-running turn
-// re-promotes itself to "working" on its next output.
-//
-// The settle verdicts split on the two legs. The inferred one ("waiting", a
-// transcript scrape) takes both: a wedged background task must not park a
-// session forever. A DECLARED verdict ("dormant" / "done") skips the quiet-time
-// leg — a nightly trigger's home is quiet for 23h by design and the agent named
-// its wake — but still takes the dead-daemon leg for "dormant": a dead daemon
-// cannot deliver the wake it promised, so the row must resurface as needing a
-// human. "done" survives a dead daemon: the deliverable is already there and
-// nothing is waiting on a process.
-//
-// `heartbeatAlive` defaults to true for callers that already gate on a fresh
-// heartbeat (or have no managed row in hand); map-based consumers pass
-// liveConvIds membership.
-//
-// `verifiedWaiting`: the daemon has CHECKED the open background work behind a
-// "waiting" — matched each task to a live child shell of the agent process and
-// re-reported it recently (open_tasks / open_tasks_at on the managed row, see
-// shared/contracts/openTasks). A checked "waiting" is not a transcript guess, so
-// it skips the quiet-time decay like a declared verdict: a poll on a five-hour
-// build stays parked with its bar instead of resurfacing at the hour. The
-// dead-daemon leg still applies — nobody is watching the shell any more.
-export function trustedAgentStatus(
-  agentStatus: string | undefined,
-  updatedAt: number | undefined,
-  now: number,
-  heartbeatAlive: boolean = true,
-  verifiedWaiting: boolean = false,
-): string | undefined {
-  if (!agentStatus) return agentStatus;
-  const decays = TRUST_DECAYING_STATUSES.has(agentStatus) && !(agentStatus === "waiting" && verifiedWaiting);
-  const declared = DECLARED_VERDICT_STATUSES.has(agentStatus) || (agentStatus === "waiting" && verifiedWaiting);
-  if (!decays && !declared) return agentStatus;
-  const quietPastHeartbeat = updatedAt === undefined || now - updatedAt >= HEARTBEAT_ALIVE_MS;
-  if (!heartbeatAlive && quietPastHeartbeat && agentStatus !== "done") return "stopped";
-  if (decays && updatedAt !== undefined && now - updatedAt >= STATUS_TRUST_TTL_MS) return "idle";
-  return agentStatus;
-}
 
 // Decides whether a batch of freshly-synced messages should bump
 // managed_sessions.agent_status back to "working". Two cases, both meaning the
@@ -287,62 +223,6 @@ export function nextPendingApiError(input: {
   return conversationPending;
 }
 
-export interface SessionIdleInput {
-  /** managed_sessions.agent_status, coerced for heartbeat staleness by the caller. */
-  agentStatus?: string;
-  /** managed_sessions.agent_status_updated_at — when the daemon last *changed* the status. */
-  agentStatusUpdatedAt?: number;
-  hasPending: boolean;
-  /** Last message (by sync order) is a non-interrupt user turn. */
-  lastRoleIsUser: boolean;
-  /** (now - conv.updated_at) < AGENT_IDLE_GRACE_MS. */
-  recentlyUpdated: boolean;
-  daemonAlive: boolean;
-  now: number;
-}
-
-// Whether a top-level session is idle (agent finished its turn, ball in the
-// user's court). The subtle part is the grace window that avoids flickering to
-// "needs input" the instant an assistant turn ends.
-//
-// When the daemon reports a definite status, the grace is measured from
-// `agentStatusUpdatedAt` (the moment the Stop hook flipped the agent to
-// idle/stopped) — NOT from `conv.updated_at`. The conversation's updated_at is
-// bumped by every synced message, so a large message backlog draining in after
-// a turn ends keeps `recentlyUpdated` true for minutes and would otherwise pin a
-// finished agent in "working" long past the grace. Once the status has settled
-// past the grace, the agent is genuinely waiting on the user, so we ignore both
-// the updated_at churn and a lagging last_message_role (the final assistant turn
-// may not have synced yet). When the status timestamp is absent (legacy
-// sessions), fall back to the conv.updated_at recency gate.
-export function isSessionIdle(input: SessionIdleInput): boolean {
-  const {
-    agentStatus,
-    agentStatusUpdatedAt,
-    hasPending,
-    lastRoleIsUser,
-    recentlyUpdated,
-    daemonAlive,
-    now,
-  } = input;
-
-  if (agentStatus) {
-    if (ACTIVE_AGENT_STATUSES.has(agentStatus)) return false;
-    if (hasPending) return false; // queued work — agent isn't waiting on the user
-    const settled =
-      agentStatusUpdatedAt !== undefined &&
-      now - agentStatusUpdatedAt >= AGENT_IDLE_GRACE_MS;
-    if (settled) return true;
-    // Within the grace (or no status timestamp): stay conservative.
-    return !lastRoleIsUser && !recentlyUpdated;
-  }
-
-  // No daemon status: fall back to liveness + recency heuristics.
-  return daemonAlive
-    ? !hasPending && !lastRoleIsUser && !recentlyUpdated
-    : !recentlyUpdated;
-}
-
 export interface SessionActivityInput {
   agentStatus?: string;
   agentStatusUpdatedAt?: number;
@@ -372,12 +252,19 @@ export interface SessionActivity {
 // enrichInboxSessionRow so the two callers can never drift on what "idle" or
 // "unresponsive" means; the only per-caller difference is how `daemonAlive` is
 // sourced, which is passed in.
-export function deriveSessionActivity(input: SessionActivityInput): SessionActivity {
-  const isInterruptMsg = !!input.lastMessagePreview && (
-    input.lastMessagePreview.startsWith("[Request interrupted") ||
-    input.lastMessagePreview.startsWith("[Request cancelled")
+// The newest message is a real user turn: a non-interrupt user message. One
+// rule for the enrichment, the notifier and the overlay's replicated
+// `last_role_is_user` fact (ct-47609).
+export function lastRoleIsUserOf(lastMessageRole: string | undefined, lastMessagePreview: string | null | undefined): boolean {
+  const isInterruptMsg = !!lastMessagePreview && (
+    lastMessagePreview.startsWith("[Request interrupted") ||
+    lastMessagePreview.startsWith("[Request cancelled")
   );
-  const lastRoleIsUser = input.lastMessageRole === "user" && !isInterruptMsg;
+  return lastMessageRole === "user" && !isInterruptMsg;
+}
+
+export function deriveSessionActivity(input: SessionActivityInput): SessionActivity {
+  const lastRoleIsUser = lastRoleIsUserOf(input.lastMessageRole, input.lastMessagePreview);
   const recentlyUpdated = (input.now - input.updatedAt) < AGENT_IDLE_GRACE_MS;
 
   const isUnresponsive = input.status === "active" && !input.daemonAlive && (
@@ -516,7 +403,9 @@ export const NEEDS_INPUT_PERMISSION_CHECK_DELAY_MS = 10_000;
 // patch (message_count) settle before the dedupe key is computed.
 export const NEEDS_INPUT_AUQ_CHECK_DELAY_MS = 2_000;
 
-// Daemon liveness window shared by the needs-input check, the inbox scan and
-// the projection deadlines (conversations.ts imports it).
-export const HEARTBEAT_ALIVE_MS = 90 * 1000;
+// The daemon liveness window, the status trust rule and the idle rule live in
+// the shared contracts now (sync-convergence ct-47609: a replica re-derives
+// is_idle from replicated facts at any instant, so the rule has ONE home).
+// Re-exported so existing `from "./inboxFilters"` importers keep working.
+export { HEARTBEAT_ALIVE_MS, trustedAgentStatus, isSessionIdle, type SessionIdleInput } from "@codecast/shared/contracts";
 

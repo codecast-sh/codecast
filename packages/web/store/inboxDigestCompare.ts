@@ -188,7 +188,7 @@ export function evaluateInboxCompare(state: InboxCompareState, ctx: InboxCompare
   // is the epoch too, so the trust decay is applied exactly where the server
   // applied it (see projectReplicaInbox).
   const focusedId = state.currentSessionId ?? null;
-  const { proj, rowById, adapted } = projectReplicaInbox(state, { scope: "mine", focusedId, epoch: slot.epoch, now: slot.epoch, nowMono: ctx.nowMono });
+  const { proj, rowById, adapted } = projectReplicaInbox(state, { scope: "mine", focusedId, epoch: slot.epoch, now: slot.epoch });
   const deps = collectInboxOverlayDeps(
     {
       sessions: state.sessions,

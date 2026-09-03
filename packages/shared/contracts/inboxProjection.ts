@@ -5,9 +5,10 @@
 //
 // PURE isomorphic code: no Node or DOM APIs, no BigInt, so the Convex runtime,
 // the daemon, the browser and React Native all run the same bytes.
-import { ACTIVE_AGENT_STATUSES } from "./agentStatus";
+import { ACTIVE_AGENT_STATUSES, AGENT_IDLE_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, trustedAgentStatus } from "./agentStatus";
 import { isMachineDeliveredMessage } from "./machineMessages";
-import { isLoopFresh, type LoopState } from "./loopState";
+import { isLoopFresh, LOOP_OVERDUE_GRACE_MS, type LoopState } from "./loopState";
+import { openTasksVouchForWaiting, OPEN_TASKS_FRESH_MS } from "./openTasks";
 import type { WorkState } from "./workState";
 
 // ── Buckets ──────────────────────────────────────────────────────────────────
@@ -744,6 +745,172 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   is_unresponsive?: boolean | null;
   awaiting_input?: boolean | null;
   last_turn_allows_park?: boolean | null;
+  agent_status_updated_at?: number | null;
+  last_heartbeat?: number | null;
+  last_role_is_user?: boolean | null;
+  auq_open?: boolean | null;
+  daemon_alive_until?: number | null;
+  producing_until?: number | null;
+  open_tasks?: unknown[] | null;
+  open_tasks_at?: number | null;
+}
+
+// ── Live facts (design C1/C2) ────────────────────────────────────────────────
+// The server derives a row's is_idle from inputs a replica never held: when
+// the daemon last changed status, whether the newest message is a user turn,
+// when the daemon's liveness lapses, and until when a child keeps the parent
+// producing. Those now replicate as facts, and THIS function is the one idle
+// rule: the overlay runs it at its epoch to stamp the row, the replica runs it
+// at its own clock to render, and the time flip (computeBucketStale) runs it
+// at each deadline on both sides. Every term is monotone in `t` for fixed
+// facts (a grace passes, a heartbeat lapses, a status decays, production
+// ends), so re-running it over an already-coerced shipped status is
+// idempotent and only ever moves a row toward settled — never back.
+
+export interface SessionIdleInput {
+  /** managed_sessions.agent_status, coerced for heartbeat staleness by the caller. */
+  agentStatus?: string;
+  /** managed_sessions.agent_status_updated_at — when the daemon last *changed* the status. */
+  agentStatusUpdatedAt?: number;
+  hasPending: boolean;
+  /** Last message (by sync order) is a non-interrupt user turn. */
+  lastRoleIsUser: boolean;
+  /** (now - conv.updated_at) < AGENT_IDLE_GRACE_MS. */
+  recentlyUpdated: boolean;
+  daemonAlive: boolean;
+  now: number;
+}
+
+// Whether a top-level session is idle (agent finished its turn, ball in the
+// user's court). The subtle part is the grace window that avoids flickering to
+// "needs input" the instant an assistant turn ends.
+//
+// When the daemon reports a definite status, the grace is measured from
+// `agentStatusUpdatedAt` (the moment the Stop hook flipped the agent to
+// idle/stopped) — NOT from `conv.updated_at`. The conversation's updated_at is
+// bumped by every synced message, so a large message backlog draining in after
+// a turn ends keeps `recentlyUpdated` true for minutes and would otherwise pin a
+// finished agent in "working" long past the grace. Once the status has settled
+// past the grace, the agent is genuinely waiting on the user, so we ignore both
+// the updated_at churn and a lagging last_message_role (the final assistant turn
+// may not have synced yet). When the status timestamp is absent (legacy
+// sessions), fall back to the conv.updated_at recency gate.
+export function isSessionIdle(input: SessionIdleInput): boolean {
+  const {
+    agentStatus,
+    agentStatusUpdatedAt,
+    hasPending,
+    lastRoleIsUser,
+    recentlyUpdated,
+    daemonAlive,
+    now,
+  } = input;
+
+  if (agentStatus) {
+    if (ACTIVE_AGENT_STATUSES.has(agentStatus)) return false;
+    if (hasPending) return false; // queued work — agent isn't waiting on the user
+    const settled =
+      agentStatusUpdatedAt !== undefined &&
+      now - agentStatusUpdatedAt >= AGENT_IDLE_GRACE_MS;
+    if (settled) return true;
+    // Within the grace (or no status timestamp): stay conservative.
+    return !lastRoleIsUser && !recentlyUpdated;
+  }
+
+  // No daemon status: fall back to liveness + recency heuristics.
+  return daemonAlive
+    ? !hasPending && !lastRoleIsUser && !recentlyUpdated
+    : !recentlyUpdated;
+}
+
+export interface LiveFactsRow {
+  status?: string | null;
+  updated_at: number;
+  message_count?: number | null;
+  has_pending_messages?: boolean | null;
+  inbox_dismissed_at?: number | null;
+  inbox_stashed_at?: number | null;
+  agent_status?: string | null;
+  agent_status_updated_at?: number | null;
+  last_heartbeat?: number | null;
+  daemon_alive_until?: number | null;
+  producing_until?: number | null;
+  last_role_is_user?: boolean | null;
+  auq_open?: boolean | null;
+  awaiting_input?: boolean | null;
+  open_tasks?: unknown[] | null;
+  open_tasks_at?: number | null;
+  loop_state?: Pick<LoopState, "status" | "wakeup_at"> | null;
+}
+
+export type LiveFacts = {
+  agent_status: string | null;
+  is_idle: boolean;
+  is_unresponsive: boolean;
+  awaiting_input: boolean;
+  daemon_alive: boolean;
+};
+
+export function deriveLiveAt(row: LiveFactsRow, t: number): LiveFacts {
+  const msgs = row.message_count ?? 0;
+  const hasPending = !!row.has_pending_messages;
+  // isLiveAt: the row's own heartbeat inside the window (the liveness set and
+  // the heartbeat map are populated together, so this IS membership).
+  const heartbeatAlive = row.last_heartbeat != null && t - row.last_heartbeat < HEARTBEAT_ALIVE_MS;
+  const verifiedWaiting = openTasksVouchForWaiting(row.open_tasks_at, row.open_tasks?.length ?? 0, t);
+  const agentStatus = trustedAgentStatus(row.agent_status ?? undefined, row.updated_at, t, heartbeatAlive, verifiedWaiting);
+  // A stopped agent is never connected, whatever the user's other daemons say.
+  const daemonAlive = agentStatus !== "stopped" && row.daemon_alive_until != null && t < row.daemon_alive_until;
+  const recentlyUpdated = t - row.updated_at < AGENT_IDLE_GRACE_MS;
+  const lastRoleIsUser = !!row.last_role_is_user;
+  const isUnresponsive = (row.status ?? "active") === "active" && !daemonAlive && (
+    (lastRoleIsUser && !recentlyUpdated) || (hasPending && !recentlyUpdated)
+  );
+  let isIdle = isSessionIdle({
+    agentStatus,
+    agentStatusUpdatedAt: row.agent_status_updated_at ?? undefined,
+    hasPending,
+    lastRoleIsUser,
+    recentlyUpdated,
+    daemonAlive,
+    now: t,
+  });
+  // An open AskUserQuestion poll is the agent blocking on the user: needs
+  // input, never working. The poll fact is the probe's answer; a row from an
+  // older channel carries only the epoch's awaiting_input, which is the same
+  // answer already gated on not-idle.
+  let awaitingInput = false;
+  if (!isIdle && msgs > 0 && (row.auq_open ?? row.awaiting_input ?? false)) {
+    awaitingInput = true;
+    isIdle = true;
+  }
+  // An idle parent stays working while a child is genuinely producing; never
+  // for dismissed or stashed rows.
+  if (isIdle && !row.inbox_dismissed_at && !row.inbox_stashed_at && msgs > 0 && row.producing_until != null && t < row.producing_until) {
+    isIdle = false;
+  }
+  return { agent_status: agentStatus ?? null, is_idle: isIdle, is_unresponsive: isUnresponsive, awaiting_input: awaitingInput, daemon_alive: daemonAlive };
+}
+
+// Every instant at which one of the row's time terms crosses its threshold
+// (design C2): the idle grace on activity and on the status change, the
+// heartbeat window, the trust TTL, the daemon and production deadlines, the
+// open-task freshness, and an armed loop going overdue. The server's time flip
+// and the replica's recompute scheduler both read this list, so a deadline
+// cannot exist on one side only.
+export function rowLiveDeadlines(row: LiveFactsRow): Array<number | null> {
+  const u = row.updated_at;
+  return [
+    u + AGENT_IDLE_GRACE_MS,
+    u + HEARTBEAT_ALIVE_MS,
+    u + STATUS_TRUST_TTL_MS,
+    row.agent_status_updated_at != null ? row.agent_status_updated_at + AGENT_IDLE_GRACE_MS : null,
+    row.last_heartbeat != null ? row.last_heartbeat + HEARTBEAT_ALIVE_MS : null,
+    row.daemon_alive_until ?? null,
+    row.producing_until ?? null,
+    row.open_tasks_at != null ? row.open_tasks_at + OPEN_TASKS_FRESH_MS : null,
+    row.loop_state?.status === "armed" ? row.loop_state.wakeup_at + LOOP_OVERDUE_GRACE_MS : null,
+  ];
 }
 
 // The machine-delivered-last-turn rule behind every structural park: an armed
@@ -860,6 +1027,16 @@ export const INBOX_FACT_FIELDS = [
   "message_count",
   "updated_at",
   "last_turn_allows_park",
+  // The is_idle inputs (ct-47609): everything deriveLiveAt needs to re-run the
+  // server's idle, responsiveness and status trust rules at ANY instant, so
+  // the +45s settle, the heartbeat lapse and the trust decay flip on the
+  // replica's own clock instead of waiting for a server re-execution.
+  "agent_status_updated_at",
+  "last_heartbeat",
+  "last_role_is_user",
+  "auq_open",
+  "daemon_alive_until",
+  "producing_until",
 ] as const;
 
 export type InboxFactField = (typeof INBOX_FACT_FIELDS)[number];
