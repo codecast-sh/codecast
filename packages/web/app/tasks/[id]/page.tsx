@@ -7,6 +7,9 @@ import { useInboxStore, TaskDetail, TaskItem, resolveAssigneeInfo } from "../../
 import { resolveTaskLinkedConversations, resolveTaskRelatedDocs, taskLinkedConversationIds } from "../../../lib/liveEntities";
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
 import { useSyncTasks, useSyncTaskDetail } from "../../../hooks/useSyncTasks";
+import { useSyncTaskGitEvents, useGitEvents, gitEventsOldestFirst } from "../../../hooks/useSyncGitEvents";
+import { ExternalEventRow } from "../../../components/feed/ExternalEventRow";
+import { gitEventToExternalEvent, type GitEventRow } from "../../../lib/externalEvents";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { AppLoader } from "../../../components/AppLoader";
@@ -572,6 +575,19 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     const s = useInboxStore.getState();
     return resolveTaskLinkedConversations(data, s.sessions, s.taskOriginBadges);
   }, [data?.linked_conversations, linkedIds, linkedSig]);
+  // Git events for this task are their own synced collection: mount the task
+  // feeder and read the store, never the query. The route id may be the short
+  // id, so match on both it and the convex id.
+  const taskConvexId = (data as any)?._id as string | undefined;
+  useSyncTaskGitEvents(taskConvexId);
+  const gitWhere = useMemo(
+    () => (row: GitEventRow) =>
+      (!!taskConvexId && (row.task_id === taskConvexId || !!row.task_ids?.includes(taskConvexId))) ||
+      row.task_id === id ||
+      !!row.task_ids?.includes(id),
+    [taskConvexId, id],
+  );
+  const gitEvents = useGitEvents(gitWhere, gitEventsOldestFirst);
   const wsDocs = useWorkspaceCollection("docs", docOriginSig);
   const relatedDocs = useMemo(() => {
     const docs: Record<string, any> = {};
@@ -1083,11 +1099,20 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
                 {[
                   ...(data.history || []).map((h: any) => ({ type: "history" as const, ts: h.created_at, data: h })),
                   ...(data.comments || []).map((c: any) => ({ type: "comment" as const, ts: c.created_at, data: c })),
+                  ...gitEvents.map((e) => ({ type: "git" as const, ts: e.created_at ?? 0, data: e })),
                 ]
                   .sort((a, b) => a.ts - b.ts)
                   .map((item) =>
                     item.type === "history" ? (
                       <HistoryItem key={item.data._id} entry={item.data} />
+                    ) : item.type === "git" ? (
+                      <ExternalEventRow
+                        key={item.data._id}
+                        event={gitEventToExternalEvent(item.data)}
+                        density="compact"
+                        omitRefs={["task_id", "task_short_id"]}
+                        className="-ml-[4px]"
+                      />
                     ) : (
                       <TaskCommentItem key={item.data._id} comment={item.data} openLinkedSession={openLinkedSession} />
                     )

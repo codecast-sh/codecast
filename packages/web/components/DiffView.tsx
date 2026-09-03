@@ -380,6 +380,17 @@ interface DiffViewProps {
   // (under this `anchorKey`), so they auto-attach to the user's next reply just
   // like message/plan annotations. Omit it (the default) and the diff is inert.
   commentContext?: { conversationId: string; anchorKey: string; filePath: string };
+  // Threads the OWNER holds, keyed by FILE line number, rendered by its own
+  // callback under the matching line. This is the escape hatch for comments
+  // that are not conversation comments — the PR page's code comments live in
+  // their own table — so the placement logic stays here and is not copied.
+  // A line with an empty array still gets a row, which is how a surface opens
+  // a composer on a line that has no thread yet.
+  lineThreads?: ReadonlyMap<number, unknown[]>;
+  renderLineThread?: (lineNumber: number, items: unknown[]) => React.ReactNode;
+  // When set, the hover handle calls this instead of starting a review-batch
+  // comment, and the handle appears even with no commentContext.
+  onLineComment?: (lineNumber: number | undefined, code: string) => void;
   // When provided, the ⋯ hidden-context separators become clickable and invoke
   // this (the owner responds by raising contextLines). Only meaningful in
   // oldStr/newStr mode, where the full text is present to expand into.
@@ -396,9 +407,14 @@ export const DiffView = memo(function DiffView({
   language,
   showLineNumbers = false,
   commentContext,
+  lineThreads,
+  renderLineThread,
+  onLineComment,
   onExpandContext,
 }: DiffViewProps) {
   const [fullyExpanded, setFullyExpanded] = useState(false);
+  // Hover affordance and per-row wiring turn on for either comment model.
+  const interactive = !!commentContext || !!onLineComment;
 
   const { items, totalCodeLines, gutterCh } = useMemo(() => {
     let items: DisplayItem[];
@@ -485,6 +501,15 @@ export const DiffView = memo(function DiffView({
     [displayItems, durableByLine],
   );
 
+  // Owner-held threads get the same placement: a file line number resolved to
+  // the display row that shows it.
+  const explicitRowByIndex = useMemo(
+    () => !lineThreads || lineThreads.size === 0
+      ? null
+      : placeDurableThreads(displayItems, new Set(lineThreads.keys())),
+    [displayItems, lineThreads],
+  );
+
   const closeEditor = useCallback(() => {
     setEditingLine(null);
     useInboxStore.getState().setReviewEditingId(null);
@@ -492,6 +517,10 @@ export const DiffView = memo(function DiffView({
 
   const addLineComment = useCallback(
     (lineKey: number, lineNum: number | undefined, code: string) => {
+      if (onLineComment) {
+        onLineComment(lineNum, code);
+        return;
+      }
       if (!commentContext) return;
       const s = useInboxStore.getState();
       const id = genCommentId();
@@ -503,7 +532,7 @@ export const DiffView = memo(function DiffView({
       s.setReviewEditingId(id);
       setEditingLine(lineKey);
     },
-    [commentContext],
+    [commentContext, onLineComment],
   );
 
   // One comment handle for the whole block instead of one per row, sitting in the
@@ -571,11 +600,11 @@ export const DiffView = memo(function DiffView({
 
   return (
     <div
-      className={`code-block-resizable group font-mono text-[13px] leading-[22px] ${commentContext ? "relative" : ""}`}
-      onMouseOver={commentContext ? trackRow : undefined}
-      onMouseLeave={commentContext ? untrackRow : undefined}
+      className={`code-block-resizable group font-mono text-[13px] leading-[22px] ${interactive ? "relative" : ""}`}
+      onMouseOver={interactive ? trackRow : undefined}
+      onMouseLeave={interactive ? untrackRow : undefined}
     >
-      {commentContext && (
+      {interactive && (
         <button
           ref={handleRef}
           type="button"
@@ -635,9 +664,11 @@ export const DiffView = memo(function DiffView({
           const lineComments = commentContext ? commentsByLine[lk] : undefined;
           const durableLine = durableRowByIndex?.get(i);
           const durableComments = durableLine !== undefined ? durableByLine.get(durableLine) : undefined;
+          const explicitLine = explicitRowByIndex?.get(i);
+          const explicitThread = explicitLine !== undefined ? lineThreads?.get(explicitLine) : undefined;
 
           const row = (
-            <div data-diff-row={commentContext ? i : undefined} className={`${rowBg} whitespace-pre`}>
+            <div data-diff-row={interactive ? i : undefined} className={`${rowBg} whitespace-pre`}>
               {showLineNumbers && (
                 <span
                   className="select-none inline-block text-right font-medium text-sol-text-dim opacity-55 pl-1 pr-3 mr-3 border-r border-sol-border/30"
@@ -651,20 +682,21 @@ export const DiffView = memo(function DiffView({
             </div>
           );
 
-          if (!commentContext || (!lineComments?.length && editingLine !== lk && !durableComments?.length)) {
+          if (!explicitThread && (!commentContext || (!lineComments?.length && editingLine !== lk && !durableComments?.length))) {
             return <div key={i}>{row}</div>;
           }
           return (
             <div key={i}>
               {row}
-              {(lineComments?.length || editingLine === lk) ? (
+              {explicitThread && renderLineThread ? renderLineThread(explicitLine!, explicitThread) : null}
+              {commentContext && (lineComments?.length || editingLine === lk) ? (
                 <DiffLineThread
                   conversationId={commentContext.conversationId}
                   comments={lineComments ?? EMPTY_COMMENT_LIST}
                   onCloseEditor={closeEditor}
                 />
               ) : null}
-              {durableComments?.length ? (
+              {commentContext && durableComments?.length ? (
                 <Suspense fallback={null}>
                   <FileLineThread
                     conversationId={commentContext.conversationId}

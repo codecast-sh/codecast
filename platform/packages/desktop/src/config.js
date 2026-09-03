@@ -130,6 +130,33 @@ function resolveDesktopConfig(input) {
 
   const window = c.window || {};
   const localHost = urls.local ? hostOf(urls.local) : null;
+
+  // The offline copy of the site (webCache.js). Off unless asked for: it
+  // intercepts every http(s) request of the session to serve the app host.
+  const web = c.web || {};
+  if (web.cache !== undefined && typeof web.cache !== "boolean") fail("web.cache must be a boolean");
+  if (web.manifestPath !== undefined && (typeof web.manifestPath !== "string" || !web.manifestPath.startsWith("/"))) {
+    fail("web.manifestPath must be an app-relative path");
+  }
+  if (web.seedDir !== undefined && web.seedDir !== null && typeof web.seedDir !== "string") fail("web.seedDir must be a path");
+  const passthrough = Array.isArray(web.passthrough) ? web.passthrough : [];
+  for (const p of passthrough) {
+    if (typeof p !== "string" || !p.startsWith("/")) fail("web.passthrough entries must be app-relative path prefixes");
+  }
+
+  // URL schemes beyond the app's own. A mail app registers mailto: here; the
+  // bundle lists it (electron-builder template `extraProtocols`) and the
+  // shell can ask the OS to make the app its handler.
+  const extraProtocols = Array.isArray(c.extraProtocols) ? c.extraProtocols : [];
+  for (const p of extraProtocols) {
+    if (!p || typeof p.scheme !== "string" || !/^[a-z][a-z0-9+.-]*$/i.test(p.scheme)) fail("extraProtocols entries need a valid scheme");
+    if (p.menuLabel !== undefined && typeof p.menuLabel !== "string") fail(`extraProtocols.${p.scheme}.menuLabel must be a string`);
+  }
+  const hooks = c.hooks || {};
+  for (const k of Object.keys(hooks)) {
+    if (typeof hooks[k] !== "function") fail(`hooks.${k} must be a function`);
+  }
+  if (c.downloadUrls !== undefined && typeof c.downloadUrls !== "function") fail("downloadUrls must be a function (url) => boolean");
   const trustedHosts = new Set([hostOf(urls.prod), ...(c.trustedHosts || [])].filter(Boolean));
   if (localHost) trustedHosts.add(localHost);
 
@@ -164,7 +191,32 @@ function resolveDesktopConfig(input) {
       minHeight: window.minHeight || 600,
       backgroundColor: window.backgroundColor || "#002b36",
       trafficLightPosition: window.trafficLightPosition || { x: 16, y: 12 },
+      // Size and position persist in settings.json across launches.
+      rememberBounds: window.rememberBounds !== false,
     },
+    web: {
+      cache: web.cache === true,
+      manifestPath: web.manifestPath || "/release.json",
+      seedDir: web.seedDir || null,
+      passthrough,
+      checkIntervalMs: web.checkIntervalMs ?? 15 * 60 * 1000,
+      // How long a launch waits for the manifest check before painting
+      // whatever copy it has. Offline fails fast; a slow link paints stale
+      // and reloads into the new release when it lands.
+      startupTimeoutMs: web.startupTimeoutMs ?? 6000,
+    },
+    extraProtocols: extraProtocols.map((p) => ({
+      scheme: p.scheme,
+      name: p.name || p.scheme,
+      // Claim the scheme on the first launch of a packaged build (macOS shows
+      // its own confirmation) — the moment a mail app asks to be the default.
+      claimOnFirstRun: p.claimOnFirstRun === true,
+      menuLabel: p.menuLabel || null,
+    })),
+    hooks: { onReady: hooks.onReady || null },
+    // URLs the page opens (target=_blank, window.open) that are downloads,
+    // not pages: saved by the shell instead of handed to the browser.
+    downloadUrls: c.downloadUrls || null,
     menu: {
       navItems,
       helpLinks,

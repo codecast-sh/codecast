@@ -6,6 +6,7 @@
   "types": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./errors": "./src/errors.ts",
     "./web": "./src/web.ts",
     "./web-vitals": "./src/webVitals.ts",
     "./native": "./src/native.ts",

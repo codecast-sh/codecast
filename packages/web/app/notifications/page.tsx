@@ -240,6 +240,11 @@ export default function NotificationsPage() {
                 const actorAvatar = notification.actor?.github_avatar_url || (notification as any).actor_avatar;
                 const agentType = notification.conversation?.agent_type || "claude_code";
                 const isSessionNotif = sessionTypes.has(notification.type);
+                // An agent's face belongs to a row that names a session. The
+                // daemon's machine alert has no conversation, so agentType
+                // would fall back to Claude Code and put that logo on a report
+                // about a frozen machine. Such a row takes the generic icon.
+                const showsAgentIcon = isSessionNotif && !!notification.conversation;
                 const typeLabel = typeLabels[notification.type] || notification.type;
                 const typeColor = typeColors[notification.type] || "text-sol-text-muted";
 
@@ -259,7 +264,7 @@ export default function NotificationsPage() {
                           alt={actorName || ""}
                           className="w-10 h-10 rounded-full flex-shrink-0 mt-0.5"
                         />
-                      ) : isSessionNotif ? (
+                      ) : showsAgentIcon ? (
                         <div className="flex-shrink-0 mt-0.5">
                           <AgentIcon agentType={agentType} />
                         </div>
@@ -274,7 +279,7 @@ export default function NotificationsPage() {
                         <div className="flex items-center gap-2 mb-1">
                           {actorName ? (
                             <span className="text-sm font-medium text-sol-text">{actorName}</span>
-                          ) : isSessionNotif ? (
+                          ) : showsAgentIcon ? (
                             <span className="text-sm font-medium text-sol-text">{agentNames[agentType] || agentType}</span>
                           ) : null}
                           <span className={`text-xs ${typeColor}`}>{typeLabel}</span>

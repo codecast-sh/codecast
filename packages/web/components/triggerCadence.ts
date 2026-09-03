@@ -8,6 +8,11 @@ export const TRIGGER_EVENT_LABELS: Record<string, string> = {
   pr_opened: "PR opened",
   pr_merged: "PR merged",
   push: "push",
+  issue_opened: "issue opened",
+  issue_assigned: "issue assigned",
+  issue_labeled: "issue labeled",
+  issue_closed: "issue closed",
+  issue_commented: "issue comment",
 };
 
 // Compact duration for countdowns and intervals: "45s", "12m", "2h 30m", "3d 4h".

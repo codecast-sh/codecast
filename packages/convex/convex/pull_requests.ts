@@ -8,6 +8,43 @@ import {
   requireTeamMembership,
 } from "./lib/access";
 
+/**
+ * A merge is the one pull request moment the team feed carries, and it must be
+ * recorded exactly once no matter which path saw the merge: the periodic sync,
+ * the state patch, or the closed webhook. All three call this, so the rule for
+ * "did it just merge" lives in one place.
+ */
+export async function recordPRMergedActivity(
+  ctx: any,
+  pr: {
+    _id: any;
+    team_id: any;
+    number: number;
+    title: string;
+    repository: string;
+    head_ref?: string;
+    author_github_username: string;
+  },
+  previousState: string | undefined,
+  nextState: string,
+): Promise<boolean> {
+  if (previousState === "merged" || nextState !== "merged") return false;
+  const actorUserId = await resolveActorUserIdForTeam(ctx, pr.team_id, pr.author_github_username);
+  if (!actorUserId) return false;
+  await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
+    team_id: pr.team_id,
+    actor_user_id: actorUserId,
+    event_type: "pr_merged" as const,
+    title: `Merged PR #${pr.number}: ${pr.title}`,
+    description: pr.repository,
+    related_pr_id: pr._id,
+    metadata: {
+      git_branch: pr.head_ref,
+    },
+  });
+  return true;
+}
+
 async function resolveActorUserIdForTeam(
   ctx: any,
   teamId: any,
@@ -99,26 +136,12 @@ export const syncPRFromGitHub = internalMutation({
         merged_at: args.merged_at,
       });
 
-      if (previousState !== "merged" && args.state === "merged") {
-        const actorUserId = await resolveActorUserIdForTeam(
-          ctx,
-          existing.team_id,
-          args.author_github_username
-        );
-        if (actorUserId) {
-          await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
-            team_id: existing.team_id,
-            actor_user_id: actorUserId,
-            event_type: "pr_merged" as const,
-            title: `Merged PR #${args.number}: ${args.title}`,
-            description: args.repository,
-            related_pr_id: existing._id,
-            metadata: {
-              git_branch: args.head_ref,
-            },
-          });
-        }
-      }
+      await recordPRMergedActivity(
+        ctx,
+        { ...existing, ...args, _id: existing._id, team_id: existing.team_id },
+        previousState,
+        args.state,
+      );
       return existing._id;
     }
 
@@ -158,19 +181,7 @@ export const syncPRFromGitHub = internalMutation({
       });
     }
 
-    if (args.state === "merged" && actorUserId) {
-      await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
-        team_id: args.team_id,
-        actor_user_id: actorUserId,
-        event_type: "pr_merged" as const,
-        title: `Merged PR #${args.number}: ${args.title}`,
-        description: args.repository,
-        related_pr_id: prId,
-        metadata: {
-          git_branch: args.head_ref,
-        },
-      });
-    }
+    await recordPRMergedActivity(ctx, { ...args, _id: prId }, undefined, args.state);
 
     return prId;
   },
@@ -360,26 +371,7 @@ export const updatePRState = internalMutation({
       updated_at: Date.now(),
     });
 
-    if (pr.state !== "merged" && args.state === "merged") {
-      const actorUserId = await resolveActorUserIdForTeam(
-        ctx,
-        pr.team_id,
-        pr.author_github_username
-      );
-      if (actorUserId) {
-        await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
-          team_id: pr.team_id,
-          actor_user_id: actorUserId,
-          event_type: "pr_merged" as const,
-          title: `Merged PR #${pr.number}: ${pr.title}`,
-          description: pr.repository,
-          related_pr_id: pr._id,
-          metadata: {
-            git_branch: pr.head_ref,
-          },
-        });
-      }
-    }
+    await recordPRMergedActivity(ctx, pr, pr.state, args.state);
 
     return pr._id;
   },
