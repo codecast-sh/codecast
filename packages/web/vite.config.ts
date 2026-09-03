@@ -6,6 +6,7 @@ import path from "path";
 import { execSync } from "node:child_process";
 import { storeHmrPlugin } from "./plugins/storeHmr";
 import { hookRefreshPlugin } from "./plugins/hookRefresh";
+import { handoffBootPlugin } from "./plugins/handoffBoot";
 
 /**
  * Build identity for drivers (window.__CODECAST_BUILD). Railway exposes the
@@ -35,6 +36,10 @@ export default defineConfig(({ mode }) => ({
     react(),
     // Lets an edit to a store action hot-swap instead of reloading the whole app.
     storeHmrPlugin(),
+    // Inlines the browser → desktop hand-off gate into <head> so a page bound
+    // for the desktop app never boots, and re-injects the boot chunk's
+    // modulepreload hints on a normal load.
+    handoffBootPlugin(),
     // codecast.sh/a/<slug> is a redirect to the branded artifact document the
     // Convex HTTP action serves (production: Hono route in server/index.ts).
     // Same behavior in dev so the path never falls through to the SPA shell.
