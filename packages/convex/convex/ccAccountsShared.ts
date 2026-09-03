@@ -67,6 +67,10 @@ export const ccUsageValidator = v.object({
 export const ccAccountsValidator = v.object({
   active_email: v.optional(v.string()),
   active_uuid: v.optional(v.string()),
+  // When the active account last changed on that machine. A usage snapshot
+  // of the active account counts as evidence only if fetched after this;
+  // a limit park stamped before it belongs to the previous login.
+  active_since: v.optional(v.number()),
   profiles: v.array(
     v.object({
       name: v.string(),
@@ -180,6 +184,13 @@ export const AUTO_SWITCH_SESSION_WINDOW_MS = 5 * 60 * 60 * 1000;
 // would already show in the probe. In practice the override waits for the
 // ~5-min usage refresh cadence on top of this.
 export const AUTO_SWITCH_ATTEMPT_EVIDENCE_MS = 5 * 60 * 1000;
+
+// After the active account changes, its usage snapshot is unreadable until
+// re-probed (the daemon probes right after a switch; a `claude /login` waits
+// for the next 5-minute tick). The loop waits this long for that probe before
+// falling back to whatever snapshot it has, re-checking at the retry cadence.
+export const AUTO_SWITCH_PROBE_GRACE_MS = 6 * 60 * 1000;
+export const AUTO_SWITCH_PROBE_RETRY_MS = 60 * 1000;
 // The attempt-history key for a same-account "continue" (no profile involved).
 export const AUTO_SWITCH_CONTINUE_KEY = "__continue__";
 // Continue-only mode (auto-switch off) acts on limit parks no older than this:
@@ -287,6 +298,7 @@ export function targetAccountEmail(
 export type AutoSwitchDecision =
   | { action: "continue" } // active account's window rolled — plain continue un-parks for free
   | { action: "switch"; profile: string }
+  | { action: "wait"; retry_at: number } // active account just changed; its meter hasn't been read since
   | { action: "exhausted"; retry_at: number }; // every account spent — when to look again
 
 /**
@@ -316,11 +328,22 @@ export type AutoSwitchDecision =
  *  3. exhausted — retry at the earliest known window reset (hourly fallback).
  *     With switching off only the active account's windows are consulted —
  *     another account's reset can't help a session that will never move.
+ *
+ * All of that reads parks and snapshots as facts about the ACTIVE account,
+ * which holds only while the account hasn't changed hands. `activeSince`
+ * (the device's activation stamp) corrects for a change: a snapshot fetched
+ * before it says nothing about the current login, so the loop WAITS for the
+ * post-switch probe rather than switching away on stale meters; and parks
+ * stamped before it belong to the previous login, so the "settled" bar for
+ * proof (b) becomes "fetched since the activation" instead of "5 minutes
+ * after someone else's park". (2026-09-02: both rules together pushed a
+ * 2%-used account off the machine twice, minutes after the user chose it.)
  */
 export function decideAutoSwitch(input: {
   now: number;
   parkedAt: number; // newest limit-park among the blocked conversations
   activeEmail?: string;
+  activeSince?: number; // when the active account last changed on the device
   profiles: AutoSwitchProfile[];
   attempts: Array<{ profile: string; at: number }>;
   allowSwitch?: boolean; // default true
@@ -328,7 +351,7 @@ export function decideAutoSwitch(input: {
   // spent window), so "continue" can never un-park — a switch is the only cure.
   activeDead?: boolean;
 }): AutoSwitchDecision {
-  const { now, parkedAt, activeEmail, profiles, attempts } = input;
+  const { now, parkedAt, activeEmail, activeSince, profiles, attempts } = input;
   const allowSwitch = input.allowSwitch !== false;
   const lastAttemptAt = (profile: string): number | null =>
     attempts.reduce<number | null>(
@@ -337,11 +360,22 @@ export function decideAutoSwitch(input: {
     );
 
   const active = profiles.find((p) => p.email && p.email === activeEmail);
+  const activeFetchedAt = active?.usage?.fetched_at ?? 0;
+  if (
+    !input.activeDead &&
+    active &&
+    activeSince !== undefined &&
+    activeFetchedAt < activeSince &&
+    now - activeSince < AUTO_SWITCH_PROBE_GRACE_MS
+  ) {
+    return { action: "wait", retry_at: now + AUTO_SWITCH_PROBE_RETRY_MS };
+  }
   const sessionResetAt = active?.usage?.session?.resets_at;
   const lastContinue = lastAttemptAt(AUTO_SWITCH_CONTINUE_KEY);
   const windowRolledSincePark = !!sessionResetAt && sessionResetAt > parkedAt && sessionResetAt <= now;
+  const parksPredateActivation = activeSince !== undefined && activeSince > parkedAt;
   const settledProbeShowsHeadroom =
-    (active?.usage?.fetched_at ?? 0) >= parkedAt + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS;
+    activeFetchedAt >= (parksPredateActivation ? activeSince : parkedAt + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS);
   if (
     !input.activeDead &&
     (windowRolledSincePark || settledProbeShowsHeadroom) &&

@@ -16,6 +16,8 @@ import {
   worstUsagePercent,
   AUTO_SWITCH_ATTEMPT_EVIDENCE_MS,
   AUTO_SWITCH_CONTINUE_KEY,
+  AUTO_SWITCH_PROBE_GRACE_MS,
+  AUTO_SWITCH_PROBE_RETRY_MS,
   AUTO_SWITCH_SESSION_WINDOW_MS,
   DEVICE_ONLINE_MS,
   STALE_FLAG_AFTER_MS,
@@ -205,6 +207,102 @@ describe("decideAutoSwitch", () => {
       attempts: [],
     });
     expect(d).toEqual({ action: "switch", profile: "c" });
+  });
+
+  // 2026-09-02: the user switched to a 2%-used account; the loop held only a
+  // 2-day-old snapshot of it (pegged) and moved the machine to a 96% account.
+  test("a snapshot older than the activation is not evidence — wait for the post-switch probe", () => {
+    const activeSince = now - 30_000; // account changed 30s ago
+    const d = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      activeSince,
+      profiles: [
+        { name: "a", email: "a@x.com", usage: { ...mkUsage(100), fetched_at: now - 2 * 86_400_000 } },
+        { name: "b", email: "b@x.com", usage: mkUsage(96) },
+      ],
+      attempts: [],
+    });
+    expect(d).toEqual({ action: "wait", retry_at: now + AUTO_SWITCH_PROBE_RETRY_MS });
+    // No snapshot at all is the same case.
+    const blank = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      activeSince,
+      profiles: [
+        { name: "a", email: "a@x.com" },
+        { name: "b", email: "b@x.com", usage: mkUsage(96) },
+      ],
+      attempts: [],
+    });
+    expect(blank.action).toBe("wait");
+  });
+
+  test("past the probe grace a stale snapshot is used as it stands", () => {
+    const d = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      activeSince: now - AUTO_SWITCH_PROBE_GRACE_MS - 1,
+      profiles: [
+        { name: "a", email: "a@x.com", usage: { ...mkUsage(100), fetched_at: now - 2 * 86_400_000 } },
+        { name: "b", email: "b@x.com", usage: mkUsage(96) },
+      ],
+      attempts: [],
+    });
+    expect(d).toEqual({ action: "switch", profile: "b" });
+  });
+
+  // Second failure the same night: the fresh probe (2%) landed, but the newest
+  // parks were re-parks on the account just switched AWAY from, so the
+  // "5 minutes after the park" bar discarded it and the loop switched again.
+  test("parks older than the activation belong to the previous account: a probe since activation continues", () => {
+    const activeSince = parkedAt + 60_000; // account changed after the newest park
+    const fetchedAt = activeSince + 10_000; // well inside the old 5-minute bar
+    const d = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      activeSince,
+      profiles: [
+        { name: "a", email: "a@x.com", usage: { ...mkUsage(2), fetched_at: fetchedAt } },
+        { name: "b", email: "b@x.com", usage: mkUsage(96) },
+      ],
+      attempts: [],
+    });
+    expect(d).toEqual({ action: "continue" });
+    // Same probe age, but the parks came AFTER the activation (this account's
+    // own parks): the settled bar still applies, and a 96% sibling is the pick.
+    const ownParks = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      activeSince: parkedAt - 60_000,
+      profiles: [
+        { name: "a", email: "a@x.com", usage: { ...mkUsage(2), fetched_at: parkedAt + 70_000 } },
+        { name: "b", email: "b@x.com", usage: mkUsage(96) },
+      ],
+      attempts: [],
+    });
+    expect(ownParks).toEqual({ action: "switch", profile: "b" });
+  });
+
+  test("a dead login never waits — a switch is the only cure", () => {
+    const d = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      activeSince: now - 30_000,
+      activeDead: true,
+      profiles: [
+        { name: "a", email: "a@x.com" },
+        { name: "b", email: "b@x.com", usage: mkUsage(20) },
+      ],
+      attempts: [],
+    });
+    expect(d).toEqual({ action: "switch", profile: "b" });
   });
 
   test("known headroom beats unknown usage; unknown still beats nothing", () => {

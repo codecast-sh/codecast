@@ -1127,6 +1127,7 @@ export const autoSwitchCheck = internalMutation({
       now,
       parkedAt: Math.max(...targets.map((c) => c.updated_at ?? 0)),
       activeEmail: primary.cc_accounts?.active_email,
+      activeSince: primary.cc_accounts?.active_since,
       profiles: primary.cc_accounts?.profiles ?? [],
       attempts,
       allowSwitch,
@@ -1134,6 +1135,21 @@ export const autoSwitchCheck = internalMutation({
       // even the limit-parked sessions until the machine has a live account.
       activeDead: authBlocked.length > 0,
     });
+
+    if (decision.action === "wait") {
+      // The active account just changed and its meter hasn't been read since.
+      // The daemon probes right after a switch; look again once that lands.
+      // Not an action: no cooldown, no attempt, exhausted_at untouched.
+      if (!state.next_check_at || state.next_check_at <= now || decision.retry_at < state.next_check_at) {
+        await ctx.scheduler.runAt(decision.retry_at, internal.accountSwitch.autoSwitchCheck, {
+          user_id: args.user_id,
+        });
+        await ctx.db.patch(primary._id, {
+          cc_auto_switch_state: { ...state, next_check_at: decision.retry_at },
+        });
+      }
+      return { acted: "wait", next_check_at: decision.retry_at };
+    }
 
     if (decision.action === "continue") {
       const bucket = Math.floor(now / 60_000);
