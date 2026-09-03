@@ -12362,6 +12362,7 @@ trigger
   .option("--mode <mode>", "Agent mode: apply (default, can act) or propose (read-only). Prefer --safe.")
   .option("--project <path>", "Project path for agent cwd")
   .option("--agent <type>", "Agent type: claude (default) or codex", "claude")
+  .option("--model <model>", "Model for spawned runs (claude: fable, opus, sonnet, haiku; codex: a model id). Default: the agent's saved default. Ignored by runs that inject into a session.")
   .option("--max-runtime <duration>", "Max runtime (default: 10m)")
   .option("--for <session>", "Bind the trigger to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.")
   .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. Runs stay associated: each one links back to this trigger at the top of its conversation.")
@@ -12509,6 +12510,7 @@ trigger
           target_conversation_id,
           project_path: options.project || getRealCwd(),
           agent_type: options.agent,
+          model: options.model,
           // Bind the task to this machine: only the creating device's
           // scheduler claims it (see TaskScheduler.canServeTask).
           created_device_id: deviceId(),
@@ -12552,6 +12554,7 @@ trigger
   .description("List triggers")
   .option("-s, --status <status>", "Filter by status (scheduled, running, completed, failed, paused)")
   .option("-a, --all", "Show all statuses including completed")
+  .option("--json", "Machine-readable output (full trigger rows)")
   .action(async (options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -12586,6 +12589,11 @@ trigger
         ? tasks
         : tasks.filter((t: any) => !["completed", "failed"].includes(t.status));
 
+      if (options.json) {
+        console.log(JSON.stringify(filtered, null, 2));
+        return;
+      }
+
       if (filtered.length === 0) {
         console.log(fmt.muted("No active triggers. Use --all to see completed ones."));
         return;
@@ -12613,7 +12621,12 @@ trigger
 
         // Prefer the haiku-distilled name/gist (display_title/display_summary,
         // generated server-side) — the stored title is usually prompt.slice(0,60).
-        console.log(`  ${c.cyan}${shortId}${c.reset}  ${statusStr}  ${t.display_title?.trim() || t.title}  ${scheduleInfo}`);
+        // Where a run goes: into its bound session (that session's model), or a
+        // fresh agent on the pinned model (or the agent's saved default).
+        const runsIn = t.originating_conversation_id
+          ? "inline"
+          : `${t.agent_type || "claude"}/${t.model || "default"}`;
+        console.log(`  ${c.cyan}${shortId}${c.reset}  ${statusStr}  ${t.display_title?.trim() || t.title}  ${scheduleInfo}  ${fmt.muted(runsIn)}`);
         if (t.display_summary) {
           console.log(`           ${fmt.muted(t.display_summary.slice(0, 100))}`);
         }
@@ -12728,6 +12741,7 @@ trigger
   .option("--mode <mode>", "Agent mode: apply (can act) or propose (read-only). Prefer --safe.")
   .option("--project <path>", "Project path for agent cwd")
   .option("--agent <type>", "Agent type: claude or codex")
+  .option("--model <model>", "Model for spawned runs (claude: fable, opus, sonnet, haiku; codex: a model id); 'default' clears the pin")
   .option("--max-runtime <duration>", "Max runtime (e.g., 10m)")
   .action(async (id, options) => {
     const config = readConfig();
@@ -12784,6 +12798,7 @@ trigger
     else if (options.mode !== undefined) body.mode = options.mode;
     if (options.project !== undefined) body.project_path = options.project;
     if (options.agent !== undefined) body.agent_type = options.agent;
+    if (options.model !== undefined) body.model = options.model;
     if (options.maxRuntime !== undefined) {
       const ms = parseDuration(options.maxRuntime);
       if (!ms) {
@@ -12794,7 +12809,7 @@ trigger
     }
 
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to update. Pass at least one of --prompt/--title/--in/--every/--on/--safe/--mode/--project/--agent/--max-runtime.");
+      console.error("Nothing to update. Pass at least one of --prompt/--title/--in/--every/--on/--safe/--mode/--project/--agent/--model/--max-runtime.");
       process.exit(1);
     }
 
