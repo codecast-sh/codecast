@@ -4,60 +4,54 @@ import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, 
 import { useAction, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { Sparkles, Pencil, X } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { isConvexId } from "../lib/entityLinks";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 
-// Suggested replies above the composer. Mounted only when the pref is on;
-// stays mounted while the user types (hidden via the `hidden` prop) so the
-// suggestions subscription doesn't churn on every keystroke. The row renders
-// only when the stored suggestions still match the conversation tail (the
-// anchor), the agent spoke last, and the session is waiting on the user —
-// a stale pill is worse than none.
+// A suggested reply, shown as ghost text inside the empty composer — the way
+// a shell autosuggests from history: dim, sitting where the words would go,
+// and Tab makes it yours. Nothing renders outside the input, so an idle
+// session never grows a second strip above the box.
 //
-// Clicking a pill SENDS it — the suggestion is press-send ready by contract,
-// so the click is the confirmation. The keyboard path is arrow selection: the
-// composer's ↑ ladder (images → queue → pills) hands off here through the
-// SuggestionPillsHandle, Enter sends the selected pill, Tab fills the
-// composer for editing instead. No modifier chords: bare Ctrl+digit is
-// macOS Mission Control's Space switcher, Cmd+digit is the browser's tab
-// switcher, Alt+digit is workbench switching — every digit chord is owned
-// upstream, which is how the original Ctrl+1/2/3 binding shipped dead.
+// Mounted only when the pref is on; it stays mounted while the user types
+// (hidden via the `hidden` prop) so the suggestions subscription doesn't
+// churn on every keystroke. The ghost shows only when the stored suggestions
+// still match the conversation tail (the anchor), the agent spoke last, and
+// the session is waiting on the user — a stale suggestion is worse than none.
+//
+// Tab (or a click on the ghost) drops the text into the composer; Enter then
+// sends it like anything typed. Up and down step through the alternatives
+// while the composer is empty. Typing anything replaces the ghost, which is
+// the whole dismissal — no gesture to learn. Outcome telemetry settles on
+// send: verbatim is "sent", changed is "edited".
 
-// Imperative selection surface for the composer's keydown ladder. Selection
-// state lives in here (the pill list is this component's server row), but the
-// keys arrive on the composer textarea, which keeps DOM focus the whole time —
-// the same split the queue and image regions use in ConversationView.
-export interface SuggestionPillsHandle {
-  // Row is rendered with at least one pill.
+// Imperative surface for the composer's keydown handler. Selection state
+// lives in here (the list is this component's server row), but the keys
+// arrive on the composer textarea, which keeps DOM focus the whole time.
+export interface ComposerSuggestionHandle {
+  // The ghost is showing.
   visible(): boolean;
-  // A pill is currently selected.
-  active(): boolean;
-  // Select the first pill; false when the row isn't visible.
-  enter(): boolean;
-  // Move selection left/right. Right past the last pill exits (clears);
-  // left of the first clamps. Returns whether a selection remains.
-  move(delta: 1 | -1): boolean;
-  // Send / edit the selected pill (clears selection).
-  send(): boolean;
-  edit(): boolean;
-  clear(): void;
+  count(): number;
+  // Put the shown suggestion into the composer; false when nothing is shown.
+  accept(): boolean;
+  // Step to the previous/next suggestion (wraps).
+  cycle(delta: 1 | -1): boolean;
+  // The composer just sent `text`: report the outcome if it descends from an
+  // accepted suggestion.
+  settleSend(text: string): void;
 }
 
-export const SuggestionPills = memo(forwardRef<SuggestionPillsHandle, {
+export const ComposerSuggestion = memo(forwardRef<ComposerSuggestionHandle, {
   conversationId: string;
   // The session is waiting on the user (not streaming, not mid-task).
   idle: boolean;
   // Composer holds text/images — keep hooks alive but render nothing.
   hidden: boolean;
-  onSend: (text: string) => void;
-  onEdit: (text: string) => void;
-  // Selection state reported up: while a pill is selected, Escape belongs to
-  // this row (deselect), not to the composer's host (popup close).
-  onActiveChange?: (active: boolean) => void;
-}>(function SuggestionPills({ conversationId, idle, hidden, onSend, onEdit, onActiveChange }, ref) {
+  onAccept: (text: string) => void;
+  // The composer blanks its own placeholder while the ghost is showing.
+  onVisibleChange?: (visible: boolean) => void;
+}>(function ComposerSuggestion({ conversationId, idle, hidden, onAccept, onVisibleChange }, ref) {
   const isRealId = isConvexId(conversationId);
 
   // Tail signature of the last real turn, as a primitive so the selector
@@ -84,22 +78,22 @@ export const SuggestionPills = memo(forwardRef<SuggestionPillsHandle, {
   const generate = useAction(api.composerSuggestions.generateComposerSuggestions);
   const recordOutcome = useMutation(api.composerSuggestions.recordSuggestionOutcome);
   const attemptedRef = useRef<string | null>(null);
-  const [dismissedAnchor, setDismissedAnchor] = useState<string | null>(null);
-  const [selIdx, setSelIdx] = useState<number | null>(null);
+  const [idx, setIdx] = useState(0);
+  // The suggestion the user accepted, held until the send settles its outcome.
+  const acceptedRef = useRef<{ text: string; anchor: string } | null>(null);
 
   // Fire-and-forget outcome telemetry — ground truth for judging the
   // suggester. Never blocks or fails the user gesture it rides on.
   const report = useCallback(
-    (suggestion: string, outcome: "sent" | "edited" | "dismissed") => {
-      if (!row?.anchor_message_uuid) return;
+    (anchor: string, suggestion: string, outcome: "sent" | "edited" | "dismissed") => {
       recordOutcome({
         conversation_id: conversationId as Id<"conversations">,
-        anchor_message_uuid: row.anchor_message_uuid,
+        anchor_message_uuid: anchor,
         suggestion,
         outcome,
       }).catch(() => {});
     },
-    [recordOutcome, conversationId, row?.anchor_message_uuid],
+    [recordOutcome, conversationId],
   );
 
   // Ask for fresh suggestions when the agent's turn has settled and the
@@ -118,133 +112,71 @@ export const SuggestionPills = memo(forwardRef<SuggestionPillsHandle, {
     return () => clearTimeout(t);
   }, [isRealId, hidden, idle, tailRole, tailKey, row, row?.anchor_message_uuid, generate, conversationId]);
 
+  const anchor = row?.anchor_message_uuid ?? null;
   const visible =
     !hidden &&
     idle &&
     tailRole === "assistant" &&
     !!row?.suggestions?.length &&
-    row.anchor_message_uuid === tailKey &&
-    dismissedAnchor !== row.anchor_message_uuid;
-
+    anchor === tailKey;
   const suggestions = visible ? row!.suggestions : [];
 
-  // Selection can't outlive the row or the list it points into.
-  useEffect(() => {
-    if (!visible) setSelIdx(null);
-    else setSelIdx((i) => (i !== null && i >= suggestions.length ? suggestions.length - 1 : i));
-  }, [visible, suggestions.length]);
+  // A new anchor starts at the top suggestion again.
+  useEffect(() => { setIdx(0); }, [anchor]);
+  useEffect(() => { onVisibleChange?.(visible); }, [visible, onVisibleChange]);
 
-  useEffect(() => {
-    onActiveChange?.(selIdx !== null);
-  }, [selIdx, onActiveChange]);
+  const stateRef = useRef({ visible, suggestions, idx, anchor });
+  stateRef.current = { visible, suggestions, idx, anchor };
+  const accept = useCallback(() => {
+    const { visible: v, suggestions: list, idx: i, anchor: a } = stateRef.current;
+    const text = v ? list[i] : undefined;
+    if (!text || !a) return false;
+    acceptedRef.current = { text, anchor: a };
+    onAccept(text);
+    return true;
+  }, [onAccept]);
 
-  const stateRef = useRef({ visible, suggestions, selIdx });
-  stateRef.current = { visible, suggestions, selIdx };
   useImperativeHandle(ref, () => ({
     visible: () => stateRef.current.visible && stateRef.current.suggestions.length > 0,
-    active: () => stateRef.current.visible && stateRef.current.selIdx !== null,
-    enter: () => {
-      if (!stateRef.current.visible || stateRef.current.suggestions.length === 0) return false;
-      setSelIdx(0);
+    count: () => (stateRef.current.visible ? stateRef.current.suggestions.length : 0),
+    accept,
+    cycle: (delta) => {
+      const { visible: v, suggestions: list } = stateRef.current;
+      if (!v || list.length < 2) return false;
+      setIdx((cur) => (cur + delta + list.length) % list.length);
       return true;
     },
-    move: (delta) => {
-      const { selIdx: cur, suggestions: list } = stateRef.current;
-      if (cur === null) return false;
-      const next = cur + delta;
-      if (next >= list.length) {
-        setSelIdx(null);
-        return false;
-      }
-      setSelIdx(Math.max(0, next));
-      return true;
+    settleSend: (text) => {
+      const accepted = acceptedRef.current;
+      acceptedRef.current = null;
+      if (!accepted || !text.trim()) return;
+      report(accepted.anchor, accepted.text, text.trim() === accepted.text.trim() ? "sent" : "edited");
     },
-    send: () => {
-      const { selIdx: cur, suggestions: list } = stateRef.current;
-      const text = cur !== null ? list[cur] : undefined;
-      if (!text) return false;
-      setSelIdx(null);
-      report(text, "sent");
-      onSend(text);
-      return true;
-    },
-    edit: () => {
-      const { selIdx: cur, suggestions: list } = stateRef.current;
-      const text = cur !== null ? list[cur] : undefined;
-      if (!text) return false;
-      setSelIdx(null);
-      report(text, "edited");
-      onEdit(text);
-      return true;
-    },
-    clear: () => setSelIdx(null),
-  }), [report, onSend, onEdit]);
+  }), [accept, report]);
 
   if (!visible) return null;
+  const text = suggestions[Math.min(idx, suggestions.length - 1)];
 
-  // One line, always: the sparkle, the pills, the dismiss. Pills share the
-  // row and truncate (the full text is the hover title); nothing wraps under
-  // the composer, and no chord renders at rest — the ladder's keys show only
-  // once a pill is selected, which is the moment they apply.
+  // Absolutely over the textarea, in its font and rhythm, so the ghost sits
+  // exactly where typed words would — and inert to the pointer, so a click
+  // into the box focuses it as ever and never inserts text by accident. The
+  // Tab cap is the one live spot: the key it names, for a mouse.
   return (
-    <div className="flex items-center gap-1.5 min-w-0 pb-1.5">
-      {suggestions.map((text, i) => (
-        <span
-          key={text}
-          className={`group inline-flex items-center min-w-0 rounded-full border transition-colors animate-fadeSlideIn ${
-            selIdx === i
-              ? "border-sol-violet/60 bg-sol-violet/15"
-              : "border-sol-border/50 bg-sol-bg-alt/70 hover:border-sol-violet/40 hover:bg-sol-violet/10"
-          }`}
-          style={{ animationDelay: `${i * 70}ms`, animationFillMode: "backwards" }}
+    <div data-composer-ghost className="pointer-events-none absolute inset-0 flex items-center gap-2 py-1 min-w-0 text-sm leading-relaxed animate-in fade-in-0 duration-200">
+      <span className="truncate min-w-0 flex-1 text-sol-text-dim" title={text}>{text}</span>
+      <span className="shrink-0 flex items-center gap-1.5 text-[9px] text-sol-text-dim/70 select-none">
+        {suggestions.length > 1 && <span className="tabular-nums">{idx + 1}/{suggestions.length}</span>}
+        <button
+          type="button"
+          // preventDefault so the composer keeps focus through the click.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={accept}
+          title="Insert this suggestion"
+          className="pointer-events-auto flex rounded-[4px] transition-opacity hover:opacity-70"
         >
-          <button
-            type="button"
-            // preventDefault so the composer keeps focus through the click.
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => { report(text, "sent"); onSend(text); }}
-            // A pill may carry a full multi-sentence prompt that the row
-            // truncates; hover shows the whole text that a click will send.
-            title={text}
-            className={`flex items-center gap-1.5 min-w-0 pl-2.5 pr-1 py-1 text-[11px] leading-none transition-colors ${
-              selIdx === i ? "text-sol-text" : "text-sol-text-muted group-hover:text-sol-text"
-            }`}
-          >
-            {/* The sparkle rides inside the first pill, so the row's left
-                edge lines up with the composer's instead of a stray glyph
-                hanging in the gutter. */}
-            {i === 0 && <Sparkles className="w-3 h-3 text-sol-violet/70 shrink-0" />}
-            <span className="truncate">{text}</span>
-          </button>
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => { report(text, "edited"); onEdit(text); }}
-            title="Edit before sending"
-            className={`shrink-0 pl-0.5 pr-2 py-1 transition-colors hover:!text-sol-text ${
-              selIdx === i ? "text-sol-text-dim" : "text-sol-text-dim/0 group-hover:text-sol-text-dim"
-            }`}
-          >
-            <Pencil className="w-2.5 h-2.5" />
-          </button>
-        </span>
-      ))}
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => { suggestions.forEach((t) => report(t, "dismissed")); setDismissedAnchor(row!.anchor_message_uuid); }}
-        title="Hide suggestions"
-        className="w-4 h-4 flex items-center justify-center rounded-full text-sol-text-dim/40 hover:text-sol-text-dim transition-colors"
-      >
-        <X className="w-3 h-3" />
-      </button>
-      {selIdx !== null && (
-        <span className="text-[9px] text-sol-text-dim flex items-center gap-2 pl-1 shrink-0 whitespace-nowrap animate-in fade-in-0 duration-150">
-          <span className="inline-flex items-center gap-1"><KeyCap size="xs">Enter</KeyCap> send</span>
-          <span className="inline-flex items-center gap-1"><KeyCap size="xs">Tab</KeyCap> edit</span>
-          <span className="inline-flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> back</span>
-        </span>
-      )}
+          <KeyCap size="xs">Tab</KeyCap>
+        </button>
+      </span>
     </div>
   );
 }));
