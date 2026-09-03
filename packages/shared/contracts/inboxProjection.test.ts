@@ -1,3 +1,4 @@
+import { deriveLiveAt, rowLiveDeadlines, type LiveFactsRow } from "./inboxProjection";
 import { describe, expect, test } from "bun:test";
 import {
   INBOX_BUCKETS,
@@ -462,6 +463,7 @@ describe("field ownership constants", () => {
       "agent_status", "is_idle", "is_unresponsive", "awaiting_input", "is_connected",
       "tmux_session", "permission_mode", "agent_started_at", "open_tasks", "open_tasks_at",
       "message_count", "updated_at", "last_turn_allows_park",
+      "agent_status_updated_at", "last_heartbeat", "last_role_is_user", "auq_open", "daemon_alive_until", "producing_until",
     ]);
     expect([...INBOX_PROJECTION_FIELDS]).toEqual([
       "bucket", "work_state", "asking", "below_fold", "bucket_stale_at", "stale_bucket",
@@ -577,5 +579,74 @@ describe("fnv1a32Update — the incremental form of the digest hash", () => {
   test("isWorkingSetWindow names exactly the five windows", () => {
     for (const w of ["recent", "pinned", "dismissed", "stashed", "owned"] as const) expect(isWorkingSetWindow(w)).toBe(true);
     for (const t of ["members", "member_rows", "foreign_scan"] as const) expect(isWorkingSetWindow(t)).toBe(false);
+  });
+});
+
+
+// ── deriveLiveAt (ct-47609) ──────────────────────────────────────────────────
+describe("deriveLiveAt: one idle rule at any instant", () => {
+  const T0 = 1_800_000_000_000;
+  const S = 1_000, MIN = 60 * S, H = 60 * MIN;
+  // A tiny seeded generator so the property runs the same way every time.
+  let seed = 12345;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)];
+  const maybe = <T,>(v: T): T | null => (rnd() < 0.3 ? null : v);
+  const facts = (): LiveFactsRow => ({
+    status: pick(["active", "active", "completed"]),
+    updated_at: T0 - Math.floor(rnd() * 3 * H),
+    message_count: pick([0, 3, 40]),
+    has_pending_messages: rnd() < 0.2,
+    inbox_dismissed_at: rnd() < 0.15 ? T0 - MIN : null,
+    inbox_stashed_at: rnd() < 0.1 ? T0 - MIN : null,
+    agent_status: maybe(pick(["working", "idle", "waiting", "dormant", "done", "stopped", "permission_blocked", "compacting"])),
+    agent_status_updated_at: maybe(T0 - Math.floor(rnd() * 2 * H)),
+    last_heartbeat: maybe(T0 - Math.floor(rnd() * 3 * MIN)),
+    daemon_alive_until: maybe(T0 + Math.floor(rnd() * 10 * MIN) - 2 * MIN),
+    producing_until: maybe(T0 + Math.floor(rnd() * 10 * MIN) - 2 * MIN),
+    last_role_is_user: rnd() < 0.4,
+    auq_open: rnd() < 0.2,
+    open_tasks: rnd() < 0.3 ? [{}] : null,
+    open_tasks_at: maybe(T0 - Math.floor(rnd() * 15 * MIN)),
+    loop_state: null,
+  });
+  const live = (r: LiveFactsRow, t: number) => deriveLiveAt(r, t);
+
+  test("re-running over the shipped (already coerced) live fields is idempotent", () => {
+    for (let i = 0; i < 150; i++) {
+      const r = facts();
+      for (const t of [T0, T0 + 50 * S, T0 + 2 * MIN, T0 + 2 * H]) {
+        const once = live(r, t);
+        const twice = live({ ...r, agent_status: once.agent_status, awaiting_input: once.awaiting_input }, t);
+        expect(twice).toEqual(once);
+      }
+    }
+  });
+
+  test("for fixed facts, is_idle never returns to false as time passes; an ask and a daemon never come back", () => {
+    for (let i = 0; i < 150; i++) {
+      const r = facts();
+      let prev = live(r, T0 - H);
+      for (let t = T0 - H + 5 * S; t <= T0 + 3 * H; t += 25 * S) {
+        const cur = live(r, t);
+        if (prev.is_idle) expect(cur.is_idle).toBe(true);
+        if (!prev.awaiting_input) expect(cur.awaiting_input).toBe(false);
+        if (!prev.daemon_alive) expect(cur.daemon_alive).toBe(false);
+        prev = cur;
+      }
+    }
+  });
+
+  test("rowLiveDeadlines names every instant the derivation can change: it is constant between adjacent deadlines", () => {
+    for (let i = 0; i < 150; i++) {
+      const r = facts();
+      const ds = [...new Set(rowLiveDeadlines(r).filter((d): d is number => d != null))].sort((a, b) => a - b);
+      const points = [T0 - 4 * H, ...ds, T0 + 4 * H];
+      for (let k = 0; k + 1 < points.length; k++) {
+        const a = points[k], b = points[k + 1];
+        if (b - a < 2) continue;
+        expect(live(r, a)).toEqual(live(r, b - 1));
+      }
+    }
   });
 });

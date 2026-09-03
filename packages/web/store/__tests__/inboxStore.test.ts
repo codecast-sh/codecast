@@ -17,14 +17,21 @@ function seedCurrentSession(partial: Record<string, unknown>) {
 // categorizeSessions distrusts an active status that's gone quiet past the trust
 // TTL (see isTrustStale), so a stale sentinel would wrongly sweep these fixtures
 // into needs-input. Tests that want an AGED session override updated_at.
+// A settled row as the server ships it (ct-47609): a minute of quiet, the
+// status change stamped past the idle grace, the last turn the agent's. The
+// replica re-derives is_idle from these facts at its own clock, exactly as the
+// server does at its epoch, so a fixture claiming is_idle on a row updated
+// milliseconds ago would be a row the server itself could never produce.
 const baseSession: InboxSession = {
   _id: "conv1",
   session_id: "session-1",
-  updated_at: Date.now(),
+  updated_at: Date.now() - 60_000,
   agent_type: "claude_code",
   message_count: 0,
   is_idle: true,
   has_pending: false,
+  agent_status_updated_at: Date.now() - 60_000,
+  last_role_is_user: false,
 };
 
 describe("inboxStore.setConversationAgent", () => {
@@ -300,6 +307,10 @@ describe("placeSections (the placement chokepoint)", () => {
       ...baseSession,
       _id: "conv-pending",
       session_id: "session-pending",
+      // A live daemon will deliver the queued message (the shared rule reads
+      // the daemon facts; without them queued work on a dead daemon is unresponsive).
+      last_heartbeat: Date.now() - 5_000,
+      daemon_alive_until: Date.now() + 85_000,
       message_count: 5,
       agent_status: "idle",
       is_idle: true,
@@ -402,6 +413,8 @@ describe("placeSections (the placement chokepoint)", () => {
       ...baseSession,
       _id: "conv-live-pending",
       session_id: "session-live-pending",
+      last_heartbeat: Date.now() - 5_000,
+      daemon_alive_until: Date.now() + 85_000,
       message_count: 9,
       is_idle: true,
       has_pending: true,
@@ -534,6 +547,10 @@ describe("placeSections (the placement chokepoint)", () => {
       ...baseSession,
       _id: "conv-just-finished",
       session_id: "session-just-finished",
+      // The status flipped to idle seconds ago and messages are still landing:
+      // inside the grace the server keeps is_idle false, and so does the replica.
+      agent_status_updated_at: Date.now() - 10_000,
+      updated_at: Date.now() - 5_000,
       message_count: 7,
       agent_status: "idle",
       is_idle: false,
@@ -653,6 +670,10 @@ describe("placeSections (the placement chokepoint)", () => {
       agent_status: "working",
       is_idle: false,
       updated_at: Date.now() - 10 * 60 * 1000,
+      // The daemon behind it is alive; without a heartbeat the shared rule
+      // (and the server) would call a quiet active status stopped.
+      last_heartbeat: Date.now() - 5_000,
+      daemon_alive_until: Date.now() + 85_000,
     };
 
     const { needsInput, working } = placeSections(
@@ -939,6 +960,7 @@ describe("placeSections (the placement chokepoint)", () => {
       session_id: "session-early",
       message_count: 3,
       updated_at: Date.now() - 300,
+      agent_status: "idle",
     };
     const late: InboxSession = {
       ...baseSession,
@@ -946,6 +968,7 @@ describe("placeSections (the placement chokepoint)", () => {
       session_id: "session-late",
       message_count: 3,
       updated_at: Date.now() - 200,
+      agent_status: "idle",
     };
     // Deferred and OLDEST — a pure updated_at sort would float it to the top,
     // so this only passes if is_deferred overrides the timestamp ordering.
@@ -955,6 +978,7 @@ describe("placeSections (the placement chokepoint)", () => {
       session_id: "session-deferred",
       message_count: 3,
       updated_at: Date.now() - 400,
+      agent_status: "idle",
       is_deferred: true,
     };
 

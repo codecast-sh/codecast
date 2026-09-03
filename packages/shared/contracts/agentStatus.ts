@@ -223,3 +223,72 @@ export function isLivenessStale(
   if (s.inbox_killed_at) return true;
   return isStatusTrustStale(s, now) || isQuietSettled(s, now);
 }
+
+// The daemon liveness window: a managed row whose heartbeat is older than this
+// has no process behind it. Shared by the needs-input check, the inbox scan,
+// the projection deadlines and the replica's live derivation (deriveLiveAt).
+export const HEARTBEAT_ALIVE_MS = 90 * 1000;
+
+// Collapse a stale "active" status so every consumer agrees on what the agent
+// is doing. The agent_status field is read in three independent places — the
+// web row's isAgentActive short-circuit, the server-computed is_idle
+// (deriveSessionActivity), and classifyWorkState — so coercing once at the
+// enrichment boundary fixes all of them with no downstream duplication.
+//
+// Two independent staleness signals, both non-destructive read-time transforms
+// (the stored managed_sessions.agent_status is untouched):
+//   - heartbeat lapsed AND the conversation quiet for the same window → the
+//     process is gone; its frozen "working" reads as "stopped". Both legs are
+//     required: the heartbeat sender shares the daemon with slow maintenance
+//     passes (tmux health checks, WIP snapshot sweeps), so a busy fleet can
+//     miss heartbeats for minutes while provably alive — syncing messages every
+//     few seconds. Coercing on heartbeat age alone filed every actively-working
+//     session under NEEDS INPUT during such a stall (2026-07-20). Fresh message
+//     traffic is proof of life that vetoes the coercion. Residual gap: a turn
+//     sitting in a long, SILENT tool call (nothing synced for 90s+) during a
+//     heartbeat stall still reads stopped — accepted, because the daemon-side
+//     fix (liveness sends decoupled from slow maintenance passes) makes stalls
+//     rare and the next synced output self-corrects the row.
+//   - conversation quiet past the trust TTL with a live heartbeat → the daemon
+//     lost the turn's idle transition and re-asserts "working" forever; reads as
+//     "idle" (not "stopped") because the fresh heartbeat means the process is
+//     alive — it's finished, not dead.
+// Any later message bumps conv.updated_at, so a genuinely long-running turn
+// re-promotes itself to "working" on its next output.
+//
+// The settle verdicts split on the two legs. The inferred one ("waiting", a
+// transcript scrape) takes both: a wedged background task must not park a
+// session forever. A DECLARED verdict ("dormant" / "done") skips the quiet-time
+// leg — a nightly trigger's home is quiet for 23h by design and the agent named
+// its wake — but still takes the dead-daemon leg for "dormant": a dead daemon
+// cannot deliver the wake it promised, so the row must resurface as needing a
+// human. "done" survives a dead daemon: the deliverable is already there and
+// nothing is waiting on a process.
+//
+// `heartbeatAlive` defaults to true for callers that already gate on a fresh
+// heartbeat (or have no managed row in hand); map-based consumers pass
+// liveConvIds membership.
+//
+// `verifiedWaiting`: the daemon has CHECKED the open background work behind a
+// "waiting" — matched each task to a live child shell of the agent process and
+// re-reported it recently (open_tasks / open_tasks_at on the managed row, see
+// shared/contracts/openTasks). A checked "waiting" is not a transcript guess, so
+// it skips the quiet-time decay like a declared verdict: a poll on a five-hour
+// build stays parked with its bar instead of resurfacing at the hour. The
+// dead-daemon leg still applies — nobody is watching the shell any more.
+export function trustedAgentStatus(
+  agentStatus: string | undefined,
+  updatedAt: number | undefined,
+  now: number,
+  heartbeatAlive: boolean = true,
+  verifiedWaiting: boolean = false,
+): string | undefined {
+  if (!agentStatus) return agentStatus;
+  const decays = TRUST_DECAYING_STATUSES.has(agentStatus) && !(agentStatus === "waiting" && verifiedWaiting);
+  const declared = DECLARED_VERDICT_STATUSES.has(agentStatus) || (agentStatus === "waiting" && verifiedWaiting);
+  if (!decays && !declared) return agentStatus;
+  const quietPastHeartbeat = updatedAt === undefined || now - updatedAt >= HEARTBEAT_ALIVE_MS;
+  if (!heartbeatAlive && quietPastHeartbeat && agentStatus !== "done") return "stopped";
+  if (decays && updatedAt !== undefined && now - updatedAt >= STATUS_TRUST_TTL_MS) return "idle";
+  return agentStatus;
+}
