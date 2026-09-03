@@ -88,6 +88,13 @@ export async function spawnSessionCore(
     ccAccount?: string;
     isolated?: boolean;
     worktreeName?: string;
+    // A worktree that already exists on the target device (`cast spawn
+    // --cloud` acquires it over SSH before creating the row): stamped on the
+    // row so the header and the host list show it from the first frame.
+    worktree?: { name: string; branch?: string; path?: string };
+    // Team/privacy resolve from THIS path when project_path lives on another
+    // machine — the directory mappings are keyed by the laptop's checkouts.
+    privacyPath?: string;
     targetDeviceId?: string | null;
     subagentFields?: { parent_conversation_id: Id<"conversations">; is_subagent: true } | null;
     prompt?: string;
@@ -97,7 +104,7 @@ export async function spawnSessionCore(
   const sessionId = crypto.randomUUID();
   const agentType = opts.agentType || "claude_code";
 
-  const privacy = await resolveCreationPrivacy(ctx, userId, opts.gitRoot || opts.projectPath);
+  const privacy = await resolveCreationPrivacy(ctx, userId, opts.privacyPath || opts.gitRoot || opts.projectPath);
 
   const conversationId = await ctx.db.insert("conversations", {
     user_id: userId,
@@ -111,6 +118,14 @@ export async function spawnSessionCore(
     ...privacy,
     ...(opts.subagentFields ?? {}),
     ...(opts.ccAccount ? { cc_account: opts.ccAccount } : {}),
+    ...(opts.worktree
+      ? {
+          worktree_name: opts.worktree.name,
+          worktree_branch: opts.worktree.branch,
+          worktree_path: opts.worktree.path,
+          worktree_status: "active" as const,
+        }
+      : {}),
     status: "active",
   });
 
@@ -181,6 +196,11 @@ export const createSessionFromCli = mutation({
     cc_account: v.optional(v.string()),
     isolated: v.optional(v.boolean()),
     worktree_name: v.optional(v.string()),
+    // A worktree the CLI already acquired on the target device (--cloud).
+    worktree_branch: v.optional(v.string()),
+    worktree_path: v.optional(v.string()),
+    // Local git root for team/privacy resolution when project_path is remote.
+    privacy_path: v.optional(v.string()),
     // A device_id or label; routes start_session at that machine (see
     // resolveDeviceSelector).
     device: v.optional(v.string()),
@@ -217,6 +237,10 @@ export const createSessionFromCli = mutation({
       ccAccount: args.cc_account,
       isolated: args.isolated,
       worktreeName: args.worktree_name,
+      worktree: args.worktree_path && args.worktree_name
+        ? { name: args.worktree_name, branch: args.worktree_branch, path: args.worktree_path }
+        : undefined,
+      privacyPath: args.privacy_path,
       targetDeviceId,
       subagentFields,
       prompt: args.prompt,

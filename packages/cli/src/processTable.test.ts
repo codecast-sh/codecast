@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { descendantPids, findStaleTmuxServers, isAgentCommand, parseProcessTable, tmuxServerRows } from "./processTable.js";
+import { descendantPids, findOtherDaemonPids, findStaleTmuxServers, isAgentCommand, isDaemonCommand, parseProcessTable, tmuxServerRows } from "./processTable.js";
 
 const table = parseProcessTable(`
     1     0 /sbin/launchd
@@ -51,5 +51,84 @@ describe("processTable", () => {
 
   test("findStaleTmuxServers: tmux unreachable reports every server", () => {
     expect(findStaleTmuxServers(table, null).map((s) => s.pid)).toEqual([45451, 90449]);
+  });
+});
+
+// The split brain sweep kills whatever this matches, so the negatives matter
+// as much as the positives. The daemon row is copied from a real ps run on the
+// founder's laptop; the rest are the other two install shapes and the
+// neighbours that carry the same tokens without being a daemon.
+const daemonTable = parseProcessTable(`
+ 59965     1 /Users/ashot/.bun/bin/bun /Users/ashot/src/codecast/packages/cli/src/daemon.ts _daemon
+ 59966     1 node /Users/x/.codecast/dist/daemon.js
+ 59967     1 /Users/x/.local/bin/codecast -- _daemon
+ 59968     1 /Users/x/.local/bin/cast _daemon
+ 70001     1 /bin/sh /Users/x/.codecast/daemon-launcher.sh
+ 70002     1 /Users/x/.local/bin/codecast _watchdog
+ 70003     1 /Users/x/.local/bin/codecast _worker probe
+ 70004  1234 bun /Users/x/src/codecast/packages/cli/src/index.ts sessions
+ 70005  1234 grep _daemon src/daemon.ts
+ 70006  1234 bun test src/daemon.pid.test.ts
+ 70007     1 nginx: master process /opt/homebrew/bin/nginx -g daemon off;
+ 70008     1 /usr/sbin/distnoted daemon
+ 70009  1234 /Users/x/.local/bin/cast send jx7c6zk restart the _daemon now
+ 70010  1234 /Users/x/.local/bin/cast task create fix _daemon crash
+ 70011  1234 /Users/x/.local/bin/cast blame packages/cli/src/daemon.ts
+`);
+
+// Interpreter flags before the entry point are normal, so they must not hide
+// a daemon from the sweep.
+const flaggedDaemonTable = parseProcessTable(`
+ 80001     1 /Users/x/.bun/bin/bun --smol /Users/x/src/codecast/packages/cli/src/daemon.ts _daemon
+ 80002     1 node --enable-source-maps /Users/x/.codecast/dist/daemon.js
+ 80003     1 /Users/x/.bun/bin/bun run /Users/x/src/codecast/packages/cli/src/daemon.ts _daemon
+`);
+
+// `bun run x` is a package script, not a daemon, unless x is the daemon file.
+const bunRunScriptTable = parseProcessTable(`
+ 80101  1234 /Users/x/.bun/bin/bun run daemon
+ 80102  1234 /Users/x/.bun/bin/bun run scripts/stamp-daemon-build-id.ts
+`);
+
+describe("isDaemonCommand", () => {
+  test("matches every install shape", () => {
+    for (const pid of [59965, 59966, 59967, 59968]) {
+      const row = daemonTable.find((p) => p.pid === pid)!;
+      expect(isDaemonCommand(row.command)).toBe(true);
+    }
+  });
+
+  test("rejects the launcher, the watchdog, a worker and look-alikes", () => {
+    for (const pid of [70001, 70002, 70003, 70004, 70005, 70006, 70007, 70008]) {
+      const row = daemonTable.find((p) => p.pid === pid)!;
+      expect(isDaemonCommand(row.command)).toBe(false);
+    }
+  });
+
+  // ps flattens quoting, so a message body arrives as bare argv tokens. Before
+  // the argv position test these three matched and the sweep killed them.
+  test("rejects a cast command whose own arguments mention the daemon", () => {
+    for (const pid of [70009, 70010, 70011]) {
+      const row = daemonTable.find((p) => p.pid === pid)!;
+      expect(isDaemonCommand(row.command)).toBe(false);
+    }
+  });
+
+  // `bun run file.ts` executes the file in this process, so it is a daemon like
+  // any other shape; `run` just sits where the entry point normally does.
+  test("matches through interpreter flags and bun run", () => {
+    for (const row of flaggedDaemonTable) {
+      expect(isDaemonCommand(row.command)).toBe(true);
+    }
+  });
+
+  test("rejects a bun run of anything else", () => {
+    for (const row of bunRunScriptTable) {
+      expect(isDaemonCommand(row.command)).toBe(false);
+    }
+  });
+
+  test("findOtherDaemonPids skips this process", () => {
+    expect(findOtherDaemonPids(daemonTable, 59966)).toEqual([59965, 59967, 59968]);
   });
 });

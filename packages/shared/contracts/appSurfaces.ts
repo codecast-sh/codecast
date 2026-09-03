@@ -58,6 +58,7 @@ export const APP_SURFACES: AppSurface[] = [
   dash("team/charts", "team charts"),
   dash("admin/daemon-logs", "daemon logs"),
   dash("config", "config page"),
+  dash("repo", "repositories you can browse: history, source and every commit"),
   standalone("explore", "explore"),
   standalone("timeline", "timeline"),
   standalone("windows", "windows"),
@@ -73,6 +74,7 @@ export const APP_SURFACES: AppSurface[] = [
   settings("settings/accounts", "linked accounts"),
   settings("settings/claude-accounts", "Claude accounts"),
   settings("settings/team", "team settings"),
+  settings("settings/integrations", "integrations"),
   settings("settings/notifications", "notification settings"),
   settings("settings/desktop", "desktop settings"),
 ];

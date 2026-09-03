@@ -17,7 +17,7 @@ const record =
 const last = (calls: Calls, name: string) => (calls[name] ?? []).at(-1);
 const count = (calls: Calls, name: string) => (calls[name] ?? []).length;
 
-mock.module("posthog-js", () => ({
+mock.module("posthog-js/dist/module.slim.js", () => ({
   default: {
     init: record(phCalls, "init"),
     register: record(phCalls, "register"),
@@ -26,12 +26,16 @@ mock.module("posthog-js", () => ({
     capture: record(phCalls, "capture"),
   },
 }));
+const analyticsExtensions = {
+  autocapture: class Autocapture {},
+  historyAutocapture: class HistoryAutocapture {},
+};
+mock.module("posthog-js/dist/extension-bundles.js", () => ({ AnalyticsExtensions: analyticsExtensions }));
 
 mock.module("@sentry/react", () => ({
   init: record(sentryCalls, "init"),
   setUser: record(sentryCalls, "setUser"),
   captureException: record(sentryCalls, "captureException"),
-  browserTracingIntegration: () => ({ name: "BrowserTracing" }),
 }));
 
 const web = await import("./web");
@@ -61,6 +65,7 @@ describe("initAnalytics (web)", () => {
     expect(options.capture_pageview).toBe("history_change");
     expect(options.capture_pageleave).toBe(true);
     expect(options.persistence).toBe("localStorage");
+    expect(options.__extensionClasses).toBe(analyticsExtensions);
     expect(options.disable_session_recording).toBe(true);
     expect(options.capture_dead_clicks).toBe(false);
     expect(last(phCalls, "register")).toEqual([
@@ -68,21 +73,22 @@ describe("initAnalytics (web)", () => {
     ]);
   });
 
-  it("initializes Sentry enabled in production with the donor sample rate", () => {
+  it("initializes Sentry error reporting in production", () => {
     web.initAnalytics(base);
     const [options] = last(sentryCalls, "init") as [Record<string, any>];
     expect(options.dsn).toBe(base.sentryDsn);
     expect(options.environment).toBe("production");
     expect(options.enabled).toBe(true);
-    expect(options.tracesSampleRate).toBe(0.2);
+    expect(options.tracesSampleRate).toBeUndefined();
+    expect(options.integrations).toBeUndefined();
     expect(options.initialScope.tags).toEqual({ platform: "web", app: "codecast" });
   });
 
-  it("disables Sentry in development and samples every trace", () => {
+  it("disables Sentry in development", () => {
     web.initAnalytics({ ...base, environment: "development" });
     const [options] = last(sentryCalls, "init") as [Record<string, any>];
     expect(options.enabled).toBe(false);
-    expect(options.tracesSampleRate).toBe(1.0);
+    expect(options.tracesSampleRate).toBeUndefined();
   });
 
   it("initializes once; a second call is ignored", () => {

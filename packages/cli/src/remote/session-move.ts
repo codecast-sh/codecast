@@ -142,7 +142,7 @@ export function resolveLocalSession(sessionId: string): LocalSession {
 // SSH / rsync primitives
 // --------------------------------------------------------------------------
 
-function sshBase(host: RemoteHost): string[] {
+export function sshBase(host: RemoteHost): string[] {
   // Keepalives make a dead connection an ERROR instead of a forever-hang: on a
   // lossy mobile network a post-push ssh sat for 12 minutes mid-connection
   // (execFileSync has no timeout here — a transfer's legitimate duration is
@@ -163,10 +163,11 @@ function sshBase(host: RemoteHost): string[] {
   ];
 }
 
-function ssh(host: RemoteHost, command: string): string {
+export function ssh(host: RemoteHost, command: string, timeoutMs?: number): string {
   return execFileSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, command], {
     encoding: "utf-8",
     maxBuffer: 64 * 1024 * 1024,
+    ...(timeoutMs ? { timeout: timeoutMs } : {}),
   });
 }
 
@@ -213,7 +214,7 @@ function rsyncFileDownInto(host: RemoteHost, remoteFile: string, localDir: strin
   execFileSync("rsync", args, { stdio: "pipe" });
 }
 
-function shq(s: string): string {
+export function shq(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`;
 }
 
@@ -241,12 +242,12 @@ export function isWorktree(cwd: string): boolean {
 }
 
 /** SSH url for git push to a path on the remote. */
-function gitSshUrl(host: RemoteHost, remotePath: string): string {
+export function gitSshUrl(host: RemoteHost, remotePath: string): string {
   // GIT_SSH_COMMAND carries the key/options; the url is plain user@host:path.
   return `${host.user}@${host.address}:${remotePath}`;
 }
 
-function gitEnv(host: RemoteHost): NodeJS.ProcessEnv {
+export function gitEnv(host: RemoteHost): NodeJS.ProcessEnv {
   return {
     ...process.env,
     GIT_SSH_COMMAND: `ssh -i ${host.keyPath} -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20`,
@@ -268,7 +269,7 @@ function remoteRepoExists(host: RemoteHost, remotePath: string): boolean {
  * receive.denyCurrentBranch=updateInstead so subsequent branch pushes update
  * its working tree in place.
  */
-function ensureRemoteRepo(host: RemoteHost, localCwd: string, remotePath: string): void {
+export function ensureRemoteRepo(host: RemoteHost, localCwd: string, remotePath: string): void {
   if (remoteRepoExists(host, remotePath)) {
     ssh(host, `cd ${shq(remotePath)} && git config receive.denyCurrentBranch updateInstead`);
     repairRemoteOrigin(host, localCwd, remotePath);
@@ -693,7 +694,7 @@ export async function pullSession(sessionId: string, host: RemoteHost, move: Mov
  * worktrees automatically gets them on the remote too. Falls back to the .env
  * family when the manifest resolves to nothing (non-node projects, no config).
  */
-function copyGitignoredFiles(host: RemoteHost, localCwd: string, remoteCwd: string): void {
+export function copyGitignoredFiles(host: RemoteHost, localCwd: string, remoteCwd: string): void {
   let candidates: string[] = [];
   try {
     candidates = resolveManifest(localCwd).setup.copy;
