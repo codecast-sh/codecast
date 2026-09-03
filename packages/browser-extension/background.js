@@ -248,7 +248,10 @@ async function handle(m) {
     }
 
     case "tabs.create": {
-      const t = await chrome.tabs.create({ url: m.url || "about:blank", active: !m.background });
+      // Into the window that already holds this group, so cast tabs stay
+      // together instead of a second group appearing per window.
+      const windowId = m.group ? windowOfOwnedGroup(m.group.title) : undefined;
+      const t = await chrome.tabs.create({ url: m.url || "about:blank", active: !m.background, ...(windowId !== undefined ? { windowId } : {}) });
       if (m.group) await placeInGroup(t, m.group);
       return { tabId: t.id };
     }
@@ -401,6 +404,12 @@ async function placeInGroup(tab, group) {
     const g = await chrome.tabGroups.update(groupId, { title: group.title, color: group.color });
     groups.set(groupId, g);
   }
+}
+
+/** The window of a group we made with this plain title, if one is open. */
+function windowOfOwnedGroup(title) {
+  const g = [...groups.values()].find((x) => ownedGroups.has(x.id) && plainTitle(x.id, x) === title);
+  return g ? g.windowId : undefined;
 }
 
 async function groupOfTab(tabId) {

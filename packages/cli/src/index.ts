@@ -4417,7 +4417,10 @@ accountsCmd
       process.exit(1);
     }
     const result = await cliPost("/cli/accounts/continue-blocked", reviveArgs);
-    console.log(`${c.green}✓${c.reset} queued 'continue' to ${result.continued} blocked session(s)${subNote}`);
+    const restartNote = (result.restarted ?? 0) > 0
+      ? ` (${result.restarted} restarted first: signed out, or pinned to another account's token)`
+      : "";
+    console.log(`${c.green}✓${c.reset} queued 'continue' to ${result.continued} blocked session(s)${restartNote}${subNote}`);
   });
 
 // The active account's usage windows, from the daemon's cache (no provider

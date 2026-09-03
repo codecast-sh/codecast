@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { measureLoopHold } from "./test-helpers/loopHold.js";
+import { loopHoldBoundMs, measureLoopHold } from "./test-helpers/loopHold.js";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion.js";
 import { SCAN_CHUNK_BYTES, readFileTailAsync, readFileTailSync, extractPendingToolUseFromTail, extractPendingToolUseFromTranscriptAsync, resolveTurnEndStatus, openTaskScanOffset, primeOpenTaskScan, readCompleteLinesSync, reconcileStatusFromTranscript, registerManagedStartedSession, resetSessionFileIndexForTests, transcriptTailTurnStartTs, openBackgroundTaskIds, openBackgroundTasks, reconciledStatusWithTasks, scanOpenBackgroundTasks, declaredSettleVerdict, latestTurnStartTs, markTurnStarted, statusFlipStartsTurn, verifyOpenTasks, parseProcessTable, taskProcessNeedle, toOpenTaskReports, paneReconcileTarget, type OpenTaskInfo } from "./daemon.js";
 
@@ -600,7 +600,7 @@ describe("openBackgroundTasks window growth and primeOpenTaskScan", () => {
     const size = fs.statSync(f).size;
     const { maxGapMs, ticks } = await measureLoopHold(() => primeOpenTaskScan(f, SID));
     expect(ticks).toBeGreaterThan(0);
-    expect(maxGapMs).toBeLessThan(200);
+    expect(maxGapMs).toBeLessThan(loopHoldBoundMs(200));
     expect(openTaskScanOffset(f)).toBe(size);
     // With the file unreadable, a sync scan that still had bytes to read would
     // fail and claim no tasks; the primed answer survives because it reads nothing.
@@ -685,7 +685,7 @@ describe("openBackgroundTasks window growth and primeOpenTaskScan", () => {
     registerManagedStartedSession("conv-managed", sid, "cc-managed-test");
     expect(openTaskScanOffset(f)).toBeUndefined();
     const { maxGapMs } = await measureLoopHold(() => reconcileStatusFromTranscript(sid, {} as any));
-    expect(maxGapMs).toBeLessThan(200);
+    expect(maxGapMs).toBeLessThan(loopHoldBoundMs(200));
     expect(openTaskScanOffset(f)).toBe(size);
     expect(openBackgroundTasks(f, sid).map((t) => t.id)).toEqual(["managed-task"]);
   }, 60_000);

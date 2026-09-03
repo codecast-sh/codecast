@@ -305,18 +305,27 @@ Chip filters, label lenses, and schedule grouping are presentation over placed r
 cannot change headline tallies. Trigger absorption stops being a pass: the
 `armed_trigger_kind` fact reaches the classifier as data, identically everywhere.
 
-**The staleness sweep is gated on overlay coverage.** The server's `is_idle` and
-`has_pending` facts come from inputs the replica does not hold (`last_message_role`,
-`agent_status_updated_at`, a producing subagent), so a row the latest overlay payload
-stamps, while that payload is younger than the compare's payload age bound, is placed
-from those facts exactly as the server placed it. The client only sweep (a quiet row
-past the idle grace reads as settled; a trust stale row blanks its queue flag) applies
-only to rows the payload cannot vouch for: liveness never delivered, a row outside the
-payload, or a payload past the bound (the stale probe refreshes it within five
-minutes). The status trust decay stays ungated: it reads the same two inputs the server
-reads. The two replica simulation found the ungated sweep filing a parent with a
-producing child, and a live daemon holding an unanswered message, under needs input
-while the server and the CLI kept them working.
+**The is_idle inputs replicate; there is no client sweep.** The server derives
+`is_idle`, `is_unresponsive` and the trusted status from inputs a replica never held:
+when the daemon last changed status (`agent_status_updated_at`), whether the newest
+message is a user turn (`last_role_is_user`, probed), the row's own heartbeat
+(`last_heartbeat`), the instant the daemon stops vouching for the row
+(`daemon_alive_until`, the user's daemons folded in), the instant its last producing
+child goes quiet (`producing_until`), and whether an AskUserQuestion poll is open
+(`auq_open`). Those six ship as facts, and ONE shared function, `deriveLiveAt(facts, t)`,
+is the idle rule: the overlay runs it at its epoch to stamp the row, the replica runs it
+at its own clock to render, and the time flip runs it at each deadline on both sides.
+Every term is monotone in `t` for fixed facts, so re-running it over the already coerced
+shipped status is idempotent and only ever moves a row toward settled. The row's time
+terms are one shared list too (`rowLiveDeadlines`): the server's time flip and the
+replica's recompute scheduler read it, so no deadline exists on one side only. The
+property tests pin all three: idempotence, monotonicity, and constancy between adjacent
+deadlines. The old client only sweep (a quiet row read as settled, a frozen queue flag
+blanked) and the coverage gate around it are gone: a row with no facts at all takes the
+server's no status branch and settles by the activity grace. One rule this makes exact
+on the replica that the client could not apply before: a declared dormant home whose
+daemon is gone resurfaces as the human's, because nobody can deliver the wake it
+promised.
 
 **Feeder parity.** `useSyncCore(profile)` owns the full feeder mount set: sync log
 applier, live window, liveness overlay, team feeders (mounted per scope), recovery

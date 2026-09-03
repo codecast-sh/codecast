@@ -24,8 +24,10 @@ import { c, fmt } from "../colors.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { APP_SURFACES, findAppSurface, type AppSurface } from "@codecast/shared/contracts";
 import { CdpConnection, listTargets, isCdpAlive, type CdpClient } from "../browser/cdp.js";
-import { engineSession } from "../browser/engine.js";
-import { engineBrowserFor } from "../browser/bridge/real.js";
+import { engineSession, realSessionKey } from "../browser/engine.js";
+import { ownerKey } from "../browser/owner.js";
+import { engineBrowserFor, isRealMode } from "../browser/bridge/real.js";
+import { targetFlags as browserTargetFlags } from "../browser/bridge/commands.js";
 import { runVerb } from "../browser/cliEngine.js";
 import { connectToTab, evaluateOn, type EvalOutcome, type PageCtx } from "../browser/pageEval.js";
 import { readState } from "../browser/instance.js";
@@ -42,6 +44,8 @@ const LOCAL_VITE_PORT = 3200;
 /** A full document load on local dev is a vite transform pass: give it this long to boot and settle. */
 const LOAD_SETTLE_MS = 45_000;
 const DESKTOP_CDP_PORT = Number(process.env.CODECAST_CDP_PORT || 9333);
+/** A page that is the codecast app: production, local dev through nginx, or vite directly. */
+const CODECAST_ORIGIN = /^https?:\/\/((www\.|local\.)?codecast\.sh|localhost:\d+|127\.0\.0\.1:\d+)(\/|$)/;
 /** Chromeless desktop windows that are never the page a driver wants. */
 const DESKTOP_SIDE_WINDOWS = /\/(palette|people|call-panel|faces|meeting-offer|call-ring)(\?|$)/;
 
@@ -56,6 +60,8 @@ interface AppTarget {
   kind: "web" | "desktop";
   origin: string;
   label: string;
+  /** The human's own Chrome through the extension: theirs, never re-signed. */
+  humansOwn: boolean;
   /** Attach to the app page. Caller closes `conn`. */
   attach(): Promise<AttachResult>;
   /** Create the page when there is none to attach to (the web target's tab). */
@@ -65,6 +71,9 @@ interface AppTarget {
 interface TargetOpts {
   desktop?: boolean;
   origin?: string;
+  /** `cast browser`'s --real / --clone: the human's own Chrome or the agent browser. */
+  real?: boolean;
+  clone?: boolean;
 }
 
 function portListening(port: number, timeoutMs = 1000): Promise<boolean> {
@@ -90,12 +99,21 @@ async function originFor(o: TargetOpts): Promise<string> {
 
 async function webTarget(o: TargetOpts, deps: PublishDeps): Promise<AppTarget> {
   const origin = await originFor(o);
-  // The same session key `cast browser` derives, so this is the same tab.
-  const ctx: PageCtx = await engineBrowserFor(engineSession(deps.detectCurrentSessionId));
+  // The same session key and the same real-or-clone choice `cast browser`
+  // makes, so this is the very tab the session's other verbs drive.
+  const session = engineSession(deps.detectCurrentSessionId);
+  const real = isRealMode({ real: o.real, clone: o.clone }, ownerKey(deps.detectCurrentSessionId));
+  let ctx: PageCtx;
+  try {
+    ctx = real ? await engineBrowserFor(realSessionKey(session)) : { session };
+  } catch (err) {
+    die((err as Error).message);
+  }
   return {
     kind: "web",
     origin,
-    label: `web ${origin} (session tab)`,
+    humansOwn: real,
+    label: `web ${origin} (${real ? "your Chrome, via the extension" : "agent browser"})`,
     attach: () => connectToTab(ctx),
     openFresh: async () => {
       // `open` starts the browser, pins the tab and carries logins; the one
@@ -112,7 +130,7 @@ async function desktopTarget(o: TargetOpts): Promise<AppTarget> {
     const targets = await listTargets(port);
     const pages = targets.filter((t) => t.type === "page" && !DESKTOP_SIDE_WINDOWS.test(t.url));
     const wanted = o.origin ? pages.find((t) => t.url.startsWith(o.origin!)) : undefined;
-    return wanted ?? pages.find((t) => /codecast\.sh|localhost/.test(t.url)) ?? pages[0] ?? null;
+    return wanted ?? pages.find((t) => CODECAST_ORIGIN.test(t.url)) ?? pages[0] ?? null;
   };
   const alive = await isCdpAlive(port);
   if (!alive) {
@@ -122,10 +140,21 @@ async function desktopTarget(o: TargetOpts): Promise<AppTarget> {
     );
   }
   const first = await pick();
-  const origin = o.origin?.replace(/\/+$/, "") ?? (first ? new URL(first.url).origin : PROD_ORIGIN);
+  // Any Electron app can own this port (the mail app does, when it runs first);
+  // a driver must know it has codecast before it drives anything.
+  const all = await listTargets(port);
+  if (!all.some((t) => t.type === "page" && CODECAST_ORIGIN.test(t.url))) {
+    const seen = all.filter((t) => t.type === "page").map((t) => t.url).slice(0, 3).join(", ") || "no pages";
+    die(
+      `127.0.0.1:${port} is not the codecast desktop app (it shows ${seen})`,
+      "another app owns the port; run codecast with CODECAST_CDP_PORT=<free port> and pass the same env to cast app",
+    );
+  }
+  const origin = o.origin?.replace(/\/+$/, "") ?? (first && first.url.startsWith("http") ? new URL(first.url).origin : PROD_ORIGIN);
   return {
     kind: "desktop",
     origin,
+    humansOwn: false,
     label: `desktop (cdp 127.0.0.1:${port}) ${origin}`,
     openFresh: async () => {
       die("the desktop app has no main window to drive");
@@ -198,7 +227,6 @@ async function withPage<T>(target: AppTarget, fn: (at: Attached) => Promise<T>):
 
 async function navigate(at: Attached, url: string): Promise<void> {
   await at.conn.send("Page.enable", {}, at.sessionId, 5000);
-  await at.conn.send("Page.bringToFront", {}, at.sessionId, 5000).catch(() => {});
   await at.conn.send("Page.navigate", { url }, at.sessionId, 10_000);
   await at.conn.waitFor((ev) => ev.method === "Page.loadEventFired" && ev.sessionId === at.sessionId, 20_000).catch(() => {});
 }
@@ -212,7 +240,6 @@ async function navigate(at: Attached, url: string): Promise<void> {
  */
 async function go(at: Attached, target: AppTarget, path: string, reload?: boolean): Promise<"in-app" | "load" | "load-after-bounce"> {
   if (!reload) {
-    await at.conn.send("Page.bringToFront", {}, at.sessionId, 5000).catch(() => {});
     const r = await evalJson<{ ok: boolean }>(at, `(() => {
       const root = document.getElementById("root");
       if (!root || root.children.length === 0) return { ok: false };
@@ -694,6 +721,12 @@ async function asUser(who: string | undefined, o: TargetOpts & { restore?: boole
     }
   }
 
+  if (target.humansOwn) {
+    die(
+      "as-user never changes the identity in your own Chrome",
+      "cast app --clone as-user … swaps the agent browser instead, or --desktop for the desktop app",
+    );
+  }
   const { conn, pages, main } = await appWindows(target);
   try {
     // The agent browser's profile is shared by every session: an identity
@@ -777,6 +810,7 @@ async function evalOnApp(script: string, o: TargetOpts & { timeout?: string }, d
 function targetFlags<T extends Command>(cmd: T): T {
   cmd.option("--desktop", `drive the desktop app over its CDP port (${DESKTOP_CDP_PORT}) instead of this session's tab`);
   cmd.option("--origin <url>", "app origin (default: local dev when it answers, else production)");
+  browserTargetFlags(cmd);
   return cmd;
 }
 
@@ -795,6 +829,10 @@ wait-settle, then prove with cast browser (snapshot, get text, shot) or eval.
   cast app sweep --json                every surface: rendered, no crash, no errors
   cast app as-user demo@example.com    a known identity for the run (--restore puts yours back)
   cast app --desktop doctor            the same against the desktop app (from-source run, port 9333)
+
+The web target is this session's tab: your own Chrome through the extension when
+it is paired (--real), the agent browser otherwise (--clone), the same choice
+\`cast browser\` makes. as-user only ever re-signs the agent browser or the desktop app.
 `);
 
   // The target flags parse both before and after the verb.

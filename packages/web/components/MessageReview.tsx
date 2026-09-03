@@ -22,6 +22,8 @@ import { AvatarImg } from "../lib/avatarCache";
 import { getQuoteUnits, quoteUnitAt, unitTop } from "../lib/quoteUnits";
 import { createReviewComment, exitReviewMode } from "../lib/reviewActions";
 import { quoteSelectionIntoReply } from "../lib/quoteSelection";
+import { stepReviewBlock } from "../lib/reviewNav";
+import { altChordDirection } from "../shortcuts";
 import { focusComposer } from "../lib/composerControl";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
@@ -222,8 +224,6 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     };
   }, [content, measureActive, measure]);
 
-  const blockCount = rects.length || 1;
-
   // ----- stack rail cards: anchor to their block, push down to avoid overlap -----
   const sortedComments = useMemo(
     () => [...myComments].sort((a, b) => a.blockIndex - b.blockIndex || a.createdAt - b.createdAt),
@@ -262,8 +262,6 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     return () => ro.disconnect();
   }, [engaged, restack]);
 
-  const setActiveBlock = useCallback((i: number) => useInboxStore.getState().setReviewActiveBlock(i), []);
-
   const blockText = useCallback((i: number): string => {
     const el = getQuoteUnits(contentRef.current)[i];
     return el ? el.innerText : "";
@@ -301,7 +299,8 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   }, [cancelClear]);
 
   // ----- keyboard nav (only while this message is the review target) -----
-  // ↑/↓ (or j/k) move between blocks; c/Enter quotes the active block (like
+  // ↑/↓ (j/k, ⌥J/⌥K) walk chunks, crossing into the neighbouring reply at
+  // either edge and back into the composer past the last; c/Enter quotes the active block (like
   // clicking ❝); n/e adds or opens its note; x/⌫ removes it; Esc leaves. The
   // outgoing message auto-attaches the batch on send, so there's no submit key.
   const handleKeyDown = useCallback(
@@ -309,7 +308,6 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
       if (!isReviewTarget) return;
       const tag = (e.target as HTMLElement).tagName;
       if (tag === "TEXTAREA" || tag === "INPUT") return;
-      const last = blockCount - 1;
       const cur = useInboxStore.getState().reviewActiveBlock;
       const blockComments = myComments.filter((c) => c.blockIndex === cur);
       const key = e.key;
@@ -323,12 +321,17 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
           return;
         }
       }
-      if (key === "ArrowDown" || key === "j") {
+      // ↑/↓, j/k and the ⌥J/⌥K chords all walk chunks; the walker crosses into
+      // the neighbouring reply at either edge and drops back into the composer
+      // past the last chunk (lib/reviewNav).
+      const chord = altChordDirection(e.nativeEvent);
+      const dir = chord === "up" || chord === "down" ? chord
+        : key === "ArrowDown" || key === "j" ? "down"
+        : key === "ArrowUp" || key === "k" ? "up"
+        : null;
+      if (dir) {
         e.preventDefault();
-        setActiveBlock(Math.min(last, cur + 1));
-      } else if (key === "ArrowUp" || key === "k") {
-        e.preventDefault();
-        setActiveBlock(Math.max(0, cur - 1));
+        stepReviewBlock(messageId, dir === "down" ? 1 : -1);
       } else if (key === "c" || key === "Enter") {
         // Quote the active block, or open its note if it's already quoted.
         e.preventDefault();
@@ -349,7 +352,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
         exitReviewMode();
       }
     },
-    [isReviewTarget, blockCount, myComments, conversationId, setActiveBlock, startComment],
+    [isReviewTarget, myComments, conversationId, messageId, startComment],
   );
 
   // keep active block in view + hold focus so single-letter keys are captured here
