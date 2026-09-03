@@ -599,7 +599,8 @@
    the pointer: a small lift. Never while held or receiving — the press-down
    and the incoming lift are the walkie's own words, and a hover rule that
    outranked them made a held key rise instead of sink. */
-.people-panel[data-density="strip"] .people-face:hover:not([data-tx]):not([data-rx]) {
+.people-panel[data-density="strip"] .people-face:hover:not([data-tx]):not([data-rx]),
+.presence-faces .people-face:hover:not([data-tx]):not([data-rx]) {
   transform: scale(1.08);
 }
 /* The compact row's actions cover the activity line rather than the badge

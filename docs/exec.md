@@ -85,7 +85,7 @@ When a prompt argument is present and stdin is piped, the child inherits stdin. 
 
 If the Codecast daemon is running and watching this project, the transcript still syncs. You can `cast read` it later. The run itself does not create an inbox card.
 
-To start work on another machine, use `cast spawn --device <name>` instead. Exec always runs here.
+To start work on another machine, use `cast spawn --device <name>` instead, or `cast spawn --cloud` for an isolated worktree on the cloud host. Exec always runs here.
 
 ## `cast spawn --effort`
 

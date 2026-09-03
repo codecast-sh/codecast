@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { computeDiff, placeDurableThreads } from "./DiffView";
+import { computeDiff, placeDurableThreads, placeSidedThreads } from "./DiffView";
 
 describe("computeDiff", () => {
   test("identical content resolves to all-context without the LCS matrix", () => {
@@ -101,5 +101,48 @@ describe("placeDurableThreads", () => {
     expect(rows.get(3)).toBe(6);
     // Line 99 isn't visible in this diff: no row, no crash.
     expect(rows.size).toBe(2);
+  });
+});
+
+
+describe("placeSidedThreads", () => {
+  const ctx = (oldNum: number, newNum: number) => ({ type: "context" as const, content: "x", oldNum, newNum });
+  const add = (newNum: number) => ({ type: "added" as const, content: "x", newNum });
+  const del = (oldNum: number) => ({ type: "removed" as const, content: "x", oldNum });
+  const sep = { type: "separator" as const };
+
+  test("the two sides of one line land on their own rows", () => {
+    // Old line 2 was deleted and new line 2 replaces it. A comment on each is
+    // a comment on different code, so each gets the row that shows it.
+    const items = [ctx(1, 1), del(2), add(2), ctx(3, 3)] as any[];
+    const rows = placeSidedThreads(items, new Set(["LEFT:2", "RIGHT:2"]));
+    expect(rows.get(1)).toBe("LEFT:2");
+    expect(rows.get(2)).toBe("RIGHT:2");
+    expect(rows.size).toBe(2);
+  });
+
+  test("a context row can carry either side, and holds only one thread", () => {
+    const items = [ctx(7, 4)] as any[];
+    expect(placeSidedThreads(items, new Set(["LEFT:7"])).get(0)).toBe("LEFT:7");
+    expect(placeSidedThreads(items, new Set(["RIGHT:4"])).get(0)).toBe("RIGHT:4");
+    // Both anchors point at the same row; the new side is read first, and the
+    // loser waits for a row of its own rather than doubling up.
+    const both = placeSidedThreads(items, new Set(["LEFT:7", "RIGHT:4"]));
+    expect(both.get(0)).toBe("RIGHT:4");
+    expect(both.size).toBe(1);
+  });
+
+  test("an added row never carries a left anchor, and a deleted row never a right one", () => {
+    const items = [add(5), del(5)] as any[];
+    const rows = placeSidedThreads(items, new Set(["LEFT:5", "RIGHT:5"]));
+    expect(rows.get(0)).toBe("RIGHT:5");
+    expect(rows.get(1)).toBe("LEFT:5");
+  });
+
+  test("separators are skipped and an anchor outside the diff places nothing", () => {
+    const items = [ctx(1, 1), sep, ctx(5, 5)] as any[];
+    const rows = placeSidedThreads(items, new Set(["RIGHT:5", "RIGHT:99"]));
+    expect(rows.get(2)).toBe("RIGHT:5");
+    expect(rows.size).toBe(1);
   });
 });

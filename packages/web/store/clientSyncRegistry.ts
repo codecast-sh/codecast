@@ -364,6 +364,26 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: {},
     feeds: ["agentTasks.webList"],
   },
+  // Issue sync sources (issue_sync_sources, docs/architecture/issue-sync.md
+  // S1.3): the Linear teams/projects and GitHub repos a workspace imports,
+  // one row per codecast project. listSources returns the COMPLETE visible
+  // set, so snapshot — absence means the source was removed.
+  //
+  // localFirst: pause/resume, the delegation settings and remove all flip the
+  // draft and ride named dispatch side effects (addIssueSyncSource /
+  // updateIssueSyncSource / removeIssueSyncSource) to the real mutations.
+  // `addSource` takes no client key, so an add's optimistic stub has no altKey
+  // to supersede onto; the next snapshot carries the real row and drops the
+  // stub, which is the same convergence by a slower door.
+  issueSyncSources: {
+    persistence: { kind: "collection", key: "issueSyncSources" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    workspaceScoped: true,
+    indexes: "_id, project_id",
+    sync: {},
+    feeds: ["issueSync.listSources"],
+  },
   // A trigger's run history: one window per task (webListRuns is capped at
   // 100 rows), so a delta overlay keeps every opened trigger's runs. Rows are
   // keyed by run_key (the server's `_id` is the conversation and repeats for
@@ -435,13 +455,50 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "commits" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
-    feeds: ["commits.getCommitsForTimeline"],
+    feeds: ["commits.getCommitsForTimeline", "commits.getCommitBySha"],
   },
+  // The PR page feeds one row into the same collection, so opening a PR paints
+  // from whatever the timeline already cached and the single row refreshes it.
   pullRequests: {
     persistence: { kind: "collection", key: "pullRequests" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
-    feeds: ["pull_requests.getPRsForTimeline"],
+    feeds: ["pull_requests.getPRsForTimeline", "pull_requests.getPRByNumber"],
+  },
+  // Code comments (review_comments): a comment on a file and line in a repo,
+  // with or without a PR. Each feed is a window onto the table (one PR's set,
+  // one commit's, one file's), so the overlay is a delta: absence in a payload
+  // means "outside this window", never "deleted".
+  codeComments: {
+    persistence: { kind: "collection", key: "codeComments" },
+    hydration: { phase: "deferred" },
+    // A comment posted here renders from its optimistic stub, keyed by the
+    // client_id it was created with; the server row carrying the same
+    // client_id supersedes the stub when listForPR echoes it back.
+    sync: { isDelta: true, altKey: "client_id" },
+    indexes: "_id, pull_request_id, repository, file_path, created_at",
+    feeds: ["codeComments.listForPR", "codeComments.listForRef", "codeComments.listForFile"],
+  },
+  // Git activity as first class events (git_events): one row per commit,
+  // push, PR change, review, check result or code comment. Every feed is a
+  // window (a team page, one conversation, one PR), so the overlay is a
+  // delta: absence in a payload means "outside this window", never "deleted".
+  // Not workspace scoped — access is decided server side by team membership
+  // or by the linked conversation, and a row carries no `workspace` key.
+  externalEvents: {
+    persistence: { kind: "collection", key: "externalEvents" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    indexes: "_id, team_id, conversation_id, pr_id, task_id, repository, created_at",
+    feeds: [
+      "externalEvents.listForTeam",
+      "externalEvents.listForConversation",
+      "externalEvents.listForPR",
+      "externalEvents.listForTask",
+      "externalEvents.listForPlan",
+      "externalEvents.listForProject",
+      "externalEvents.listForRepository",
+    ],
   },
   // The daemon-side fleet (managed_sessions). listActiveSessions is the
   // COMPLETE live set (24h heartbeat window) — snapshot, so a session that
@@ -819,6 +876,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   pageThreads: "shared",
   agentTasks: "shared",
   agentTaskRuns: "shared",
+  issueSyncSources: "shared",
   workflows: "shared",
   workflowRuns: "shared",
   artifacts: "shared",
@@ -827,6 +885,8 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   sessionThreads: "shared",
   commits: "shared",
   pullRequests: "shared",
+  codeComments: "shared",
+  externalEvents: "shared",
   managedSessions: "shared",
   sessionMetricsAggregate: "shared",
   pendingPermissions: "shared",

@@ -6,8 +6,15 @@
   "main": "src/index.js",
   "types": "index.d.ts",
   "exports": {
-    ".": "./src/index.js",
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./src/index.js"
+    },
     "./preload": "./src/preload.js",
+    "./vite": {
+      "types": "./templates/vite-release-manifest.d.ts",
+      "default": "./templates/vite-release-manifest.js"
+    },
     "./templates/electron-builder": "./templates/electron-builder.js",
     "./templates/*": "./templates/*"
   },

@@ -5,17 +5,16 @@
 // (honest presence, coarse presence: teammates should never be able to read
 // "last keystroke at 14:02:31" off each other).
 //
-// Built on the push-routing predicates in pushRouter.ts rather than fresh
-// thresholds: "active" here and "hold my phone pushes" there must be the same
-// judgment, or the app would claim someone is away while routing says they're
-// at the desk.
+// Built on the same policy as push routing rather than fresh thresholds:
+// "active" here and "hold my phone pushes" there must be the same judgment,
+// or the app would claim someone is away while routing says they're at the desk.
 import {
   INPUT_ACTIVE_MS,
   PRESENCE_FRESH_MS,
   isMachineActivePresence,
   type MachineDevice,
   type PresenceRow,
-} from "./pushRouter";
+} from "./presencePolicy";
 
 // Input this old means the person walked away from an otherwise-open surface.
 export const PRESENCE_IDLE_MAX_MS = 20 * 60_000;
