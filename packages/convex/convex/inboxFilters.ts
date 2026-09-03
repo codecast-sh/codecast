@@ -194,7 +194,7 @@ export function nextAgentStatusOnAddMessages(
 // lives in @codecast/shared/contracts as the single source of truth shared
 // with the web client's ApiErrorCard rendering.
 export { isApiErrorBanner, classifyApiErrorBanner, CLIENT_ERROR_BANNER_PREFIX, blockedContinueClientId, BLOCKED_BANNER_KINDS, CONTINUE_BANNER_KINDS } from "@codecast/shared/contracts";
-import { isApiErrorBanner as isApiErrorBannerFn } from "@codecast/shared/contracts";
+import { isApiErrorBanner as isApiErrorBannerFn, isNoResponseStub } from "@codecast/shared/contracts";
 
 // Decides what an addMessages batch should do about stale API-error banners.
 //   - "supersede": a real turn arrived; delete banner(s) that precede it and
@@ -235,11 +235,17 @@ export function isBannerTurn(m: TurnShape): boolean {
 }
 
 // A genuine turn: assistant text or a tool call, user text, a tool result or
-// an image. A banner is not one, and neither is a system notice or an empty
-// meta row — those say nothing about whether a block lifted.
+// an image. A banner is not one, and neither is a system notice, an empty
+// meta row, or the CLI's synthetic "No response requested." stub — those say
+// nothing about whether a block lifted. The stub follows every limit banner
+// the resume hook pokes: counting it as a turn cleared the flag and painted a
+// still-parked session "resolved".
 export function isRealTurn(m: TurnShape): boolean {
   if (isBannerTurn(m)) return false;
-  if (m.role === "assistant") return !!m.content?.trim() || (m.tool_calls?.length ?? 0) > 0;
+  if (m.role === "assistant") {
+    if ((m.tool_calls?.length ?? 0) > 0) return true;
+    return !!m.content?.trim() && !isNoResponseStub(m.content);
+  }
   if (m.role === "user") {
     return !!m.content?.trim() || (m.tool_results?.length ?? 0) > 0 || (m.images?.length ?? 0) > 0;
   }
