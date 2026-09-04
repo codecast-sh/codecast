@@ -4,8 +4,6 @@
 // Kept out of components/terminal/ConversationTerminal.tsx so that module
 // exports only components and stays a React Fast Refresh boundary.
 
-import { closeTab } from "./termSessions";
-
 export const CONVERSATION_TERMINAL_DEFAULT_HEIGHT = 260;
 
 export interface SplitState {
@@ -39,7 +37,10 @@ export function isConversationTerminalOpen(convKey: string): boolean {
 export function toggleConversationTerminal(convKey: string, target: string): void {
   const existing = conversationTerminalSplits.get(convKey);
   if (existing) {
-    if (existing.termId) closeTab(existing.termId);
+    if (existing.termId) {
+      const termId = existing.termId;
+      void import("./termSessions").then(({ closeTab }) => closeTab(termId));
+    }
     conversationTerminalSplits.delete(convKey);
   } else {
     conversationTerminalSplits.set(convKey, { termId: null, target, height: CONVERSATION_TERMINAL_DEFAULT_HEIGHT });

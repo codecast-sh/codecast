@@ -67,6 +67,19 @@ describe("tokenMatches and authorizeLocalRequest", () => {
     expect(authorizeLocalRequest(req({ origin: "https://evil.com", authorization: `Bearer ${TOKEN}` }), opts())).toBe(false);
     expect(authorizeLocalRequest(req({ origin: "https://codecast.sh", authorization: TOKEN }), opts())).toBe(false);
   });
+
+  // The daemon's token is state now: it loads from disk early in boot, so a
+  // caller can reach these options before it exists. A constant-time compare of
+  // two zero-length buffers reports a match, so an unconfigured server would
+  // otherwise authorize a request that presents no token at all.
+  it("authenticates nobody when the server has no token yet", () => {
+    const unset = opts({ token: "" });
+    expect(tokenMatches("", unset)).toBe(false);
+    expect(tokenMatches(TOKEN, unset)).toBe(false);
+    const req = (headers: Record<string, string>) => ({ headers }) as unknown as http.IncomingMessage;
+    expect(authorizeLocalRequest(req({ origin: "https://codecast.sh" }), unset)).toBe(false);
+    expect(authorizeLocalRequest(req({ origin: "https://codecast.sh", authorization: "Bearer " }), unset)).toBe(false);
+  });
 });
 
 describe("corsHeaders", () => {

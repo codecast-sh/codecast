@@ -7,6 +7,33 @@ const COMMAND_TIMEOUT_MS = 5000;
 // send-keys arg-list chunking: keeps each control-mode command line small.
 const INPUT_CHUNK_BYTES = 256;
 
+export function terminalColorReports(colors: unknown): string[] {
+  if (!colors || typeof colors !== "object") return [];
+  return ([["foreground", 10], ["background", 11]] as const).flatMap(([key, code]) => {
+    const value = (colors as Record<string, unknown>)[key];
+    if (typeof value !== "string" || !/^#[\da-f]{6}$/i.test(value)) return [];
+    const rgb = value.slice(1).match(/../g)!.map((channel) => channel.repeat(2)).join("/");
+    return [`\\033]${code};rgb:${rgb}\\007`];
+  });
+}
+
+/**
+ * The control-mode commands that hand tmux the viewer's default colours.
+ *
+ * tmux answers an application's OSC 10/11 query on the pane's behalf, but only
+ * once a client has REPORTED what its colours are — `refresh-client -r` is that
+ * report. Without it tmux answers from its own idea of the terminal (black),
+ * which is what made Codex paint dark panels inside a light xterm.
+ *
+ * Pure, so the exact bytes we hand tmux are provable without a live server.
+ * The pane id comes from tmux itself, but it is interpolated into a command
+ * line, so it is validated here the way shellSafe guards session names.
+ */
+export function colorReportCommands(paneId: string, colors: unknown): string[] {
+  if (!/^%\d+$/.test(paneId)) return [];
+  return terminalColorReports(colors).map((report) => `refresh-client -r "${paneId}:${report}"`);
+}
+
 export interface ControlClientEvents {
   onOutput(data: Buffer): void;
   onExit(reason?: string): void;
@@ -150,7 +177,7 @@ export class TmuxControlClient {
    * (the stdout stream is chronological), which is what makes the seed
    * duplicate-free.
    */
-  async start(cols: number, rows: number): Promise<{ cols: number; rows: number; seed: Buffer; sessionName: string }> {
+  async start(cols: number, rows: number, colors?: unknown): Promise<{ cols: number; rows: number; seed: Buffer; sessionName: string }> {
     const args = ["-u", "-C"]; // -u: force UTF-8 regardless of client locale
     if (this.mode.kind === "create") {
       args.push("new-session", "-A", "-s", shellSafe(this.mode.sessionName), "-x", String(cols), "-y", String(rows));
@@ -244,6 +271,7 @@ export class TmuxControlClient {
     // Resolving anyway would seed nothing and render as a blank pane with a
     // healthy status dot — surface the failure instead.
     if (!info.ok || !this.paneId) throw new Error("tmux attach failed — could not read the pane");
+    await this.setColors(colors);
     const paneCols = parseInt(parts[1] ?? "", 10) || cols;
     const paneRows = parseInt(parts[2] ?? "", 10) || rows;
     const sessionName = parts[3] || (this.mode.kind === "create" ? this.mode.sessionName : this.mode.target);
@@ -336,6 +364,14 @@ export class TmuxControlClient {
     for (let i = 0; i < data.length; i += INPUT_CHUNK_BYTES) {
       const chunk = data.subarray(i, i + INPUT_CHUNK_BYTES);
       void this.command(`send-keys -t ${this.paneId} -H ${toSendKeysHex(chunk).join(" ")}`);
+    }
+  }
+
+  /** Report the viewer's default colours to tmux (startup and theme changes). */
+  async setColors(colors: unknown): Promise<void> {
+    if (this.closed || !this.paneId) return;
+    for (const cmd of colorReportCommands(this.paneId, colors)) {
+      await this.command(cmd);
     }
   }
 
