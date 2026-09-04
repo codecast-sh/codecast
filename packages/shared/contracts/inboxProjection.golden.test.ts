@@ -43,6 +43,7 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   2: "e72f762fac4e3f41",
   3: "658e57e266be626a",
   4: "7af701cea3a64c02",
+  5: "5c58a1d04036be6a",
 };
 
 type Expected = {

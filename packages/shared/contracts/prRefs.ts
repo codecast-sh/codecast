@@ -21,6 +21,29 @@ const NAME = "[A-Za-z0-9._-]+";
 const REPO_ONLY = new RegExp(`^${NAME}/${NAME}$`);
 
 /**
+ * One spelling for a repository, or for an owner alone.
+ *
+ * GitHub treats an owner and a repository name as case insensitive but keeps
+ * the case it was given, so the same repository reaches us as
+ * "Codecast-SH/Codecast" from a person typing it, from a git remote, and as
+ * "codecast-sh/codecast" from a webhook. Every index we look it up by is a byte
+ * comparison, so the value stored and the value searched for both go through
+ * here and one spelling wins. A surface that shows the name may keep whatever
+ * case it was handed; the indexed field is always this form.
+ */
+export function normalizeRepository<T extends string | undefined | null>(repository: T): T {
+  return (typeof repository === "string" ? repository.trim().toLowerCase() : repository) as T;
+}
+
+/** The canonical owner of "owner/name", the key every installation lookup uses. */
+export function repositoryOwner(repository: string): string {
+  return normalizeRepository(repository).split("/")[0];
+}
+
+const ref = (repository: string, number?: number): ParsedPrRef =>
+  number == null ? { repository: normalizeRepository(repository) } : { repository: normalizeRepository(repository), number };
+
+/**
  * Read a pull request reference. Returns null when the text names no pull
  * request, so a caller can tell "nothing was given" from "this is a number".
  */
@@ -31,22 +54,22 @@ export function parsePrRef(raw: string | null | undefined): ParsedPrRef | null {
   // A GitHub pull request URL, with any trailing path or fragment:
   // https://github.com/owner/name/pull/12/files#discussion_r1
   const github = text.match(new RegExp(`github\\.com/(${NAME})/(${NAME})/pulls?/(\\d+)`));
-  if (github) return { repository: `${github[1]}/${github[2]}`, number: Number(github[3]) };
+  if (github) return ref(`${github[1]}/${github[2]}`, Number(github[3]));
 
   // A codecast PR page: https://codecast.sh/pr/owner/name/12
   const codecast = text.match(new RegExp(`/pr/(${NAME})/(${NAME})/(\\d+)`));
-  if (codecast) return { repository: `${codecast[1]}/${codecast[2]}`, number: Number(codecast[3]) };
+  if (codecast) return ref(`${codecast[1]}/${codecast[2]}`, Number(codecast[3]));
 
   // owner/name#12, and the slash form people also type.
   const pair = text.match(new RegExp(`^(${NAME}/${NAME})(?:#|/)(\\d+)$`));
-  if (pair) return { repository: pair[1], number: Number(pair[2]) };
+  if (pair) return ref(pair[1], Number(pair[2]));
 
   // A bare number, with or without the hash people put in front of it.
   const bare = text.match(/^#?(\d+)$/);
   if (bare) return { number: Number(bare[1]) };
 
   // owner/name alone names a repository and no pull request.
-  if (REPO_ONLY.test(text)) return { repository: text };
+  if (REPO_ONLY.test(text)) return ref(text);
 
   return null;
 }
@@ -54,13 +77,14 @@ export function parsePrRef(raw: string | null | undefined): ParsedPrRef | null {
 /**
  * The "owner/name" a git remote points at, or null when the remote is not a
  * GitHub one. Covers the three shapes git writes: the scp style ssh remote,
- * the https remote, and the ssh:// URL.
+ * the https remote, and the ssh:// URL. The answer is the canonical spelling,
+ * whatever case the remote was cloned with.
  */
 export function extractRepoFromRemoteUrl(remoteUrl: string | null | undefined): string | null {
   const url = (remoteUrl ?? "").trim().replace(/\/+$/, "").replace(/\.git$/, "");
   if (!url) return null;
   const match = url.match(new RegExp(`github\\.com[:/](${NAME})/(${NAME})$`));
-  return match ? `${match[1]}/${match[2]}` : null;
+  return match ? normalizeRepository(`${match[1]}/${match[2]}`) : null;
 }
 
 /** The path of the codecast page for a pull request. */

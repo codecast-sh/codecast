@@ -329,7 +329,7 @@ export { isUserDormant, isSettleVerdictCurrent } from "@codecast/shared/contract
 // token. "pinned" and "live" are orthogonal to work_state (they filter the
 // is_pinned / is_live flags), so callers handle them specially. Returns null for
 // "all"/unset/garbage so an unrecognized value transparently means "no filter".
-export type WorkStateFilter = WorkState | "pinned" | "live";
+export type WorkStateFilter = WorkState | "pinned" | "live" | "hibernated";
 
 export function normalizeWorkStateFilter(raw: string | undefined | null): WorkStateFilter | null {
   const v = (raw || "").trim().toLowerCase().replace(/[\s_]+/g, "-");
@@ -360,6 +360,8 @@ export function normalizeWorkStateFilter(raw: string | undefined | null): WorkSt
     case "idle":
     case "blank":
       return "idle";
+    case "hibernated":
+      return "hibernated";
     case "pinned":
     case "pin":
       return "pinned";

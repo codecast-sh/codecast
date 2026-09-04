@@ -6,7 +6,9 @@ import {
   buildCodexUserTurnMessage,
   codexForkParentIdFromHead,
   isAppServerOwnedCodexTranscript,
+  isMissingAppServerThreadError,
   isTmuxSessionMetadataMatch,
+  mayMaterializeClaudeTranscript,
   removeAppServerThreadRegistration,
   upsertAppServerThreadRegistration,
 } from "./daemon.js";
@@ -169,5 +171,47 @@ describe("Codex history import routing", () => {
     const start = source.indexOf("async function deliverMessage(");
     const end = source.indexOf("const childConvId", start);
     expect(source.slice(start, end)).toContain("pendingAgentSwitches.has(conversationId)");
+  });
+});
+
+describe("one conversation, one agent", () => {
+  test("only a claude or unhinted conversation may be materialized", () => {
+    // Materialization writes a claude transcript and binds it as the
+    // conversation's session id, so anything else gains a second backend.
+    expect(mayMaterializeClaudeTranscript("claude")).toBe(true);
+    expect(mayMaterializeClaudeTranscript(null)).toBe(true);
+    expect(mayMaterializeClaudeTranscript(undefined)).toBe(true);
+    expect(mayMaterializeClaudeTranscript("codex")).toBe(false);
+    expect(mayMaterializeClaudeTranscript("opencode")).toBe(false);
+    expect(mayMaterializeClaudeTranscript("cursor")).toBe(false);
+    expect(mayMaterializeClaudeTranscript("gemini")).toBe(false);
+    expect(mayMaterializeClaudeTranscript("grok")).toBe(false);
+  });
+
+  test("materialization is gated on the conversation's declared agent", () => {
+    const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
+    const start = source.indexOf("async function materializeSession(");
+    const end = source.indexOf("logDelivery(`Materialized session=", start);
+    const body = source.slice(start, end);
+    expect(body).toContain("mayMaterializeClaudeTranscript(matAgentType)");
+    expect(body).not.toContain("clientOwnsSessionStore(matAgentType)");
+  });
+
+  test("only a provably missing thread counts as gone", () => {
+    expect(isMissingAppServerThreadError(new Error("thread not found"))).toBe(true);
+    expect(isMissingAppServerThreadError(new Error("No rollout found for thread"))).toBe(true);
+    expect(isMissingAppServerThreadError(new Error("Request turn/start timed out after 30000ms"))).toBe(false);
+    expect(isMissingAppServerThreadError(new Error("socket hang up"))).toBe(false);
+    expect(isMissingAppServerThreadError("turn/start timed out")).toBe(false);
+  });
+
+  test("a failed turn keeps the registration unless the thread is gone", () => {
+    const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
+    const start = source.indexOf("const tryAppServerDelivery = async (");
+    const end = source.indexOf("delivery failed, falling back to tmux", start);
+    const body = source.slice(start, end);
+    const guard = body.indexOf("isMissingAppServerThreadError(err)");
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(body.indexOf("removeAppServerThreadRegistration"));
   });
 });

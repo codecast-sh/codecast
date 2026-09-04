@@ -1,3 +1,5 @@
+import { HibernatedMarker } from "./HibernatedMarker";
+import { HIBERNATED_COPY } from "@codecast/shared/contracts";
 import { BranchCodeLink } from "./repo/RepositoryLinks";
 import React, { useState, useCallback, useEffect, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -26,6 +28,7 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { actedBlockedConversations, isBlockedConversation, isSubagentConversation, isUsageExhausted, nestParentIdOf, worstUsagePercent, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { withSafetyBlock } from "@codecast/shared/contracts";
 import { rankByHeadroom, isStashHidden } from "@codecast/shared/contracts";
 import { sessionIdleAt, sessionLiveAt } from "../lib/liveness";
 import { TooltipProvider } from "./ui/tooltip";
@@ -312,7 +315,10 @@ function AuthErrorBadge({ kind, agentType }: { kind?: string | null; agentType?:
   // Only the parked-and-won't-heal kinds get a badge. kind "error" (statusful
   // 429/5xx provider failures) self-retries — badging it paints a healthy
   // session as blocked.
-  if (kind !== "limit" && kind !== "auth" && kind !== "connection" && kind !== "fatal" && kind !== "throttle") return null;
+  if (kind !== "limit" && kind !== "auth" && kind !== "connection" && kind !== "fatal" && kind !== "throttle" && kind !== "safety") return null;
+  if (kind === "safety") {
+    return <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30" title="OpenAI stopped this conversation for safety review. Automatic retries and account switching cannot resolve it.">safety</span>;
+  }
   if (kind === "throttle") {
     return (
       <span
@@ -591,6 +597,8 @@ function BlockedSessionsBanner({
   // waiting for. Same predicate the server selection uses, so the counts on
   // the buttons are exactly what the mutations will touch.
   const subagents = blocked.filter(isSubagentConversation);
+  const safetyBlocked = blocked.filter((sess) => sess.pending_api_error_kind === "safety" && (includeSubs || !isSubagentConversation(sess)));
+  const safetyCount = safetyBlocked.length;
   // Workers join the acted set only through the checkbox — never because they
   // are all that is blocked. Continuing an in-process worker cannot reach it;
   // it resumes a standalone copy that reruns its brief for nobody (the
@@ -807,6 +815,7 @@ function BlockedSessionsBanner({
               [throttleCount, "rate-limit bursts"],
               [connCount, "dropped connections"],
               [fatalCount, "api errors"],
+              [safetyCount, "safety review"],
             ] as const).reduce((best, cur) => (cur[0] > best[0] ? cur : best))[1]}
           </button>
           {/* The breakdown items always sum to the headline count: when the
@@ -820,6 +829,7 @@ function BlockedSessionsBanner({
               connCount > 0 ? `${connCount} dropped mid-response` : null,
               fatalCount > 0 ? `${fatalCount} failed on an api error` : null,
               authCount > 0 ? `${authCount} signed out` : null,
+              safetyCount > 0 ? `${safetyCount} need safety review (excluded from automatic recovery)` : null,
               !includeSubs && subagents.length > 0
                 ? `${subagents.length} subagent worker${subagents.length === 1 ? "" : "s"} skipped`
                 : null,
@@ -867,7 +877,7 @@ function BlockedSessionsBanner({
           mixed fleet (limits + a few signed out) the remedy the banner leads
           with is continue/switch; a loud sign-in button under a "usage
           limits" headline reads as the wrong fix. */}
-      {authCount > 0 && limitCount === 0 && connCount === 0 && fatalCount === 0 && loginDevice && (
+      {authCount > 0 && limitCount === 0 && connCount === 0 && fatalCount === 0 && safetyCount === 0 && loginDevice && (
         <SignInCta device={loginDevice} authSessionIds={actedAuthIds} disabled={busy !== null} />
       )}
       {expanded && (
@@ -915,6 +925,12 @@ function BlockedSessionsBanner({
           One solid button, one quiet select, one quiet escape hatch — nothing
           folded away, nothing competing. */}
       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+        {safetyCount > 0 && (
+          <button onClick={() => onOpen?.(safetyBlocked[0])} className="rounded border border-amber-500/40 px-3 py-1 text-[11px] font-semibold text-amber-500 hover:bg-amber-500/10">
+            Review {safetyCount === 1 ? "safety stop" : `${safetyCount} safety stops`}
+          </button>
+        )}
+        {acted.length > 0 && <>
         <button
           onClick={handleContinue}
           disabled={busy !== null || acted.length === 0}
@@ -953,6 +969,7 @@ function BlockedSessionsBanner({
             </select>
           </label>
         )}
+        </>}
         <button
           onClick={() => handleAcknowledge(blocked.map((sess) => sess._id))}
           disabled={busy !== null}
@@ -1769,7 +1786,11 @@ function DormantReasonRow({ session, isActive, hasOtherRows, variant, onOpen }: 
   let family: string;
   let title: string;
   let detail: string;
-  if (session.agent_status === "waiting") {
+  if (session.agent_status === "hibernated") {
+    family = "Hibernated";
+    title = HIBERNATED_COPY;
+    detail = "";
+  } else if (session.agent_status === "waiting") {
     family = "Background";
     title = "waiting on background work";
     detail = "the turn ended on an open task — the agent resumes when it finishes";
@@ -2130,6 +2151,7 @@ export const SessionCard = memo(function SessionCard({
   sessionLabel: string | null;
   isFavorite: boolean;
 }) {
+  session = withSafetyBlock(session);
   const tipActions = useTipActions();
   // The card's idle duration ("idle 3m") and trust-stale pulse read Date.now() at
   // render. Now that the panel no longer re-renders every heartbeat (it wakes on a
@@ -2466,6 +2488,7 @@ export const SessionCard = memo(function SessionCard({
             </span>
             <div className="flex items-center gap-1 flex-shrink-0">
               {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
+            <HibernatedMarker status={session.agent_status} compact />
               {session.session_error && (
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
               )}
@@ -2886,6 +2909,7 @@ export const SessionCard = memo(function SessionCard({
               );
             })()}
             {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
+            <HibernatedMarker status={session.agent_status} compact />
             {session.session_error && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
             )}
@@ -3812,7 +3836,7 @@ function SessionListPanelImpl({
     // resets once the agent resumes; if that never happens the stamp expires
     // and the session re-enters here (coarseNow keeps the TTL live).
     const reviving = freshReviveRequestIds(s.blockedReviveRequestedAt, now);
-    return (Object.values(s.sessions) as InboxSession[]).filter(
+    return (Object.values(s.sessions) as InboxSession[]).map(withSafetyBlock).filter(
       (sess) =>
         isBlockedConversation({ ...sess, agent_type: sess.agent_type ?? "claude_code" }) &&
         !isSessionHidden(sess) &&
@@ -4619,7 +4643,7 @@ function SessionListPanelImpl({
             <button
               key={blockedIncidentTs}
               onClick={openBlockedBanner}
-              title={`${blockedSessions.length} session${blockedSessions.length === 1 ? "" : "s"} blocked on a usage limit, login, dropped connection, or api error — restart them all`}
+              title={`${blockedSessions.length} session${blockedSessions.length === 1 ? "" : "s"} blocked on usage, login, connection, API errors, or safety review — view blockers`}
               className={`flex items-center gap-1 px-1.5 py-[3px] rounded-[5px] text-[10px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30 hover:bg-amber-500/20 transition-colors ${blockedIncidentTs > 0 ? "cc-blocked-pill-pulse" : ""}`}
             >
               <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>

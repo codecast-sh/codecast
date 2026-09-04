@@ -37,6 +37,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { declineInvite } from "../../lib/calls/callManager";
 import { callRingAnswer, callRingHide, callRingSize } from "../../lib/desktop";
 import { soundCallRing } from "../../lib/sounds";
+import { RingCard } from "../../components/calls/RingCard";
 import { CALL_RING_PERIOD_MS } from "@codecast/shared/contracts";
 
 export default function CallRingPage() {
@@ -109,51 +110,19 @@ function CallRingRoot() {
   const quiet = useInboxStore((st) => st.currentUser?.status === "busy");
   useEffect(() => {
     if (!invite || quiet) return;
-    soundCallRing();
-    const t = setInterval(soundCallRing, CALL_RING_PERIOD_MS);
+    let cycle = 0;
+    soundCallRing(cycle);
+    const t = setInterval(() => soundCallRing(++cycle), CALL_RING_PERIOD_MS);
     return () => clearInterval(t);
   }, [invite?._id, quiet]);
 
   if (!invite) return null;
   return (
-    <div ref={cardRef} className="inline-flex w-[340px] flex-col gap-2.5 rounded-xl border border-sol-border bg-sol-bg-alt px-3 py-2.5 shadow-2xl">
-      <div className="flex min-w-0 items-center gap-2.5">
-        {invite.from_image ? (
-          <img
-            src={invite.from_image}
-            alt=""
-            className="h-9 w-9 shrink-0 rounded-full object-cover ring-2 ring-sol-cyan/60"
-          />
-        ) : (
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sol-bg-highlight text-sm text-sol-text-muted">
-            {(invite.from_name || "?").charAt(0).toUpperCase()}
-          </div>
-        )}
-        <div className="min-w-0">
-          <div className="text-sm font-medium leading-snug text-sol-text">
-            {invite.from_name} wants to huddle
-          </div>
-          {invite.anchor_title && (
-            <div className="truncate text-xs text-sol-text-muted">{invite.anchor_title}</div>
-          )}
-        </div>
-      </div>
-      <div className="flex gap-2">
-        <button
-          type="button"
-          onClick={() => callRingAnswer(String(invite._id), String(invite.room_key))}
-          className="flex-1 cursor-pointer rounded border border-sol-green bg-sol-green px-3 py-2 text-xs font-semibold text-sol-base03 transition-colors hover:bg-sol-green/90"
-        >
-          Join
-        </button>
-        <button
-          type="button"
-          onClick={() => void declineInvite(String(invite._id))}
-          className="flex-1 cursor-pointer rounded border border-sol-border/60 px-3 py-2 text-xs text-sol-text transition-colors hover:bg-sol-bg-highlight"
-        >
-          Decline
-        </button>
-      </div>
-    </div>
+    <RingCard
+      ref={cardRef}
+      invite={invite}
+      onAnswer={() => callRingAnswer(String(invite._id), String(invite.room_key))}
+      onDecline={() => void declineInvite(String(invite._id))}
+    />
   );
 }

@@ -211,6 +211,9 @@ export function useGlobalShortcutActions() {
     router.push("/inbox");
   }, [router]));
 
+  useShortcutAction('nav.back', useCallback(() => { window.history.back(); }, []));
+  useShortcutAction('nav.forward', useCallback(() => { window.history.forward(); }, []));
+
   useShortcutAction('compose.focus', useCallback(() => { focusComposer(); }, []));
 
   useShortcutAction('sidebar.toggleLeft', useCallback(() => {

@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { isTeamMember } from "./privacy";
 import { requireUser } from "./lib/auth";
+import { normalizeRepository, repositoryOwner } from "./lib/gitRefs";
 import { requireTeamAdmin, requireTeamMembership, effectiveTeamForResource } from "./lib/access";
 
 const GITHUB_API_BASE = "https://api.github.com";
@@ -197,10 +198,13 @@ export const storeInstallation = internalMutation({
       throw new Error("Installation is already linked to another team");
     }
 
+    // `by_account_login` is the index every repository lookup splits its owner
+    // into, so the login is stored in the canonical spelling.
+    const accountLogin = normalizeRepository(args.account_login);
     if (existing) {
       await ctx.db.patch(existing._id, {
         team_id: args.team_id,
-        account_login: args.account_login,
+        account_login: accountLogin,
         account_type: args.account_type,
         account_id: args.account_id,
         repository_selection: args.repository_selection,
@@ -214,7 +218,7 @@ export const storeInstallation = internalMutation({
     return await ctx.db.insert("github_app_installations", {
       team_id: args.team_id,
       installation_id: args.installation_id,
-      account_login: args.account_login,
+      account_login: accountLogin,
       account_type: args.account_type,
       account_id: args.account_id,
       repository_selection: args.repository_selection,
@@ -266,10 +270,10 @@ export const removeInstallation = internalMutation({
 // principals: a webhook knows the team a repository belongs to and has no user,
 // while a user-facing path knows the user and may not know the team.
 
-const repoOwner = (repository: string) => repository.split("/")[0];
+
 
 /** Does this installation grant access to this repository right now? */
-function installationCoversRepo(
+export function installationCoversRepo(
   installation: Doc<"github_app_installations">,
   repository: string,
 ): boolean {
@@ -277,9 +281,11 @@ function installationCoversRepo(
   // every token minted from it. Answering with it trades a clean null for a
   // failed round trip and a thrown error at the mint call.
   if (installation.suspended_at) return false;
-  if (installation.account_login !== repoOwner(repository)) return false;
+  if (normalizeRepository(installation.account_login) !== repositoryOwner(repository)) return false;
   if (installation.repository_selection === "all") return true;
-  return !!installation.repositories?.some((r) => r.full_name === repository);
+  // The list keeps GitHub's display case for the settings page; the match is canonical.
+  const wanted = normalizeRepository(repository);
+  return !!installation.repositories?.some((r) => normalizeRepository(r.full_name) === wanted);
 }
 
 /** Every installation that covers `repository`, before any scoping. */
@@ -289,7 +295,7 @@ async function installationsCoveringRepo(
 ): Promise<Doc<"github_app_installations">[]> {
   const byOwner = await ctx.db
     .query("github_app_installations")
-    .withIndex("by_account_login", (q) => q.eq("account_login", repoOwner(repository)))
+    .withIndex("by_account_login", (q) => q.eq("account_login", repositoryOwner(repository)))
     .collect();
   return byOwner.filter((installation) => installationCoversRepo(installation, repository));
 }

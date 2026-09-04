@@ -49,6 +49,7 @@ import {
 } from "./ccAccountsShared";
 import { deliverSessionNotificationToParties } from "./notifications";
 import { canOwnerOrTeamAccess } from "./privacy";
+import { withSafetyBlock } from "@codecast/shared/contracts";
 
 // The freshest online NON-remote device: it holds the keychain profiles and is
 // the canonical credential source remotes are pushed from.
@@ -85,6 +86,7 @@ async function listBlockedConversations(
   ctx: { db: any },
   userId: Id<"users">,
   includeSubagents: boolean,
+  includeSafety = false,
 ): Promise<{
   blocked: Doc<"conversations">[];
   topLevelCount: number;
@@ -97,12 +99,14 @@ async function listBlockedConversations(
     .withIndex("by_user_updated", (q: any) => q.eq("user_id", userId).gt("updated_at", since))
     .order("desc")
     .take(1000);
-  const all: Doc<"conversations">[] = recent.filter(isBlockedConversation);
+  const all: Doc<"conversations">[] = recent.map(withSafetyBlock).filter(isBlockedConversation);
   const topLevel = all.filter((c: Doc<"conversations">) => !isSubagentConversation(c));
   const subagents = all.filter(isSubagentConversation);
-  const acted = actedBlockedConversations(all, includeSubagents).slice(0, MAX_REVIVE);
+  const selected = (includeSafety
+    ? includeSubagents ? [...topLevel, ...subagents] : topLevel
+    : actedBlockedConversations(all, includeSubagents)).slice(0, MAX_REVIVE);
   return {
-    blocked: acted,
+    blocked: selected,
     topLevelCount: topLevel.length,
     subagentCount: subagents.length,
     totalBlocked: all.length,
@@ -137,7 +141,8 @@ export const continueAllBlocked = mutation({
     const kinds = new Set(args.kinds ?? CONTINUE_BANNER_KINDS);
     const { blocked: candidates, topLevelCount, subagentCount, totalBlocked } =
       await listBlockedConversations(ctx, userId, args.include_subagents === true);
-    const blocked = candidates.filter((c) => kinds.has(c.pending_api_error_kind ?? "error"));
+    const blocked = actedBlockedConversations(candidates, args.include_subagents === true)
+      .filter((c) => kinds.has(c.pending_api_error_kind ?? "error"));
     if (args.dry_run) {
       return {
         continued: 0,
@@ -211,9 +216,10 @@ export const requestAccountSwitch = mutation({
 
     const now = Date.now();
     const reviveWanted = args.continue_blocked !== false;
-    const { blocked, topLevelCount, subagentCount, totalBlocked } = reviveWanted
+    const { blocked: candidates, topLevelCount, subagentCount, totalBlocked } = reviveWanted
       ? await listBlockedConversations(ctx, userId, args.include_subagents === true)
       : { blocked: [], topLevelCount: 0, subagentCount: 0, totalBlocked: 0 };
+    const blocked = actedBlockedConversations(candidates, args.include_subagents === true);
     if (args.dry_run) {
       return {
         devices: 0,
@@ -347,6 +353,7 @@ export async function insertSwitchCommands(
 
   const groups = new Map<string, Doc<"conversations">[]>();
   for (const conv of opts.blocked) {
+    if (withSafetyBlock(conv).pending_api_error_kind === "safety") continue;
     const owner =
       conv.owner_device_id && onlineById.has(conv.owner_device_id)
         ? conv.owner_device_id
@@ -553,6 +560,7 @@ export const blockedNotifyCheck = internalMutation({
       ctx,
       args.user_id,
       true,
+      true,
     );
     if (blocked.length === 0) return { notified: false, reason: "nothing_blocked" };
     const user = await ctx.db.get(args.user_id);
@@ -569,18 +577,22 @@ export const blockedNotifyCheck = internalMutation({
     const authCount = blocked.filter((c) => c.pending_api_error_kind === "auth").length;
     const connCount = blocked.filter((c) => c.pending_api_error_kind === "connection").length;
     const fatalCount = blocked.filter((c) => c.pending_api_error_kind === "fatal").length;
-    const limitCount = blocked.length - authCount - connCount - fatalCount;
+    const safetyCount = blocked.filter((c) => c.pending_api_error_kind === "safety").length;
+    const throttleCount = blocked.filter((c) => c.pending_api_error_kind === "throttle").length;
+    const limitCount = blocked.length - authCount - connCount - fatalCount - safetyCount - throttleCount;
     // Same headline the banner leads with.
     const on =
-      limitCount > 0 ? "usage limits" : connCount > 0 ? "dropped connections" : fatalCount > 0 ? "api errors" : "login";
+      safetyCount > 0 ? "safety review" : limitCount > 0 ? "usage limits" : connCount > 0 ? "dropped connections" : fatalCount > 0 ? "api errors" : throttleCount > 0 ? "rate-limit bursts" : "login";
     const title = `${totalBlocked} session${totalBlocked === 1 ? "" : "s"} blocked on ${on}`;
     const parts = [
       limitCount > 0 ? `${limitCount} hit a usage limit` : null,
       connCount > 0 ? `${connCount} dropped mid-response` : null,
       fatalCount > 0 ? `${fatalCount} failed on an api error` : null,
       authCount > 0 ? `${authCount} signed out` : null,
+      safetyCount > 0 ? `${safetyCount} need safety review` : null,
+      throttleCount > 0 ? `${throttleCount} rate limited by a burst` : null,
     ].filter(Boolean);
-    const hint = authCount > 0 ? "sign in to revive them" : "revive them from the inbox";
+    const hint = safetyCount > 0 ? "review safety stops in the inbox; they are excluded from automatic recovery" : authCount > 0 ? "sign in to revive them" : "revive them from the inbox";
     const message =
       parts.join(" · ") +
       (subagentCount > 0 ? ` (${subagentCount} subagent${subagentCount === 1 ? "" : "s"})` : "") +

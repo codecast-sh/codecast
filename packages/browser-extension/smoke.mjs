@@ -15,7 +15,7 @@
  *      background create into a named tab group, the group title animating
  *      while a command runs, the border overlay around the driven page, and
  *      a screenshot that does not show it;
- *   4. the product path — `cast browser target real` and then the plain
+ *   4. the product path — the paired-extension default and then the plain
  *      verbs (open, snapshot, click, shot, tabs, stop) on the engine driver,
  *      with the CLI's own state isolated from the machine's. Asserts the tab
  *      landed in a group named for the session, a second tab from
@@ -52,7 +52,8 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
-import { BRIDGE_EXTENSION_ID, bridgePairingUrl, CAST_TAB_GROUP, targetIdOfTab } from "../cli/src/browser/bridge/protocol.ts";
+import { pathToFileURL } from "node:url";
+import { BRIDGE_EXTENSION_ID, bridgePairingPage, bridgePairingUrl, CAST_TAB_GROUP, targetIdOfTab } from "../cli/src/browser/bridge/protocol.ts";
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
 const extDir = path.join(repoRoot, "packages/browser-extension");
@@ -279,24 +280,64 @@ async function seedToken(ext, token, bridgePort) {
  * and wait for options.js to read it, store it and clear the address bar.
  * Returns what was observed so the caller can assert both halves.
  */
+/**
+ * The product pairing path. `setup` writes a forwarding page to a 0600 file
+ * and starts Chrome on the file's path, so Chrome's process singleton lands it
+ * in the Chrome that owns the default profile and no process argument carries
+ * the token. Here the same page is opened over CDP in the scratch Chrome. A
+ * token the extension does not hold yet is offered, not stored: the options
+ * page waits for one click, which is the human's proof that the terminal, and
+ * not some local HTML file, asked.
+ */
 async function pair(ext, token, bridgePort) {
   if (process.env.SMOKE_SEED_TOKEN) return seedToken(ext, token, bridgePort);
-  const url = bridgePairingUrl({ token, port: bridgePort });
-  const { targetId } = await ext.cdp.send("Target.createTarget", { url, background: true });
-  const { sessionId } = await ext.cdp.send("Target.attachToTarget", { targetId, flatten: true });
-  const deadline = Date.now() + 15_000;
-  let hash = null;
-  let stored = false;
-  while (Date.now() < deadline) {
-    const r = await ext.cdp.send("Runtime.evaluate", { expression: "location.hash", returnByValue: true }, sessionId).catch(() => null);
-    hash = r?.result?.value ?? hash;
+  const optionsUrl = `chrome-extension://${BRIDGE_EXTENSION_ID}/options.html`;
+  const pagePath = path.join(work, "pair.html");
+  fs.writeFileSync(pagePath, bridgePairingPage(bridgePairingUrl({ token, port: bridgePort })), { mode: 0o600 });
+  const { targetId } = await ext.cdp.send("Target.createTarget", { url: pathToFileURL(pagePath).href, background: true });
+  let { sessionId } = await ext.cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  // The hop crosses from file: into the extension's process; a session that
+  // died with the old renderer is re-attached rather than reported.
+  const evalIn = async (expression) => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const r = await ext.cdp.send("Runtime.evaluate", { expression, returnByValue: true }, sessionId).catch(() => null);
+      if (r?.result) return r.result.value;
+      ({ sessionId } = await ext.cdp.send("Target.attachToTarget", { targetId, flatten: true }).catch(() => ({ sessionId })));
+    }
+    return undefined;
+  };
+  const storedNow = async () => {
     const b = await ext.eval(`chrome.storage.local.get("bridge").then((v) => v.bridge || null)`).catch(() => null);
-    stored = !!b && b.token === token && b.port === bridgePort;
-    if (hash === "" && stored) break;
+    return !!b && b.token === token && b.port === bridgePort;
+  };
+  const deadline = Date.now() + 15_000;
+  let href = null;
+  let hash = null;
+  let offered = false;
+  let storedBeforeClick = false;
+  while (Date.now() < deadline) {
+    href = (await evalIn("location.href")) ?? href;
+    if (href && href.startsWith(optionsUrl)) {
+      hash = await evalIn("location.hash");
+      offered = (await evalIn(`!document.getElementById("pair").hidden`)) === true;
+      if (hash === "" && offered) break;
+    }
+    await sleep(250);
+  }
+  const forwarded = !!href && href.startsWith(optionsUrl);
+  if (offered) {
+    storedBeforeClick = await storedNow();
+    await evalIn(`document.getElementById("pair").click()`);
+  }
+  let stored = false;
+  const storeDeadline = Date.now() + 10_000;
+  while (offered && Date.now() < storeDeadline) {
+    stored = await storedNow();
+    if (stored) break;
     await sleep(250);
   }
   await ext.cdp.send("Target.closeTarget", { targetId }).catch(() => {});
-  return { hash, stored };
+  return { href, hash, forwarded, offered, storedBeforeClick, stored };
 }
 
 /** The extension's own view of its connection, as the options page reads it. */
@@ -579,7 +620,7 @@ function cliEnv(engineBinary) {
 }
 
 /**
- * The product path: real mode made sticky with `target real`, then the plain
+ * The product path: the paired-extension default after a host restart, then plain
  * verbs on the engine driver, nothing else on the line. What the raw client
  * proved above must now hold when the CLI is the client: the pinned tab the
  * CLI pre-creates lands in a group named for the session and the daemon
@@ -601,17 +642,29 @@ async function cliRealMode(engineBinary, ext, cdpPort, pageUrl, token, bridgePor
       return { tabs: tabs.length, active: t.active, title: g?.title ?? null, color: g?.color ?? null, members, groupIds, urls: tabs.map((x) => x.url) };
     })`);
 
-  const target = await cli(["browser", "target", "real"]);
-  check("cli: target real", target.code === 0 && /real Chrome/.test(target.all), target.all.slice(0, 300));
+  const bridgeFile = path.join(castDir, "browser", "bridge.json");
+  const previousBridge = JSON.parse(fs.readFileSync(bridgeFile, "utf-8"));
+  process.kill(previousBridge.hostPid, "SIGTERM");
+  const stoppedDeadline = Date.now() + 5000;
+  let bridgeStopped = false;
+  while (Date.now() < stoppedDeadline) {
+    bridgeStopped = await fetch(`http://127.0.0.1:${bridgePort}/healthz`)
+      .then(() => false, () => true);
+    if (bridgeStopped) break;
+    await sleep(100);
+  }
+  check("cli: paired bridge host stopped before a fresh session's first verb", bridgeStopped);
   const shown = await cli(["browser", "target"]);
-  check("cli: target is sticky", shown.code === 0 && /target:\s*\S*real/.test(shown.all), shown.all.slice(0, 300));
+  check("cli: paired Chrome remains the default with the host down", shown.code === 0 && /target:\s*\S*real/.test(shown.all) && /paired.*reconnect/.test(shown.all), shown.all.slice(0, 300));
 
   const open = await cli(["browser", "open", url]);
   check(
-    "cli: open drives the real Chrome through the engine",
+    "cli: default open restarts the host and drives Chrome through the extension",
     open.code === 0 && /Cast Bridge Smoke/.test(open.all) && /real Chrome, via the extension/.test(open.all),
     open.all.slice(0, 400),
   );
+  const restartedBridge = JSON.parse(fs.readFileSync(bridgeFile, "utf-8"));
+  check("cli: restarted bridge has a new host and a connected extension", restartedBridge.hostPid !== previousBridge.hostPid && restartedBridge.extensionConnected === true);
 
   // The engine daemon and every CLI call are up now; none of them may carry
   // the bridge token on its command line (it reaches the engine through the
@@ -795,7 +848,9 @@ async function main() {
   check("the scratch Chrome gave the extension the ID the CLI expects", ext.extId === BRIDGE_EXTENSION_ID, `${ext.extId} vs ${BRIDGE_EXTENSION_ID}`);
   await handshake(ext, token, bridgePort);
   const paired = await pair(ext, token, bridgePort);
-  check("pairing URL: the options page stored the token and cleared the fragment", paired.stored && paired.hash === "", JSON.stringify(paired));
+  check("pairing page: the file page forwarded into the options page and the fragment was cleared", paired.forwarded && paired.hash === "", JSON.stringify(paired));
+  check("pairing page: a new token is offered, not stored, until the human clicks Pair", paired.offered && !paired.storedBeforeClick, JSON.stringify(paired));
+  check("pairing page: the click stored the token", paired.stored, JSON.stringify(paired));
 
   // 5. Extension connects to the host. Every status output along the way is
   //    also the proof that status masks the token.
@@ -819,9 +874,9 @@ async function main() {
     statuses.map((s) => s.slice(0, 120)).join(" | ").slice(0, 300),
   );
 
-  // 6. The MVP verbs, all through --real.
-  const open = await cast(["browser", "open", "--real", pageUrl]);
-  check("open", open.code === 0 && /Cast Bridge Smoke/.test(open.all), open.all.slice(0, 300));
+  // 6. The MVP verbs, starting through the paired-extension default.
+  const open = await cast(["browser", "open", pageUrl]);
+  check("built-in driver: default open uses the paired Chrome extension", open.code === 0 && /Cast Bridge Smoke/.test(open.all), open.all.slice(0, 300));
 
   const snap = await cast(["browser", "snapshot", "--real"]);
   check(
@@ -908,7 +963,7 @@ async function main() {
 
   await engine(ab, ["--cdp", cdpUrl, "close"]);
 
-  // 9. The product path: the CLI on the engine driver, in sticky real mode.
+  // 9. The product path: the CLI on the engine driver, defaulting to the paired extension.
   await cliRealMode(ab, ext, cdpPort, pageUrl, token, bridgePort);
   await ext.close();
 }

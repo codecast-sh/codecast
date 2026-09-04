@@ -1,11 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { codexRecoveryAction, recoverCodexTurn, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
+import { codexRecoveryAction, codexResumeParams, recoverCodexTurn, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
 import type { TurnStatus } from "./codexAppServer.js";
 
 const record: PersistedCodexThread = { threadId: "thread", updatedAt: 1, activeTurnId: "turn", cwd: "/project", approvalPolicy: "on-request" };
 const thread = (status: TurnStatus) => ({ id: "thread", status: { type: "idle" }, turns: [{ id: "turn", status, items: [] }] });
 
 describe("Codex interrupted turn recovery", () => {
+  test.each(["read-only", "workspace-write", "danger-full-access"] as const)("preserves %s across restart", sandbox => {
+    const saved = JSON.parse(JSON.stringify({ ...record, sandbox }));
+    expect(codexResumeParams(saved, saved.approvalPolicy)).toEqual({ threadId: "thread", cwd: "/project", approvalPolicy: "on-request", sandbox });
+    expect(codexResumeParams(settledCodexRecord(saved, "turn"), "never").sandbox).toBe(sandbox);
+  });
+
+  test("does not infer unrestricted access from an old never-approve registration", () => {
+    expect(codexResumeParams({ ...record, approvalPolicy: "never" }, "never").sandbox).toBeUndefined();
+  });
+
   test("continues an interrupted turn with persisted intent", async () => {
     let saved = JSON.parse(JSON.stringify(record));
     const requests: unknown[] = [];

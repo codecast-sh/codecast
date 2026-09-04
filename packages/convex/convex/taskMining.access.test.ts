@@ -43,6 +43,15 @@ test("a team workspace task and shared conversation remain readable", async () =
   expect(result.linked_conversations[0]._id).toBe("conv1");
 });
 
+test("a team member who does not own a private linked conversation does not see its summary", async () => {
+  // The task is in the team workspace, so the member reads it; the linked
+  // conversation is private to another member and must not ride along.
+  const ctx = context("other", { team_id: "team1", workspace: "team:team1" }, { team_id: "team1", is_private: true }, true);
+  const result = await (webGetTaskDetail as any)._handler(ctx, { id: "ct-1" });
+  expect(result._id).toBe("task1");
+  expect(result.linked_conversations).toEqual([]);
+});
+
 test("active-task association cannot expose a private session", async () => {
   const result = await (webGetTaskDetail as any)._handler(context("other", { assignee: "viewer", conversation_ids: [] }, { active_task_id: "task1" }), { id: "ct-1" });
   expect(result.linked_conversations).toEqual([]);
