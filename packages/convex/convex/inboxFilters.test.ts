@@ -1,4 +1,4 @@
-import { openTasksVouchForWaiting, OPEN_TASKS_FRESH_MS } from "@codecast/shared/contracts";
+import { openTasksVouchForWaiting, OPEN_TASKS_FRESH_MS, isTransientRateLimit429, throttleBannerContent, THROTTLE_BANNER_PREFIX, BLOCKED_BANNER_KINDS, CONTINUE_BANNER_KINDS } from "@codecast/shared/contracts";
 import { describe, expect, test } from "bun:test";
 // The REAL web helpers, imported so the cross-check below enforces the
 // convex/web agreement instead of restating it.
@@ -447,6 +447,10 @@ describe("isApiErrorBanner", () => {
     expect(isApiErrorBanner("You've hit your session limit · resets 11:30pm (America/New_York)")).toBe(true);
     expect(isApiErrorBanner("You've hit your session limit")).toBe(true);
     expect(isApiErrorBanner("You've hit your monthly spend limit · raise it at claude.ai/settings/usage")).toBe(true);
+    // Org-billed form (2026-09-03): an apostrophe between "your" and "limit".
+    // Unrecognized, the park is never stamped, so a resume re-sources the
+    // spent account's setup-token instead of the account the device moved to.
+    expect(isApiErrorBanner("You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage?from=cc_cli_limit_message · your session limit resets 7:40pm (America/New_York)")).toBe(true);
     expect(isApiErrorBanner("You’ve hit your weekly limit · resets 3am (America/New_York)")).toBe(true); // curly apostrophe
     expect(isApiErrorBanner("Claude usage limit reached. Your limit will reset at 3am (America/New_York).")).toBe(true);
     // Sentence-shaped spend-limit variant, admitted by its /usage-credits tail.
@@ -454,6 +458,30 @@ describe("isApiErrorBanner", () => {
     // "reached" variant with a model-name limit, same /usage-credits tail.
     expect(isApiErrorBanner("You've reached your Fable 5 limit. Run /usage-credits to continue or switch models with /model.")).toBe(true);
     expect(classifyApiErrorBanner("You've reached your Fable 5 limit. Run /usage-credits to continue or switch models with /model.")).toBe("limit");
+  });
+
+  test("a burst-throttle 429 the parser rewrote is kind throttle, not limit", () => {
+    // Claude Code renders the provider's transient 429 with the weekly-limit
+    // words; the daemon's parser rewrites it into the marked form from the
+    // entry's errorDetails (2026-09-04: two account rotations chased a burst).
+    const raw = "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.";
+    const details = `429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."},"request_id":"req_011CeiuuRePE7mL29UARczgV"}`;
+    expect(isTransientRateLimit429(429, details)).toBe(true);
+    expect(isTransientRateLimit429(429, `429 {"type":"error","error":{"type":"exceeded_limit","message":"weekly"}}`)).toBe(false);
+    expect(isTransientRateLimit429(500, details)).toBe(false);
+    expect(isTransientRateLimit429(429, undefined)).toBe(false);
+    const banner = throttleBannerContent(raw);
+    expect(banner.startsWith(THROTTLE_BANNER_PREFIX)).toBe(true);
+    expect(banner).toContain("Claude Code showed: You've reached your Fable limit.");
+    expect(banner.includes("\n")).toBe(false);
+    expect(classifyApiErrorBanner(banner)).toBe("throttle");
+    expect(BLOCKED_BANNER_KINDS.has("throttle")).toBe(true);
+    expect(CONTINUE_BANNER_KINDS).toContain("throttle");
+    // The untouched CLI words still read as a limit park — a real weekly
+    // exhaustion writes the same line and no transient errorDetails.
+    expect(classifyApiErrorBanner(raw)).toBe("limit");
+    // Prose that merely opens with the words is not a banner.
+    expect(classifyApiErrorBanner("Rate limited · here is why\nand more prose")).toBe(null);
   });
 
   test("does not flag prose that merely opens like a limit banner", () => {
@@ -487,6 +515,7 @@ describe("isApiErrorBanner", () => {
   test("classifies banner kinds for the badge label", () => {
     expect(classifyApiErrorBanner("Please run /login · API Error: 401 Invalid authentication credentials")).toBe("auth");
     expect(classifyApiErrorBanner("You've hit your session limit · resets 11:30pm (America/New_York)")).toBe("limit");
+    expect(classifyApiErrorBanner("You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage?from=cc_cli_limit_message · your session limit resets 7:40pm (America/New_York)")).toBe("limit");
     expect(classifyApiErrorBanner("You've hit your monthly spend limit. Run /usage-credits to manage your limit and keep using Fable 5 or switch models to continue this chat.")).toBe("limit");
     expect(classifyApiErrorBanner("API Error: 529 Overloaded")).toBe("error");
     expect(classifyApiErrorBanner("All good, deploy finished.")).toBe(null);

@@ -76,3 +76,17 @@ describe("SyncService pending-message daemon ownership", () => {
     });
   });
 });
+
+describe("SyncService managed-session cleanup", () => {
+  test("unregisters the exact failed backend before an error is reported", async () => {
+    const { sync, calls } = createSyncWithCapturedMutations({
+      "managedSessions:unregisterManagedSession": { found: true },
+    });
+
+    await expect(sync.unregisterManagedSession("session-old")).resolves.toEqual({ found: true });
+    expect(calls).toEqual([{
+      name: "managedSessions:unregisterManagedSession",
+      args: { session_id: "session-old", api_token: "token" },
+    }]);
+  });
+});
