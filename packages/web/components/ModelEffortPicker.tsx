@@ -159,40 +159,42 @@ export function ModelEffortMenu({
           </div>
         </>
       )}
-      <DropdownMenuSeparator />
-      <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Effort</DropdownMenuLabel>
-      {/* Chips size to their label and wrap — clients with many effort levels
-          (pi: off/minimal/low/medium/high/xhigh + default = 7) flow onto a second
-          row instead of overflowing narrow equal-width columns. `grow` lets each
-          chip expand to fill its row; whitespace-nowrap keeps a label on one line. */}
-      <div className="flex flex-wrap gap-1 px-2 pb-1.5">
-        {/* "default" = no pin, the agent's saved default wins. Launch rail
-            only: the live picker has no session-scoped default stop (the
-            /effort auto one-shot rewrites the user's GLOBAL config). */}
-        {rail.efforts.map((level: string) => {
-          const active = level === "default" ? !effort : level === effort;
-          return (
-            <button
-              key={level}
-              onClick={() => { if (!active) onSelect({ effort: level }); }}
-              className={`grow whitespace-nowrap px-2 py-1 rounded text-[10px] border transition-colors ${
-                active
-                  ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-cyan"
-                  : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
-              }`}
-            >
-              {level}
-            </button>
-          );
-        })}
-      </div>
+      {cfg.efforts.length > 0 && <>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Effort</DropdownMenuLabel>
+        {/* Chips size to their label and wrap — clients with many effort levels
+            (pi: off/minimal/low/medium/high/xhigh + default = 7) flow onto a second
+            row instead of overflowing narrow equal-width columns. `grow` lets each
+            chip expand to fill its row; whitespace-nowrap keeps a label on one line. */}
+        <div className="flex flex-wrap gap-1 px-2 pb-1.5">
+          {/* "default" = no pin, the agent's saved default wins. Launch rail
+              only: the live picker has no session-scoped default stop (the
+              /effort auto one-shot rewrites the user's GLOBAL config). */}
+          {rail.efforts.map((level: string) => {
+            const active = level === "default" ? !effort : level === effort;
+            return (
+              <button
+                key={level}
+                onClick={() => { if (!active) onSelect({ effort: level }); }}
+                className={`grow whitespace-nowrap px-2 py-1 rounded text-[10px] border transition-colors ${
+                  active
+                    ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-cyan"
+                    : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
+                }`}
+              >
+                {level}
+              </button>
+            );
+          })}
+        </div>
+      </>}
     </DropdownMenuContent>
   );
 }
 
 /**
  * Conversation-header badge, upgraded from a read-only label to the in-place
- * model/effort control for LIVE claude sessions. Blank sessions are owned by
+ * model/effort control for live sessions. Blank sessions are owned by
  * LaunchModelPill (the new-session surface); non-editable views keep the
  * static label.
  */
@@ -212,13 +214,15 @@ export function HeaderModelControl({
   canEdit: boolean;
 }) {
   const blank = (messageCount ?? 0) === 0;
-  const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
+  const ownerDeviceId = useInboxStore((s) => conversationId
+    ? (s.conversations[conversationId] ?? s.sessions[conversationId])?.owner_device_id
+    : undefined);
 
   const interactive = !!(
     canEdit &&
     !blank &&
     conversationId &&
-    cfg?.midSession
+    canControlModel(agentType, blank)
   );
 
   const glyph = effortGlyph(effort);
@@ -254,6 +258,7 @@ export function HeaderModelControl({
           agentType={agentType}
           modelKey={modelOptionKey(model, agentType)}
           effort={effort}
+          ownerDeviceId={ownerDeviceId}
           midSession
           onSelect={(sel) => {
             void commitModelChange({

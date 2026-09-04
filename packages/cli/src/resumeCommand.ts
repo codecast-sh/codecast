@@ -6,9 +6,11 @@ import {
   chooseClaudeTailMessagesForTokenBudget,
   type ExportResult,
 } from "./jsonlGenerator.js";
-import { AGENT_CLIENTS, type AgentClientId } from "@codecast/shared/contracts";
+import { AGENT_CLIENTS, findModelOption, type AgentClientId } from "@codecast/shared/contracts";
+import { appendModelEffortFlags } from "./launchCommand.js";
 
-export const CLAUDE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { CLAUDE_UUID_RE } from "./syncScope.js";
+export { CLAUDE_UUID_RE };
 
 // opencode session ids are `ses_` followed by base62 — the ONLY shape a real id
 // takes (verified against a live ~/.local/share/opencode/opencode.db: all 37 rows
@@ -233,18 +235,26 @@ export function buildNonClaudeResumeCommand(
     codexPermFlags?: string | null;
     grokArgs?: string | null;
     grokPermFlags?: string | null;
+    model?: string;
+    effort?: string;
   } = {},
 ): string | null {
   if (agentType === "claude") return null;
   const base = AGENT_CLIENTS[agentType].resumeCmd(sessionId);
+  const modelFlags: string[] = [];
+  appendModelEffortFlags(modelFlags, {
+    agentType,
+    modelAlias: opts.model ? findModelOption(agentType, opts.model)?.cliAlias : undefined,
+    requestedEffort: opts.effort,
+  });
   const withFlags = (args?: string | null, permFlags?: string | null): string => {
     let extra = args || "";
     if (permFlags) extra = extra ? extra + " " + permFlags : permFlags;
-    return `${base}${extra ? " " + extra : ""}`;
+    return `${base}${extra ? " " + extra : ""}${modelFlags.length ? " " + modelFlags.join(" ") : ""}`;
   };
   if (agentType === "codex") return withFlags(opts.codexArgs, opts.codexPermFlags);
   if (agentType === "grok") return withFlags(opts.grokArgs, opts.grokPermFlags);
-  return base;
+  return withFlags();
 }
 
 /**
@@ -300,7 +310,18 @@ export function resumeTmuxPrefix(agentType: AgentClientId): string {
  * compatible.
  */
 export function resumeShortId(sessionId: string): string {
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) {
+    return `${sessionId.slice(0, 8)}-${sessionId.replaceAll("-", "").slice(-16)}`;
+  }
   return CLAUDE_UUID_RE.test(sessionId) ? sessionId.slice(0, 8) : sessionId.slice(0, 16);
+}
+
+export function upgradedLegacyResumeTmuxName(tmuxName: string, sessionId: string): string | null {
+  if (!tmuxName.includes("-resume-")) return null;
+  const legacyShortId = sessionId.slice(0, 8);
+  const upgradedShortId = resumeShortId(sessionId);
+  if (legacyShortId === upgradedShortId || !tmuxName.endsWith(`-${legacyShortId}`)) return null;
+  return `${tmuxName.slice(0, -legacyShortId.length)}${upgradedShortId}`;
 }
 
 /**

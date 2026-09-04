@@ -13,33 +13,20 @@ import { DispatchNotWiredError } from "../store/mutativeMiddleware";
 // unaffected.
 export { modelOptionKey };
 
-// UI-free model/effort switching logic, shared by the web pickers
-// (components/ModelEffortPicker.tsx) and the mobile app's switcher sheet.
-// Two rails, picked by session state:
-//  - blank session (message_count === 0): reconfigureSession — idempotent
-//    respawn with --model/--effort launch flags.
-//  - live session: the agent's own `/model <alias>` / `/effort <level>`
-//    commands, sent as ORDINARY MESSAGES. They ride the same optimistic bubble
-//    + outbox rail as anything typed into the composer, so the switch is
-//    local-first, survives a reload, queues while offline, and revives a dead
-//    session (the daemon's delivery path auto-resumes before it injects). The
-//    durable confirmation is the transcript echo ("Set model to …") flowing
-//    back through the model/effort rollup — no server-side optimistic state.
-
 export function effortGlyph(effort: string | undefined | null): string {
   switch (effort) {
     case "low": return "○";
     case "medium": return "◐";
     case "high": return "●";
-    case "max": case "xhigh": return "◈";
+    case "ultra": case "max": case "xhigh": return "◈";
     default: return "";
   }
 }
 
 /** True when this agent/session-state combination has a working rail. */
-export function canControlModel(agentType: string | undefined, blank: boolean): boolean {
+export function canControlModel(agentType: string | undefined, _blank: boolean): boolean {
   const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
-  return !!cfg && (blank || cfg.midSession);
+  return !!cfg;
 }
 
 /**
@@ -51,6 +38,7 @@ export function modelSwitchMessages(
   agentType: string | undefined,
   sel: { model?: string; effort?: string },
 ): string[] {
+  if (!AGENT_MODEL_CONFIG[modelAgentKey(agentType)]?.midSession) return [];
   const out: string[] = [];
   if (sel.model !== undefined) {
     const alias = sel.model === "default" ? "default" : findModelOption(agentType, sel.model)?.cliAlias;
@@ -60,12 +48,6 @@ export function modelSwitchMessages(
   return out;
 }
 
-/**
- * The one commit path for every surface. Optimistically stamps the local
- * store, then either respawns a blank session with launch flags or sends the
- * switch commands as messages to a live one. `notify` surfaces errors — sonner
- * toast on web, the in-screen toast on mobile.
- */
 export async function commitModelChange(opts: {
   conversationId: string;
   agentType: string | undefined;
@@ -90,7 +72,7 @@ export async function commitModelChange(opts: {
     ...(sel.effort !== undefined ? { effort: sel.effort === "default" ? null : sel.effort } : {}),
   });
 
-  if (!blank) {
+  if (!blank && AGENT_MODEL_CONFIG[agentKey]?.midSession) {
     // Live rail: the switch IS a message. addOptimisticMessage + sendMessage is
     // the standard composer pair (the same two-step the decision queue and the
     // blocked-session "continue" use), so delivery, retry and failure honesty
@@ -117,8 +99,7 @@ export async function commitModelChange(opts: {
   if (!isConvexId(conversationId)) return;
 
   try {
-    // Already-created blank (pre-warmed real id): respawn with the new flags.
-    await store.convCommand(conversationId, "reconfigureSession", sel);
+    await store.convCommand(conversationId, blank ? "reconfigureSession" : "switchSessionAgent", sel);
   } catch (err) {
     // Parked-unwired means the write is queued and WILL apply on the next
     // outbox drain — reverting the local stamp here would make the UI disagree

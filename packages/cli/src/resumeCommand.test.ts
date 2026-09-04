@@ -506,3 +506,21 @@ describe("isWorkflowAgentTranscriptPath", () => {
     expect(isWorkflowAgentTranscriptPath(`${host}/subagents/workflows/wf_46053253-162`)).toBe(false);
   });
 });
+
+describe("model choices on native resume", () => {
+  test.each([
+    ["codex", "gpt-6-astra", "high", "-m gpt-6-astra", "model_reasoning_effort=high"],
+    ["opencode", "anthropic/claude-sonnet-5", undefined, "-m anthropic/claude-sonnet-5", undefined],
+    ["pi", "openai/gpt-5.4", "high", "--model openai/gpt-5.4", "--thinking high"],
+    ["grok", "grok-4.6", "high", "-m grok-4.6", "--reasoning-effort high"],
+  ])("preserves history and applies %s model flags", (agent, model, effort, flag, effortFlag) => {
+    const command = buildNonClaudeResumeCommand(agent as any, "session123", { model, effort });
+    expect(command).toContain("session123");
+    expect(command).toContain(flag!);
+    if (effortFlag) expect(command).toContain(effortFlag);
+  });
+
+  test("does not interpolate an unknown model into the shell", () => {
+    expect(buildNonClaudeResumeCommand("pi", "session123", { model: "openai/gpt;touch /tmp/injected" })).toBe("pi --session session123");
+  });
+});
