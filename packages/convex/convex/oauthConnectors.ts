@@ -17,6 +17,7 @@ import { action, internalMutation, internalQuery, query } from "./_generated/ser
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { getAuthenticatedUserId } from "./pendingMessages";
 import { convexSiteUrl, webBaseUrl } from "./slack";
 import {
   encryptRefreshToken,
@@ -55,11 +56,15 @@ const linear: ProviderConfig = {
   name: "Linear",
   authorizeUrl: "https://linear.app/oauth/authorize",
   tokenUrl: "https://api.linear.app/oauth/token",
-  scopes: ["read", "issues:create", "comments:create"],
+  // write is what lets outbound push a title/state/label back onto an issue
+  // (S5); read + issues:create alone can only ever create, never update.
+  scopes: ["read", "write", "comments:create"],
   env: { clientId: "LINEAR_OAUTH_CLIENT_ID", clientSecret: "LINEAR_OAUTH_CLIENT_SECRET" },
   tokenAuth: "body",
-  // Linear scopes are space-separated but its authorize wants comma-joined.
-  authorizeExtra: { prompt: "consent" },
+  // actor: "app" attributes our writes to the Codecast app rather than to
+  // whoever happened to connect the workspace — the person who clicked
+  // Connect should not appear as the author of every synced comment.
+  authorizeExtra: { prompt: "consent", actor: "app" },
   profile: async (accessToken) => {
     try {
       const r = await fetch("https://api.linear.app/graphql", {
@@ -116,43 +121,60 @@ function isConnectorId(v: unknown): v is ConnectorId {
  * Connect
  * ========================================================================== */
 
+// api_token is what lets `cast integrations connect linear` reach the same
+// flow as the web button (googleOAuth.getConnectUrl and slack.getInstallUrl
+// take it for the same reason). The signed state is identical either way, so
+// the CLI and the browser cannot drift apart on what a callback carries.
 export const getConnectUrl = action({
-  args: { provider: v.string() },
+  args: { provider: v.string(), api_token: v.optional(v.string()) },
   handler: async (ctx, args): Promise<{ ok: boolean; url?: string; error?: string }> => {
     if (!isConnectorId(args.provider)) return { ok: false, error: "unknown provider" };
     const p = PROVIDERS[args.provider];
     const env = providerEnv(p);
     if (!env) return { ok: false, error: notConfigured(p) };
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return { ok: false, error: "not signed in" };
-    const me: any = await ctx.runQuery(internal.oauthConnectors.resolveTeam, {});
+    const me: any = await ctx.runQuery(internal.oauthConnectors.resolveTeam, {
+      api_token: args.api_token,
+    });
+    if (!me?.user_id) return { ok: false, error: "not signed in" };
     if (!me?.team_id) return { ok: false, error: `Join or create a team first — ${p.name} binds to a team` };
 
     const state = await signStateWith(env.clientSecret, {
       provider: p.id,
-      user_id: String(userId),
+      user_id: String(me.user_id),
       team_id: String(me.team_id),
       nonce: crypto.randomUUID(),
-      iat: Date.now(),
+      // `ts`, not `iat`: verifyStateWith REQUIRES this exact field and rejects
+      // any state without it, so an `iat` state failed every callback with
+      // bad_state. Freshness (5 minutes) is enforced there, which is why no
+      // second expiry check exists below.
+      ts: Date.now(),
     });
     const url = new URL(p.authorizeUrl);
     url.searchParams.set("client_id", env.clientId);
     url.searchParams.set("redirect_uri", redirectUri());
     url.searchParams.set("response_type", "code");
     url.searchParams.set("state", state);
+    // Linear wants its scopes comma-joined; everyone else space-joined.
     if (p.scopes.length > 0) url.searchParams.set("scope", p.scopes.join(p.id === "linear" ? "," : " "));
     for (const [k, val] of Object.entries(p.authorizeExtra ?? {})) url.searchParams.set(k, val);
     return { ok: true, url: url.toString() };
   },
 });
 
+/** The caller and the team a connector binds to. Routing fallback
+ *  (active_team_id ?? team_id), the same one appConnections.listConnections
+ *  uses — resolving differently here would connect one team while the card
+ *  reports another. */
 export const resolveTeam = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
+  args: { api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return null;
     const user = await ctx.db.get(userId);
-    return { team_id: (user as any)?.active_team_id ?? (user as any)?.team_id ?? null };
+    return {
+      user_id: userId,
+      team_id: (user as any)?.active_team_id ?? (user as any)?.team_id ?? null,
+    };
   },
 });
 
@@ -163,7 +185,7 @@ export const resolveTeam = internalQuery({
 export const callbackHandler = async (ctx: any, request: Request): Promise<Response> => {
   const url = new URL(request.url);
   const errorRedirect = (provider: string, reason: string) =>
-    Response.redirect(`${webBaseUrl()}/capabilities?tab=apps&${provider}=error&reason=${encodeURIComponent(reason)}`, 302);
+    Response.redirect(`${webBaseUrl()}/settings/integrations?${provider}=error&reason=${encodeURIComponent(reason)}`, 302);
 
   const state = url.searchParams.get("state");
   const code = url.searchParams.get("code");
@@ -190,9 +212,6 @@ export const callbackHandler = async (ctx: any, request: Request): Promise<Respo
   }
   if (!st || !p || !env || typeof st.user_id !== "string" || typeof st.team_id !== "string") {
     return new Response("bad_state", { status: 400 });
-  }
-  if (typeof st.iat === "number" && Date.now() - st.iat > CONFIRM_TTL_MS) {
-    return errorRedirect(p.id, "expired");
   }
 
   // Exchange the code.
@@ -248,7 +267,7 @@ export const callbackHandler = async (ctx: any, request: Request): Promise<Respo
   // sent to any server by the redirect), and let the authenticated session
   // finish it. See googleOAuth.ts for the relay-attack reasoning.
   return Response.redirect(
-    `${webBaseUrl()}/capabilities?tab=apps&${p.id}=pending#installation=${encodeURIComponent(stored.id)}&confirm=${confirmToken}&provider=${p.id}`,
+    `${webBaseUrl()}/settings/integrations?${p.id}=pending#installation=${encodeURIComponent(stored.id)}&confirm=${confirmToken}&provider=${p.id}`,
     302,
   );
 };

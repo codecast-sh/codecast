@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { PROVIDERS, storeConnection, finishConfirm, deleteConnection } from "./oauthConnectors";
+import { PROVIDERS, storeConnection, finishConfirm, deleteConnection, getConnectUrl } from "./oauthConnectors";
+import { signStateWith, verifyStateWith } from "./googleOAuth";
 
 // The generic connector shares Google's security design; these tests pin the
 // PROVIDER TABLE (a new connector must be a config, not a fork) and the
@@ -21,11 +22,53 @@ describe("PROVIDERS", () => {
     }
   });
 
-  test("scopes stay minimal — no write scopes beyond what an agent needs", () => {
-    // Linear: read + create issues/comments. Never admin, never delete.
-    expect(PROVIDERS.linear.scopes).toEqual(["read", "issues:create", "comments:create"]);
+  test("scopes stay minimal — no admin, no delete", () => {
+    // Linear: read + write + comment. `write` is what issue sync's outbound
+    // needs to change a title or move a state (issue-sync.md S5); it is not
+    // admin, and there is no delete scope in the set.
+    expect(PROVIDERS.linear.scopes).toEqual(["read", "write", "comments:create"]);
+    expect(PROVIDERS.linear.scopes).not.toContain("admin");
     // Notion: access is per-page the user shares; the OAuth has no scope string.
     expect(PROVIDERS.notion.scopes).toEqual([]);
+  });
+
+  test("Linear writes are attributed to the app, not the connector", () => {
+    expect(PROVIDERS.linear.authorizeExtra?.actor).toBe("app");
+  });
+});
+
+describe("connect state", () => {
+  const SECRET = "linear-client-secret";
+  const connectCtx = () => ({
+    runQuery: async () => ({ user_id: OWNER, team_id: TEAM }),
+  }) as any;
+
+  test("the state getConnectUrl signs is one verifyStateWith accepts", async () => {
+    process.env.LINEAR_OAUTH_CLIENT_ID = "linear-client-id";
+    process.env.LINEAR_OAUTH_CLIENT_SECRET = SECRET;
+
+    const res = await (getConnectUrl as any)._handler(connectCtx(), { provider: "linear" });
+    expect(res.ok).toBe(true);
+
+    const url = new URL(res.url);
+    const payload = await verifyStateWith(SECRET, url.searchParams.get("state")!);
+    // THE regression: the connector used to sign `iat`, and verifyStateWith
+    // requires `ts` — so it returned null and every Linear/Notion callback
+    // died at bad_state before the code was ever exchanged.
+    expect(payload).not.toBeNull();
+    expect(payload!.provider).toBe("linear");
+    expect(payload!.user_id).toBe(OWNER);
+    expect(payload!.team_id).toBe(TEAM);
+
+    expect(url.searchParams.get("scope")).toBe("read,write,comments:create");
+    expect(url.searchParams.get("actor")).toBe("app");
+  });
+
+  test("a state carrying iat instead of ts never verifies", async () => {
+    const stale = await signStateWith(SECRET, {
+      provider: "linear", user_id: OWNER, team_id: TEAM, iat: Date.now(),
+    });
+    expect(await verifyStateWith(SECRET, stale)).toBeNull();
   });
 });
 
