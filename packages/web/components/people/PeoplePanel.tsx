@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { ChevronRight, Headphones, LayoutGrid, List, MessageSquare, PictureInPicture2, Pin, Settings2, Volume2, VolumeX } from "lucide-react";
+import { ChevronRight, Headphones, LayoutGrid, List, MessageSquare, PictureInPicture2, Pin, Settings2, Volume2, VolumeX, X } from "lucide-react";
 import { PeopleStrip } from "./PeopleStrip";
 import { PeopleLegend } from "./PeopleLegend";
 import { TeamPulseLine } from "./TeamPulseLine";
@@ -15,6 +15,7 @@ import {
   canOpenFacesOverlay,
   canPin,
   closeFacesWindow,
+  closePeopleWindow,
   getAlwaysOnTop,
   navigateMainWindow,
   openFacesWindow,
@@ -65,7 +66,20 @@ const STATUSES = ["available", "busy", "away"] as const;
  * down; the clock is coarse. A room full of teammates heartbeating must cost
  * this window nothing.
  */
-export function PeoplePanel() {
+export function PeoplePanel({
+  host = false,
+  callBehind = false,
+  onShowCall,
+}: {
+  /** Drawn as the WALL shape of the voice host, which holds the microphone
+   *  and draws the strip and the call as shapes of its own: no call dock
+   *  here, a close of its own, and a pill for a call running behind it. */
+  host?: boolean;
+  /** Host only: a call is running behind this wall (put away with the X). */
+  callBehind?: boolean;
+  /** Host only: bring that call back. */
+  onShowCall?: () => void;
+} = {}) {
   const callsEnabled = useCallsAvailable();
   // A call that starts here moves to its own window. CallDock hosts that
   // handoff (useHandCallToPanel) so the buddy list and the main window share
@@ -100,11 +114,19 @@ export function PeoplePanel() {
       </h1>
       {density === "strip" ? (
         <ErrorBoundary name="People strip" level="inline" fallback={null}>
-          <PeopleStrip callsEnabled={callsEnabled} data={data} pulse={pulse} pin={<><CallSettingsButton onClick={() => setSettingsOpen(true)} /><FacesOverlayButton /><PinButton /></>} />
+          <PeopleStrip callsEnabled={callsEnabled} data={data} pulse={pulse} pin={<><CallSettingsButton onClick={() => setSettingsOpen(true)} /><FacesOverlayButton /><PinButton />{host && <WallCloseButton />}</>} />
         </ErrorBoundary>
       ) : (
         <>
-          <PanelHeader density={density} me={data.me} pulse={pulse} onOpenSettings={() => setSettingsOpen(true)} />
+          <PanelHeader
+            density={density}
+            me={data.me}
+            pulse={pulse}
+            onOpenSettings={() => setSettingsOpen(true)}
+            host={host}
+            callBehind={callBehind}
+            onShowCall={onShowCall}
+          />
           <div className="people-scroll min-h-0 flex-1 overflow-y-auto">
             {callsEnabled && (
               <ErrorBoundary name="Live now" level="inline" fallback={null}>
@@ -124,10 +146,13 @@ export function PeoplePanel() {
           the audio. CallDock portals to the body and decides for itself whether
           it is a call dock, the walkie strip, or nothing at all — and once a
           call panel exists it stands down entirely, so what is left of it in
-          this window is the walkie. */}
-      <ErrorBoundary name="Call window" level="inline" fallback={null}>
-        <CallDock />
-      </ErrorBoundary>
+          this window is the walkie. Never inside the voice host: there the
+          strip and the call are shapes of the window itself. */}
+      {!host && (
+        <ErrorBoundary name="Call window" level="inline" fallback={null}>
+          <CallDock />
+        </ErrorBoundary>
+      )}
       {settingsOpen && <CallSettingsSheet onClose={() => setSettingsOpen(false)} />}
     </main>
   );
@@ -142,6 +167,9 @@ function PanelHeader({
   me,
   pulse,
   onOpenSettings,
+  host = false,
+  callBehind = false,
+  onShowCall,
 }: {
   density: PeopleDensity;
   /** Your roster row (or the user doc until it lands) — resolved once by
@@ -149,6 +177,9 @@ function PanelHeader({
   me: any;
   pulse: TeamPulse;
   onOpenSettings: () => void;
+  host?: boolean;
+  callBehind?: boolean;
+  onShowCall?: () => void;
 }) {
   const callsEnabled = useCallsAvailable();
   const status = (me?.status ?? "available") as (typeof STATUSES)[number];
@@ -188,6 +219,7 @@ function PanelHeader({
           <CallSettingsButton onClick={onOpenSettings} />
           <FacesOverlayButton />
           <PinButton />
+          {host && <WallCloseButton />}
         </div>
         {choosing && (
           <div
@@ -208,6 +240,7 @@ function PanelHeader({
           </div>
         )}
         <TeamPulseLine pulse={pulse} className="px-3 pb-2 text-[10.5px]" />
+        <CallBehindPill show={callBehind} onShowCall={onShowCall} />
         <ElsewhereCallPill className="border-t border-sol-border/60 px-3 py-1.5" />
       </div>
     );
@@ -228,6 +261,7 @@ function PanelHeader({
           <CallSettingsButton onClick={onOpenSettings} />
           <FacesOverlayButton />
           <PinButton />
+          {host && <WallCloseButton />}
         </div>
       </div>
       <div className="flex items-center gap-2 px-3 pb-2.5">
@@ -250,8 +284,47 @@ function PanelHeader({
       {/* The team in one line, under your own row: the reason to glance at a
           pinned window at all is to learn this without reading the list. */}
       <TeamPulseLine pulse={pulse} wrap className="px-3 pb-2.5 text-[11px]" />
+      <CallBehindPill show={callBehind} onShowCall={onShowCall} />
       <ElsewhereCallPill className="border-t border-sol-border/60 px-3 py-1.5" />
     </div>
+  );
+}
+
+/**
+ * A call running behind this wall. The voice host holds the call and this
+ * wall at once, one shape at a time; the person put the call away with the
+ * stage's X, and this is the way back. Same words and glyph as the elsewhere
+ * pill, because to the person it is the same fact — the call is not in front
+ * of them — with a different way back.
+ */
+function CallBehindPill({ show, onShowCall }: { show: boolean; onShowCall?: () => void }) {
+  if (!show || !onShowCall) return null;
+  return (
+    <button
+      type="button"
+      onClick={onShowCall}
+      className="flex w-full items-center gap-1.5 border-t border-sol-border/60 px-3 py-1.5 text-left text-[11px] text-sol-violet hover:bg-sol-bg-highlight"
+      title="Bring the call back"
+    >
+      <Headphones className="h-3 w-3 shrink-0" aria-hidden="true" />
+      In a huddle — show the call
+    </button>
+  );
+}
+
+/** The wall's own close: the voice window has no traffic lights. Putting the
+ *  buddy list away is what the people window's close box did. */
+function WallCloseButton() {
+  return (
+    <button
+      type="button"
+      onClick={() => void closePeopleWindow()}
+      title="Put the buddy list away"
+      aria-label="Put the buddy list away"
+      className="rounded p-1 text-sol-text-dim transition-colors hover:text-sol-text"
+    >
+      <X className="h-3.5 w-3.5" />
+    </button>
   );
 }
 

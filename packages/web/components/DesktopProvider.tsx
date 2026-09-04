@@ -26,6 +26,7 @@ import {
   reportDesktopWindowState,
   isDetachedTabWindow,
   onCallPanelHandback,
+  onVoiceMirror,
 } from "../lib/desktop";
 import { cleanNotificationBody } from "../lib/notificationText";
 import { notificationRoute } from "../lib/notificationTypes";
@@ -41,6 +42,19 @@ import { usePresenceReporter } from "../hooks/usePresenceReporter";
 // in the bell but don't banner — the phone already covered the away window,
 // and a wake shouldn't replay a storm of stale banners on top.
 const BANNER_FRESH_MS = 3 * 60_000;
+
+// A seat the WALKIE holds — a burst being spoken or heard — is not a huddle.
+// Reported as one, every other window would say "in a huddle in another
+// window" for the length of a sentence somebody is speaking into a DM.
+//
+// The engine is loaded lazily, on the desktop only: this provider wraps every
+// page, and the walkie pulls the media stack in with it.
+let walkie: typeof import("../lib/calls/walkie") | null = null;
+function inHuddle(st: any): boolean {
+  if (st.call?.phase !== "connected") return false;
+  if (!walkie) return true;
+  return !walkie.walkieHoldsRoom(walkie.getWalkieStatus(), st.call.roomKey ?? null);
+}
 
 export function DesktopProvider() {
   const router = useRouter();
@@ -174,6 +188,14 @@ export function DesktopProvider() {
 
     installDesktopInputTracker();
     installWindowRoleTracker();
+    void import("../lib/calls/walkie").then((mod) => {
+      walkie = mod;
+      // Every other window draws the voice host's walkie and call facts off
+      // its mirror: a talk key in this window lights for a burst the host is
+      // speaking. Latest-only on the shell's side, so subscribing late starts
+      // from the truth.
+      onVoiceMirror((payload) => mod.applyVoiceMirror(payload));
+    });
     // The shell offers to record a meeting it noticed starting. It picked this
     // window; the answer, and the microphone, are ours.
     void import("../lib/calls/meetingOffers").then(({ installMeetingOfferListener }) => {
@@ -284,7 +306,7 @@ export function DesktopProvider() {
     const withSession = (p: string) =>
       inboxFamily(p) && st.currentSessionId ? `/conversation/${st.currentSessionId}` : p;
     if (isDetachedTabWindow() || st.tabs.length === 0 || !st.activeTabId) {
-      reportDesktopWindowState({ active: withSession(live), open: [], inCall: st.call?.phase === "connected" });
+      reportDesktopWindowState({ active: withSession(live), open: [], inCall: inHuddle(st) });
       return;
     }
     const open = st.tabs.map((t) => ({
@@ -295,7 +317,7 @@ export function DesktopProvider() {
     reportDesktopWindowState({
       active: activeTab?.path ?? withSession(live),
       open,
-      inCall: st.call?.phase === "connected",
+      inCall: inHuddle(st),
     });
   }, [surfaceSig, location.pathname, location.search]);
 

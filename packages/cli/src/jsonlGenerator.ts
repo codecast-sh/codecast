@@ -712,8 +712,15 @@ export function generateCodexJsonl(
   const sessionId = options.sessionId || uuidv4();
   const cwd = data.conversation.project_path || process.cwd();
   const startTime = data.conversation.started_at;
+  const model = data.conversation.agent_type === "codex" ? data.conversation.model || undefined : undefined;
+  const push = (entry: { timestamp: string; type: string; payload: unknown; isMeta?: boolean }) => {
+    lines.push(JSON.stringify({
+      ...entry,
+      ...(options.sessionId && entry.type === "response_item" ? { isMeta: true } : {}),
+    }));
+  };
 
-  lines.push(JSON.stringify({
+  push({
     timestamp: startTime, type: "session_meta",
     payload: {
       id: sessionId, timestamp: startTime, cwd,
@@ -721,25 +728,25 @@ export function generateCodexJsonl(
       model_provider: "openai",
       base_instructions: { text: "You are Codex, a coding agent.", source: "built-in" },
     },
-  }));
+  });
 
-  lines.push(JSON.stringify({
-    timestamp: startTime, type: "response_item",
+  push({
+    timestamp: startTime, type: "response_item", isMeta: true,
     payload: {
       type: "message", role: "developer",
       content: [{ type: "input_text", text: `<permissions instructions>\nFilesystem sandboxing: sandbox_mode is danger-full-access. approval_policy is never.\n</permissions instructions>` }],
     },
-  }));
+  });
 
-  lines.push(JSON.stringify({
-    timestamp: startTime, type: "response_item",
+  push({
+    timestamp: startTime, type: "response_item", isMeta: true,
     payload: { type: "message", role: "user", content: [{ type: "input_text", text: `# Project context\nWorking directory: ${cwd}` }] },
-  }));
+  });
 
-  lines.push(JSON.stringify({
-    timestamp: startTime, type: "response_item",
+  push({
+    timestamp: startTime, type: "response_item", isMeta: true,
     payload: { type: "message", role: "user", content: [{ type: "input_text", text: `<environment_context>\n  <cwd>${cwd}</cwd>\n  <shell>bash</shell>\n</environment_context>` }] },
-  }));
+  });
 
   for (const msg of data.messages) {
     if (isServerMetaMessage(msg)) continue;
@@ -748,58 +755,58 @@ export function generateCodexJsonl(
     if (msg.role === "user") {
       if (msg.tool_results && msg.tool_results.length > 0) {
         for (const tr of msg.tool_results) {
-          lines.push(JSON.stringify({
+          push({
             timestamp: ts, type: "response_item",
             payload: { type: "function_call_output", call_id: tr.tool_use_id, output: tr.is_error ? `Error:\n${tr.content}` : `Exit code: 0\nOutput:\n${tr.content}` },
-          }));
+          });
         }
       } else {
         if (msg.content) {
-          lines.push(JSON.stringify({ timestamp: ts, type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: msg.content }] } }));
-          lines.push(JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "user_message", message: msg.content, images: [], local_images: [], text_elements: [] } }));
-          lines.push(JSON.stringify({
+          push({ timestamp: ts, type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: msg.content }] } });
+          push({ timestamp: ts, type: "event_msg", payload: { type: "user_message", message: msg.content, images: [], local_images: [], text_elements: [] } });
+          if (model) push({
             timestamp: ts, type: "turn_context",
             payload: {
               cwd, approval_policy: "never", sandbox_policy: { type: "danger-full-access" },
-              model: "gpt-5.2-codex", personality: "friendly",
-              collaboration_mode: { mode: "code", settings: { model: "gpt-5.2-codex", reasoning_effort: "high", developer_instructions: "you are now in code mode.\n" } },
+              model, personality: "friendly",
+              collaboration_mode: { mode: "code", settings: { model, reasoning_effort: "high", developer_instructions: "you are now in code mode.\n" } },
               effort: "high", summary: "auto",
             },
-          }));
+          });
         }
       }
     } else if (msg.role === "assistant") {
       if (msg.thinking) {
-        lines.push(JSON.stringify({
+        push({
           timestamp: ts, type: "response_item",
           payload: { type: "reasoning", summary: [{ type: "summary_text", text: msg.thinking.slice(0, 500) }], content: null, encrypted_content: null },
-        }));
+        });
       }
       if (msg.tool_calls) {
         for (const tc of msg.tool_calls) {
-          lines.push(JSON.stringify({
+          push({
             timestamp: ts, type: "response_item",
             payload: { type: "function_call", name: mapToolName(tc.name), arguments: tc.input, call_id: tc.id },
-          }));
+          });
         }
       }
       if (msg.content) {
-        lines.push(JSON.stringify({ timestamp: ts, type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: msg.content }] } }));
-        lines.push(JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "agent_message", message: msg.content } }));
+        push({ timestamp: ts, type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: msg.content }] } });
+        push({ timestamp: ts, type: "event_msg", payload: { type: "agent_message", message: msg.content } });
       }
       // Inline tool_results from incremental sync
       if (msg.tool_results && msg.tool_results.length > 0) {
         for (const tr of msg.tool_results) {
-          lines.push(JSON.stringify({
+          push({
             timestamp: ts, type: "response_item",
             payload: { type: "function_call_output", call_id: tr.tool_use_id, output: tr.is_error ? `Error:\n${tr.content}` : `Exit code: 0\nOutput:\n${tr.content}` },
-          }));
+          });
         }
       }
-      lines.push(JSON.stringify({
+      push({
         timestamp: ts, type: "event_msg",
         payload: { type: "token_count", info: null, rate_limits: { primary: { used_percent: 0.0, window_minutes: 300, resets_at: 0 }, secondary: { used_percent: 0.0, window_minutes: 10080, resets_at: 0 }, credits: { has_credits: false, unlimited: false, balance: null }, plan_type: null } },
-      }));
+      });
     }
   }
 

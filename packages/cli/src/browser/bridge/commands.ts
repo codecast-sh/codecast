@@ -78,7 +78,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
   const { me } = deps;
 
   br.command("target [mode]")
-    .description("Which browser the verbs act on: clone (the agent browser, default) or real (the human's own Chrome through the extension; a session acts only on tabs it opened)")
+    .description("Which browser the verbs act on: real (your Chrome, default once the extension is paired) or clone (the agent browser)")
     .action(async (mode?: string) => {
       if (!mode) {
         const cur = stickyTarget(me());
@@ -86,7 +86,9 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
           ? " (chosen for this session)"
           : extensionReady()
             ? " (default: the codecast extension is connected, so sessions use your Chrome)"
-            : " (default: the codecast extension is not connected, so sessions use the agent browser)";
+            : cur === "real"
+              ? " (default: the codecast extension is paired; commands wait for it to reconnect to your Chrome)"
+              : " (default: no paired codecast extension, so sessions use the agent browser)";
         console.log(`target: ${fmt.highlight(cur)}${fmt.muted(why)}`);
         console.log(fmt.muted("  change with `cast browser target real|clone`; any command takes --real/--clone to override"));
         return;

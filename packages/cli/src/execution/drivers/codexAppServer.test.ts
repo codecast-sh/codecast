@@ -42,6 +42,16 @@ function fakeIo(): CodexAppServerIo {
 }
 
 describe("CodexAppServerRuntimeDriver", () => {
+  test("registers the sandbox used to start the thread for later recovery", async () => {
+    const io = fakeIo();
+    let registration: Parameters<NonNullable<CodexAppServerIo["registerThread"]>>[0] | undefined;
+    io.registerThread = input => { registration = input; };
+    const request = startRequest();
+    request.target.isolation = { sandbox: "read-only", approvalPolicy: "never" };
+    expect((await new CodexAppServerRuntimeDriver({ io }).start(request)).state).toBe("started");
+    expect(registration).toMatchObject({ threadId: "thread-1", sandbox: "read-only", approvalPolicy: "never" });
+  });
+
   test("a thread/start error is ambiguous, never a signal to choose another agent", async () => {
     const io = fakeIo();
     io.client.threadStart = async () => { throw new Error("rpc timeout"); };
