@@ -8887,6 +8887,9 @@ function AssistantBlockImpl({
     return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
   }, [fullscreen]);
 
+  const chatOn = useTeamFeature("chat");
+  const ctxMenu = useContextMenu<void>();
+
   if (!hasContent && !hasThinking && !hasToolCalls && !hasImages) {
     return null;
   }
@@ -8898,17 +8901,12 @@ function AssistantBlockImpl({
   };
 
   const handleCopyLink = () => copyMessageLink(conversationId, messageId);
-  const chatOn = useTeamFeature("chat");
   const handleForwardToChat = () => forwardMessageToChat(conversationId, messageId);
 
   // Show Claude header for first message in sequence (regardless of content type)
   const shouldShowHeader = showHeader;
   const onlyToolCalls = hasToolCalls && !hasContent && !visibleThinking;
   const hasVisibleContent = hasContent || visibleThinking || hasToolCalls || hasImages;
-
-  // Right-click mirrors the corner toolbar (meta actions only). Declared
-  // before the visibility early-return — hooks can't be conditional.
-  const ctxMenu = useContextMenu<void>();
 
   // When nothing visible, hide completely
   if (!hasVisibleContent) {
