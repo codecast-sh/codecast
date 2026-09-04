@@ -43,7 +43,7 @@ async function setSystemConfig(
   return { success: true, version: value };
 }
 
-async function getSystemConfig(ctx: any, key: string): Promise<string | null> {
+export async function getSystemConfig(ctx: any, key: string): Promise<string | null> {
   const config = await ctx.db
     .query("system_config")
     .withIndex("by_key", (q: any) => q.eq("key", key))

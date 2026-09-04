@@ -15,7 +15,9 @@ import { applyHideTransition } from "./cleanup";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
 import { canSendProductMessage, enqueuePendingMessage } from "./pendingMessages";
+import { enqueueCloudSpawn } from "./cloud";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
+import { findAgentBoxSessionCreatedBy, retainSessionCreator, sessionLaunchRunner } from "./sessionLaunch";
 import {
   BUCKETS_VIEW_CONTRACT_ID,
   BUCKETS_VIEW_KEY,
@@ -705,7 +707,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string }]) => {
     const sessionId = opts.session_id || crypto.randomUUID();
     // Idempotent on (user, session_id). The optimistic web client keys a New
     // Session by a client-minted stub id and passes it as session_id, then
@@ -718,7 +720,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     // and is what makes client-side re-create safe. Skips the rate limit too —
     // reviving an already-created session shouldn't count against the quota.
     if (opts.session_id) {
-      const existing = await findConversationBySessionReference(ctx, sessionId, userId);
+      const existing = await findConversationBySessionReference(ctx, sessionId, userId)
+        ?? await findAgentBoxSessionCreatedBy(ctx, sessionId, userId);
       if (existing) {
         // Older ContextChat created first and linked in a second dispatch. If
         // that follow-up was lost, an idempotent replay must repair the source
@@ -738,6 +741,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await checkRateLimit(ctx as any, userId, "createConversation");
     const now = Date.now();
     const agentType = (opts.agent_type || "claude_code") as ConvexAgentType;
+    const runnerUserId = await sessionLaunchRunner(ctx, userId, opts.target_device_id);
 
     const mappings = await ctx.db
       .query("directory_team_mappings")
@@ -793,7 +797,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const parentConversationId = await resolveWorkerParentConversation(ctx, userId, workerPlanId);
 
     const conversationId = await ctx.db.insert("conversations", {
-      user_id: userId,
+      user_id: runnerUserId,
+      ...(runnerUserId !== userId ? { author_user_id: userId } : {}),
       team_id: resolvedTeamId,
       agent_type: agentType,
       session_id: sessionId,
@@ -813,9 +818,16 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(parentConversationId
         ? { parent_conversation_id: parentConversationId, is_subagent: true }
         : {}),
+      // "Run in the cloud": park the row on the host before anything is queued.
+      // The same pair createQuickSession stamps — the web's deferred create just
+      // reaches this side effect instead of that mutation.
+      ...(opts.cloud_device_id
+        ? { owner_device_id: opts.cloud_device_id, cloud_placement: "pending" as const }
+        : {}),
     });
 
     await ctx.db.patch(conversationId, { short_id: conversationId.toString().slice(0, 7) });
+    await retainSessionCreator(ctx, conversationId, userId, runnerUserId);
 
     // Context-launched sessions keep their source relation in the SAME
     // transaction as creation. A parked asyncAction has no later Promise result
@@ -844,7 +856,19 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         ...(effortOk ? { effort: opts.effort } : {}),
       });
     }
-    await enqueueStartSession(ctx, userId, {
+    // A cloud session starts nowhere yet: the browser cannot SSH, so an online
+    // local daemon prepares the host (wake, refresh the checkout, acquire a
+    // worktree) and then places the row, and placement is what enqueues the
+    // start. Queuing start_session here would race that and route the session at
+    // a host with no checkout to run in.
+    if (opts.cloud_device_id) {
+      await enqueueCloudSpawn(ctx, userId, {
+        conversationId,
+        cloudDeviceId: opts.cloud_device_id,
+      });
+      return conversationId;
+    }
+    await enqueueStartSession(ctx, runnerUserId, {
       conversationId,
       agentType: daemonType,
       projectPath: resolvedProjectPath || resolvedGitRoot,
@@ -1148,6 +1172,44 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
   updateProject: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
     await (ctx as any).runMutation(api.projects.webUpdate, { id, ...fields });
+  },
+
+  // Issue sync sources (docs/architecture/issue-sync.md S1.3, S9). Like plans
+  // and projects above, the authoritative write already exists as a public
+  // mutation — it creates the project when none is named, registers the
+  // provider webhook and schedules the first import — so the side effect
+  // delegates rather than re-deriving any of it. The store paints
+  // issueSyncSources optimistically; these perform the real write.
+  addIssueSyncSource: async (ctx, userId, [opts]: [any]) => {
+    return await (ctx as any).runMutation(api.issueSync.addSource, {
+      provider: opts.provider,
+      kind: opts.kind,
+      external_id: opts.external_id,
+      external_key: opts.external_key,
+      name: opts.name,
+      url: opts.url,
+      // Absent project_id means "create a project named after the source" —
+      // the mutation's own contract, so an unset value is passed as unset
+      // rather than guessed at here.
+      project_id: isServerId(opts.project_id) ? opts.project_id : undefined,
+      // Delegation settings ride the create, so an edit made while the create
+      // is still in flight (dropped below as a stub-id write) is not lost.
+      delegate_label: opts.delegate_label,
+      delegate_assignee: opts.delegate_assignee,
+      auto_spawn: opts.auto_spawn,
+      push_new_tasks: opts.push_new_tasks,
+    });
+  },
+  updateIssueSyncSource: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
+    // A gesture on a row whose create is still in flight names a stub id that
+    // no server row answers to; the outbox would re-drive the argument error
+    // forever. Drop it — the create carries the same settings.
+    if (!isServerId(id)) return;
+    await (ctx as any).runMutation(api.issueSync.updateSource, { id, ...fields });
+  },
+  removeIssueSyncSource: async (ctx, userId, [id]: [string]) => {
+    if (!isServerId(id)) return;
+    await (ctx as any).runMutation(api.issueSync.removeSource, { id });
   },
 
   // Saved views. Creates carry a client_key so a retry returns the same row

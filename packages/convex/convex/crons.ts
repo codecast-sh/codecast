@@ -31,6 +31,14 @@ crons.interval(
   internal.daemonLogs.checkDaemonHealth
 );
 
+// Separate entry from "check daemon health" so a failure in one alert never
+// stops the other. The 5 minute cadence is also this alert's debounce.
+crons.interval(
+  "check daemon loop freeze",
+  { minutes: 5 },
+  internal.daemonLogs.checkDeviceLoopFreeze
+);
+
 crons.interval(
   // pending_permissions was never pruned — resolved rows matter for ~5 min and
   // the daemon cancels its own after ~1h, so drop the leftovers hourly to keep
@@ -187,6 +195,27 @@ crons.cron(
   "prune sync log actions",
   "45 2-22 * * *",
   internal.syncLogPrune.pruneSyncActions,
+  {}
+);
+
+crons.interval(
+  // Repository content we cached for the source and history pages. It is all
+  // re-fetchable, so a week without a read means nobody wants it.
+  "prune repository content cache",
+  { hours: 12 },
+  internal.repos.pruneRepoCache,
+  {}
+);
+
+crons.interval(
+  // Issue sync catch-up (issue-sync.md S6). Pulls every active source for
+  // issues updated since its last sync, minus a 5 minute overlap, and applies
+  // them through the same applyRemote path a webhook takes. This is both the
+  // repair for a webhook that never arrived and the only retry an outbound
+  // push gets — pushTask deliberately never retries in a loop (S5).
+  "reconcile issue sync sources",
+  { minutes: 15 },
+  internal.issueSync.reconcileSources,
   {}
 );
 

@@ -1,5 +1,6 @@
 import { getApplyPatchInput, parseApplyPatchSections } from "./applyPatchParser";
 import { parseFileChangeSummary, parseUnifiedDiffSections } from "./unifiedDiffParser";
+import { embeddedApplyPatches, shellApplyPatches } from "./embeddedPatch";
 
 export interface FileChange {
   id: string;
@@ -28,19 +29,31 @@ export interface ExtractableMessage {
   tool_results?: Array<{ tool_use_id: string; content: string; is_error?: boolean }> | null;
 }
 
+const SHELL_TOOL_NAMES = new Set(["bash", "shell", "shell_command", "exec_command", "commandexecution", "run_shell_command"]);
 const EDIT_TOOL_NAMES = new Set([
-  "Edit",
-  "Write",
+  "edit",
+  "write",
+  "multiedit",
   "file_edit",
+  "edit_file",
+  "replace",
+  "str_replace",
   "file_write",
+  "write_file",
+  "create_file",
   "apply_patch",
-  "fileChange",
-  "Bash",
+  "exec",
+  "filechange",
+  ...SHELL_TOOL_NAMES,
 ]);
+
+function toolName(name: string): string {
+  return name.split(".").at(-1)!.toLowerCase();
+}
 
 /** Cheap pre-filter: does this message carry any tool call that could produce a file change? */
 export function hasFileChangeToolCall(message: ExtractableMessage): boolean {
-  return !!message.tool_calls?.some((tc) => EDIT_TOOL_NAMES.has(tc.name));
+  return !!message.tool_calls?.some((tc) => EDIT_TOOL_NAMES.has(toolName(tc.name)));
 }
 
 export function extractFileChanges(messages: ExtractableMessage[]): FileChange[] {
@@ -48,6 +61,9 @@ export function extractFileChanges(messages: ExtractableMessage[]): FileChange[]
   let sequenceIndex = 0;
 
   const sortedMessages = [...messages].sort((a, b) => a.timestamp - b.timestamp);
+  const results = new Map(sortedMessages.flatMap((message) =>
+    (message.tool_results ?? []).map((result) => [result.tool_use_id, result] as const),
+  ));
 
   for (const message of sortedMessages) {
     if (!message.tool_calls || message.tool_calls.length === 0) {
@@ -55,20 +71,26 @@ export function extractFileChanges(messages: ExtractableMessage[]): FileChange[]
     }
 
     for (const toolCall of message.tool_calls) {
-      if (!EDIT_TOOL_NAMES.has(toolCall.name)) {
+      const name = toolName(toolCall.name);
+      const result = results.get(toolCall.id);
+      if (!EDIT_TOOL_NAMES.has(name) || (result?.is_error && !SHELL_TOOL_NAMES.has(name))) {
         continue;
       }
 
-      if (toolCall.name === "apply_patch") {
-        const patchInput = getApplyPatchInput(toolCall.input);
-        if (!patchInput) {
-          continue;
+      if (name === "apply_patch" || name === "exec" || SHELL_TOOL_NAMES.has(name)) {
+        let patchInputs: string[] = [];
+        if (name === "apply_patch") patchInputs = [getApplyPatchInput(toolCall.input)];
+        else {
+          try {
+            const params = JSON.parse(toolCall.input);
+            const source = typeof params === "string" ? params : params?.input ?? params?.command ?? params?.cmd;
+            if (typeof source === "string") patchInputs = name === "exec" ? embeddedApplyPatches(source) : shellApplyPatches(source);
+          } catch {
+            if (name === "exec") patchInputs = embeddedApplyPatches(toolCall.input);
+          }
         }
 
-        const sections = parseApplyPatchSections(patchInput);
-        if (sections.length === 0) {
-          continue;
-        }
+        const sections = result?.is_error ? [] : patchInputs.flatMap(parseApplyPatchSections);
 
         sections.forEach((section, sectionIndex) => {
           const isAdd = section.operation === "Add";
@@ -84,19 +106,18 @@ export function extractFileChanges(messages: ExtractableMessage[]): FileChange[]
             timestamp: message.timestamp,
           });
         });
-        continue;
+        if (!SHELL_TOOL_NAMES.has(name)) continue;
       }
 
-      if (toolCall.name === "fileChange") {
+      if (name === "filechange") {
         let summary = "";
         try {
           const params = JSON.parse(toolCall.input);
-          summary = typeof params.changes === "string" ? params.changes : "";
+          summary = typeof params?.changes === "string" ? params.changes : "";
         } catch {
           continue;
         }
 
-        const result = message.tool_results?.find((item) => item.tool_use_id === toolCall.id);
         const sections = parseUnifiedDiffSections(result?.content || "", parseFileChangeSummary(summary));
         if (sections.length === 0) {
           continue;
@@ -120,9 +141,34 @@ export function extractFileChanges(messages: ExtractableMessage[]): FileChange[]
 
       try {
         const params = JSON.parse(toolCall.input);
+        if (!params || typeof params !== "object") continue;
+        const filePath = params.file_path ?? params.filePath ?? params.path;
 
-        if (toolCall.name === "Edit" || toolCall.name === "file_edit") {
-          if (!params.file_path || !params.new_string) {
+        if (["edit", "file_edit", "edit_file", "replace", "str_replace", "multiedit"].includes(name)) {
+          if (typeof filePath !== "string" || !filePath) {
+            continue;
+          }
+          const edits = name === "multiedit" ? params.edits : [params];
+          if (!Array.isArray(edits)) continue;
+          for (const [index, edit] of edits.entries()) {
+            if (!edit || typeof edit !== "object") continue;
+            const oldContent = edit.old_string ?? edit.oldString ?? edit.oldText;
+            const newContent = edit.new_string ?? edit.newString ?? edit.newText;
+            if (typeof oldContent !== "string" || typeof newContent !== "string") continue;
+            changes.push({
+              id: name === "multiedit" ? `${toolCall.id}:${index}` : toolCall.id,
+              toolCallId: toolCall.id,
+              sequenceIndex: sequenceIndex++,
+              messageId: message._id,
+              filePath,
+              changeType: "edit",
+              oldContent,
+              newContent,
+              timestamp: message.timestamp,
+            });
+          }
+        } else if (["write", "file_write", "write_file", "create_file"].includes(name)) {
+          if (typeof filePath !== "string" || !filePath || typeof params.content !== "string") {
             continue;
           }
 
@@ -131,29 +177,14 @@ export function extractFileChanges(messages: ExtractableMessage[]): FileChange[]
             toolCallId: toolCall.id,
             sequenceIndex: sequenceIndex++,
             messageId: message._id,
-            filePath: params.file_path,
-            changeType: "edit",
-            oldContent: params.old_string,
-            newContent: params.new_string,
-            timestamp: message.timestamp,
-          });
-        } else if (toolCall.name === "Write" || toolCall.name === "file_write") {
-          if (!params.file_path || !params.content) {
-            continue;
-          }
-
-          changes.push({
-            id: toolCall.id,
-            toolCallId: toolCall.id,
-            sequenceIndex: sequenceIndex++,
-            messageId: message._id,
-            filePath: params.file_path,
+            filePath,
             changeType: "write",
             newContent: params.content,
             timestamp: message.timestamp,
           });
-        } else if (toolCall.name === "Bash") {
-          const command = params.command as string | undefined;
+        } else {
+          const command = params.command ?? params.cmd;
+          if (typeof command !== "string") continue;
           if (!command || !command.includes("git commit")) {
             continue;
           }
@@ -163,7 +194,7 @@ export function extractFileChanges(messages: ExtractableMessage[]): FileChange[]
             continue;
           }
 
-          const commitHash = extractCommitHash(message.tool_results, toolCall.id);
+          const commitHash = result && !result.is_error ? extractCommitHashFromContent(result.content) : undefined;
 
           changes.push({
             id: toolCall.id,
@@ -234,22 +265,6 @@ function extractCommitMessage(command: string): string | undefined {
   }
 
   return undefined;
-}
-
-function extractCommitHash(
-  toolResults: Array<{ tool_use_id: string; content: string; is_error?: boolean }> | null | undefined,
-  toolCallId: string
-): string | undefined {
-  if (!toolResults) {
-    return undefined;
-  }
-
-  const result = toolResults.find((r) => r.tool_use_id === toolCallId);
-  if (!result || result.is_error) {
-    return undefined;
-  }
-
-  return extractCommitHashFromContent(result.content);
 }
 
 /**

@@ -91,4 +91,30 @@ describe("deviceBeatChanged", () => {
     expect(deviceBeatChanged(existing, { ...quietBeat, local_project_roots: ["/Users/ashot/src", "/tmp"] })).toBe(true);
     expect(deviceBeatChanged(existing, { ...quietBeat, loop_freeze_ms: 12_000 })).toBe(true);
   });
+
+  // The hour freeze budget rides every beat, so an unrounded value would make
+  // every beat a change and re-run every roster subscription in the fleet. The
+  // daemon rounds the hour to 5s (freezeBeatFields) and this is the other half
+  // of that contract: a repeat of the same rounded value must read as no news,
+  // and one step of the rounding must write through.
+  test("the freeze budget writes through only when its rounded value moves", () => {
+    const frozen = {
+      ...existing,
+      loop_freeze_1h_ms: 215_000,
+      loop_freeze_max_ms: 41_000,
+      loop_freeze_top: "walk@recursiveWatcher.ts:138 60%",
+    };
+    const sameBudget = {
+      loop_freeze_1h_ms: 215_000,
+      loop_freeze_max_ms: 41_000,
+      loop_freeze_top: "walk@recursiveWatcher.ts:138 60%",
+    };
+    expect(deviceBeatChanged(frozen, { ...quietBeat, ...sameBudget })).toBe(false);
+    expect(deviceBeatChanged(frozen, { ...sameBudget, loop_freeze_1h_ms: 220_000 })).toBe(true);
+    expect(deviceBeatChanged(frozen, { ...sameBudget, loop_freeze_max_ms: 42_000 })).toBe(true);
+    expect(deviceBeatChanged(frozen, { ...sameBudget, loop_freeze_top: "scanDir@daemon.ts:900 80%" })).toBe(true);
+    // A machine that has never reported the budget writes it through the first
+    // time, so an upgraded daemon's first beat is not swallowed.
+    expect(deviceBeatChanged(existing, { ...quietBeat, ...sameBudget })).toBe(true);
+  });
 });

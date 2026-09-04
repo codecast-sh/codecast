@@ -22,6 +22,7 @@ import {
   legacyConversationAcceptsDaemonWork,
 } from "./executionBindings";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
+import { requestRemoteWake } from "./cloud";
 
 export {
   MESSAGES_VIEW_CONTRACT_ID,
@@ -180,6 +181,10 @@ export function canDaemonSeePendingMessage(
   if (isFencedPendingMessage(message) || !legacyConversationAcceptsDaemonWork(conversation)) {
     return false;
   }
+  // A row the web parked on the cloud host is nobody's to deliver until a local
+  // daemon has prepared the host and placed it (cloud.placeConversation). The
+  // message waits as pending and rides the real start.
+  if ((conversation as any).cloud_placement === "pending") return false;
   // Delivery is the TARGET owner's job, not the sender's — a teammate's message is delivered by
   // the owner's daemon. (For a self-send these are the same user.)
   if (pendingMessageOwnerId(message, conversation) !== userId.toString()) return false;
@@ -220,6 +225,11 @@ export async function resolveOfflineOwnerTakeover(
   const claimant = await getDeviceRow(ctx, userId, claimantDeviceId);
   if (!claimant || claimant.is_remote) return false;
   const owner = await getDeviceRow(ctx, userId, ownerDeviceId);
+  // A remote owner that is offline is a cloud host that put itself to sleep,
+  // not a dead laptop: its worktree and transcript are on its disk, and the
+  // wake stamp (requestRemoteWake) boots it. Taking the message over would run
+  // the session on a machine that has none of that.
+  if (owner?.is_remote) return false;
   const ownerOnline = !!owner && now - owner.last_seen < DEVICE_ONLINE_MS;
   return !ownerOnline;
 }
@@ -389,6 +399,9 @@ export async function enqueuePendingMessage(
     createdAt: Date.now(),
     delivery: fenced ?? undefined,
   });
+
+  // Work for a cloud host that is asleep: ask a local daemon to boot it.
+  await requestRemoteWake(ctx, conversation);
 
   // Wake-up rules. A human send resurfaces the session everywhere: dismissed,
   // stashed, and killed flags all clear ("I messaged it, show it to me").
