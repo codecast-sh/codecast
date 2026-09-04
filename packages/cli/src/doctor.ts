@@ -42,7 +42,7 @@ import { getMachineKey, hardwareId } from "./machineKey.js";
 import { deviceId } from "./remote/device.js";
 import { probeAllClients, hasBin } from "./doctorClients.js";
 import { defaultCursorPath } from "./cursorWatcher.js";
-import { findStaleTmuxServers, descendantPids, killProcessTree, liveTmuxServerPid, snapshotProcessTable } from "./processTable.js";
+import { findStaleTmuxServers, killProcessTree, liveTmuxServerPid, snapshotProcessTable } from "./processTable.js";
 
 // ── deps handed in by index.ts ───────────────────────────────────────────────
 // The CLI entrypoint owns config decryption and the daemon state-file helpers;
@@ -453,7 +453,7 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
         // hourly sweep acts on.
         const stale = findStaleTmuxServers(procs, await liveTmuxServerPid(), process.getuid?.());
         if (stale.length === 0) return { ok: true, detail: "one server on the default socket" };
-        const trees = stale.reduce((n, s) => n + s.descendants, 0);
+        const trees = stale.reduce((n, s) => n + s.tree.length, 0);
         const agents = stale.reduce((n, s) => n + s.agents, 0);
         const summary = `${stale.length} stale server(s) (pid ${stale.map((s) => s.pid).join(", ")}) holding ${trees} process(es), ${agents} agent(s), unreachable from tmux`;
         if (!opts.reapTmux) {
@@ -461,7 +461,7 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
         }
         let killed = 0;
         for (const s of stale) {
-          const r = await killProcessTree([...descendantPids(procs, s.pid), s.pid]);
+          const r = await killProcessTree([...s.tree, s.pid]);
           killed += r.terminated + r.killed;
         }
         cleanup.push(`reaped stale tmux server(s) ${stale.map((s) => s.pid).join(", ")}`);

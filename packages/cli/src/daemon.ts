@@ -15459,7 +15459,7 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
           syncServiceRef?.setSessionError(conversationId, undefined, { force: true }).catch(logConvexFailure);
         }
         if (action === "active") {
-          const turn = response.thread.turns?.findLast(t => t.status === "inProgress");
+          const turn = response.thread.turns?.slice().reverse().find(t => t.status === "inProgress");
           if (turn) appServerTurnProgress.set(turn.id, makeAppServerTurnProgress(record.threadId, response.model));
         }
         appServerRecoveryRetryAt.delete(conversationId);
