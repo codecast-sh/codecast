@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CodexAppServer, approvalResultForMethod, threadItemToMessage, threadItemsToMessages } from "./codexAppServer.js";
+import { CodexAppServer, approvalResultForMethod, threadForkTimeoutMsForBytes, threadItemToMessage, threadItemsToMessages } from "./codexAppServer.js";
 
 describe("CodexAppServer protocol", () => {
   test("enables the experimental API and forks a rollout by path", async () => {
@@ -39,6 +39,13 @@ describe("CodexAppServer protocol", () => {
       path: "/tmp/synthetic-thread.jsonl",
     });
     expect(response.thread.id).toBe("real-thread");
+  });
+
+  test("scales fork deadlines for large transcript imports", () => {
+    expect(threadForkTimeoutMsForBytes(1024 * 1024)).toBe(60_000);
+    expect(threadForkTimeoutMsForBytes(17 * 1024 * 1024)).toBe(300_000);
+    expect(threadForkTimeoutMsForBytes(20 * 1024 * 1024)).toBe(345_000);
+    expect(threadForkTimeoutMsForBytes(100 * 1024 * 1024)).toBe(600_000);
   });
 });
 
@@ -160,5 +167,26 @@ describe("threadItemsToMessages", () => {
     expect(messages.map((m) => m.role)).toEqual(["assistant", "assistant"]);
     expect(messages[0]?.content).toBe("first turn reply");
     expect(messages[1]?.content).toBe("second turn reply");
+  });
+});
+
+describe("Codex per-turn model snapshots", () => {
+  test.each(["threadStart", "threadResume", "threadFork"] as const)("records the actual model returned by %s", async method => {
+    const server = new CodexAppServer({ log: () => {} });
+    (server as any).sendRequest = async () => ({ thread: { id: "thread1" }, model: "gpt-6-astra", cwd: "/tmp" });
+    await server[method]({ threadId: "thread1", model: "default" });
+    const started: unknown[][] = [];
+    const finished: unknown[][] = [];
+    server.on("turnStarted", (...args) => started.push(args));
+    server.on("turnCompleted", (...args) => finished.push(args));
+    const notify = (method: string, params: object) => (server as any).handleNotification({ method, params: { threadId: "thread1", ...params } });
+    notify("turn/started", { turn: { id: "turn1" } });
+    notify("item/completed", { turnId: "turn1", item: { type: "agentMessage", id: "response1", text: "First" } });
+    await server.turnStart({ threadId: "thread1", input: [], model: "gpt-5.6-sol" });
+    notify("turn/completed", { turn: { id: "turn1", status: "completed" } });
+    expect(started[0]).toEqual(["thread1", "turn1", "gpt-6-astra"]);
+    expect(finished[0][2]).toMatchObject([{ model: "gpt-6-astra", content: "First" }]);
+    notify("turn/started", { turn: { id: "turn2" } });
+    expect(started[1]).toEqual(["thread1", "turn2", "gpt-5.6-sol"]);
   });
 });

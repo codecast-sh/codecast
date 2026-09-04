@@ -9,6 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { WebSocket } from "ws";
+import { hookPortFile as loopbackHookPortFile } from "../../loopbackIdentity.js";
 import { CdpTimeout, type CdpClient, type CdpEvent, type EventHandler } from "../cdp.js";
 import { reviveError } from "../recovery.js";
 import {
@@ -16,9 +17,9 @@ import {
   type AttachResult, type HelloResult, type ResidentStatus, type TargetsResult, type WireCall, type WireMessage,
 } from "./protocol.js";
 
-/** Where the daemon writes its loopback port (daemon.ts HOOK_PORT_FILE). */
+/** Where the daemon writes its loopback port. loopbackIdentity.ts owns the path. */
 export function hookPortFile(): string {
-  return path.join(process.env.HOME || os.homedir(), ".codecast", "hook-port");
+  return loopbackHookPortFile(path.join(process.env.HOME || os.homedir(), ".codecast"));
 }
 
 export function readHookPort(): number | null {

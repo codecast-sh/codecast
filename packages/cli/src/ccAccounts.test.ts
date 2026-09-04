@@ -769,8 +769,17 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
     invalidateAccountsCache();
   });
 
+  // The usage endpoint answers by bearer token; the token endpoint (c's
+  // lapsed dormant grant is rotated before its probe) hands out a fixed
+  // rotated pair. `calls` records the usage probes only.
   const usageFetch = (calls: string[]): typeof fetch =>
-    (async (_url: any, init: any) => {
+    (async (url: any, init: any) => {
+      if (String(url).includes("/oauth/token")) {
+        return new Response(
+          JSON.stringify({ access_token: "at-c-rotated", refresh_token: "rt-c-rotated", expires_in: 28800 }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
       const token = String(init?.headers?.Authorization ?? "").replace("Bearer ", "");
       calls.push(token);
       return new Response(
@@ -779,28 +788,29 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
       );
     }) as any;
 
-  it("probes the active token + live dormant tokens, skips expired ones, keys by uuid", async () => {
+  it("probes the active token + live dormant tokens, rotates lapsed ones first, keys by uuid", async () => {
     const calls: string[] = [];
     const res = await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch(calls) });
     // Active covers profile a (freshest token wins); b probed with its own
-    // token; c skipped — its dormant token is expired and must never refresh.
-    expect(calls.sort()).toEqual(["at-active", "at-b"]);
-    expect(res.probed.sort()).toEqual(["active", "b"]);
-    expect(res.skipped).toContain("c");
+    // token; c's dormant token had lapsed, so it was rotated and probed with
+    // the new one — its reading no longer freezes at the last live probe.
+    expect(calls.sort()).toEqual(["at-active", "at-b", "at-c-rotated"]);
+    expect(res.probed.sort()).toEqual(["active", "b", "c"]);
+    expect(res.rotated).toEqual(["c"]);
     const cache = readUsageCache();
     expect(cache.accounts["uuid-a"]?.session?.percent).toBe(28);
     expect(cache.accounts["uuid-b"]?.session?.percent).toBe(90);
-    expect(cache.accounts["uuid-c"]).toBeUndefined();
+    expect(cache.accounts["uuid-c"]?.session?.percent).toBe(28);
   });
 
   it("throttles per-account probes within minIntervalMs", async () => {
     const calls: string[] = [];
     await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch(calls) });
     await refreshUsageSnapshots({ now: NOW + 60_000, fetchImpl: usageFetch(calls) });
-    expect(calls.length).toBe(2); // second pass: both entries fresh, no probes
+    expect(calls.length).toBe(3); // second pass: every entry fresh, no probes
     const later: string[] = [];
     await refreshUsageSnapshots({ now: NOW + 10 * 60_000, fetchImpl: usageFetch(later) });
-    expect(later.length).toBe(2);
+    expect(later.length).toBe(3);
   });
 
   it("re-probes a just-activated account inside the throttle and reports when it became active", async () => {
@@ -841,7 +851,7 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
       now: NOW + 10 * 60_000,
       fetchImpl: (async () => new Response("overloaded", { status: 529 })) as any,
     });
-    expect(res.failed.length).toBe(2);
+    expect(res.failed.length).toBe(3);
     // Old readings survive — stale beats blank.
     expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(90);
   });
@@ -853,7 +863,114 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
     const byName = Object.fromEntries((payload?.profiles ?? []).map((p) => [p.name, p]));
     expect(byName.a.usage?.session?.percent).toBe(28);
     expect(byName.b.usage?.session?.percent).toBe(90);
-    expect(byName.c.usage).toBeUndefined();
+    expect(byName.c.usage?.session?.percent).toBe(28);
+  });
+
+  // The token endpoint + usage endpoint behind one fetch: a refresh with the
+  // expected refresh token rotates; anything else is refused with the given
+  // status. Usage answers carry the bearer token so the test can see which
+  // credential probed.
+  const dualFetch = (
+    calls: { tokenPosts: string[]; usage: string[] },
+    opts: { refuse?: number } = {},
+  ): typeof fetch =>
+    (async (url: any, init: any) => {
+      if (String(url).includes("/oauth/token")) {
+        const body = new URLSearchParams(String(init?.body));
+        calls.tokenPosts.push(body.get("refresh_token") ?? "");
+        if (opts.refuse) return new Response('{"error":"invalid_grant"}', { status: opts.refuse });
+        return new Response(
+          JSON.stringify({ access_token: "at-c-rotated", refresh_token: "rt-c-rotated", expires_in: 28800 }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      const token = String(init?.headers?.Authorization ?? "").replace("Bearer ", "");
+      calls.usage.push(token);
+      return new Response(
+        JSON.stringify({ limits: [{ kind: "session", percent: token === "at-c-rotated" ? 12 : 28, resets_at: "2026-07-15T17:39:59+00:00" }] }),
+        { status: 200 },
+      );
+    }) as any;
+
+  const readProfileC = () => JSON.parse(fs.readFileSync(path.join(home, ".codecast", "cc-accounts", "c.json"), "utf-8"));
+  const readIndex = () => JSON.parse(fs.readFileSync(path.join(home, ".codecast", "cc-accounts.json"), "utf-8"));
+
+  it("rotates a lapsed dormant grant with its own refresh token, then probes with the new one", async () => {
+    const calls = { tokenPosts: [] as string[], usage: [] as string[] };
+    const res = await refreshUsageSnapshots({ now: NOW, fetchImpl: dualFetch(calls) });
+    expect(calls.tokenPosts).toEqual(["rt-at-c"]);
+    expect(calls.usage.sort()).toEqual(["at-active", "at-b", "at-c-rotated"]);
+    expect(res.rotated).toEqual(["c"]);
+    expect(res.probed.sort()).toEqual(["active", "b", "c"]);
+    expect(readUsageCache().accounts["uuid-c"]?.session?.percent).toBe(12);
+    // The rotated pair lives in the profile now — the next switch to c lands
+    // on a live login; everything else in the blob is untouched.
+    const c = readProfileC();
+    expect(c.credentials.claudeAiOauth.accessToken).toBe("at-c-rotated");
+    expect(c.credentials.claudeAiOauth.refreshToken).toBe("rt-c-rotated");
+    expect(c.credentials.claudeAiOauth.expiresAt).toBe(NOW + 28800 * 1000);
+    expect(c.credentials.claudeAiOauth.subscriptionType).toBe("max");
+    expect(c.oauthAccount.accountUuid).toBe("uuid-c");
+    // Live now: the next pass inside the throttle neither rotates nor probes.
+    const again = { tokenPosts: [] as string[], usage: [] as string[] };
+    await refreshUsageSnapshots({ now: NOW + 60_000, fetchImpl: dualFetch(again) });
+    expect(again.tokenPosts).toEqual([]);
+    expect(again.usage).toEqual([]);
+  });
+
+  it("marks a refused grant login-expired, keeps the last snapshot, and never retries it until re-saved", async () => {
+    // Seed c with a reading from a probe made while its token still lived
+    // (an hour ago it had 1000ms left), so the refusal has a snapshot to keep.
+    const seed = { tokenPosts: [] as string[], usage: [] as string[] };
+    await refreshUsageSnapshots({ now: NOW - 3600_000, fetchImpl: dualFetch(seed) });
+    expect(seed.tokenPosts).toEqual([]);
+    const calls = { tokenPosts: [] as string[], usage: [] as string[] };
+    const res = await refreshUsageSnapshots({ now: NOW, fetchImpl: dualFetch(calls, { refuse: 400 }) });
+    expect(calls.tokenPosts).toEqual(["rt-at-c"]);
+    expect(res.expired).toEqual(["c"]);
+    expect(res.failed).toEqual([]);
+    expect(readIndex().profiles.c.login_expired_at).toBe(NOW);
+    expect(readUsageCache().accounts["uuid-c"]?.session?.percent).toBe(28); // stale beats blank
+    expect(readProfileC().credentials.claudeAiOauth.refreshToken).toBe("rt-at-c"); // untouched
+    // The heartbeat says so, and the next pass leaves the dead grant alone.
+    invalidateAccountsCache();
+    const byName = Object.fromEntries((getAccountsHeartbeatPayload()?.profiles ?? []).map((p) => [p.name, p]));
+    expect(byName.c.login_expired_at).toBe(NOW);
+    expect(byName.b.login_expired_at).toBeUndefined();
+    const later = { tokenPosts: [] as string[], usage: [] as string[] };
+    const res2 = await refreshUsageSnapshots({ now: NOW + 10 * 60_000, fetchImpl: dualFetch(later) });
+    expect(later.tokenPosts).toEqual([]);
+    expect(res2.skipped).toContain("c");
+  });
+
+  it("treats a token-endpoint outage as transient: no mark, no write, retried next pass", async () => {
+    const calls = { tokenPosts: [] as string[], usage: [] as string[] };
+    const res = await refreshUsageSnapshots({ now: NOW, fetchImpl: dualFetch(calls, { refuse: 503 }) });
+    expect(res.failed.map((f) => f.name)).toEqual(["c"]);
+    expect(res.expired).toEqual([]);
+    expect(readIndex().profiles.c.login_expired_at).toBeUndefined();
+    expect(readProfileC().credentials.claudeAiOauth.accessToken).toBe("at-c");
+    const retry = { tokenPosts: [] as string[], usage: [] as string[] };
+    await refreshUsageSnapshots({ now: NOW + 10 * 60_000, fetchImpl: dualFetch(retry) });
+    expect(retry.tokenPosts).toEqual(["rt-at-c"]);
+  });
+
+  it("marks an index entry with no secret behind it login-expired instead of skipping it silently", async () => {
+    // 2026-09-03: two profiles had index rows but no keychain item; the loop
+    // stepped over them and their meters read as live readings 22h old.
+    fs.rmSync(path.join(home, ".codecast", "cc-accounts", "b.json"));
+    const calls = { tokenPosts: [] as string[], usage: [] as string[] };
+    const res = await refreshUsageSnapshots({ now: NOW, fetchImpl: dualFetch(calls) });
+    expect(res.expired).toEqual(["b"]);
+    expect(readIndex().profiles.b.login_expired_at).toBe(NOW);
+    expect(calls.usage.sort()).toEqual(["at-active", "at-c-rotated"]);
+  });
+
+  it("minIntervalMs 0 (the refresh button) re-probes every account at once", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: dualFetch({ tokenPosts: [], usage: [] }) });
+    const calls = { tokenPosts: [] as string[], usage: [] as string[] };
+    await refreshUsageSnapshots({ now: NOW + 5_000, minIntervalMs: 0, fetchImpl: dualFetch(calls) });
+    expect(calls.usage.length).toBe(3);
   });
 });
 

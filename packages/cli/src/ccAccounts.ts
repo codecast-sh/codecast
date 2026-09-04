@@ -45,6 +45,11 @@ export interface CcProfileMeta {
   tier?: string;
   subscription?: string;
   saved_at?: number;
+  // The token endpoint refused this profile's refresh token (invalid_grant):
+  // the saved login is dead until the account signs in again. Set by the
+  // daemon's usage refresh, cleared by any re-save of the profile (a fresh
+  // /login re-snapshots it). Readers treat it as "not a switch target".
+  login_expired_at?: number;
   active: boolean;
 }
 
@@ -992,8 +997,6 @@ export interface RefreshResult {
 export async function refreshActiveCredential(
   opts: { fetchImpl?: typeof fetch; now?: number } = {},
 ): Promise<RefreshResult> {
-  const fetchImpl = opts.fetchImpl ?? fetch;
-  const now = opts.now ?? Date.now();
   const raw = await readActiveCredentialAsync();
   if (!raw) return { refreshed: false, reason: "no active credential" };
   let cred: any;
@@ -1002,10 +1005,30 @@ export async function refreshActiveCredential(
   } catch {
     return { refreshed: false, reason: "active credential is not JSON" };
   }
+  const rotated = await rotateOauthCredential(cred, opts);
+  if (!rotated.ok) return { refreshed: false, reason: rotated.reason };
+  writeActiveCredential(JSON.stringify(rotated.cred));
+  invalidateAccountsCache();
+  return { refreshed: true, expiresAt: rotated.expiresAt };
+}
+
+/**
+ * The token-endpoint round trip behind every refresh: trade the blob's refresh
+ * token for a new access token and return the rotated blob, or the reason it
+ * could not be rotated. `dead` marks a DEFINITIVE refusal (the endpoint
+ * answered 400/401: invalid_grant, revoked, already rotated elsewhere) as
+ * opposed to a transient failure (network, 5xx) worth retrying. Never writes.
+ */
+export async function rotateOauthCredential(
+  cred: any,
+  opts: { fetchImpl?: typeof fetch; now?: number } = {},
+): Promise<{ ok: true; cred: any; expiresAt: number } | { ok: false; reason: string; dead: boolean }> {
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const now = opts.now ?? Date.now();
   const oauth = cred?.claudeAiOauth;
   const refreshToken = oauth?.refreshToken;
   if (!refreshToken) {
-    return { refreshed: false, reason: "no refresh token (API-key login?)" };
+    return { ok: false, reason: "no refresh token (API-key login?)", dead: false };
   }
 
   let resp: Response;
@@ -1019,42 +1042,98 @@ export async function refreshActiveCredential(
         refresh_token: refreshToken,
         client_id: CC_OAUTH_CLIENT_ID,
       }).toString(),
+      signal: AbortSignal.timeout(20_000),
     });
   } catch (err) {
-    return { refreshed: false, reason: `request failed: ${err instanceof Error ? err.message : String(err)}` };
+    return { ok: false, reason: `request failed: ${err instanceof Error ? err.message : String(err)}`, dead: false };
   }
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
-    return { refreshed: false, reason: `token endpoint ${resp.status}: ${text.slice(0, 120)}` };
+    return {
+      ok: false,
+      reason: `token endpoint ${resp.status}: ${text.slice(0, 120)}`,
+      dead: resp.status === 400 || resp.status === 401,
+    };
   }
   let data: any;
   try {
     data = await resp.json();
   } catch {
-    return { refreshed: false, reason: "token response is not JSON" };
+    return { ok: false, reason: "token response is not JSON", dead: false };
   }
   const accessToken = data?.access_token;
   const expiresInSec = Number(data?.expires_in);
   if (typeof accessToken !== "string" || !accessToken || !Number.isFinite(expiresInSec)) {
-    return { refreshed: false, reason: "token response missing access_token/expires_in" };
+    return { ok: false, reason: "token response missing access_token/expires_in", dead: false };
   }
   const expiresAt = now + expiresInSec * 1000;
   // Only override the three fields a refresh actually changes; preserve the
   // rest of the blob verbatim (subscriptionType, rateLimitTier, scopes, …).
-  const newCred = {
-    ...cred,
-    claudeAiOauth: {
-      ...oauth,
-      accessToken,
-      refreshToken: typeof data.refresh_token === "string" && data.refresh_token
-        ? data.refresh_token
-        : refreshToken,
-      expiresAt,
+  return {
+    ok: true,
+    expiresAt,
+    cred: {
+      ...cred,
+      claudeAiOauth: {
+        ...oauth,
+        accessToken,
+        refreshToken: typeof data.refresh_token === "string" && data.refresh_token
+          ? data.refresh_token
+          : refreshToken,
+        expiresAt,
+      },
     },
   };
-  writeActiveCredential(JSON.stringify(newCred));
+}
+
+/** Stamp a profile dead in the index (see CcProfileMeta.login_expired_at). */
+function markLoginExpired(name: string, now: number): void {
+  const index = readProfileIndex();
+  if (!index.profiles[name] || index.profiles[name].login_expired_at) return;
+  index.profiles[name] = { ...index.profiles[name], login_expired_at: now };
+  writeProfileIndex(index);
   invalidateAccountsCache();
-  return { refreshed: true, expiresAt };
+}
+
+/**
+ * Rotate a DORMANT profile's tokens in place, so its usage stays readable
+ * past the ~8h access-token life. The profile is this machine's only holder
+ * of that grant (the active login is snapshotted into its profile on every
+ * switch away, and remotes are pushed the active login only), so rotating it
+ * here keeps the lineage whole: the new pair is written back into the same
+ * profile and the next switch to it lands on a live login. A definitive
+ * refusal marks the profile `login_expired_at` in the index, which every
+ * reader takes as "dead until re-saved" — no retries against a revoked grant,
+ * no auto-switch onto it. Same defensive write discipline as the active
+ * refresh: nothing is overwritten until a complete new blob is in hand.
+ */
+export async function refreshProfileCredential(
+  name: string,
+  opts: { fetchImpl?: typeof fetch; now?: number } = {},
+): Promise<RefreshResult & { dead?: boolean; accessToken?: string }> {
+  const now = opts.now ?? Date.now();
+  const raw = await readProfileSecretAsync(name);
+  if (!raw) return { refreshed: false, reason: "no saved credential" };
+  let profile: CcProfile;
+  try {
+    profile = parseProfile(raw);
+  } catch (err) {
+    return { refreshed: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+  const rotated = await rotateOauthCredential(profile.credentials, { ...opts, now });
+  if (!rotated.ok) {
+    if (rotated.dead) markLoginExpired(name, now);
+    return { refreshed: false, reason: rotated.reason, dead: rotated.dead };
+  }
+  writeProfileSecret(name, JSON.stringify({ ...profile, credentials: rotated.cred }));
+  const index = readProfileIndex();
+  if (index.profiles[name]?.login_expired_at) {
+    const { login_expired_at: _cleared, ...rest } = index.profiles[name];
+    index.profiles[name] = rest;
+    writeProfileIndex(index);
+    invalidateAccountsCache();
+  }
+  return { refreshed: true, expiresAt: rotated.expiresAt, accessToken: rotated.cred.claudeAiOauth.accessToken };
 }
 
 /**
@@ -1345,13 +1424,23 @@ export interface UsageRefreshSummary {
   probed: string[];
   skipped: string[];
   failed: Array<{ name: string; reason: string }>;
+  // Dormant profiles whose tokens were rotated on this pass to make the probe
+  // possible (see refreshProfileCredential).
+  rotated: string[];
+  // Dormant profiles whose refresh token the endpoint refused on this pass:
+  // now marked login_expired_at in the index.
+  expired: string[];
 }
 
 /**
- * Refresh usage snapshots for the active login + every saved profile whose
- * access token is still live. Expired dormant tokens are skipped (their last
- * snapshot survives) — we never refresh a dormant grant. Per-account probes
- * are throttled by `minIntervalMs` so callers can invoke this freely.
+ * Refresh usage snapshots for the active login + every saved profile. A
+ * dormant profile whose access token has lapsed is rotated first with its own
+ * refresh token (refreshProfileCredential) — its reading otherwise froze at
+ * the last probe before the token died, and a frozen pegged window kept the
+ * account out of auto-switch for days. A profile already marked login-expired
+ * is skipped (its last snapshot survives) until a re-save clears the mark.
+ * Per-account probes are throttled by `minIntervalMs` (0 = probe everything
+ * now) so callers can invoke this freely.
  */
 export async function refreshUsageSnapshots(
   opts: { fetchImpl?: typeof fetch; now?: number; minIntervalMs?: number } = {},
@@ -1359,7 +1448,7 @@ export async function refreshUsageSnapshots(
   const now = opts.now ?? Date.now();
   const minInterval = opts.minIntervalMs ?? 4 * 60 * 1000;
   const cache = readUsageCache();
-  const summary: UsageRefreshSummary = { probed: [], skipped: [], failed: [] };
+  const summary: UsageRefreshSummary = { probed: [], skipped: [], failed: [], rotated: [], expired: [] };
 
   const jobs = new Map<string, { label: string; token: string }>();
   const active = activeAccountSummary();
@@ -1381,19 +1470,43 @@ export async function refreshUsageSnapshots(
     if (!key) continue;
     knownKeys.add(key);
     if (jobs.has(key)) continue; // active covers it with the freshest token
+    if (meta.login_expired_at) {
+      summary.skipped.push(name); // dead grant — keep last snapshot, no retry
+      continue;
+    }
     const raw = await readProfileSecretAsync(name);
-    if (!raw) continue;
-    let profile: CcProfile;
+    let profile: CcProfile | null = null;
     try {
-      profile = parseProfile(raw);
+      profile = raw ? parseProfile(raw) : null;
     } catch {
+      profile = null;
+    }
+    if (!profile) {
+      // An index entry with no readable secret behind it (keychain item gone,
+      // blob corrupt): nothing can probe or switch to it. Same standing as a
+      // refused grant — dead until the account signs in again and is
+      // re-saved — so it is marked the same way rather than skipped in
+      // silence, where it would read as live with a frozen meter.
+      markLoginExpired(name, now);
+      summary.expired.push(name);
       continue;
     }
+    let token = profile.credentials?.claudeAiOauth?.accessToken;
     if (!credentialHealth(JSON.stringify(profile.credentials), now).pushable) {
-      summary.skipped.push(name); // dormant token expired — keep last snapshot
-      continue;
+      const prev = cache.accounts[key];
+      if (prev && now - prev.fetched_at < minInterval) {
+        summary.skipped.push(name); // inside the throttle — rotating now would buy nothing
+        continue;
+      }
+      const rotated = await refreshProfileCredential(name, { fetchImpl: opts.fetchImpl, now });
+      if (!rotated.refreshed) {
+        if (rotated.dead) summary.expired.push(name);
+        else summary.failed.push({ name, reason: rotated.reason ?? "token refresh failed" });
+        continue;
+      }
+      summary.rotated.push(name);
+      token = rotated.accessToken;
     }
-    const token = profile.credentials?.claudeAiOauth?.accessToken;
     if (typeof token === "string" && token) jobs.set(key, { label: name, token });
   }
   if (activeKey) knownKeys.add(activeKey);
@@ -1446,6 +1559,8 @@ export interface AccountsHeartbeatPayload {
     usage?: CcUsageSnapshot;
     // Per-session launch token on file for this profile (never the token).
     token?: { stored_at: number; expires_at: number };
+    // The saved login is dead (refresh refused) — see CcProfileMeta.
+    login_expired_at?: number;
   }>;
 }
 
@@ -1501,7 +1616,7 @@ const accountsCache = createMtimeGatedCache<AccountsHeartbeatPayload | null>(
       const activeSince =
         stamp && (active?.uuid || active?.email) === stamp.key ? stamp.since : undefined;
       const usage = readUsageCache().accounts;
-      const profiles = listProfiles().map(({ name, email, uuid, tier, subscription }) => {
+      const profiles = listProfiles().map(({ name, email, uuid, tier, subscription, login_expired_at }) => {
         const tok = accountTokenInfo(name);
         return {
           name,
@@ -1510,6 +1625,7 @@ const accountsCache = createMtimeGatedCache<AccountsHeartbeatPayload | null>(
           subscription,
           usage: usage[uuid || email || ""] ?? undefined,
           ...(tok ? { token: { stored_at: tok.stored_at, expires_at: tok.expires_at } } : {}),
+          ...(login_expired_at ? { login_expired_at } : {}),
         };
       });
       if (active?.email || profiles.length > 0) {

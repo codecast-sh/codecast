@@ -26,6 +26,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { injectViaTmux, TEST_SCRATCH_DIRNAME } from "./daemon.js";
 import { tmuxRun } from "./tmux.js";
+import { claudeProjectDirName } from "./projectPathResolver.js";
 
 function hasBin(name: string): boolean {
   const r = spawnSync("which", [name], { encoding: "utf8" });
@@ -61,12 +62,9 @@ function getUserMessages(jsonlPath: string): string[] {
   return out;
 }
 
-// macOS resolves /tmp to /private/tmp, and Claude Code encodes the project dir
-// by replacing `/` with `-` (so /private/tmp/foo → -private-tmp-foo). Mirror
-// that here so we know where the JSONL will land.
 function jsonlPathFor(projectDir: string, sessionUuid: string): string {
   const real = fs.realpathSync(projectDir);
-  const encoded = real.replace(/\//g, "-");
+  const encoded = claudeProjectDirName(real);
   return path.join(os.homedir(), ".claude", "projects", encoded, `${sessionUuid}.jsonl`);
 }
 
@@ -76,10 +74,9 @@ describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () 
   // Run under the shared scratch marker dir so the daemon's isProjectAllowedToSync
   // refuses to sync this real claude session — otherwise its transcript lands in
   // ~/.claude/projects like any other and leaks into the inbox as a phantom
-  // conversation. Stays under os.tmpdir() and dot-free so jsonlPathFor's
-  // slash-only encoding still resolves the transcript location.
+  // conversation.
   const scratchRoot = path.join(os.tmpdir(), TEST_SCRATCH_DIRNAME);
-  const projectDir = path.join(scratchRoot, `inject-clear-${process.pid}-${Date.now()}`);
+  const projectDir = path.join(scratchRoot, `inject_clear-${process.pid}-${Date.now()}`);
   const target = `${tmuxSession}:0.0`;
   let jsonlPath = "";
 
