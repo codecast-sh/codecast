@@ -12,12 +12,14 @@ consumer only pulls the SDKs its surface needs.
 
 | Import | Surface | Peers used |
 | --- | --- | --- |
-| `@platform/analytics/web` | Browser and Electron renderer | `posthog-js`, `@sentry/react` |
+| `@platform/analytics/web` | Browser and Electron renderer, including global error listeners | `posthog-js`, `@sentry/react` |
+| `@platform/analytics/web-runtime` | Lazy browser SDK runtime without error-listener imports | `posthog-js`, `@sentry/react` |
 | `@platform/analytics/native` | React Native (Expo) | `posthog-react-native`, `@sentry/react-native` |
 | `@platform/analytics/server` | Any server runtime | none — plain `fetch` |
 
-Two more subpaths: `@platform/analytics` (the shared config types and
-`resolveConfig`) and `@platform/analytics/web-vitals` (Core Web Vitals
+Three more subpaths: `@platform/analytics` (the shared config types and
+`resolveConfig`), `@platform/analytics/errors` (SDK-free global error
+deduplication/listeners), and `@platform/analytics/web-vitals` (Core Web Vitals
 forwarded to PostHog as `web_vital` events; needs the `web-vitals` peer).
 
 All peers are optional and pinned to codecast's versions: `posthog-js`
@@ -40,10 +42,11 @@ initAnalytics({
 ```
 
 Behavior carried over from codecast: Sentry is disabled in development;
-traces sample at 1.0 in dev and 0.2 in prod; browser session recording,
-replay and dead click capture are off (they cost typing latency); SPA
-pageviews are captured on history changes; `platform`, `environment` and
-`app` ride every PostHog event as super properties. The native entry adds
+the web entry captures errors without browser tracing; browser session
+recording, replay and dead click capture are off (they cost typing latency);
+SPA pageviews are captured on history changes; `platform`, `environment` and
+`app` ride every PostHog event as super properties. The native entry keeps
+Sentry tracing at 1.0 in dev and 0.2 in prod and adds
 `trackScreen`, `wrapRoot`, app lifecycle events, and mobile session replay
 (`enableSessionReplay`, default on). It requires its SDKs lazily and
 degrades to no-ops when the native module is absent, so an OTA update can

@@ -52,6 +52,7 @@ describe("exports map", () => {
     const map: Record<string, string> = {
       "@platform/analytics": "src/index.ts",
       "@platform/analytics/web": "src/web.ts",
+      "@platform/analytics/web-runtime": "src/webRuntime.ts",
       "@platform/analytics/native": "src/native.ts",
       "@platform/analytics/server": "src/server.ts",
       "@platform/analytics/web-vitals": "src/webVitals.ts",
