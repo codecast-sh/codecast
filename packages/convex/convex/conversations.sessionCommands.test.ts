@@ -85,13 +85,14 @@ describe("getConversationLifecycle", () => {
     inbox_pinned_at: undefined,
   };
 
-  test("returns the five lifecycle fields for a conversation the caller runs", async () => {
+  test("returns lifecycle and pending-work state for a conversation the caller runs", async () => {
     expect(await call({ conversations: [killedRow] }, RUNNER, { conversation_id: CONV })).toEqual({
       status: "completed",
       inbox_killed_at: 222,
       inbox_dismissed_at: 222,
       inbox_stashed_at: 111,
       inbox_pinned_at: null, // absent stamps normalize to null, never undefined
+      has_pending_messages: false,
     });
   });
 
@@ -103,7 +104,14 @@ describe("getConversationLifecycle", () => {
       inbox_dismissed_at: null,
       inbox_stashed_at: null,
       inbox_pinned_at: null,
+      has_pending_messages: false,
     });
+  });
+
+  test("pending work is reported through both conversation and session selectors", async () => {
+    const tables = { conversations: [{ ...killedRow, status: "active", has_pending_messages: true }] };
+    expect((await call(tables, RUNNER, { conversation_id: CONV }))!.has_pending_messages).toBe(true);
+    expect((await call(tables, RUNNER, { session_id: "s1" }))!.has_pending_messages).toBe(true);
   });
 
   test("someone else's conversation is null, not a leak", async () => {
@@ -137,6 +145,7 @@ describe("getConversationLifecycle", () => {
         inbox_dismissed_at: null,
         inbox_stashed_at: null,
         inbox_pinned_at: null,
+        has_pending_messages: false,
       });
     });
 
