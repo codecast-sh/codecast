@@ -4,6 +4,7 @@
 // the iOS session screen, so it must stay free of DOM and React imports. The
 // session title lookup is injected because each platform has its own store.
 
+import { isTurnInterruptionNotice } from "@codecast/shared/contracts";
 import { isCommandMessage, cleanContent, isSystemMessage } from "./conversationProcessor";
 import {
   parseMachineDeliveredMessage,
@@ -11,6 +12,7 @@ import {
   stickyPromptContent,
   type MachineDeliveredKind,
 } from "../components/sessionMessage";
+import type { PromptImage } from "./messagePreview";
 import { formatShortDate } from "./utils";
 
 // Row kinds hidden behind the "other" chip: machine-delivered messages plus
@@ -21,6 +23,7 @@ export type NavigatorRowKind = "user" | HiddenKind;
 export type NavigatorRow = {
   _id: string;
   display: string;
+  images?: PromptImage[];
   isCmd: boolean;
   timestamp: number;
   commentCount: number;
@@ -31,7 +34,7 @@ export type NavigatorRow = {
   originalIndex: number;
 };
 
-export type NavigatorSourceMessage = { _id: string; content?: string; timestamp: number };
+export type NavigatorSourceMessage = { _id: string; content?: string; timestamp: number; images?: PromptImage[] };
 
 export const MACHINE_KIND_LABEL: Record<HiddenKind, string> = {
   schedule: "trigger", // user-facing vocabulary is "trigger" (ct-38953); the kind key mirrors the wire tag
@@ -122,6 +125,7 @@ export function buildNavigatorRows(
   const rows: NavigatorRow[] = [];
   for (const m of userMessages) {
     const content = m.content ?? "";
+    if (isTurnInterruptionNotice(content)) continue;
     const commentCount = commentCounts?.get(m._id) || 0;
     const machine = parseMachineDeliveredMessage(content);
     if (machine) {
@@ -134,7 +138,7 @@ export function buildNavigatorRows(
       // line would only repeat the body; drop it when the body already
       // carries it. Session sources are titles, never the body.
       const source = display.toLowerCase().startsWith(sourceText.toLowerCase()) ? undefined : sourceText;
-      rows.push({ _id: m._id, display, isCmd: false, timestamp: m.timestamp, commentCount, kind: machine.kind, source, originalIndex: -1 });
+      rows.push({ _id: m._id, ...(m.images?.length ? { images: m.images } : {}), display, isCmd: false, timestamp: m.timestamp, commentCount, kind: machine.kind, source, originalIndex: -1 });
       continue;
     }
     const user = processUserMessage(content);
@@ -142,8 +146,8 @@ export function buildNavigatorRows(
       rows.push({ _id: m._id, display: "", isCmd: false, timestamp: m.timestamp, commentCount, kind: "continue", originalIndex: -1 });
       continue;
     }
-    if (stripInvisible(user.display).trim().length === 0) continue;
-    rows.push({ _id: m._id, ...user, timestamp: m.timestamp, commentCount, kind: "user", originalIndex: humanOrdinal++ });
+    if (stripInvisible(user.display).trim().length === 0 && !m.images?.length) continue;
+    rows.push({ _id: m._id, ...(m.images?.length ? { images: m.images } : {}), ...user, timestamp: m.timestamp, commentCount, kind: "user", originalIndex: humanOrdinal++ });
   }
   return rows;
 }

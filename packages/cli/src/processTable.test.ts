@@ -204,3 +204,16 @@ describe.skipIf(!hasTmux())("liveTmuxServerPid", () => {
     expect(findStaleTmuxServers(procs, pid).map((s) => s.pid)).not.toContain(pid);
   }, 60_000);
 });
+
+test("stale server plan refuses missing or invalid current UID", () => {
+  for (const uid of [undefined, NaN, -1]) {
+    expect(staleTmuxServerKillPlan(ownedTable, 45451, uid)).toEqual({ kill: [], selfHosted: [], refused: "owner-unknown" });
+  }
+});
+
+test("stale server plan preserves its own whole hosting tree", () => {
+  const procs = parseProcessTable("100 1 501 tmux new-session\n200 1 501 tmux new-session\n201 200 501 bash\n202 201 501 bun doctor");
+  const plan = staleTmuxServerKillPlan(procs, 100, 501, 202);
+  expect(plan.kill).toEqual([]);
+  expect(plan.selfHosted.map(s => s.pid)).toEqual([200]);
+});

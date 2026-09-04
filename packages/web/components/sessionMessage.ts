@@ -305,7 +305,7 @@ export function parseSpawnedTaskPrompt(rawContent: string | null | undefined): S
 // the Expo bundle imports it and must not drag web UI dependencies into Hermes.
 
 // "[codecast]" is the CLI's injected session-move notice (sessionMoveNotice.ts).
-const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan", "[Codecast import]", "[codecast]", 'Background agent "'];
+const NOISE_PREFIXES = ["[Request interrupted", "The user interrupted the previous turn on purpose.", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan", "[Codecast import]", "[codecast]", 'Background agent "'];
 
 const NOISE_PATTERNS = [
   /toolu_[A-Za-z0-9_-]+/,
@@ -337,6 +337,7 @@ export function stickyPromptContent(raw: string | null | undefined): string | nu
 
 export function cleanUserMessage(raw: string | null | undefined): string | null {
   if (!raw) return null;
+  if (raw.trimStart().startsWith("<turn_aborted>")) return null;
   // A machine-delivered message (cast send, or an inter-agent teammate broadcast) isn't the
   // user's own prompt — skip it so it never surfaces as the sticky fallback or card preview.
   if (isMachineDeliveredMessage(raw)) return null;

@@ -26,6 +26,27 @@ export function extractDaemonCommandConversationId(args: string | null | undefin
   }
 }
 
+function matchesSessionTarget(entry: any, conv: { session_id?: string; owner_device_id?: string }): boolean {
+  if (entry.target_device_id !== conv.owner_device_id) return false;
+  try {
+    return JSON.parse(entry.args || "null")?.session_id === conv.session_id;
+  } catch {
+    return false;
+  }
+}
+
+export function validateSessionCommandRequestId(requestId: unknown): asserts requestId is string {
+  if (typeof requestId !== "string" || requestId.length === 0 || requestId.length > 128 || /[^A-Za-z0-9_-]/.test(requestId)) {
+    throw new Error("Invalid request ID: expected 1-128 letters, digits, underscores or hyphens");
+  }
+}
+
+export async function findSessionCommandByRequest(ctx: DbCtx, userId: Id<"users">, requestId: string) {
+  validateSessionCommandRequestId(requestId);
+  return ctx.db.query("daemon_commands")
+    .withIndex("by_user_request", (q: any) => q.eq("user_id", userId).eq("request_id", requestId)).unique();
+}
+
 /**
  * Ask the session's daemon to bring its agent back up, without killing anything
  * first. The one writer for every resume-only caller: the web's Resume button
@@ -45,23 +66,22 @@ export function extractDaemonCommandConversationId(args: string | null | undefin
  */
 export async function enqueueResumeSession(
   ctx: DbCtx,
-  conv: Pick<Doc<"conversations">, "_id" | "user_id" | "session_id" | "project_path" | "git_root" | "agent_type">,
+  conv: Pick<Doc<"conversations">, "_id" | "user_id" | "session_id" | "project_path" | "git_root" | "agent_type" | "owner_device_id">,
 ): Promise<{ deduplicated: boolean; command_id?: Id<"daemon_commands"> }> {
   const pendingCommands = await ctx.db
     .query("daemon_commands")
     .withIndex("by_user_pending", (q: any) => q.eq("user_id", conv.user_id).eq("executed_at", undefined))
     .collect();
 
-  if (hasRecentPendingDaemonCommand(pendingCommands as any, {
-    conversationId: conv._id.toString(),
-    command: "resume_session",
-  })) {
-    return { deduplicated: true };
-  }
+  const existing = pendingCommands.find((entry: any) => matchesSessionTarget(entry, conv) && hasRecentPendingDaemonCommand([entry], {
+    conversationId: conv._id.toString(), command: "resume_session",
+  }));
+  if (existing) return { deduplicated: true, command_id: existing._id };
 
   const command_id = await ctx.db.insert("daemon_commands", {
     user_id: conv.user_id,
     command: "resume_session" as const,
+    target_device_id: conv.owner_device_id,
     args: JSON.stringify({
       session_id: conv.session_id,
       agent_type: fromConvexAgentType(conv.agent_type),
@@ -74,10 +94,9 @@ export async function enqueueResumeSession(
 }
 
 /**
- * Ask the session's daemon to park the pane: kill the tmux session and its
- * process tree, keep the transcript, stamp the agent "hibernated". The next
- * message wakes it through the ordinary auto-resume path, so this is a cheap,
- * fully reversible way to give the machine its resources back.
+ * Ask the session's daemon to park an idle pane. The daemon independently
+ * verifies exact ownership and safety and may refuse; enqueueing is no proof
+ * of parking. A confirmed park preserves the transcript and resumes on send.
  *
  * There is no matching enqueueWakeSession. Waking IS a resume, and
  * enqueueResumeSession already does every part of it, so `cast wake` routes to
@@ -88,27 +107,38 @@ export async function enqueueResumeSession(
  */
 export async function enqueueHibernateSession(
   ctx: DbCtx,
-  conv: Pick<Doc<"conversations">, "_id" | "user_id" | "session_id">,
-): Promise<{ deduplicated: boolean; command_id?: Id<"daemon_commands"> }> {
-  const pendingCommands = await ctx.db
-    .query("daemon_commands")
-    .withIndex("by_user_pending", (q: any) => q.eq("user_id", conv.user_id).eq("executed_at", undefined))
-    .collect();
-
-  if (hasRecentPendingDaemonCommand(pendingCommands as any, {
-    conversationId: conv._id.toString(),
-    command: "hibernate_session",
-  })) {
-    return { deduplicated: true };
+  conv: Pick<Doc<"conversations">, "_id" | "user_id" | "session_id" | "owner_device_id">,
+  requestId?: string,
+): Promise<{ deduplicated: boolean; command_id: Id<"daemon_commands"> }> {
+  if (requestId !== undefined) validateSessionCommandRequestId(requestId);
+  if (!conv.session_id || !conv.owner_device_id) throw new Error("Session has no confirmed owning device");
+  const managed = await ctx.db.query("managed_sessions")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id)).first();
+  if (!managed || managed.session_id !== conv.session_id || managed.user_id !== conv.user_id) {
+    throw new Error("Managed session identity changed or is unavailable");
   }
-
+  if (requestId !== undefined) {
+    const existing = await findSessionCommandByRequest(ctx, conv.user_id, requestId);
+    if (existing) {
+      if (existing.command !== "hibernate_session" || !matchesSessionTarget(existing, conv) ||
+        extractDaemonCommandConversationId(existing.args) !== conv._id.toString()) {
+        throw new Error("Request ID is already bound to a different command or target");
+      }
+      return { deduplicated: true, command_id: existing._id };
+    }
+  } else {
+    const pending = await ctx.db.query("daemon_commands")
+      .withIndex("by_user_pending", (q: any) => q.eq("user_id", conv.user_id).eq("executed_at", undefined)).collect();
+    const existing = pending.find((entry: any) => matchesSessionTarget(entry, conv) &&
+      hasRecentPendingDaemonCommand([entry], { conversationId: conv._id.toString(), command: "hibernate_session" }));
+    if (existing) return { deduplicated: true, command_id: existing._id };
+  }
   const command_id = await ctx.db.insert("daemon_commands", {
     user_id: conv.user_id,
+    request_id: requestId,
+    target_device_id: conv.owner_device_id,
     command: "hibernate_session" as const,
-    args: JSON.stringify({
-      session_id: conv.session_id,
-      conversation_id: conv._id,
-    }),
+    args: JSON.stringify({ session_id: conv.session_id, conversation_id: conv._id }),
     created_at: Date.now(),
   });
   return { deduplicated: false, command_id };

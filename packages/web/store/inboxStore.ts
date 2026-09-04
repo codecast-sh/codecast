@@ -50,7 +50,7 @@ import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, deriveLiveAt, rowLiveDeadlines, type LiveFacts, modelOptionKey, formatDecisionAnswer } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer } from "@codecast/shared/contracts";
 import { liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
@@ -513,6 +513,7 @@ export type InboxSession = {
   // (shared deriveLiveAt), so the idle grace, a heartbeat lapse and the status
   // decay flip locally without a server re-execution.
   agent_status_updated_at?: number | null;
+  hibernated_at?: number | null;
   last_heartbeat?: number | null;
   last_role_is_user?: boolean | null;
   auq_open?: boolean | null;
@@ -531,11 +532,13 @@ export type InboxSession = {
   open_tasks?: OpenTaskReport[] | null;
   open_tasks_at?: number | null;
   is_deferred?: boolean;
-  // The user's park gesture ("a machine owns this"), current per the server's
-  // inbox_dormant_at >= updated_at rule — same contract as is_deferred. The raw
-  // stamp rides along so the optimistic write can set both.
-  is_dormant?: boolean;
-  inbox_dormant_at?: number | null;
+  // The user's own rest verdict — where they filed the row (Needs Input, Done,
+  // Dormant) — current per the server's inbox_rest_at >= updated_at rule, the
+  // same contract as is_deferred. The raw stamp rides along so the optimistic
+  // write sets both and the client re-checks currency as updated_at moves.
+  user_rest?: UserRest | null;
+  inbox_rest?: UserRest | null;
+  inbox_rest_at?: number | null;
   // The settle classifier's verdict for the CURRENT settle (server nulls a
   // stale one), consulted only when the agent made no declaration of its own.
   settle_verdict?: "done" | "needs_input" | "dormant" | null;
@@ -548,6 +551,7 @@ export type InboxSession = {
   // buckets into the Stashed group (above Dismissed) while the agent keeps
   // running. Same absolute-flag semantics as dismiss; a dismiss clears it.
   inbox_stashed_at?: number | null;
+  inbox_snoozed_until?: number | null;
   // "Stash and hide": the stash survives trigger wakes (a plain stash pops
   // back on one). Honored only while inbox_stashed_at is set — see the shared
   // isStashHidden. Every stash write sets it, true or null.
@@ -742,6 +746,8 @@ export type Message = {
 // header and message browser have the full list regardless of which window of
 // messages is currently paginated in.
 export type UserMessage = {
+  images?: Array<{ media_type: string; storage_id?: string; data?: string }>;
+  from_user_id?: string;
   _id: string;
   message_uuid?: string;
   role: "user";
@@ -797,6 +803,7 @@ export type ForkChild = {
   git_root?: string;
   inbox_dismissed_at?: number | null;
   inbox_stashed_at?: number | null;
+  inbox_snoozed_until?: number | null;
   inbox_stash_hidden?: boolean | null;
   inbox_killed_at?: number | null;
   inbox_pinned_at?: number | null;
@@ -829,6 +836,7 @@ export type SessionSummary = {
   author_avatar?: string | null;
   inbox_dismissed_at?: number | null;
   inbox_stashed_at?: number | null;
+  inbox_snoozed_until?: number | null;
   inbox_stash_hidden?: boolean | null;
   inbox_killed_at?: number | null;
   inbox_pinned_at?: number | null;
@@ -848,6 +856,7 @@ const SUMMARY_PASSTHROUGH_KEYS = [
 export const TRIAGE_STAMP_KEYS = [
   "inbox_dismissed_at",
   "inbox_stashed_at",
+  "inbox_snoozed_until",
   "inbox_stash_hidden",
   "inbox_killed_at",
   "inbox_pinned_at",
@@ -1571,9 +1580,9 @@ export function isSessionStashed(
 // Hidden sessions are viewed through the peek path (viewingDismissedId) so
 // navigation never silently resurrects them.
 export function isSessionHidden(
-  s: Pick<InboxSession, "inbox_dismissed_at" | "inbox_stashed_at">,
+  s: Pick<InboxSession, "inbox_dismissed_at" | "inbox_stashed_at" | "inbox_snoozed_until">,
 ): boolean {
-  return !!s.inbox_dismissed_at || !!s.inbox_stashed_at;
+  return !!s.inbox_dismissed_at || !!s.inbox_stashed_at || (s.inbox_snoozed_until ?? 0) > Date.now();
 }
 
 // ── Working-set membership (sync-convergence C4/C5) ─────────────────────────
@@ -1627,6 +1636,7 @@ function workingSetRowOf(s: InboxSession): WorkingSetRow {
     inbox_pinned_at: s.inbox_pinned_at ?? (s.is_pinned ? (s.updated_at || 1) : null),
     inbox_dismissed_at: s.inbox_dismissed_at ?? null,
     inbox_stashed_at: s.inbox_stashed_at ?? null,
+    inbox_snoozed_until: s.inbox_snoozed_until ?? null,
     has_pending_messages: s.has_pending ?? null,
     owned_by_me: s.owned_by_me ?? null,
     // The lead a teammate rides (rollupParentIdOf): the fold and the bucket
@@ -1660,7 +1670,7 @@ function isMemberCandidate(s: InboxSession): boolean {
 // rank), so a gesture that moves only a stamp can never leave membership
 // serving the previous selection.
 const membershipTimeSig = makeCollectionSig<InboxSession>((s) =>
-  `${Math.floor((s.updated_at ?? 0) / 60_000)}|${s.inbox_pinned_at ?? ""}|${s.inbox_dismissed_at ?? ""}|${s.inbox_stashed_at ?? ""}|${s.inbox_killed_at ?? ""}`);
+  `${Math.floor((s.updated_at ?? 0) / 60_000)}|${s.inbox_pinned_at ?? ""}|${s.inbox_dismissed_at ?? ""}|${s.inbox_stashed_at ?? ""}|${s.inbox_snoozed_until ?? ""}|${s.inbox_killed_at ?? ""}`);
 let _membershipKey: string | null = null;
 let _membershipVal: InboxMembership | null = null;
 export function computeInboxMembership(
@@ -2343,10 +2353,13 @@ export function orchestrationGroupLabelOf(s: InboxSession): string | null {
 export function sessionStructuralSig(s: InboxSession): string {
   return [
     s._id,
+    s.agent_status === "hibernated" ? 1 : 0,
     sessionSortRank(s).join(","),
     isSessionHidden(s) ? 1 : 0,
     isSessionDismissed(s) ? 1 : 0,
-    isSessionStashed(s) ? 1 : 0,
+    s.inbox_stashed_at ? 1 : 0,
+    isSessionKilled(s) ? 1 : 0,
+    s.inbox_snoozed_until ?? 0,
     nestParentIdOf(s) || "",
     s.forked_from || "",
     orchestrationGroupLabelOf(s) || "",
@@ -2491,6 +2504,7 @@ export interface PlacedInbox {
   dormant: InboxSession[];
   working: InboxSession[];
   stashed: InboxSession[];
+  snoozed: InboxSession[];
   dismissed: InboxSession[];
   subsByParent: Map<string, InboxSession[]>;
   forksByParent: Map<string, InboxSession[]>;
@@ -2530,13 +2544,14 @@ export const INBOX_PAYLOAD_FRESH_MS = 90_000;
 // (agent_status, is_idle, is_unresponsive, awaiting_input) taken from `live`:
 // the shared deriveLiveAt over the row's replicated facts at the caller's
 // clock (ct-47609). Fields the server enrichment ships already
-// currency-filtered (is_dormant, settle_verdict) are mapped back onto stamps
+// currency-filtered (user_rest, settle_verdict) are mapped back onto stamps
 // the shared currency rules accept as current.
 function projectableRowOf(s: InboxSession, live: LiveFacts): ProjectableInboxRow {
   const base = workingSetRowOf(s);
   return {
     ...base,
-    inbox_dormant_at: s.inbox_dormant_at ?? (s.is_dormant ? (s.updated_at || 1) : null),
+    inbox_rest: s.inbox_rest ?? s.user_rest ?? null,
+    inbox_rest_at: s.inbox_rest_at ?? (s.user_rest ? (s.updated_at || 1) : null),
     anchor_id: s.is_anchor ? s._id : null,
     armed_trigger_kind: s.armed_trigger_kind ?? null,
     loop_state: s.loop_state ?? null,
@@ -2544,6 +2559,7 @@ function projectableRowOf(s: InboxSession, live: LiveFacts): ProjectableInboxRow
     settle_verdict_at: s.settle_verdict ? (s.updated_at || 1) : null,
     thread_state_status: s.thread_state_status ?? null,
     pending_api_error: s.pending_api_error === true,
+    session_error: s.session_error ?? null,
     last_user_message: s.last_user_message ?? null,
     agent_status: live.agent_status,
     is_idle: live.is_idle,
@@ -2629,6 +2645,7 @@ function placementDeadlineSig(state: PlaceInboxState, now: number): string {
     let passed = 0;
     for (const d of rowLiveDeadlines(liveFactsOf(row))) if (d != null && d <= now) passed++;
     if (passed > 0) mix(`l${passed}`, id);
+    if (row.inbox_snoozed_until && row.inbox_snoozed_until <= now) mix("s", id);
     if (row._hasDraft) mix("d", id);
   }
   if (revive) {
@@ -2858,7 +2875,7 @@ export function placeInboxRows(
     const base = sharedPlacementOf(s, deriveLiveAt(liveFactsOf(s), now), askingOf(s), epoch);
     let bucket = base.bucket;
     let work_state = base.work_state;
-    if ((bucket === "needs_input" || bucket === "done" || bucket === "dormant") && inFlight(s._id)) {
+    if ((bucket === "needs_input" || bucket === "done" || bucket === "dormant") && !s.inbox_snoozed_until && inFlight(s._id)) {
       bucket = "working";
       work_state = "working";
     } else if (bucket === "questions" && inFlight(s._id) && ownPromptOnly(s)) {
@@ -2893,21 +2910,28 @@ export function placeInboxRows(
   const activeKeyed: RankedSession[] = [];
   const dismissed: InboxSession[] = [];
   const stashed: InboxSession[] = [];
+  const snoozed: InboxSession[] = [];
   for (const s of Object.values(visibleSessions)) {
     const p = placements.get(s._id) ?? null;
     // A placed row files by its placement; a stub or child row by its own
     // stamps. An anchor's standing thread lives in its own space unless hard
     // blocked — the shared `hidden` bucket, never rendered here.
-    const setAside = p ? p.bucket === "dismissed" || p.bucket === "stashed" || p.bucket === "hidden" : isSessionHidden(s);
+    const subagent = isOrphanOrSubagent(s);
+    const hidden = subagent
+      ? !!s.inbox_killed_at || !!s.inbox_stashed_at || (s.inbox_snoozed_until ?? 0) > now
+      : isSessionHidden(s);
+    const setAside = p ? p.bucket === "dismissed" || p.bucket === "stashed" || p.bucket === "snoozed" || p.bucket === "hidden" : hidden;
     // The rank reads the SAME verdict the section files under (rankVerdictOf).
     if (!setAside) activeKeyed.push({ s, rank: sessionSortRank(s, p) });
-    if (p ? p.bucket === "dismissed" : isSessionDismissed(s)) dismissed.push(s);
+    if (p ? p.bucket === "dismissed" : !subagent && isSessionDismissed(s)) dismissed.push(s);
     if (p ? p.bucket === "stashed" : isSessionStashed(s)) stashed.push(s);
+    if (p?.bucket === "snoozed") snoozed.push(s);
   }
   activeKeyed.sort(compareRankedSessions);
   const sorted = activeKeyed.map((x) => x.s);
   dismissed.sort((a, b) => (b.inbox_dismissed_at || 0) - (a.inbox_dismissed_at || 0));
   stashed.sort((a, b) => (b.inbox_stashed_at || 0) - (a.inbox_stashed_at || 0));
+  snoozed.sort((a, b) => (a.inbox_snoozed_until || 0) - (b.inbox_snoozed_until || 0));
   const allIds = new Set(sorted.map((s) => s._id));
 
   // 5. Nesting (both child kinds — see nestParentIdOf) and fork grouping.
@@ -3022,7 +3046,7 @@ export function placeInboxRows(
   for (const s of Object.values(mineAll)) {
     if (questionIds.has(s._id) || allIds.has(s._id)) continue;
     if (!askingOf(s)) continue;
-    if (s.inbox_killed_at || s.inbox_dismissed_at) continue;
+    if (s.inbox_killed_at || s.inbox_dismissed_at || s.inbox_snoozed_until) continue;
     if (rollupParentIdOf(s)) continue;
     questionIds.add(s._id);
     questions.push(s);
@@ -3072,7 +3096,7 @@ export function placeInboxRows(
     tally: tallyOut,
     truncated: reuseArray(prev?.truncated, membership?.truncated ?? EMPTY_TRUNCATED),
     set_digest,
-    sorted: reuseArray(prev?.sorted, sorted),
+    sorted: reuseArray(prev?.sorted, sorted.filter(s => !isOrphanSubagent(s))),
     questions: reuseArray(prev?.questions, questions),
     pinned: reuseArray(prev?.pinned, pinned),
     newSessions: reuseArray(prev?.newSessions, newSessions),
@@ -3081,6 +3105,7 @@ export function placeInboxRows(
     dormant: reuseArray(prev?.dormant, dormant),
     working: reuseArray(prev?.working, working),
     stashed: reuseArray(prev?.stashed, stashed),
+    snoozed: reuseArray(prev?.snoozed, snoozed),
     dismissed: reuseArray(prev?.dismissed, dismissed),
     subsByParent: reuseArrayMap(prev?.subsByParent, subsByParent),
     forksByParent: reuseArrayMap(prev?.forksByParent, forksByParent),
@@ -4032,7 +4057,7 @@ export function findReusableBlankSession(
     // tears down the pre-warm agent on the hide transition, then the conv is
     // deleted) — so a hidden row here is a corpse awaiting the ghost sweep,
     // never a reuse candidate. The next summon mints a fresh pre-warm instead.
-    if (s.inbox_dismissed_at || s.inbox_stashed_at || s.is_pinned) continue;
+    if (s.inbox_dismissed_at || s.inbox_stashed_at || s.inbox_snoozed_until || s.is_pinned) continue;
     if (s.is_subagent || s.parent_conversation_id || s.worktree_name || s.workflow_run_id) continue;
     if (s.active_task || s.active_plan) continue;
     if (s.agent_type !== opts.agentType) continue;
@@ -4392,7 +4417,9 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   clearBlockedReviveRequested: (ids: string[]) => void;
   restoreSession: (id: string) => void;
   deferSession: (id: string) => void;
-  dormantSession: (id: string) => void;
+  setSessionRest: (id: string, rest: UserRest) => void;
+  snoozeSession: (id: string, until: number) => void;
+  wakeSnoozedSession: (id: string) => void;
   pinSession: (id: string) => void;
   renameSession: (id: string, title: string) => void;
   switchProject: (convId: string, path: string) => void;
@@ -4411,6 +4438,7 @@ interface InboxStoreState extends ChatSliceState, Omit<RegisteredCollectionSlots
   sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => void;
+  hibernateSession: (requestId: string, convId: string, sessionId: string, ownerDeviceId: string) => Promise<any>;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
   createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
@@ -6171,6 +6199,28 @@ function commitCurrentSession(draft: Draft, id: string) {
 // HIDDEN_OVERRIDE_SETTLE_MS lives in ./inboxOverlays (the `triage_gesture`
 // overlay's bound) and is re-exported above.
 
+function clearSessionSnoozeInDraft(draft: Draft, id: string) {
+  for (const row of [draft.sessions[id], draft.conversations[id]]) {
+    if (row?.inbox_snoozed_until) row.inbox_snoozed_until = null;
+  }
+}
+
+function setSessionSnoozeInDraft(draft: Draft, id: string, until: number) {
+  if (!Number.isFinite(until) || until <= 0) throw new Error("Invalid snooze time");
+  const session = draft.sessions[id] ?? draft.conversations[id];
+  if (!session || session.inbox_killed_at || !isConvexId(id)
+    || isForeignSession(session, draft.conversations[id], draft.currentUser?._id?.toString())) return false;
+  for (const row of [draft.sessions[id], draft.conversations[id]]) {
+    if (!row) continue;
+    row.inbox_snoozed_until = until;
+    row.inbox_stashed_at = null;
+    row.inbox_dismissed_at = null;
+    row.inbox_pinned_at = null;
+    if ("is_pinned" in row) row.is_pinned = false;
+  }
+  return true;
+}
+
 // Shared body of stashSession/killSession: hide `id` (and its nested
 // children) out of the active buckets, advancing the current selection past the
 // removed set. Stash writes inbox_stashed_at; dismiss writes inbox_dismissed_at
@@ -6257,6 +6307,7 @@ function hideSessionInDraft(
     const wasPinned = sess?.is_pinned;
     if (sess) {
       sess[field] = now;
+      if (sess.inbox_snoozed_until) sess.inbox_snoozed_until = null;
       if (mode === "kill" && sess.inbox_stashed_at) sess.inbox_stashed_at = null;
       if (mode === "stash" || sess.inbox_stash_hidden) sess.inbox_stash_hidden = stashHiddenValue;
       if (wasPinned) {
@@ -6267,6 +6318,7 @@ function hideSessionInDraft(
     const conv = draft.conversations[sid];
     if (conv) {
       conv[field] = now;
+      if (conv.inbox_snoozed_until) conv.inbox_snoozed_until = null;
       if (mode === "kill" && conv.inbox_stashed_at) conv.inbox_stashed_at = null;
       if (mode === "stash" || conv.inbox_stash_hidden) conv.inbox_stash_hidden = stashHiddenValue;
       if (wasPinned) conv.inbox_pinned_at = null;
@@ -6435,7 +6487,7 @@ function pickBridgedFields(
 const ACK_DERIVED_TWINS: Record<string, string> = {
   inbox_pinned_at: "is_pinned",
   inbox_deferred_at: "is_deferred",
-  inbox_dormant_at: "is_dormant",
+  inbox_rest_at: "user_rest",
 };
 
 function stampSyncAckInDraft(
@@ -7746,12 +7798,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
       if (this.sessions[sid]) {
         this.sessions[sid].inbox_dismissed_at = null;
         this.sessions[sid].inbox_stashed_at = null;
+        this.sessions[sid].inbox_snoozed_until = null;
         this.sessions[sid].inbox_killed_at = null;
       }
       const conv = this.conversations[sid] as any;
       if (conv) {
         conv.inbox_dismissed_at = null;
         conv.inbox_stashed_at = null;
+        conv.inbox_snoozed_until = null;
         conv.inbox_killed_at = null;
       }
     }
@@ -7764,8 +7818,32 @@ const inboxStoreConfig = (set: any, get: any) => ({
     broadcastGesture({ kind: "restore", ids: allIds, ts: now }, bridgeUserId(this));
   }),
 
+  snoozeSession: action(function (this: Draft, id: string, until: number) {
+    const ids = [id, ...Object.values(this.sessions).filter((row) => nestParentIdOf(row) === id).map((row) => row._id)];
+    const next = nextSessionPastRemoved(computeVisualOrder(this), id, new Set(ids));
+    if (!setSessionSnoozeInDraft(this, id, until)) return;
+    for (const sid of ids.slice(1)) setSessionSnoozeInDraft(this, sid, until);
+    if (ids.includes(this.currentSessionId ?? "")) {
+      declareViewNav("gesture");
+      this.currentSessionId = next?._id ?? null;
+      recordCurrentConversationPointer(this, next?._id);
+      syncActiveInboxTabPath(this, next?._id ?? null);
+    }
+    if (ids.includes(this.viewingDismissedId ?? "")) this.viewingDismissedId = null;
+    if (ids.includes(this.sidePanelSessionId ?? "")) this.sidePanelSessionId = next?._id ?? null;
+  }),
+
+  wakeSnoozedSession: action(function (this: Draft, id: string) {
+    const now = Math.floor(Date.now() / 60_000) * 60_000;
+    if (!setSessionSnoozeInDraft(this, id, now)) return;
+    for (const sid of Object.values(this.sessions).filter((row) => nestParentIdOf(row) === id && row.inbox_snoozed_until).map((row) => row._id)) {
+      setSessionSnoozeInDraft(this, sid, now);
+    }
+  }),
+
   deferSession: action(function (this: Draft, id: string) {
     const now = Date.now();
+    clearSessionSnoozeInDraft(this, id);
     if (this.sessions[id]) {
       this.sessions[id].is_deferred = true;
       // The server field, on the session row: the sessions→conversations
@@ -7776,20 +7854,27 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (this.conversations[id]) (this.conversations[id] as any).inbox_deferred_at = now;
   }),
 
-  // "A machine owns this — wake me when something happens." Same shape as
-  // deferSession: a stamp on the row that any later activity expires (the
-  // server honors it only while >= updated_at, so a wake un-parks it with no
-  // clearing write). The row moves from Needs Input to Dormant locally at once.
-  dormantSession: action(function (this: Draft, id: string) {
+  // The user files the row themselves: "this is dormant / done / still my
+  // move". Same shape as deferSession: a stamp on the row that any later
+  // activity expires (the server honors it only while >= updated_at, so a
+  // wake un-files it with no clearing write). The row moves into the chosen
+  // section locally at once, whatever the classifier thought.
+  setSessionRest: action(function (this: Draft, id: string, rest: UserRest) {
     const now = Date.now();
+    clearSessionSnoozeInDraft(this, id);
     if (this.sessions[id]) {
-      this.sessions[id].is_dormant = true;
-      this.sessions[id].inbox_dormant_at = now;
+      this.sessions[id].user_rest = rest;
+      this.sessions[id].inbox_rest = rest;
+      this.sessions[id].inbox_rest_at = now;
     }
-    if (this.conversations[id]) (this.conversations[id] as any).inbox_dormant_at = now;
+    if (this.conversations[id]) {
+      (this.conversations[id] as any).inbox_rest = rest;
+      (this.conversations[id] as any).inbox_rest_at = now;
+    }
   }),
 
   pinSession: action(function (this: Draft, id: string) {
+    clearSessionSnoozeInDraft(this, id);
     const newPinned = !this.sessions[id]?.is_pinned;
     const now = Date.now();
     const pinnedAt = newPinned ? now : null;
@@ -8009,6 +8094,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // synced pending_messages row, not a return value. Args mirror the server
   // handler: [conversation_id, content, image_storage_ids, client_id].
   sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string) {
+    clearSessionSnoozeInDraft(this, _convId);
     notePendingMessageSendRequested(_clientId);
     // A message into a session that is asking you something IS the answer —
     // a poll payload always, free text when the row says awaiting_input. Mark
@@ -8039,6 +8125,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // optional `optimistic` patch updates sessions[convId] synchronously for an
   // instant UI; asyncAction returns the server result (e.g. fork's new id), so
   // callers that await the old mutation are a drop-in swap.
+  hibernateSession: asyncAction(function (this: Draft, requestId: string, convId: string, _sessionId: string, _ownerDeviceId: string) {
+    for (const [id, row] of Object.entries(this.sessionCommands)) {
+      if (row.conversation_id === convId || (row.executed_at && Date.now() - row.executed_at > 86400_000)) delete this.sessionCommands[id];
+    }
+    this.sessionCommands[requestId] = {
+      _id: requestId, conversation_id: convId, command: "hibernate_session",
+      requested_at: Date.now(), executed_at: null, result: null, error: null,
+    };
+  }),
+
   convCommand: asyncAction(function (this: Draft, convId: string, _command: string, _extraArgs?: Record<string, any>, optimistic?: Record<string, any>) {
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),
@@ -8949,8 +9045,22 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
 
   setConversationAgent: sync(function (this: Draft, id: string, agentType: string) {
-    if (this.sessions[id]) this.sessions[id].agent_type = agentType;
-    if (this.conversations[id]) this.conversations[id].agent_type = agentType;
+    // Same as the server patch: an agent flip invalidates the previous
+    // agent's model/effort (claude-fable on a Codex session is leftover).
+    // Pending-lock the clear so a stale inbox/meta echo cannot put the old
+    // model back on the header chip; an omitted `model` from
+    // getConversationWithMeta retires the lock (undefined === undefined).
+    const ts = Date.now();
+    for (const coll of ["sessions", "conversations"] as const) {
+      const row = this[coll][id] as any;
+      if (!row) continue;
+      row.agent_type = agentType;
+      row.model = undefined;
+      row.effort = undefined;
+      this.pending[`${coll}:${id}:agent_type`] = { type: "field", value: agentType, ts };
+      this.pending[`${coll}:${id}:model`] = { type: "field", value: undefined, ts };
+      this.pending[`${coll}:${id}:effort`] = { type: "field", value: undefined, ts };
+    }
     if (this.currentConversation.conversationId === id) {
       this.currentConversation.agentType = agentType;
     }
@@ -9139,14 +9249,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   setUserMessages: sync(function (this: Draft, convId: string, msgs: UserMessage[]) {
     const prev = this.userMessages[convId];
-    // Convex hands back a fresh array on every reactive tick. Bail when the
-    // snapshot is unchanged (same length + edge ids) so consumers don't
-    // re-render on no-op updates — mirrors the messages-sync dedup.
-    if (prev && prev.length === msgs.length &&
-        prev[0]?._id === msgs[0]?._id &&
-        prev[prev.length - 1]?._id === msgs[msgs.length - 1]?._id) {
-      return;
-    }
+    if (prev && prev.length === msgs.length && prev.every((message, index) => {
+      const next = msgs[index];
+      return message._id === next._id && message.content === next.content &&
+        message.timestamp === next.timestamp && message.message_uuid === next.message_uuid &&
+        message.from_user_id === next.from_user_id &&
+        JSON.stringify(message.images) === JSON.stringify(next.images);
+    })) return;
     this.userMessages[convId] = msgs;
     // Persisted beside the message pages so a reopen (or a reload) paints the
     // message navigator from disk instead of a skeleton while getUserMessages

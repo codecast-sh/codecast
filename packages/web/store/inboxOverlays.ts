@@ -62,8 +62,10 @@ export const TRIAGE_PENDING_FIELDS = [
   "inbox_pinned_at",
   "is_pinned",
   "inbox_killed_at",
-  "inbox_dormant_at",
-  "is_dormant",
+  "inbox_rest",
+  "inbox_rest_at",
+  "inbox_snoozed_until",
+  "user_rest",
   "inbox_deferred_at",
   "is_deferred",
 ] as const;

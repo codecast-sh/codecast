@@ -31,5 +31,15 @@
     },
     "default_title": "Codecast: not connected",
     "default_popup": "popup.html"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "options.html"
+      ],
+      "matches": [
+        "file:///*"
+      ]
+    }
+  ]
 }

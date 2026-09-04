@@ -1,3 +1,4 @@
+import { HibernatedMarker } from "./HibernatedMarker";
 import { sessionRepository } from "../lib/repoNavigation";
 import { repoTreeHref, repoCommitsHref } from "../lib/repoView";
 import { BranchCodeLink } from "./repo/RepositoryLinks";
@@ -33,9 +34,9 @@ import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { extractBrowserTabId, focusBrowserTab, prefetchBrowserFocusEndpoint } from "../lib/browserFocus";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isWarningSystemNotice, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName } from "../lib/conversationProcessor";
+import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isHiddenSystemNotice, isWarningSystemNotice, isContextOnlyUserMessage, initialSubagentPromptId, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage } from "../lib/conversationProcessor";
 import { splitMarkdownBlocks } from "../lib/markdownBlocks";
-import { classifyApiErrorBanner, isNoResponseStub, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, withSafetyBlock, SAFETY_BLOCK_HINT, isNoResponseStub, agentSupportsFork, ACTIVE_AGENT_STATUSES, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec, AGENT_LAUNCH_OPTIONS, parseThreadStateStatus, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel, type ConvexAgentType, type AgentStatus, type ThreadStateFields, type DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "./DecisionAnswerFooter";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { parseLimitResetAt } from "../lib/limitReset";
@@ -134,9 +135,9 @@ import { CommitCard } from "./CommitCard";
 import { PRCard } from "./PRCard";
 import { DiffView } from "./DiffView";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
-import { GrokIcon as GrokMark } from "./BrandIcons";
+import { CodexIcon as CodexMark, GrokIcon as GrokMark } from "./BrandIcons";
 import { AnchorHeaderPill } from "./anchor/AnchorHeaderPill";
-import { HeaderModelControl, LaunchModelPill } from "./ModelEffortPicker";
+import { HeaderModelControl, LaunchModelPill, useLiveSessionMeta } from "./ModelEffortPicker";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -172,6 +173,7 @@ import { isMarkdownFile, isPlanFile } from "../lib/markdownFiles";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
 import { buildPollPayload, pollKeyForOption, SYNTHETIC_POLL_OPTION } from "../lib/pollPayload";
 import { dropScrapedProseTwins } from "../lib/proseTwins";
+import { MessagePromptPreview } from "./MessagePromptPreview";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
@@ -2282,6 +2284,7 @@ function cleanStickyContent(content: string): string {
 }
 
 type ParsedApiError = {
+  isSafety?: boolean;
   statusCode?: number;
   message: string;
   errorType?: string;
@@ -2330,6 +2333,10 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
   if (!content) return null;
   const trimmed = content.trim();
   if (!trimmed) return null;
+
+  if (classifyApiErrorBanner(trimmed) === "safety") {
+    return { message: trimmed.replace(/^Safety stop:\s*(?:misalignment_policy_violation\s*·\s*)?/, ""), errorType: "misalignment_policy_violation", isSafety: true };
+  }
 
   // Marked opencode/pi provider error: strip the marker, classify (auth vs
   // generic), and show the provider's own text. classifyApiErrorBanner keys on the
@@ -2464,7 +2471,7 @@ function useApiErrorLive(conversationId?: string): boolean {
     if (!conversationId) return true;
     const row = s.sessions[conversationId];
     if (!row) return true;
-    return row.pending_api_error === true;
+    return withSafetyBlock(row).pending_api_error === true;
   });
 }
 
@@ -2482,13 +2489,17 @@ function ApiErrorCard({ error, agentType, conversationId, timestamp, compact = f
     ? { border: "border-sol-border/40 bg-sol-bg-alt/30", fg: "text-sol-text-muted", badge: "border-sol-border/40 bg-sol-bg-alt/50 text-sol-text-muted", icon: "bg-sol-bg-alt text-sol-text-muted" }
     : isServerError
       ? { border: "border-sol-red/40 bg-sol-red/10", fg: "text-sol-red", badge: "border-sol-red/40 bg-sol-red/10 text-sol-red", icon: "bg-sol-red/20 text-sol-red" }
-      : { border: "border-amber-500/40 bg-amber-500/10", fg: "text-amber-500", badge: "border-amber-500/40 bg-amber-500/10 text-amber-500", icon: "bg-amber-500/20 text-amber-500" };
+      : { border: "border-amber-500/40 bg-amber-500/10", fg: error.isSafety ? "text-amber-700 dark:text-amber-500" : "text-amber-500", badge: "border-amber-500/40 bg-amber-500/10 text-amber-500", icon: "bg-amber-500/20 text-amber-500" };
 
   let heading: string;
   let icon: ReactNode;
   let hint: ReactNode;
   const remedy = authRemedy(agentType);
-  if (error.isAuth) {
+  if (error.isSafety) {
+    heading = "Safety review required";
+    icon = <span className="text-[10px] font-semibold">!</span>;
+    hint = <p className="mt-1.5 text-xs text-sol-text-dim">{SAFETY_BLOCK_HINT}</p>;
+  } else if (error.isAuth) {
     heading = "Authentication required";
     icon = (
       <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -2989,7 +3000,9 @@ function classifyUserMessage(
   // Legacy stored form: command tags were stripped at sync time, leaving "name\n/name\nargs".
   // isCommandMessage misses it (no leading tag/slash), so catch it explicitly.
   if (isStrippedCommand(tNoReminders)) return { kind: 'command' };
-  if (agentType === "codex" && isCodexTurnAbortedMessage(t)) return { kind: 'interrupt', tone: 'amber' };
+  // Only Codex emits <turn_aborted>; classify by the message, not the conversation's
+  // CURRENT agent_type, which changes when the conversation is switched to another agent.
+  if (isCodexTurnAbortedMessage(t)) return { kind: 'interrupt', tone: 'amber' };
   if (isInterruptMessage(t)) return { kind: 'interrupt', tone: 'sky' };
   if (isAgentSwitchNotice(tNoReminders) || msg.subtype === "agent_switch") {
     const parsed = parseAgentSwitchNotice(tNoReminders);
@@ -3093,13 +3106,7 @@ function ClaudeIcon() {
 }
 
 function CodexIcon() {
-  return (
-    <div className="w-6 h-6 rounded bg-[#0f0f0f] flex items-center justify-center shrink-0">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729z" fill="white"/>
-      </svg>
-    </div>
-  );
+  return <CodexMark className="w-6 h-6" />;
 }
 
 function CursorIcon() {
@@ -3191,23 +3198,26 @@ function ConversationMetadata({
   conversationId?: string;
   canEditModel?: boolean;
 }) {
-  if (!agentType && !model && !startedAt && !messageCount) return null;
+  const live = useLiveSessionMeta(conversationId);
+  const resolvedAgent = live?.agentType ?? agentType;
+  const resolvedModel = live ? (live.model ?? undefined) : model;
+  if (!resolvedAgent && !resolvedModel && !startedAt && !messageCount) return null;
 
   return (
     <div className="flex items-center gap-1 text-[10px] sm:text-xs text-sol-text-dim min-w-0 overflow-hidden">
-      {agentType && (
+      {resolvedAgent && (
         <div
           className="flex items-center flex-shrink-0 cursor-default"
-          title={formatAgentType(agentType)}
+          title={formatAgentType(resolvedAgent)}
         >
-          <AgentTypeIcon agentType={agentType} />
+          <AgentTypeIcon agentType={resolvedAgent} />
         </div>
       )}
       <HeaderModelControl
         conversationId={conversationId}
-        agentType={agentType}
-        model={model}
-        effort={effort}
+        agentType={resolvedAgent}
+        model={resolvedModel}
+        effort={live ? (live.effort ?? undefined) : effort}
         messageCount={messageCount}
         canEdit={!!canEditModel}
       />
@@ -6911,16 +6921,6 @@ function SkillExpansionBlock({ content, timestamp, cmdName, collapsed }: { conte
 function isInterruptMessage(content: string): boolean {
   const trimmed = content.trim();
   return trimmed.startsWith("[Request interrupted") || trimmed.startsWith("[Request cancelled");
-}
-
-function isCodexTurnAbortedMessage(content: string): boolean {
-  const trimmed = content.trim();
-  return trimmed.startsWith("<turn_aborted>") && trimmed.includes("</turn_aborted>");
-}
-
-function isInterruptLikeMessage(content: string, agentType?: string): boolean {
-  if (isInterruptMessage(content)) return true;
-  return agentType === "codex" && isCodexTurnAbortedMessage(content);
 }
 
 function InterruptStatusLine({ label = "user interrupted", tone = "sky" }: { label?: string; tone?: "sky" | "amber" }) {
@@ -12942,8 +12942,8 @@ const ConversationViewInner = (
     // Context-only import truncation notices are never user-facing. Rows synced by
     // older CLIs still carry them; drop here (some() guard keeps the common-case
     // array identity stable).
-    const base = messagesFromConv.some(m => m.role === "user" && isImportNotice(m.content))
-      ? messagesFromConv.filter(m => !(m.role === "user" && isImportNotice(m.content)))
+    const base = messagesFromConv.some(m => m.role === "user" && isContextOnlyUserMessage(m.content))
+      ? messagesFromConv.filter(m => !(m.role === "user" && isContextOnlyUserMessage(m.content)))
       : messagesFromConv;
     // A real (JSONL) AskUserQuestion tool call carries full fidelity. During the
     // brief race before its tool_use is detected, the daemon may also emit a
@@ -13661,6 +13661,7 @@ const ConversationViewInner = (
 
   const userMsgKindMap = useMemo(() => {
     const map = new Map<string, UserMessageKind>();
+    const initialPromptId = initialSubagentPromptId(messages, conversation?.parent_conversation_id, hasMoreAbove);
     for (let i = 0; i < timeline.length; i++) {
       const item = timeline[i];
       if (item.type !== 'message') continue;
@@ -13680,10 +13681,13 @@ const ConversationViewInner = (
         contextPrev = pm;
         break;
       }
-      map.set(msg._id, classifyUserMessage(msg, conversation?.agent_type, immediatePrev, contextPrev));
+      const kind = classifyUserMessage(msg, conversation?.agent_type, immediatePrev, contextPrev);
+      map.set(msg._id, msg._id === initialPromptId && kind.kind === "normal"
+        ? { kind: "session_message", from: conversation!.parent_conversation_id!.slice(0, 7), body: msg.content || "" }
+        : kind);
     }
     return map;
-  }, [timeline, conversation?.agent_type]);
+  }, [timeline, messages, conversation?.agent_type, conversation?.parent_conversation_id, hasMoreAbove]);
 
   // Aggregation for the condensed/compact feeds. Built once per timeline; O(n).
   //
@@ -13929,6 +13933,13 @@ const ConversationViewInner = (
       return val;
     });
   }, []);
+
+  const stickyMessageId = activeStickyMsg?.id;
+  const stickyImages = useMemo(() => {
+    if (!stickyMessageId) return undefined;
+    return messages.find(message => message._id === stickyMessageId)?.images
+      ?? serverUserMessages?.find(message => message._id === stickyMessageId)?.images;
+  }, [stickyMessageId, messages, serverUserMessages]);
 
   // Collapse and re-measure clamping whenever the sticky switches to a different message.
   useWatchEffect(() => {
@@ -15590,13 +15601,13 @@ const ConversationViewInner = (
     { key: "view_resume_codex", label: "Copy Codex resume command", icon: PaletteCopy, available: !!conversation?.session_id, run: () => { void handleCopyResumeCommand("codex"); } },
     { key: "view_tmux", label: "Copy tmux attach command", icon: PaletteCopy, available: !!managedSession?.tmux_session, run: copyTmuxAttach },
     { key: "view_search", label: "Search in conversation", icon: PaletteSearch, run: () => { setIsLocalSearchOpen(true); setLocalSearchQuery(""); setTimeout(() => localSearchInputRef.current?.focus(), 0); } },
-    { key: "view_thinking", label: showThinking ? "Hide thinking" : "Show thinking", icon: PaletteEye, available: hasAnyThinking, run: () => setShowThinking(s => !s) },
+    { key: "view_thinking", label: showThinking ? "Hide thinking" : "Show thinking", icon: PaletteEye, shortcutAction: "conv.toggleThinking", available: hasAnyThinking, run: () => setShowThinking(s => !s) },
     { key: "view_sticky", label: stickyDisabled ? "Enable sticky headers" : "Disable sticky headers", icon: PalettePin, run: () => { updateUI({ sticky_headers_disabled: !stickyDisabled }); setStickyMsgVisible(false); setActiveStickyMsg(null); } },
     { key: "view_source", label: "Browse repository source", icon: PaletteBranch, available: !!codeRepository, run: () => { if (codeRepository) codeRouter.push(repoTreeHref(codeRepository, conversation?.git_branch || "HEAD")); } },
     { key: "view_history", label: "Browse commit history", icon: PaletteBranch, available: !!codeRepository, run: () => { if (codeRepository) codeRouter.push(repoCommitsHref(codeRepository, conversation?.git_branch || "HEAD")); } },
     { key: "view_diff", label: diffExpanded ? "Hide git diff" : "Show git diff", icon: PaletteBranch, available: !!conversation?.git_branch, run: () => setDiffExpanded(s => !s) },
-    { key: "view_branches", label: "Branch map", icon: PaletteBranch, available: !!isOwner, run: toggleMap },
-    { key: "view_density", label: "Cycle message density", icon: PaletteRows, run: () => setDensity(DENSITY_OPTIONS[(DENSITY_OPTIONS.findIndex(o => o.value === density) + 1) % DENSITY_OPTIONS.length].value) },
+    { key: "view_branches", label: "Branch map", icon: PaletteBranch, shortcutAction: "conv.toggleTree", available: !!isOwner, run: toggleMap },
+    { key: "view_density", label: "Cycle message density", icon: PaletteRows, shortcutAction: "conv.cycleDensity", run: () => setDensity(DENSITY_OPTIONS[(DENSITY_OPTIONS.findIndex(o => o.value === density) + 1) % DENSITY_OPTIONS.length].value) },
   ]);
 
   useWatchEffect(() => {
@@ -16311,7 +16322,7 @@ const ConversationViewInner = (
             )}
             {conversation && <AnchorHeaderPill conversationId={conversation._id.toString()} />}
 
-            {isSessionDisconnected && (managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || managedSession?.agent_status === "connected") ? (
+            {managedSession?.agent_status === "hibernated" ? <HibernatedMarker status={managedSession.agent_status} /> : isSessionDisconnected && (managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || managedSession?.agent_status === "connected") ? (
               <span data-cc-conv-status className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30">
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan animate-pulse" />
                 <span className="hidden sm:inline">{managedSession?.agent_status === "starting" ? "Starting" : managedSession?.agent_status === "resuming" ? "Resuming" : "Delivering"}</span>
@@ -16982,6 +16993,10 @@ const ConversationViewInner = (
               </div>
               <div className="flex items-center gap-2 mb-1">
                 {(() => {
+                  const kind = userMsgKindMap.get(activeStickyMsg.id);
+                  if (kind?.kind === "session_message") {
+                    return <><CornerDownRight className="w-4 h-4 text-sol-cyan" /><span className="text-sol-cyan text-xs">Message from</span><EntityIdPill shortId={kind.from} /></>;
+                  }
                   const stickySender = activeStickyMsg.fromUserId ? senderById.get(String(activeStickyMsg.fromUserId)) : undefined;
                   return (
                     <>
@@ -16991,11 +17006,16 @@ const ConversationViewInner = (
                   );
                 })()}
               </div>
-              <div
-                ref={stickyTextRef}
-                className={`text-sm text-sol-text whitespace-pre-wrap break-words pl-8 pr-4 ${stickyExpanded ? "max-h-[50vh] overflow-y-auto cursor-auto select-text" : "line-clamp-3"}`}
-                onClick={stickyExpanded ? (e) => e.stopPropagation() : undefined}
-              >{cleanStickyContent(activeStickyMsg.content)}</div>
+              <div className="pl-8 pr-4">
+                <MessagePromptPreview
+                  content={cleanStickyContent(activeStickyMsg.content)}
+                  images={stickyImages}
+                  variant="sticky"
+                  textRef={stickyTextRef}
+                  textClassName={`text-sm text-sol-text whitespace-pre-wrap ${stickyExpanded ? "max-h-[50vh] overflow-y-auto cursor-auto select-text" : "line-clamp-3"}`}
+                  onTextClick={stickyExpanded ? (e) => e.stopPropagation() : undefined}
+                />
+              </div>
             </div>
           </div>
         </div>
