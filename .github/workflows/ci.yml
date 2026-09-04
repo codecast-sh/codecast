@@ -126,6 +126,11 @@ jobs:
         working-directory: packages/cli
         # Exclude the e2e suite — it has its own step with --rerun-each for
         # resilience against tmux-resource flake under CI runner load.
+        # DAEMON_BUILD_ID_CHECK turns on the daemon build id stamp check, which
+        # walks the whole daemon import closure. Off locally so the normal test
+        # loop stays fast.
+        env:
+          DAEMON_BUILD_ID_CHECK: "1"
         run: bun test src/ --bail=5
 
       - name: E2E messaging pipeline (real tmux + fake-claude shim)

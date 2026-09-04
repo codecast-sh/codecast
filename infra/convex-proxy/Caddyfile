@@ -19,6 +19,10 @@
 	handle /cli/* {
 		reverse_proxy {$CONVEX_SITE_UPSTREAM}
 	}
+	# Reading a public repository with no account (convex/repoPublicHttp.ts).
+	handle /api/public/* {
+		reverse_proxy {$CONVEX_SITE_UPSTREAM}
+	}
 
 	# Storage (port 3210, same upstream as backend): immutable image bytes gated only
 	# by an unguessable UUID URL. Override the backend's `private` Cache-Control so
