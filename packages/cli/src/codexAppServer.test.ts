@@ -1,7 +1,35 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { CodexAppServer, approvalResultForMethod, threadForkTimeoutMsForBytes, threadItemToMessage, threadItemsToMessages } from "./codexAppServer.js";
 
 describe("CodexAppServer protocol", () => {
+  test("start, resume and fork export workspace ports without changing sandbox", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-worktree-env-"));
+    const cwd = path.join(root, ".codecast/worktrees/cloud-test");
+    const stateDir = path.join(root, ".codecast/workspaces/cloud-test");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "state.json"), JSON.stringify({ resourceIndex: 3, ports: { web: 3261 } }));
+    const requests: Array<any> = [];
+    const server = new CodexAppServer({ log: () => {} });
+    (server as any).sendRequest = async (method: string, params: unknown) => {
+      requests.push({ method, params });
+      return { thread: { id: "thread" }, model: "gpt-test" };
+    };
+    try {
+      await server.threadStart({ cwd, sandbox: "read-only", config: { model_reasoning_effort: "high" } });
+      await server.threadResume({ cwd, threadId: "thread", sandbox: "workspace-write" });
+      await server.threadFork({ cwd, threadId: "thread", sandbox: "danger-full-access" });
+      expect(requests.map((r) => r.params.sandbox)).toEqual(["read-only", "workspace-write", "danger-full-access"]);
+      for (const { params } of requests) {
+        expect(params.config["shell_environment_policy.set"]).toMatchObject({ PORT_WEB: "3261", AGENT_RESOURCE_INDEX: "3" });
+      }
+      expect(requests[0].params.config.model_reasoning_effort).toBe("high");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
   test("enables the experimental API and forks a rollout by path", async () => {
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     const server = new CodexAppServer({ log: () => {} });

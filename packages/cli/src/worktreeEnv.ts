@@ -37,6 +37,18 @@ export function worktreeEnv(cwd: string, readFile: (p: string) => string = (p) =
     for (const [k, v] of Object.entries(env)) {
       if (KEEP.test(k) && (typeof v === "string" || typeof v === "number")) out[k] = String(v);
     }
+    for (const [name, port] of Object.entries(state.ports ?? {})) {
+      if (/^[a-zA-Z0-9_]+$/.test(name) && Number.isInteger(port) && Number(port) > 0 && Number(port) <= 65535) {
+        out[`PORT_${name.toUpperCase()}`] = String(port);
+        out[`CODECAST_PORT_${name.toUpperCase()}`] = String(port);
+      }
+    }
+    if (typeof state.name === "string") out.CODECAST_WORKTREE_NAME = state.name;
+    if (typeof state.path === "string") out.CODECAST_WORKTREE_PATH = state.path;
+    if (typeof state.branch === "string") out.CODECAST_BRANCH = state.branch;
+    if (Number.isInteger(state.resourceIndex) && state.resourceIndex >= 0) {
+      out.CODECAST_RESOURCE_INDEX = String(state.resourceIndex);
+    }
     // The daemon's own name for the index, so a session placed in a worktree
     // it did not create (cloud) sees exactly what an --isolated session sees.
     if (out.CODECAST_RESOURCE_INDEX !== undefined && /^\d+$/.test(out.CODECAST_RESOURCE_INDEX)) {
@@ -46,6 +58,15 @@ export function worktreeEnv(cwd: string, readFile: (p: string) => string = (p) =
   } catch {
     return {};
   }
+}
+
+export function withWorktreeConfig<T extends { cwd?: string; config?: Record<string, unknown> }>(params: T): T {
+  const env = params.cwd ? worktreeEnv(params.cwd) : {};
+  if (!Object.keys(env).length) return params;
+  return {
+    ...params,
+    config: { ...params.config, "shell_environment_policy.set": env },
+  };
 }
 
 /**

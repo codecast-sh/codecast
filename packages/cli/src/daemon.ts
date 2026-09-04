@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, spawn, spawnSync } from "./proc.js";
 import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { countingSemaphore } from "./semaphore.js";
-import { recoverCodexTurn, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
+import { codexResumeParams, recoverCodexTurn, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
 import { descendantPids, findOtherDaemonPids, killProcessTree, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan } from "./processTable.js";
 import {
   DEFAULT_HIBERNATE_IDLE_MS,
@@ -875,6 +875,8 @@ const STARTED_SESSIONS_FILE = path.join(CONFIG_DIR, "started-sessions.json");
 // repos observed locally (see recordProjectMapping). Lets cross-machine forks resume
 // in the right working directory even when the repo lives off the convention paths.
 const PROJECT_MAP_FILE = path.join(CONFIG_DIR, "project-paths.json");
+// sessionId -> repair key (see projectPathRepairKey) the server last confirmed.
+const PROJECT_PATH_REPAIRS_FILE = path.join(CONFIG_DIR, "project-path-repairs.json");
 const APP_SERVER_THREADS_FILE = path.join(CONFIG_DIR, "app-server-threads.json");
 const PID_FILE_STALE_GRACE_MS = 2_000;
 
@@ -1524,6 +1526,7 @@ function sendAgentStatus(
   // brings it back.
   opts?: { hibernatedAt?: number | null },
 ): void {
+  if (isSupersededAppServerSession(sessionId, conversationId)) return;
   const prevStatus = lastSentAgentStatus.get(sessionId);
   const isTransition = prevStatus !== status;
   // The throttle drops redundant "working" re-sends. A write carrying a park
@@ -3832,7 +3835,8 @@ async function killConversationBackends(
   // Released at the end when it is a codecast worktree holding no work
   // (worktreeGc.ts) — killing a session is the one moment a worktree stops
   // being anybody's.
-  let gcCwd: string | undefined = startedSessionTmux.get(conversationId)?.projectPath;
+  let gcCwd: string | undefined = startedSessionTmux.get(conversationId)?.projectPath
+    ?? persistedAppServerThreads.get(conversationId)?.cwd;
 
   // Tear down every backend bound to this conversation (app-server thread
   // and/or tmux), then stamp the kill-specific server status. Shared with
@@ -3846,7 +3850,7 @@ async function killConversationBackends(
       sendAgentStatus(syncServiceRef, conversationId, teardown.appServerThreadId, "stopped");
     }
     log(`[REMOTE] Killed app-server thread ${teardown.appServerThreadId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)}`);
-    return { result: "killed_app_server" };
+    result = "killed_app_server";
   }
   if (teardown.killedTmux) {
     result = "killed_tmux";
@@ -3946,7 +3950,9 @@ async function killConversationBackends(
   // injected message.
   await clearConversationDeliveryAndResumeState(conversationId, sessionId, "REMOTE");
 
-  if (gcCwd) void releaseSessionWorktree(gcCwd, log).catch((err) => log(`[WORKTREE-GC] ${String(err).slice(0, 160)}`));
+  if (gcCwd && teardownPlan.reapPidTree && !error) {
+    await releaseSessionWorktree(gcCwd, log);
+  }
 
   if (!result) result = sessionId ? "no_process" : "no_session";
   return { result, error };
@@ -4629,7 +4635,7 @@ async function executeRemoteCommand(
           log(`[REMOTE] Started ${agentType} session via app-server: ${codexThreadId.slice(0, 8)} (cwd: ${cwd})`);
           if (conversationId) {
             const initialManagedSessionId = getInitialManagedSessionId(agentType, expectedSessionId, codexThreadId);
-            registerAppServerConversation(conversationId, codexThreadId, { cwd, approvalPolicy: codexApprovalPolicy });
+            registerAppServerConversation(conversationId, codexThreadId, { cwd, approvalPolicy: codexApprovalPolicy, sandbox: codexSkipApprovals ? "danger-full-access" : "workspace-write", persist: true });
             // This device now owns and runs the session — claim it and clear any
             // stale "clone it first" error a different device may have left.
             syncServiceRef?.claimSession(conversationId).catch(logConvexFailure);
@@ -4724,15 +4730,15 @@ async function executeRemoteCommand(
           break;
         }
 
-        const escapeThreadId = appServerConversations.get(conversationId);
-        if (escapeThreadId && codexAppServerInstance?.running) {
+        const escapeThreadId = appServerConversations.get(conversationId) ?? persistedAppServerThreads.get(conversationId)?.threadId;
+        if (escapeThreadId) {
           const activeTurnId = findActiveTurnForThread(escapeThreadId);
           const persisted = persistedAppServerThreads.get(conversationId);
           if (persisted?.activeTurnId) {
             persistedAppServerThreads.set(conversationId, settledCodexRecord(persisted, persisted.activeTurnId));
             persistAppServerThreadRegistrations();
           }
-          if (activeTurnId) {
+          if (activeTurnId && codexAppServerInstance?.running) {
             await codexAppServerInstance.turnInterrupt(escapeThreadId, activeTurnId);
             result = "escape_interrupted";
             log(`[REMOTE] Interrupted app-server turn ${activeTurnId.slice(0, 8)} on thread ${escapeThreadId.slice(0, 8)}`);
@@ -5485,6 +5491,7 @@ async function executeRemoteCommand(
               cwd,
               persist: true,
               approvalPolicy,
+              sandbox: approvalPolicy === "never" ? "danger-full-access" : "workspace-write",
             });
             if (forked.thread.path && fs.existsSync(forked.thread.path)) {
               setPosition(forked.thread.path, fs.statSync(forked.thread.path).size);
@@ -11882,6 +11889,7 @@ function reconcileStatusFromPane(
   conversationId: string,
   syncService: SyncService,
 ): void {
+  if (isSupersededAppServerSession(sessionId, conversationId)) return;
   // The claude-chrome classifier below cannot read GLYPHLESS_PROMPT_CLIENTS
   // panes — worse than "unknown" for grok, whose ❯ composer stays visible for
   // the whole turn while its busy chrome (header spinner, "Esc:cancel",
@@ -13525,30 +13533,67 @@ export async function verifyTmuxSubmitAfterPaste(
   return { outcome: "timeout", rePasted, payloadSeen, payloadCheckable };
 }
 
-// Drains the composer with blind C-a/C-k cycles before a paste.
+// Text the composer shows after its last ❯/› glyph: the prompt line plus the
+// wrapped/continuation lines under it, up to the box rule or a blank line.
+// null when no glyph is visible (glyphless client or mid-redraw).
+export function tmuxComposerText(pane: string): string | null {
+  const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
+  if (glyphAt === -1) return null;
+  const lines = pane.slice(glyphAt + 1).split("\n");
+  const body = [lines[0]];
+  for (const line of lines.slice(1)) {
+    if (!line.trim() || /^\s*[─═]{3,}/.test(line)) break;
+    body.push(line);
+  }
+  return body.join("\n");
+}
+
+// Drains the composer before a paste.
 //
-// Why C-a/C-k cycles and not a single C-u: in Claude Code 2.1.x's input box a
-// single C-u does not reliably empty the buffer when stale text is present
+// One cycle is C-a (start of line), C-k (kill to end of line), BSpace (join
+// onto the line above). Why not a single C-u: in Claude Code 2.1.x's input box
+// a single C-u does not reliably empty the buffer when stale text is present
 // (e.g. a prompt recalled via Up arrow). The leftover then concatenates with
 // the paste and the trailing Enter submits both as one message — the
-// "old prompt + new follow-up" duplication seen on 2026-05-19. Cycling C-a
-// (start of line) + C-k (kill to end) drains reliably; three cycles handles
-// multi-line drafts. See daemon.inject-clear.test.ts.
+// "old prompt + new follow-up" duplication seen on 2026-05-19. Why BSpace:
+// C-a/C-k only ever empties the CURRENT line, so a multi-line draft (a pasted
+// <session-message> block, a stale multi-paragraph prompt) kept every line
+// above the cursor no matter how many cycles ran, the Enter gate saw foreign
+// text forever, and the message sat pending for hours (msg ns7c8zkm,
+// 2026-09-04, 294 failed drains). BSpace on the emptied line removes the
+// newline and pulls the cursor onto the line above, so each cycle retires one
+// line; on an empty composer all three keys are no-ops.
+//
+// Three blind cycles cover the common short draft. Past that the drain
+// captures the pane every three cycles and keeps going only while text is
+// still visible at the prompt, so a long draft drains fully without a fixed
+// guess at its line count. See daemon.inject-enter-gate.test.ts.
 //
 // This drain is best-effort: whatever it misses shows up at the prompt as
 // foreign text and fails the Enter gate (awaitTmuxComposerPayload), which
 // re-drains and re-pastes. The gate, not this drain, is the closed loop.
+export const DRAIN_MAX_CYCLES = 40;
 export async function drainTmuxComposer(
   target: string,
   exec: typeof tmuxExec = tmuxExec,
 ): Promise<void> {
-  for (let i = 0; i < 3; i++) {
-    await exec(["send-keys", "-t", target, "C-a"]);
-    await new Promise(resolve => setTimeout(resolve, 20));
-    await exec(["send-keys", "-t", target, "C-k"]);
-    await new Promise(resolve => setTimeout(resolve, 20));
+  const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  for (let cycle = 1; cycle <= DRAIN_MAX_CYCLES; cycle++) {
+    for (const key of ["C-a", "C-k", "BSpace"]) {
+      await exec(["send-keys", "-t", target, key]);
+      await pause(20);
+    }
+    if (cycle % 3 !== 0) continue;
+    let pane: string;
+    try {
+      ({ stdout: pane } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]));
+    } catch {
+      break; // capture problems are diagnosed by the Enter gate
+    }
+    const text = tmuxComposerText(pane);
+    if (text === null || !text.trim()) break;
   }
-  await new Promise(resolve => setTimeout(resolve, 50));
+  await pause(50);
 }
 
 // A TUI paints its composer seconds before it starts reading stdin: on a cold
@@ -14902,7 +14947,7 @@ const codexPermissionPending = new Set<string>(); // sessionIds currently waitin
 const codexPermissionRunning = new Set<string>(); // sessionIds with an in-flight tmux capture
 
 let codexAppServerInstance: CodexAppServer | null = null;
-type AppServerThreadEntry = { threadId: string; conversationId: string; cwd?: string; approvalPolicy?: ApprovalPolicy };
+type AppServerThreadEntry = { threadId: string; conversationId: string; cwd?: string; approvalPolicy?: ApprovalPolicy; sandbox?: PersistedCodexThread["sandbox"] };
 type PersistedAppServerThreadRecord = PersistedCodexThread;
 type AppServerStreamingPartial = { itemId: string; content: string };
 type AppServerPartialMessage = AppServerStreamingPartial;
@@ -14927,6 +14972,17 @@ let rehydratePersistedAppServerThreadsPromise: Promise<void> | null = null;
 const appServerRecoveryRetryAt = new Map<string, number>();
 const appServerRecoveringThreads = new Set<string>();
 let appServerShuttingDown = false;
+
+export function isSupersededAppServerSession(
+  sessionId: string,
+  conversationId = conversationCacheRef?.[sessionId],
+  live: ReadonlyMap<string, string> = appServerConversations,
+  persisted: ReadonlyMap<string, PersistedAppServerThreadRecord> = persistedAppServerThreads,
+): boolean {
+  if (!conversationId) return false;
+  const threadId = live.get(conversationId) ?? persisted.get(conversationId)?.threadId;
+  return !!threadId && threadId !== sessionId;
+}
 
 export function codexForkParentIdFromHead(headContent: string): string | undefined {
   const firstLine = headContent.split("\n").find((line) => line.trim().length > 0);
@@ -15356,11 +15412,12 @@ function registerAppServerConversation(
     updatedAt?: number;
     persist?: boolean;
     approvalPolicy?: ApprovalPolicy;
+    sandbox?: PersistedCodexThread["sandbox"];
   } = {},
 ): void {
   const updatedAt = opts.updatedAt ?? Date.now();
   const existingConversation = appServerThreads.get(threadId)?.conversationId;
-  upsertAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, threadId, { cwd: opts.cwd, approvalPolicy: opts.approvalPolicy });
+  upsertAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, threadId, { cwd: opts.cwd, approvalPolicy: opts.approvalPolicy, sandbox: opts.sandbox });
   if (!opts.persist) return;
   if (existingConversation && existingConversation !== conversationId) {
     persistedAppServerThreads.delete(existingConversation);
@@ -15368,7 +15425,7 @@ function registerAppServerConversation(
   const previous = persistedAppServerThreads.get(conversationId);
   persistedAppServerThreads.set(conversationId, {
     ...(previous?.threadId === threadId ? previous : {}),
-    threadId, updatedAt, cwd: opts.cwd, approvalPolicy: opts.approvalPolicy,
+    threadId, updatedAt, cwd: opts.cwd, approvalPolicy: opts.approvalPolicy, sandbox: opts.sandbox,
   });
   persistAppServerThreadRegistrations();
 }
@@ -15394,6 +15451,7 @@ function markAppServerConversationResumable(
     updatedAt,
     cwd: liveEntry?.cwd,
     approvalPolicy: liveEntry?.approvalPolicy,
+    sandbox: liveEntry?.sandbox,
   });
   persistAppServerThreadRegistrations();
 }
@@ -15413,6 +15471,7 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
     if ((appServerRecoveryRetryAt.get(conversationId) ?? 0) > Date.now()) continue;
     if (appServerConversations.has(conversationId) && (!record.activeTurnId || findActiveTurnForThread(record.threadId))) continue;
     try {
+      let hasPendingMessages = false;
       if (record.activeTurnId) {
         const service = syncServiceRef;
         if (!service) continue;
@@ -15425,23 +15484,23 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
           forgetPersistedAppServerConversation(conversationId);
           continue;
         }
-        if (lifecycle.hasPendingMessages && appServerConversations.has(conversationId)) continue;
+        hasPendingMessages = !!lifecycle.hasPendingMessages;
+        if (hasPendingMessages && appServerConversations.has(conversationId)) continue;
       }
       const policy = record.approvalPolicy ?? resolveCodexApprovalPolicy(activeConfig);
-      const response = await server.threadResume({
-        threadId: record.threadId,
-        ...(record.cwd ? { cwd: record.cwd } : {}),
-        approvalPolicy: policy,
-      });
+      const response = await server.threadResume(codexResumeParams(record, policy));
       if (appServerShuttingDown || !server.running || persistedAppServerThreads.get(conversationId) !== record || pendingAgentSwitches.has(conversationId)) continue;
       registerAppServerConversation(conversationId, record.threadId, {
         cwd: record.cwd,
         updatedAt: record.updatedAt,
         persist: false,
         approvalPolicy: policy,
+        sandbox: record.sandbox,
       });
+      log(`[codex-app-server] resumed thread ${record.threadId.slice(0, 8)} sandbox=${record.sandbox ?? "default"} approvalPolicy=${policy}`);
       ensureManagedSessionHeartbeat(record.threadId);
       resumed++;
+      if (hasPendingMessages) continue;
       appServerRecoveringThreads.add(record.threadId);
       try {
         const action = await recoverCodexTurn({
@@ -15468,7 +15527,7 @@ async function rehydratePersistedAppServerThreads(): Promise<void> {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (/thread not found|no rollout found/i.test(message)) {
+      if (isMissingAppServerThreadError(err)) {
         dropped++;
         forgetPersistedAppServerConversation(conversationId);
       } else {
@@ -15505,6 +15564,7 @@ function loadPersistedAppServerThreadRegistrations(): void {
         updatedAt,
         cwd: record.cwd,
         approvalPolicy: record.approvalPolicy,
+        sandbox: record.sandbox,
         activeTurnId: record.activeTurnId,
         recoveryAttempts: record.recoveryAttempts,
       });
@@ -15876,7 +15936,7 @@ function stopManagedSessionHeartbeat(sessionId: string | undefined): void {
 }
 
 function ensureManagedSessionHeartbeat(sessionId: string): void {
-  if (!syncServiceRef) return;
+  if (!syncServiceRef || isSupersededAppServerSession(sessionId)) return;
   managedHeartbeatSessions.add(sessionId);
   ensureHeartbeatFlushLoop();
 }
@@ -15953,7 +16013,7 @@ async function runHeartbeatFlush(): Promise<void> {
   // (a module-level `let` would re-widen to `SyncService | null` after each).
   const sync = syncServiceRef;
   if (!sync) return;
-  const ids = [...managedHeartbeatSessions];
+  const ids = [...managedHeartbeatSessions].filter(id => !isSupersededAppServerSession(id));
   const now = Date.now();
 
   // Cadence sentinel: sends past 2x the interval mean something starved the
@@ -15989,7 +16049,7 @@ async function runHeartbeatFlush(): Promise<void> {
 async function runHeartbeatMaintenance(): Promise<void> {
   const sync = syncServiceRef;
   if (!sync) return;
-  const ids = [...managedHeartbeatSessions];
+  const ids = [...managedHeartbeatSessions].filter(id => !isSupersededAppServerSession(id));
   const tick = heartbeatMaintenanceCount++;
 
   // Self-heal pass (local): reconcile a status latched on a lost hook transition
@@ -17096,6 +17156,7 @@ export async function readFileTailAsync(filePath: string, maxBytes = 64 * 1024):
 // rides a setTimeout that dies across macOS sleep, so this heartbeat-driven path
 // is its only durable latch recovery. Gemini/Cursor formats are not yet classified.
 export async function reconcileStatusFromTranscript(sessionId: string, syncService: SyncService): Promise<void> {
+  if (isSupersededAppServerSession(sessionId)) return;
   const stored = lastSentAgentStatus.get(sessionId);
 
   // permission_blocked recovery. tmux-managed sessions are handled by the PANE
@@ -17198,6 +17259,7 @@ export async function reconcileStatusFromTranscript(sessionId: string, syncServi
 }
 
 async function heartbeatHealthCheck(sessionId: string): Promise<void> {
+  if (isSupersededAppServerSession(sessionId)) return;
   const tmux = resumeSessionCache.get(sessionId);
   if (!tmux) return;
 
@@ -18037,10 +18099,12 @@ export function resumeReuseCandidates(
 // but a daemon auto-resume has no human at the pane to answer it — so it would wedge forever
 // and trip the web stuck-banner into a kill+restart loop. There is no CLI flag for it, only
 // these env gates (read by Claude Code as process.env.CLAUDE_CODE_RESUME_THRESHOLD_*).
-export function buildResumeEnvPrefix(agentType: string): string {
-  return agentType === "claude"
+export function buildResumeEnvPrefix(agentType: string, cwd?: string): string {
+  const prefix = agentType === "claude"
     ? `${AGENT_ENV_SCRUB} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
     : AGENT_ENV_SCRUB;
+  const workspaceEnv = cwd ? worktreeEnvPrefix(cwd) : "";
+  return workspaceEnv ? `${prefix} ${workspaceEnv}` : prefix;
 }
 
 // The settings-level transcript pin (agentEnv.ts): idempotent, respects an
@@ -18697,7 +18761,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     // See buildResumeEnvPrefix: strips CLAUDECODE and (for Claude) suppresses the
     // "Resume from summary?" prompt that would otherwise wedge an unattended auto-resume.
-    const resumeEnvPrefix = buildResumeEnvPrefix(agentType);
+    const resumeEnvPrefix = buildResumeEnvPrefix(agentType, cwd);
     // Same managed-key injection as a fresh launch, so a resumed opencode/pi
     // session gets its provider key too (pl-207).
     const resumeKeyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
@@ -18874,6 +18938,30 @@ const repairInFlight = new Map<string, Promise<boolean>>();
 // regenerate a transcript for them.
 export function clientOwnsSessionStore(agentType: AgentClientId | undefined | null): boolean {
   return agentType != null && agentType !== "claude" && agentType !== "codex";
+}
+
+// Materialization writes a CLAUDE transcript AND binds it to the conversation as
+// its session id, so the conversation's next resume launches claude. That is only
+// ever right for a conversation whose declared agent IS claude (or an unhinted one,
+// which defaults to claude downstream). Codex is excluded even though the daemon
+// can generate a codex JSONL: a codex conversation's live backend is its app-server
+// thread, its history lives in ~/.codex/sessions, and a fabricated claude session is
+// therefore not a recovery but a SECOND agent answering in the same thread. On
+// 2026-09-04 that put opus-5 and gpt-6-astra in one conversation, each briefing the
+// same fleet of seventeen sessions, and minted a duplicate conversation row for the
+// twin. This is the delivery twin of startFreshSessionForDelivery's cross-agent
+// refusal: a message left pending is recoverable, a wrong-agent backend is not.
+export function mayMaterializeClaudeTranscript(agentType: AgentClientId | undefined | null): boolean {
+  return agentType == null || agentType === "claude";
+}
+
+// Does an app-server error prove the thread is GONE? Only "thread not found" and
+// "no rollout found" do. A timeout says nothing: under load turn/start routinely
+// exceeds its deadline while the turn itself runs, so treating that as a dead
+// thread retires a live binding and sends the next delivery down the fallback
+// chain (2026-09-04).
+export function isMissingAppServerThreadError(err: unknown): boolean {
+  return /thread not found|no rollout found/i.test(err instanceof Error ? err.message : String(err));
 }
 
 // The resume paths' twin of clientOwnsSessionStore: may a resume with NO local
@@ -19348,13 +19436,14 @@ async function materializeSession(
         logDelivery(`Materialization skipped for ${conversationId.slice(0, 12)}: 0 messages (session_id=${exportData.conversation?.session_id?.slice(0, 8) || "none"})`);
         return null;
       }
-      // A store-owned client (opencode/pi/cursor) has no Claude-JSONL transcript to
-      // materialize — fabricating one is invalid and, for opencode, the write path
-      // corrupts the shared opencode.db (ct-39174/ct-39178). Delivery falls back to
-      // the started-pane injection / re-resume instead of a materialized session.
+      // Only a claude (or unhinted) conversation may be materialized. A store-owned
+      // client (opencode/pi/cursor) has no Claude-JSONL transcript at all, and for
+      // opencode the write path corrupts the shared opencode.db (ct-39174/ct-39178);
+      // codex has its own live backend and would gain a second agent. Delivery falls
+      // back to the started-pane injection / re-resume instead.
       const matAgentType = fromConvexAgentType(exportData.conversation.agent_type);
-      if (clientOwnsSessionStore(matAgentType)) {
-        logDelivery(`Materialization skipped for ${conversationId.slice(0, 12)}: ${matAgentType} owns its session store (no Claude JSONL to materialize)`);
+      if (!mayMaterializeClaudeTranscript(matAgentType)) {
+        logDelivery(`Materialization refused for ${conversationId.slice(0, 12)}: conversation is ${matAgentType}, a materialized session would attach a claude backend to it`);
         return null;
       }
 
@@ -19510,8 +19599,12 @@ async function deliverMessage(
         logDelivery(`[codex-app-server] delivered via app-server to thread ${appServerThreadId.slice(0, 8)}`);
         return true;
       } catch (err) {
-        removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, appServerThreadId);
-        if (err instanceof Error && /thread not found|no rollout found/i.test(err.message)) {
+        // Retire the binding ONLY when the thread is provably gone. A timed-out or
+        // dropped turn/start leaves a live thread live, and unregistering it there
+        // was what made a codex conversation look backend-less on the next delivery
+        // (2026-09-04); the recovery sweep re-resumes anything genuinely lost.
+        if (isMissingAppServerThreadError(err)) {
+          removeAppServerThreadRegistration(appServerThreads, appServerConversations, conversationId, appServerThreadId);
           forgetPersistedAppServerConversation(conversationId);
         }
         logDelivery(`[codex-app-server] delivery failed, falling back to tmux: ${err instanceof Error ? err.message : String(err)}`);
@@ -19902,11 +19995,65 @@ function isSyncPaused(): boolean {
   return process.env.CODE_CHAT_SYNC_PAUSED === "1" || process.env.CODECAST_PAUSED === "1";
 }
 
+// The boot sweep used to send conversations:updateProjectPath for EVERY
+// transcript under ~/.claude/projects on every daemon start — 2250 mutations
+// on this machine, ~3/s for the first minutes after a restart, almost all of
+// them no-ops (the row already had that path). That is exactly the window in
+// which a restarted daemon should be delivering the user's queued messages, and
+// on 2026-09-04 it landed inside a backend brownout where every extra write
+// queued behind the ones that mattered. The server's answer is stable for a
+// given (session, path, git root), so remember what it confirmed and send only
+// what changed: a new transcript, a moved checkout, or a row the earlier boot
+// never reached.
+export function projectPathRepairKey(projectPath: string, gitRoot?: string): string {
+  return `${projectPath}\n${gitRoot ?? ""}`;
+}
+
+// Decide whether a transcript's path still needs to go to the server.
+// `confirmed` is the previous boot's session -> key map; a matching key means
+// the server already holds this exact path and git root for the session.
+export function projectPathRepairNeeded(
+  confirmed: Record<string, string>,
+  sessionId: string,
+  projectPath: string,
+  gitRoot?: string,
+): { key: string; send: boolean } {
+  const key = projectPathRepairKey(projectPath, gitRoot);
+  return { key, send: confirmed[sessionId] !== key };
+}
+
+function readProjectPathRepairs(): Record<string, string> {
+  try {
+    const raw = JSON.parse(fs.readFileSync(PROJECT_PATH_REPAIRS_FILE, "utf-8"));
+    return raw && typeof raw === "object" ? (raw as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistProjectPathRepairs(map: Record<string, string>): void {
+  try {
+    const temp = `${PROJECT_PATH_REPAIRS_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(temp, JSON.stringify(map));
+    fs.renameSync(temp, PROJECT_PATH_REPAIRS_FILE);
+  } catch {}
+}
+
 async function repairProjectPaths(syncService: SyncService): Promise<void> {
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
   if (!fs.existsSync(claudeProjectsDir)) return;
 
   log("Checking for project paths that need repair...");
+  const confirmed = readProjectPathRepairs();
+  // Rebuilt from this boot's transcripts only, so entries for deleted
+  // transcripts fall away instead of accumulating forever.
+  const nextConfirmed: Record<string, string> = {};
+  // Only sessions this daemon has a conversation for can be marked confirmed:
+  // for an unknown session the server answers { updated: false } whether the
+  // row is right or missing, and a row created later must still get swept.
+  const knownConversations = readConversationCache();
+  let skipped = 0;
+  let sent = 0;
 
   const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true })
     .filter(d => d.isDirectory())
@@ -19963,7 +20110,16 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
         const projectPath = resolveTranscriptProjectPath(filePath, dir);
         if (!projectPath) continue;
 
-        const result = await syncService.updateProjectPath(sessionId, projectPath, await resolveRepoRoot(projectPath));
+        const gitRoot = await resolveRepoRoot(projectPath);
+        const plan = projectPathRepairNeeded(confirmed, sessionId, projectPath, gitRoot);
+        if (!plan.send) {
+          skipped++;
+          nextConfirmed[sessionId] = plan.key;
+          continue;
+        }
+        sent++;
+        const result = await syncService.updateProjectPath(sessionId, projectPath, gitRoot);
+        if (result && knownConversations[sessionId]) nextConfirmed[sessionId] = plan.key;
         if (result?.updated) {
           repaired++;
           log(`Repaired path for ${sessionId.slice(0, 8)}: ${projectPath}`);
@@ -19974,9 +20130,8 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
     }
   }
 
-  if (repaired > 0) {
-    log(`Repaired ${repaired} project paths (checked ${checked})`);
-  }
+  persistProjectPathRepairs(nextConfirmed);
+  log(`Project path sweep: checked ${checked}, unchanged ${skipped}, sent ${sent}, repaired ${repaired}`);
 }
 
 async function backfillPlanModeFromJSONL(syncService: SyncService): Promise<void> {
@@ -20474,7 +20629,8 @@ export function shouldSelfHeal(
   monoStaleMs: number = staleMs,
 ): boolean {
   if (alreadyHealing) return false;
-  return Math.min(staleMs, monoStaleMs) > thresholdMs;
+  const recoveryThreshold = sawSuspend(staleMs, monoStaleMs) ? Math.min(thresholdMs, 90_000) : thresholdMs;
+  return Math.min(staleMs, monoStaleMs) > recoveryThreshold;
 }
 
 function selfHealIfTimersStalled(source: string): void {
@@ -23793,6 +23949,7 @@ async function main(): Promise<void> {
         threadId,
         cwd: entry.cwd,
         approvalPolicy: entry.approvalPolicy,
+        sandbox: entry.sandbox,
         updatedAt: Date.now(),
         activeTurnId: turnId,
         recoveryAttempts: appServerRecoveringThreads.has(threadId) ? previous?.recoveryAttempts : 0,
@@ -23992,8 +24149,8 @@ async function main(): Promise<void> {
             registry.register(new CodexAppServerRuntimeDriver({
               io: {
                 client: codexAppServerInstance,
-                registerThread({ conversationId, threadId, cwd, approvalPolicy }) {
-                  registerAppServerConversation(conversationId, threadId, { cwd, approvalPolicy });
+                registerThread({ conversationId, threadId, cwd, approvalPolicy, sandbox }) {
+                  registerAppServerConversation(conversationId, threadId, { cwd, approvalPolicy, sandbox, persist: true });
                 },
                 async inspectThread(threadId) {
                   if (!codexAppServerInstance?.running) return "unknown";

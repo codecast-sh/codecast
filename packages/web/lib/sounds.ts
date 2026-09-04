@@ -1,5 +1,5 @@
 import { useInboxStore, type ClientUI } from "../store/inboxStore";
-import { isNotificationLeader } from "./desktop";
+import { isNotificationLeader, isVoiceHost } from "./desktop";
 import type { CueSpec } from "./cueSpec";
 import {
   WALKIE_AWAY,
@@ -51,8 +51,15 @@ function volumeFactor(): number {
 // the shell-elected leader window sounds them, so one event is one sound.
 // Feedback for the user's own gesture (send, kill, dismiss) is not gated: it
 // happens in exactly the window that acted.
+//
+// The voice host is an announcer too. It is never the shell's leader — it is
+// hidden or floating beside the work, not a place the person looks — but it
+// is the ONLY window that hears a teammate's burst and the only one seated in
+// a room, so the cues those events raise (a burst opening, a knock at the
+// door) would sound nowhere without it. Nothing it observes is observed by
+// the leader as well, so no event sounds twice.
 function isAnnouncer(): boolean {
-  return isNotificationLeader();
+  return isNotificationLeader() || isVoiceHost();
 }
 
 function getCtx(): AudioContext {

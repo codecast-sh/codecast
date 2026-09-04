@@ -15,7 +15,6 @@
  * distinct worktrees and non-colliding ports because the host allocates them.
  */
 
-import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 import {
   ensureUp,
@@ -25,14 +24,12 @@ import {
   type CloudHost,
 } from "../browser/cloudHost.js";
 import {
-  copyGitignoredFiles,
-  ensureRemoteRepo,
-  gitEnv,
-  gitSshUrl,
   shq,
   ssh,
   type RemoteHost,
 } from "../remote/session-move.js";
+import { cloudCopyFiles, copyCloudFiles, refreshRemoteCheckout } from "./transfer.js";
+export { refreshRemoteCheckout } from "./transfer.js";
 
 export interface PreparedHost {
   cloud: CloudHost;
@@ -80,63 +77,6 @@ export async function learnHostDeviceId(cloud: CloudHost, host: RemoteHost): Pro
   return deviceId;
 }
 
-/** The branch origin/HEAD points at locally, or "main". */
-function defaultBranch(localGitRoot: string): string {
-  try {
-    const ref = execFileSync("git", ["-C", localGitRoot, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], {
-      encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return ref.replace(/^origin\//, "") || "main";
-  } catch {
-    return "main";
-  }
-}
-
-/**
- * Make the host's checkout exist and sit on origin/<default branch>.
- *
- * Missing → bundle clone over scp with origin repaired to the real URL
- * (ensureRemoteRepo). Present → fetch on the host; when the host cannot reach
- * origin (no git key there yet), push the laptop's origin/<branch> to the
- * host's remote-tracking ref over SSH instead, which needs nothing but the
- * host key we already hold. Then check the branch out at that tip.
- *
- * A dirty checkout is never reset: `cast remote move` lands moved sessions
- * at the same path, and a hard reset there would erase their uncommitted
- * work. Worktrees then branch from the current HEAD, and the caller is told.
- */
-export function refreshRemoteCheckout(
-  host: RemoteHost,
-  localGitRoot: string,
-  repoPath: string,
-  onProgress: Progress = () => {},
-): { branch: string; head: string; reset: boolean } {
-  ensureRemoteRepo(host, localGitRoot, repoPath);
-  const branch = defaultBranch(localGitRoot);
-  let fetched = false;
-  try {
-    ssh(host, `cd ${shq(repoPath)} && git fetch -q origin ${shq(branch)}`, 300_000);
-    fetched = true;
-  } catch {
-    onProgress(`host cannot reach origin — sending origin/${branch} from here`);
-    execFileSync(
-      "git",
-      ["-C", localGitRoot, "push", "-q", "--force", gitSshUrl(host, repoPath),
-       `refs/remotes/origin/${branch}:refs/remotes/origin/${branch}`],
-      { env: gitEnv(host), stdio: "pipe" },
-    );
-  }
-  const dirty = ssh(host, `cd ${shq(repoPath)} && git status --porcelain | wc -l`).trim() !== "0";
-  if (dirty) {
-    onProgress(`${repoPath} has uncommitted changes — left as is; worktrees branch from its current HEAD`);
-  } else {
-    ssh(host, `cd ${shq(repoPath)} && git checkout -q -B ${shq(branch)} ${shq(`origin/${branch}`)}`);
-  }
-  const head = ssh(host, `cd ${shq(repoPath)} && git rev-parse HEAD`).trim();
-  onProgress(`checkout at ${head.slice(0, 8)}${fetched ? "" : " (via laptop)"}${dirty ? "" : ` on ${branch}`}`);
-  return { branch, head, reset: !dirty };
-}
-
 /**
  * Everything a session needs before it can be placed on the host. Idempotent
  * and cheap on a warm host: the wake is a no-op, the fetch is incremental and
@@ -148,6 +88,7 @@ export async function prepareCloudHost(opts: {
   onProgress?: Progress;
 }): Promise<PreparedHost> {
   const log = opts.onProgress ?? (() => {});
+  const files = cloudCopyFiles(opts.localGitRoot);
   const cloud = resolveCloudHost(opts.hostArg);
   const up = await ensureUp(cloud, log);
   const host = toRemoteHost(up);
@@ -157,7 +98,7 @@ export async function prepareCloudHost(opts: {
   }
   const repoPath = remoteRepoPath(host, opts.localGitRoot);
   refreshRemoteCheckout(host, opts.localGitRoot, repoPath, log);
-  copyGitignoredFiles(host, opts.localGitRoot, repoPath);
+  copyCloudFiles(host, opts.localGitRoot, repoPath, files);
   return { cloud: { ...up, deviceId }, host, deviceId, repoPath };
 }
 
@@ -192,13 +133,26 @@ export function acquireRemoteWorkspace(host: RemoteHost, repoPath: string, name:
  * like JSON is the answer. A broken contract is an error, not a workspace.
  */
 export function parseAcquireOutput(name: string, out: string): RemoteWorkspace {
-  const line = out.trim().split("\n").reverse().find((l) => l.startsWith("{"));
-  if (!line) throw new Error(`cast ws acquire ${name} printed no JSON on the host:\n${out.slice(-400)}`);
-  const ws = JSON.parse(line) as RemoteWorkspace & { state: string; contract?: { ok: boolean; failures: unknown[] } | null };
-  if (ws.contract && !ws.contract.ok) {
-    throw new Error(`workspace ${name} on the host is broken: ${JSON.stringify(ws.contract.failures)}`);
+  const line = out.trim().split("\n").reverse().find((l) => l.trimStart().startsWith("{"));
+  if (!line) throw new Error(`cast ws acquire ${name} printed no JSON on the host`);
+  let ws;
+  try {
+    ws = JSON.parse(line);
+  } catch {
+    throw new Error(`cast ws acquire ${name} printed invalid JSON on the host`);
   }
-  return { name: ws.name, path: ws.path, branch: ws.branch, ports: ws.ports ?? {}, created: ws.created };
+  if (ws.name !== name) throw new Error(`cast ws acquire ${name} returned a different workspace`);
+  if (ws.state !== "ready" || ws.contract?.ok !== true || !Array.isArray(ws.contract.failures) || ws.contract.failures.length > 0) {
+    throw new Error(`workspace ${name} on the host is broken: ready state and a successful contract are required`);
+  }
+  if (typeof ws.path !== "string" || !ws.path.startsWith("/") || ws.path === "/"
+    || /[\x00-\x1f\x7f\\]/.test(ws.path) || path.posix.normalize(ws.path) !== ws.path
+    || typeof ws.branch !== "string" || !ws.branch.trim() || /[\x00-\x20\x7f]/.test(ws.branch)
+    || typeof ws.created !== "boolean" || !ws.ports || typeof ws.ports !== "object" || Array.isArray(ws.ports)
+    || Object.values(ws.ports).some((port) => typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535)) {
+    throw new Error(`cast ws acquire ${name} returned invalid workspace fields`);
+  }
+  return { name: ws.name, path: ws.path, branch: ws.branch, ports: ws.ports, created: ws.created };
 }
 
 /** A worktree name nobody has to think about: cloud-<6 hex>. */

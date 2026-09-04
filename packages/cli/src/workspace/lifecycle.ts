@@ -39,6 +39,7 @@ import {
 } from "./contract.js";
 import { buildHookEnv, runHook } from "./hooks.js";
 import { allocatePorts, isPortFree, portsToEnv } from "./ports.js";
+import { withPortReservations } from "./portReservations.js";
 import { resolveManifest } from "./resolver.js";
 import { runSetup } from "./setup.js";
 import type {
@@ -91,52 +92,49 @@ export async function acquireWorkspace(
 
   const branch = opts.branch ?? `${BRANCH_PREFIX}${name}`;
 
-  // Attach path: existing state, ready, contract passes → return as-is.
-  const existing = readState(repoRoot, name);
-  if (existing && existing.state === "ready") {
-    const ws = stateToWorkspace(existing);
-    const contract = await validateContract(ws);
-    if (contract.ok) {
-      ws.contract = contract;
-      return { workspace: ws, created: false };
+  const prepared = await withPortReservations(repoRoot, async (reservations) => {
+    const existing = readState(repoRoot, name);
+    if (existing && existing.state === "ready") {
+      const ws = stateToWorkspace(existing);
+      const contract = await validateContract(ws);
+      if (contract.ok) {
+        ws.contract = contract;
+        return { result: { workspace: ws, created: false } };
+      }
     }
-    // Existing but broken → fall through to heal path.
-  }
 
-  // Warm-pool fast path. Skipped when:
-  //   - pool is empty / not initialized (claimFromPool returns null)
-  //   - opts.skipPool=true (e.g., from the pool's own pre-warm loop)
-  //   - opts.branch overrides the default (custom branch semantics may not
-  //     match pool slot conventions; safer to fall through)
-  //
-  // We intentionally do not pre-init the pool here — callers control sizing.
-  if (!opts.skipPool && !opts.branch && !existing) {
-    const { claimFromPool } = await import("./pool/manager.js");
-    const claimed = await claimFromPool(repoRoot, name);
-    if (claimed) {
-      return { workspace: claimed.workspace, created: true };
+    if (!opts.skipPool && !opts.branch && !existing) {
+      const { claimFromPool } = await import("./pool/manager.js");
+      const claimed = await claimFromPool(repoRoot, name);
+      if (claimed) {
+        return { result: { workspace: claimed.workspace, created: true } };
+      }
     }
-  }
 
-  // Allocate ports. If a previous attempt picked an index, prefer it for
-  // stability across re-runs; else start at 0.
-  const portAlloc = await allocatePorts(manifest, {
-    startIndex: opts.resourceIndex ?? existing?.resourceIndex ?? 0,
+    const root = fs.realpathSync(repoRoot);
+    const reservedPorts = new Set(reservations
+      .filter((reservation) => reservation.repoRoot !== root || reservation.workspace.name !== name)
+      .flatMap((reservation) => Object.values(reservation.workspace.ports)));
+    const portAlloc = await allocatePorts(manifest, {
+      startIndex: opts.resourceIndex ?? existing?.resourceIndex ?? 0,
+      reservedPorts,
+    });
+    const initialEnv = buildWorkspaceEnv(manifest, portAlloc.ports);
+    writeState(repoRoot, {
+      name,
+      path: path.join(repoRoot, WORKTREES_DIR, name),
+      branch,
+      resourceIndex: portAlloc.resourceIndex,
+      state: "creating",
+      manifest,
+      ports: portAlloc.ports,
+      env: initialEnv,
+      updatedAt: new Date().toISOString(),
+    });
+    return { existing, portAlloc, initialEnv };
   });
-
-  // Pre-write "creating" state so observers see in-progress work.
-  const initialEnv = buildWorkspaceEnv(manifest, portAlloc.ports);
-  writeState(repoRoot, {
-    name,
-    path: path.join(repoRoot, WORKTREES_DIR, name),
-    branch,
-    resourceIndex: portAlloc.resourceIndex,
-    state: "creating",
-    manifest,
-    ports: portAlloc.ports,
-    env: initialEnv,
-    updatedAt: new Date().toISOString(),
-  });
+  if (prepared.result) return prepared.result;
+  const { existing, portAlloc, initialEnv } = prepared;
 
   try {
     // Hook context shared across before/after-create.
@@ -264,7 +262,11 @@ export async function releaseWorkspace(repoRoot: string, name: string): Promise<
     }
   }
 
-  deleteState(repoRoot, name);
+  if (!state.manifest.backend || state.manifest.backend === "local") {
+    await withPortReservations(repoRoot, async () => deleteState(repoRoot, name));
+  } else {
+    deleteState(repoRoot, name);
+  }
 }
 
 /**

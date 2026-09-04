@@ -8,6 +8,8 @@ const {
   callWindowChrome,
   callWindowPlacementKey,
   normalizeCallWindowSize,
+  isCallSize,
+  CALL_SIZES,
   CALL_WINDOW_SIZES,
 } = require("./callWindowPolicy");
 
@@ -18,6 +20,7 @@ const {
 const facts = (over) => ({
   ended: false,
   quitting: false,
+  host: false,
   room: "dm:a:b",
   ...over,
 });
@@ -29,9 +32,18 @@ test("a live huddle is never poured into the main window", () => {
   assert.equal(shouldHideCallWindow(facts({})), true);
 });
 
-test("hiding keeps the huddle; hang-up and quit actually close", () => {
+test("hiding keeps the huddle; for an older renderer, hang-up and quit actually close", () => {
   assert.equal(shouldHideCallWindow(facts({ ended: true })), false);
   assert.equal(shouldHideCallWindow(facts({ quitting: true })), false);
+});
+
+test("a voice host is never destroyed by its own hang-up — only by the app quitting", () => {
+  // It holds the walkie's ear between calls. Destroying it on hang-up would
+  // cost the next burst a renderer boot before anybody could hear it.
+  assert.equal(shouldHideCallWindow(facts({ ended: true, host: true })), true);
+  assert.equal(shouldHideCallWindow(facts({ host: true })), true);
+  assert.equal(shouldHideCallWindow(facts({ quitting: true, host: true })), false);
+  assert.equal(shouldHideCallWindow(facts({ ended: true, quitting: true, host: true })), false);
 });
 
 test("a hang-up hands nothing back", () => {
@@ -54,9 +66,40 @@ test("changing SIZE never reaches the arbiter, because the window does not close
   // took the call, which the arbiter had to tell apart from a real close. One
   // window with four sizes has no such moment: the size change keeps the same
   // window and the same media, so the only close left is a close.
-  const [panel, ...circleSizes] = CALL_WINDOW_SIZES;
+  const [panel, ...circleSizes] = CALL_SIZES;
   assert.equal(panel, "panel");
   assert.deepEqual(circleSizes, ["circles", "speaker", "tiny"]);
+});
+
+test("the walkie strip and the idle faces are shapes of the same window, never call sizes", () => {
+  // A burst becoming a call is this window changing shape. The shell
+  // remembers only the CALL shape the person chose; the strip and the faces
+  // are decided by what is happening and must never come back as "the size
+  // the person left the call in".
+  assert.deepEqual(CALL_WINDOW_SIZES, [...CALL_SIZES, "walkie", "wall", "faces", "idle"]);
+  for (const size of CALL_SIZES) assert.equal(isCallSize(size), true, size);
+  for (const size of ["walkie", "wall", "faces", "idle", "nonsense"]) assert.equal(isCallSize(size), false, size);
+});
+
+test("the wall is an ordinary window that floats only by its own pin", () => {
+  // The buddy list: a card the person resizes and clicks in. Its pin is the
+  // one it always had — above other apps, following the person between
+  // desktops — and nothing about it is ever click-through.
+  assert.deepEqual(callWindowChrome("wall"), {
+    alwaysOnTop: false,
+    visibleOnAllWorkspaces: false,
+    clickThrough: false,
+    resizable: true,
+  });
+  assert.deepEqual(callWindowChrome("wall", { pinned: true }), {
+    alwaysOnTop: true,
+    visibleOnAllWorkspaces: true,
+    clickThrough: false,
+    resizable: true,
+  });
+  // The pin means nothing to any other shape.
+  assert.deepEqual(callWindowChrome("panel", { pinned: true }), callWindowChrome("panel"));
+  assert.deepEqual(callWindowChrome("faces", { pinned: true }), callWindowChrome("faces"));
 });
 
 // ── What kind of window each size is ──────────────────────────────────────
@@ -89,18 +132,33 @@ test("the float and the click-through move together", () => {
   // Apart they are each a bug: a window that floats over everything and still
   // takes every click is a pane sitting on somebody's work, and a
   // click-through window that is NOT on top is one you cannot reach at all.
-  for (const size of [...CALL_WINDOW_SIZES, "nonsense"]) {
+  for (const size of [...CALL_SIZES, "faces", "nonsense"]) {
     const chrome = callWindowChrome(size);
     assert.equal(chrome.alwaysOnTop, chrome.clickThrough, size);
     assert.equal(chrome.resizable, !chrome.clickThrough, size);
   }
 });
 
+test("the idle faces are a circle shape: they float, let the mouse through, cannot be dragged by an edge", () => {
+  assert.deepEqual(callWindowChrome("faces"), callWindowChrome("circles"));
+});
+
+test("the strip floats and follows like a circle, but takes every click", () => {
+  // It is exactly its card, and every pixel of the card is a control: a strip
+  // that let the mouse through would be a Talk button nobody could press.
+  assert.deepEqual(callWindowChrome("walkie"), {
+    alwaysOnTop: true,
+    visibleOnAllWorkspaces: true,
+    clickThrough: false,
+    resizable: false,
+  });
+});
+
 test("an unknown size lands on the stage, never on a click-through window", () => {
   // The size arrives over IPC from a renderer, on a channel that changes what
   // the window IS. Anything unrecognized has to fail to the window a person
   // can see and click.
-  for (const bad of ["faces", "", null, undefined, 3, {}]) {
+  for (const bad of ["banana", "", null, undefined, 3, {}]) {
     assert.equal(normalizeCallWindowSize(bad), "panel", String(bad));
   }
   for (const size of CALL_WINDOW_SIZES) assert.equal(normalizeCallWindowSize(size), size);
@@ -116,6 +174,13 @@ test("the stage's bounds and the circles' position are remembered separately", (
   // Tiny is the same corner as the other two: one remembered spot for every
   // small form, because they are the same glance at different sizes.
   assert.equal(callWindowPlacementKey("tiny"), "circles");
+  // The idle faces share it too — the photos turn into video at one spot.
+  assert.equal(callWindowPlacementKey("faces"), "circles");
+  // The strip has a corner of its own, the wall its own rectangle, and a
+  // hidden window is nowhere.
+  assert.equal(callWindowPlacementKey("walkie"), "walkie");
+  assert.equal(callWindowPlacementKey("wall"), "wall");
+  assert.equal(callWindowPlacementKey("idle"), null);
 });
 
 // ── The window's own construction options ─────────────────────────────────
@@ -128,10 +193,10 @@ test("the stage's bounds and the circles' position are remembered separately", (
 
 const CREATE_CALL_WINDOW = (() => {
   const src = readFileSync(join(__dirname, "main.js"), "utf8");
-  const start = src.indexOf("function createCallWindow(");
-  assert.ok(start > 0, "createCallWindow not found in main.js");
+  const start = src.indexOf("function ensureCallWindow(");
+  assert.ok(start > 0, "ensureCallWindow not found in main.js");
   const end = src.indexOf("callWindow = win;", start);
-  assert.ok(end > start, "createCallWindow's window assignment not found");
+  assert.ok(end > start, "ensureCallWindow's window assignment not found");
   return src.slice(start, end);
 })();
 
@@ -142,7 +207,7 @@ test("the call window is born frameless and see-through", () => {
     'backgroundColor: "#00000000"',
     "hasShadow: false",
   ]) {
-    assert.ok(CREATE_CALL_WINDOW.includes(option), `createCallWindow is missing \`${option}\``);
+    assert.ok(CREATE_CALL_WINDOW.includes(option), `ensureCallWindow is missing \`${option}\``);
   }
 });
 
@@ -168,18 +233,14 @@ test("the call window is not throttled when it is behind other windows", () => {
   assert.ok(CREATE_CALL_WINDOW.includes("backgroundThrottling: false"));
 });
 
-test("the call never gets a second window for its circles", () => {
+test("the call never gets a second window for its circles or its faces", () => {
   // The circle sizes used to be a window of their own, and moving the call
-  // there cost a re-join on every shape change. A `facesWindow` EXISTS again —
-  // but it is the idle presence overlay (photos, no call), so the guard is on
-  // the meaning, not the name: the old call-hosting channels stay dead, and
-  // the overlay is never handed a room.
+  // there cost a re-join on every shape change. The idle faces overlay was a
+  // third window, yielding to the call's circles at a shared spot. Both are
+  // shapes of the one voice window now, so the old channels stay dead and no
+  // second see-through window is ever built.
   const src = readFileSync(join(__dirname, "main.js"), "utf8");
-  for (const dead of ["report-faces-state", "set-faces-size"]) {
+  for (const dead of ["report-faces-state", "set-faces-size", "createFacesWindow", "facesWindow.", "set-faces-window-"]) {
     assert.ok(!src.includes(dead), `main.js still refers to \`${dead}\``);
   }
-  assert.ok(
-    !/createFacesWindow\([^)]+\)/.test(src),
-    "createFacesWindow takes arguments — a room here is the separate call window coming back",
-  );
 });

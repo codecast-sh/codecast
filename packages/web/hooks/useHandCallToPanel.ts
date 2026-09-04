@@ -3,7 +3,7 @@ import { useTrackedStore } from "../store/inboxStore";
 import { useWatchEffect } from "./useWatchEffect";
 import { useWalkieStatus } from "./useWalkie";
 import { walkieHoldsRoom } from "../lib/calls/walkie";
-import { canPopOutCall } from "../lib/desktop";
+import { canPopOutCall, hasVoiceHost } from "../lib/desktop";
 import {
   clearAutoPopSuppress,
   isAutoPopSuppressed,
@@ -41,6 +41,10 @@ export function useHandCallToPanel(): void {
   const handed = useRef<string | null>(null);
 
   useWatchEffect(() => {
+    // With a voice host, no call ever STARTS in this window: every join is
+    // sent to the host before a microphone opens here, so there is nothing
+    // to hand over and no re-join to cause. This hook is the older shell's.
+    if (hasVoiceHost()) return;
     if (call.phase === "idle") {
       handed.current = null;
       // A finished call is not a closed panel. The next huddle should get a

@@ -1,0 +1,53 @@
+/* The strip as the whole contents of the voice window.
+ *
+ * The window is see-through and exactly the size of this card plus the room
+ * its shadow needs; the shell keeps it that size off the card's own measure
+ * (VoiceHostPanel's WalkieStripHost), anchored to the bottom-right corner it
+ * is tucked into. Nothing here is a placement: the window IS the placement.
+ */
+.voice-walkie-window {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  background: transparent;
+  overflow: hidden;
+}
+
+.voice-walkie-card {
+  /* The card's own width, never the viewport's: the window is sized FROM this
+     measure, so a card that shrank to a narrow window (the wall's, a moment
+     earlier) would report that width back and pin the window there. */
+  width: 448px;
+  /* And never shrunk to fit: the window follows the card, not the reverse. */
+  flex: none;
+  /* Room for the card's shadow (walkie.css, 30px blur) so it is not cut off
+     at the window's edge. Transparent, and the window takes clicks there —
+     it is the strip's own margin. */
+  padding: 14px;
+  box-sizing: border-box;
+}
+
+/* Drag by the header row, the way the stage drags by its own. A real drag
+ * region, because nothing here competes for the mouse events: the strip is
+ * not click-through. Every control on that row stays a control. */
+.voice-walkie-card .walkie-strip-head {
+  -webkit-app-region: drag;
+}
+.voice-walkie-card .walkie-strip-head :is(button, a, input, textarea, select, [role="button"]) {
+  -webkit-app-region: no-drag;
+}
+
+/* The wall as the whole contents of the voice window: the buddy list in a
+ * card with its own edge, because the window is see-through and frameless
+ * and the card is the only surface there is. The panel already fills the
+ * viewport and never scrolls itself (people.css). */
+.voice-wall-window {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--sol-text) 14%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--sol-text) 5%, transparent);
+}
